@@ -41,6 +41,9 @@ name: Execution Test
 stages:
   - id: first
     title: First
+    skip:
+      allowed: true
+      reason_required: true
     items:
       - type: confirm
         id: confirm
@@ -68,8 +71,8 @@ stages:
 rework:
   allow_return_to: any_previous
 "#;
-const LEGACY_V1_PRESET_START_DOCUMENT: &str = "{\"command\":\"preset.start\",\"execution_version\":1,\"payload\":{\"preset\":\"sw-dev\",\"task_title\":\"Legacy V1\"},\"preconditions\":{},\"selector\":{\"display\":\"/worktree\",\"expected_uuid\":\"00000000-0000-4000-8000-000000000001\",\"path_bytes_base64url\":\"L3dvcmt0cmVl\",\"version\":1},\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}";
-const LEGACY_V2_PRESET_START_DOCUMENT: &str = "{\"command\":\"preset.start\",\"execution_version\":2,\"payload\":{\"preset\":\"sw-dev\",\"task_title\":\"Legacy V2\"},\"preconditions\":{},\"selector\":{\"display\":\"/worktree\",\"expected_uuid\":\"00000000-0000-4000-8000-000000000001\",\"path_bytes_base64url\":\"L3dvcmt0cmVl\",\"version\":1},\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}";
+const LEGACY_V1_SESSION_START_DOCUMENT: &str = "{\"command\":\"session.start\",\"execution_version\":1,\"payload\":{\"preset\":\"sw-dev\",\"task_title\":\"Legacy V1\"},\"preconditions\":{},\"selector\":{\"display\":\"/worktree\",\"expected_uuid\":\"00000000-0000-4000-8000-000000000001\",\"path_bytes_base64url\":\"L3dvcmt0cmVl\",\"version\":1},\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}";
+const LEGACY_V2_SESSION_START_DOCUMENT: &str = "{\"command\":\"session.start\",\"execution_version\":2,\"payload\":{\"preset\":\"sw-dev\",\"task_title\":\"Legacy V2\"},\"preconditions\":{},\"selector\":{\"display\":\"/worktree\",\"expected_uuid\":\"00000000-0000-4000-8000-000000000001\",\"path_bytes_base64url\":\"L3dvcmt0cmVl\",\"version\":1},\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}";
 
 #[derive(Clone)]
 struct FixtureIds(Arc<Mutex<u64>>);
@@ -222,6 +225,15 @@ impl ProcedureProviderV1 for FixtureProcedures {
                 })
             })
     }
+    fn load_workspace_procedure_snapshot(
+        &self,
+        _workspace: &WorkspaceBindingV1,
+        _procedure: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+        self.load_preset_snapshot("execution-test", snapshot_id, created_at)
+    }
 }
 #[derive(Clone)]
 struct SpyProcedures {
@@ -249,6 +261,21 @@ impl ProcedureProviderV1 for SpyProcedures {
     ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         FixtureProcedures.load_preset_snapshot(preset, snapshot_id, created_at)
+    }
+    fn load_workspace_procedure_snapshot(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        procedure: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        FixtureProcedures.load_workspace_procedure_snapshot(
+            workspace,
+            procedure,
+            snapshot_id,
+            created_at,
+        )
     }
 }
 
@@ -428,7 +455,7 @@ impl RecordingStore {
             .to_owned()
     }
 
-    fn enqueue_persisted_preset_start(&self, canonical_execution: &str) -> JobId {
+    fn enqueue_persisted_session_start(&self, canonical_execution: &str) -> JobId {
         let mut state = self.state.lock().unwrap();
         state.sequence += 1;
         let job = JobReceiptV1::new(
@@ -546,7 +573,8 @@ impl StoreContractV1 for RecordingStore {
         if let Some(transition) = transition {
             match transition.persisted_session_mutation() {
                 PersistedSessionMutationV1::Unchanged => {}
-                PersistedSessionMutationV1::Replace(session) => {
+                PersistedSessionMutationV1::Replace(session)
+                | PersistedSessionMutationV1::ReplaceFresh(session) => {
                     state.current_session = Some(session.clone())
                 }
                 PersistedSessionMutationV1::Clear => state.current_session = None,
@@ -690,7 +718,7 @@ where
 
     fn start(&mut self) -> TerminalReceiptV1 {
         self.submit(
-            "preset.start",
+            "session.start",
             json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Task"}),
             PreconditionsV1::default(),
         )
@@ -731,6 +759,25 @@ where
         )
         .unwrap()
     }
+    #[allow(dead_code)]
+    fn session_identity_preconditions(&self) -> PreconditionsV1 {
+        let session = self.store.current_session().unwrap();
+        PreconditionsV1::new(
+            Some(session.session_id().clone()),
+            Some(session.revision()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[allow(dead_code)]
+    fn session_revision_preconditions(&self) -> PreconditionsV1 {
+        let session = self.store.current_session().unwrap();
+        PreconditionsV1::new(None, Some(session.revision()), None, None, None, None).unwrap()
+    }
 
     fn check(&mut self, item_id: &str) -> TerminalReceiptV1 {
         let preconditions = self.item_preconditions(item_id);
@@ -744,7 +791,7 @@ where
     fn attach(&mut self) -> TerminalReceiptV1 {
         let preconditions = self.item_preconditions("proof");
         self.submit(
-            "item.attach_path",
+            "item.attach",
             json!({"selector": selector_json(), "item_id": "proof", "path": "proof.txt", "media_type": "text/plain"}),
             preconditions,
         )
@@ -780,11 +827,20 @@ fn binding_at(identity: DurableWorktreeIdentityV1, root: &str) -> WorkspaceBindi
 }
 
 fn selector_json() -> Value {
+    selector_json_with_expected(Some(WORKSPACE_ID))
+}
+
+#[allow(dead_code)]
+fn selector_json_without_expected_uuid() -> Value {
+    selector_json_with_expected(None)
+}
+
+fn selector_json_with_expected(expected_uuid: Option<&str>) -> Value {
     json!({
         "version": 1,
         "path_bytes_base64url": "L3dvcmt0cmVl",
         "display": "/worktree",
-        "expected_uuid": WORKSPACE_ID,
+        "expected_uuid": expected_uuid,
     })
 }
 
@@ -795,19 +851,22 @@ fn slice_request(
     key: u64,
 ) -> SliceRequestV1 {
     let payload: Map<String, Value> = payload.as_object().unwrap().clone();
+    let expected_workspace_id = payload
+        .get("selector")
+        .and_then(Value::as_object)
+        .and_then(|selector| selector.get("expected_uuid"))
+        .and_then(Value::as_str)
+        .map(|value| WorkspaceId::new(value.to_owned()).expect("fixture UUID is valid"));
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{key:012}")).unwrap(),
         client: ClientInfoV1::new("execution-test", "1", 1).unwrap(),
-        operation: if command == "workspace.init" {
+        operation: if matches!(command, "workspace.init" | "workspace.reset_all") {
             OperationV1::Bootstrap
         } else {
             OperationV1::Mutate
         },
         command: CommandNameV1::new(command).unwrap(),
-        workspace: Some(
-            WorkspaceContextV1::new("/worktree", Some(WorkspaceId::new(WORKSPACE_ID).unwrap()))
-                .unwrap(),
-        ),
+        workspace: Some(WorkspaceContextV1::new("/worktree", expected_workspace_id).unwrap()),
         idempotency_key: Some(ProtocolIdempotencyKeyV1::new(format!("protocol-{key}")).unwrap()),
         preconditions,
         options: RequestOptionsV1::new(false, 0).unwrap(),
@@ -841,8 +900,8 @@ fn clean_start_is_claimed_decoded_and_committed() {
 #[test]
 fn literal_legacy_v1_and_v2_documents_fail_closed_without_regeneration() {
     for document in [
-        LEGACY_V1_PRESET_START_DOCUMENT,
-        LEGACY_V2_PRESET_START_DOCUMENT,
+        LEGACY_V1_SESSION_START_DOCUMENT,
+        LEGACY_V2_SESSION_START_DOCUMENT,
     ] {
         let identity = identity();
         let binding = binding(identity.clone());
@@ -858,8 +917,8 @@ fn literal_legacy_v1_and_v2_documents_fail_closed_without_regeneration() {
             FixtureWorkspaces::stable(binding.clone()),
         );
 
-        store.enqueue_persisted_preset_start(document);
-        store.enqueue_persisted_preset_start(document);
+        store.enqueue_persisted_session_start(document);
+        store.enqueue_persisted_session_start(document);
         for worker in ["legacy-recovery-one", "legacy-recovery-two"] {
             assert!(matches!(
                 engine.execute_next(&binding, WorkerIdV1::new(worker).unwrap()),
@@ -890,7 +949,7 @@ fn v3_recovery_uses_the_persisted_snapshot_and_ids_without_regeneration() {
         FixtureWorkspaces::stable(binding.clone()),
     );
     let request = slice_request(
-        "preset.start",
+        "session.start",
         json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Persisted"}),
         PreconditionsV1::default(),
         950,
@@ -946,7 +1005,7 @@ fn v2_document_with_a_v3_execution_resolution_is_rejected_as_undocumented() {
         FixtureWorkspaces::stable(binding.clone()),
     );
     let request = slice_request(
-        "preset.start",
+        "session.start",
         json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Unsupported"}),
         PreconditionsV1::default(),
         954,
@@ -971,7 +1030,7 @@ fn v2_document_with_a_v3_execution_resolution_is_rejected_as_undocumented() {
         FixtureArtifacts,
         FixtureWorkspaces::stable(binding.clone()),
     );
-    recovery_store.enqueue_persisted_preset_start(&unsupported);
+    recovery_store.enqueue_persisted_session_start(&unsupported);
     assert!(matches!(
         recovery.execute_next(&binding, WorkerIdV1::new("unsupported-v2").unwrap()),
         Err(ExecutionErrorV1::InvalidPersistedExecution { .. })
@@ -999,7 +1058,7 @@ fn moved_queued_work_uses_the_rediscovered_manager_binding_not_its_stale_selecto
         workspaces.clone(),
     );
     let request = slice_request(
-        "preset.start",
+        "session.start",
         json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Moved"}),
         PreconditionsV1::default(),
         951,
@@ -1038,7 +1097,7 @@ fn deleted_or_replaced_manager_binding_fails_before_any_store_claim() {
         deleted.clone(),
     );
     let request = slice_request(
-        "preset.start",
+        "session.start",
         json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Deleted"}),
         PreconditionsV1::default(),
         952,
@@ -1073,7 +1132,7 @@ fn deleted_or_replaced_manager_binding_fails_before_any_store_claim() {
         replaced,
     );
     let replacement_request = slice_request(
-        "preset.start",
+        "session.start",
         json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Replacement"}),
         PreconditionsV1::default(),
         953,
@@ -1279,7 +1338,7 @@ fn terminal_idempotency_replay_returns_the_exact_receipt_without_fresh_dependenc
     let binding = binding(identity.clone());
     let store = RecordingStore::new(identity);
     let request = slice_request(
-        "preset.start",
+        "session.start",
         json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Task"}),
         PreconditionsV1::default(),
         900,
@@ -1351,7 +1410,7 @@ fn a_claimed_execution_survives_engine_restart_and_decodes_its_immutable_documen
         FixtureWorkspaces::stable(binding.clone()),
     );
     let request = slice_request(
-        "preset.start",
+        "session.start",
         json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Restart"}),
         PreconditionsV1::default(),
         901,

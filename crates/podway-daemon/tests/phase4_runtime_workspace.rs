@@ -20,7 +20,10 @@ use podway_daemon::{
 };
 use podway_protocol::Rfc3339MillisV1;
 use podway_service::ServiceRuntimePathsV1;
-use podway_store::{SqliteStoreOptionsV1, StoreReadContractV1};
+use podway_store::{
+    SqliteStoreOptionsV1, StoreContractV1, StoreErrorV1, StoreReadContractV1,
+    StoreUnavailableReasonV1, WorkerIdV1,
+};
 use serde_json::Value;
 use support_phase4_workspace::{
     copy_tree, git_worktrees, non_utf8_child_path, read_file, selector,
@@ -103,6 +106,39 @@ fn init_creates_only_workspace_state_not_a_task_or_session() {
         fs::canonicalize(fixture.main().join(".podway/runtime"))
             .expect("runtime directory must canonicalize")
     );
+}
+#[test]
+fn cloned_contexts_expose_only_read_only_store_facades() {
+    let fixture = git_worktrees();
+    let manager = manager(fixture.temporary_path());
+    let scheduler = bootstrap_main(&manager, fixture.main());
+    let context = scheduler.context_snapshot();
+    let context_clone = context.as_ref().clone();
+
+    assert_eq!(
+        context.store().startup_recovery_report(),
+        context_clone.store().startup_recovery_report(),
+        "context clones expose the same generation's immutable recovery observation"
+    );
+    assert_eq!(
+        context
+            .store()
+            .read_workspace_view(context.binding().identity())
+            .expect("read facade must observe the active workspace")
+            .identity()
+            .workspace_uuid(),
+        context.binding().identity().workspace_uuid()
+    );
+    assert!(matches!(
+        context.store().claim_next(
+            context.binding().identity(),
+            WorkerIdV1::new("read-facade").expect("fixture worker ID must be valid"),
+            podway_store::EpochMillisV1::new(1_700_000_000_123),
+        ),
+        Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Recovery
+        })
+    ));
 }
 
 #[test]

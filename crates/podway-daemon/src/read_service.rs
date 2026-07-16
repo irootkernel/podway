@@ -1,4 +1,4 @@
-//! Authoritative daemon-owned projections for `session.status` and `session.next`.
+//! Authoritative daemon-owned projections for workspace session and job reads.
 //!
 //! Store remains the only durable authority. Notification versions only close the race between a
 //! predicate read and a wait; every wake-up is followed by another Store read before a result can
@@ -12,15 +12,15 @@ use podway_core::{
     derive_session_status_v1,
 };
 use podway_protocol::{
-    AllowedActionsResultV1, BlockerResultV1, CommandSuggestionResultV1, CurrentAttemptResultV1,
-    ItemTypeResultV1, NextItemResultV1, NextResultV1, NextStageAfterCompletionResultV1,
-    NextStageResultV1, QueueResultV1, Rfc3339MillisV1, SessionLifecycleV1, StageStatusResultV1,
-    StatusItemResultV1, StatusProcedureV1, StatusResultV1, StatusSessionV1, StatusStageResultV1,
-    StatusTaskV1,
+    AllowedActionsResultV1, AttemptLifecycleResultV1, BlockerResultV1, CommandSuggestionResultV1,
+    CurrentAttemptResultV1, ItemTypeResultV1, NextItemResultV1, NextResultV1,
+    NextStageAfterCompletionResultV1, NextStageResultV1, PreviousAttemptResultV1, QueueResultV1,
+    Rfc3339MillisV1, SessionLifecycleV1, StageStatusResultV1, StatusItemResultV1,
+    StatusProcedureV1, StatusResultV1, StatusSessionV1, StatusStageResultV1, StatusTaskV1,
 };
 use podway_store::{
-    DurableWorktreeIdentityV1, JobIdV1, JobStateV1, StoreErrorV1, StoreReadContractV1,
-    WorkspaceViewV1,
+    DurableWorktreeIdentityV1, JobIdV1, JobListQueryV1, JobStateV1, JobViewV1, StoreErrorV1,
+    StoreReadContractV1, WorkspaceViewV1,
 };
 use serde_json::{Value, json};
 
@@ -215,7 +215,16 @@ where
         identity: &DurableWorktreeIdentityV1,
         wait: ReadWaitV1,
     ) -> Result<StatusResultV1, ReadServiceErrorV1> {
-        self.read_with_wait(identity, &wait, Self::project_status)
+        self.status_with_verbose(identity, wait, false)
+    }
+
+    pub fn status_with_verbose(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        wait: ReadWaitV1,
+        verbose: bool,
+    ) -> Result<StatusResultV1, ReadServiceErrorV1> {
+        self.read_with_wait(identity, &wait, |view| Self::project_status(view, verbose))
     }
 
     pub fn next(
@@ -225,13 +234,49 @@ where
     ) -> Result<NextResultV1, ReadServiceErrorV1> {
         self.read_with_wait(identity, &wait, Self::project_next)
     }
+    /// Reads a named job from committed Store state.
+    ///
+    /// A terminal wait first establishes the terminal predicate through
+    /// [`Self::read_with_wait`], then re-reads the job record. The terminal observation and
+    /// returned job therefore both come from Store, never from a scheduler notification.
+    pub fn job(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        job_id: &JobIdV1,
+        wait: ReadWaitV1,
+    ) -> Result<JobViewV1, ReadServiceErrorV1> {
+        match wait {
+            ReadWaitV1::Immediate => self.read_job(identity, job_id),
+            ReadWaitV1::AfterJobUntil { .. } => {
+                self.read_with_wait(identity, &wait, |_| Ok(()))?;
+                self.read_job(identity, job_id)
+            }
+            ReadWaitV1::IdleUntil(_) => Err(ReadServiceErrorV1::InconsistentState {
+                reason: "named job reads cannot wait for workspace idleness",
+            }),
+        }
+    }
 
-    fn read_with_wait<Output>(
+    /// Lists jobs from one authoritative committed Store snapshot.
+    pub fn list_jobs(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        query: JobListQueryV1,
+    ) -> Result<Vec<JobViewV1>, ReadServiceErrorV1> {
+        self.store
+            .list_jobs(identity, query)
+            .map_err(ReadServiceErrorV1::Store)
+    }
+
+    fn read_with_wait<Output, Project>(
         &self,
         identity: &DurableWorktreeIdentityV1,
         wait: &ReadWaitV1,
-        project: fn(&WorkspaceViewV1) -> Result<Output, ReadServiceErrorV1>,
-    ) -> Result<Output, ReadServiceErrorV1> {
+        project: Project,
+    ) -> Result<Output, ReadServiceErrorV1>
+    where
+        Project: Fn(&WorkspaceViewV1) -> Result<Output, ReadServiceErrorV1>,
+    {
         if matches!(wait, ReadWaitV1::Immediate) {
             return project(&self.read_workspace_view(identity)?);
         }
@@ -317,8 +362,23 @@ where
         validate_workspace_view(&view, identity)?;
         Ok(view)
     }
+    fn read_job(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        job_id: &JobIdV1,
+    ) -> Result<JobViewV1, ReadServiceErrorV1> {
+        self.store
+            .read_job(identity, job_id)
+            .map_err(ReadServiceErrorV1::Store)?
+            .ok_or_else(|| ReadServiceErrorV1::JobNotFound {
+                job_id: job_id.clone(),
+            })
+    }
 
-    fn project_status(view: &WorkspaceViewV1) -> Result<StatusResultV1, ReadServiceErrorV1> {
+    fn project_status(
+        view: &WorkspaceViewV1,
+        verbose: bool,
+    ) -> Result<StatusResultV1, ReadServiceErrorV1> {
         let aggregate = current_session(view)?;
         let status = derive_session_status_v1(aggregate);
         let current_attempt = active_attempt(aggregate)?;
@@ -387,6 +447,26 @@ where
             })
             .unwrap_or_default();
 
+        let previous_attempts = verbose
+            .then(|| {
+                aggregate
+                    .attempts()
+                    .iter()
+                    .filter(|attempt| aggregate.active_attempt_id() != Some(attempt.attempt_id()))
+                    .map(|attempt| {
+                        Ok(PreviousAttemptResultV1 {
+                            stage_id: attempt.stage_id().clone(),
+                            attempt_id: attempt.attempt_id().clone(),
+                            attempt_number: attempt.number(),
+                            lifecycle: attempt_lifecycle(attempt.lifecycle()),
+                            started_at: rfc3339_millis(attempt.started_at())?,
+                            ended_at: attempt.ended_at().map(rfc3339_millis).transpose()?,
+                            reason: attempt.reason().map(ToOwned::to_owned),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ReadServiceErrorV1>>()
+            })
+            .transpose()?;
         let result = StatusResultV1 {
             task: StatusTaskV1 {
                 title: aggregate.task_title().to_owned(),
@@ -406,6 +486,7 @@ where
                 cancelled_at: aggregate.cancelled_at().map(rfc3339_millis).transpose()?,
             },
             current,
+            previous_attempts,
             stages: status
                 .stages()
                 .iter()
@@ -767,7 +848,7 @@ fn suggestions(next: &podway_core::NextWorkViewV1) -> Vec<CommandSuggestionResul
                 ItemTypeV1::Choice => ("item.set", "set", Some("<choice>")),
                 ItemTypeV1::Integer => ("item.set", "set", Some("<integer>")),
                 ItemTypeV1::List => ("item.add", "add", Some("<value>")),
-                ItemTypeV1::Artifact => ("item.attach_path", "attach", Some("<path>")),
+                ItemTypeV1::Artifact => ("item.attach", "attach", Some("<path>")),
             };
             let mut argv = vec![
                 "podway".to_owned(),
@@ -826,6 +907,14 @@ const fn stage_status(status: DerivedStageStatusV1) -> StageStatusResultV1 {
     }
 }
 
+const fn attempt_lifecycle(lifecycle: AttemptLifecycle) -> AttemptLifecycleResultV1 {
+    match lifecycle {
+        AttemptLifecycle::Active => AttemptLifecycleResultV1::Active,
+        AttemptLifecycle::Completed => AttemptLifecycleResultV1::Completed,
+        AttemptLifecycle::Skipped => AttemptLifecycleResultV1::Skipped,
+        AttemptLifecycle::Abandoned => AttemptLifecycleResultV1::Abandoned,
+    }
+}
 const fn session_lifecycle(lifecycle: SessionLifecycle) -> SessionLifecycleV1 {
     match lifecycle {
         SessionLifecycle::Running => SessionLifecycleV1::Running,

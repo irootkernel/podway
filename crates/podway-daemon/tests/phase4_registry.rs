@@ -18,15 +18,18 @@ use std::{
 };
 
 use podway_core::WorkspaceId;
-use podway_daemon::registry;
-use podway_daemon::registry::{
+#[path = "../src/registry.rs"]
+#[allow(dead_code)]
+mod registry_under_test;
+use podway_protocol::Rfc3339MillisV1;
+use podway_service::ServiceRuntimePathsV1;
+use podway_store::ValidatedWorkspaceRootV1;
+use registry_under_test as registry;
+use registry_under_test::{
     MAX_WORKSPACE_REGISTRY_ENTRIES_V1, RegistryErrorV1, RegistryFailpointActionV1,
     RegistryFailpointV1, RegistryPathViolationV1, RegistryStoreV1, WorkspaceRegistryEntryV1,
     WorkspaceRegistryV1,
 };
-use podway_protocol::Rfc3339MillisV1;
-use podway_service::ServiceRuntimePathsV1;
-use podway_store::ValidatedWorkspaceRootV1;
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const REGISTRY_CRASH_CHILD_TEST_NAME: &str = "registry_crash_child_aborts_at_configured_boundary";
@@ -819,4 +822,52 @@ fn registry_document_contains_only_metadata_fields() {
         document["schema"],
         serde_json::Value::String("podway.registry/v1".to_owned())
     );
+}
+#[test]
+fn reset_replacement_publishes_only_old_or_target_identity_at_the_exact_root() {
+    let fixture = RegistryFixture::new();
+    let previous = workspace(70);
+    let target = workspace(71);
+    let exact_root = root("/tmp/registry-reset");
+    RegistryStoreV1::new(&fixture.paths)
+        .insert_or_refresh(previous.clone(), exact_root.clone(), timestamp())
+        .expect("old reset identity must be registered");
+
+    let before_rename = RegistryStoreV1::with_failpoint(
+        &fixture.paths,
+        RegistryFailpointV1::BeforeRename,
+        RegistryFailpointActionV1::ReturnError,
+    );
+    assert!(matches!(
+        before_rename
+            .replace_for_reset(&previous, target.clone(), exact_root.clone(), timestamp(),),
+        Err(RegistryErrorV1::Failpoint {
+            point: RegistryFailpointV1::BeforeRename
+        })
+    ));
+    let old_document = RegistryStoreV1::new(&fixture.paths)
+        .load()
+        .expect("pre-publication reset failure must retain the old document");
+    assert!(old_document.lookup(&previous).is_some());
+    assert!(old_document.lookup(&target).is_none());
+
+    let replacement = RegistryStoreV1::new(&fixture.paths)
+        .replace_for_reset(&previous, target.clone(), exact_root.clone(), timestamp())
+        .expect("one publication must replace the reset identity");
+    assert_eq!(replacement.workspace_uuid(), &target);
+    let target_document = RegistryStoreV1::new(&fixture.paths)
+        .load()
+        .expect("target publication must remain strict");
+    assert!(target_document.lookup(&previous).is_none());
+    assert_eq!(
+        target_document
+            .lookup(&target)
+            .expect("target identity must replace old identity")
+            .last_known_root(),
+        &exact_root
+    );
+
+    RegistryStoreV1::new(&fixture.paths)
+        .replace_for_reset(&previous, target.clone(), exact_root, timestamp())
+        .expect("replaying an already-published target must be idempotent");
 }

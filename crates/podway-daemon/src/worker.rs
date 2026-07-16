@@ -55,6 +55,11 @@ pub trait WorkerWorkspaceContextV1: Send + Sync {
 
     /// Closes this generation's shared admission/claim permission gate permanently.
     fn stop_claims(&self);
+    /// Records that all work claimed before the closed gate has drained under scheduler
+    /// serialization. This is an immutable lifecycle fact, not a queue-length observation.
+    fn record_work_drained(&self) {}
+    /// Consumes this context's sole Store handle for daemon-owned maintenance.
+    fn close_store_for_maintenance(&self) -> Result<(), StoreErrorV1>;
     fn mark_recovery_required(&self);
     fn recovery_required(&self) -> bool;
 
@@ -83,6 +88,12 @@ impl WorkerWorkspaceContextV1 for WorkspaceSchedulerContextV1 {
 
     fn stop_claims(&self) {
         WorkspaceSchedulerContextV1::stop_claims(self);
+    }
+    fn record_work_drained(&self) {
+        WorkspaceSchedulerContextV1::record_work_drained(self);
+    }
+    fn close_store_for_maintenance(&self) -> Result<(), StoreErrorV1> {
+        WorkspaceSchedulerContextV1::close_store_for_maintenance(self)
     }
 
     fn mark_recovery_required(&self) {
@@ -128,7 +139,7 @@ where
 }
 
 /// A directly injected engine remains useful for deterministic worker tests. Production uses a
-/// context-aware adapter so each engine is constructed from the context's exact SQLite Store.
+/// context-aware adapter so each engine is constructed from the context's shared Store slot.
 impl<Context, Store, Ids, Clock, Procedures, Artifacts, Workspaces> WorkerExecutionV1<Context>
     for DaemonExecutionEngineV1<Store, Ids, Clock, Procedures, Artifacts, Workspaces>
 where
@@ -284,6 +295,11 @@ pub struct WorkerDrainReportV1 {
     terminal_job_count: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkerRetirementModeV1 {
+    Ordinary,
+    Maintenance,
+}
 impl WorkerDrainReportV1 {
     pub const fn terminal_job_count(self) -> u64 {
         self.terminal_job_count
@@ -513,7 +529,27 @@ where
     {
         registry
             .retire(scheduler, |retiring| self.close_scheduler(retiring, close))
-            .map_err(|error| self.map_retirement_error(error))
+            .map_err(|error| self.map_retirement_error(error, WorkerRetirementModeV1::Ordinary))
+    }
+
+    /// Retires a generation for daemon-owned maintenance.
+    ///
+    /// Existing serialized work drains first. The claim gate then remains closed while the context
+    /// consumes its Store, and only a successful Store close permits the maintenance callback.
+    pub fn retire_workspace_for_maintenance<F>(
+        &self,
+        registry: &WorkspaceSchedulerRegistryV1<Context>,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+        maintenance: F,
+    ) -> Result<(), WorkerRetirementErrorV1<Context, Execution, Clock>>
+    where
+        F: FnOnce(&WorkspaceBindingV1) -> Result<(), WorkerErrorV1>,
+    {
+        registry
+            .retire(scheduler, |retiring| {
+                self.close_scheduler_for_maintenance(retiring, maintenance)
+            })
+            .map_err(|error| self.map_retirement_error(error, WorkerRetirementModeV1::Maintenance))
     }
 
     fn drain_scheduler(
@@ -623,6 +659,31 @@ where
             close(context.binding())
         })
     }
+    fn close_scheduler_for_maintenance<F>(
+        &self,
+        scheduler: &WorkspaceSchedulerV1<Context>,
+        maintenance: F,
+    ) -> Result<(), WorkerErrorV1>
+    where
+        F: FnOnce(&WorkspaceBindingV1) -> Result<(), WorkerErrorV1>,
+    {
+        if scheduler.context_snapshot().recovery_required() {
+            return Err(WorkerErrorV1::RecoveryRequired);
+        }
+        scheduler.with_serialized(|context| {
+            if context.recovery_required() {
+                return Err(WorkerErrorV1::RecoveryRequired);
+            }
+            if let Err(error) = self.drain_context(scheduler, context.as_ref()) {
+                context.stop_claims();
+                return Err(error);
+            }
+            context.stop_claims();
+            context.record_work_drained();
+            context.close_store_for_maintenance()?;
+            maintenance(context.binding())
+        })
+    }
 
     fn read_required_job(
         &self,
@@ -648,6 +709,7 @@ where
     fn map_retirement_error(
         &self,
         error: WorkspaceSchedulerRetirementErrorV1<Context, WorkerErrorV1>,
+        mode: WorkerRetirementModeV1,
     ) -> WorkerRetirementErrorV1<Context, Execution, Clock> {
         match error {
             WorkspaceSchedulerRetirementErrorV1::Start(source) => {
@@ -659,6 +721,7 @@ where
                     retry: Box::new(WorkerRetirementRetryV1 {
                         worker: self.clone(),
                         retry,
+                        mode,
                     }),
                 }
             }
@@ -690,6 +753,22 @@ where
 {
     worker: DaemonWorkerV1<Context, Execution, Clock>,
     retry: WorkspaceSchedulerRetirementRetryV1<Context>,
+    mode: WorkerRetirementModeV1,
+}
+
+impl<Context, Execution, Clock> Clone for WorkerRetirementRetryV1<Context, Execution, Clock>
+where
+    Context: WorkerWorkspaceContextV1,
+    Execution: WorkerExecutionV1<Context>,
+    Clock: WorkerClockV1,
+{
+    fn clone(&self) -> Self {
+        Self {
+            worker: self.worker.clone(),
+            retry: self.retry.clone(),
+            mode: self.mode,
+        }
+    }
 }
 
 impl<Context, Execution, Clock> fmt::Debug for WorkerRetirementRetryV1<Context, Execution, Clock>
@@ -703,6 +782,7 @@ where
             .debug_struct("WorkerRetirementRetryV1")
             .field("key", self.retry.key())
             .field("generation", &self.retry.generation())
+            .field("mode", &self.mode)
             .finish()
     }
 }
@@ -721,6 +801,7 @@ where
         self.retry.generation()
     }
 
+    /// Retries an ordinary retirement without reopening its scheduler slot.
     pub fn retry_with<F>(
         &self,
         close: F,
@@ -728,9 +809,44 @@ where
     where
         F: FnOnce(&WorkspaceBindingV1) -> Result<(), WorkerErrorV1>,
     {
+        if self.mode != WorkerRetirementModeV1::Ordinary {
+            return Err(self.mode_mismatch());
+        }
         self.retry
             .retry(|retiring| self.worker.close_scheduler(retiring, close))
-            .map_err(|error| self.worker.map_retirement_error(error))
+            .map_err(|error| {
+                self.worker
+                    .map_retirement_error(error, WorkerRetirementModeV1::Ordinary)
+            })
+    }
+
+    /// Retries maintenance retirement while preserving the Store-close-before-callback order.
+    pub fn retry_with_maintenance<F>(
+        &self,
+        maintenance: F,
+    ) -> Result<(), WorkerRetirementErrorV1<Context, Execution, Clock>>
+    where
+        F: FnOnce(&WorkspaceBindingV1) -> Result<(), WorkerErrorV1>,
+    {
+        if self.mode != WorkerRetirementModeV1::Maintenance {
+            return Err(self.mode_mismatch());
+        }
+        self.retry
+            .retry(|retiring| {
+                self.worker
+                    .close_scheduler_for_maintenance(retiring, maintenance)
+            })
+            .map_err(|error| {
+                self.worker
+                    .map_retirement_error(error, WorkerRetirementModeV1::Maintenance)
+            })
+    }
+
+    fn mode_mismatch(&self) -> WorkerRetirementErrorV1<Context, Execution, Clock> {
+        WorkerRetirementErrorV1::CloseFailed {
+            source: Box::new(WorkerErrorV1::RetirementRejected),
+            retry: Box::new(self.clone()),
+        }
     }
 }
 

@@ -18,7 +18,8 @@ use podway_core::{
 };
 use podway_store::codec::{
     PersistedDomainErrorV1, PersistedDomainResultV1, PersistedSessionLifecycleV1,
-    PersistedTerminalResultV1,
+    PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
+    encode_persisted_terminal_receipt_v1,
 };
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, DurableWorktreeIdentityV1, IdempotencyKeyV1,
@@ -26,8 +27,9 @@ use podway_store::{
     PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StateTransitionV1,
     StoreContractV1, StoreErrorV1, StoreFailpointV1, StoreIdempotencyReadContractV1,
-    StoreIntegrityCheckV1, StoreReadContractV1, StoreRecordKindV1, StoreUnavailableReasonV1,
-    TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    StoreIntegrityCheckV1, StoreInvariantV1, StoreReadContractV1, StoreRecordKindV1,
+    StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
+    WorkerIdV1,
 };
 use tempfile::TempDir;
 
@@ -138,6 +140,126 @@ fn admit(store: &SqliteStoreV1, job_id: JobId, key: &str, digest_nibble: char, n
         digest_nibble,
         now,
     );
+}
+
+fn reset_seed_request(number: u8) -> AdmitRequestV1 {
+    AdmitRequestV1::new(
+        DomainCommand::WorkspaceResetAll,
+        IdempotencyKeyV1::new(format!("seeded-reset-{number}")).unwrap(),
+        job(number),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('f'),
+        UnixMillis::new(10),
+    )
+}
+
+fn reset_seed_result() -> DomainResult {
+    DomainResult::WorkspaceReset {
+        workspace_id: identity().workspace_uuid().clone(),
+        revision: Revision::ZERO,
+    }
+}
+
+fn seed_reset_target(
+    path: &Path,
+    request: AdmitRequestV1,
+    result: DomainResult,
+    now: u64,
+) -> Result<TerminalReceiptV1, StoreErrorV1> {
+    SqliteStoreV1::seed_or_verify_reset_target(
+        path,
+        &ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-phase4")).unwrap(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        request,
+        result,
+        UnixMillis::new(now),
+    )
+}
+
+fn overwrite_seeded_terminal(path: &Path, terminal: &PersistedTerminalReceiptV1) {
+    let encoded = encode_persisted_terminal_receipt_v1(terminal).unwrap();
+    let connection = Connection::open(path).unwrap();
+    assert_eq!(
+        connection
+            .execute("UPDATE jobs SET terminal_response_json = ?1", [&encoded],)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE idempotency_records SET terminal_response_json = ?1",
+                [&encoded],
+            )
+            .unwrap(),
+        1
+    );
+}
+
+fn seeded_reset_terminal_without_projection(
+    request: &AdmitRequestV1,
+) -> PersistedTerminalReceiptV1 {
+    PersistedTerminalReceiptV1::new(
+        JobReceiptV1::new(
+            1,
+            request.job_id().clone(),
+            request.request_digest().clone(),
+        ),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::WorkspaceReset {
+            workspace_id: identity().workspace_uuid().clone(),
+            revision: Revision::ZERO,
+        }),
+    )
+}
+
+#[test]
+fn seeded_reset_target_rejects_a_missing_terminal_job_projection() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("reset-target.sqlite3");
+    let request = reset_seed_request(240);
+    let result = reset_seed_result();
+    seed_reset_target(&path, request.clone(), result.clone(), 20).unwrap();
+    overwrite_seeded_terminal(&path, &seeded_reset_terminal_without_projection(&request));
+
+    assert!(matches!(
+        seed_reset_target(&path, request, result, 21),
+        Err(StoreErrorV1::CorruptStateV1 {
+            record: StoreRecordKindV1::Job
+        })
+    ));
+}
+
+#[test]
+fn seeded_reset_target_rejects_a_wrong_terminal_job_projection() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("reset-target.sqlite3");
+    let request = reset_seed_request(241);
+    let result = reset_seed_result();
+    seed_reset_target(&path, request.clone(), result.clone(), 20).unwrap();
+    let terminal = terminal_with_job_projection(
+        JobReceiptV1::new(
+            1,
+            request.job_id().clone(),
+            request.request_digest().clone(),
+        ),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::WorkspaceReset {
+            workspace_id: identity().workspace_uuid().clone(),
+            revision: Revision::ZERO,
+        }),
+        PersistedTerminalJobStateV1::Succeeded,
+        request.submitted_at().get(),
+        None,
+        21,
+    );
+    overwrite_seeded_terminal(&path, &terminal);
+
+    assert!(matches!(
+        seed_reset_target(&path, request, result, 21),
+        Err(StoreErrorV1::CorruptStateV1 {
+            record: StoreRecordKindV1::Job
+        })
+    ));
 }
 #[test]
 fn direct_admission_uses_a_complete_deterministic_store_command_document() {
@@ -875,45 +997,39 @@ fn workspace_binding_inspection_keeps_authority_availability_failures_transient(
     Ok(())
 }
 #[test]
-fn queued_barrier_blocks_new_admission_until_its_cancellation_commits() {
+fn ordinary_admission_rejects_workspace_reset_all_before_idempotency_or_queue_writes() {
     let temporary = TempDir::new().unwrap();
     let store = store(&temporary);
-    let barrier_job = job(13);
-    let barrier = AdmitRequestV1::new(
+    let key = IdempotencyKeyV1::new("reset-all-ordinary-admission").unwrap();
+    let request = AdmitRequestV1::new(
         DomainCommand::WorkspaceResetAll,
-        IdempotencyKeyV1::new("barrier").unwrap(),
-        barrier_job.clone(),
+        key.clone(),
+        job(13),
         RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
         digest('f'),
         UnixMillis::new(2),
     );
+
     assert!(matches!(
-        store.admit(&identity(), barrier),
-        Ok(AdmitOutcomeV1::New(_))
-    ));
-    let blocked = AdmitRequestV1::new(
-        DomainCommand::WorkspaceInitialize,
-        IdempotencyKeyV1::new("blocked").unwrap(),
-        job(14),
-        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
-        digest('e'),
-        UnixMillis::new(3),
-    );
-    assert!(matches!(
-        store.admit(&identity(), blocked),
-        Err(StoreErrorV1::StorageUnavailableV1 {
-            reason: StoreUnavailableReasonV1::Busy,
+        store.admit(&identity(), request),
+        Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::TransitionMutationShape
         })
     ));
-    store
-        .cancel_before_claim(
-            &identity(),
-            barrier_job,
-            Revision::new(1),
-            UnixMillis::new(4),
-        )
-        .unwrap();
-    admit(&store, job(14), "blocked", 'e', 5);
+    assert_eq!(
+        store
+            .read_idempotent_outcome(&identity(), &key, &digest('f'))
+            .unwrap(),
+        None,
+        "ordinary reset admission must not create an idempotency record"
+    );
+    assert!(
+        store
+            .list_jobs(&identity(), JobListQueryV1::new(100).unwrap())
+            .unwrap()
+            .is_empty(),
+        "ordinary reset admission must not create a queued job"
+    );
 }
 #[test]
 fn reopen_recovers_running_work_and_replays_persisted_execution() {
@@ -2715,4 +2831,394 @@ fn coherent_workspace_and_job_reads_return_bounded_sequence_ordered_terminal_fac
     assert_eq!(final_view.latest_workspace_sequence(), 2);
     assert_eq!(final_view.observed_at(), UnixMillis::new(4));
     assert_terminal_replay(store.admit(&identity(), first_request), expected_terminal);
+}
+#[test]
+fn fresh_session_start_replace_retires_old_history_and_replays_its_terminal_receipt() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    let store = store(&temporary);
+    let initial = aggregate();
+    seed_current_session(&store, &initial, job(220), "fresh-replacement-seed", 2);
+    let cancelled = apply_transition_v1(
+        Some(&initial),
+        &SessionCommandV1::Cancel(CancelSessionV1 {
+            expected_attempt_id: initial.active_attempt_id().cloned().unwrap(),
+            reason: "fixture".to_owned(),
+        }),
+        CommandContextV1 {
+            expected_revision: initial.revision(),
+            now: UnixMillis::new(12),
+        },
+    )
+    .unwrap()
+    .next_aggregate()
+    .cloned()
+    .unwrap();
+    let old_job = job(221);
+    let old_request = AdmitRequestV1::new(
+        DomainCommand::SessionCancel,
+        IdempotencyKeyV1::new("fresh-replacement-old-history").unwrap(),
+        old_job.clone(),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(initial.revision()),
+            initial.active_attempt_id().cloned(),
+            None,
+            None,
+        )
+        .unwrap(),
+        digest('b'),
+        UnixMillis::new(13),
+    );
+    store.admit(&identity(), old_request).unwrap();
+    let old_claim = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("fresh-replacement-worker").unwrap(),
+            UnixMillis::new(14),
+        )
+        .unwrap()
+        .unwrap();
+    store
+        .commit_terminal(
+            old_claim.claim().clone(),
+            initial.revision(),
+            Some(
+                StateTransitionV1::new_persisted(
+                    Some(cancelled.session_id().clone()),
+                    initial.revision(),
+                    cancelled.revision(),
+                    PersistedSessionMutationV1::Replace(cancelled.clone()),
+                )
+                .unwrap(),
+            ),
+            TerminalResultV1::Success(DomainResult::SessionChanged {
+                session_id: cancelled.session_id().clone(),
+                revision_before: initial.revision(),
+                revision_after: cancelled.revision(),
+                changed: true,
+            }),
+            UnixMillis::new(15),
+        )
+        .unwrap();
+
+    let replacement_snapshot =
+        ProcedureSnapshotV1::from_canonical_json(CanonicalProcedureSnapshotInputV1 {
+            snapshot_id: ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000225").unwrap(),
+            schema_id: "podway.procedure/v1".to_owned(),
+            procedure_id: initial.snapshot().procedure_id().to_owned(),
+            procedure_version: initial.snapshot().procedure_version().to_owned(),
+            name: initial.snapshot().name().to_owned(),
+            source_label: initial.snapshot().source_label().clone(),
+            canonical_json: initial.snapshot().canonical_json().clone(),
+            digest: initial.snapshot().digest().clone(),
+            created_at: UnixMillis::new(16),
+        })
+        .unwrap();
+    let replacement = SessionAggregateV1::start(
+        SessionId::new("00000000-0000-4000-8000-000000000223").unwrap(),
+        "Fresh replacement",
+        replacement_snapshot,
+        AttemptId::new("00000000-0000-4000-8000-000000000224").unwrap(),
+        UnixMillis::new(16),
+    )
+    .unwrap();
+    let replacement_job = job(222);
+    let replacement_request = AdmitRequestV1::new(
+        DomainCommand::SessionStartReplace,
+        IdempotencyKeyV1::new("fresh-replacement").unwrap(),
+        replacement_job.clone(),
+        RevisionAttemptItemPreconditionsV1::new(Some(cancelled.revision()), None, None, None)
+            .unwrap(),
+        digest('c'),
+        UnixMillis::new(16),
+    );
+    store
+        .admit(&identity(), replacement_request.clone())
+        .unwrap();
+    let replacement_claim = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("fresh-replacement-worker").unwrap(),
+            UnixMillis::new(17),
+        )
+        .unwrap()
+        .unwrap();
+    let terminal_result = TerminalResultV1::Success(DomainResult::SessionChanged {
+        session_id: replacement.session_id().clone(),
+        revision_before: cancelled.revision(),
+        revision_after: replacement.revision(),
+        changed: true,
+    });
+    let receipt = store
+        .commit_terminal(
+            replacement_claim.claim().clone(),
+            cancelled.revision(),
+            Some(
+                StateTransitionV1::new_persisted(
+                    Some(replacement.session_id().clone()),
+                    cancelled.revision(),
+                    replacement.revision(),
+                    PersistedSessionMutationV1::ReplaceFresh(replacement.clone()),
+                )
+                .unwrap(),
+            ),
+            terminal_result,
+            UnixMillis::new(18),
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.result(),
+        &TerminalResultV1::Success(DomainResult::SessionChanged {
+            session_id: replacement.session_id().clone(),
+            revision_before: cancelled.revision(),
+            revision_after: Revision::new(1),
+            changed: true,
+        })
+    );
+    assert_eq!(
+        store.read_session_aggregate(&identity()).unwrap(),
+        Some(replacement.clone())
+    );
+
+    let connection = Connection::open(path).unwrap();
+    let retired_old_history: i64 = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM jobs
+                 WHERE session_id = ?1 AND job_id != ?2) +
+                (SELECT COUNT(*) FROM idempotency_records
+                 WHERE scope_kind = 'session'
+                   AND scope_session_id = ?1
+                   AND job_id != ?2) +
+                (SELECT COUNT(*) FROM operational_journal WHERE job_id = ?3) +
+                (SELECT COUNT(*) FROM procedure_snapshots WHERE snapshot_id = ?4)",
+            [
+                cancelled.session_id().as_str(),
+                replacement_job.as_str(),
+                old_job.as_str(),
+                initial.snapshot().snapshot_id().as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let retained_terminal_rows: i64 = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM jobs WHERE job_id = ?1) +
+                (SELECT COUNT(*) FROM idempotency_records WHERE job_id = ?1)",
+            [replacement_job.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retired_old_history, 0);
+    assert_eq!(retained_terminal_rows, 2);
+    drop(connection);
+
+    assert_terminal_replay(
+        store.admit(&identity(), replacement_request),
+        PersistedTerminalReceiptV1::new_with_projections(
+            JobReceiptV1::new(3, replacement_job, digest('c')),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id: replacement.session_id().clone(),
+                revision_before: cancelled.revision(),
+                revision_after: replacement.revision(),
+                changed: true,
+            }),
+            PersistedTerminalJobProjectionV1::new(
+                PersistedTerminalJobStateV1::Succeeded,
+                UnixMillis::new(16),
+                Some(UnixMillis::new(17)),
+                UnixMillis::new(18),
+            )
+            .unwrap(),
+            Some(
+                PersistedTerminalSessionProjectionV1::new(
+                    replacement.session_id().clone(),
+                    replacement.task_title().to_owned(),
+                    replacement.lifecycle().into(),
+                    cancelled.revision(),
+                    replacement.revision(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap(),
+    );
+}
+
+#[test]
+fn fresh_session_start_replace_invalid_shapes_fail_closed() {
+    let replacement = aggregate();
+    assert!(
+        StateTransitionV1::new_persisted(
+            Some(replacement.session_id().clone()),
+            Revision::new(2),
+            replacement.revision(),
+            PersistedSessionMutationV1::Replace(replacement.clone()),
+        )
+        .is_err()
+    );
+    assert!(
+        StateTransitionV1::new_persisted(
+            Some(replacement.session_id().clone()),
+            Revision::new(2),
+            Revision::new(2),
+            PersistedSessionMutationV1::ReplaceFresh(replacement.clone()),
+        )
+        .is_err()
+    );
+    assert!(
+        StateTransitionV1::new_persisted(
+            Some(SessionId::new("00000000-0000-4000-8000-000000000299").unwrap()),
+            Revision::new(2),
+            replacement.revision(),
+            PersistedSessionMutationV1::ReplaceFresh(replacement.clone()),
+        )
+        .is_err()
+    );
+    assert!(
+        PersistedTerminalSessionProjectionV1::new(
+            replacement.session_id().clone(),
+            replacement.task_title().to_owned(),
+            replacement.lifecycle().into(),
+            Revision::new(2),
+            Revision::ZERO,
+        )
+        .is_err()
+    );
+
+    for invalid_shape in [
+        FreshReplacementInvalidShape::SameSession,
+        FreshReplacementInvalidShape::OtherCommand,
+        FreshReplacementInvalidShape::StaleRevision,
+    ] {
+        let temporary = TempDir::new().unwrap();
+        let store = store(&temporary);
+        let current = aggregate();
+        seed_current_session(
+            &store,
+            &current,
+            job(230),
+            &format!("fresh-replacement-invalid-{invalid_shape:?}"),
+            2,
+        );
+        let replacement = SessionAggregateV1::start(
+            SessionId::new("00000000-0000-4000-8000-000000000232").unwrap(),
+            "Replacement",
+            current.snapshot().clone(),
+            AttemptId::new("00000000-0000-4000-8000-000000000233").unwrap(),
+            UnixMillis::new(12),
+        )
+        .unwrap();
+        let (
+            command,
+            next,
+            result_session_id,
+            expected_revision,
+            request_job,
+            request_key,
+            request_digest,
+        ) = match invalid_shape {
+            FreshReplacementInvalidShape::SameSession => (
+                DomainCommand::SessionStartReplace,
+                current.clone(),
+                current.session_id().clone(),
+                current.revision(),
+                job(231),
+                "fresh-replacement-invalid-same-session-request",
+                'd',
+            ),
+            FreshReplacementInvalidShape::OtherCommand => (
+                DomainCommand::SessionComplete,
+                replacement.clone(),
+                replacement.session_id().clone(),
+                current.revision(),
+                job(232),
+                "fresh-replacement-invalid-other-command-request",
+                'e',
+            ),
+            FreshReplacementInvalidShape::StaleRevision => (
+                DomainCommand::SessionStartReplace,
+                replacement.clone(),
+                replacement.session_id().clone(),
+                Revision::ZERO,
+                job(233),
+                "fresh-replacement-invalid-stale-revision-request",
+                'f',
+            ),
+        };
+        let request = AdmitRequestV1::new(
+            command,
+            IdempotencyKeyV1::new(request_key).unwrap(),
+            request_job,
+            RevisionAttemptItemPreconditionsV1::new(Some(current.revision()), None, None, None)
+                .unwrap(),
+            digest(request_digest),
+            UnixMillis::new(13),
+        );
+        store.admit(&identity(), request).unwrap();
+        let claim = store
+            .claim_next(
+                &identity(),
+                WorkerIdV1::new("fresh-replacement-invalid-worker").unwrap(),
+                UnixMillis::new(14),
+            )
+            .unwrap()
+            .unwrap();
+        let result = store.commit_terminal(
+            claim.claim().clone(),
+            expected_revision,
+            Some(
+                StateTransitionV1::new_persisted(
+                    Some(next.session_id().clone()),
+                    current.revision(),
+                    next.revision(),
+                    PersistedSessionMutationV1::ReplaceFresh(next),
+                )
+                .unwrap(),
+            ),
+            TerminalResultV1::Success(DomainResult::SessionChanged {
+                session_id: result_session_id,
+                revision_before: current.revision(),
+                revision_after: Revision::new(1),
+                changed: true,
+            }),
+            UnixMillis::new(15),
+        );
+        match invalid_shape {
+            FreshReplacementInvalidShape::StaleRevision => {
+                assert!(matches!(
+                    result,
+                    Err(StoreErrorV1::PreconditionConflictV1 { .. })
+                ));
+            }
+            FreshReplacementInvalidShape::SameSession => {
+                assert!(matches!(
+                    result,
+                    Err(StoreErrorV1::InternalInvariantViolationV1 {
+                        invariant: StoreInvariantV1::TransitionMutationShape
+                    })
+                ));
+            }
+            FreshReplacementInvalidShape::OtherCommand => {
+                assert!(matches!(
+                    result,
+                    Err(StoreErrorV1::CorruptStateV1 {
+                        record: StoreRecordKindV1::Job
+                    })
+                ));
+            }
+        }
+        assert_eq!(
+            store.read_session_aggregate(&identity()).unwrap(),
+            Some(current)
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FreshReplacementInvalidShape {
+    SameSession,
+    OtherCommand,
+    StaleRevision,
 }

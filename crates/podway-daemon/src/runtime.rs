@@ -446,16 +446,77 @@ fn recover_registered_workspaces(
             }
         };
         let observation = WorkspaceRuntimeObservationV1::new(clock.now(), clock.generated_at());
-        match manager.resolve_existing(selector, Some(&workspace_uuid), observation) {
-            Ok(scheduler) => {
-                let requeued_job_count = scheduler
-                    .context_snapshot()
-                    .store()
-                    .startup_recovery_report()
-                    .requeued_job_count();
-                outcomes.push(None);
-                recovered.push((index, workspace_uuid, requeued_job_count, scheduler));
-            }
+        match manager.begin_reset_maintenance(selector.clone()) {
+            Ok(transaction) => match transaction.discover_marker() {
+                Ok(Some(marker)) => {
+                    let completion = if transaction.authority().registry_previous_workspace_uuid()
+                        != &workspace_uuid
+                    {
+                        Err(WorkspaceRuntimeErrorV1::ResetRegistryPredecessorStale)
+                    } else {
+                        transaction.resume(
+                            marker.idempotency_key(),
+                            marker.request_digest(),
+                            observation,
+                        )
+                    };
+                    match completion {
+                        Ok(completion) => {
+                            let scheduler = Arc::clone(completion.scheduler());
+                            let target_workspace_uuid = scheduler
+                                .context_snapshot()
+                                .binding()
+                                .identity()
+                                .workspace_uuid()
+                                .clone();
+                            let requeued_job_count = scheduler
+                                .context_snapshot()
+                                .store()
+                                .startup_recovery_report()
+                                .requeued_job_count();
+                            outcomes.push(None);
+                            recovered.push((
+                                index,
+                                target_workspace_uuid,
+                                requeued_job_count,
+                                scheduler,
+                            ));
+                        }
+                        Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                            UnavailableWorkspaceReportV1::new(
+                                workspace_uuid,
+                                unavailable_reason_from_runtime_error(error),
+                            ),
+                        ))),
+                    }
+                }
+                Ok(None) => {
+                    drop(transaction);
+                    match manager.resolve_existing(selector, Some(&workspace_uuid), observation) {
+                        Ok(scheduler) => {
+                            let requeued_job_count = scheduler
+                                .context_snapshot()
+                                .store()
+                                .startup_recovery_report()
+                                .requeued_job_count();
+                            outcomes.push(None);
+                            recovered.push((index, workspace_uuid, requeued_job_count, scheduler));
+                        }
+                        Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                            UnavailableWorkspaceReportV1::new(
+                                workspace_uuid,
+                                unavailable_reason_from_runtime_error(error),
+                            ),
+                        ))),
+                    }
+                }
+                Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                    UnavailableWorkspaceReportV1::new(
+                        workspace_uuid,
+                        unavailable_reason_from_runtime_error(error),
+                    ),
+                ))),
+            },
             Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
                 UnavailableWorkspaceReportV1::new(
                     workspace_uuid,
@@ -515,9 +576,21 @@ fn unavailable_reason_from_runtime_error(
         WorkspaceRuntimeErrorV1::Store(_) | WorkspaceRuntimeErrorV1::BindingDisappeared { .. } => {
             WorkspaceRecoveryUnavailableReasonV1::WorkspaceStateUnreadable
         }
+        WorkspaceRuntimeErrorV1::MaintenanceInProgress
+        | WorkspaceRuntimeErrorV1::ResetSchedulerRetirement
+        | WorkspaceRuntimeErrorV1::ResetMarkerConflict
+        | WorkspaceRuntimeErrorV1::ResetIdempotencyConflict { .. }
+        | WorkspaceRuntimeErrorV1::ResetRegistryPredecessorStale
+        | WorkspaceRuntimeErrorV1::RuntimeDirectory(_) => {
+            WorkspaceRecoveryUnavailableReasonV1::DaemonUnavailable
+        }
+        WorkspaceRuntimeErrorV1::ResetSourceNotRegistered => {
+            WorkspaceRecoveryUnavailableReasonV1::WorkspaceNotInitialized
+        }
         WorkspaceRuntimeErrorV1::BindingIdentityMismatch { .. }
         | WorkspaceRuntimeErrorV1::BindingMismatch { .. }
         | WorkspaceRuntimeErrorV1::RebindEvidenceMismatch { .. }
+        | WorkspaceRuntimeErrorV1::ResetSourceAmbiguous
         | WorkspaceRuntimeErrorV1::RevalidationKeyMismatch { .. } => {
             WorkspaceRecoveryUnavailableReasonV1::WorkspaceIdentityConflict
         }

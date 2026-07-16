@@ -149,14 +149,18 @@ impl<C> WorkspaceSchedulerV1<C> {
         Arc::clone(&read_lock(&self.context))
     }
 
-    /// Quiesces this identity, swaps the context for future operations, and returns the prior context.
+    /// Retires the current context while serialization is held, then publishes its replacement.
     ///
-    /// The serialization mutex makes the replacement wait for every earlier serialized operation.
-    /// Existing snapshots outside that contract remain immutable, so callers must use
-    /// [`Self::with_serialized`] for authority-bearing work.
-    pub fn rebind_context_serialized(&self, context: Arc<C>) -> Arc<C> {
+    /// The replacement is not visible when retirement fails.
+    pub(crate) fn rebind_context_serialized_after<E>(
+        &self,
+        context: Arc<C>,
+        retire: impl FnOnce(&Arc<C>) -> Result<(), E>,
+    ) -> Result<Arc<C>, E> {
         let _serialization = mutex_lock(&self.serialization);
-        std::mem::replace(&mut *write_lock(&self.context), context)
+        let mut current = write_lock(&self.context);
+        retire(&current)?;
+        Ok(std::mem::replace(&mut *current, context))
     }
 
     /// Runs one operation under this identity's in-process serialization mutex.
@@ -875,5 +879,26 @@ mod tests {
             .get_or_create(key, || ())
             .expect("replacement remains registered after stale completion");
         assert!(Arc::ptr_eq(&current, &replacement));
+    }
+
+    #[test]
+    fn lifecycle_rebind_retires_before_replacement_and_preserves_on_failure() {
+        let scheduler =
+            WorkspaceSchedulerV1::new(test_key(), SchedulerGenerationV1::initial(), 11_usize);
+        let rejected = scheduler.rebind_context_serialized_after(Arc::new(22), |current| {
+            assert_eq!(**current, 11);
+            Err::<(), _>("retirement failed")
+        });
+        assert_eq!(rejected, Err("retirement failed"));
+        assert_eq!(*scheduler.context_snapshot(), 11);
+
+        let prior = scheduler
+            .rebind_context_serialized_after(Arc::new(22), |current| {
+                assert_eq!(**current, 11);
+                Ok::<(), &str>(())
+            })
+            .expect("successful retirement must publish the replacement");
+        assert_eq!(*prior, 11);
+        assert_eq!(*scheduler.context_snapshot(), 22);
     }
 }

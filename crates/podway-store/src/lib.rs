@@ -1263,6 +1263,8 @@ pub enum PersistedSessionMutationV1 {
     Unchanged,
     /// Replace the current normalized session state with this validated aggregate.
     Replace(SessionAggregateV1),
+    /// Replace an existing session with a distinct fresh session at revision one.
+    ReplaceFresh(SessionAggregateV1),
     /// Remove the current session and expose workspace revision zero.
     Clear,
 }
@@ -1301,6 +1303,14 @@ impl StateTransitionV1 {
                         != previous_workspace_revision
                             .checked_next()
                             .map_err(|_| StoreValueErrorV1::RevisionRegressed)?
+                {
+                    return Err(StoreValueErrorV1::SessionMutationRevisionMismatch);
+                }
+            }
+            PersistedSessionMutationV1::ReplaceFresh(aggregate) => {
+                if session_id.as_ref() != Some(aggregate.session_id())
+                    || resulting_workspace_revision != RevisionV1::new(1)
+                    || aggregate.revision() != RevisionV1::new(1)
                 {
                     return Err(StoreValueErrorV1::SessionMutationRevisionMismatch);
                 }

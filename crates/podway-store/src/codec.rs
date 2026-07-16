@@ -656,7 +656,10 @@ impl PersistedTerminalSessionProjectionV1 {
                 field: "terminal session title",
             });
         }
-        if self.revision_after < self.revision_before {
+        if self.revision_after < self.revision_before
+            && !(self.revision_after == RevisionV1::new(1)
+                && self.revision_before > RevisionV1::new(1))
+        {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "terminal session revisions",
             });
@@ -793,7 +796,15 @@ impl PersistedTerminalReceiptV1 {
                 ),
                 Some(session_projection),
             ) => {
-                if *changed != (*revision_before != *revision_after) {
+                let fresh_replacement = matches!(
+                    &self.result,
+                    PersistedTerminalResultV1::Success(
+                        PersistedDomainResultV1::SessionChanged { .. }
+                    )
+                ) && *changed
+                    && *revision_after == RevisionV1::new(1)
+                    && *revision_before > RevisionV1::ZERO;
+                if *changed != (*revision_before != *revision_after) && !fresh_replacement {
                     return Err(StoreCodecErrorV1::InvalidValue {
                         field: "terminal session projection",
                     });
@@ -1031,12 +1042,47 @@ fn validate_success_result_for_command_v1(
 ) -> Result<(), StoreCodecErrorV1> {
     let revisions_are_possible =
         |before: RevisionV1, after: RevisionV1, changed: bool| changed == (before != after);
+    let monotonic_revisions_are_possible =
+        |before: RevisionV1, after: RevisionV1, changed: bool| {
+            revisions_are_possible(before, after, changed) && before <= after
+        };
+    let fresh_replacement_revisions_are_possible =
+        |before: RevisionV1, after: RevisionV1, changed: bool| {
+            changed && after == RevisionV1::new(1) && before > RevisionV1::ZERO
+        };
     let compatible = match (command, result) {
         (CommandV1::WorkspaceInitialize, PersistedDomainResultV1::WorkspaceInitialized { .. })
         | (CommandV1::WorkspaceResetAll, PersistedDomainResultV1::WorkspaceReset { .. }) => true,
         (
+            CommandV1::SessionStartReplace,
+            PersistedDomainResultV1::SessionChanged {
+                revision_before,
+                revision_after,
+                changed,
+                ..
+            },
+        ) => {
+            monotonic_revisions_are_possible(*revision_before, *revision_after, *changed)
+                || fresh_replacement_revisions_are_possible(
+                    *revision_before,
+                    *revision_after,
+                    *changed,
+                )
+        }
+        (
+            CommandV1::SessionReset,
+            PersistedDomainResultV1::SessionChanged {
+                revision_before,
+                revision_after,
+                changed,
+                ..
+            },
+        ) => {
+            revisions_are_possible(*revision_before, *revision_after, *changed)
+                && *revision_after == RevisionV1::ZERO
+        }
+        (
             CommandV1::SessionStart
-            | CommandV1::SessionStartReplace
             | CommandV1::SessionComplete
             | CommandV1::SessionSkip
             | CommandV1::SessionRetry
@@ -1044,15 +1090,14 @@ fn validate_success_result_for_command_v1(
             | CommandV1::SessionBlock
             | CommandV1::SessionUnblock
             | CommandV1::SessionCancel
-            | CommandV1::SessionReopen
-            | CommandV1::SessionReset,
+            | CommandV1::SessionReopen,
             PersistedDomainResultV1::SessionChanged {
                 revision_before,
                 revision_after,
                 changed,
                 ..
             },
-        ) => revisions_are_possible(*revision_before, *revision_after, *changed),
+        ) => monotonic_revisions_are_possible(*revision_before, *revision_after, *changed),
         (
             CommandV1::ItemCheck { item_id }
             | CommandV1::ItemUncheck { item_id }
@@ -1070,7 +1115,7 @@ fn validate_success_result_for_command_v1(
             },
         ) => {
             item_id == result_item_id
-                && revisions_are_possible(*revision_before, *revision_after, *changed)
+                && monotonic_revisions_are_possible(*revision_before, *revision_after, *changed)
         }
         _ => false,
     };

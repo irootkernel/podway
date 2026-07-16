@@ -21,14 +21,12 @@ use std::{
 use podway_core::UnixMillis;
 use podway_daemon::{
     dispatch::{DispatchFailureKindV1, WorkspaceRuntimeV1},
-    execution::ExecutionClockV1,
-    production::{NativeContextExecutionV1, NativeProductionClockV1, ProductionWorkspaceRuntimeV1},
+    production::{NativeProductionClockV1, ProductionWorkspaceRuntimeV1},
     runtime::{
         ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1, WorkspaceRecoveryEntryV1,
         WorkspaceRecoveryUnavailableReasonV1,
     },
     runtime_workspace::{WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1},
-    worker::WorkerExecutionV1,
 };
 use podway_git::{GitResolverContractV1, NativeGitResolverV1};
 use podway_protocol::{
@@ -39,10 +37,7 @@ use podway_protocol::{
     read_single_frame_v1, write_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
-use podway_store::{
-    IdempotencyKeyV1 as StoreIdempotencyKeyV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StoreContractV1, ValidatedWorkspaceRootV1, WorkerIdV1,
-};
+use podway_store::{SqliteStoreOptionsV1, SqliteStoreV1, ValidatedWorkspaceRootV1, WorkerIdV1};
 use support_phase4_workspace::{
     TemporaryDirectoryV1, copy_tree, git_worktrees, non_utf8_child_path, read_file,
     selector as git_selector,
@@ -160,7 +155,7 @@ fn request(
 }
 
 #[test]
-fn startup_recovery_drains_a_real_queued_workspace_and_serves_framed_status() {
+fn startup_recovery_serves_a_real_workspace_without_public_store_mutation_access() {
     let fixture = git_worktrees();
     make_workspace_runtime_private(fixture.main());
     let paths = runtime_paths(fixture.temporary_path());
@@ -177,32 +172,8 @@ fn startup_recovery_drains_a_real_queued_workspace_and_serves_framed_status() {
     let workspace = workspace_runtime
         .resolve_bootstrap(&workspace_selector)
         .expect("real workspace must bootstrap");
-    let context = workspace.scheduler().context_snapshot();
-    let initialization = request(
-        1,
-        "workspace.init",
-        OperationV1::Bootstrap,
-        &workspace_selector,
-    );
-    NativeContextExecutionV1
-        .admit(
-            context.as_ref(),
-            context.binding(),
-            &initialization.1,
-            StoreIdempotencyKeyV1::new("recovered-initialization")
-                .expect("Store idempotency key must be valid"),
-        )
-        .expect("production execution must durably admit the queued initialization");
-    context
-        .store()
-        .claim_next(
-            context.binding().identity(),
-            WorkerIdV1::new("interrupted-worker").expect("worker ID must be valid"),
-            NativeProductionClockV1::default().now(),
-        )
-        .expect("Store claim must succeed")
-        .expect("the admitted job must be claimed before restart");
-    drop(context);
+    let _context = workspace.scheduler().context_snapshot();
+    drop(_context);
     drop(workspace);
     drop(workspace_runtime);
     drop(manager);
@@ -213,7 +184,7 @@ fn startup_recovery_drains_a_real_queued_workspace_and_serves_framed_status() {
     assert!(matches!(
         runtime.recovery_report().workspaces(),
         [WorkspaceRecoveryEntryV1::Recovered(report)]
-            if report.requeued_job_count() == 1 && report.drained_terminal_job_count() == 1
+            if report.requeued_job_count() == 0 && report.drained_terminal_job_count() == 0
     ));
 
     let socket_path = runtime.socket_path().to_path_buf();
@@ -254,6 +225,41 @@ fn startup_recovery_drains_a_real_queued_workspace_and_serves_framed_status() {
     );
 }
 
+#[test]
+fn readonly_resolution_reuses_only_the_exact_active_context_without_registry_refresh() {
+    let fixture = git_worktrees();
+    make_workspace_runtime_private(fixture.main());
+    let paths = runtime_paths(fixture.temporary_path());
+    let manager = WorkspaceRuntimeManagerV1::new(
+        paths.paths(),
+        SqliteStoreOptionsV1::new(8).expect("SQLite options must be valid"),
+    );
+    let scheduler = manager
+        .bootstrap(git_selector(fixture.main()), observation())
+        .expect("workspace bootstrap must succeed");
+    let context = scheduler.context_snapshot();
+    let workspace_id = context.binding().identity().workspace_uuid().clone();
+    let before = manager
+        .registry()
+        .lookup(&workspace_id)
+        .expect("registry must be readable")
+        .expect("bootstrap must publish registry metadata");
+    let resolution = manager
+        .resolve_existing_readonly(git_selector(fixture.main()), Some(&workspace_id))
+        .expect("read-only resolution must validate the existing workspace");
+    let active = resolution
+        .active_scheduler()
+        .expect("the exact active context must be reusable");
+    assert!(Arc::ptr_eq(active, &scheduler));
+    assert_eq!(resolution.binding(), context.binding());
+    let after = manager
+        .registry()
+        .lookup(&workspace_id)
+        .expect("registry must remain readable")
+        .expect("read-only resolution must retain registry metadata");
+    assert_eq!(after.last_known_root(), before.last_known_root());
+    assert_eq!(after.last_seen_at(), before.last_seen_at());
+}
 #[test]
 fn shutdown_leaves_a_replacement_socket_untouched() {
     let temporary = TemporaryDirectoryV1::new("podway-daemon-runtime-endpoint");

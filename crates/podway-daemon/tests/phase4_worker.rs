@@ -62,6 +62,12 @@ enum RecoveryHookPanic {
     StopClaims,
     MarkRecoveryRequired,
 }
+enum FixtureMaintenanceStoreState {
+    Open {
+        close_result: Result<(), StoreErrorV1>,
+    },
+    Closed(Result<(), StoreErrorV1>),
+}
 
 struct FixtureState {
     next_sequence: u64,
@@ -202,6 +208,8 @@ struct FixtureCoordinationState {
     mark_recovery_required_calls: usize,
     panic_stop_claims_once: bool,
     panic_mark_recovery_required_once: bool,
+    maintenance_store: FixtureMaintenanceStoreState,
+    maintenance_close_calls: usize,
 }
 
 struct FixtureContext {
@@ -225,6 +233,10 @@ impl FixtureContext {
                     mark_recovery_required_calls: 0,
                     panic_stop_claims_once: false,
                     panic_mark_recovery_required_once: false,
+                    maintenance_store: FixtureMaintenanceStoreState::Open {
+                        close_result: Ok(()),
+                    },
+                    maintenance_close_calls: 0,
                 }),
                 changed: Condvar::new(),
             }),
@@ -248,6 +260,28 @@ impl FixtureContext {
 
     fn claims_are_stopped(&self) -> bool {
         !mutex_lock(&self.coordination.state).accepting_claims
+    }
+    fn fail_maintenance_store_close(&self, error: StoreErrorV1) {
+        let mut state = mutex_lock(&self.coordination.state);
+        match &mut state.maintenance_store {
+            FixtureMaintenanceStoreState::Open { close_result } => {
+                *close_result = Err(error);
+            }
+            FixtureMaintenanceStoreState::Closed(_) => {
+                panic!("maintenance Store close failure must be configured before close");
+            }
+        }
+    }
+
+    fn maintenance_store_is_closed(&self) -> bool {
+        matches!(
+            &mutex_lock(&self.coordination.state).maintenance_store,
+            FixtureMaintenanceStoreState::Closed(_)
+        )
+    }
+
+    fn maintenance_close_call_count(&self) -> usize {
+        mutex_lock(&self.coordination.state).maintenance_close_calls
     }
 }
 
@@ -283,6 +317,20 @@ impl WorkerWorkspaceContextV1 for FixtureContext {
             !panics_after_stopping_claims,
             "fixture injected stop_claims panic"
         );
+    }
+    fn close_store_for_maintenance(&self) -> Result<(), StoreErrorV1> {
+        let mut state = mutex_lock(&self.coordination.state);
+        state.maintenance_close_calls += 1;
+        let maintenance_store = std::mem::replace(
+            &mut state.maintenance_store,
+            FixtureMaintenanceStoreState::Closed(Ok(())),
+        );
+        let result = match maintenance_store {
+            FixtureMaintenanceStoreState::Open { close_result }
+            | FixtureMaintenanceStoreState::Closed(close_result) => close_result,
+        };
+        state.maintenance_store = FixtureMaintenanceStoreState::Closed(result.clone());
+        result
     }
 
     fn mark_recovery_required(&self) {
@@ -1020,7 +1068,8 @@ fn graceful_retirement_waits_for_claimed_work_and_stops_future_claims() {
     assert_eq!(boundary.job_state(job.job_id()), JobStateV1::Failed);
 }
 #[test]
-fn admission_racing_retirement_is_drained_and_old_generation_cannot_claim_future_work() {
+fn admission_racing_maintenance_retirement_is_drained_and_old_generation_cannot_claim_future_work()
+{
     let boundary = Arc::new(FixtureBoundary::new());
     let worker = worker(Arc::clone(&boundary), Arc::new(FixtureClock::new(1)));
     let registry = FixtureRegistry::new();
@@ -1051,7 +1100,7 @@ fn admission_racing_retirement_is_drained_and_old_generation_cannot_claim_future
         let registry = registry.clone();
         let scheduler = Arc::clone(&retiring);
         thread::spawn(move || {
-            worker.retire_workspace_with(&registry, &scheduler, |_| {
+            worker.retire_workspace_for_maintenance(&registry, &scheduler, |_| {
                 close_entered_sender
                     .send(())
                     .expect("test observes retirement after queue drain");
@@ -1133,4 +1182,108 @@ fn retirement_closes_exact_generation_and_retry_does_not_reopen_it() {
         replacement.generation().get(),
         retiring_scheduler.generation().get() + 1
     );
+}
+#[test]
+fn maintenance_retirement_drains_stops_claims_closes_store_then_runs_callback() {
+    let boundary = Arc::new(FixtureBoundary::new());
+    let worker = worker(Arc::clone(&boundary), Arc::new(FixtureClock::new(1)));
+    let registry = FixtureRegistry::new();
+    let binding = binding(15, "podway.unix-path/v1:2f746d702f6d61696e74656e616e6365");
+    let scheduler = scheduler(&registry, Arc::clone(&boundary), binding.clone());
+    let first = boundary.enqueue(&binding);
+    let second = boundary.enqueue(&binding);
+    let context = scheduler.context_snapshot();
+    let callback_context = Arc::clone(&context);
+    let callback_boundary = Arc::clone(&boundary);
+    let callback_count = Arc::new(AtomicUsize::new(0));
+    let observed_callback_count = Arc::clone(&callback_count);
+
+    worker
+        .retire_workspace_for_maintenance(&registry, &scheduler, move |_| {
+            assert_eq!(
+                callback_boundary.executed(),
+                vec![first.job_id().clone(), second.job_id().clone()],
+                "maintenance starts only after all earlier FIFO work reaches terminal state"
+            );
+            assert!(callback_context.claims_are_stopped());
+            assert!(callback_context.maintenance_store_is_closed());
+            observed_callback_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("maintenance retirement closes the Store before the callback");
+
+    assert_eq!(callback_count.load(Ordering::SeqCst), 1);
+    assert_eq!(context.maintenance_close_call_count(), 1);
+    assert!(matches!(
+        worker.submit(
+            &scheduler,
+            &request(),
+            idempotency_key(),
+            WorkerCompletionModeV1::Detached,
+        ),
+        Err(WorkerErrorV1::RetirementRejected)
+    ));
+}
+
+#[test]
+fn failed_maintenance_store_close_is_cached_and_keeps_the_generation_fail_closed() {
+    let boundary = Arc::new(FixtureBoundary::new());
+    let worker = worker(Arc::clone(&boundary), Arc::new(FixtureClock::new(1)));
+    let registry = FixtureRegistry::new();
+    let binding = binding(
+        16,
+        "podway.unix-path/v1:2f746d702f636c6f73652d6661696c757265",
+    );
+    let scheduler = scheduler(&registry, Arc::clone(&boundary), binding.clone());
+    let context = scheduler.context_snapshot();
+    context.fail_maintenance_store_close(StoreErrorV1::StorageUnavailableV1 {
+        reason: podway_store::StoreUnavailableReasonV1::Busy,
+    });
+    let callback_count = Arc::new(AtomicUsize::new(0));
+    let first_callback_count = Arc::clone(&callback_count);
+
+    let failure = worker
+        .retire_workspace_for_maintenance(&registry, &scheduler, move |_| {
+            first_callback_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect_err("a failed Store close keeps retirement retryable");
+    assert!(context.claims_are_stopped());
+    assert!(context.maintenance_store_is_closed());
+    assert_eq!(context.maintenance_close_call_count(), 1);
+    assert_eq!(callback_count.load(Ordering::SeqCst), 0);
+
+    let retry = match failure {
+        WorkerRetirementErrorV1::CloseFailed { retry, .. } => retry,
+        _ => panic!("maintenance close failure retains a typed retry"),
+    };
+    let retry_callback_count = Arc::clone(&callback_count);
+    assert!(matches!(
+        retry.retry_with_maintenance(move |_| {
+            retry_callback_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }),
+        Err(WorkerRetirementErrorV1::CloseFailed {
+            source,
+            ..
+        }) if matches!(*source, WorkerErrorV1::Store(StoreErrorV1::StorageUnavailableV1 {
+            reason: podway_store::StoreUnavailableReasonV1::Busy
+        }))
+    ));
+    assert_eq!(
+        context.maintenance_close_call_count(),
+        2,
+        "a retry reuses the cached close failure instead of reopening the Store"
+    );
+    assert_eq!(callback_count.load(Ordering::SeqCst), 0);
+    assert!(registry.get_active(scheduler.key()).is_none());
+    assert!(matches!(
+        worker.submit(
+            &scheduler,
+            &request(),
+            idempotency_key(),
+            WorkerCompletionModeV1::Detached,
+        ),
+        Err(WorkerErrorV1::RetirementRejected)
+    ));
 }

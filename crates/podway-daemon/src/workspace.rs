@@ -7,28 +7,1016 @@
 
 use std::{
     error::Error,
-    fmt, fs, io,
+    fmt,
+    fs::{self, File, Metadata},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 #[cfg(unix)]
-use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+use std::{
+    ffi::OsString,
+    os::unix::{
+        ffi::OsStringExt,
+        fs::{MetadataExt, PermissionsExt},
+    },
+};
 
-use podway_core::WorkspaceId;
+#[cfg(unix)]
+use nix::{
+    errno::Errno,
+    fcntl::{AtFlags, OFlag, open, openat},
+    sys::stat::Mode,
+    unistd::{UnlinkatFlags, getuid, linkat, unlinkat},
+};
+use podway_core::{UnixMillis, WorkspaceId, canonicalize_json_v1, verify_canonical_json_v1};
 use podway_git::{
     DiagnosticPathDisplayV1, DurableWorktreeIdentityV1 as GitWorktreeIdentityV1, GitResolveErrorV1,
     GitResolverContractV1, LosslessPathV1, SelectorValidationErrorV1, ValidatedWorktreeV1,
     WorkspaceIdentityStateV1, WorktreeMoveMetadataV1, WorktreeSelectorV1,
 };
 use podway_store::{
-    DurableWorktreeIdentityV1 as StoreWorktreeIdentityV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StoreErrorV1, StoreValueErrorV1, ValidatedWorkspaceRootV1, WorkspaceBindingV1,
+    CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
+    DurableWorktreeIdentityV1 as StoreWorktreeIdentityV1, IdempotencyKeyV1, JobIdV1,
+    SqliteStoreOptionsV1, SqliteStoreV1, StoreErrorV1, StoreValueErrorV1, ValidatedWorkspaceRootV1,
+    WorkspaceBindingV1,
 };
 
 use crate::scheduler::WorkspaceSchedulerKeyV1;
 
 const STATE_DATABASE_FILE_NAME_V1: &str = "state.sqlite3";
 const STORED_ROOT_DIAGNOSTIC_V1: &str = "store-validated workspace root";
+/// The sole reset-marker schema accepted as destructive-reset recovery authority.
+pub const RESET_MARKER_SCHEMA_V1: &str = "podway.reset-marker/v1";
+/// Reset-marker decoding is bounded before parsing so a local corrupt file cannot amplify recovery.
+pub const MAX_RESET_MARKER_BYTES_V1: u64 = 16 * 1024;
+const RESET_MARKER_FILE_NAME_V1: &str = "reset.marker";
+const STATE_DATABASE_FILE_WAL_NAME_V1: &str = "state.sqlite3-wal";
+const STATE_DATABASE_FILE_SHM_NAME_V1: &str = "state.sqlite3-shm";
+const PRIVATE_RUNTIME_DIRECTORY_MODE_V1: u32 = 0o700;
+const PRIVATE_RUNTIME_FILE_MODE_V1: u32 = 0o600;
+const RESET_MARKER_TEMPORARY_NAME_ATTEMPTS_V1: usize = 128;
+
+static RESET_MARKER_TEMPORARY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
+
+/// Exact durable recovery input for a reset-all operation.
+///
+/// This document deliberately contains no path, selector, or terminal timestamp. The
+/// Git-validated runtime descriptor remains filesystem authority; the immutable predecessor UUID
+/// binds recovery to one registry generation before it can seed or verify the target Store.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResetMarkerV1 {
+    operation_id: JobIdV1,
+    idempotency_key: IdempotencyKeyV1,
+    request_digest: CanonicalRequestDigestV1,
+    previous_workspace_uuid: WorkspaceId,
+    target_workspace_uuid: WorkspaceId,
+    submitted_at_ms: UnixMillis,
+}
+
+impl ResetMarkerV1 {
+    pub fn new(
+        operation_id: JobIdV1,
+        idempotency_key: IdempotencyKeyV1,
+        request_digest: CanonicalRequestDigestV1,
+        previous_workspace_uuid: WorkspaceId,
+        target_workspace_uuid: WorkspaceId,
+        submitted_at_ms: UnixMillis,
+    ) -> Self {
+        Self {
+            operation_id,
+            idempotency_key,
+            request_digest,
+            previous_workspace_uuid,
+            target_workspace_uuid,
+            submitted_at_ms,
+        }
+    }
+
+    pub fn operation_id(&self) -> &JobIdV1 {
+        &self.operation_id
+    }
+
+    pub fn idempotency_key(&self) -> &IdempotencyKeyV1 {
+        &self.idempotency_key
+    }
+
+    pub fn request_digest(&self) -> &CanonicalRequestDigestV1 {
+        &self.request_digest
+    }
+    pub fn previous_workspace_uuid(&self) -> &WorkspaceId {
+        &self.previous_workspace_uuid
+    }
+
+    pub fn target_workspace_uuid(&self) -> &WorkspaceId {
+        &self.target_workspace_uuid
+    }
+
+    pub const fn submitted_at_ms(&self) -> UnixMillis {
+        self.submitted_at_ms
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, ResetMarkerErrorV1> {
+        canonicalize_json_v1(&SerializableResetMarkerRefV1 {
+            schema: RESET_MARKER_SCHEMA_V1,
+            operation_id: self.operation_id.as_str(),
+            idempotency_key: self.idempotency_key.as_str(),
+            request_digest: self.request_digest.as_str(),
+            previous_workspace_uuid: self.previous_workspace_uuid.as_str(),
+            target_workspace_uuid: self.target_workspace_uuid.as_str(),
+            submitted_at_ms: self.submitted_at_ms.get(),
+        })
+        .map(String::into_bytes)
+        .map_err(|_| ResetMarkerErrorV1::Encode)
+    }
+
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, ResetMarkerErrorV1> {
+        if bytes.len() as u64 > MAX_RESET_MARKER_BYTES_V1 {
+            return Err(ResetMarkerErrorV1::TooLarge {
+                maximum: MAX_RESET_MARKER_BYTES_V1,
+                actual: bytes.len() as u64,
+            });
+        }
+        match verify_canonical_json_v1(bytes) {
+            Ok(()) => {}
+            Err(podway_core::CanonicalJsonErrorV1::InvalidJson(_)) => {
+                return Err(ResetMarkerErrorV1::InvalidJson);
+            }
+            Err(_) => return Err(ResetMarkerErrorV1::NonCanonical),
+        }
+        let serialized: SerializedResetMarkerV1 =
+            serde_json::from_slice(bytes).map_err(|_| ResetMarkerErrorV1::InvalidShape)?;
+        if serialized.schema != RESET_MARKER_SCHEMA_V1 {
+            return Err(ResetMarkerErrorV1::UnsupportedSchema);
+        }
+        let marker = Self {
+            operation_id: JobIdV1::new(serialized.operation_id)
+                .map_err(|_| ResetMarkerErrorV1::InvalidOperationId)?,
+            idempotency_key: IdempotencyKeyV1::new(serialized.idempotency_key)
+                .map_err(|_| ResetMarkerErrorV1::InvalidIdempotencyKey)?,
+            request_digest: CanonicalRequestDigestV1::new(serialized.request_digest)
+                .map_err(|_| ResetMarkerErrorV1::InvalidRequestDigest)?,
+            previous_workspace_uuid: WorkspaceId::new(serialized.previous_workspace_uuid)
+                .map_err(|_| ResetMarkerErrorV1::InvalidTargetWorkspaceUuid)?,
+            target_workspace_uuid: WorkspaceId::new(serialized.target_workspace_uuid)
+                .map_err(|_| ResetMarkerErrorV1::InvalidTargetWorkspaceUuid)?,
+            submitted_at_ms: UnixMillis::new(serialized.submitted_at_ms),
+        };
+        if marker.canonical_bytes()?.as_slice() != bytes {
+            return Err(ResetMarkerErrorV1::NonCanonical);
+        }
+        Ok(marker)
+    }
+}
+
+/// Strict reset-marker codec failures.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResetMarkerErrorV1 {
+    TooLarge { maximum: u64, actual: u64 },
+    InvalidJson,
+    NonCanonical,
+    InvalidShape,
+    UnsupportedSchema,
+    InvalidOperationId,
+    InvalidIdempotencyKey,
+    InvalidRequestDigest,
+    InvalidTargetWorkspaceUuid,
+    Encode,
+}
+
+impl fmt::Display for ResetMarkerErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge { maximum, actual } => {
+                write!(
+                    formatter,
+                    "reset marker is {actual} bytes, maximum is {maximum}"
+                )
+            }
+            Self::InvalidJson => formatter.write_str("reset marker is not valid JSON"),
+            Self::NonCanonical => formatter.write_str("reset marker is not canonical JSON"),
+            Self::InvalidShape => formatter.write_str("reset marker has an invalid strict shape"),
+            Self::UnsupportedSchema => {
+                formatter.write_str("reset marker has an unsupported schema")
+            }
+            Self::InvalidOperationId => {
+                formatter.write_str("reset marker has an invalid operation ID")
+            }
+            Self::InvalidIdempotencyKey => {
+                formatter.write_str("reset marker has an invalid idempotency key")
+            }
+            Self::InvalidRequestDigest => {
+                formatter.write_str("reset marker has an invalid request digest")
+            }
+            Self::InvalidTargetWorkspaceUuid => {
+                formatter.write_str("reset marker has an invalid target workspace UUID")
+            }
+            Self::Encode => formatter.write_str("reset marker cannot be canonically encoded"),
+        }
+    }
+}
+
+impl Error for ResetMarkerErrorV1 {}
+
+/// A path property that makes a Git-validated runtime directory or one of its fixed files unsafe.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RuntimeDirectoryPathViolationV1 {
+    Symlink,
+    NotDirectory,
+    NotRegularFile,
+    WrongOwner {
+        expected_uid: u32,
+        actual_uid: u32,
+    },
+    WrongMode {
+        expected_mode: u32,
+        actual_mode: u32,
+    },
+}
+
+impl fmt::Display for RuntimeDirectoryPathViolationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Symlink => formatter.write_str("is a symlink"),
+            Self::NotDirectory => formatter.write_str("is not a directory"),
+            Self::NotRegularFile => formatter.write_str("is not a regular file"),
+            Self::WrongOwner {
+                expected_uid,
+                actual_uid,
+            } => write!(
+                formatter,
+                "has owner UID {actual_uid}, expected current UID {expected_uid}"
+            ),
+            Self::WrongMode {
+                expected_mode,
+                actual_mode,
+            } => write!(
+                formatter,
+                "has mode {actual_mode:o}, expected {expected_mode:o}"
+            ),
+        }
+    }
+}
+/// Opaque manager-issued authority for descriptor-relative destructive reset maintenance.
+pub(crate) struct ResetMaintenanceFilesystemTokenV1 {
+    _private: (),
+}
+
+impl ResetMaintenanceFilesystemTokenV1 {
+    pub(crate) const fn issue() -> Self {
+        Self { _private: () }
+    }
+}
+
+/// Deterministic marker-publication failure boundary for filesystem contract tests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResetMarkerPublicationFailpointV1 {
+    BeforeLinkAndTemporaryCleanup,
+}
+
+/// Fail-closed descriptor-relative reset-marker and fixed-file maintenance errors.
+#[derive(Debug)]
+pub enum ValidatedRuntimeDirectoryErrorV1 {
+    UnsupportedPlatform,
+    Path {
+        operation: &'static str,
+        path: PathBuf,
+        source: io::Error,
+    },
+    UnsafeDirectory {
+        path: PathBuf,
+        violation: RuntimeDirectoryPathViolationV1,
+    },
+    UnsafeFile {
+        path: PathBuf,
+        violation: RuntimeDirectoryPathViolationV1,
+    },
+    Marker(ResetMarkerErrorV1),
+    MarkerAlreadyExists,
+    MarkerMissing,
+    FileIdentityChanged {
+        path: PathBuf,
+    },
+    TemporaryNameExhausted {
+        path: PathBuf,
+    },
+    /// Both errors are retained when a publication failure also leaves its temporary behind.
+    PublicationAndTemporaryCleanup {
+        publication: Box<ValidatedRuntimeDirectoryErrorV1>,
+        temporary_cleanup: Box<ValidatedRuntimeDirectoryErrorV1>,
+    },
+    /// A published marker or failed publication left an exact temporary path for recovery.
+    TemporaryCleanup {
+        temporary_path: PathBuf,
+        cleanup: Box<ValidatedRuntimeDirectoryErrorV1>,
+    },
+    /// A deterministic test seam interrupted marker publication.
+    Failpoint {
+        point: ResetMarkerPublicationFailpointV1,
+    },
+}
+
+impl fmt::Display for ValidatedRuntimeDirectoryErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedPlatform => {
+                formatter.write_str("reset runtime-directory operations require Unix support")
+            }
+            Self::Path {
+                operation,
+                path,
+                source,
+            } => write!(formatter, "cannot {operation} {}: {source}", path.display()),
+            Self::UnsafeDirectory { path, violation } => {
+                write!(
+                    formatter,
+                    "runtime directory {} {violation}",
+                    path.display()
+                )
+            }
+            Self::UnsafeFile { path, violation } => {
+                write!(formatter, "runtime file {} {violation}", path.display())
+            }
+            Self::Marker(error) => error.fmt(formatter),
+            Self::MarkerAlreadyExists => formatter.write_str("reset marker already exists"),
+            Self::MarkerMissing => {
+                formatter.write_str("reset marker disappeared during maintenance")
+            }
+            Self::FileIdentityChanged { path } => {
+                write!(
+                    formatter,
+                    "runtime file {} changed during maintenance",
+                    path.display()
+                )
+            }
+            Self::TemporaryNameExhausted { path } => write!(
+                formatter,
+                "could not create a reset marker temporary in {}",
+                path.display()
+            ),
+            Self::PublicationAndTemporaryCleanup {
+                publication,
+                temporary_cleanup,
+            } => write!(
+                formatter,
+                "reset marker publication failed: {publication}; temporary cleanup also failed: {temporary_cleanup}"
+            ),
+            Self::TemporaryCleanup {
+                temporary_path,
+                cleanup,
+            } => write!(
+                formatter,
+                "reset marker temporary {} could not be removed: {cleanup}",
+                temporary_path.display()
+            ),
+            Self::Failpoint { point } => {
+                write!(
+                    formatter,
+                    "reset marker publication failpoint {point:?} triggered"
+                )
+            }
+        }
+    }
+}
+
+impl Error for ValidatedRuntimeDirectoryErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Path { source, .. } => Some(source),
+            Self::Marker(error) => Some(error),
+            Self::PublicationAndTemporaryCleanup { publication, .. } => Some(publication),
+            Self::TemporaryCleanup { cleanup, .. } => Some(cleanup),
+            _ => None,
+        }
+    }
+}
+
+/// A descriptor opened only from Git-validated containment evidence.
+///
+/// Its fixed-name methods never accept a caller-derived deletion path.
+pub struct ValidatedRuntimeDirectoryV1 {
+    path: PathBuf,
+    #[cfg(unix)]
+    directory: File,
+    #[cfg(unix)]
+    current_uid: u32,
+}
+
+impl ValidatedRuntimeDirectoryV1 {
+    pub fn open(worktree: &ValidatedWorktreeV1) -> Result<Self, ValidatedRuntimeDirectoryErrorV1> {
+        #[cfg(unix)]
+        {
+            open_validated_runtime_directory_unix(worktree)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = worktree;
+            Err(ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    /// Returns only a diagnostic path. It is never accepted back as maintenance authority.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read_reset_marker(
+        &self,
+    ) -> Result<Option<ResetMarkerV1>, ValidatedRuntimeDirectoryErrorV1> {
+        #[cfg(unix)]
+        {
+            let Some((mut file, _)) = self.open_fixed_private_file(RESET_MARKER_FILE_NAME_V1)?
+            else {
+                return Ok(None);
+            };
+            let bytes = read_bounded_runtime_file(
+                &mut file,
+                MAX_RESET_MARKER_BYTES_V1,
+                &self.path.join(RESET_MARKER_FILE_NAME_V1),
+            )?;
+            ResetMarkerV1::decode_canonical(&bytes)
+                .map(Some)
+                .map_err(ValidatedRuntimeDirectoryErrorV1::Marker)
+        }
+        #[cfg(not(unix))]
+        {
+            Err(ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    /// Atomically publishes a strict marker with no replacement of an existing marker.
+    pub(crate) fn publish_reset_marker(
+        &self,
+        _authority: &ResetMaintenanceFilesystemTokenV1,
+        marker: &ResetMarkerV1,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        self.publish_reset_marker_with_optional_failpoint(marker, None)
+    }
+
+    /// Injects a publication boundary failure for deterministic filesystem contract tests.
+    #[cfg(test)]
+    pub(crate) fn publish_reset_marker_with_failpoint(
+        &self,
+        _authority: &ResetMaintenanceFilesystemTokenV1,
+        marker: &ResetMarkerV1,
+        failpoint: ResetMarkerPublicationFailpointV1,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        self.publish_reset_marker_with_optional_failpoint(marker, Some(failpoint))
+    }
+
+    fn publish_reset_marker_with_optional_failpoint(
+        &self,
+        marker: &ResetMarkerV1,
+        failpoint: Option<ResetMarkerPublicationFailpointV1>,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        #[cfg(unix)]
+        {
+            self.publish_reset_marker_unix(marker, failpoint)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (marker, failpoint);
+            Err(ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    /// Removes the marker only after re-opening, decoding, and identity-checking the exact marker.
+    pub(crate) fn remove_reset_marker(
+        &self,
+        _authority: &ResetMaintenanceFilesystemTokenV1,
+        expected: &ResetMarkerV1,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        #[cfg(unix)]
+        {
+            let identity = self.require_exact_reset_marker(expected)?;
+            self.unlink_owned_fixed_file(RESET_MARKER_FILE_NAME_V1, identity)?;
+            self.sync_directory()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = expected;
+            Err(ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform)
+        }
+    }
+    /// Removes only the three fixed SQLite names while the exact published marker remains present.
+    ///
+    /// Missing names are idempotent; links, non-regular files, foreign owners, non-private modes,
+    /// a missing marker, or a changed marker fail closed.
+    pub(crate) fn remove_reset_database_files(
+        &self,
+        _authority: &ResetMaintenanceFilesystemTokenV1,
+        expected_marker: &ResetMarkerV1,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        #[cfg(unix)]
+        {
+            let marker_identity = self.require_exact_reset_marker(expected_marker)?;
+            for name in [
+                STATE_DATABASE_FILE_NAME_V1,
+                STATE_DATABASE_FILE_WAL_NAME_V1,
+                STATE_DATABASE_FILE_SHM_NAME_V1,
+            ] {
+                if let Some((file, identity)) = self.open_fixed_private_file(name)? {
+                    drop(file);
+                    self.require_exact_reset_marker_with_identity(
+                        expected_marker,
+                        marker_identity,
+                    )?;
+                    self.unlink_owned_fixed_file(name, identity)?;
+                }
+            }
+            self.sync_directory()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = expected_marker;
+            Err(ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform)
+        }
+    }
+    #[cfg(unix)]
+    fn require_exact_reset_marker(
+        &self,
+        expected: &ResetMarkerV1,
+    ) -> Result<RuntimeFileIdentityV1, ValidatedRuntimeDirectoryErrorV1> {
+        let Some((mut file, identity)) = self.open_fixed_private_file(RESET_MARKER_FILE_NAME_V1)?
+        else {
+            return Err(ValidatedRuntimeDirectoryErrorV1::MarkerMissing);
+        };
+        let marker_path = self.path.join(RESET_MARKER_FILE_NAME_V1);
+        let bytes = read_bounded_runtime_file(&mut file, MAX_RESET_MARKER_BYTES_V1, &marker_path)?;
+        let actual = ResetMarkerV1::decode_canonical(&bytes)
+            .map_err(ValidatedRuntimeDirectoryErrorV1::Marker)?;
+        if &actual != expected {
+            return Err(ValidatedRuntimeDirectoryErrorV1::FileIdentityChanged {
+                path: marker_path,
+            });
+        }
+        Ok(identity)
+    }
+    #[cfg(unix)]
+    fn require_exact_reset_marker_with_identity(
+        &self,
+        expected: &ResetMarkerV1,
+        expected_identity: RuntimeFileIdentityV1,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        let actual_identity = self.require_exact_reset_marker(expected)?;
+        if actual_identity != expected_identity {
+            return Err(ValidatedRuntimeDirectoryErrorV1::FileIdentityChanged {
+                path: self.path.join(RESET_MARKER_FILE_NAME_V1),
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn open_fixed_private_file(
+        &self,
+        name: &str,
+    ) -> Result<Option<(File, RuntimeFileIdentityV1)>, ValidatedRuntimeDirectoryErrorV1> {
+        let path = self.path.join(name);
+        let descriptor = match openat(
+            &self.directory,
+            name,
+            OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_RDONLY,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(Errno::ENOENT) => return Ok(None),
+            Err(source) => {
+                return Err(runtime_path_error("open runtime file", path, source.into()));
+            }
+        };
+        let file = File::from(descriptor);
+        let metadata = file
+            .metadata()
+            .map_err(|source| runtime_path_error("inspect runtime file", path.clone(), source))?;
+        validate_runtime_file(&path, &metadata, self.current_uid)?;
+        Ok(Some((
+            file,
+            RuntimeFileIdentityV1::from_metadata(&metadata),
+        )))
+    }
+
+    #[cfg(unix)]
+    fn cleanup_marker_temporary(
+        &self,
+        temporary_name: &str,
+        temporary_path: &Path,
+        identity: RuntimeFileIdentityV1,
+        injected_failure: Option<ResetMarkerPublicationFailpointV1>,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        let cleanup = match injected_failure {
+            Some(point) => Err(ValidatedRuntimeDirectoryErrorV1::Failpoint { point }),
+            None => self.unlink_owned_fixed_file(temporary_name, identity),
+        };
+        cleanup.map_err(
+            |cleanup| ValidatedRuntimeDirectoryErrorV1::TemporaryCleanup {
+                temporary_path: temporary_path.to_path_buf(),
+                cleanup: Box::new(cleanup),
+            },
+        )
+    }
+
+    #[cfg(unix)]
+    fn publication_failure_with_temporary_cleanup(
+        &self,
+        temporary_name: &str,
+        temporary_path: &Path,
+        identity: RuntimeFileIdentityV1,
+        publication: ValidatedRuntimeDirectoryErrorV1,
+        injected_cleanup_failure: Option<ResetMarkerPublicationFailpointV1>,
+    ) -> ValidatedRuntimeDirectoryErrorV1 {
+        match self.cleanup_marker_temporary(
+            temporary_name,
+            temporary_path,
+            identity,
+            injected_cleanup_failure,
+        ) {
+            Ok(()) => publication,
+            Err(temporary_cleanup) => {
+                ValidatedRuntimeDirectoryErrorV1::PublicationAndTemporaryCleanup {
+                    publication: Box::new(publication),
+                    temporary_cleanup: Box::new(temporary_cleanup),
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn publish_reset_marker_unix(
+        &self,
+        marker: &ResetMarkerV1,
+        failpoint: Option<ResetMarkerPublicationFailpointV1>,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        let bytes = marker
+            .canonical_bytes()
+            .map_err(ValidatedRuntimeDirectoryErrorV1::Marker)?;
+        let (temporary_name, temporary_path, mut temporary, identity) =
+            self.create_marker_temporary()?;
+        if let Err(source) = temporary.write_all(&bytes) {
+            drop(temporary);
+            let publication = runtime_path_error(
+                "write reset marker temporary",
+                temporary_path.clone(),
+                source,
+            );
+            return Err(self.publication_failure_with_temporary_cleanup(
+                &temporary_name,
+                &temporary_path,
+                identity,
+                publication,
+                None,
+            ));
+        }
+        if let Err(source) = temporary.sync_all() {
+            drop(temporary);
+            let publication = runtime_path_error(
+                "sync reset marker temporary",
+                temporary_path.clone(),
+                source,
+            );
+            return Err(self.publication_failure_with_temporary_cleanup(
+                &temporary_name,
+                &temporary_path,
+                identity,
+                publication,
+                None,
+            ));
+        }
+        drop(temporary);
+        if let Some(point) = failpoint {
+            return Err(self.publication_failure_with_temporary_cleanup(
+                &temporary_name,
+                &temporary_path,
+                identity,
+                ValidatedRuntimeDirectoryErrorV1::Failpoint { point },
+                Some(point),
+            ));
+        }
+        match linkat(
+            &self.directory,
+            temporary_name.as_str(),
+            &self.directory,
+            RESET_MARKER_FILE_NAME_V1,
+            AtFlags::empty(),
+        ) {
+            Ok(()) => {}
+            Err(Errno::EEXIST) => {
+                return Err(self.publication_failure_with_temporary_cleanup(
+                    &temporary_name,
+                    &temporary_path,
+                    identity,
+                    ValidatedRuntimeDirectoryErrorV1::MarkerAlreadyExists,
+                    None,
+                ));
+            }
+            Err(source) => {
+                let publication = runtime_path_error(
+                    "publish reset marker",
+                    self.path.join(RESET_MARKER_FILE_NAME_V1),
+                    source.into(),
+                );
+                return Err(self.publication_failure_with_temporary_cleanup(
+                    &temporary_name,
+                    &temporary_path,
+                    identity,
+                    publication,
+                    None,
+                ));
+            }
+        }
+        if let Err(publication) = self.sync_directory() {
+            return Err(self.publication_failure_with_temporary_cleanup(
+                &temporary_name,
+                &temporary_path,
+                identity,
+                publication,
+                None,
+            ));
+        }
+        self.cleanup_marker_temporary(&temporary_name, &temporary_path, identity, None)?;
+        self.sync_directory()
+    }
+
+    #[cfg(unix)]
+    fn create_marker_temporary(
+        &self,
+    ) -> Result<(String, PathBuf, File, RuntimeFileIdentityV1), ValidatedRuntimeDirectoryErrorV1>
+    {
+        for _ in 0..RESET_MARKER_TEMPORARY_NAME_ATTEMPTS_V1 {
+            let sequence = RESET_MARKER_TEMPORARY_SEQUENCE_V1.fetch_add(1, Ordering::Relaxed);
+            let name = format!(
+                ".podway-reset-marker-v1-{}-{sequence}.tmp",
+                std::process::id()
+            );
+            let path = self.path.join(&name);
+            let descriptor = match openat(
+                &self.directory,
+                name.as_str(),
+                OFlag::O_CLOEXEC
+                    | OFlag::O_CREAT
+                    | OFlag::O_EXCL
+                    | OFlag::O_NOFOLLOW
+                    | OFlag::O_WRONLY,
+                Mode::S_IRUSR | Mode::S_IWUSR,
+            ) {
+                Ok(descriptor) => descriptor,
+                Err(Errno::EEXIST) => continue,
+                Err(source) => {
+                    return Err(runtime_path_error(
+                        "create reset marker temporary",
+                        path,
+                        source.into(),
+                    ));
+                }
+            };
+            let file = File::from(descriptor);
+            let metadata = file.metadata().map_err(|source| {
+                runtime_path_error("inspect reset marker temporary", path.clone(), source)
+            })?;
+            validate_runtime_file(&path, &metadata, self.current_uid)?;
+            return Ok((
+                name,
+                path,
+                file,
+                RuntimeFileIdentityV1::from_metadata(&metadata),
+            ));
+        }
+        Err(ValidatedRuntimeDirectoryErrorV1::TemporaryNameExhausted {
+            path: self.path.clone(),
+        })
+    }
+
+    #[cfg(unix)]
+    fn unlink_owned_fixed_file(
+        &self,
+        name: &str,
+        expected: RuntimeFileIdentityV1,
+    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        let path = self.path.join(name);
+        let metadata =
+            match nix::sys::stat::fstatat(&self.directory, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+                Ok(metadata) => metadata,
+                Err(Errno::ENOENT) => {
+                    return Err(ValidatedRuntimeDirectoryErrorV1::FileIdentityChanged { path });
+                }
+                Err(source) => {
+                    return Err(runtime_path_error(
+                        "reinspect runtime file before unlink",
+                        path,
+                        source.into(),
+                    ));
+                }
+            };
+        if !expected.matches_file_stat(&metadata) {
+            return Err(ValidatedRuntimeDirectoryErrorV1::FileIdentityChanged { path });
+        }
+        unlinkat(&self.directory, name, UnlinkatFlags::NoRemoveDir).map_err(|source| {
+            runtime_path_error("unlink runtime file", self.path.join(name), source.into())
+        })
+    }
+
+    #[cfg(unix)]
+    fn sync_directory(&self) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+        self.directory.sync_all().map_err(|source| {
+            runtime_path_error("sync runtime directory", self.path.clone(), source)
+        })
+    }
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct RuntimeFileIdentityV1 {
+    device: u64,
+    inode: u64,
+    owner_uid: u32,
+}
+
+#[cfg(unix)]
+impl RuntimeFileIdentityV1 {
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            owner_uid: metadata.uid(),
+        }
+    }
+
+    fn matches_file_stat(&self, stat: &nix::sys::stat::FileStat) -> bool {
+        self.device == stat.st_dev as u64
+            && self.inode == stat.st_ino
+            && self.owner_uid == stat.st_uid
+    }
+}
+
+#[cfg(unix)]
+fn open_validated_runtime_directory_unix(
+    worktree: &ValidatedWorktreeV1,
+) -> Result<ValidatedRuntimeDirectoryV1, ValidatedRuntimeDirectoryErrorV1> {
+    let runtime_bytes = worktree
+        .containment()
+        .runtime_directory()
+        .decode_path_bytes()
+        .map_err(|_| {
+            runtime_path_error(
+                "decode Git-validated runtime directory",
+                PathBuf::new(),
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Git containment runtime directory cannot be decoded",
+                ),
+            )
+        })?;
+    let path = PathBuf::from(OsString::from_vec(runtime_bytes));
+    let descriptor = open(
+        &path,
+        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+        Mode::empty(),
+    )
+    .map_err(|source| runtime_path_error("open runtime directory", path.clone(), source.into()))?;
+    let directory = File::from(descriptor);
+    let metadata = directory
+        .metadata()
+        .map_err(|source| runtime_path_error("inspect runtime directory", path.clone(), source))?;
+    let current_uid = getuid().as_raw();
+    validate_runtime_directory(&path, &metadata, current_uid)?;
+    Ok(ValidatedRuntimeDirectoryV1 {
+        path,
+        directory,
+        current_uid,
+    })
+}
+
+#[cfg(unix)]
+fn read_bounded_runtime_file(
+    file: &mut File,
+    maximum: u64,
+    path: &Path,
+) -> Result<Vec<u8>, ValidatedRuntimeDirectoryErrorV1> {
+    let metadata = file
+        .metadata()
+        .map_err(|source| runtime_path_error("inspect runtime file", path.to_path_buf(), source))?;
+    if metadata.len() > maximum {
+        return Err(ValidatedRuntimeDirectoryErrorV1::Marker(
+            ResetMarkerErrorV1::TooLarge {
+                maximum,
+                actual: metadata.len(),
+            },
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(maximum + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| runtime_path_error("read runtime file", path.to_path_buf(), source))?;
+    if bytes.len() as u64 > maximum {
+        return Err(ValidatedRuntimeDirectoryErrorV1::Marker(
+            ResetMarkerErrorV1::TooLarge {
+                maximum,
+                actual: bytes.len() as u64,
+            },
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn validate_runtime_directory(
+    path: &Path,
+    metadata: &Metadata,
+    current_uid: u32,
+) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+    let violation = if metadata.file_type().is_symlink() {
+        Some(RuntimeDirectoryPathViolationV1::Symlink)
+    } else if !metadata.is_dir() {
+        Some(RuntimeDirectoryPathViolationV1::NotDirectory)
+    } else if metadata.uid() != current_uid {
+        Some(RuntimeDirectoryPathViolationV1::WrongOwner {
+            expected_uid: current_uid,
+            actual_uid: metadata.uid(),
+        })
+    } else {
+        let actual_mode = metadata.permissions().mode() & 0o777;
+        (actual_mode != PRIVATE_RUNTIME_DIRECTORY_MODE_V1).then_some(
+            RuntimeDirectoryPathViolationV1::WrongMode {
+                expected_mode: PRIVATE_RUNTIME_DIRECTORY_MODE_V1,
+                actual_mode,
+            },
+        )
+    };
+    violation.map_or(Ok(()), |violation| {
+        Err(ValidatedRuntimeDirectoryErrorV1::UnsafeDirectory {
+            path: path.to_path_buf(),
+            violation,
+        })
+    })
+}
+
+#[cfg(unix)]
+fn validate_runtime_file(
+    path: &Path,
+    metadata: &Metadata,
+    current_uid: u32,
+) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+    let violation = if metadata.file_type().is_symlink() {
+        Some(RuntimeDirectoryPathViolationV1::Symlink)
+    } else if !metadata.file_type().is_file() {
+        Some(RuntimeDirectoryPathViolationV1::NotRegularFile)
+    } else if metadata.uid() != current_uid {
+        Some(RuntimeDirectoryPathViolationV1::WrongOwner {
+            expected_uid: current_uid,
+            actual_uid: metadata.uid(),
+        })
+    } else {
+        let actual_mode = metadata.permissions().mode() & 0o777;
+        (actual_mode != PRIVATE_RUNTIME_FILE_MODE_V1).then_some(
+            RuntimeDirectoryPathViolationV1::WrongMode {
+                expected_mode: PRIVATE_RUNTIME_FILE_MODE_V1,
+                actual_mode,
+            },
+        )
+    };
+    violation.map_or(Ok(()), |violation| {
+        Err(ValidatedRuntimeDirectoryErrorV1::UnsafeFile {
+            path: path.to_path_buf(),
+            violation,
+        })
+    })
+}
+
+fn runtime_path_error(
+    operation: &'static str,
+    path: PathBuf,
+    source: io::Error,
+) -> ValidatedRuntimeDirectoryErrorV1 {
+    ValidatedRuntimeDirectoryErrorV1::Path {
+        operation,
+        path,
+        source,
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SerializedResetMarkerV1 {
+    schema: String,
+    operation_id: String,
+    idempotency_key: String,
+    request_digest: String,
+    previous_workspace_uuid: String,
+    target_workspace_uuid: String,
+    submitted_at_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+struct SerializableResetMarkerRefV1<'a> {
+    schema: &'a str,
+    operation_id: &'a str,
+    idempotency_key: &'a str,
+    request_digest: &'a str,
+    previous_workspace_uuid: &'a str,
+    target_workspace_uuid: &'a str,
+    submitted_at_ms: u64,
+}
 
 /// Read-only access to the durable binding for one exact SQLite database path.
 ///
@@ -297,6 +1285,59 @@ impl ResolvedWorkspaceV1 {
     }
 }
 
+/// Git-only reset resolution. It never inspects or opens the existing SQLite database, so a
+/// missing or corrupt old Store cannot prevent marker recovery from reaching fixed-file deletion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResetWorkspaceResolutionV1 {
+    worktree: ValidatedWorktreeV1,
+    workspace_root: ValidatedWorkspaceRootV1,
+    database_path: PathBuf,
+}
+
+impl ResetWorkspaceResolutionV1 {
+    fn new(
+        worktree: ValidatedWorktreeV1,
+        database_path: PathBuf,
+    ) -> Result<Self, WorkspaceResolutionErrorV1> {
+        Ok(Self {
+            workspace_root: store_root_from_worktree(&worktree)?,
+            worktree,
+            database_path,
+        })
+    }
+
+    pub fn worktree(&self) -> &ValidatedWorktreeV1 {
+        &self.worktree
+    }
+
+    pub fn workspace_root(&self) -> &ValidatedWorkspaceRootV1 {
+        &self.workspace_root
+    }
+
+    pub fn database_path(&self) -> &Path {
+        &self.database_path
+    }
+
+    pub fn target_identity(&self, target_workspace_uuid: WorkspaceId) -> DurableWorktreeIdentityV1 {
+        DurableWorktreeIdentityV1::new(
+            self.worktree
+                .identity()
+                .common_directory_fingerprint()
+                .clone(),
+            target_workspace_uuid,
+            self.worktree
+                .identity()
+                .worktree_administration_fingerprint()
+                .clone(),
+        )
+    }
+
+    pub fn open_runtime_directory(
+        &self,
+    ) -> Result<ValidatedRuntimeDirectoryV1, ValidatedRuntimeDirectoryErrorV1> {
+        ValidatedRuntimeDirectoryV1::open(&self.worktree)
+    }
+}
 /// Resolves a selector by observing Git, then SQLite binding state, then Git again.
 ///
 /// `R` and `I` are injected so the orchestration can be tested with deterministic Git race and
@@ -385,6 +1426,46 @@ where
         ResolvedWorkspaceV1::new(revalidated, revalidated_database_path)
     }
 
+    /// Resolves Git containment for reset recovery without inspecting the old database.
+    ///
+    /// The target UUID is intentionally not taken from the candidate identity. The marker carries
+    /// the target UUID, while the returned worktree supplies only stable Git fingerprints and
+    /// descriptor-safe runtime containment.
+    pub fn resolve_for_reset(
+        &self,
+        selector: WorktreeSelectorV1,
+    ) -> Result<ResetWorkspaceResolutionV1, WorkspaceResolutionErrorV1> {
+        let preliminary_selector = preliminary_selector(&selector)?;
+        let preliminary = self
+            .git_resolver
+            .resolve(preliminary_selector)
+            .map_err(|source| WorkspaceResolutionErrorV1::Git {
+                observation: WorkspaceGitObservationV1::Preliminary,
+                source,
+            })?;
+        require_candidate_identity(&preliminary)?;
+        let database_path = database_path_from_worktree(&preliminary)?;
+        let candidate_selector = WorktreeSelectorV1::new(
+            selector.version(),
+            Some(preliminary.identity().clone()),
+            selector.path().clone(),
+        )
+        .map_err(|source| WorkspaceResolutionErrorV1::Selector { source })?;
+        let revalidated = self
+            .git_resolver
+            .resolve(candidate_selector)
+            .map_err(|source| WorkspaceResolutionErrorV1::Git {
+                observation: WorkspaceGitObservationV1::CandidateRevalidation,
+                source,
+            })?;
+        require_revalidated_identity(
+            &revalidated,
+            WorkspaceIdentityStateV1::Candidate,
+            &store_identity_from_git(preliminary.identity()),
+        )?;
+        let revalidated_database_path = require_stable_database_path(&database_path, &revalidated)?;
+        ResetWorkspaceResolutionV1::new(revalidated, revalidated_database_path)
+    }
     /// Resolves a workspace that has no durable database binding yet.
     ///
     /// The returned validated worktree retains Git's `Candidate` identity. The accompanying Store
@@ -604,4 +1685,103 @@ fn database_path_from_unix_bytes(bytes: Vec<u8>) -> Result<PathBuf, WorkspaceRes
 #[cfg(not(unix))]
 fn database_path_from_unix_bytes(_bytes: Vec<u8>) -> Result<PathBuf, WorkspaceResolutionErrorV1> {
     Err(WorkspaceResolutionErrorV1::RuntimeDirectoryPathUnsupportedPlatform)
+}
+#[cfg(all(test, unix))]
+mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use podway_core::{UnixMillis, WorkspaceId};
+    use podway_store::{CanonicalRequestDigestV1, IdempotencyKeyV1, JobIdV1};
+
+    use super::{
+        ResetMaintenanceFilesystemTokenV1, ResetMarkerPublicationFailpointV1, ResetMarkerV1,
+        ValidatedRuntimeDirectoryErrorV1, ValidatedRuntimeDirectoryV1,
+    };
+
+    static RUNTIME_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn marker() -> ResetMarkerV1 {
+        ResetMarkerV1::new(
+            JobIdV1::new("00000000-0000-4000-8000-000000005201")
+                .expect("fixture operation ID must be valid"),
+            IdempotencyKeyV1::new("workspace-marker-unit")
+                .expect("fixture idempotency key must be valid"),
+            CanonicalRequestDigestV1::new(format!("sha256:{}", "a".repeat(64)))
+                .expect("fixture request digest must be valid"),
+            WorkspaceId::new("00000000-0000-4000-8000-000000005200")
+                .expect("fixture predecessor UUID must be valid"),
+            WorkspaceId::new("00000000-0000-4000-8000-000000005202")
+                .expect("fixture target UUID must be valid"),
+            UnixMillis::new(1_700_000_000_123),
+        )
+    }
+
+    fn runtime_directory() -> (std::path::PathBuf, ValidatedRuntimeDirectoryV1) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let sequence = RUNTIME_TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "podway-runtime-marker-unit-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).expect("fixture runtime directory must be created");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+            .expect("fixture runtime directory must be private");
+        let runtime = ValidatedRuntimeDirectoryV1 {
+            path: path.clone(),
+            directory: fs::File::open(&path).expect("fixture runtime directory must open"),
+            current_uid: nix::unistd::getuid().as_raw(),
+        };
+        (path, runtime)
+    }
+
+    #[test]
+    fn manager_token_binds_fixed_database_deletion_to_the_exact_marker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (path, runtime) = runtime_directory();
+        let marker = marker();
+        let authority = ResetMaintenanceFilesystemTokenV1::issue();
+        let database = path.join("state.sqlite3");
+        fs::write(&database, b"old database").expect("fixture database must exist");
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o600))
+            .expect("fixture database must be private");
+
+        assert!(matches!(
+            runtime.remove_reset_database_files(&authority, &marker),
+            Err(ValidatedRuntimeDirectoryErrorV1::MarkerMissing)
+        ));
+        runtime
+            .publish_reset_marker(&authority, &marker)
+            .expect("manager token must publish the marker");
+        runtime
+            .remove_reset_database_files(&authority, &marker)
+            .expect("matching manager marker must authorize fixed database deletion");
+        assert!(!database.exists());
+        runtime
+            .remove_reset_marker(&authority, &marker)
+            .expect("matching manager marker must authorize removal");
+        fs::remove_dir(path).expect("fixture runtime directory must be removed");
+    }
+
+    #[test]
+    fn manager_token_retains_marker_publication_cleanup_failure_evidence() {
+        let (path, runtime) = runtime_directory();
+        let authority = ResetMaintenanceFilesystemTokenV1::issue();
+        let error = runtime
+            .publish_reset_marker_with_failpoint(
+                &authority,
+                &marker(),
+                ResetMarkerPublicationFailpointV1::BeforeLinkAndTemporaryCleanup,
+            )
+            .expect_err("injected publication failure must be retained");
+        assert!(matches!(
+            error,
+            ValidatedRuntimeDirectoryErrorV1::PublicationAndTemporaryCleanup { .. }
+        ));
+        fs::remove_dir_all(path).expect("fixture runtime directory must be removed");
+    }
 }

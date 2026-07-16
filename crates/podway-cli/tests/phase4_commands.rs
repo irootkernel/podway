@@ -2,17 +2,19 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::Shutdown,
-    os::unix::net::UnixListener,
+    os::unix::{fs::symlink, net::UnixListener},
     path::PathBuf,
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     thread::{self, JoinHandle},
 };
 
 use nix::unistd::geteuid;
+use podway_config::MAX_PROCEDURE_DOCUMENT_BYTES_V1;
 use podway_core::{AttemptId, JobId, Revision, WorkspaceId};
 use podway_protocol::{
-    ErrorCodeV1, ErrorEnvelopeInputV1, ExitCodeV1, JobOutputV1, JobStateV1, OperationV1,
+    ErrorCodeV1, ErrorEnvelopeInputV1, ExitCodeV1, JobOutputV1, JobStateV1,
+    MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WORKTREE_SELECTOR_COMPONENT_BYTES_V1, OperationV1,
     OutputEnvelopeInputV1, RequestEnvelopeV1, ResponseEnvelopeV1, Rfc3339MillisV1, SliceCommandV1,
     SliceRequestV1, WorkspaceOutputV1, decode_request_payload_v1, decode_single_frame_v1,
     encode_frame_v1, encode_request_payload_v1, encode_response_payload_v1,
@@ -23,6 +25,7 @@ use uuid::Uuid;
 
 const WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174001";
 const ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174002";
+const SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174004";
 const JOB_ID: &str = "123e4567-e89b-42d3-a456-426614174003";
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -61,6 +64,25 @@ impl Fixture {
             .output()
             .expect("podway binary must run")
     }
+    fn run_with_stdin(&self, arguments: &[&str], input: &[u8]) -> Output {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_podway"))
+            .args(arguments)
+            .env("HOME", &self.home)
+            .env("TMPDIR", &self.temporary)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("podway binary must start");
+        let mut stdin = child.stdin.take().expect("podway stdin must be piped");
+        stdin
+            .write_all(input)
+            .expect("stdin fixture must be writable");
+        drop(stdin);
+        child
+            .wait_with_output()
+            .expect("podway binary must complete")
+    }
 }
 
 impl Drop for Fixture {
@@ -74,7 +96,10 @@ enum Reply {
     Status,
     Output,
     Error,
+    ResetUnreadable,
     MalformedFramedResponse,
+    MalformedStatusResult,
+    MalformedNextResult,
 }
 
 struct FakeDaemon {
@@ -135,9 +160,21 @@ impl Reply {
                 Some(job()),
             ),
             Self::Error => error_response(request),
+            Self::ResetUnreadable => error_response_with(
+                request,
+                "WORKSPACE_STATE_UNREADABLE",
+                "Workspace state is corrupt or inaccessible.",
+                5,
+                false,
+            ),
             Self::MalformedFramedResponse => Err(io::Error::other(
                 "malformed framed response does not have an envelope",
             )),
+            Self::MalformedStatusResult | Self::MalformedNextResult => output_response(
+                request,
+                Map::from_iter([("invalid".to_owned(), Value::Bool(true))]),
+                None,
+            ),
         }
     }
 }
@@ -187,14 +224,30 @@ fn output_response(
 }
 
 fn error_response(request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1> {
+    error_response_with(
+        request,
+        "JOB_WAIT_TIMEOUT",
+        "The wait expired; the admitted job may continue.",
+        4,
+        true,
+    )
+}
+
+fn error_response_with(
+    request: &RequestEnvelopeV1,
+    code: &str,
+    message: &str,
+    exit_code: u8,
+    retryable: bool,
+) -> io::Result<ResponseEnvelopeV1> {
     podway_protocol::ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
         request_id: request.request_id().clone(),
         command: request.command().clone(),
         generated_at: timestamp(),
-        code: ErrorCodeV1::new("JOB_WAIT_TIMEOUT").expect("fixture code must be valid"),
-        message: "The wait expired; the admitted job may continue.".to_owned(),
-        retryable: true,
-        exit_code: ExitCodeV1::new(4).expect("fixture exit code must be valid"),
+        code: ErrorCodeV1::new(code).expect("fixture error code must be valid"),
+        message: message.to_owned(),
+        retryable,
+        exit_code: ExitCodeV1::new(exit_code).expect("fixture exit code must be valid"),
         workspace: Some(Map::from_iter([
             ("uuid".to_owned(), Value::String(WORKSPACE_ID.to_owned())),
             ("root".to_owned(), Value::String("/fixture".to_owned())),
@@ -210,16 +263,66 @@ fn error_response(request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1>
 
 fn status_result() -> Map<String, Value> {
     serde_json::from_value(json!({
-        "task": { "title": "Fixture task" },
-        "session": { "revision": 12 },
+        "task": {
+            "title": "Fixture task",
+            "procedure": {
+                "id": "fixture",
+                "version": "1.0.0",
+                "name": "Fixture procedure",
+                "digest": format!("sha256:{}", "a".repeat(64)),
+            },
+        },
+        "session": {
+            "id": SESSION_ID,
+            "lifecycle": "running",
+            "revision": 12,
+            "created_at": "2026-07-15T12:34:56.789Z",
+            "completed_at": null,
+            "cancelled_at": null,
+        },
         "current": {
+            "stage_id": "implement",
+            "stage_index": 0,
             "title": "Implement",
             "attempt_id": ATTEMPT_ID,
+            "attempt_number": 1,
+            "blocked": false,
+            "ready_to_complete": false,
         },
+        "stages": [{
+            "id": "implement",
+            "index": 0,
+            "title": "Implement",
+            "status": "current",
+            "latest_attempt_number": 1,
+        }],
         "items": [
-            { "id": "goal", "revision": 3 },
-            { "id": "artifact", "revision": 0 }
-        ]
+            {
+                "id": "goal",
+                "type": "text",
+                "prompt": "Goal",
+                "required": true,
+                "satisfied": true,
+                "revision": 3,
+                "value": "Fixture goal",
+            },
+            {
+                "id": "artifact",
+                "type": "artifact",
+                "prompt": "Artifact",
+                "required": false,
+                "satisfied": false,
+                "revision": 4,
+                "value": null,
+            },
+        ],
+        "blockers": [],
+        "queue": {
+            "pending_mutations": false,
+            "queued_count": 0,
+            "running_job_id": null,
+            "latest_workspace_sequence": 9,
+        },
     }))
     .expect("fixture status result must be an object")
 }
@@ -236,7 +339,7 @@ fn init_uses_bootstrap_without_a_task_or_expected_uuid() {
 
     let output = fixture.run(&[
         "--json",
-        "--workspace",
+        "--worktree",
         "/fixture",
         "init",
         "--idempotency-key",
@@ -264,11 +367,58 @@ fn init_uses_bootstrap_without_a_task_or_expected_uuid() {
             .is_none()
     );
     assert!(slice.selector().expected_uuid().is_none());
-    assert!(matches!(slice.command(), SliceCommandV1::WorkspaceInit));
+    assert!(matches!(slice.command(), SliceCommandV1::WorkspaceInit(_)));
     assert_eq!(
         request.payload().len(),
         1,
-        "init payload must not start a task"
+        "init payload must contain only its selector"
+    );
+}
+#[test]
+fn init_repair_uses_the_durable_bootstrap_authority() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Output]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "init",
+        "--repair",
+        "--idempotency-key",
+        "repair-replay",
+        "--detach",
+    ]);
+    assert!(output.status.success(), "init repair failed: {output:?}");
+    let response: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
+    assert_eq!(response["command"], "workspace.init");
+    assert_eq!(response["job"]["id"], JOB_ID);
+
+    let wires = daemon.finish();
+    assert_eq!(wires.len(), 1, "init repair must not status-preflight");
+    let request = decode_request(&wires[0]);
+    let slice = SliceRequestV1::from_envelope(&request)
+        .expect("init repair must remain admitted by the durable bootstrap slice");
+    assert!(matches!(
+        slice.command(),
+        SliceCommandV1::WorkspaceInit(init) if init.repair
+    ));
+    assert_eq!(request.command().as_str(), "workspace.init");
+    assert_eq!(request.operation(), OperationV1::Bootstrap);
+    assert_eq!(
+        request.idempotency_key().map(|key| key.as_str()),
+        Some("repair-replay")
+    );
+    assert!(request.options().detach());
+    assert_eq!(
+        request.payload().get("repair"),
+        Some(&Value::Bool(true)),
+        "init --repair must transmit a typed repair marker omitted by ordinary init",
+    );
+    assert_eq!(
+        request.payload().len(),
+        2,
+        "init --repair must differ from ordinary init's selector-only payload",
     );
 }
 
@@ -279,7 +429,7 @@ fn item_mutation_preflights_status_and_replays_exact_wire() {
 
     let output = fixture.run(&[
         "--json",
-        "--workspace",
+        "--worktree",
         "/fixture",
         "--timeout",
         "1s",
@@ -352,7 +502,7 @@ fn mutation_preflight_error_is_recorrelated_to_the_invoked_command() {
 
     let output = fixture.run(&[
         "--json",
-        "--workspace",
+        "--worktree",
         "/fixture",
         "set",
         "goal",
@@ -391,7 +541,7 @@ fn mutation_sync_and_detach_preferences_are_transport_fields() {
     for detach in [false, true] {
         let fixture = Fixture::new();
         let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);
-        let mut arguments = vec!["--workspace", "/fixture", "complete"];
+        let mut arguments = vec!["--worktree", "/fixture", "complete"];
         if detach {
             arguments.extend(["--idempotency-key", "complete-replay", "--detach"]);
         }
@@ -432,7 +582,7 @@ fn mutation_sync_and_detach_preferences_are_transport_fields() {
 fn daemon_and_parser_errors_preserve_stable_exit_and_json_contracts() {
     let fixture = Fixture::new();
     let daemon = FakeDaemon::start(&fixture, vec![Reply::Error]);
-    let output = fixture.run(&["--json", "--workspace", "/fixture", "status"]);
+    let output = fixture.run(&["--json", "--worktree", "/fixture", "status"]);
     assert_eq!(output.status.code(), Some(4));
     let response: Value =
         serde_json::from_slice(&output.stdout).expect("error stdout must be JSON");
@@ -455,22 +605,612 @@ fn daemon_and_parser_errors_preserve_stable_exit_and_json_contracts() {
             .count(),
         1
     );
+    let invalid_applicability = fixture.run(&["--json", "next", "--verbose"]);
+    assert_eq!(invalid_applicability.status.code(), Some(2));
+    let invalid_applicability_json: Value = serde_json::from_slice(&invalid_applicability.stdout)
+        .expect("validation error stdout must be JSON");
+    assert_eq!(invalid_applicability_json["schema"], "podway.error/v1");
+    assert_eq!(invalid_applicability_json["command"], "session.next");
+    assert_eq!(invalid_applicability_json["code"], "REQUEST_INVALID");
 }
 #[test]
 fn malformed_framed_daemon_response_uses_the_stable_client_error_envelope() {
     let fixture = Fixture::new();
     let daemon = FakeDaemon::start(&fixture, vec![Reply::MalformedFramedResponse]);
 
-    let output = fixture.run(&["--json", "--workspace", "/fixture", "status"]);
+    let output = fixture.run(&["--json", "--worktree", "/fixture", "status"]);
     assert_eq!(output.status.code(), Some(6));
     let response: Value =
         serde_json::from_slice(&output.stdout).expect("client error stdout must be JSON");
     assert_eq!(response["schema"], "podway.error/v1");
-    assert_eq!(response["command"], "cli");
-    assert_eq!(response["code"], "DAEMON_RESPONSE_INVALID");
+    assert_eq!(response["command"], "session.status");
+    assert_eq!(response["code"], "INTERNAL_ERROR");
     assert_eq!(response["exit_code"], 6);
     assert_eq!(response["retryable"], false);
 
     let wires = daemon.finish();
     assert_eq!(wires.len(), 1);
+    assert_eq!(
+        response["request_id"],
+        decode_request(&wires[0]).request_id().as_str(),
+        "client-envelope failures preserve the request correlation identifier"
+    );
+}
+#[test]
+fn malformed_typed_read_results_fail_closed_in_json_and_text() {
+    for (argument, command, reply) in [
+        ("status", "session.status", Reply::MalformedStatusResult),
+        ("next", "session.next", Reply::MalformedNextResult),
+    ] {
+        let fixture = Fixture::new();
+        let daemon = FakeDaemon::start(&fixture, vec![reply]);
+        let output = fixture.run(&["--json", "--worktree", "/fixture", argument]);
+        assert_eq!(
+            output.status.code(),
+            Some(6),
+            "{command} malformed result must fail",
+        );
+        let response: Value =
+            serde_json::from_slice(&output.stdout).expect("failure stdout must be JSON");
+        assert_eq!(response["schema"], "podway.error/v1");
+        assert_eq!(response["command"], command);
+        assert_eq!(response["code"], "INTERNAL_ERROR");
+        assert_eq!(response["exit_code"], 6);
+
+        let wires = daemon.finish();
+        assert_eq!(wires.len(), 1);
+        assert_eq!(
+            response["request_id"],
+            decode_request(&wires[0]).request_id().as_str(),
+            "{command} malformed result must preserve request correlation",
+        );
+
+        let text_fixture = Fixture::new();
+        let text_daemon = FakeDaemon::start(&text_fixture, vec![reply]);
+        let text_output = text_fixture.run(&["--worktree", "/fixture", argument]);
+        assert_eq!(text_output.status.code(), Some(6));
+        assert!(
+            text_output.stdout.is_empty(),
+            "{command} malformed result must not fall back to generic text output: {text_output:?}",
+        );
+        let stderr = String::from_utf8(text_output.stderr).expect("stderr must be UTF-8");
+        assert!(
+            stderr.contains(&format!("invalid {command} result")),
+            "{command} text failure must report malformed typed output: {stderr}",
+        );
+        assert_eq!(text_daemon.finish().len(), 1);
+    }
+}
+#[test]
+fn malformed_status_preflight_cannot_authorize_mutation_or_reset() {
+    for (arguments, command) in [
+        (
+            &[
+                "--json",
+                "--worktree",
+                "/fixture",
+                "set",
+                "goal",
+                "bounded value",
+            ][..],
+            "item.set",
+        ),
+        (
+            &[
+                "--json",
+                "--worktree",
+                "/fixture",
+                "reset",
+                "--all",
+                "--force",
+                "--yes",
+            ][..],
+            "workspace.reset_all",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let daemon = FakeDaemon::start(&fixture, vec![Reply::MalformedStatusResult]);
+
+        let output = fixture.run(arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(6),
+            "{command} must fail closed on malformed status"
+        );
+        let response: Value =
+            serde_json::from_slice(&output.stdout).expect("failure stdout must be JSON");
+        assert_eq!(response["command"], command);
+        assert_eq!(response["code"], "INTERNAL_ERROR");
+
+        let wires = daemon.finish();
+        assert_eq!(
+            wires.len(),
+            1,
+            "{command} must not issue a request after malformed status"
+        );
+        assert_eq!(
+            response["request_id"],
+            decode_request(&wires[0]).request_id().as_str(),
+            "{command} must correlate malformed preflight failure to its status request"
+        );
+    }
+}
+
+#[test]
+fn set_stdin_is_bounded_before_preflight_at_the_authoritative_value_limit() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);
+    let exact_value = "x".repeat(MAX_SLICE_ITEM_TEXT_SCALARS_V1);
+
+    let output = fixture.run_with_stdin(
+        &["--json", "--worktree", "/fixture", "set", "goal", "--stdin"],
+        exact_value.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "exact stdin limit failed: {output:?}"
+    );
+
+    let wires = daemon.finish();
+    assert_eq!(
+        wires.len(),
+        2,
+        "exact stdin limit must preflight then mutate"
+    );
+    let mutation = decode_request(&wires[1]);
+    let slice = SliceRequestV1::from_envelope(&mutation)
+        .expect("exact stdin limit must remain admitted by the typed item-set slice");
+    assert!(matches!(
+        slice.command(),
+        SliceCommandV1::ItemSet(item) if item.value.chars().count() == MAX_SLICE_ITEM_TEXT_SCALARS_V1
+    ));
+    assert_eq!(
+        mutation.payload()["value"].as_str().map(str::len),
+        Some(MAX_SLICE_ITEM_TEXT_SCALARS_V1)
+    );
+
+    let overflow_fixture = Fixture::new();
+    let overflow = "x".repeat(MAX_SLICE_ITEM_TEXT_SCALARS_V1 + 1);
+    let overflow_output = overflow_fixture.run_with_stdin(
+        &["--json", "--worktree", "/fixture", "set", "goal", "--stdin"],
+        overflow.as_bytes(),
+    );
+    assert_eq!(
+        overflow_output.status.code(),
+        Some(2),
+        "stdin overflow must fail before daemon access"
+    );
+    let error: Value =
+        serde_json::from_slice(&overflow_output.stdout).expect("overflow stdout must be JSON");
+    assert_eq!(error["command"], "item.set");
+    assert_eq!(error["code"], "REQUEST_TOO_LARGE");
+}
+
+#[test]
+fn text_success_uses_stdout_and_daemon_errors_use_stderr() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Status]);
+
+    let output = fixture.run(&["--worktree", "/fixture", "status"]);
+    assert!(output.status.success(), "text status failed: {output:?}");
+    assert!(
+        String::from_utf8(output.stdout)
+            .expect("status stdout must be UTF-8")
+            .contains("task: Fixture task")
+    );
+    assert!(output.stderr.is_empty(), "text success must not use stderr");
+    assert_eq!(daemon.finish().len(), 1);
+
+    let error_fixture = Fixture::new();
+    let error_daemon = FakeDaemon::start(&error_fixture, vec![Reply::Error]);
+    let error_output = error_fixture.run(&["--worktree", "/fixture", "status"]);
+    assert_eq!(error_output.status.code(), Some(4));
+    assert!(
+        error_output.stdout.is_empty(),
+        "daemon text errors must not use stdout"
+    );
+    assert!(
+        String::from_utf8(error_output.stderr)
+            .expect("error stderr must be UTF-8")
+            .contains("error: JOB_WAIT_TIMEOUT:")
+    );
+    assert_eq!(error_daemon.finish().len(), 1);
+}
+
+#[test]
+fn resolved_routes_attribute_post_parse_failures() {
+    fn assert_route(output: Output, command: &str) {
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{command} must be a usage failure"
+        );
+        let error: Value =
+            serde_json::from_slice(&output.stdout).expect("failure stdout must be JSON");
+        assert_eq!(error["command"], command);
+        assert_eq!(error["code"], "REQUEST_INVALID");
+    }
+
+    let fixture = Fixture::new();
+    assert_route(
+        fixture.run(&["--json", "--worktree", "/fixture", "help"]),
+        "help",
+    );
+    assert_route(
+        fixture.run(&["--json", "--worktree", "/dev/null/unresolvable", "status"]),
+        "session.status",
+    );
+    assert_route(
+        fixture.run(&[
+            "--json",
+            "--worktree",
+            "/fixture",
+            "attach",
+            "artifact",
+            "--reference",
+            "build:42",
+            "--digest",
+            "not-a-digest",
+            "--size",
+            "42",
+            "--media-type",
+            "text/plain",
+        ]),
+        "item.attach",
+    );
+
+    let key = "x".repeat(257);
+    assert_route(
+        fixture.run(&[
+            "--json",
+            "--worktree",
+            "/fixture",
+            "--idempotency-key",
+            &key,
+            "start",
+            "--preset",
+            "sw-dev",
+            "--task",
+            "too long replay key",
+        ]),
+        "session.start",
+    );
+
+    let long_worktree = format!("/{}", "x".repeat(MAX_WORKTREE_SELECTOR_COMPONENT_BYTES_V1));
+    assert_route(
+        fixture.run(&["--json", "--worktree", &long_worktree, "status"]),
+        "session.status",
+    );
+}
+#[test]
+fn session_start_uses_the_canonical_wire_name_and_source_payload() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Output]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "Canonical task",
+    ]);
+    assert!(output.status.success(), "start failed: {output:?}");
+
+    let wires = daemon.finish();
+    assert_eq!(
+        wires.len(),
+        1,
+        "start must not preflight a nonexistent session"
+    );
+    let request = decode_request(&wires[0]);
+    assert_eq!(request.command().as_str(), "session.start");
+    assert_eq!(request.operation(), OperationV1::Mutate);
+    assert_eq!(request.payload()["preset"], "sw-dev");
+    assert_eq!(request.payload()["task_title"], "Canonical task");
+    assert!(request.idempotency_key().is_some());
+    assert!(request.preconditions().session_revision().is_none());
+    assert!(request.preconditions().attempt_id().is_none());
+}
+
+#[test]
+fn reference_attachment_uses_size_bytes_and_item_preconditions() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);
+    let digest = format!("sha256:{}", "a".repeat(64));
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "attach",
+        "artifact",
+        "--reference",
+        "build:42",
+        "--digest",
+        &digest,
+        "--size",
+        "42",
+        "--media-type",
+        "text/plain",
+    ]);
+    assert!(
+        output.status.success(),
+        "reference attach failed: {output:?}"
+    );
+
+    let wires = daemon.finish();
+    assert_eq!(wires.len(), 2);
+    let request = decode_request(&wires[1]);
+    assert_eq!(request.command().as_str(), "item.attach");
+    assert_eq!(request.payload()["item_id"], "artifact");
+    assert_eq!(request.payload()["reference"], "build:42");
+    assert_eq!(request.payload()["digest"], digest);
+    assert_eq!(request.payload()["size_bytes"], 42);
+    assert_eq!(request.payload()["media_type"], "text/plain");
+    assert_eq!(
+        request.preconditions().attempt_id().map(AttemptId::as_str),
+        Some(ATTEMPT_ID)
+    );
+    assert_eq!(
+        request.preconditions().item_revision().map(Revision::get),
+        Some(4)
+    );
+}
+
+#[test]
+fn start_replace_supplies_confirmation_and_identity_preconditions() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "Replacement",
+        "--replace",
+        "--yes",
+    ]);
+    assert!(output.status.success(), "start replace failed: {output:?}");
+
+    let wires = daemon.finish();
+    assert_eq!(wires.len(), 2);
+    let request = decode_request(&wires[1]);
+    assert_eq!(request.command().as_str(), "session.start_replace");
+    assert_eq!(request.payload()["confirmed"], true);
+    assert_eq!(
+        request.preconditions().session_id().map(|id| id.as_str()),
+        Some(SESSION_ID)
+    );
+    assert_eq!(
+        request
+            .preconditions()
+            .session_revision()
+            .map(Revision::get),
+        Some(12)
+    );
+    assert!(request.preconditions().attempt_id().is_none());
+}
+#[test]
+fn start_replace_dry_run_uses_the_readonly_preflighted_preview_contract() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--if-session-revision",
+        "12",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "Replacement preview",
+        "--replace",
+        "--dry-run",
+    ]);
+    assert!(
+        output.status.success(),
+        "start replace dry run failed: {output:?}"
+    );
+
+    let wires = daemon.finish();
+    assert_eq!(
+        wires.len(),
+        2,
+        "replace preview must preflight current state"
+    );
+    let preview = decode_request(&wires[1]);
+    assert_eq!(preview.command().as_str(), "session.start_replace");
+    assert_eq!(preview.operation(), OperationV1::Query);
+    assert_eq!(preview.payload()["dry_run"], true);
+    assert!(preview.payload().get("confirmed").is_none());
+    assert!(preview.idempotency_key().is_none());
+    assert_eq!(
+        preview.preconditions().session_id().map(|id| id.as_str()),
+        Some(SESSION_ID)
+    );
+    assert_eq!(
+        preview
+            .preconditions()
+            .session_revision()
+            .map(Revision::get),
+        Some(12)
+    );
+}
+
+#[test]
+fn reset_all_binds_readable_workspace_identity_without_session_preconditions() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "reset",
+        "--all",
+        "--force",
+        "--yes",
+    ]);
+    assert!(output.status.success(), "reset all failed: {output:?}");
+
+    let wires = daemon.finish();
+    assert_eq!(wires.len(), 2, "reset all must probe readable state");
+    let reset = decode_request(&wires[1]);
+    assert_eq!(reset.command().as_str(), "workspace.reset_all");
+    assert_eq!(reset.operation(), OperationV1::Bootstrap);
+    assert_eq!(reset.payload()["expected_workspace_uuid"], WORKSPACE_ID);
+    assert_eq!(
+        reset
+            .workspace()
+            .and_then(|workspace| workspace.expected_uuid())
+            .map(WorkspaceId::as_str),
+        Some(WORKSPACE_ID)
+    );
+    assert!(reset.preconditions().session_id().is_none());
+    assert!(reset.preconditions().session_revision().is_none());
+}
+
+#[test]
+fn reset_all_continues_only_after_the_documented_unreadable_state_probe_error() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::ResetUnreadable, Reply::Output]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "reset",
+        "--all",
+        "--force",
+        "--yes",
+    ]);
+    assert!(
+        output.status.success(),
+        "unreadable-state reset all failed: {output:?}"
+    );
+
+    let wires = daemon.finish();
+    assert_eq!(wires.len(), 2);
+    let reset = decode_request(&wires[1]);
+    assert_eq!(reset.command().as_str(), "workspace.reset_all");
+    assert!(reset.payload().get("expected_workspace_uuid").is_none());
+    assert!(
+        reset
+            .workspace()
+            .and_then(|workspace| workspace.expected_uuid())
+            .is_none()
+    );
+    assert!(reset.preconditions().session_id().is_none());
+    assert!(reset.preconditions().session_revision().is_none());
+}
+#[test]
+fn offline_procedure_validation_rejects_oversized_files_before_reading_them() {
+    let fixture = Fixture::new();
+    let procedure = fixture.root.join("oversized.yaml");
+    fs::File::create(&procedure)
+        .expect("oversized procedure file must be created")
+        .set_len((MAX_PROCEDURE_DOCUMENT_BYTES_V1 + 1) as u64)
+        .expect("oversized procedure file length must be set");
+
+    let output = fixture.run(&[
+        "--json",
+        "procedure",
+        "validate",
+        procedure.to_str().expect("fixture procedure path is UTF-8"),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let error: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
+    assert_eq!(error["schema"], "podway.error/v1");
+    assert_eq!(error["command"], "procedure.validate");
+    assert_eq!(error["code"], "PROCEDURE_INVALID");
+}
+#[test]
+fn offline_procedure_validation_rejects_symlink_sources() {
+    let fixture = Fixture::new();
+    let source = fixture.root.join("source.yaml");
+    let symlinked = fixture.root.join("source-link.yaml");
+    fs::write(&source, "schema: podway.procedure/v1\n").expect("source procedure must be written");
+    symlink(&source, &symlinked).expect("source procedure symlink must be created");
+
+    let output = fixture.run(&[
+        "--json",
+        "procedure",
+        "validate",
+        symlinked.to_str().expect("fixture procedure path is UTF-8"),
+    ]);
+    assert_eq!(output.status.code(), Some(5));
+    let error: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
+    assert_eq!(error["command"], "procedure.validate");
+    assert_eq!(error["code"], "PATH_OUTSIDE_WORKTREE");
+}
+
+#[test]
+fn session_start_help_documents_a_parseable_dry_run() {
+    let fixture = Fixture::new();
+    let help = fixture.run(&["--json", "help", "session.start"]);
+    assert!(help.status.success(), "session.start help failed: {help:?}");
+    let help_json: Value = serde_json::from_slice(&help.stdout).expect("help stdout must be JSON");
+    let help_text = help_json["result"]["text"]
+        .as_str()
+        .expect("session.start help must have text");
+    assert!(
+        help_text.contains("[--dry-run]") && help_text.contains("--dry-run"),
+        "session.start help must document its dry-run parser flag: {help_text}",
+    );
+
+    let preview = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "preview",
+        "--dry-run",
+    ]);
+    assert!(
+        preview.status.success(),
+        "documented session.start dry-run must parse and execute locally: {preview:?}",
+    );
+    let preview_json: Value =
+        serde_json::from_slice(&preview.stdout).expect("preview stdout must be JSON");
+    assert_eq!(preview_json["command"], "session.start");
+    assert_eq!(preview_json["result"]["dry_run"], true);
+}
+
+#[test]
+fn local_custom_procedure_dry_run_rejects_worktree_symlinks() {
+    let fixture = Fixture::new();
+    let worktree = fixture.root.join("worktree");
+    fs::create_dir(&worktree).expect("worktree directory must be created");
+    let external = fixture.root.join("outside.yaml");
+    fs::write(&external, "schema: podway.procedure/v1\n")
+        .expect("outside procedure must be written");
+    symlink(&external, worktree.join("escape.yaml")).expect("procedure symlink must be created");
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        worktree.to_str().expect("fixture worktree path is UTF-8"),
+        "start",
+        "--procedure",
+        "escape.yaml",
+        "--task",
+        "unsafe preview",
+        "--dry-run",
+    ]);
+    assert_eq!(output.status.code(), Some(5));
+    let error: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
+    assert_eq!(error["code"], "PATH_OUTSIDE_WORKTREE");
+    assert_eq!(error["command"], "session.start");
 }

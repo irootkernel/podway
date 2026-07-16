@@ -154,7 +154,7 @@ fn request() -> podway_protocol::RequestEnvelopeV1 {
         )
         .as_bytes(),
     )
-    .expect("fixture request must satisfy the G005 session.status contract")
+    .expect("fixture request must satisfy the G006 session.status contract")
 }
 
 fn output_payload(command: &str) -> Vec<u8> {
@@ -166,11 +166,11 @@ fn output_payload(command: &str) -> Vec<u8> {
 fn mutation_request() -> podway_protocol::RequestEnvelopeV1 {
     decode_request_payload_v1(
         format!(
-            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1}},"operation":"mutate","command":"preset.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"start-fixture","options":{{"detach":true,"wait_timeout_ms":1234}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"preset":"sw-dev","task_title":"A bounded fixture task"}}}}"#
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1}},"operation":"mutate","command":"session.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"start-fixture","options":{{"detach":true,"wait_timeout_ms":1234}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"preset":"sw-dev","task_title":"A bounded fixture task"}}}}"#
         )
         .as_bytes(),
     )
-    .expect("fixture mutation request must satisfy the G005 preset.start contract")
+    .expect("fixture mutation request must satisfy the G006 session.start contract")
 }
 
 fn error_payload() -> Vec<u8> {
@@ -356,7 +356,7 @@ fn trailing_response_data_is_a_typed_framing_failure() {
 fn request_is_one_exact_frame_and_preserves_envelope_wait_preferences() {
     let fixture = RuntimeFixture::new();
     let frame =
-        encode_frame_v1(&output_payload("preset.start")).expect("output response must frame");
+        encode_frame_v1(&output_payload("session.start")).expect("output response must frame");
     let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
     let request = mutation_request();
     let expected_payload = encode_request_payload_v1(&request).expect("request must encode");
@@ -372,9 +372,9 @@ fn request_is_one_exact_frame_and_preserves_envelope_wait_preferences() {
     let decoded =
         decode_request_payload_v1(request_payload).expect("request wire must use protocol codec");
     let slice =
-        SliceRequestV1::from_envelope(&decoded).expect("request must remain in the G005 slice");
+        SliceRequestV1::from_envelope(&decoded).expect("request must remain in the G006 slice");
     assert_eq!(decoded.operation(), OperationV1::Mutate);
-    assert!(matches!(slice.command(), SliceCommandV1::PresetStart(_)));
+    assert!(matches!(slice.command(), SliceCommandV1::SessionStart(_)));
     assert!(decoded.options().detach());
     assert_eq!(decoded.options().wait_timeout_ms(), 1_234);
     server.join();

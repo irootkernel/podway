@@ -145,6 +145,60 @@
         }
       ]
     },
+    "previous_attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage_id",
+          "attempt_id",
+          "attempt_number",
+          "lifecycle",
+          "started_at",
+          "ended_at",
+          "reason"
+        ],
+        "properties": {
+          "stage_id": {
+            "type": "string"
+          },
+          "attempt_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attempt_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "lifecycle": {
+            "enum": [
+              "active",
+              "completed",
+              "skipped",
+              "abandoned"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
     "stages": {
       "type": "array",
       "items": {

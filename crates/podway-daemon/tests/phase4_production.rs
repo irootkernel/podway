@@ -200,7 +200,7 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
 
     let preset = request(
         2,
-        "preset.start",
+        "session.start",
         &main_selector,
         json!({
             "selector": serde_json::to_value(&main_selector).unwrap(),
@@ -211,10 +211,10 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
         "preset-start",
         PreconditionsV1::default(),
     );
-    let started = dispatch_command(&dispatcher, &preset, "preset.start");
+    let started = dispatch_command(&dispatcher, &preset, "session.start");
     assert!(
         started.session().is_some(),
-        "preset.start terminal output must project the persisted session"
+        "session.start terminal output must project the persisted session"
     );
 
     let status = request(
@@ -229,7 +229,7 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
     let initial_status = status_result(&dispatch_command(&dispatcher, &status, "session.status"));
     let started_session = started
         .session()
-        .expect("preset.start terminal output includes a session");
+        .expect("session.start terminal output includes a session");
     assert_eq!(started_session.id(), &initial_status.session.id);
     assert_eq!(
         started_session.revision_after(),
@@ -239,7 +239,7 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
     let initial_current = initial_status
         .current
         .as_ref()
-        .expect("preset.start must create a current attempt");
+        .expect("session.start must create a current attempt");
     assert_eq!(initial_status.task.title, "Production composition task");
     assert_eq!(initial_status.task.procedure.id, "sw-dev");
     assert_eq!(initial_current.stage_id.as_str(), "understand");
@@ -554,7 +554,7 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
     );
     let replay = request(
         17,
-        "preset.start",
+        "session.start",
         &main_selector,
         json!({
             "selector": serde_json::to_value(&main_selector).unwrap(),
@@ -569,7 +569,7 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
         Arc::new(crate::manager(fixture.temporary_path())),
         WorkerIdV1::new("production-replay-after-reopen-test").unwrap(),
     );
-    let replayed = dispatch_command(&reopened_dispatcher, &replay, "preset.start");
+    let replayed = dispatch_command(&reopened_dispatcher, &replay, "session.start");
     assert_ne!(
         started_session.revision_after(),
         returned_status.session.revision,
@@ -638,7 +638,7 @@ fn manager_adapter_reuses_moves_rejects_copies_and_distinct_identities_admit_rea
     ));
     let main_initialize = request(
         100,
-        "preset.start",
+        "session.start",
         &main_selector,
         json!({
             "selector": serde_json::to_value(&main_selector).unwrap(),
@@ -651,7 +651,7 @@ fn manager_adapter_reuses_moves_rejects_copies_and_distinct_identities_admit_rea
     );
     let linked_initialize = request(
         101,
-        "preset.start",
+        "session.start",
         &linked_selector,
         json!({
             "selector": serde_json::to_value(&linked_selector).unwrap(),
@@ -668,7 +668,7 @@ fn manager_adapter_reuses_moves_rejects_copies_and_distinct_identities_admit_rea
         let start = Arc::clone(&start);
         thread::spawn(move || {
             start.wait();
-            dispatch_command(dispatcher.as_ref(), &main_initialize, "preset.start")
+            dispatch_command(dispatcher.as_ref(), &main_initialize, "session.start")
         })
     };
     let linked_mutation = {
@@ -676,7 +676,7 @@ fn manager_adapter_reuses_moves_rejects_copies_and_distinct_identities_admit_rea
         let start = Arc::clone(&start);
         thread::spawn(move || {
             start.wait();
-            dispatch_command(dispatcher.as_ref(), &linked_initialize, "preset.start")
+            dispatch_command(dispatcher.as_ref(), &linked_initialize, "session.start")
         })
     };
     start.wait();

@@ -21,7 +21,6 @@ use podway_store::{
     SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreFailpointActionV1,
     StoreFailpointV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreRecordKindV1,
     StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
-    WorkerIdV1,
     codec::{
         PersistedDomainResultV1, PersistedTerminalResultV1, encode_command_v1,
         encode_persisted_terminal_receipt_v1,
@@ -1808,31 +1807,11 @@ fn generic_terminal_commit_cannot_succeed_workspace_reset_in_old_database() {
     )
     .unwrap();
     let reset = request(50, 'f');
-    store.admit(&workspace, reset.clone()).unwrap();
-    let claimed = store
-        .claim_next(
-            &workspace,
-            WorkerIdV1::new("reset-worker").unwrap(),
-            UnixMillis::new(2),
-        )
-        .unwrap()
-        .unwrap();
-
     assert!(matches!(
-        store.commit_terminal(
-            claimed.claim().clone(),
-            Revision::ZERO,
-            None,
-            TerminalResultV1::Success(reset_result(&workspace)),
-            UnixMillis::new(3),
-        ),
+        store.admit(&workspace, reset),
         Err(StoreErrorV1::InternalInvariantViolationV1 { .. })
     ));
-    assert_eq!(
-        store
-            .read_workspace_view(&workspace)
-            .unwrap()
-            .running_job_id(),
-        Some(reset.job_id())
-    );
+    let view = store.read_workspace_view(&workspace).unwrap();
+    assert_eq!(view.queued_job_count(), 0);
+    assert_eq!(view.running_job_id(), None);
 }

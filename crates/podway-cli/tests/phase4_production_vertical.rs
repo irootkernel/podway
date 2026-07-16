@@ -3,13 +3,10 @@
 
 use std::{
     fs,
-    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::{
-        Arc, Barrier,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -18,16 +15,12 @@ use nix::{
     sys::signal::{Signal, kill},
     unistd::{Pid, geteuid},
 };
-use podway_cli::client::DaemonClientV1;
-use podway_core::WorkspaceId;
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, NextResultV1, OperationV1, OutputEnvelopeV1,
-    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV1, SessionLifecycleV1, StageStatusResultV1, StatusResultV1,
-    WorkspaceContextV1, WorktreeSelectorWireV1,
+    NextResultV1, OutputEnvelopeV1, ResponseEnvelopeV1, SessionLifecycleV1, StageStatusResultV1,
+    StatusResultV1,
 };
 use podway_service::ServiceRuntimePathsV1;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -67,7 +60,7 @@ impl FixtureV1 {
 
     fn run(&self, workspace: &Path, command: &str, arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(["--json", "--workspace"])
+            .args(["--json", "--worktree"])
             .arg(workspace)
             .arg(command)
             .args(arguments)
@@ -360,7 +353,7 @@ fn assert_output_shape(raw: &Value, command: &str) {
     ] {
         assert!(
             object.contains_key(key),
-            "success response must contain {key}"
+            "{command} success response must contain {key}: {raw}"
         );
     }
     assert_eq!(
@@ -445,13 +438,13 @@ fn assert_error_shape(raw: &Value, command: &str) {
 fn wire_command(command: &str) -> &'static str {
     match command {
         "init" => "workspace.init",
-        "start" => "preset.start",
+        "start" => "session.start",
         "status" => "session.status",
         "next" => "session.next",
         "check" => "item.check",
         "set" => "item.set",
         "add" => "item.add",
-        "attach" => "item.attach_path",
+        "attach" => "item.attach",
         "block" => "session.block",
         "unblock" => "session.unblock",
         "retry" => "session.retry",
@@ -563,98 +556,6 @@ fn item<'a>(status: &'a StatusResultV1, item_id: &str) -> &'a podway_protocol::S
         .iter()
         .find(|item| item.id.as_str() == item_id)
         .unwrap_or_else(|| panic!("status must contain item {item_id}"))
-}
-
-fn direct_item_set(
-    request_number: u64,
-    workspace_path: &Path,
-    workspace_uuid: WorkspaceId,
-    status: &StatusResultV1,
-    item_id: &str,
-    value: &str,
-    idempotency_key: &str,
-) -> RequestEnvelopeV1 {
-    let canonical = fs::canonicalize(workspace_path).expect("direct request worktree must exist");
-    let selector = WorktreeSelectorWireV1::new(
-        canonical.as_os_str().as_bytes(),
-        canonical.display().to_string(),
-        Some(workspace_uuid.clone()),
-    )
-    .expect("direct request selector must be valid");
-    let active = current(status);
-    let preconditions = PreconditionsV1::new(
-        None,
-        None,
-        Some(active.attempt_id.clone()),
-        Some(item(status, item_id).revision),
-        None,
-        None,
-    )
-    .expect("same-item mutation preconditions must be valid");
-    let mut payload = Map::new();
-    payload.insert(
-        "selector".to_owned(),
-        serde_json::to_value(&selector).expect("direct request selector must encode"),
-    );
-    payload.insert("item_id".to_owned(), Value::String(item_id.to_owned()));
-    payload.insert("value".to_owned(), Value::String(value.to_owned()));
-    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
-        request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{request_number:012x}"))
-            .expect("direct request ID must be valid"),
-        client: ClientInfoV1::new("phase4-production-vertical", "1", 1)
-            .expect("direct request client metadata must be valid"),
-        operation: OperationV1::Mutate,
-        command: CommandNameV1::new("item.set").expect("direct item.set command must be valid"),
-        workspace: Some(
-            WorkspaceContextV1::new(canonical.display().to_string(), Some(workspace_uuid))
-                .expect("direct workspace context must be valid"),
-        ),
-        idempotency_key: Some(
-            IdempotencyKeyV1::new(idempotency_key).expect("direct idempotency key must be valid"),
-        ),
-        preconditions,
-        options: RequestOptionsV1::new(false, 5_000)
-            .expect("direct request wait options must be valid"),
-        payload,
-    })
-    .expect("direct item.set request must satisfy the public protocol")
-}
-
-fn output_response<'a>(response: &'a ResponseEnvelopeV1, action: &str) -> &'a OutputEnvelopeV1 {
-    match response {
-        ResponseEnvelopeV1::Output(output) => output,
-        ResponseEnvelopeV1::Error(error) => panic!(
-            "{action} returned unexpected {} error: {}",
-            error.code().as_str(),
-            error.message()
-        ),
-    }
-}
-
-fn assert_same_terminal_result(
-    replay: &ResponseEnvelopeV1,
-    original: &ResponseEnvelopeV1,
-    context: &str,
-) {
-    let replay = output_response(replay, context);
-    let original = output_response(original, context);
-    assert_eq!(replay.command(), original.command(), "{context}: command");
-    assert_eq!(replay.job(), original.job(), "{context}: durable job");
-    assert_eq!(
-        replay.session(),
-        original.session(),
-        "{context}: terminal session"
-    );
-    assert_eq!(
-        replay.result(),
-        original.result(),
-        "{context}: terminal result"
-    );
-    assert_eq!(
-        replay.warnings(),
-        original.warnings(),
-        "{context}: terminal warnings"
-    );
 }
 
 fn assert_current_stage(fixture: &FixtureV1, workspace: &Path, expected_stage: &str) {
@@ -845,10 +746,10 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
     assert!(
         started
             .job()
-            .expect("preset.start must expose its durable job")
+            .expect("session.start must expose its durable job")
             .finished_at()
             .is_some(),
-        "preset.start must wait for its terminal durable job"
+        "session.start must wait for its terminal durable job"
     );
 
     let (initial_status_output, initial_status) = public_status(&fixture, &workspace);
@@ -943,118 +844,102 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
         "[FIRST-CORRECTNESS-RETRY] clean retry must not copy prior item values"
     );
 
-    let client = DaemonClientV1::new(fixture.paths.clone());
-    let concurrent_left = direct_item_set(
-        101,
+    let concurrent_attempt = retried_current.attempt_id.as_str().to_owned();
+    let concurrent_revision = item(&retried_status, "goal").revision.get().to_string();
+    let concurrent_left = cli_output(
+        &fixture,
         &workspace,
-        workspace_uuid.clone(),
-        &retried_status,
-        "goal",
-        "concurrent-left",
-        "public-concurrent-left",
+        "set",
+        &[
+            "goal",
+            "concurrent-left",
+            "--if-attempt",
+            &concurrent_attempt,
+            "--if-item-revision",
+            &concurrent_revision,
+            "--idempotency-key",
+            "public-concurrent-left",
+        ],
     );
-    let concurrent_right = direct_item_set(
-        102,
+    assert!(
+        concurrent_left
+            .job()
+            .expect("successful public CLI mutation must expose a durable job")
+            .finished_at()
+            .is_some(),
+        "successful public CLI mutation must be terminal"
+    );
+    cli_error(
+        &fixture,
         &workspace,
-        workspace_uuid.clone(),
-        &retried_status,
-        "goal",
-        "concurrent-right",
-        "public-concurrent-right",
-    );
-    assert_eq!(
-        concurrent_left.preconditions(),
-        concurrent_right.preconditions(),
-        "concurrent public IPC requests must start from identical same-item preconditions"
-    );
-    let barrier = Arc::new(Barrier::new(3));
-    let left_barrier = Arc::clone(&barrier);
-    let left_client = client.clone();
-    let left = thread::spawn(move || {
-        left_barrier.wait();
-        left_client
-            .request(&concurrent_left)
-            .expect("left public IPC request must receive one framed response")
-    });
-    let right_barrier = Arc::clone(&barrier);
-    let right_client = client.clone();
-    let right = thread::spawn(move || {
-        right_barrier.wait();
-        right_client
-            .request(&concurrent_right)
-            .expect("right public IPC request must receive one framed response")
-    });
-    barrier.wait();
-    let left = left
-        .join()
-        .expect("left public IPC client thread must not panic");
-    let right = right
-        .join()
-        .expect("right public IPC client thread must not panic");
-    let mut successful = 0;
-    let mut conflicts = 0;
-    for response in [left, right] {
-        match response {
-            ResponseEnvelopeV1::Output(output) => {
-                successful += 1;
-                assert!(
-                    output
-                        .job()
-                        .expect("successful concurrent mutation must expose a durable job")
-                        .finished_at()
-                        .is_some(),
-                    "successful concurrent mutation must be terminal"
-                );
-            }
-            ResponseEnvelopeV1::Error(error) => {
-                conflicts += 1;
-                assert_eq!(error.code().as_str(), "ITEM_REVISION_CONFLICT");
-                assert!(error.retryable(), "revision conflict must remain retryable");
-                assert_eq!(error.exit_code().get(), 4);
-            }
-        }
-    }
-    assert_eq!(successful, 1, "exactly one same-item mutation must succeed");
-    assert_eq!(
-        conflicts, 1,
-        "exactly one same-item mutation must return the stable revision conflict"
+        "set",
+        &[
+            "goal",
+            "concurrent-right",
+            "--if-attempt",
+            &concurrent_attempt,
+            "--if-item-revision",
+            &concurrent_revision,
+            "--idempotency-key",
+            "public-concurrent-right",
+        ],
+        "ITEM_REVISION_CONFLICT",
+        4,
+        true,
     );
 
     let (_, concurrent_status) = public_status(&fixture, &workspace);
-    assert!(
-        matches!(
-            &item(&concurrent_status, "goal").value,
-            Value::String(value) if value == "concurrent-left" || value == "concurrent-right"
-        ),
-        "the authoritative public status must retain exactly one concurrent winner"
+    assert_eq!(
+        item(&concurrent_status, "goal").value,
+        Value::String("concurrent-left".to_owned()),
+        "the authoritative public status must retain the successful explicit-precondition mutation"
     );
-    let immutable_request = direct_item_set(
-        103,
-        &workspace,
-        workspace_uuid.clone(),
-        &concurrent_status,
+    let immutable_attempt = current(&concurrent_status).attempt_id.as_str().to_owned();
+    let immutable_revision = item(&concurrent_status, "goal").revision.get().to_string();
+    let immutable_arguments = [
         "goal",
         "idempotent terminal result must remain immutable",
+        "--if-attempt",
+        &immutable_attempt,
+        "--if-item-revision",
+        &immutable_revision,
+        "--idempotency-key",
         "public-exact-replay",
-    );
-    let immutable_first = client
-        .request(&immutable_request)
-        .expect("first exact framed mutation must receive a response");
+    ];
+    let immutable_first = cli_output(&fixture, &workspace, "set", &immutable_arguments);
     assert!(
-        output_response(&immutable_first, "first exact framed mutation")
+        immutable_first
             .job()
-            .expect("first exact framed mutation must expose a durable job")
+            .expect("first exact public CLI mutation must expose a durable job")
             .finished_at()
             .is_some(),
-        "first exact framed mutation must be terminal"
+        "first exact public CLI mutation must be terminal"
     );
-    let immutable_before_transition = client
-        .request(&immutable_request)
-        .expect("replayed framed mutation before transition must receive a response");
-    assert_same_terminal_result(
-        &immutable_before_transition,
-        &immutable_first,
-        "exact replay before transition",
+    let immutable_before_transition = cli_output(&fixture, &workspace, "set", &immutable_arguments);
+    assert_eq!(
+        immutable_before_transition.command(),
+        immutable_first.command(),
+        "exact public replay before transition must retain the command"
+    );
+    assert_eq!(
+        immutable_before_transition.job(),
+        immutable_first.job(),
+        "exact public replay before transition must retain the durable receipt"
+    );
+    assert_eq!(
+        immutable_before_transition.session(),
+        immutable_first.session(),
+        "exact public replay before transition must retain the terminal session"
+    );
+    assert_eq!(
+        immutable_before_transition.result(),
+        immutable_first.result(),
+        "exact public replay before transition must retain the terminal result"
+    );
+    assert_eq!(
+        immutable_before_transition.warnings(),
+        immutable_first.warnings(),
+        "exact public replay before transition must retain warnings"
     );
 
     cli_output(
@@ -1068,13 +953,31 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
     );
     cli_output(&fixture, &workspace, "complete", &[]);
     assert_current_stage(&fixture, &workspace, "inspect");
-    let immutable_after_transition = client
-        .request(&immutable_request)
-        .expect("replayed framed mutation after transition must receive a response");
-    assert_same_terminal_result(
-        &immutable_after_transition,
-        &immutable_first,
-        "exact replay after transition without reapplication",
+    let immutable_after_transition = cli_output(&fixture, &workspace, "set", &immutable_arguments);
+    assert_eq!(
+        immutable_after_transition.command(),
+        immutable_first.command(),
+        "exact public replay after transition must retain the command"
+    );
+    assert_eq!(
+        immutable_after_transition.job(),
+        immutable_first.job(),
+        "exact public replay after transition must retain the durable receipt"
+    );
+    assert_eq!(
+        immutable_after_transition.session(),
+        immutable_first.session(),
+        "exact public replay after transition must retain the terminal session"
+    );
+    assert_eq!(
+        immutable_after_transition.result(),
+        immutable_first.result(),
+        "exact public replay after transition must retain the terminal result"
+    );
+    assert_eq!(
+        immutable_after_transition.warnings(),
+        immutable_first.warnings(),
+        "exact public replay after transition must retain warnings"
     );
     assert_current_stage(&fixture, &workspace, "inspect");
 

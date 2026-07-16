@@ -108,7 +108,7 @@ fn g005_parses_every_admitted_command_with_exact_preconditions() {
         ),
         (
             envelope(
-                "preset.start",
+                "session.start",
                 OperationV1::Mutate,
                 json!({"selector": selector.clone(), "preset": "bug-fix", "task_title": "Fix the login"}),
                 no_preconditions.clone(),
@@ -120,7 +120,7 @@ fn g005_parses_every_admitted_command_with_exact_preconditions() {
                     client_name: "podway-cli",
                 },
             ),
-            "preset.start",
+            "session.start",
         ),
         (
             envelope(
@@ -204,7 +204,7 @@ fn g005_parses_every_admitted_command_with_exact_preconditions() {
         ),
         (
             envelope(
-                "item.attach_path",
+                "item.attach",
                 OperationV1::Mutate,
                 json!({"selector": selector.clone(), "item_id": "artifact", "path": "proof/report.txt", "media_type": "text/plain"}),
                 item_preconditions(),
@@ -216,7 +216,7 @@ fn g005_parses_every_admitted_command_with_exact_preconditions() {
                     client_name: "podway-cli",
                 },
             ),
-            "item.attach_path",
+            "item.attach",
         ),
         (
             envelope(
@@ -355,7 +355,7 @@ fn g005_rejects_wrong_operations_missing_or_extra_conditions_and_unknown_fields(
     assert!(SliceRequestV1::from_envelope(&extra_query_precondition).is_err());
 
     let unknown_payload_field = envelope(
-        "preset.start",
+        "session.start",
         OperationV1::Mutate,
         json!({
             "selector": selector.clone(),
@@ -390,7 +390,7 @@ fn g005_rejects_wrong_operations_missing_or_extra_conditions_and_unknown_fields(
     assert!(SliceRequestV1::from_envelope(&ambiguous_unblock).is_err());
 
     let unimplemented_command = envelope(
-        "session.cancel",
+        "session.unknown",
         OperationV1::Mutate,
         json!({"selector": selector}),
         session_preconditions(),
@@ -458,7 +458,7 @@ fn g005_enforces_workspace_and_command_text_reason_and_path_bounds() {
 
     let selector = selector_json(b"/worktree", "/worktree");
     let overlong_title = envelope(
-        "preset.start",
+        "session.start",
         OperationV1::Mutate,
         json!({"selector": selector.clone(), "preset": "bug-fix", "task_title": "x".repeat(501)}),
         PreconditionsV1::default(),
@@ -503,7 +503,7 @@ fn g005_enforces_workspace_and_command_text_reason_and_path_bounds() {
     assert!(SliceRequestV1::from_envelope(&overlong_list_value).is_err());
 
     let invalid_path = envelope(
-        "item.attach_path",
+        "item.attach",
         OperationV1::Mutate,
         json!({"selector": selector.clone(), "item_id": "artifact", "path": "../escape"}),
         item_preconditions(),

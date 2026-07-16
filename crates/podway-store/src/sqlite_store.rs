@@ -315,6 +315,9 @@ impl StoreContractV1 for SqliteStoreV1 {
         request: AdmitRequestV1,
     ) -> Result<AdmitOutcomeV1, StoreErrorV1> {
         self.require_identity(identity)?;
+        if matches!(request.command(), crate::CommandV1::WorkspaceResetAll) {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
         self.trigger_failpoint(StoreFailpointV1::AdmissionBeforeTransaction)?;
         let mut connection = self.lock_connection()?;
         let transaction = connection
@@ -772,12 +775,16 @@ impl StoreContractV1 for SqliteStoreV1 {
                 };
                 let post_transition_session = match transition.persisted_session_mutation() {
                     PersistedSessionMutationV1::Unchanged => current,
-                    PersistedSessionMutationV1::Replace(aggregate) => Some(aggregate.clone()),
+                    PersistedSessionMutationV1::Replace(aggregate)
+                    | PersistedSessionMutationV1::ReplaceFresh(aggregate) => {
+                        Some(aggregate.clone())
+                    }
                     PersistedSessionMutationV1::Clear => None,
                 };
                 match transition.persisted_session_mutation() {
                     PersistedSessionMutationV1::Unchanged => {}
-                    PersistedSessionMutationV1::Replace(aggregate) => {
+                    PersistedSessionMutationV1::Replace(aggregate)
+                    | PersistedSessionMutationV1::ReplaceFresh(aggregate) => {
                         replace_current_session(&transaction, aggregate)?;
                     }
                     PersistedSessionMutationV1::Clear => {
@@ -2205,7 +2212,7 @@ fn verify_seeded_reset_snapshot(
     {
         return Err(corrupt(StoreRecordKindV1::Job));
     }
-    verify_terminal_job_projection(&terminal, "succeeded", job.8, job.9, job.10)?;
+    verify_seeded_terminal_job_projection(&terminal, "succeeded", job.8, job.9, job.10)?;
     Ok(context.receipt.clone())
 }
 
@@ -2392,6 +2399,20 @@ fn verify_terminal_job_projection(
     Ok(())
 }
 
+fn verify_seeded_terminal_job_projection(
+    terminal: &PersistedTerminalReceiptV1,
+    state: &str,
+    submitted_at: i64,
+    claimed_at: Option<i64>,
+    finished_at: Option<i64>,
+) -> Result<(), StoreErrorV1> {
+    verify_terminal_job_projection(terminal, state, submitted_at, claimed_at, finished_at)?;
+    if terminal.job_projection().is_none() {
+        return Err(corrupt(StoreRecordKindV1::Job));
+    }
+    Ok(())
+}
+
 fn terminal_session_projection(
     result: &PersistedTerminalResultV1,
     post_transition_session: Option<&podway_core::SessionAggregateV1>,
@@ -2441,6 +2462,38 @@ fn validate_success_transition(
     current: Option<&podway_core::SessionAggregateV1>,
     identity: &DurableWorktreeIdentityV1,
 ) -> Result<(), StoreErrorV1> {
+    if let PersistedSessionMutationV1::ReplaceFresh(aggregate) =
+        transition.persisted_session_mutation()
+    {
+        let matches = match result {
+            podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            } => {
+                matches!(command, crate::CommandV1::SessionStartReplace)
+                    && *changed
+                    && transition.session_id() == Some(session_id)
+                    && aggregate.session_id() == session_id
+                    && transition.resulting_workspace_revision() == RevisionV1::new(1)
+                    && aggregate.revision() == RevisionV1::new(1)
+                    && *revision_after == RevisionV1::new(1)
+                    && current.is_some_and(|session| {
+                        session.session_id() != session_id
+                            && transition.previous_workspace_revision() == session.revision()
+                            && *revision_before == session.revision()
+                    })
+            }
+            podway_core::DomainResult::WorkspaceInitialized { .. }
+            | podway_core::DomainResult::WorkspaceReset { .. }
+            | podway_core::DomainResult::ItemChanged { .. } => false,
+        };
+        return matches
+            .then_some(())
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape));
+    }
+
     let session_result_matches =
         |session_id: &podway_core::SessionId| match transition.persisted_session_mutation() {
             PersistedSessionMutationV1::Unchanged => {
@@ -2448,8 +2501,11 @@ fn validate_success_transition(
                     && current.is_some_and(|session| session.session_id() == session_id)
             }
             PersistedSessionMutationV1::Replace(aggregate) => {
-                transition.session_id() == Some(session_id) && aggregate.session_id() == session_id
+                transition.session_id() == Some(session_id)
+                    && aggregate.session_id() == session_id
+                    && current.is_none_or(|session| session.session_id() == session_id)
             }
+            PersistedSessionMutationV1::ReplaceFresh(_) => false,
             PersistedSessionMutationV1::Clear => {
                 transition.session_id().is_none()
                     && current.is_some_and(|session| session.session_id() == session_id)

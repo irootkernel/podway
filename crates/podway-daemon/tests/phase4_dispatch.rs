@@ -4,10 +4,12 @@ use podway_core::{AttemptId, JobId, Revision, WorkspaceId};
 use podway_daemon::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
-        DispatchFailureV1, DispatchResponseMetadataV1, DispatcherReadOutputV1,
-        DispatcherReadServiceV1, DispatcherTerminalOutputV1, DispatcherTerminalResultV1,
-        MutationAdmissionWorkerV1, MutationDispatchOutcomeV1, MutationWaitV1,
-        RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
+        DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
+        DispatcherJobOutputV1, DispatcherPreviewServiceV1, DispatcherReadOutputV1,
+        DispatcherReadServiceV1, DispatcherStatusRequestV1, DispatcherTerminalOutputV1,
+        DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1,
+        MutationDispatchOutcomeV1, MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1,
+        WorkspaceRuntimeV1,
     },
     server::RequestDispatcherV1,
 };
@@ -76,6 +78,12 @@ impl WorkspaceRuntimeV1 for FakeRuntime {
         }
         Ok(self.workspace.clone())
     }
+    fn resolve_existing_readonly(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<Self::Workspace, DispatchFailureV1> {
+        self.resolve_existing(selector)
+    }
 
     fn resolve_bootstrap(
         &self,
@@ -92,11 +100,46 @@ impl WorkspaceRuntimeV1 for FakeRuntime {
     fn workspace_output(&self, workspace: &Self::Workspace) -> WorkspaceOutputV1 {
         workspace.output.clone()
     }
+
+    fn doctor(
+        &self,
+        _selector: &WorktreeSelectorWireV1,
+        _deep: bool,
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
+        Ok(DispatcherWorkspaceOutputV1::new(
+            self.workspace.output.clone(),
+            Map::new(),
+            Vec::new(),
+        ))
+    }
+
+    fn show(
+        &self,
+        _selector: &WorktreeSelectorWireV1,
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
+        Ok(DispatcherWorkspaceOutputV1::new(
+            self.workspace.output.clone(),
+            Map::new(),
+            Vec::new(),
+        ))
+    }
+
+    fn repair(
+        &self,
+        _selector: &WorktreeSelectorWireV1,
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
+        Ok(DispatcherWorkspaceOutputV1::new(
+            self.workspace.output.clone(),
+            Map::new(),
+            Vec::new(),
+        ))
+    }
 }
 
 #[derive(Default)]
 struct ReadState {
     status_waits: Vec<RequestReadWaitV1>,
+    status_verbose: Vec<bool>,
     next_waits: Vec<RequestReadWaitV1>,
 }
 
@@ -113,24 +156,64 @@ impl FakeReads {
     }
 }
 
+fn status_result() -> Map<String, Value> {
+    map(json!({
+        "task": {
+            "title": "Task",
+            "procedure": {
+                "id": "phase4",
+                "version": "1",
+                "name": "Phase 4",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        },
+        "session": {
+            "id": "00000000-0000-4000-8000-000000000104",
+            "lifecycle": "running",
+            "revision": 1,
+            "created_at": GENERATED_AT,
+            "completed_at": null,
+            "cancelled_at": null
+        },
+        "current": null,
+        "stages": [],
+        "items": [],
+        "blockers": [],
+        "queue": {
+            "pending_mutations": true,
+            "queued_count": 2,
+            "running_job_id": JOB_ID,
+            "latest_workspace_sequence": 41
+        }
+    }))
+}
+
+fn next_result() -> Map<String, Value> {
+    map(json!({
+        "stage": null,
+        "missing_required_items": [],
+        "blockers": [],
+        "allowed_actions": {
+            "complete": false,
+            "skip": false,
+            "retry": false,
+            "return_to": [],
+            "cancel": true
+        },
+        "next_stage_after_completion": null,
+        "suggestions": []
+    }))
+}
 impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
     fn status(
         &self,
         _workspace: &FakeWorkspace,
-        wait: RequestReadWaitV1,
+        input: DispatcherStatusRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
-        self.state.lock().unwrap().status_waits.push(wait);
-        Ok(DispatcherReadOutputV1::new(
-            map(json!({
-                "queue": {
-                    "pending_mutations": true,
-                    "queued_count": 2,
-                    "running_job_id": JOB_ID,
-                    "latest_workspace_sequence": 41
-                }
-            })),
-            Vec::new(),
-        ))
+        let mut state = self.state.lock().unwrap();
+        state.status_waits.push(input.wait);
+        state.status_verbose.push(input.verbose);
+        Ok(DispatcherReadOutputV1::new(status_result(), Vec::new()))
     }
 
     fn next(
@@ -139,10 +222,66 @@ impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
         wait: RequestReadWaitV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
         self.state.lock().unwrap().next_waits.push(wait);
+        Ok(DispatcherReadOutputV1::new(next_result(), Vec::new()))
+    }
+    fn job_list(
+        &self,
+        _workspace: &FakeWorkspace,
+        _state: Option<JobStateV1>,
+    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
         Ok(DispatcherReadOutputV1::new(
-            map(json!({"allowed_actions": ["session.complete"]})),
+            map(json!({"jobs": []})),
             Vec::new(),
         ))
+    }
+
+    fn job_status(
+        &self,
+        _workspace: &FakeWorkspace,
+        _job_id: &JobId,
+        _wait: RequestReadWaitV1,
+    ) -> Result<DispatcherJobOutputV1, DispatchFailureV1> {
+        Ok(DispatcherJobOutputV1::new(
+            queued_job(),
+            map(json!({"job": {"id": JOB_ID}})),
+            Vec::new(),
+        ))
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeControl;
+
+impl FakeControl {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl DispatcherControlServiceV1<FakeWorkspace> for FakeControl {
+    fn cancel_job(
+        &self,
+        _workspace: &FakeWorkspace,
+        _job_id: &JobId,
+        _expected_state: JobStateV1,
+    ) -> Result<DispatcherJobOutputV1, DispatchFailureV1> {
+        Ok(DispatcherJobOutputV1::new(
+            queued_job(),
+            map(json!({"cancelled": true})),
+            Vec::new(),
+        ))
+    }
+}
+#[derive(Clone, Default)]
+struct FakePreview;
+
+impl DispatcherPreviewServiceV1<FakeWorkspace> for FakePreview {
+    fn preview(
+        &self,
+        _workspace: &FakeWorkspace,
+        _request: &SliceRequestV1,
+    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
+        Ok(DispatcherReadOutputV1::new(Map::new(), Vec::new()))
     }
 }
 
@@ -191,6 +330,29 @@ impl MutationAdmissionWorkerV1<FakeWorkspace> for FakeWorker {
         });
         state.outcome.clone().expect("test worker has an outcome")
     }
+    fn reset_all(
+        &self,
+        _selector: &WorktreeSelectorWireV1,
+        request: &SliceRequestV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1> {
+        let mut state = self.state.lock().unwrap();
+        state.calls.push(MutationCall {
+            command: request.command().command_name().to_owned(),
+            key: idempotency_key.as_str().to_owned(),
+            wait: MutationWaitV1::UntilTerminal { timeout_millis: 0 },
+        });
+        let output = WorkspaceOutputV1::new(
+            WorkspaceId::new(WORKSPACE_ID).expect("test workspace ID must be valid"),
+            "/safe/worktree",
+            42,
+        )
+        .expect("test workspace output must be valid");
+        Ok((
+            output,
+            state.outcome.clone().expect("test worker has an outcome")?,
+        ))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -205,6 +367,8 @@ impl DispatchResponseMetadataV1 for FixedMetadata {
 type Dispatcher = RequestDispatcherV1Adapter<
     FakeRuntime,
     FakeReads,
+    FakeControl,
+    FakePreview,
     FakeWorker,
     FixedMetadata,
     CatalogDispatchErrorMapperV1,
@@ -214,6 +378,8 @@ fn dispatcher(runtime: FakeRuntime, reads: FakeReads, worker: FakeWorker) -> Dis
     RequestDispatcherV1Adapter::new(
         runtime,
         reads,
+        FakeControl::new(),
+        FakePreview,
         worker,
         FixedMetadata,
         CatalogDispatchErrorMapperV1,
@@ -269,8 +435,10 @@ fn request_and_slice(
     key: u64,
 ) -> (RequestEnvelopeV1, SliceRequestV1) {
     let operation = match command {
-        "workspace.init" => OperationV1::Bootstrap,
-        "session.status" | "session.next" => OperationV1::Query,
+        "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
+        "workspace.repair" | "job.cancel" => OperationV1::Control,
+        "workspace.doctor" | "workspace.show" | "session.status" | "session.next" | "job.list"
+        | "job.status" | "job.wait" => OperationV1::Query,
         _ => OperationV1::Mutate,
     };
     let request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
@@ -285,7 +453,7 @@ fn request_and_slice(
             )
             .unwrap(),
         ),
-        idempotency_key: (!matches!(operation, OperationV1::Query))
+        idempotency_key: matches!(operation, OperationV1::Mutate | OperationV1::Bootstrap)
             .then(|| IdempotencyKeyV1::new(format!("key-{key}")).unwrap()),
         preconditions,
         options: RequestOptionsV1::new(detach, timeout_millis).unwrap(),
@@ -346,7 +514,7 @@ fn error(response: ResponseEnvelopeV1) -> podway_protocol::ErrorEnvelopeV1 {
 }
 
 #[test]
-fn routes_every_exact_g005_command_without_spelling_aliases() {
+fn routes_existing_commands_through_their_g006_authorities() {
     let runtime = FakeRuntime::new();
     let reads = FakeReads::new();
     let worker = FakeWorker::new(terminal_success());
@@ -359,7 +527,7 @@ fn routes_every_exact_g005_command_without_spelling_aliases() {
             PreconditionsV1::default(),
         ),
         (
-            "preset.start",
+            "session.start",
             json!({"selector": selector.clone(), "preset": "sw-dev", "task_title": "Task"}),
             PreconditionsV1::default(),
         ),
@@ -389,7 +557,7 @@ fn routes_every_exact_g005_command_without_spelling_aliases() {
             item_preconditions(),
         ),
         (
-            "item.attach_path",
+            "item.attach",
             json!({"selector": selector.clone(), "item_id": "artifact", "path": "proof.txt", "media_type": "text/plain"}),
             item_preconditions(),
         ),
@@ -442,11 +610,11 @@ fn routes_every_exact_g005_command_without_spelling_aliases() {
             .collect::<Vec<_>>(),
         vec![
             "workspace.init",
-            "preset.start",
+            "session.start",
             "item.check",
             "item.set",
             "item.add",
-            "item.attach_path",
+            "item.attach",
             "session.block",
             "session.unblock",
             "session.retry",
@@ -503,7 +671,7 @@ fn queries_preserve_pending_fields_and_use_the_request_wait() {
     let dispatcher = dispatcher(runtime, reads.clone(), worker);
     let (request, slice) = request_and_slice(
         "session.status",
-        json!({"selector": selector("/safe/worktree")}),
+        json!({"selector": selector("/safe/worktree"), "wait_for_idle": true, "verbose": true}),
         PreconditionsV1::default(),
         false,
         73,
@@ -520,6 +688,7 @@ fn queries_preserve_pending_fields_and_use_the_request_wait() {
         reads.state.lock().unwrap().status_waits,
         vec![RequestReadWaitV1::IdleUntil { timeout_millis: 73 }]
     );
+    assert_eq!(reads.state.lock().unwrap().status_verbose, vec![true]);
 }
 
 #[test]
@@ -531,7 +700,7 @@ fn detached_mutation_returns_a_durable_receipt_without_waiting() {
     }));
     let dispatcher = dispatcher(runtime, reads, worker.clone());
     let (request, slice) = request_and_slice(
-        "preset.start",
+        "session.start",
         json!({"selector": selector("/safe/worktree"), "preset": "sw-dev", "task_title": "Task"}),
         PreconditionsV1::default(),
         true,
@@ -611,7 +780,7 @@ fn idempotent_replay_preserves_the_original_job_identity() {
     }));
     let dispatcher = dispatcher(runtime, reads, worker.clone());
     let (request, slice) = request_and_slice(
-        "preset.start",
+        "session.start",
         json!({"selector": selector("/safe/worktree"), "preset": "sw-dev", "task_title": "Task"}),
         PreconditionsV1::default(),
         true,

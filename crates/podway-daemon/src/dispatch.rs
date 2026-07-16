@@ -1,4 +1,4 @@
-//! Production routing for the deliberately small G005 daemon command slice.
+//! Production routing for the complete G006 daemon command contract.
 //!
 //! The dispatcher has no Store, SQLite, Git, configuration, or scheduler-registry authority. Those
 //! capabilities remain behind the injected runtime seams below. In particular, a workspace value is
@@ -7,9 +7,9 @@
 use podway_core::{JobId, Revision};
 use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
-    OutputEnvelopeInputV1, OutputEnvelopeV1, RequestEnvelopeV1, ResponseEnvelopeV1,
-    Rfc3339MillisV1, SessionOutputV1, SliceCommandV1, SliceRequestV1, WorkspaceOutputV1,
-    WorktreeSelectorWireV1,
+    JobStateV1, NextResultV1, OutputEnvelopeInputV1, OutputEnvelopeV1, QueryWaitV1,
+    RequestEnvelopeV1, ResponseEnvelopeV1, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
+    SliceRequestV1, StatusResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
 };
 use serde_json::{Map, Value};
 
@@ -20,6 +20,9 @@ use crate::server::RequestDispatcherV1;
 /// All catalog messages are static. Dynamic Store, SQLite, Git, filesystem, and configuration
 /// errors are deliberately represented only by [`DispatchFailureKindV1`] and never reach a public
 /// envelope.
+/// `workspace.reset_all` is synchronous maintenance; custom mutation waiting is unsupported.
+pub const RESET_ALL_WAIT_TIMEOUT_MILLIS_V1: u64 = 30_000;
+
 pub const MAX_PUBLIC_DIAGNOSTIC_SCALARS_V1: usize = 512;
 
 /// A safe, structured subset of error details that a dispatcher may expose.
@@ -115,6 +118,7 @@ pub enum DispatchFailureKindV1 {
     StageNotFound,
     StageNotSkippable,
     ReturnNotAllowed,
+    ReopenNotAllowed,
     RequiredItemsMissing,
     BlockersPresent,
     ItemNotFound,
@@ -132,6 +136,7 @@ pub enum DispatchFailureKindV1 {
     BlockerNotCurrent,
     IdempotencyKeyReused,
     JobNotFound,
+    JobNotCancellable,
     JobWaitTimeout,
     DaemonUnavailable,
     DaemonShuttingDown,
@@ -224,6 +229,28 @@ pub trait DispatchResponseMetadataV1: Send + Sync {
     fn generated_at(&self) -> Rfc3339MillisV1;
 }
 
+/// A pre-serialized authoritative workspace projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispatcherWorkspaceOutputV1 {
+    workspace: WorkspaceOutputV1,
+    result: Map<String, Value>,
+    warnings: Vec<Map<String, Value>>,
+}
+
+impl DispatcherWorkspaceOutputV1 {
+    pub fn new(
+        workspace: WorkspaceOutputV1,
+        result: Map<String, Value>,
+        warnings: Vec<Map<String, Value>>,
+    ) -> Self {
+        Self {
+            workspace,
+            result,
+            warnings,
+        }
+    }
+}
+
 /// An opaque workspace-routing authority.
 ///
 /// Implementations must resolve the selector through Store UUID plus Git common-directory and
@@ -237,6 +264,11 @@ pub trait WorkspaceRuntimeV1: Send + Sync {
         &self,
         selector: &WorktreeSelectorWireV1,
     ) -> Result<Self::Workspace, DispatchFailureV1>;
+    /// Resolves only through the runtime's non-mutating identity path.
+    fn resolve_existing_readonly(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<Self::Workspace, DispatchFailureV1>;
 
     fn resolve_bootstrap(
         &self,
@@ -244,23 +276,52 @@ pub trait WorkspaceRuntimeV1: Send + Sync {
     ) -> Result<Self::Workspace, DispatchFailureV1>;
 
     fn workspace_output(&self, workspace: &Self::Workspace) -> WorkspaceOutputV1;
+    /// Performs read-only workspace diagnostics after validated identity resolution.
+    fn doctor(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+        deep: bool,
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1>;
+
+    /// Projects one workspace only after validated identity resolution.
+    fn show(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1>;
+
+    /// Repairs only daemon registry metadata after validated identity resolution.
+    fn repair(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1>;
 }
 
 /// The request-derived wait policy for an authoritative read.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RequestReadWaitV1 {
     Immediate,
     IdleUntil { timeout_millis: u64 },
+    AfterJobUntil { job_id: JobId, timeout_millis: u64 },
 }
 
 impl RequestReadWaitV1 {
-    fn from_timeout_millis(timeout_millis: u64) -> Self {
-        if timeout_millis == 0 {
-            Self::Immediate
-        } else {
-            Self::IdleUntil { timeout_millis }
+    fn from_query_wait(wait: &QueryWaitV1, timeout_millis: u64) -> Self {
+        match wait {
+            QueryWaitV1::Immediate => Self::Immediate,
+            QueryWaitV1::Idle => Self::IdleUntil { timeout_millis },
+            QueryWaitV1::AfterJob { job_id } => Self::AfterJobUntil {
+                job_id: job_id.clone(),
+                timeout_millis,
+            },
         }
     }
+}
+
+/// Typed dispatcher input for `session.status`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispatcherStatusRequestV1 {
+    pub wait: RequestReadWaitV1,
+    pub verbose: bool,
 }
 
 /// A pre-serialized authoritative query projection.
@@ -279,20 +340,72 @@ impl DispatcherReadOutputV1 {
         Self { result, warnings }
     }
 }
+/// A pre-serialized authoritative named-job projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispatcherJobOutputV1 {
+    job: JobOutputV1,
+    result: Map<String, Value>,
+    warnings: Vec<Map<String, Value>>,
+}
 
-/// Projects authoritative Store state for G005 queries. Notifications may wake implementations,
-/// but they never establish a result without a Store read.
+impl DispatcherJobOutputV1 {
+    pub fn new(
+        job: JobOutputV1,
+        result: Map<String, Value>,
+        warnings: Vec<Map<String, Value>>,
+    ) -> Self {
+        Self {
+            job,
+            result,
+            warnings,
+        }
+    }
+}
+
+/// Projects authoritative Store state for all daemon query routes. Notifications may wake
+/// implementations, but they never establish a result without a Store read.
 pub trait DispatcherReadServiceV1<Workspace>: Send + Sync {
     fn status(
         &self,
         workspace: &Workspace,
-        wait: RequestReadWaitV1,
+        input: DispatcherStatusRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
 
     fn next(
         &self,
         workspace: &Workspace,
         wait: RequestReadWaitV1,
+    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
+
+    fn job_list(
+        &self,
+        workspace: &Workspace,
+        state: Option<JobStateV1>,
+    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
+
+    fn job_status(
+        &self,
+        workspace: &Workspace,
+        job_id: &JobId,
+        wait: RequestReadWaitV1,
+    ) -> Result<DispatcherJobOutputV1, DispatchFailureV1>;
+}
+
+/// Performs a non-durable control operation through its sole workspace authority.
+pub trait DispatcherControlServiceV1<Workspace>: Send + Sync {
+    fn cancel_job(
+        &self,
+        workspace: &Workspace,
+        job_id: &JobId,
+        expected_state: JobStateV1,
+    ) -> Result<DispatcherJobOutputV1, DispatchFailureV1>;
+}
+/// Computes a non-durable preview from committed workspace state.
+pub trait DispatcherPreviewServiceV1<Workspace>: Send + Sync {
+    fn preview(
+        &self,
+        workspace: &Workspace,
+        request: &SliceRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
 }
 
@@ -369,26 +482,47 @@ pub trait MutationAdmissionWorkerV1<Workspace>: Send + Sync {
         idempotency_key: &IdempotencyKeyV1,
         wait: MutationWaitV1,
     ) -> Result<MutationDispatchOutcomeV1, DispatchFailureV1>;
+    /// Completes reset-all through the daemon maintenance state machine. This path receives no
+    /// resolved workspace because reset must run before ordinary Store bootstrap, resolution, and
+    /// admission.
+    fn reset_all(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+        request: &SliceRequestV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1>;
 }
 
-/// Production adapter for valid G005 requests.
+/// Production adapter for valid G006 requests.
 ///
 /// The server parses and admits [`SliceRequestV1`] before invoking this type. The dispatcher still
 /// verifies request/slice command agreement as a defense against incorrect in-process wiring.
-pub struct RequestDispatcherV1Adapter<Runtime, Reads, Mutations, Metadata, Errors> {
+pub struct RequestDispatcherV1Adapter<
+    Runtime,
+    Reads,
+    Controls,
+    Previews,
+    Mutations,
+    Metadata,
+    Errors,
+> {
     runtime: Runtime,
     reads: Reads,
+    controls: Controls,
+    previews: Previews,
     mutations: Mutations,
     metadata: Metadata,
     errors: Errors,
 }
 
-impl<Runtime, Reads, Mutations, Metadata, Errors>
-    RequestDispatcherV1Adapter<Runtime, Reads, Mutations, Metadata, Errors>
+impl<Runtime, Reads, Controls, Previews, Mutations, Metadata, Errors>
+    RequestDispatcherV1Adapter<Runtime, Reads, Controls, Previews, Mutations, Metadata, Errors>
 {
     pub fn new(
         runtime: Runtime,
         reads: Reads,
+        controls: Controls,
+        previews: Previews,
         mutations: Mutations,
         metadata: Metadata,
         errors: Errors,
@@ -396,6 +530,8 @@ impl<Runtime, Reads, Mutations, Metadata, Errors>
         Self {
             runtime,
             reads,
+            controls,
+            previews,
             mutations,
             metadata,
             errors,
@@ -410,16 +546,26 @@ impl<Runtime, Reads, Mutations, Metadata, Errors>
         &self.reads
     }
 
+    pub fn controls(&self) -> &Controls {
+        &self.controls
+    }
+
+    pub fn previews(&self) -> &Previews {
+        &self.previews
+    }
+
     pub fn mutations(&self) -> &Mutations {
         &self.mutations
     }
 }
 
-impl<Runtime, Reads, Mutations, Metadata, Errors>
-    RequestDispatcherV1Adapter<Runtime, Reads, Mutations, Metadata, Errors>
+impl<Runtime, Reads, Controls, Previews, Mutations, Metadata, Errors>
+    RequestDispatcherV1Adapter<Runtime, Reads, Controls, Previews, Mutations, Metadata, Errors>
 where
     Runtime: WorkspaceRuntimeV1,
     Reads: DispatcherReadServiceV1<Runtime::Workspace>,
+    Controls: DispatcherControlServiceV1<Runtime::Workspace>,
+    Previews: DispatcherPreviewServiceV1<Runtime::Workspace>,
     Mutations: MutationAdmissionWorkerV1<Runtime::Workspace>,
     Metadata: DispatchResponseMetadataV1,
     Errors: DispatchErrorMapperV1,
@@ -436,24 +582,161 @@ where
         }
 
         match slice_request.command() {
-            SliceCommandV1::Status => self.dispatch_status(request, slice_request),
-            SliceCommandV1::Next => self.dispatch_next(request, slice_request),
-            SliceCommandV1::WorkspaceInit => self.dispatch_mutation(request, slice_request, true),
+            SliceCommandV1::WorkspaceDoctor(input) => {
+                self.dispatch_doctor(request, slice_request, input.deep)
+            }
+            SliceCommandV1::WorkspaceShow(_) => self.dispatch_show(request, slice_request),
+            SliceCommandV1::WorkspaceRepair(_) => self.dispatch_repair(request, slice_request),
+            SliceCommandV1::SessionStatus(input) => {
+                self.dispatch_status(request, slice_request, &input.wait, input.verbose)
+            }
+            SliceCommandV1::SessionNext(input) => {
+                self.dispatch_next(request, slice_request, &input.wait)
+            }
+            SliceCommandV1::SessionStart(input) if input.dry_run => {
+                self.dispatch_preview(request, slice_request)
+            }
+            SliceCommandV1::SessionStartReplace(input) if input.start.dry_run => {
+                self.dispatch_preview(request, slice_request)
+            }
+            SliceCommandV1::SessionReturn(input) if input.dry_run => {
+                self.dispatch_preview(request, slice_request)
+            }
+            SliceCommandV1::SessionReopen(input) if input.dry_run => {
+                self.dispatch_preview(request, slice_request)
+            }
+            SliceCommandV1::SessionReset(input) if input.dry_run => {
+                self.dispatch_preview(request, slice_request)
+            }
+            SliceCommandV1::JobList(input) => {
+                self.dispatch_job_list(request, slice_request, input.state)
+            }
+            SliceCommandV1::JobStatus(input) => self.dispatch_job_status(
+                request,
+                slice_request,
+                &input.job_id,
+                RequestReadWaitV1::Immediate,
+            ),
+            SliceCommandV1::JobWait(input) => self.dispatch_job_status(
+                request,
+                slice_request,
+                &input.job_id,
+                RequestReadWaitV1::AfterJobUntil {
+                    job_id: input.job_id.clone(),
+                    timeout_millis: request.options().wait_timeout_ms(),
+                },
+            ),
+            SliceCommandV1::JobCancel(input) => self.dispatch_job_cancel(
+                request,
+                slice_request,
+                &input.job_id,
+                input.preconditions.expected_job_state,
+            ),
+            SliceCommandV1::WorkspaceInit(_) => {
+                self.dispatch_mutation(request, slice_request, true)
+            }
+            SliceCommandV1::WorkspaceResetAll(_) => self.dispatch_reset_all(request, slice_request),
             _ => self.dispatch_mutation(request, slice_request, false),
         }
+    }
+
+    fn dispatch_doctor(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+        deep: bool,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        self.workspace_output_response(
+            request,
+            self.runtime.doctor(slice_request.selector(), deep)?,
+        )
+    }
+
+    fn dispatch_show(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        self.workspace_output_response(request, self.runtime.show(slice_request.selector())?)
+    }
+
+    fn dispatch_repair(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        self.workspace_output_response(request, self.runtime.repair(slice_request.selector())?)
     }
 
     fn dispatch_status(
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
+        query_wait: &QueryWaitV1,
+        verbose: bool,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
         self.require_query_options(request)?;
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
         let output = self.reads.status(
             &workspace,
-            RequestReadWaitV1::from_timeout_millis(request.options().wait_timeout_ms()),
+            DispatcherStatusRequestV1 {
+                wait: RequestReadWaitV1::from_query_wait(
+                    query_wait,
+                    request.options().wait_timeout_ms(),
+                ),
+                verbose,
+            },
         )?;
+        let result = StatusResultV1::from_result_map(&output.result)
+            .map(|result| result.to_result_map())
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+        self.output_response(
+            request,
+            Some(self.runtime.workspace_output(&workspace)),
+            None,
+            None,
+            result,
+            output.warnings,
+        )
+    }
+
+    fn dispatch_next(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+        query_wait: &QueryWaitV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        let workspace = self.runtime.resolve_existing(slice_request.selector())?;
+        let output = self.reads.next(
+            &workspace,
+            RequestReadWaitV1::from_query_wait(query_wait, request.options().wait_timeout_ms()),
+        )?;
+        let result = NextResultV1::from_result_map(&output.result)
+            .map(|result| result.to_result_map())
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+        self.output_response(
+            request,
+            Some(self.runtime.workspace_output(&workspace)),
+            None,
+            None,
+            result,
+            output.warnings,
+        )
+    }
+    fn dispatch_preview(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        let workspace = self
+            .runtime
+            .resolve_existing_readonly(slice_request.selector())?;
+        let output = self.previews.preview(&workspace, slice_request)?;
         self.output_response(
             request,
             Some(self.runtime.workspace_output(&workspace)),
@@ -464,20 +747,75 @@ where
         )
     }
 
-    fn dispatch_next(
+    fn dispatch_job_list(
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
+        state: Option<JobStateV1>,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
         self.require_query_options(request)?;
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
-        let output = self.reads.next(
-            &workspace,
-            RequestReadWaitV1::from_timeout_millis(request.options().wait_timeout_ms()),
-        )?;
+        let output = self.reads.job_list(&workspace, state)?;
         self.output_response(
             request,
             Some(self.runtime.workspace_output(&workspace)),
+            None,
+            None,
+            output.result,
+            output.warnings,
+        )
+    }
+
+    fn dispatch_job_status(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+        job_id: &JobId,
+        wait: RequestReadWaitV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        let workspace = self.runtime.resolve_existing(slice_request.selector())?;
+        let output = self.reads.job_status(&workspace, job_id, wait)?;
+        self.output_response(
+            request,
+            Some(self.runtime.workspace_output(&workspace)),
+            Some(output.job),
+            None,
+            output.result,
+            output.warnings,
+        )
+    }
+
+    fn dispatch_job_cancel(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+        job_id: &JobId,
+        expected_state: JobStateV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        let workspace = self.runtime.resolve_existing(slice_request.selector())?;
+        let output = self
+            .controls
+            .cancel_job(&workspace, job_id, expected_state)?;
+        self.output_response(
+            request,
+            Some(self.runtime.workspace_output(&workspace)),
+            Some(output.job),
+            None,
+            output.result,
+            output.warnings,
+        )
+    }
+
+    fn workspace_output_response(
+        &self,
+        request: &RequestEnvelopeV1,
+        output: DispatcherWorkspaceOutputV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.output_response(
+            request,
+            Some(output.workspace),
             None,
             None,
             output.result,
@@ -493,7 +831,41 @@ where
         }
         Ok(())
     }
-
+    fn require_reset_all_options(
+        &self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<(), DispatchFailureV1> {
+        if request.options().detach()
+            || request.options().wait_timeout_ms() != RESET_ALL_WAIT_TIMEOUT_MILLIS_V1
+        {
+            return Err(DispatchFailureV1::new(
+                DispatchFailureKindV1::RequestInvalid,
+            ));
+        }
+        Ok(())
+    }
+    fn dispatch_reset_all(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_reset_all_options(request)?;
+        let idempotency_key = request
+            .idempotency_key()
+            .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+        let (workspace, outcome) =
+            self.mutations
+                .reset_all(slice_request.selector(), slice_request, idempotency_key)?;
+        match outcome {
+            MutationDispatchOutcomeV1::Terminal { job, result } => {
+                self.terminal_response(request, workspace, job, result, false)
+            }
+            MutationDispatchOutcomeV1::Detached { .. }
+            | MutationDispatchOutcomeV1::TimedOut { .. } => {
+                Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+            }
+        }
+    }
     fn dispatch_mutation(
         &self,
         request: &RequestEnvelopeV1,
@@ -621,11 +993,13 @@ where
     }
 }
 
-impl<Runtime, Reads, Mutations, Metadata, Errors> RequestDispatcherV1
-    for RequestDispatcherV1Adapter<Runtime, Reads, Mutations, Metadata, Errors>
+impl<Runtime, Reads, Controls, Previews, Mutations, Metadata, Errors> RequestDispatcherV1
+    for RequestDispatcherV1Adapter<Runtime, Reads, Controls, Previews, Mutations, Metadata, Errors>
 where
     Runtime: WorkspaceRuntimeV1,
     Reads: DispatcherReadServiceV1<Runtime::Workspace>,
+    Controls: DispatcherControlServiceV1<Runtime::Workspace>,
+    Previews: DispatcherPreviewServiceV1<Runtime::Workspace>,
     Mutations: MutationAdmissionWorkerV1<Runtime::Workspace>,
     Metadata: DispatchResponseMetadataV1,
     Errors: DispatchErrorMapperV1,
@@ -807,6 +1181,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             false,
             1,
         ),
+        DispatchFailureKindV1::ReopenNotAllowed => (
+            "REOPEN_NOT_ALLOWED",
+            "The session or destination cannot be reopened.",
+            false,
+            1,
+        ),
         DispatchFailureKindV1::ReturnNotAllowed => (
             "RETURN_NOT_ALLOWED",
             "The return destination is not allowed.",
@@ -909,6 +1289,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::JobNotFound => (
             "JOB_NOT_FOUND",
             "The job does not exist or was pruned.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::JobNotCancellable => (
+            "JOB_NOT_CANCELLABLE",
+            "The job is running or terminal.",
             false,
             1,
         ),

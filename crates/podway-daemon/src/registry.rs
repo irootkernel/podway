@@ -458,12 +458,14 @@ pub struct RegistryStoreV1 {
 }
 
 impl RegistryStoreV1 {
-    pub fn new(paths: &ServiceRuntimePathsV1) -> Self {
+    pub(crate) fn new(paths: &ServiceRuntimePathsV1) -> Self {
         Self::with_optional_failpoint(paths, None, RegistryFailpointActionV1::ReturnError)
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)]
     /// Constructs a store with an injected publication boundary for deterministic tests.
-    pub fn with_failpoint(
+    pub(crate) fn with_failpoint(
         paths: &ServiceRuntimePathsV1,
         failpoint: RegistryFailpointV1,
         failpoint_action: RegistryFailpointActionV1,
@@ -508,7 +510,7 @@ impl RegistryStoreV1 {
     ///
     /// A UUID associated with a different root is rejected; callers must use
     /// [`Self::move_workspace`] with the exact previous root.
-    pub fn insert_or_refresh(
+    pub(crate) fn insert_or_refresh(
         &self,
         workspace_uuid: WorkspaceId,
         last_known_root: ValidatedWorkspaceRootV1,
@@ -556,7 +558,7 @@ impl RegistryStoreV1 {
     }
 
     /// Moves one workspace only when its registry root exactly matches `previous_root`.
-    pub fn move_workspace(
+    pub(crate) fn move_workspace(
         &self,
         workspace_uuid: &WorkspaceId,
         previous_root: &ValidatedWorkspaceRootV1,
@@ -588,8 +590,121 @@ impl RegistryStoreV1 {
         })
     }
 
+    /// Atomically replaces the registered reset source UUID at `exact_root` with `target_uuid`.
+    ///
+    /// The reset marker is the recovery authority for this transition; this method only publishes
+    /// the corresponding metadata observation. It never composes removal and insertion into two
+    /// documents, so readers observe either the prior UUID or the reset target UUID at the root.
+    pub(crate) fn replace_for_reset(
+        &self,
+        previous_uuid: &WorkspaceId,
+        target_uuid: WorkspaceId,
+        exact_root: ValidatedWorkspaceRootV1,
+        seen_at: Rfc3339MillisV1,
+    ) -> Result<WorkspaceRegistryEntryV1, RegistryErrorV1> {
+        let target =
+            WorkspaceRegistryEntryV1::new(target_uuid.clone(), exact_root.clone(), seen_at)
+                .map_err(RegistryErrorV1::RegistryValidation)?;
+
+        self.with_locked(|parent, current_uid| {
+            let mut registry = read_registry_v1(&self.registry_path, parent, current_uid)?;
+            let previous_index = registry
+                .workspaces
+                .binary_search_by(|entry| entry.workspace_uuid.cmp(previous_uuid));
+            let target_index = registry
+                .workspaces
+                .binary_search_by(|entry| entry.workspace_uuid.cmp(&target_uuid));
+            if let Some(conflict) = registry.workspaces.iter().find(|entry| {
+                entry.last_known_root == exact_root
+                    && entry.workspace_uuid != *previous_uuid
+                    && entry.workspace_uuid != target_uuid
+            }) {
+                return Err(RegistryErrorV1::WorkspaceRootConflict {
+                    workspace_uuid: target_uuid.clone(),
+                    registered_root: conflict.last_known_root.clone(),
+                    supplied_root: exact_root,
+                });
+            }
+
+            if previous_uuid == &target_uuid {
+                let index =
+                    previous_index.map_err(|_| RegistryErrorV1::WorkspaceNotRegistered {
+                        workspace_uuid: previous_uuid.clone(),
+                    })?;
+                {
+                    let current = &mut registry.workspaces[index];
+                    if current.last_known_root != exact_root {
+                        return Err(RegistryErrorV1::WorkspaceRootConflict {
+                            workspace_uuid: previous_uuid.clone(),
+                            registered_root: current.last_known_root.clone(),
+                            supplied_root: exact_root,
+                        });
+                    }
+                    current.last_seen_at = target.last_seen_at.clone();
+                }
+                let updated = registry.workspaces[index].clone();
+                persist_registry_v1(self, parent, current_uid, &registry)?;
+                return Ok(updated);
+            }
+
+            if let Ok(index) = target_index {
+                let current = &registry.workspaces[index];
+                if current.last_known_root != exact_root {
+                    return Err(RegistryErrorV1::WorkspaceRootConflict {
+                        workspace_uuid: target_uuid,
+                        registered_root: current.last_known_root.clone(),
+                        supplied_root: exact_root,
+                    });
+                }
+                if let Ok(previous_index) = previous_index {
+                    let previous = &registry.workspaces[previous_index];
+                    if previous.last_known_root != exact_root {
+                        return Err(RegistryErrorV1::WorkspaceRootConflict {
+                            workspace_uuid: previous_uuid.clone(),
+                            registered_root: previous.last_known_root.clone(),
+                            supplied_root: exact_root,
+                        });
+                    }
+                    registry.workspaces.remove(previous_index);
+                    let index = registry
+                        .workspaces
+                        .binary_search_by(|entry| entry.workspace_uuid.cmp(&target_uuid))
+                        .expect("target entry remains after removing a different UUID");
+                    registry.workspaces[index].last_seen_at = target.last_seen_at.clone();
+                } else {
+                    registry.workspaces[index].last_seen_at = target.last_seen_at.clone();
+                }
+                persist_registry_v1(self, parent, current_uid, &registry)?;
+                return Ok(target);
+            }
+
+            let previous_index =
+                previous_index.map_err(|_| RegistryErrorV1::WorkspaceNotRegistered {
+                    workspace_uuid: previous_uuid.clone(),
+                })?;
+            let previous = &registry.workspaces[previous_index];
+            if previous.last_known_root != exact_root {
+                return Err(RegistryErrorV1::WorkspaceRootConflict {
+                    workspace_uuid: previous_uuid.clone(),
+                    registered_root: previous.last_known_root.clone(),
+                    supplied_root: exact_root,
+                });
+            }
+
+            registry.workspaces.remove(previous_index);
+            let target_index = registry
+                .workspaces
+                .binary_search_by(|entry| entry.workspace_uuid.cmp(&target_uuid))
+                .unwrap_or_else(|index| index);
+            registry.workspaces.insert(target_index, target.clone());
+            persist_registry_v1(self, parent, current_uid, &registry)?;
+            Ok(target)
+        })
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
     /// Removes the exact UUID metadata entry, returning it when it existed.
-    pub fn remove(
+    pub(crate) fn remove(
         &self,
         workspace_uuid: &WorkspaceId,
     ) -> Result<Option<WorkspaceRegistryEntryV1>, RegistryErrorV1> {

@@ -63,7 +63,7 @@
     {
       "source": "sot/schemas/status-result-v1.schema.json",
       "destination": "schemas/status-result-v1.schema.json",
-      "source_sha256": "3e1a7f0b343aa68ab436eec5125f05433bd556cd0dc5c66a22f35e75a84c6248",
+      "source_sha256": "6601cbc14fd96bc363fbddc0da8a058866a6a734b533884282e09f0a6156ae2a",
       "copy_mode": "exact",
       "owner": "sot",
       "generator_version": "phase-0a-v1"
