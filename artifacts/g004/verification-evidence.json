@@ -1,0 +1,458 @@
+{
+  "schemaVersion": 2,
+  "kind": "g004-verification-attestation",
+  "goalId": "G004",
+  "contract": "Podway v0.1.0 Phases 2-3 persistence queue and Git boundary",
+  "attestationStatus": "passed",
+  "evidenceIdentity": {
+    "algorithm": "sha256",
+    "canonicalization": "podway.canonical-json/v1",
+    "digest": "89f8e58d598d9a08886a9e25532e95e0d2f87adc8a9859b7ea092043ef746af4",
+    "normalization": "Hash canonical JSON with evidenceIdentity.digest set to null."
+  },
+  "sourceReport": {
+    "immutablePath": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/verification-report.json",
+    "canonicalPath": "artifacts/phase0/verification-report.json",
+    "pointerPath": "artifacts/phase0/verification-report.pointer.json",
+    "reportSha256": "0704bfa5b5c4864cdf363c268e30832bbc7ed88202f1ffa561b06c2375581752",
+    "reportSelfDigest": "1a4c6ed3a6ab78f9adcb9afde2a99039af089838a1469f9ba98d26ff1afc44ab",
+    "runId": "7cddc564e7fd40f2a5d8ce97b984cdea",
+    "status": "passed",
+    "freshness": {
+      "startedAtUtc": "2026-07-15T10:15:19Z",
+      "maximumAgeSeconds": 86400
+    },
+    "sourceManifest": {
+      "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/source-manifest.json",
+      "sha256": "c2ea1baf769d8aea010987cff5ba8c6178141074cce86b029072286c2429b3a2",
+      "file_count": 176
+    }
+  },
+  "runner": {
+    "reportSchemaVersion": "podway.phase0.verification-report/v4",
+    "gates": [
+      {
+        "id": "01-cargo-fmt",
+        "argv": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exitCode": 0,
+        "termination": "completed",
+        "stdout": {
+          "bytes": 0,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/01-cargo-fmt.stdout.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "bytes": 0,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/01-cargo-fmt.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      {
+        "id": "02-cargo-check",
+        "argv": [
+          "cargo",
+          "check",
+          "--workspace",
+          "--all-targets"
+        ],
+        "exitCode": 0,
+        "termination": "completed",
+        "stdout": {
+          "bytes": 0,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/02-cargo-check.stdout.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "bytes": 72,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/02-cargo-check.stderr.log",
+          "sha256": "c92508a29848820f033cd2ea015c85dde0953c88b07cc967ce34b7c08f610549"
+        }
+      },
+      {
+        "id": "03-cargo-test",
+        "argv": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--all-targets"
+        ],
+        "exitCode": 0,
+        "termination": "completed",
+        "stdout": {
+          "bytes": 23760,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/03-cargo-test.stdout.log",
+          "sha256": "59e79873ec5eeffd78609c285f29d89015fbec83055e65d751170f23aeb5d468"
+        },
+        "stderr": {
+          "bytes": 3174,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/03-cargo-test.stderr.log",
+          "sha256": "960a3921ed4eebea02e71380829bf9c9b7211e84647544a07555d06372d7e273"
+        }
+      },
+      {
+        "id": "04-cargo-clippy",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exitCode": 0,
+        "termination": "completed",
+        "stdout": {
+          "bytes": 0,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/04-cargo-clippy.stdout.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "bytes": 72,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/04-cargo-clippy.stderr.log",
+          "sha256": "8c233a54790c4800d3dd585436af679aa838da259bfdb129412e2d51cdb75cdc"
+        }
+      },
+      {
+        "id": "05-import-sot",
+        "argv": [
+          "python3",
+          "tools/import_sot.py",
+          "--check"
+        ],
+        "exitCode": 0,
+        "termination": "completed",
+        "stdout": {
+          "bytes": 48,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/05-import-sot.stdout.log",
+          "sha256": "f81ecac5f3aef7d5e1e7bd617412bc3fcf997786edf36745e51caee21df0cd36"
+        },
+        "stderr": {
+          "bytes": 0,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/05-import-sot.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      {
+        "id": "06-verify-contracts",
+        "argv": [
+          "python3",
+          "tools/verify_contracts.py",
+          "--all"
+        ],
+        "exitCode": 0,
+        "termination": "completed",
+        "stdout": {
+          "bytes": 218,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/06-verify-contracts.stdout.log",
+          "sha256": "daca2122a2abe6ea8197744f25b0456e8440b98daba877cf3d2c8d4b4ce74050"
+        },
+        "stderr": {
+          "bytes": 0,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/06-verify-contracts.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      {
+        "id": "07-verify-verification-runner",
+        "argv": [
+          "python3",
+          "tools/verify_verification_runner.py"
+        ],
+        "exitCode": 0,
+        "termination": "completed",
+        "stdout": {
+          "bytes": 2041,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/07-verify-verification-runner.stdout.log",
+          "sha256": "bf30dbcaefaba881302c1ef7dbeed116e51ca286b8b46f58558edd70ed3e568a"
+        },
+        "stderr": {
+          "bytes": 0,
+          "path": "artifacts/phase0/verification-logs/7cddc564e7fd40f2a5d8ce97b984cdea/07-verify-verification-runner.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    ]
+  },
+  "postChecks": [
+    {
+      "id": "verification-runner-check",
+      "argv": [
+        "python3",
+        "tools/run_verification.py",
+        "--check"
+      ],
+      "exitCode": 0,
+      "stdout": {
+        "bytes": 461,
+        "path": "artifacts/g004/post-checks/verification-runner-check.stdout.log",
+        "sha256": "900da578dd47f6abe3df9508deef59875be022397663b827440e1e80fff77036"
+      },
+      "stderr": {
+        "bytes": 0,
+        "path": "artifacts/g004/post-checks/verification-runner-check.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "id": "phase0-receipts-check",
+      "argv": [
+        "python3",
+        "tools/phase0_receipts.py",
+        "--check"
+      ],
+      "exitCode": 0,
+      "stdout": {
+        "bytes": 1100,
+        "path": "artifacts/g004/post-checks/phase0-receipts-check.stdout.log",
+        "sha256": "b64d69ddada2b8efd784a2623348209aea5fdbf1be87fc90c9e8b699faeb8a9a"
+      },
+      "stderr": {
+        "bytes": 0,
+        "path": "artifacts/g004/post-checks/phase0-receipts-check.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ],
+  "phase0Bindings": [
+    {
+      "phase": "0A",
+      "lock": {
+        "path": "contracts/locks/phase-0a-contract-lock.json",
+        "sha256": "d4ff806cd3ad8d00c7b6ea29b590f1f6345eb459098a2342a8516246fe8ff743"
+      },
+      "handoffReceipt": {
+        "path": "contracts/handoffs/phase-0a-handoff.json",
+        "fileSha256": "c8a0fd4f15cebd79f5b8ec51b910fd43751f94a453e6e7b2b84c23bf3135a0aa",
+        "selfDigest": "9fbce913f79a02d3a0d6c075f139135fbb6cc5b49ad719f7d9e0bb08bc3b5a8e"
+      }
+    },
+    {
+      "phase": "0B",
+      "lock": {
+        "path": "contracts/locks/phase-0b-contract-lock.json",
+        "sha256": "94b04a065d0a2d6a565184b15e03a5375ea5acff20320537e91c29281d67d8ee"
+      },
+      "handoffReceipt": {
+        "path": "contracts/handoffs/phase-0b-handoff.json",
+        "fileSha256": "85a1ed86e1419a18a6780e0fa1b983ed93edc3bdc2b9798a0dbae2812a7e9ea3",
+        "selfDigest": "ef43e0d0bd6f9a94d815d811864bcec51a6ac61f5dbc0dfc8a7d60f1d37f26e0"
+      }
+    },
+    {
+      "phase": "0C",
+      "lock": {
+        "path": "contracts/locks/phase-0c-contract-lock.json",
+        "sha256": "873a31e3c2e13823e7120783c98d121b09cf423f457b6ec7130c3191797e4ceb"
+      },
+      "handoffReceipt": {
+        "path": "contracts/handoffs/phase-0c-handoff.json",
+        "fileSha256": "e6dba6b496df9bd6d41d339a4dab855bef6ba5db910fc486f7829dbbbc63b6f0",
+        "selfDigest": "5169c302b1dbb16e14d6c2b212a57aba39ca96aa942bed6d7e8900226321c927"
+      }
+    }
+  ],
+  "negativeSentinels": {
+    "fixture": {
+      "path": "tests/fixtures/phase0/verification-runner-sentinels.json",
+      "sha256": "faf6a53d74c9a5cc657b06747d28b2e26bdefd965864cc523ad1ec79b15b73a0"
+    },
+    "gateId": "07-verify-verification-runner",
+    "cases": [
+      {
+        "id": "stale-report",
+        "expected": "report_stale",
+        "observed": [
+          "report_stale"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "future-report",
+        "expected": "report_from_future",
+        "observed": [
+          "report_from_future"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "canonical-report-replacement",
+        "expected": "canonical_pointer_replaced",
+        "observed": [
+          "canonical_pointer_replaced"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "immutable-report-replacement",
+        "expected": "canonical_pointer_replaced",
+        "observed": [
+          "canonical_pointer_replaced"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "pointer-replacement",
+        "expected": "canonical_pointer_replaced",
+        "observed": [
+          "canonical_pointer_replaced"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "report-self-digest-tamper",
+        "expected": "report_tampered",
+        "observed": [
+          "report_tampered"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "log-tamper",
+        "expected": "log_tampered",
+        "observed": [
+          "log_tampered"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "manifest-add-race",
+        "expected": "source_stale",
+        "observed": [
+          "source_stale"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "manifest-delete-race",
+        "expected": "source_stale",
+        "observed": [
+          "source_stale"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "executable-drift",
+        "expected": "environment_drift",
+        "observed": [
+          "environment_drift"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "config-drift",
+        "expected": "environment_drift",
+        "observed": [
+          "environment_drift"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "gate-timeout",
+        "expected": "deadline_exceeded",
+        "observed": [
+          "deadline_exceeded"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "gate-output-overflow",
+        "expected": "output_limit_exceeded",
+        "observed": [
+          "output_limit_exceeded"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "probe-timeout",
+        "expected": "probe_timeout",
+        "observed": [
+          "probe_timeout"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "probe-output-overflow",
+        "expected": "probe_output_overflow",
+        "observed": [
+          "probe_output_overflow"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "json-bounds",
+        "expected": [
+          "resource_limit",
+          "json_too_large"
+        ],
+        "observed": [
+          "resource_limit",
+          "json_too_large"
+        ],
+        "result": "rejected"
+      },
+      {
+        "id": "manifest-bounds",
+        "expected": "source_manifest_limit",
+        "observed": [
+          "source_manifest_limit"
+        ],
+        "result": "rejected"
+      }
+    ]
+  },
+  "declaredCoverage": [
+    {
+      "id": "store-atomicity",
+      "sourcePaths": [
+        "crates/podway-store/tests/phase4_store_transactions.rs",
+        "crates/podway-store/tests/phase2_crash_matrix.rs"
+      ]
+    },
+    {
+      "id": "store-integrity",
+      "sourcePaths": [
+        "crates/podway-store/tests/phase2_schema_codec.rs",
+        "crates/podway-store/tests/phase2_integrity.rs",
+        "crates/podway-store/tests/phase2_path_safety.rs",
+        "crates/podway-store/tests/phase2_reset_lifecycle.rs"
+      ]
+    },
+    {
+      "id": "git-boundary",
+      "sourcePaths": [
+        "crates/podway-git/tests/phase3_resolver.rs",
+        "crates/podway-git/tests/phase3_layout.rs",
+        "crates/podway-git/src/native.rs"
+      ]
+    }
+  ],
+  "regeneration": {
+    "required": false,
+    "reason": "Verification-runner and sentinel-fixture source changes invalidate all derived attestation values; regenerate before marking this attestation passed.",
+    "verificationInputPath": "/tmp/podway-phase0-verification-input.json",
+    "completionRule": "Set attestationStatus to passed only after every required field is regenerated with a concrete value and evidenceIdentity.digest is computed using its declared normalization.",
+    "commands": [
+      "python3 tools/phase0_receipts.py --write-locks",
+      "python3 tools/run_verification.py --run",
+      "python3 tools/run_verification.py --check",
+      "python3 tools/phase0_receipts.py --write --verification /tmp/podway-phase0-verification-input.json",
+      "python3 tools/phase0_receipts.py --check"
+    ],
+    "requiredFields": [
+      "evidenceIdentity.digest computed from canonical JSON after setting evidenceIdentity.digest to null",
+      "sourceReport immutable path, report SHA-256, self digest, run ID, status, started timestamp, and source-manifest identity",
+      "all runner gate exit codes, terminations, and stdout/stderr paths, SHA-256 digests, and byte counts",
+      "post-check exit codes and stdout/stderr paths, SHA-256 digests, and byte counts",
+      "Phase 0A/0B/0C lock SHA-256 values and handoff receipt file/self digests",
+      "sentinel fixture SHA-256 and every sentinel result"
+    ]
+  },
+  "blockers": []
+}

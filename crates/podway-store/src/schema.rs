@@ -1,0 +1,2021 @@
+//! SQLite v1 connection setup and schema initialization.
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
+
+use podway_core::{
+    CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1, ProcedureSnapshotId,
+    ProcedureSnapshotV1, ProcedureSourceKindV1, ProcedureSourceLabelV1, Sha256Digest, UnixMillis,
+};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
+use sha2::{Digest, Sha256};
+use tempfile::TempDir;
+
+use crate::codec::{
+    PersistedDomainResultV1, PersistedTerminalResultV1, decode_command_v1,
+    decode_terminal_receipt_v1, encode_command_v1, encode_persisted_terminal_receipt_v1,
+    validate_persisted_terminal_result_for_command_v1,
+};
+use crate::state_rows::load_current_session;
+use crate::{
+    DurableWorktreeIdentityV1, EpochMillisV1, IdempotencyKeyV1, IntegrityCheckResultV1,
+    IntegrityModeV1, IntegrityReportV1, JobIdV1, MAX_SQLITE_BUSY_TIMEOUT_MS_V1,
+    RusqliteErrorContextV1, SqliteStoreOptionsV1, StoreErrorV1, StoreFailpointV1,
+    StoreIntegrityCheckV1, StoreUnavailableReasonV1, ValidatedWorkspaceRootV1,
+    command_is_session_scoped_v1, command_name_v1, map_rusqlite_error_v1,
+};
+
+pub const SQLITE_SCHEMA_VERSION_V1: u32 = 1;
+pub const SQLITE_INITIAL_MIGRATION_NAME_V1: &str = "schema-0-uninitialized";
+
+const SQLITE_V1_DDL: &str = include_str!("../../../spec/sqlite-v1.sql");
+const CONNECTION_PRAGMA_PREAMBLE_V1: &str = concat!(
+    "PRAGMA foreign_keys = ON;\n",
+    "PRAGMA journal_mode = WAL;\n",
+    "PRAGMA synchronous = FULL;\n",
+    "PRAGMA busy_timeout = 5000;\n",
+    "PRAGMA trusted_schema = OFF;\n\n",
+);
+const USER_VERSION_SUFFIX_V1: &str = "PRAGMA user_version = 1;\n";
+
+/// The exact immutable bytes of the canonical v1 migration.
+pub fn sqlite_v1_ddl() -> &'static str {
+    SQLITE_V1_DDL
+}
+
+/// SHA-256 of the exact immutable bytes returned by [`sqlite_v1_ddl`].
+pub fn sqlite_v1_ddl_checksum() -> String {
+    let digest = Sha256::digest(SQLITE_V1_DDL.as_bytes());
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut checksum = String::with_capacity("sha256:".len() + digest.len() * 2);
+    checksum.push_str("sha256:");
+    for byte in digest {
+        checksum.push(char::from(HEX[usize::from(byte >> 4)]));
+        checksum.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    checksum
+}
+
+/// Opens a SQLite database only after schema v1, required pragmas, and durable identity verify.
+///
+/// A version-zero database is initialized only when it has no user schema objects. The validated
+/// root is updated in a separate short write transaction after the immutable identity matches.
+pub fn open_or_initialize_v1(
+    path: impl AsRef<Path>,
+    root: &ValidatedWorkspaceRootV1,
+    identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    now: EpochMillisV1,
+) -> Result<Connection, StoreErrorV1> {
+    open_or_initialize_with_temporary_cleanup_arm_v1(
+        path.as_ref(),
+        root,
+        identity,
+        options,
+        now,
+        None,
+    )
+}
+
+pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
+    path: &Path,
+    root: &ValidatedWorkspaceRootV1,
+    identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    now: EpochMillisV1,
+    temporary_cleanup_armed: Option<&mut bool>,
+) -> Result<Connection, StoreErrorV1> {
+    let path = canonical_database_path_v1(path)?;
+    recover_interrupted_publication_v1(&path)?;
+    prepare_database_path_for_write_open_v1(&path)?;
+    let mut connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(storage_error)?;
+    validate_existing_database_path_v1(&path)?;
+    apply_connection_pragmas_v1(&connection, options.busy_timeout_ms())?;
+
+    match read_user_version_v1(&connection)? {
+        0 => {
+            if user_schema_object_count_v1(&connection)? != 0 {
+                return Err(integrity_error(
+                    StoreIntegrityCheckV1::RequiredSchemaObjects,
+                ));
+            }
+            if let Some(
+                failpoint @ (StoreFailpointV1::SchemaAfterPragmas
+                | StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup),
+            ) = options.failpoint()
+            {
+                if failpoint == StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup
+                    && let Some(armed) = temporary_cleanup_armed
+                {
+                    *armed = true;
+                }
+                options.trigger_failpoint(failpoint)?;
+            }
+            initialize_empty_schema_v1(&mut connection, root, identity, options, now)?;
+        }
+        SQLITE_SCHEMA_VERSION_V1 => {}
+        found if found > SQLITE_SCHEMA_VERSION_V1 => {
+            return Err(StoreErrorV1::NewerStateV1 {
+                found_schema_version: found,
+                supported_schema_version: SQLITE_SCHEMA_VERSION_V1,
+            });
+        }
+        _ => return Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion)),
+    }
+
+    let _report = verify_integrity_connection_v1(
+        &mut connection,
+        identity,
+        options,
+        IntegrityModeV1::Fast,
+        now,
+    )?;
+    update_validated_root_v1(&mut connection, root, identity, now)?;
+    validate_existing_database_path_v1(&path)?;
+    Ok(connection)
+}
+
+/// Applies the required SQLite durability and safety pragmas and verifies their exact values.
+pub fn apply_connection_pragmas_v1(
+    connection: &Connection,
+    busy_timeout_ms: u32,
+) -> Result<(), StoreErrorV1> {
+    if busy_timeout_ms == 0 || busy_timeout_ms > MAX_SQLITE_BUSY_TIMEOUT_MS_V1 {
+        return Err(integrity_error(StoreIntegrityCheckV1::ConnectionPragmas));
+    }
+
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "synchronous", "FULL")
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "busy_timeout", busy_timeout_ms)
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "trusted_schema", "OFF")
+        .map_err(storage_error)?;
+
+    verify_connection_pragmas_v1(connection, busy_timeout_ms)
+}
+
+/// Verifies the pragma state required by canonical schema v1.
+pub fn verify_connection_pragmas_v1(
+    connection: &Connection,
+    busy_timeout_ms: u32,
+) -> Result<(), StoreErrorV1> {
+    let foreign_keys: i64 = connection
+        .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    let journal_mode: String = connection
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    let synchronous: i64 = connection
+        .query_row("PRAGMA synchronous", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    let actual_busy_timeout: i64 = connection
+        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    let trusted_schema: i64 = connection
+        .query_row("PRAGMA trusted_schema", [], |row| row.get(0))
+        .map_err(storage_error)?;
+
+    if foreign_keys != 1
+        || !journal_mode.eq_ignore_ascii_case("wal")
+        || synchronous != 2
+        || actual_busy_timeout != i64::from(busy_timeout_ms)
+        || trusted_schema != 0
+    {
+        return Err(integrity_error(StoreIntegrityCheckV1::ConnectionPragmas));
+    }
+    Ok(())
+}
+
+/// Verifies the frozen schema version, migration row/checksum, and exact DDL object set.
+pub fn verify_schema_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    verify_schema_version_v1(connection)?;
+    verify_exact_schema_objects_v1(connection)?;
+    verify_migration_checksum_v1(connection)
+}
+
+/// Inspects an existing database through a disposable byte-for-byte clone.
+///
+/// Bound integrity inspection finalizes a proven Store-owned interrupted publication before cloning.
+/// Copying the finalized database and its sidecars before opening SQLite keeps inspection physically
+/// read-only with respect to the authoritative workspace files.
+pub fn inspect_integrity_v1(
+    path: impl AsRef<Path>,
+    expected_identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    mode: IntegrityModeV1,
+    checked_at: EpochMillisV1,
+) -> Result<IntegrityReportV1, StoreErrorV1> {
+    inspect_database_snapshot_v1(
+        path.as_ref(),
+        expected_identity,
+        options,
+        mode,
+        checked_at,
+        |_| Ok(()),
+    )
+    .map(|(report, ())| report)
+}
+
+pub(crate) fn inspect_database_snapshot_v1<T>(
+    path: &Path,
+    expected_identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    mode: IntegrityModeV1,
+    checked_at: EpochMillisV1,
+    inspect: impl FnOnce(&Connection) -> Result<T, StoreErrorV1>,
+) -> Result<(IntegrityReportV1, T), StoreErrorV1> {
+    let path = canonical_database_path_v1(path)?;
+    recover_interrupted_publication_v1(&path)?;
+    inspect_database_snapshot_unbound_v1(&path, options, |connection| {
+        let report = verify_inspection_integrity_connection_v1(
+            connection,
+            expected_identity,
+            options,
+            mode,
+            checked_at,
+        )?;
+        let inspected = inspect(connection)?;
+        Ok((report, inspected))
+    })
+}
+
+/// Opens only a disposable, validated byte-for-byte database snapshot for inspection.
+///
+/// Bound callers must finalize any interrupted publication before calling this helper. This helper
+/// never recovers a publication or otherwise mutates authoritative database or sidecar paths. The
+/// callback must derive any expected identity from the snapshot before asking it to validate that identity.
+pub(crate) fn inspect_database_snapshot_unbound_v1<T>(
+    path: &Path,
+    options: &SqliteStoreOptionsV1,
+    inspect: impl FnOnce(&mut Connection) -> Result<T, StoreErrorV1>,
+) -> Result<T, StoreErrorV1> {
+    let path = canonical_database_path_v1(path)?;
+    validate_existing_database_path_v1(&path)?;
+    let inspection_directory = TempDir::new().map_err(storage_io_error)?;
+    let inspection_path = fs::canonicalize(inspection_directory.path())
+        .map_err(storage_io_error)?
+        .join("inspection.sqlite3");
+    copy_database_for_inspection_v1(&path, &inspection_path)?;
+    let mut connection = Connection::open_with_flags(
+        &inspection_path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(storage_error)?;
+    apply_inspection_pragmas_v1(&connection, options.busy_timeout_ms())?;
+    inspect(&mut connection)
+}
+/// Verifies an already-configured disposable inspection connection without changing its pragmas.
+pub(crate) fn verify_inspection_integrity_connection_v1(
+    connection: &mut Connection,
+    expected_identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    mode: IntegrityModeV1,
+    checked_at: EpochMillisV1,
+) -> Result<IntegrityReportV1, StoreErrorV1> {
+    verify_integrity_connection_inner_v1(connection, expected_identity, options, mode, checked_at)
+}
+
+/// Runs the startup integrity preflight before callers perform durable state mutations.
+pub(crate) fn verify_integrity_connection_v1(
+    connection: &mut Connection,
+    expected_identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    mode: IntegrityModeV1,
+    checked_at: EpochMillisV1,
+) -> Result<IntegrityReportV1, StoreErrorV1> {
+    apply_connection_pragmas_v1(connection, options.busy_timeout_ms())?;
+    verify_integrity_connection_inner_v1(connection, expected_identity, options, mode, checked_at)
+}
+
+fn verify_integrity_connection_inner_v1(
+    connection: &mut Connection,
+    expected_identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    mode: IntegrityModeV1,
+    checked_at: EpochMillisV1,
+) -> Result<IntegrityReportV1, StoreErrorV1> {
+    let mut checks = Vec::new();
+
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::SchemaVersion,
+        verify_schema_version_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::RequiredSchemaObjects,
+        verify_exact_schema_objects_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::MigrationChecksum,
+        verify_migration_checksum_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::ConnectionPragmas,
+        verify_connection_pragmas_v1(connection, options.busy_timeout_ms()),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::WorkspaceIdentity,
+        verify_workspace_identity_v1(connection, expected_identity),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::SqliteQuickCheck,
+        verify_sqlite_check_v1(
+            connection,
+            "quick_check",
+            StoreIntegrityCheckV1::SqliteQuickCheck,
+        ),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::ForeignKeys,
+        verify_foreign_keys_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::SnapshotDigest,
+        verify_all_snapshots_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::ActiveAttempt,
+        verify_active_attempts_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::SessionCursor,
+        verify_normalized_session_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::JobQueue,
+        verify_job_queue_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::InternalCodec,
+        verify_job_codecs_v1(connection),
+    )?;
+    record_integrity_check_v1(
+        &mut checks,
+        StoreIntegrityCheckV1::IdempotencyReceipt,
+        verify_idempotency_receipts_v1(connection),
+    )?;
+    if mode == IntegrityModeV1::Deep {
+        record_integrity_check_v1(
+            &mut checks,
+            StoreIntegrityCheckV1::SqliteDeepCheck,
+            verify_sqlite_check_v1(
+                connection,
+                "integrity_check",
+                StoreIntegrityCheckV1::SqliteDeepCheck,
+            ),
+        )?;
+    }
+
+    Ok(IntegrityReportV1::new(mode, checked_at, checks))
+}
+
+fn record_integrity_check_v1(
+    checks: &mut Vec<IntegrityCheckResultV1>,
+    check: StoreIntegrityCheckV1,
+    result: Result<(), StoreErrorV1>,
+) -> Result<(), StoreErrorV1> {
+    result?;
+    checks.push(IntegrityCheckResultV1::new(check, true));
+    Ok(())
+}
+
+/// Verifies the singleton identity and validates its lossless root encoding without mutating it.
+pub fn verify_workspace_identity_v1(
+    connection: &Connection,
+    identity: &DurableWorktreeIdentityV1,
+) -> Result<(), StoreErrorV1> {
+    let workspace_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM workspace_state", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    if workspace_count != 1 {
+        return Err(integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity));
+    }
+
+    let row: (String, String, String, String) = connection
+        .query_row(
+            "SELECT workspace_uuid, git_common_fingerprint, git_worktree_fingerprint, last_validated_root \
+             FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(storage_error)?;
+
+    let stored_workspace = crate::WorkspaceUuidV1::new(row.0)
+        .map_err(|_| integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity))?;
+    let stored_common = crate::GitIdentityV1::new(row.1)
+        .map_err(|_| integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity))?;
+    let stored_worktree = crate::GitIdentityV1::new(row.2)
+        .map_err(|_| integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity))?;
+    ValidatedWorkspaceRootV1::from_encoded(row.3)
+        .map_err(|_| integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity))?;
+
+    if stored_workspace != *identity.workspace_uuid()
+        || stored_common != *identity.common_dir_identity()
+        || stored_worktree != *identity.worktree_admin_identity()
+    {
+        return Err(integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity));
+    }
+    Ok(())
+}
+
+fn apply_inspection_pragmas_v1(
+    connection: &Connection,
+    busy_timeout_ms: u32,
+) -> Result<(), StoreErrorV1> {
+    if busy_timeout_ms == 0 || busy_timeout_ms > MAX_SQLITE_BUSY_TIMEOUT_MS_V1 {
+        return Err(integrity_error(StoreIntegrityCheckV1::ConnectionPragmas));
+    }
+
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "synchronous", "FULL")
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "busy_timeout", busy_timeout_ms)
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "trusted_schema", "OFF")
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "query_only", "ON")
+        .map_err(storage_error)?;
+
+    verify_connection_pragmas_v1(connection, busy_timeout_ms)
+}
+
+fn verify_schema_version_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    if read_user_version_v1(connection)? == SQLITE_SCHEMA_VERSION_V1 {
+        Ok(())
+    } else {
+        Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion))
+    }
+}
+
+fn verify_migration_checksum_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let migration_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .map_err(storage_error)?;
+    let migration: Option<(String, String)> = connection
+        .query_row(
+            "SELECT name, checksum FROM schema_migrations WHERE version = ?1",
+            [i64::from(SQLITE_SCHEMA_VERSION_V1)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    if migration_count != 1 {
+        return Err(integrity_error(StoreIntegrityCheckV1::MigrationChecksum));
+    }
+    let Some((name, checksum)) = migration else {
+        return Err(integrity_error(StoreIntegrityCheckV1::MigrationChecksum));
+    };
+    if name != SQLITE_INITIAL_MIGRATION_NAME_V1 || checksum != sqlite_v1_ddl_checksum() {
+        return Err(integrity_error(StoreIntegrityCheckV1::MigrationChecksum));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SchemaObjectV1 {
+    object_type: String,
+    name: String,
+    table_name: String,
+    sql: Option<String>,
+}
+
+fn verify_exact_schema_objects_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let expected = expected_schema_objects_v1()?;
+    let actual = schema_objects_v1(connection)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(integrity_error(
+            StoreIntegrityCheckV1::RequiredSchemaObjects,
+        ))
+    }
+}
+
+fn expected_schema_objects_v1() -> Result<Vec<SchemaObjectV1>, StoreErrorV1> {
+    let reference = Connection::open_in_memory().map_err(storage_error)?;
+    reference
+        .execute_batch(migration_schema_statements_v1()?)
+        .map_err(storage_error)?;
+    schema_objects_v1(&reference)
+}
+
+fn schema_objects_v1(connection: &Connection) -> Result<Vec<SchemaObjectV1>, StoreErrorV1> {
+    let mut statement = connection
+        .prepare(
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema \
+             WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name, tbl_name, sql",
+        )
+        .map_err(storage_error)?;
+    let mut rows = statement.query([]).map_err(storage_error)?;
+    let mut objects = Vec::new();
+    while let Some(row) = rows.next().map_err(storage_error)? {
+        objects.push(SchemaObjectV1 {
+            object_type: row.get(0).map_err(storage_error)?,
+            name: row.get(1).map_err(storage_error)?,
+            table_name: row.get(2).map_err(storage_error)?,
+            sql: row.get(3).map_err(storage_error)?,
+        });
+    }
+    Ok(objects)
+}
+
+fn verify_sqlite_check_v1(
+    connection: &Connection,
+    pragma: &str,
+    check: StoreIntegrityCheckV1,
+) -> Result<(), StoreErrorV1> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA {pragma}"))
+        .map_err(storage_error)?;
+    let mut rows = statement.query([]).map_err(storage_error)?;
+    let Some(row) = rows.next().map_err(storage_error)? else {
+        return Err(integrity_error(check));
+    };
+    let value: String = row.get(0).map_err(storage_error)?;
+    if value != "ok" || rows.next().map_err(storage_error)?.is_some() {
+        return Err(integrity_error(check));
+    }
+    Ok(())
+}
+
+fn verify_foreign_keys_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let mut statement = connection
+        .prepare("PRAGMA foreign_key_check")
+        .map_err(storage_error)?;
+    let mut rows = statement.query([]).map_err(storage_error)?;
+    if rows.next().map_err(storage_error)?.is_some() {
+        return Err(integrity_error(StoreIntegrityCheckV1::ForeignKeys));
+    }
+    Ok(())
+}
+
+fn verify_all_snapshots_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let mut statement = connection
+        .prepare(
+            "SELECT snapshot_id, schema_id, procedure_id, procedure_version, name, digest, canonical_json, \
+             source_kind, source_label, created_at_ms FROM procedure_snapshots",
+        )
+        .map_err(storage_error)?;
+    let mut rows = statement.query([]).map_err(storage_error)?;
+    while let Some(row) = rows.next().map_err(storage_error)? {
+        let snapshot_id: String = row.get(0).map_err(storage_error)?;
+        let schema_id: String = row.get(1).map_err(storage_error)?;
+        let procedure_id: String = row.get(2).map_err(storage_error)?;
+        let procedure_version: String = row.get(3).map_err(storage_error)?;
+        let name: String = row.get(4).map_err(storage_error)?;
+        let digest: String = row.get(5).map_err(storage_error)?;
+        let canonical_json: String = row.get(6).map_err(storage_error)?;
+        let source_kind: String = row.get(7).map_err(storage_error)?;
+        let source_label: String = row.get(8).map_err(storage_error)?;
+        let created_at: i64 = row.get(9).map_err(storage_error)?;
+        let source_kind = ProcedureSourceKindV1::from_row_value(&source_kind)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?;
+        let created_at = u64::try_from(created_at)
+            .map(UnixMillis::new)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?;
+        ProcedureSnapshotV1::from_canonical_json(CanonicalProcedureSnapshotInputV1 {
+            snapshot_id: ProcedureSnapshotId::new(snapshot_id)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?,
+            schema_id,
+            procedure_id,
+            procedure_version,
+            name,
+            source_label: ProcedureSourceLabelV1::from_row(source_kind, source_label)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?,
+            canonical_json: CanonicalProcedureJsonV1::new(canonical_json)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?,
+            digest: Sha256Digest::new(digest)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?,
+            created_at,
+        })
+        .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?;
+    }
+    Ok(())
+}
+
+fn verify_active_attempts_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let multiple_active: i64 = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts WHERE lifecycle = 'active' \
+             GROUP BY session_id HAVING COUNT(*) > 1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    if multiple_active == 0 {
+        Ok(())
+    } else {
+        Err(integrity_error(StoreIntegrityCheckV1::ActiveAttempt))
+    }
+}
+
+fn verify_normalized_session_v1(connection: &mut Connection) -> Result<(), StoreErrorV1> {
+    let transaction = connection.transaction().map_err(storage_error)?;
+    let session_count: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM task_sessions", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    if !(0..=1).contains(&session_count) {
+        return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
+    }
+
+    verify_latest_attempt_cursors_v1(&transaction)?;
+    if session_count == 1 {
+        verify_active_session_cursor_v1(&transaction)?;
+    }
+
+    load_current_session(&transaction).map_err(|error| match error {
+        StoreErrorV1::StorageUnavailableV1 { .. } => error,
+        _ => integrity_error(StoreIntegrityCheckV1::SessionCursor),
+    })?;
+    drop(transaction);
+    Ok(())
+}
+
+fn verify_latest_attempt_cursors_v1(transaction: &Transaction<'_>) -> Result<(), StoreErrorV1> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT p.session_id, p.stage_id, p.latest_attempt_number, p.latest_attempt_id, \
+             (SELECT MAX(a.attempt_number) FROM attempts a WHERE a.session_id = p.session_id \
+              AND a.stage_id = p.stage_id), \
+             (SELECT a.attempt_id FROM attempts a WHERE a.session_id = p.session_id \
+              AND a.stage_id = p.stage_id AND a.attempt_number = p.latest_attempt_number) \
+             FROM stage_progress p",
+        )
+        .map_err(storage_error)?;
+    let mut rows = statement.query([]).map_err(storage_error)?;
+    while let Some(row) = rows.next().map_err(storage_error)? {
+        let latest_number: i64 = row.get(2).map_err(storage_error)?;
+        let latest_id: Option<String> = row.get(3).map_err(storage_error)?;
+        let actual_number: Option<i64> = row.get(4).map_err(storage_error)?;
+        let actual_id: Option<String> = row.get(5).map_err(storage_error)?;
+        let valid = match actual_number {
+            Some(actual_number) => {
+                latest_number == actual_number && latest_id.is_some() && latest_id == actual_id
+            }
+            None => latest_number == 0 && latest_id.is_none(),
+        };
+        if !valid {
+            return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
+        }
+    }
+    Ok(())
+}
+
+fn verify_active_session_cursor_v1(transaction: &Transaction<'_>) -> Result<(), StoreErrorV1> {
+    let (session_id, lifecycle, active_stage_id, active_attempt_id): (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ) = transaction
+        .query_row(
+            "SELECT session_id, lifecycle, active_stage_id, active_attempt_id FROM task_sessions \
+             WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(storage_error)?;
+    let current_count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM stage_progress WHERE session_id = ?1 AND progress_state = 'current'",
+            [&session_id],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    let active_count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM attempts WHERE session_id = ?1 AND lifecycle = 'active'",
+            [&session_id],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+
+    match lifecycle.as_str() {
+        "running" => {
+            let (Some(active_stage_id), Some(active_attempt_id)) =
+                (active_stage_id.as_deref(), active_attempt_id.as_deref())
+            else {
+                return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
+            };
+            let matching_current: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM stage_progress WHERE session_id = ?1 AND stage_id = ?2 \
+                     AND progress_state = 'current'",
+                    params![&session_id, active_stage_id],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            let matching_attempt: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM attempts WHERE session_id = ?1 AND stage_id = ?2 \
+                     AND attempt_id = ?3 AND lifecycle = 'active'",
+                    params![&session_id, active_stage_id, active_attempt_id],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            if current_count != 1
+                || active_count != 1
+                || matching_current != 1
+                || matching_attempt != 1
+            {
+                return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
+            }
+        }
+        "completed" | "cancelled" => {
+            if active_stage_id.is_some()
+                || active_attempt_id.is_some()
+                || current_count != 0
+                || active_count != 0
+            {
+                return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
+            }
+        }
+        _ => return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor)),
+    }
+    Ok(())
+}
+
+fn verify_job_queue_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let invalid_sequence: i64 = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE workspace_sequence < 1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    let running_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM jobs WHERE state = 'running'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    let invalid_claim_time: i64 = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE (state = 'queued' AND claimed_at_ms IS NOT NULL) \
+             OR (state = 'running' AND claimed_at_ms IS NULL))",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    let overtaken_queue: i64 = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs running JOIN jobs queued \
+             ON queued.workspace_sequence < running.workspace_sequence \
+             WHERE running.state = 'running' AND queued.state = 'queued')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    let invalid_state: i64 = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE state NOT IN \
+             ('queued', 'running', 'succeeded', 'failed', 'cancelled'))",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    let maximum_sequence: Option<i64> = connection
+        .query_row("SELECT MAX(workspace_sequence) FROM jobs", [], |row| {
+            row.get(0)
+        })
+        .map_err(storage_error)?;
+    let next_sequence: i64 = connection
+        .query_row(
+            "SELECT next_workspace_sequence FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+
+    if invalid_sequence != 0
+        || running_count > 1
+        || invalid_claim_time != 0
+        || overtaken_queue != 0
+        || invalid_state != 0
+        || next_sequence < 0
+        || maximum_sequence.unwrap_or(0) > next_sequence
+    {
+        return Err(integrity_error(StoreIntegrityCheckV1::JobQueue));
+    }
+    Ok(())
+}
+
+fn verify_job_codecs_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let workspace_id: String = connection
+        .query_row(
+            "SELECT workspace_uuid FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT job_id, workspace_sequence, request_digest, command_name, canonical_request_json, state, \
+             session_id, submitted_at_ms, claimed_at_ms, finished_at_ms, terminal_response_json FROM jobs",
+        )
+        .map_err(storage_error)?;
+    let mut rows = statement.query([]).map_err(storage_error)?;
+    while let Some(row) = rows.next().map_err(storage_error)? {
+        let job_id: String = row.get(0).map_err(storage_error)?;
+        let sequence: i64 = row.get(1).map_err(storage_error)?;
+        let digest: String = row.get(2).map_err(storage_error)?;
+        let command_name: String = row.get(3).map_err(storage_error)?;
+        let request: String = row.get(4).map_err(storage_error)?;
+        let state: String = row.get(5).map_err(storage_error)?;
+        let session_id: Option<String> = row.get(6).map_err(storage_error)?;
+        let submitted_at: i64 = row.get(7).map_err(storage_error)?;
+        let claimed_at: Option<i64> = row.get(8).map_err(storage_error)?;
+        let finished_at: Option<i64> = row.get(9).map_err(storage_error)?;
+        let terminal: Option<String> = row.get(10).map_err(storage_error)?;
+
+        let job_id = JobIdV1::new(job_id)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+        let sequence = u64::try_from(sequence)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+        if sequence == 0 {
+            return Err(integrity_error(StoreIntegrityCheckV1::InternalCodec));
+        }
+        let digest = Sha256Digest::new(digest)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+        validate_epoch_v1(submitted_at, StoreIntegrityCheckV1::InternalCodec)?;
+        if let Some(claimed_at) = claimed_at {
+            validate_epoch_v1(claimed_at, StoreIntegrityCheckV1::InternalCodec)?;
+        }
+        if let Some(finished_at) = finished_at {
+            validate_epoch_v1(finished_at, StoreIntegrityCheckV1::InternalCodec)?;
+        }
+        if let Some(session_id) = session_id.as_deref() {
+            podway_core::SessionId::new(session_id.to_owned())
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+        }
+
+        let execution = decode_command_v1(&request)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+        let canonical_request = encode_command_v1(&execution)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+        expected_job_scope_v1(
+            execution.command(),
+            session_id.as_deref(),
+            StoreIntegrityCheckV1::InternalCodec,
+        )?;
+        if canonical_request != request || command_name != command_name_v1(execution.command()) {
+            return Err(integrity_error(StoreIntegrityCheckV1::InternalCodec));
+        }
+
+        match state.as_str() {
+            "queued" | "running" if terminal.is_none() && finished_at.is_none() => {}
+            "succeeded" | "failed" | "cancelled" => {
+                let terminal = terminal
+                    .ok_or_else(|| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+                let receipt = decode_terminal_receipt_v1(&terminal)
+                    .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+                let canonical_terminal = encode_persisted_terminal_receipt_v1(&receipt)
+                    .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+                validate_persisted_terminal_result_for_command_v1(
+                    execution.command(),
+                    receipt.result(),
+                )
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+                if matches!(
+                    receipt.result(),
+                    PersistedTerminalResultV1::Success(
+                        PersistedDomainResultV1::WorkspaceInitialized {
+                            workspace_id: result_workspace_id,
+                            ..
+                        }
+                        | PersistedDomainResultV1::WorkspaceReset {
+                            workspace_id: result_workspace_id,
+                            ..
+                        }
+                    ) if result_workspace_id.as_str() != workspace_id.as_str()
+                ) {
+                    return Err(integrity_error(StoreIntegrityCheckV1::InternalCodec));
+                }
+                let compatible = matches!(
+                    (state.as_str(), receipt.result()),
+                    ("succeeded", PersistedTerminalResultV1::Success(_))
+                        | ("failed", PersistedTerminalResultV1::Failure(_))
+                        | ("cancelled", PersistedTerminalResultV1::Cancelled)
+                );
+                if finished_at.is_none()
+                    || canonical_terminal != terminal
+                    || receipt.job().identity_sequence() != sequence
+                    || receipt.job().job_id() != &job_id
+                    || receipt.job().request_digest() != &digest
+                    || !compatible
+                {
+                    return Err(integrity_error(StoreIntegrityCheckV1::InternalCodec));
+                }
+            }
+            _ => return Err(integrity_error(StoreIntegrityCheckV1::InternalCodec)),
+        }
+    }
+    Ok(())
+}
+
+fn verify_idempotency_receipts_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let duplicate_job_id: i64 = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_records GROUP BY job_id HAVING COUNT(*) > 1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    if duplicate_job_id != 0 {
+        return Err(integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt));
+    }
+
+    let max_workspace_sequence: i64 = connection
+        .query_row(
+            "SELECT next_workspace_sequence FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    let max_workspace_sequence = u64::try_from(max_workspace_sequence)
+        .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+    let mut statement = connection
+        .prepare(
+            "SELECT r.idempotency_key, r.request_digest, r.job_id, r.scope_kind, r.scope_session_id, \
+             r.terminal_response_json, j.job_id, j.idempotency_key, j.request_digest, j.state, \
+             j.session_id, j.canonical_request_json, j.terminal_response_json \
+             FROM idempotency_records r LEFT JOIN jobs j ON j.job_id = r.job_id",
+        )
+        .map_err(storage_error)?;
+    let mut rows = statement.query([]).map_err(storage_error)?;
+    while let Some(row) = rows.next().map_err(storage_error)? {
+        let idempotency_key: String = row.get(0).map_err(storage_error)?;
+        let request_digest: String = row.get(1).map_err(storage_error)?;
+        let job_id: String = row.get(2).map_err(storage_error)?;
+        let scope_kind: String = row.get(3).map_err(storage_error)?;
+        let scope_session_id: Option<String> = row.get(4).map_err(storage_error)?;
+        let terminal: Option<String> = row.get(5).map_err(storage_error)?;
+        let retained_job_id: Option<String> = row.get(6).map_err(storage_error)?;
+        let retained_key: Option<String> = row.get(7).map_err(storage_error)?;
+        let retained_digest: Option<String> = row.get(8).map_err(storage_error)?;
+        let retained_state: Option<String> = row.get(9).map_err(storage_error)?;
+        let retained_session_id: Option<String> = row.get(10).map_err(storage_error)?;
+        let retained_request: Option<String> = row.get(11).map_err(storage_error)?;
+        let retained_terminal: Option<String> = row.get(12).map_err(storage_error)?;
+
+        IdempotencyKeyV1::new(idempotency_key.clone())
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+        let request_digest = Sha256Digest::new(request_digest)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+        let job_id = JobIdV1::new(job_id)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+        validate_scope_v1(&scope_kind, scope_session_id.as_deref())?;
+
+        if retained_job_id.is_some() {
+            let retained_key = retained_key
+                .ok_or_else(|| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            let retained_digest = retained_digest
+                .ok_or_else(|| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            let retained_state = retained_state
+                .ok_or_else(|| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            let retained_digest = Sha256Digest::new(retained_digest)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            let retained_request = retained_request
+                .ok_or_else(|| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            let execution = decode_command_v1(&retained_request)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            let expected_scope = expected_job_scope_v1(
+                execution.command(),
+                retained_session_id.as_deref(),
+                StoreIntegrityCheckV1::IdempotencyReceipt,
+            )?;
+            let terminal_matches = if terminal_state_v1(&retained_state) {
+                terminal == retained_terminal
+            } else {
+                terminal.is_none()
+            };
+            if retained_key != idempotency_key
+                || retained_digest != request_digest
+                || (scope_kind.as_str(), scope_session_id.as_deref()) != expected_scope
+                || !terminal_matches
+            {
+                return Err(integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt));
+            }
+        } else {
+            let terminal = terminal
+                .ok_or_else(|| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            let receipt = decode_terminal_receipt_v1(&terminal)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            let canonical_terminal = encode_persisted_terminal_receipt_v1(&receipt)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+            if canonical_terminal != terminal
+                || receipt.job().identity_sequence() == 0
+                || receipt.job().identity_sequence() > max_workspace_sequence
+                || receipt.job().job_id() != &job_id
+                || receipt.job().request_digest() != &request_digest
+            {
+                return Err(integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt));
+            }
+        }
+    }
+
+    let job_without_record: i64 = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs j WHERE NOT EXISTS \
+             (SELECT 1 FROM idempotency_records r WHERE r.job_id = j.job_id))",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    if job_without_record != 0 {
+        return Err(integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt));
+    }
+    Ok(())
+}
+
+fn validate_scope_v1(scope_kind: &str, session_id: Option<&str>) -> Result<(), StoreErrorV1> {
+    match (scope_kind, session_id) {
+        ("workspace", None) => Ok(()),
+        ("session", Some(session_id)) => podway_core::SessionId::new(session_id.to_owned())
+            .map(|_| ())
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt)),
+        _ => Err(integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt)),
+    }
+}
+fn expected_job_scope_v1<'a>(
+    command: &crate::CommandV1,
+    session_id: Option<&'a str>,
+    check: StoreIntegrityCheckV1,
+) -> Result<(&'static str, Option<&'a str>), StoreErrorV1> {
+    if command_is_session_scoped_v1(command) {
+        let session_id = session_id.ok_or_else(|| integrity_error(check.clone()))?;
+        podway_core::SessionId::new(session_id.to_owned())
+            .map_err(|_| integrity_error(check.clone()))?;
+        Ok(("session", Some(session_id)))
+    } else if session_id.is_some() {
+        Err(integrity_error(check))
+    } else {
+        Ok(("workspace", None))
+    }
+}
+
+fn validate_epoch_v1(value: i64, check: StoreIntegrityCheckV1) -> Result<(), StoreErrorV1> {
+    u64::try_from(value)
+        .map(|_| ())
+        .map_err(|_| integrity_error(check))
+}
+
+fn terminal_state_v1(state: &str) -> bool {
+    matches!(state, "succeeded" | "failed" | "cancelled")
+}
+
+fn initialize_empty_schema_v1(
+    connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
+    identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    now: EpochMillisV1,
+) -> Result<(), StoreErrorV1> {
+    let now = sqlite_integer_v1(now.get(), "initialization timestamp")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let object_count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    if object_count != 0 {
+        return Err(integrity_error(
+            StoreIntegrityCheckV1::RequiredSchemaObjects,
+        ));
+    }
+    transaction
+        .execute_batch(migration_schema_statements_v1()?)
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                i64::from(SQLITE_SCHEMA_VERSION_V1),
+                SQLITE_INITIAL_MIGRATION_NAME_V1,
+                sqlite_v1_ddl_checksum(),
+                now,
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO workspace_state (singleton, workspace_uuid, git_common_fingerprint, \
+             git_worktree_fingerprint, last_validated_root, next_workspace_sequence, created_at_ms, \
+             updated_at_ms) VALUES (1, ?1, ?2, ?3, ?4, 0, ?5, ?5)",
+            params![
+                identity.workspace_uuid().as_str(),
+                identity.common_dir_identity().as_str(),
+                identity.worktree_admin_identity().as_str(),
+                root.as_encoded(),
+                now,
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V1)
+        .map_err(storage_error)?;
+    options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
+    transaction.commit().map_err(storage_error)
+}
+
+fn update_validated_root_v1(
+    connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
+    identity: &DurableWorktreeIdentityV1,
+    now: EpochMillisV1,
+) -> Result<(), StoreErrorV1> {
+    let now = sqlite_integer_v1(now.get(), "workspace update timestamp")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let current: Option<(String, i64)> = transaction
+        .query_row(
+            "SELECT last_validated_root, updated_at_ms FROM workspace_state \
+             WHERE singleton = 1 AND workspace_uuid = ?1 AND git_common_fingerprint = ?2 \
+             AND git_worktree_fingerprint = ?3",
+            params![
+                identity.workspace_uuid().as_str(),
+                identity.common_dir_identity().as_str(),
+                identity.worktree_admin_identity().as_str(),
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((current_root, current_updated_at_ms)) = current else {
+        return Err(integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity));
+    };
+    if current_root == root.as_encoded() && current_updated_at_ms == now {
+        return transaction.commit().map_err(storage_error);
+    }
+    let changed = transaction
+        .execute(
+            "UPDATE workspace_state SET last_validated_root = ?1, updated_at_ms = ?2 \
+             WHERE singleton = 1 AND workspace_uuid = ?3 AND git_common_fingerprint = ?4 \
+             AND git_worktree_fingerprint = ?5",
+            params![
+                root.as_encoded(),
+                now,
+                identity.workspace_uuid().as_str(),
+                identity.common_dir_identity().as_str(),
+                identity.worktree_admin_identity().as_str(),
+            ],
+        )
+        .map_err(storage_error)?;
+    if changed != 1 {
+        return Err(integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity));
+    }
+    transaction.commit().map_err(storage_error)
+}
+
+fn migration_schema_statements_v1() -> Result<&'static str, StoreErrorV1> {
+    SQLITE_V1_DDL
+        .strip_prefix(CONNECTION_PRAGMA_PREAMBLE_V1)
+        .and_then(|sql| sql.strip_suffix(USER_VERSION_SUFFIX_V1))
+        .ok_or(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: crate::StoreInvariantV1::SchemaDefinition,
+        })
+}
+
+fn read_user_version_v1(connection: &Connection) -> Result<u32, StoreErrorV1> {
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    u32::try_from(version).map_err(|_| integrity_error(StoreIntegrityCheckV1::SchemaVersion))
+}
+
+fn user_schema_object_count_v1(connection: &Connection) -> Result<i64, StoreErrorV1> {
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)
+}
+
+fn sqlite_integer_v1(value: u64, field: &'static str) -> Result<i64, StoreErrorV1> {
+    i64::try_from(value).map_err(|_| {
+        StoreErrorV1::InvalidStateV1(crate::StoreValueErrorV1::IntegerOutOfRange { field })
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DatabasePathStateV1 {
+    Existing,
+    Missing,
+}
+
+pub(crate) fn canonical_database_path_v1(path: &Path) -> Result<PathBuf, StoreErrorV1> {
+    validate_database_parent_path_v1(path)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(unsafe_database_path_error)?;
+    let canonical_parent = fs::canonicalize(parent).map_err(storage_io_error)?;
+    Ok(canonical_parent.join(file_name))
+}
+pub(crate) fn inspect_database_path_v1(path: &Path) -> Result<DatabasePathStateV1, StoreErrorV1> {
+    validate_database_parent_path_v1(path)?;
+    let state = match fs::symlink_metadata(path) {
+        Ok(_) => {
+            validate_existing_regular_private_file_v1(path)?;
+            DatabasePathStateV1::Existing
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => DatabasePathStateV1::Missing,
+        Err(error) => return Err(storage_io_error(error)),
+    };
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = sqlite_sidecar_path_v1(path, suffix);
+        match fs::symlink_metadata(&sidecar) {
+            Ok(_) => validate_existing_regular_private_file_v1(&sidecar)?,
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(storage_io_error(error)),
+        }
+    }
+    Ok(state)
+}
+
+pub(crate) fn validate_existing_database_path_v1(path: &Path) -> Result<(), StoreErrorV1> {
+    match inspect_database_path_v1(path)? {
+        DatabasePathStateV1::Existing => Ok(()),
+        DatabasePathStateV1::Missing => Err(unsafe_database_path_error()),
+    }
+}
+
+pub(crate) fn validate_database_parent_path_v1(path: &Path) -> Result<(), StoreErrorV1> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let metadata = fs::symlink_metadata(parent).map_err(storage_io_error)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(unsafe_database_path_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_existing_regular_private_file_v1(path: &Path) -> Result<(), StoreErrorV1> {
+    let metadata = validate_existing_regular_private_file_metadata_v1(path)?;
+    #[cfg(unix)]
+    if metadata.nlink() != 1 {
+        return Err(unsafe_database_path_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_publication_link_pair_v1(
+    temporary: &Path,
+    destination: &Path,
+) -> Result<(), StoreErrorV1> {
+    if !is_store_temporary_database_name_v1(temporary, destination) {
+        return Err(unsafe_database_path_error());
+    }
+    let temporary_metadata = validate_existing_regular_private_file_metadata_v1(temporary)?;
+    let destination_metadata = validate_existing_regular_private_file_metadata_v1(destination)?;
+    #[cfg(unix)]
+    if temporary_metadata.nlink() != 2
+        || destination_metadata.nlink() != 2
+        || temporary_metadata.dev() != destination_metadata.dev()
+        || temporary_metadata.ino() != destination_metadata.ino()
+        || !has_exact_private_file_permissions_v1(&temporary_metadata)
+        || !has_exact_private_file_permissions_v1(&destination_metadata)
+    {
+        return Err(unsafe_database_path_error());
+    }
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+static PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER: std::sync::Mutex<
+    Option<(
+        std::sync::Arc<std::sync::Barrier>,
+        std::sync::Arc<std::sync::Barrier>,
+    )>,
+> = std::sync::Mutex::new(None);
+
+#[cfg(all(test, unix))]
+fn wait_at_publication_recovery_link_count_for_test() {
+    let barriers = PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER
+        .lock()
+        .expect("publication recovery test hook lock")
+        .take();
+    if let Some((reached, release)) = barriers {
+        reached.wait();
+        release.wait();
+    }
+}
+
+pub(crate) fn recover_interrupted_publication_v1(destination: &Path) -> Result<(), StoreErrorV1> {
+    validate_database_parent_path_v1(destination)?;
+    let destination_metadata = match fs::symlink_metadata(destination) {
+        Ok(_) => validate_existing_regular_private_file_metadata_v1(destination)?,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(storage_io_error(error)),
+    };
+    #[cfg(unix)]
+    {
+        match destination_metadata.nlink() {
+            1 => return Ok(()),
+            2 => {}
+            _ => return Err(unsafe_database_path_error()),
+        }
+    }
+    #[cfg(all(test, unix))]
+    wait_at_publication_recovery_link_count_for_test();
+    #[cfg(not(unix))]
+    {
+        let _ = destination_metadata;
+        return Err(unsafe_database_path_error());
+    }
+
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    const MAX_PUBLICATION_RECOVERY_DIRECTORY_ENTRIES_V1: usize = 1_024;
+
+    let mut temporary = None;
+    let mut inspected_entries = 0usize;
+    for entry in fs::read_dir(parent).map_err(storage_io_error)? {
+        inspected_entries = inspected_entries
+            .checked_add(1)
+            .ok_or_else(unsafe_database_path_error)?;
+        if inspected_entries > MAX_PUBLICATION_RECOVERY_DIRECTORY_ENTRIES_V1 {
+            return Err(unsafe_database_path_error());
+        }
+        let candidate = entry.map_err(storage_io_error)?.path();
+        if !is_store_temporary_database_name_v1(&candidate, destination) {
+            continue;
+        }
+        let candidate_metadata = match fs::symlink_metadata(&candidate) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                if publication_destination_is_finalized_v1(destination)? {
+                    return Ok(());
+                }
+                return Err(storage_io_error(error));
+            }
+            Err(error) => return Err(storage_io_error(error)),
+        };
+        if !is_same_publication_file_v1(&candidate_metadata, &destination_metadata) {
+            continue;
+        }
+        if let Err(error) = validate_publication_link_pair_v1(&candidate, destination) {
+            if publication_destination_is_finalized_v1(destination)? {
+                return Ok(());
+            }
+            return Err(error);
+        }
+        if temporary.replace(candidate).is_some() {
+            return Err(unsafe_database_path_error());
+        }
+    }
+    let temporary = match temporary {
+        Some(temporary) => temporary,
+        None => {
+            if publication_destination_is_finalized_v1(destination)? {
+                File::open(parent)
+                    .map_err(storage_io_error)?
+                    .sync_all()
+                    .map_err(storage_io_error)?;
+                return Ok(());
+            }
+            return Err(unsafe_database_path_error());
+        }
+    };
+    match fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            if !publication_destination_is_finalized_v1(destination)? {
+                return Err(storage_io_error(error));
+            }
+        }
+        Err(error) => return Err(storage_io_error(error)),
+    }
+    validate_existing_regular_private_file_v1(destination)?;
+    File::open(parent)
+        .map_err(storage_io_error)?
+        .sync_all()
+        .map_err(storage_io_error)
+}
+#[cfg(unix)]
+fn publication_destination_is_finalized_v1(destination: &Path) -> Result<bool, StoreErrorV1> {
+    let metadata = match fs::symlink_metadata(destination) {
+        Ok(_) => validate_existing_regular_private_file_metadata_v1(destination)?,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(storage_io_error(error)),
+    };
+    Ok(metadata.nlink() == 1)
+}
+
+#[cfg(not(unix))]
+fn publication_destination_is_finalized_v1(_destination: &Path) -> Result<bool, StoreErrorV1> {
+    Ok(false)
+}
+#[cfg(all(test, unix))]
+mod publication_recovery_tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn concurrent_finalization_without_a_directory_candidate_is_accepted() {
+        let directory = TempDir::new().expect("publication recovery directory");
+        let destination = directory.path().join("state.sqlite3");
+        let temporary = directory.path().join(".state.sqlite3.1.0.0.tmp");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .expect("private temporary database");
+        file.write_all(b"publication").expect("temporary bytes");
+        file.sync_all().expect("temporary sync");
+        fs::hard_link(&temporary, &destination).expect("publication hard link");
+
+        let reached = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        *PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER
+            .lock()
+            .expect("publication recovery test hook lock") =
+            Some((Arc::clone(&reached), Arc::clone(&release)));
+
+        let destination_for_recovery = destination.clone();
+        let recovery = std::thread::spawn(move || {
+            recover_interrupted_publication_v1(&destination_for_recovery)
+        });
+        reached.wait();
+        fs::remove_file(&temporary).expect("concurrent temporary unlink");
+        release.wait();
+
+        recovery
+            .join()
+            .expect("publication recovery thread")
+            .expect("concurrent finalization accepted");
+        assert!(!temporary.exists());
+        assert_eq!(
+            fs::symlink_metadata(&destination)
+                .expect("published destination")
+                .nlink(),
+            1
+        );
+    }
+}
+
+#[cfg(unix)]
+fn is_store_temporary_database_name_v1(temporary: &Path, destination: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let Some(name) = temporary.file_name() else {
+        return false;
+    };
+    let Some(destination_name) = destination.file_name() else {
+        return false;
+    };
+    let mut prefix = Vec::with_capacity(destination_name.as_bytes().len() + 2);
+    prefix.push(b'.');
+    prefix.extend_from_slice(destination_name.as_bytes());
+    prefix.push(b'.');
+    let name = name.as_bytes();
+    let Some(body) = name
+        .strip_prefix(prefix.as_slice())
+        .and_then(|body| body.strip_suffix(b".tmp"))
+    else {
+        return false;
+    };
+    let mut components = body.split(|byte| *byte == b'.');
+    let Some(process_id) = components.next() else {
+        return false;
+    };
+    let Some(created_at) = components.next() else {
+        return false;
+    };
+    let Some(attempt) = components.next() else {
+        return false;
+    };
+    components.next().is_none()
+        && canonical_decimal_v1(process_id, false)
+        && canonical_decimal_v1(created_at, true)
+        && canonical_decimal_v1(attempt, true)
+        && std::str::from_utf8(attempt)
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .is_some_and(|value| value < 128)
+}
+
+#[cfg(not(unix))]
+fn is_store_temporary_database_name_v1(_temporary: &Path, _destination: &Path) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn canonical_decimal_v1(value: &[u8], allow_zero: bool) -> bool {
+    !value.is_empty()
+        && value.iter().all(u8::is_ascii_digit)
+        && (value.len() == 1 || value[0] != b'0')
+        && (allow_zero || value != b"0")
+}
+
+#[cfg(unix)]
+fn has_exact_private_file_permissions_v1(metadata: &fs::Metadata) -> bool {
+    metadata.mode() & 0o777 == 0o600
+}
+
+#[cfg(unix)]
+fn is_same_publication_file_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.file_type().is_file()
+        && right.file_type().is_file()
+        && left.dev() == right.dev()
+        && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn is_same_publication_file_v1(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+fn validate_existing_regular_private_file_metadata_v1(
+    path: &Path,
+) -> Result<fs::Metadata, StoreErrorV1> {
+    let metadata = fs::symlink_metadata(path).map_err(storage_io_error)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(unsafe_database_path_error());
+    }
+    if !has_private_permissions_v1(&metadata)? {
+        return Err(unsafe_database_path_error());
+    }
+    Ok(metadata)
+}
+
+fn prepare_database_path_for_write_open_v1(path: &Path) -> Result<(), StoreErrorV1> {
+    if inspect_database_path_v1(path)? == DatabasePathStateV1::Missing {
+        create_private_file_if_missing_v1(path)?;
+    }
+    for suffix in ["-wal", "-shm"] {
+        create_private_file_if_missing_v1(&sqlite_sidecar_path_v1(path, suffix))?;
+    }
+    validate_existing_database_path_v1(path)
+}
+
+fn create_private_file_if_missing_v1(path: &Path) -> Result<(), StoreErrorV1> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    match options.open(path) {
+        Ok(file) => {
+            drop(file);
+            validate_existing_regular_private_file_v1(path)
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            validate_existing_regular_private_file_v1(path)
+        }
+        Err(error) => Err(storage_io_error(error)),
+    }
+}
+
+fn sqlite_sidecar_path_v1(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(suffix);
+    sidecar.into()
+}
+
+const INSPECTION_SNAPSHOT_MAX_ATTEMPTS_V1: u8 = 3;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InspectionSnapshotCopyOutcomeV1 {
+    Stable,
+    Unstable,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InspectionSnapshotCopyPhaseV1 {
+    Main,
+    Wal,
+}
+
+#[cfg(test)]
+type InspectionSnapshotCopyHookV1 = Box<dyn Fn(InspectionSnapshotCopyPhaseV1) + Send + Sync>;
+
+#[cfg(test)]
+static INSPECTION_SNAPSHOT_COPY_HOOK_FOR_TEST: std::sync::Mutex<
+    Option<InspectionSnapshotCopyHookV1>,
+> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+static INSPECTION_SNAPSHOT_COPY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+struct InspectionSnapshotCopyHookGuardV1 {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for InspectionSnapshotCopyHookGuardV1 {
+    fn drop(&mut self) {
+        *INSPECTION_SNAPSHOT_COPY_HOOK_FOR_TEST
+            .lock()
+            .expect("inspection snapshot copy hook lock") = None;
+    }
+}
+
+#[cfg(test)]
+fn install_inspection_snapshot_copy_hook_for_test_v1(
+    hook: impl Fn(InspectionSnapshotCopyPhaseV1) + Send + Sync + 'static,
+) -> InspectionSnapshotCopyHookGuardV1 {
+    let lock = INSPECTION_SNAPSHOT_COPY_TEST_LOCK
+        .lock()
+        .expect("inspection snapshot copy test lock");
+    let mut installed = INSPECTION_SNAPSHOT_COPY_HOOK_FOR_TEST
+        .lock()
+        .expect("inspection snapshot copy hook lock");
+    assert!(
+        installed.is_none(),
+        "inspection snapshot copy hook already installed"
+    );
+    *installed = Some(Box::new(hook));
+    drop(installed);
+    InspectionSnapshotCopyHookGuardV1 { _lock: lock }
+}
+
+#[cfg(test)]
+fn run_inspection_snapshot_copy_hook_for_test_v1(phase: InspectionSnapshotCopyPhaseV1) {
+    if let Some(hook) = INSPECTION_SNAPSHOT_COPY_HOOK_FOR_TEST
+        .lock()
+        .expect("inspection snapshot copy hook lock")
+        .as_ref()
+    {
+        hook(phase);
+    }
+}
+
+#[derive(Debug)]
+struct InspectionSnapshotFileV1 {
+    file: File,
+    fingerprint: InspectionFileFingerprintV1,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct InspectionFileFingerprintV1 {
+    length: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed_seconds: i64,
+    #[cfg(unix)]
+    changed_nanoseconds: i64,
+    content_digest: [u8; 32],
+}
+
+fn copy_database_for_inspection_v1(source: &Path, destination: &Path) -> Result<(), StoreErrorV1> {
+    let source_wal = sqlite_sidecar_path_v1(source, "-wal");
+    let destination_wal = sqlite_sidecar_path_v1(destination, "-wal");
+    let destination_shm = sqlite_sidecar_path_v1(destination, "-shm");
+
+    for _ in 0..INSPECTION_SNAPSHOT_MAX_ATTEMPTS_V1 {
+        clear_inspection_clone_v1(destination)?;
+        clear_inspection_clone_v1(&destination_wal)?;
+        clear_inspection_clone_v1(&destination_shm)?;
+
+        let mut main = capture_inspection_file_v1(source)?;
+        let mut wal = capture_optional_inspection_file_v1(&source_wal)?;
+        #[cfg(test)]
+        run_inspection_snapshot_copy_hook_for_test_v1(InspectionSnapshotCopyPhaseV1::Main);
+        if copy_inspection_file_v1(&mut main, destination)?
+            == InspectionSnapshotCopyOutcomeV1::Unstable
+        {
+            continue;
+        }
+        if let Some(wal) = wal.as_mut() {
+            #[cfg(test)]
+            run_inspection_snapshot_copy_hook_for_test_v1(InspectionSnapshotCopyPhaseV1::Wal);
+            if copy_inspection_file_v1(wal, &destination_wal)?
+                == InspectionSnapshotCopyOutcomeV1::Unstable
+            {
+                continue;
+            }
+        }
+
+        let main_after = fingerprint_inspection_path_v1(source)?;
+        let wal_after = fingerprint_optional_inspection_path_v1(&source_wal)?;
+        if main.fingerprint == main_after
+            && wal.as_ref().map(|file| &file.fingerprint) == wal_after.as_ref()
+        {
+            return Ok(());
+        }
+    }
+
+    Err(StoreErrorV1::StorageUnavailableV1 {
+        reason: StoreUnavailableReasonV1::Busy,
+    })
+}
+
+fn clear_inspection_clone_v1(path: &Path) -> Result<(), StoreErrorV1> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(storage_io_error(error)),
+    }
+}
+
+fn capture_inspection_file_v1(path: &Path) -> Result<InspectionSnapshotFileV1, StoreErrorV1> {
+    validate_existing_regular_private_file_v1(path)?;
+    let mut file = File::open(path).map_err(storage_io_error)?;
+    let fingerprint = fingerprint_open_inspection_file_v1(&mut file)?;
+    Ok(InspectionSnapshotFileV1 { file, fingerprint })
+}
+
+fn capture_optional_inspection_file_v1(
+    path: &Path,
+) -> Result<Option<InspectionSnapshotFileV1>, StoreErrorV1> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => capture_inspection_file_v1(path).map(Some),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(storage_io_error(error)),
+    }
+}
+
+fn fingerprint_inspection_path_v1(
+    path: &Path,
+) -> Result<InspectionFileFingerprintV1, StoreErrorV1> {
+    capture_inspection_file_v1(path).map(|snapshot| snapshot.fingerprint)
+}
+
+fn fingerprint_optional_inspection_path_v1(
+    path: &Path,
+) -> Result<Option<InspectionFileFingerprintV1>, StoreErrorV1> {
+    capture_optional_inspection_file_v1(path).map(|snapshot| snapshot.map(|file| file.fingerprint))
+}
+
+fn fingerprint_open_inspection_file_v1(
+    file: &mut File,
+) -> Result<InspectionFileFingerprintV1, StoreErrorV1> {
+    let metadata = file.metadata().map_err(storage_io_error)?;
+    if !metadata.file_type().is_file() || !has_private_permissions_v1(&metadata)? {
+        return Err(unsafe_database_path_error());
+    }
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8 * 1024];
+    file.seek(SeekFrom::Start(0)).map_err(storage_io_error)?;
+    loop {
+        let read = file.read(&mut buffer).map_err(storage_io_error)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    file.seek(SeekFrom::Start(0)).map_err(storage_io_error)?;
+
+    Ok(InspectionFileFingerprintV1 {
+        length: metadata.len(),
+        modified: metadata.modified().map_err(storage_io_error)?,
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(unix)]
+        changed_seconds: metadata.ctime(),
+        #[cfg(unix)]
+        changed_nanoseconds: metadata.ctime_nsec(),
+        content_digest: hasher.finalize().into(),
+    })
+}
+
+fn copy_inspection_file_v1(
+    source: &mut InspectionSnapshotFileV1,
+    destination: &Path,
+) -> Result<InspectionSnapshotCopyOutcomeV1, StoreErrorV1> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut destination_file = options.open(destination).map_err(storage_io_error)?;
+    source
+        .file
+        .seek(SeekFrom::Start(0))
+        .map_err(storage_io_error)?;
+    let copied =
+        std::io::copy(&mut source.file, &mut destination_file).map_err(storage_io_error)?;
+    destination_file.sync_all().map_err(storage_io_error)?;
+    let destination_fingerprint = fingerprint_open_inspection_file_v1(&mut destination_file)?;
+    if copied != source.fingerprint.length
+        || destination_fingerprint.length != source.fingerprint.length
+        || destination_fingerprint.content_digest != source.fingerprint.content_digest
+    {
+        return Ok(InspectionSnapshotCopyOutcomeV1::Unstable);
+    }
+    Ok(InspectionSnapshotCopyOutcomeV1::Stable)
+}
+
+#[cfg(unix)]
+fn has_private_permissions_v1(metadata: &fs::Metadata) -> Result<bool, StoreErrorV1> {
+    Ok(metadata.mode() & 0o077 == 0)
+}
+
+#[cfg(not(unix))]
+fn has_private_permissions_v1(_metadata: &fs::Metadata) -> Result<bool, StoreErrorV1> {
+    Err(StoreErrorV1::InvalidStateV1(
+        crate::StoreValueErrorV1::UnsupportedPrivatePermissionPlatform,
+    ))
+}
+
+fn unsafe_database_path_error() -> StoreErrorV1 {
+    StoreErrorV1::StorageUnavailableV1 {
+        reason: StoreUnavailableReasonV1::StorageIo,
+    }
+}
+
+fn storage_io_error(_error: std::io::Error) -> StoreErrorV1 {
+    StoreErrorV1::StorageUnavailableV1 {
+        reason: StoreUnavailableReasonV1::StorageIo,
+    }
+}
+fn integrity_error(check: StoreIntegrityCheckV1) -> StoreErrorV1 {
+    StoreErrorV1::StorageIntegrityV1 { check }
+}
+
+fn storage_error(error: rusqlite::Error) -> StoreErrorV1 {
+    map_rusqlite_error_v1(
+        error,
+        RusqliteErrorContextV1::Integrity(StoreIntegrityCheckV1::SqliteQuickCheck),
+    )
+}
+
+#[cfg(all(test, unix))]
+mod inspection_snapshot_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    fn write_private_file(path: &Path, contents: &[u8]) {
+        fs::write(path, contents).expect("write private inspection source");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("set private inspection source permissions");
+    }
+
+    fn directory_entries(path: &Path) -> Vec<std::ffi::OsString> {
+        let mut entries = fs::read_dir(path)
+            .expect("read inspection source directory")
+            .map(|entry| entry.expect("read inspection source entry").file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries
+    }
+
+    #[test]
+    fn unbound_inspection_never_finalizes_an_interrupted_publication() {
+        let directory = TempDir::new().expect("inspection source directory");
+        let source = directory.path().join("state.sqlite3");
+        let publication = directory.path().join(".state.sqlite3.1.0.0.tmp");
+        write_private_file(&source, b"unbound inspection source");
+        fs::hard_link(&source, &publication).expect("interrupted publication link");
+
+        let source_bytes = fs::read(&source).expect("authoritative bytes before inspection");
+        let entries_before = directory_entries(directory.path());
+        let result = inspect_database_snapshot_unbound_v1(
+            &source,
+            &SqliteStoreOptionsV1::new(8).expect("inspection options"),
+            |_| Ok(()),
+        );
+
+        assert!(matches!(
+            result,
+            Err(StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::StorageIo
+            })
+        ));
+        assert_eq!(
+            fs::read(&source).expect("authoritative bytes after inspection"),
+            source_bytes
+        );
+        assert_eq!(directory_entries(directory.path()), entries_before);
+        assert!(publication.exists());
+    }
+
+    #[test]
+    fn unstable_main_copy_retries_and_accepts_the_next_stable_snapshot() {
+        let directory = TempDir::new().expect("inspection source directory");
+        let source = directory.path().join("state.sqlite3");
+        let destination = directory.path().join("inspection.sqlite3");
+        write_private_file(&source, b"main-before");
+
+        let main_copy_calls = Arc::new(AtomicUsize::new(0));
+        let hook_source = source.clone();
+        let hook_calls = Arc::clone(&main_copy_calls);
+        let hook = install_inspection_snapshot_copy_hook_for_test_v1(move |phase| {
+            if phase == InspectionSnapshotCopyPhaseV1::Main
+                && hook_calls.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                write_private_file(&hook_source, b"main-after!");
+            }
+        });
+
+        copy_database_for_inspection_v1(&source, &destination).expect("stable retry succeeds");
+        drop(hook);
+
+        assert_eq!(main_copy_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            fs::read(&destination).expect("stable inspection snapshot"),
+            fs::read(&source).expect("stable authoritative source")
+        );
+    }
+
+    #[test]
+    fn unstable_wal_copy_exhaustion_is_busy() {
+        let directory = TempDir::new().expect("inspection source directory");
+        let source = directory.path().join("state.sqlite3");
+        let source_wal = sqlite_sidecar_path_v1(&source, "-wal");
+        let destination = directory.path().join("inspection.sqlite3");
+        write_private_file(&source, b"main-stable");
+        write_private_file(&source_wal, b"wal-before");
+
+        let wal_copy_calls = Arc::new(AtomicUsize::new(0));
+        let hook_wal = source_wal.clone();
+        let hook_calls = Arc::clone(&wal_copy_calls);
+        let hook = install_inspection_snapshot_copy_hook_for_test_v1(move |phase| {
+            if phase == InspectionSnapshotCopyPhaseV1::Wal {
+                let next = hook_calls.fetch_add(1, Ordering::SeqCst);
+                let contents: &[u8] = if next.is_multiple_of(2) {
+                    b"wal-after!"
+                } else {
+                    b"wal-before"
+                };
+                write_private_file(&hook_wal, contents);
+            }
+        });
+
+        let result = copy_database_for_inspection_v1(&source, &destination);
+        drop(hook);
+
+        assert!(matches!(
+            result,
+            Err(StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::Busy
+            })
+        ));
+        assert_eq!(
+            wal_copy_calls.load(Ordering::SeqCst),
+            usize::from(INSPECTION_SNAPSHOT_MAX_ATTEMPTS_V1)
+        );
+    }
+}

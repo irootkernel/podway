@@ -1,0 +1,1576 @@
+//! Phase 2 schema and internal codec foundation contracts.
+
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+use podway_core::{
+    AttemptId, DomainCommand, DomainCommandKind, DomainError, DomainResult, ItemId, JobId,
+    Revision, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
+};
+use podway_store::codec::{
+    PersistedDomainCommandKindV1, PersistedDomainErrorV1, PersistedDomainResultV1,
+    PersistedSessionLifecycleV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
+    PersistedTerminalReceiptV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
+    STORE_COMMAND_SCHEMA_V1, STORE_COMMAND_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V0,
+    STORE_TERMINAL_SCHEMA_V1, StoreCodecErrorV1, decode_command_v1, decode_terminal_receipt_v1,
+    encode_command_v1, encode_persisted_terminal_receipt_v1, encode_terminal_receipt_v1,
+};
+use podway_store::schema::{
+    SQLITE_INITIAL_MIGRATION_NAME_V1, SQLITE_SCHEMA_VERSION_V1, open_or_initialize_v1,
+    sqlite_v1_ddl, verify_connection_pragmas_v1,
+};
+use podway_store::{
+    ClaimTokenV1, ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, JobReceiptV1,
+    PersistedSessionMutationV1, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1,
+    StateTransitionV1, StoreErrorV1, StoreFailpointV1, StoreIntegrityCheckV1,
+    StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
+    WorkerIdV1,
+};
+use rusqlite::Connection;
+use sha2::{Digest, Sha256};
+use tempfile::TempDir;
+const FROZEN_SQLITE_V1_DDL: &str = include_str!("../../../spec/sqlite-v1.sql");
+const EXPECTED_SQLITE_V1_MIGRATION_SHA256: &str =
+    "sha256:20ea04d9635b8e1632e6d3aa5f3a888eaca49307b43ade9b9991363b30607423";
+
+fn digest(hex_digit: char) -> Sha256Digest {
+    Sha256Digest::new(format!("sha256:{}", hex_digit.to_string().repeat(64)))
+        .expect("fixture digest must be valid")
+}
+
+fn workspace_id() -> WorkspaceId {
+    WorkspaceId::new("00000000-0000-4000-8000-000000000001")
+        .expect("fixture workspace ID must be valid")
+}
+
+fn job_id() -> JobId {
+    JobId::new("00000000-0000-4000-8000-000000000003").expect("fixture job ID must be valid")
+}
+
+fn session_id() -> podway_core::SessionId {
+    podway_core::SessionId::new("00000000-0000-4000-8000-000000000004")
+        .expect("fixture session ID must be valid")
+}
+
+fn attempt_id() -> AttemptId {
+    AttemptId::new("00000000-0000-4000-8000-000000000005")
+        .expect("fixture attempt ID must be valid")
+}
+
+fn identity() -> DurableWorktreeIdentityV1 {
+    DurableWorktreeIdentityV1::new(digest('a'), workspace_id(), digest('b'))
+}
+
+fn other_identity() -> DurableWorktreeIdentityV1 {
+    DurableWorktreeIdentityV1::new(digest('c'), workspace_id(), digest('b'))
+}
+
+fn root() -> ValidatedWorkspaceRootV1 {
+    ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-store-phase2"))
+        .expect("fixture root must be valid")
+}
+
+fn options() -> SqliteStoreOptionsV1 {
+    SqliteStoreOptionsV1::new(8).expect("fixture options must be valid")
+}
+
+fn receipt(sequence: u64) -> podway_store::JobReceiptV1 {
+    podway_store::JobReceiptV1::new(sequence, job_id(), digest('d'))
+}
+
+fn open_temp_database(
+    temporary: &TempDir,
+    root: &ValidatedWorkspaceRootV1,
+    identity: &DurableWorktreeIdentityV1,
+) -> Result<Connection, StoreErrorV1> {
+    let options = options();
+    open_temp_database_with_options(temporary, root, identity, &options)
+}
+
+fn open_temp_database_with_options(
+    temporary: &TempDir,
+    root: &ValidatedWorkspaceRootV1,
+    identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+) -> Result<Connection, StoreErrorV1> {
+    open_or_initialize_v1(
+        temporary.path().join("state.sqlite3"),
+        root,
+        identity,
+        options,
+        UnixMillis::new(1234),
+    )
+}
+
+fn opened_error(
+    temporary: &TempDir,
+    root: &ValidatedWorkspaceRootV1,
+    identity: &DurableWorktreeIdentityV1,
+) -> StoreErrorV1 {
+    match open_temp_database(temporary, root, identity) {
+        Ok(_) => panic!("open must fail"),
+        Err(error) => error,
+    }
+}
+fn assert_codec_error<T>(result: Result<T, StoreCodecErrorV1>, expected: StoreCodecErrorV1) {
+    match result {
+        Err(error) => assert_eq!(error, expected),
+        Ok(_) => panic!("unknown field must be rejected"),
+    }
+}
+
+fn make_database_private(temporary: &TempDir) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    fs::set_permissions(
+        temporary.path().join("state.sqlite3"),
+        fs::Permissions::from_mode(0o600),
+    )?;
+    Ok(())
+}
+
+fn assert_uninitialized_schema0(
+    temporary: &TempDir,
+    application_id: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let connection = Connection::open(temporary.path().join("state.sqlite3"))?;
+    let user_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let user_object_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+        [],
+        |row| row.get(0),
+    )?;
+    let initialization_object_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('schema_migrations', 'workspace_state')",
+        [],
+        |row| row.get(0),
+    )?;
+    let actual_application_id: i64 =
+        connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
+
+    assert_eq!(user_version, 0);
+    assert_eq!(user_object_count, 0);
+    assert_eq!(initialization_object_count, 0);
+    assert_eq!(actual_application_id, application_id);
+    Ok(())
+}
+
+fn assert_schema_initialization_failpoint_recovers(
+    failpoint: StoreFailpointV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const APPLICATION_ID: i64 = 0x504f_4457;
+
+    let temporary = TempDir::new()?;
+    let root = root();
+    let identity = identity();
+    let raw = Connection::open(temporary.path().join("state.sqlite3"))?;
+    raw.pragma_update(None, "application_id", APPLICATION_ID)?;
+    drop(raw);
+    make_database_private(&temporary)?;
+
+    let failing_options = options().with_failpoint(Some(failpoint));
+    assert!(matches!(
+        open_temp_database_with_options(&temporary, &root, &identity, &failing_options),
+        Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Recovery
+        })
+    ));
+    assert_uninitialized_schema0(&temporary, APPLICATION_ID)?;
+
+    let connection = open_temp_database(&temporary, &root, &identity)?;
+    let migration_count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    let identity_count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM workspace_state", [], |row| row.get(0))?;
+    assert_eq!(migration_count, 1);
+    assert_eq!(identity_count, 1);
+    drop(connection);
+
+    open_temp_database(&temporary, &root, &identity)?;
+    Ok(())
+}
+
+#[test]
+fn schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum()
+-> Result<(), Box<dyn std::error::Error>> {
+    const BUSY_TIMEOUT_MS: u32 = 4_321;
+
+    let temporary = TempDir::new()?;
+    let root = root();
+    let identity = identity();
+    let options = options().with_busy_timeout_ms(BUSY_TIMEOUT_MS)?;
+    let connection = open_temp_database_with_options(&temporary, &root, &identity, &options)?;
+
+    verify_connection_pragmas_v1(&connection, BUSY_TIMEOUT_MS)?;
+    let user_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let foreign_keys: i64 = connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    let journal_mode: String = connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+    let synchronous: i64 = connection.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
+    let busy_timeout: i64 = connection.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+    let trusted_schema: i64 =
+        connection.query_row("PRAGMA trusted_schema", [], |row| row.get(0))?;
+    assert_eq!(user_version, i64::from(SQLITE_SCHEMA_VERSION_V1));
+    assert_eq!(foreign_keys, 1);
+    assert_eq!(journal_mode, "wal");
+    assert_eq!(synchronous, 2);
+    assert_eq!(busy_timeout, i64::from(BUSY_TIMEOUT_MS));
+    assert_eq!(trusted_schema, 0);
+    let ddl = sqlite_v1_ddl();
+    assert_eq!(ddl.as_bytes(), FROZEN_SQLITE_V1_DDL.as_bytes());
+    assert_eq!(
+        format!(
+            "sha256:{:x}",
+            Sha256::digest(FROZEN_SQLITE_V1_DDL.as_bytes())
+        ),
+        EXPECTED_SQLITE_V1_MIGRATION_SHA256
+    );
+    assert_eq!(
+        format!("sha256:{:x}", Sha256::digest(ddl.as_bytes())),
+        EXPECTED_SQLITE_V1_MIGRATION_SHA256
+    );
+
+    let migration: (String, String) = connection.query_row(
+        "SELECT name, checksum FROM schema_migrations WHERE version = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(migration.0, SQLITE_INITIAL_MIGRATION_NAME_V1);
+    assert_eq!(migration.1, EXPECTED_SQLITE_V1_MIGRATION_SHA256);
+
+    let workspace: (String, String, i64, i64) = connection.query_row(
+        "SELECT workspace_uuid, last_validated_root, next_workspace_sequence, created_at_ms \
+         FROM workspace_state WHERE singleton = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(workspace.0, identity.workspace_uuid().as_str());
+    assert_eq!(workspace.1, root.as_encoded());
+    assert_eq!(workspace.2, 0);
+    assert_eq!(workspace.3, 1234);
+    drop(connection);
+
+    let moved_root = ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-store-moved"))?;
+    let connection = open_temp_database_with_options(&temporary, &moved_root, &identity, &options)?;
+    verify_connection_pragmas_v1(&connection, BUSY_TIMEOUT_MS)?;
+    let reopened_foreign_keys: i64 =
+        connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    let reopened_journal_mode: String =
+        connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+    let reopened_synchronous: i64 =
+        connection.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
+    let reopened_busy_timeout: i64 =
+        connection.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+    let reopened_trusted_schema: i64 =
+        connection.query_row("PRAGMA trusted_schema", [], |row| row.get(0))?;
+    assert_eq!(reopened_foreign_keys, 1);
+    assert_eq!(reopened_journal_mode, "wal");
+    assert_eq!(reopened_synchronous, 2);
+    assert_eq!(reopened_busy_timeout, i64::from(BUSY_TIMEOUT_MS));
+    assert_eq!(reopened_trusted_schema, 0);
+
+    let stored_root: String = connection.query_row(
+        "SELECT last_validated_root FROM workspace_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(stored_root, moved_root.as_encoded());
+    Ok(())
+}
+
+#[test]
+fn schema_after_pragmas_failure_leaves_schema0_unchanged_and_retry_initializes()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_schema_initialization_failpoint_recovers(StoreFailpointV1::SchemaAfterPragmas)
+}
+
+#[test]
+fn schema_before_commit_failure_rolls_back_and_retry_initializes()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_schema_initialization_failpoint_recovers(StoreFailpointV1::SchemaBeforeCommit)
+}
+
+#[test]
+fn schema_open_fails_closed_for_partial_newer_checksum_missing_object_migration_and_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let partial = TempDir::new()?;
+    Connection::open(partial.path().join("state.sqlite3"))?
+        .execute_batch("CREATE TABLE unexpected_schema0 (value INTEGER) STRICT;")?;
+    make_database_private(&partial)?;
+    assert!(matches!(
+        opened_error(&partial, &root(), &identity()),
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::RequiredSchemaObjects
+        }
+    ));
+
+    let newer = TempDir::new()?;
+    let raw = Connection::open(newer.path().join("state.sqlite3"))?;
+    raw.pragma_update(None, "user_version", 2)?;
+    drop(raw);
+    make_database_private(&newer)?;
+    assert!(matches!(
+        opened_error(&newer, &root(), &identity()),
+        StoreErrorV1::NewerStateV1 {
+            found_schema_version: 2,
+            supported_schema_version: SQLITE_SCHEMA_VERSION_V1
+        }
+    ));
+
+    let checksum = TempDir::new()?;
+    let connection = open_temp_database(&checksum, &root(), &identity())?;
+    connection.execute(
+        "UPDATE schema_migrations SET checksum = 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'",
+        [],
+    )?;
+    drop(connection);
+    assert!(matches!(
+        opened_error(&checksum, &root(), &identity()),
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::MigrationChecksum
+        }
+    ));
+
+    let missing_migration = TempDir::new()?;
+    let connection = open_temp_database(&missing_migration, &root(), &identity())?;
+    connection.execute("DELETE FROM schema_migrations", [])?;
+    drop(connection);
+    assert!(matches!(
+        opened_error(&missing_migration, &root(), &identity()),
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::MigrationChecksum
+        }
+    ));
+
+    let missing_object = TempDir::new()?;
+    let connection = open_temp_database(&missing_object, &root(), &identity())?;
+    connection.execute_batch("DROP INDEX ix_jobs_state_sequence;")?;
+    drop(connection);
+    assert!(matches!(
+        opened_error(&missing_object, &root(), &identity()),
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::RequiredSchemaObjects
+        }
+    ));
+
+    let mismatch = TempDir::new()?;
+    let connection = open_temp_database(&mismatch, &root(), &identity())?;
+    drop(connection);
+    assert!(matches!(
+        opened_error(&mismatch, &root(), &other_identity()),
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::WorkspaceIdentity
+        }
+    ));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_root_text_is_lossless_for_non_utf8_unix_paths()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    const ENCODED_NON_UTF8_ROOT: &str = "podway.unix-path/v1:2f746d702f706f647761792dff2d726f6f74";
+
+    let bytes = b"/tmp/podway-\xff-root".to_vec();
+    let root = ValidatedWorkspaceRootV1::from_unix_bytes(bytes.clone())?;
+    assert_eq!(root.unix_bytes(), bytes.as_slice());
+    assert_eq!(root.to_path_buf().as_os_str().as_bytes(), bytes.as_slice());
+    assert_eq!(root.as_encoded(), ENCODED_NON_UTF8_ROOT);
+    assert_eq!(
+        ValidatedWorkspaceRootV1::from_encoded(root.as_encoded())?,
+        root
+    );
+
+    let temporary = TempDir::new()?;
+    let identity = identity();
+    let connection = open_temp_database(&temporary, &root, &identity)?;
+    let stored_encoded: String = connection.query_row(
+        "SELECT last_validated_root FROM workspace_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(stored_encoded, ENCODED_NON_UTF8_ROOT);
+    let stored_root = ValidatedWorkspaceRootV1::from_encoded(stored_encoded.clone())?;
+    assert_eq!(stored_root.unix_bytes(), bytes.as_slice());
+    assert_eq!(
+        stored_root.to_path_buf().as_os_str().as_bytes(),
+        bytes.as_slice()
+    );
+    connection.close().map_err(|(_, error)| error)?;
+
+    let connection = open_temp_database(&temporary, &root, &identity)?;
+    let reopened_encoded: String = connection.query_row(
+        "SELECT last_validated_root FROM workspace_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(reopened_encoded, ENCODED_NON_UTF8_ROOT);
+    let reopened_root = ValidatedWorkspaceRootV1::from_encoded(reopened_encoded)?;
+    assert_eq!(reopened_root.unix_bytes(), bytes.as_slice());
+    assert_eq!(
+        reopened_root.to_path_buf().as_os_str().as_bytes(),
+        bytes.as_slice()
+    );
+    connection.close().map_err(|(_, error)| error)?;
+
+    assert!(ValidatedWorkspaceRootV1::from_encoded("podway.unix-path/v1:FF").is_err());
+    Ok(())
+}
+
+fn fully_specified_preconditions(
+    item: &ItemId,
+) -> Result<RevisionAttemptItemPreconditionsV1, Box<dyn std::error::Error>> {
+    Ok(RevisionAttemptItemPreconditionsV1::new(
+        Some(Revision::new(11)),
+        Some(attempt_id()),
+        Some(item.clone()),
+        Some(Revision::new(7)),
+    )?)
+}
+
+fn assert_command_fields(actual: &DomainCommand, expected: &DomainCommand) {
+    match actual {
+        DomainCommand::WorkspaceInitialize => {
+            assert!(matches!(expected, DomainCommand::WorkspaceInitialize));
+        }
+        DomainCommand::WorkspaceResetAll => {
+            assert!(matches!(expected, DomainCommand::WorkspaceResetAll));
+        }
+        DomainCommand::SessionStart => {
+            assert!(matches!(expected, DomainCommand::SessionStart));
+        }
+        DomainCommand::SessionStartReplace => {
+            assert!(matches!(expected, DomainCommand::SessionStartReplace));
+        }
+        DomainCommand::SessionComplete => {
+            assert!(matches!(expected, DomainCommand::SessionComplete));
+        }
+        DomainCommand::SessionSkip => {
+            assert!(matches!(expected, DomainCommand::SessionSkip));
+        }
+        DomainCommand::SessionRetry => {
+            assert!(matches!(expected, DomainCommand::SessionRetry));
+        }
+        DomainCommand::SessionReturn => {
+            assert!(matches!(expected, DomainCommand::SessionReturn));
+        }
+        DomainCommand::SessionBlock => {
+            assert!(matches!(expected, DomainCommand::SessionBlock));
+        }
+        DomainCommand::SessionUnblock => {
+            assert!(matches!(expected, DomainCommand::SessionUnblock));
+        }
+        DomainCommand::SessionCancel => {
+            assert!(matches!(expected, DomainCommand::SessionCancel));
+        }
+        DomainCommand::SessionReopen => {
+            assert!(matches!(expected, DomainCommand::SessionReopen));
+        }
+        DomainCommand::SessionReset => {
+            assert!(matches!(expected, DomainCommand::SessionReset));
+        }
+        DomainCommand::ItemCheck { item_id } => match expected {
+            DomainCommand::ItemCheck {
+                item_id: expected_item_id,
+            } => assert_eq!(item_id, expected_item_id),
+            _ => panic!("decoded command kind differs from the literal golden"),
+        },
+        DomainCommand::ItemUncheck { item_id } => match expected {
+            DomainCommand::ItemUncheck {
+                item_id: expected_item_id,
+            } => assert_eq!(item_id, expected_item_id),
+            _ => panic!("decoded command kind differs from the literal golden"),
+        },
+        DomainCommand::ItemSet { item_id } => match expected {
+            DomainCommand::ItemSet {
+                item_id: expected_item_id,
+            } => assert_eq!(item_id, expected_item_id),
+            _ => panic!("decoded command kind differs from the literal golden"),
+        },
+        DomainCommand::ItemAdd { item_id } => match expected {
+            DomainCommand::ItemAdd {
+                item_id: expected_item_id,
+            } => assert_eq!(item_id, expected_item_id),
+            _ => panic!("decoded command kind differs from the literal golden"),
+        },
+        DomainCommand::ItemRemove { item_id } => match expected {
+            DomainCommand::ItemRemove {
+                item_id: expected_item_id,
+            } => assert_eq!(item_id, expected_item_id),
+            _ => panic!("decoded command kind differs from the literal golden"),
+        },
+        DomainCommand::ItemAttach { item_id } => match expected {
+            DomainCommand::ItemAttach {
+                item_id: expected_item_id,
+            } => assert_eq!(item_id, expected_item_id),
+            _ => panic!("decoded command kind differs from the literal golden"),
+        },
+        DomainCommand::ItemClear { item_id } => match expected {
+            DomainCommand::ItemClear {
+                item_id: expected_item_id,
+            } => assert_eq!(item_id, expected_item_id),
+            _ => panic!("decoded command kind differs from the literal golden"),
+        },
+    }
+}
+
+fn assert_command_execution_fields(actual: &ClaimedExecutionV1, expected: &ClaimedExecutionV1) {
+    assert_command_fields(actual.command(), expected.command());
+    assert_eq!(
+        actual.preconditions().expected_session_revision(),
+        expected.preconditions().expected_session_revision()
+    );
+    assert_eq!(
+        actual.preconditions().expected_attempt_id(),
+        expected.preconditions().expected_attempt_id()
+    );
+    assert_eq!(
+        actual.preconditions().expected_item_id(),
+        expected.preconditions().expected_item_id()
+    );
+    assert_eq!(
+        actual.preconditions().expected_item_revision(),
+        expected.preconditions().expected_item_revision()
+    );
+    assert_eq!(
+        actual.has_complete_execution_document(),
+        expected.has_complete_execution_document()
+    );
+}
+
+fn assert_command_golden(
+    execution: &ClaimedExecutionV1,
+    golden: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(encode_command_v1(execution)?, golden);
+    assert!(!execution.has_complete_execution_document());
+    let decoded = decode_command_v1(golden)?;
+    assert!(!decoded.has_complete_execution_document());
+    assert_command_execution_fields(&decoded, execution);
+    Ok(())
+}
+
+fn command_golden_v1(command: &DomainCommand) -> &'static str {
+    match command {
+        DomainCommand::WorkspaceInitialize => {
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::WorkspaceResetAll => {
+            r#"{"command":{"kind":"workspace_reset_all"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionStart => {
+            r#"{"command":{"kind":"session_start"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionStartReplace => {
+            r#"{"command":{"kind":"session_start_replace"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionComplete => {
+            r#"{"command":{"kind":"session_complete"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionSkip => {
+            r#"{"command":{"kind":"session_skip"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionRetry => {
+            r#"{"command":{"kind":"session_retry"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionReturn => {
+            r#"{"command":{"kind":"session_return"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionBlock => {
+            r#"{"command":{"kind":"session_block"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionUnblock => {
+            r#"{"command":{"kind":"session_unblock"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionCancel => {
+            r#"{"command":{"kind":"session_cancel"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionReopen => {
+            r#"{"command":{"kind":"session_reopen"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionReset => {
+            r#"{"command":{"kind":"session_reset"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::ItemCheck { .. } => {
+            r#"{"command":{"item_id":"selected-item","kind":"item_check"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::ItemUncheck { .. } => {
+            r#"{"command":{"item_id":"selected-item","kind":"item_uncheck"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::ItemSet { .. } => {
+            r#"{"command":{"item_id":"selected-item","kind":"item_set"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::ItemAdd { .. } => {
+            r#"{"command":{"item_id":"selected-item","kind":"item_add"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::ItemRemove { .. } => {
+            r#"{"command":{"item_id":"selected-item","kind":"item_remove"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::ItemAttach { .. } => {
+            r#"{"command":{"item_id":"selected-item","kind":"item_attach"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::ItemClear { .. } => {
+            r#"{"command":{"item_id":"selected-item","kind":"item_clear"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+    }
+}
+
+fn assert_terminal_result_variant_coverage(result: &PersistedTerminalResultV1) {
+    match result {
+        PersistedTerminalResultV1::Success(_) => {}
+        PersistedTerminalResultV1::Failure(_) => {}
+        PersistedTerminalResultV1::Cancelled => {}
+    }
+}
+
+fn assert_persisted_result_variant_coverage(result: &PersistedDomainResultV1) {
+    match result {
+        PersistedDomainResultV1::WorkspaceInitialized { .. } => {}
+        PersistedDomainResultV1::WorkspaceReset { .. } => {}
+        PersistedDomainResultV1::SessionChanged { .. } => {}
+        PersistedDomainResultV1::ItemChanged { .. } => {}
+    }
+}
+
+fn assert_persisted_error_variant_coverage(error: &PersistedDomainErrorV1) {
+    match error {
+        PersistedDomainErrorV1::EmptyValue { .. } => {}
+        PersistedDomainErrorV1::ValueTooLong { .. } => {}
+        PersistedDomainErrorV1::InvalidUuid { .. } => {}
+        PersistedDomainErrorV1::InvalidIdentifier { .. } => {}
+        PersistedDomainErrorV1::InvalidSha256Digest => {}
+        PersistedDomainErrorV1::RevisionOverflow { .. } => {}
+        PersistedDomainErrorV1::InvalidState { .. } => {}
+        PersistedDomainErrorV1::RequiredItemsMissing => {}
+        PersistedDomainErrorV1::BlockersPresent => {}
+        PersistedDomainErrorV1::ArtifactChanged => {}
+        PersistedDomainErrorV1::InvalidTransition { .. } => {}
+        PersistedDomainErrorV1::PreconditionFailed { .. } => {}
+        PersistedDomainErrorV1::ItemNotFound { .. } => {}
+        PersistedDomainErrorV1::BlockerNotCurrent => {}
+    }
+}
+
+fn assert_receipt_fields(actual: &JobReceiptV1, expected: &JobReceiptV1) {
+    assert_eq!(actual.identity_sequence(), expected.identity_sequence());
+    assert_eq!(actual.job_id(), expected.job_id());
+    assert_eq!(actual.request_digest(), expected.request_digest());
+}
+
+fn assert_success_fields(actual: &PersistedDomainResultV1, expected: &DomainResult) {
+    assert_persisted_result_variant_coverage(actual);
+    match expected {
+        DomainResult::WorkspaceInitialized {
+            workspace_id,
+            revision,
+        } => match actual {
+            PersistedDomainResultV1::WorkspaceInitialized {
+                workspace_id: actual_workspace_id,
+                revision: actual_revision,
+            } => {
+                assert_eq!(actual_workspace_id, workspace_id);
+                assert_eq!(actual_revision, revision);
+            }
+            _ => panic!("decoded result kind differs from the literal golden"),
+        },
+        DomainResult::WorkspaceReset {
+            workspace_id,
+            revision,
+        } => match actual {
+            PersistedDomainResultV1::WorkspaceReset {
+                workspace_id: actual_workspace_id,
+                revision: actual_revision,
+            } => {
+                assert_eq!(actual_workspace_id, workspace_id);
+                assert_eq!(actual_revision, revision);
+            }
+            _ => panic!("decoded result kind differs from the literal golden"),
+        },
+        DomainResult::SessionChanged {
+            session_id,
+            revision_before,
+            revision_after,
+            changed,
+        } => match actual {
+            PersistedDomainResultV1::SessionChanged {
+                session_id: actual_session_id,
+                revision_before: actual_revision_before,
+                revision_after: actual_revision_after,
+                changed: actual_changed,
+            } => {
+                assert_eq!(actual_session_id, session_id);
+                assert_eq!(actual_revision_before, revision_before);
+                assert_eq!(actual_revision_after, revision_after);
+                assert_eq!(actual_changed, changed);
+            }
+            _ => panic!("decoded result kind differs from the literal golden"),
+        },
+        DomainResult::ItemChanged {
+            session_id,
+            item_id,
+            revision_before,
+            revision_after,
+            changed,
+        } => match actual {
+            PersistedDomainResultV1::ItemChanged {
+                session_id: actual_session_id,
+                item_id: actual_item_id,
+                revision_before: actual_revision_before,
+                revision_after: actual_revision_after,
+                changed: actual_changed,
+            } => {
+                assert_eq!(actual_session_id, session_id);
+                assert_eq!(actual_item_id, item_id);
+                assert_eq!(actual_revision_before, revision_before);
+                assert_eq!(actual_revision_after, revision_after);
+                assert_eq!(actual_changed, changed);
+            }
+            _ => panic!("decoded result kind differs from the literal golden"),
+        },
+    }
+}
+
+fn expected_persisted_command_kind(kind: DomainCommandKind) -> PersistedDomainCommandKindV1 {
+    match kind {
+        DomainCommandKind::WorkspaceInitialize => PersistedDomainCommandKindV1::WorkspaceInitialize,
+        DomainCommandKind::WorkspaceResetAll => PersistedDomainCommandKindV1::WorkspaceResetAll,
+        DomainCommandKind::SessionStart => PersistedDomainCommandKindV1::SessionStart,
+        DomainCommandKind::SessionStartReplace => PersistedDomainCommandKindV1::SessionStartReplace,
+        DomainCommandKind::SessionComplete => PersistedDomainCommandKindV1::SessionComplete,
+        DomainCommandKind::SessionSkip => PersistedDomainCommandKindV1::SessionSkip,
+        DomainCommandKind::SessionRetry => PersistedDomainCommandKindV1::SessionRetry,
+        DomainCommandKind::SessionReturn => PersistedDomainCommandKindV1::SessionReturn,
+        DomainCommandKind::SessionBlock => PersistedDomainCommandKindV1::SessionBlock,
+        DomainCommandKind::SessionUnblock => PersistedDomainCommandKindV1::SessionUnblock,
+        DomainCommandKind::SessionCancel => PersistedDomainCommandKindV1::SessionCancel,
+        DomainCommandKind::SessionReopen => PersistedDomainCommandKindV1::SessionReopen,
+        DomainCommandKind::SessionReset => PersistedDomainCommandKindV1::SessionReset,
+        DomainCommandKind::ItemCheck => PersistedDomainCommandKindV1::ItemCheck,
+        DomainCommandKind::ItemUncheck => PersistedDomainCommandKindV1::ItemUncheck,
+        DomainCommandKind::ItemSet => PersistedDomainCommandKindV1::ItemSet,
+        DomainCommandKind::ItemAdd => PersistedDomainCommandKindV1::ItemAdd,
+        DomainCommandKind::ItemRemove => PersistedDomainCommandKindV1::ItemRemove,
+        DomainCommandKind::ItemAttach => PersistedDomainCommandKindV1::ItemAttach,
+        DomainCommandKind::ItemClear => PersistedDomainCommandKindV1::ItemClear,
+    }
+}
+
+fn expected_persisted_lifecycle(state: SessionLifecycle) -> PersistedSessionLifecycleV1 {
+    match state {
+        SessionLifecycle::Running => PersistedSessionLifecycleV1::Running,
+        SessionLifecycle::Completed => PersistedSessionLifecycleV1::Completed,
+        SessionLifecycle::Cancelled => PersistedSessionLifecycleV1::Cancelled,
+    }
+}
+
+fn assert_failure_fields(actual: &PersistedDomainErrorV1, expected: &DomainError) {
+    assert_persisted_error_variant_coverage(actual);
+    match expected {
+        DomainError::EmptyValue { field } => match actual {
+            PersistedDomainErrorV1::EmptyValue {
+                field: actual_field,
+            } => assert_eq!(actual_field.as_str(), *field),
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::ValueTooLong {
+            field,
+            maximum,
+            actual: expected_actual,
+        } => match actual {
+            PersistedDomainErrorV1::ValueTooLong {
+                field: actual_field,
+                maximum: actual_maximum,
+                actual: actual_actual,
+            } => {
+                assert_eq!(actual_field.as_str(), *field);
+                assert_eq!(*actual_maximum, u64::try_from(*maximum).unwrap());
+                assert_eq!(*actual_actual, u64::try_from(*expected_actual).unwrap());
+            }
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::InvalidUuid { field } => match actual {
+            PersistedDomainErrorV1::InvalidUuid {
+                field: actual_field,
+            } => assert_eq!(actual_field.as_str(), *field),
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::InvalidIdentifier { field } => match actual {
+            PersistedDomainErrorV1::InvalidIdentifier {
+                field: actual_field,
+            } => assert_eq!(actual_field.as_str(), *field),
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::InvalidSha256Digest => {
+            assert!(matches!(
+                actual,
+                PersistedDomainErrorV1::InvalidSha256Digest
+            ));
+        }
+        DomainError::RevisionOverflow { revision } => match actual {
+            PersistedDomainErrorV1::RevisionOverflow {
+                revision: actual_revision,
+            } => assert_eq!(actual_revision, revision),
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::InvalidState { reason } => match actual {
+            PersistedDomainErrorV1::InvalidState {
+                reason: actual_reason,
+            } => assert_eq!(actual_reason.as_str(), *reason),
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::RequiredItemsMissing => {
+            assert!(matches!(
+                actual,
+                PersistedDomainErrorV1::RequiredItemsMissing
+            ));
+        }
+        DomainError::BlockersPresent => {
+            assert!(matches!(actual, PersistedDomainErrorV1::BlockersPresent));
+        }
+        DomainError::ArtifactChanged => {
+            assert!(matches!(actual, PersistedDomainErrorV1::ArtifactChanged));
+        }
+        DomainError::InvalidTransition { command, state } => match actual {
+            PersistedDomainErrorV1::InvalidTransition {
+                command: actual_command,
+                state: actual_state,
+            } => {
+                assert_eq!(*actual_command, expected_persisted_command_kind(*command));
+                assert_eq!(*actual_state, expected_persisted_lifecycle(*state));
+            }
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::PreconditionFailed {
+            expected,
+            actual: expected_actual,
+        } => match actual {
+            PersistedDomainErrorV1::PreconditionFailed {
+                expected: actual_expected,
+                actual: actual_actual,
+            } => {
+                assert_eq!(actual_expected, expected);
+                assert_eq!(actual_actual, expected_actual);
+            }
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::ItemNotFound { item_id } => match actual {
+            PersistedDomainErrorV1::ItemNotFound {
+                item_id: actual_item_id,
+            } => assert_eq!(actual_item_id, item_id),
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
+        DomainError::BlockerNotCurrent => {
+            assert!(matches!(actual, PersistedDomainErrorV1::BlockerNotCurrent));
+        }
+    }
+}
+
+fn assert_success_terminal_golden(
+    terminal: &TerminalReceiptV1,
+    expected_result: &DomainResult,
+    golden: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let legacy_golden = golden.replacen(STORE_TERMINAL_SCHEMA_V1, STORE_TERMINAL_SCHEMA_V0, 1);
+    assert_eq!(encode_terminal_receipt_v1(terminal)?, legacy_golden);
+    let decoded = decode_terminal_receipt_v1(&legacy_golden)?;
+    assert_receipt_fields(decoded.job(), terminal.job());
+    assert_terminal_result_variant_coverage(decoded.result());
+    match decoded.result() {
+        PersistedTerminalResultV1::Success(result) => {
+            assert_success_fields(result, expected_result)
+        }
+        _ => panic!("decoded terminal result kind differs from the literal golden"),
+    }
+    Ok(())
+}
+
+fn assert_failure_terminal_golden(
+    terminal: &TerminalReceiptV1,
+    expected_error: &DomainError,
+    golden: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let legacy_golden = golden.replacen(STORE_TERMINAL_SCHEMA_V1, STORE_TERMINAL_SCHEMA_V0, 1);
+    assert_eq!(encode_terminal_receipt_v1(terminal)?, legacy_golden);
+    let decoded = decode_terminal_receipt_v1(&legacy_golden)?;
+    assert_receipt_fields(decoded.job(), terminal.job());
+    assert_terminal_result_variant_coverage(decoded.result());
+    match decoded.result() {
+        PersistedTerminalResultV1::Failure(error) => assert_failure_fields(error, expected_error),
+        _ => panic!("decoded terminal result kind differs from the literal golden"),
+    }
+    Ok(())
+}
+
+fn success_golden_v1(result: &DomainResult) -> &'static str {
+    match result {
+        DomainResult::WorkspaceInitialized { .. } => {
+            r#"{"job":{"identity_sequence":1,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"success","payload":{"kind":"workspace_initialized","revision":1,"workspace_id":"00000000-0000-4000-8000-000000000001"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainResult::WorkspaceReset { .. } => {
+            r#"{"job":{"identity_sequence":2,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"success","payload":{"kind":"workspace_reset","revision":2,"workspace_id":"00000000-0000-4000-8000-000000000001"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainResult::SessionChanged { .. } => {
+            r#"{"job":{"identity_sequence":3,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"success","payload":{"changed":true,"kind":"session_changed","revision_after":3,"revision_before":2,"session_id":"00000000-0000-4000-8000-000000000004"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainResult::ItemChanged { .. } => {
+            r#"{"job":{"identity_sequence":4,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"success","payload":{"changed":false,"item_id":"selected-item","kind":"item_changed","revision_after":4,"revision_before":3,"session_id":"00000000-0000-4000-8000-000000000004"}},"schema":"podway.store-terminal/v1"}"#
+        }
+    }
+}
+
+fn failure_golden_v1(error: &DomainError) -> &'static str {
+    match error {
+        DomainError::EmptyValue { .. } => {
+            r#"{"job":{"identity_sequence":10,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"field":"field","kind":"empty_value"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::ValueTooLong { .. } => {
+            r#"{"job":{"identity_sequence":11,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"actual":2,"field":"field","kind":"value_too_long","maximum":1}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::InvalidUuid { .. } => {
+            r#"{"job":{"identity_sequence":12,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"field":"field","kind":"invalid_uuid"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::InvalidIdentifier { .. } => {
+            r#"{"job":{"identity_sequence":13,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"field":"field","kind":"invalid_identifier"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::InvalidSha256Digest => {
+            r#"{"job":{"identity_sequence":14,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"invalid_sha256_digest"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::RevisionOverflow { .. } => {
+            r#"{"job":{"identity_sequence":15,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"revision_overflow","revision":9}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::InvalidState { .. } => {
+            r#"{"job":{"identity_sequence":16,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"invalid_state","reason":"fixture"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::InvalidTransition { .. } => {
+            r#"{"job":{"identity_sequence":17,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"command":"item_check","kind":"invalid_transition","state":"completed"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::PreconditionFailed { .. } => {
+            r#"{"job":{"identity_sequence":18,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"actual":11,"expected":10,"kind":"precondition_failed"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::ItemNotFound { .. } => {
+            r#"{"job":{"identity_sequence":19,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"item_id":"missing-item","kind":"item_not_found"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::BlockerNotCurrent => {
+            r#"{"job":{"identity_sequence":20,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"blocker_not_current"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::RequiredItemsMissing => {
+            r#"{"job":{"identity_sequence":21,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"required_items_missing"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::BlockersPresent => {
+            r#"{"job":{"identity_sequence":22,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"blockers_present"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::ArtifactChanged => {
+            r#"{"job":{"identity_sequence":23,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"artifact_changed"}},"schema":"podway.store-terminal/v1"}"#
+        }
+    }
+}
+
+#[test]
+fn command_codec_matches_independent_literal_goldens_for_every_variant_and_precondition_shape()
+-> Result<(), Box<dyn std::error::Error>> {
+    let item = ItemId::new("selected-item")?;
+    let preconditions = fully_specified_preconditions(&item)?;
+    let commands = vec![
+        DomainCommand::WorkspaceInitialize,
+        DomainCommand::WorkspaceResetAll,
+        DomainCommand::SessionStart,
+        DomainCommand::SessionStartReplace,
+        DomainCommand::SessionComplete,
+        DomainCommand::SessionSkip,
+        DomainCommand::SessionRetry,
+        DomainCommand::SessionReturn,
+        DomainCommand::SessionBlock,
+        DomainCommand::SessionUnblock,
+        DomainCommand::SessionCancel,
+        DomainCommand::SessionReopen,
+        DomainCommand::SessionReset,
+        DomainCommand::ItemCheck {
+            item_id: item.clone(),
+        },
+        DomainCommand::ItemUncheck {
+            item_id: item.clone(),
+        },
+        DomainCommand::ItemSet {
+            item_id: item.clone(),
+        },
+        DomainCommand::ItemAdd {
+            item_id: item.clone(),
+        },
+        DomainCommand::ItemRemove {
+            item_id: item.clone(),
+        },
+        DomainCommand::ItemAttach {
+            item_id: item.clone(),
+        },
+        DomainCommand::ItemClear {
+            item_id: item.clone(),
+        },
+    ];
+    for command in commands {
+        let execution = ClaimedExecutionV1::new(command, preconditions.clone());
+        assert_command_golden(&execution, command_golden_v1(execution.command()))?;
+    }
+
+    let optional_shapes = vec![
+        (
+            None,
+            None,
+            None,
+            None,
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":null,"expected_item_revision":null,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            Some(Revision::new(11)),
+            None,
+            None,
+            None,
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":null,"expected_item_revision":null,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            None,
+            Some(attempt_id()),
+            None,
+            None,
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":null,"expected_item_revision":null,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            Some(Revision::new(11)),
+            Some(attempt_id()),
+            None,
+            None,
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":null,"expected_item_revision":null,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            None,
+            None,
+            Some(item.clone()),
+            None,
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":"selected-item","expected_item_revision":null,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            Some(Revision::new(11)),
+            None,
+            Some(item.clone()),
+            None,
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":"selected-item","expected_item_revision":null,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            None,
+            Some(attempt_id()),
+            Some(item.clone()),
+            None,
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":null,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            Some(Revision::new(11)),
+            Some(attempt_id()),
+            Some(item.clone()),
+            None,
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":null,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            None,
+            None,
+            Some(item.clone()),
+            Some(Revision::new(7)),
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            Some(Revision::new(11)),
+            None,
+            Some(item.clone()),
+            Some(Revision::new(7)),
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            None,
+            Some(attempt_id()),
+            Some(item.clone()),
+            Some(Revision::new(7)),
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        ),
+        (
+            Some(Revision::new(11)),
+            Some(attempt_id()),
+            Some(item.clone()),
+            Some(Revision::new(7)),
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#,
+        ),
+    ];
+    for (session_revision, attempt, item_id, item_revision, golden) in optional_shapes {
+        let preconditions = RevisionAttemptItemPreconditionsV1::new(
+            session_revision,
+            attempt,
+            item_id,
+            item_revision,
+        )?;
+        assert_command_golden(
+            &ClaimedExecutionV1::new(DomainCommand::WorkspaceInitialize, preconditions),
+            golden,
+        )?;
+    }
+
+    for malformed_optional_shape in [
+        r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":null,"expected_item_revision":7,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":null,"expected_item_revision":7,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":null,"expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#,
+        r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":null,"expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#,
+    ] {
+        assert!(decode_command_v1(malformed_optional_shape).is_err());
+    }
+
+    let encoded = command_golden_v1(&DomainCommand::WorkspaceInitialize);
+    assert!(
+        decode_command_v1(
+            &encoded.replacen(STORE_COMMAND_SCHEMA_V1, "podway.store-command/v2", 1,)
+        )
+        .is_err()
+    );
+    assert_codec_error(
+        decode_command_v1(&encoded.replacen(STORE_COMMAND_SCHEMA_V1, "podway.store-command/v3", 1)),
+        StoreCodecErrorV1::UnsupportedSchema {
+            expected: STORE_COMMAND_SCHEMA_V2,
+            found: "podway.store-command/v3".to_owned(),
+        },
+    );
+    assert!(
+        decode_command_v1(&encoded.replacen("\"schema\"", "\"unexpected\":true,\"schema\"", 1,))
+            .is_err()
+    );
+    assert!(decode_command_v1(&encoded.replacen("workspace_initialize", "unknown", 1)).is_err());
+    assert!(decode_command_v1(&encoded.replacen("selected-item", "Invalid", 1)).is_err());
+    Ok(())
+}
+
+#[test]
+fn terminal_codec_matches_independent_literal_goldens_for_results_errors_and_cancellation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let results = vec![
+        DomainResult::WorkspaceInitialized {
+            workspace_id: workspace_id(),
+            revision: Revision::new(1),
+        },
+        DomainResult::WorkspaceReset {
+            workspace_id: workspace_id(),
+            revision: Revision::new(2),
+        },
+        DomainResult::SessionChanged {
+            session_id: session_id(),
+            revision_before: Revision::new(2),
+            revision_after: Revision::new(3),
+            changed: true,
+        },
+        DomainResult::ItemChanged {
+            session_id: session_id(),
+            item_id: ItemId::new("selected-item")?,
+            revision_before: Revision::new(3),
+            revision_after: Revision::new(4),
+            changed: false,
+        },
+    ];
+    for (index, result) in results.into_iter().enumerate() {
+        let sequence = u64::try_from(index + 1)?;
+        let terminal =
+            TerminalReceiptV1::new(receipt(sequence), TerminalResultV1::Success(result.clone()));
+        assert_success_terminal_golden(&terminal, &result, success_golden_v1(&result))?;
+    }
+
+    let errors = vec![
+        DomainError::EmptyValue { field: "field" },
+        DomainError::ValueTooLong {
+            field: "field",
+            maximum: 1,
+            actual: 2,
+        },
+        DomainError::InvalidUuid { field: "field" },
+        DomainError::InvalidIdentifier { field: "field" },
+        DomainError::InvalidSha256Digest,
+        DomainError::RevisionOverflow {
+            revision: Revision::new(9),
+        },
+        DomainError::InvalidState { reason: "fixture" },
+        DomainError::InvalidTransition {
+            command: DomainCommandKind::ItemCheck,
+            state: SessionLifecycle::Completed,
+        },
+        DomainError::PreconditionFailed {
+            expected: Revision::new(10),
+            actual: Revision::new(11),
+        },
+        DomainError::ItemNotFound {
+            item_id: ItemId::new("missing-item")?,
+        },
+        DomainError::BlockerNotCurrent,
+        DomainError::RequiredItemsMissing,
+        DomainError::BlockersPresent,
+        DomainError::ArtifactChanged,
+    ];
+    for (index, error) in errors.into_iter().enumerate() {
+        let sequence = u64::try_from(index + 10)?;
+        let terminal =
+            TerminalReceiptV1::new(receipt(sequence), TerminalResultV1::Failure(error.clone()));
+        assert_failure_terminal_golden(&terminal, &error, failure_golden_v1(&error))?;
+    }
+
+    let cancelled = PersistedTerminalReceiptV1::cancelled(receipt(99));
+    let cancelled_golden = r#"{"job":{"identity_sequence":99,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"cancelled"},"schema":"podway.store-terminal/v0"}"#;
+    assert_eq!(
+        encode_persisted_terminal_receipt_v1(&cancelled)?,
+        cancelled_golden
+    );
+    let decoded = decode_terminal_receipt_v1(cancelled_golden)?;
+    assert_receipt_fields(decoded.job(), cancelled.job());
+    assert_terminal_result_variant_coverage(decoded.result());
+    assert!(matches!(
+        decoded.result(),
+        PersistedTerminalResultV1::Cancelled
+    ));
+    assert!(decoded.job_projection().is_none());
+    assert!(decoded.session_projection().is_none());
+    assert!(
+        decode_terminal_receipt_v1(&cancelled_golden.replacen(
+            STORE_TERMINAL_SCHEMA_V0,
+            "podway.store-terminal/v2",
+            1,
+        ))
+        .is_err()
+    );
+    assert!(
+        decode_terminal_receipt_v1(&cancelled_golden.replacen(
+            "\"schema\"",
+            "\"unexpected\":true,\"schema\"",
+            1,
+        ))
+        .is_err()
+    );
+    assert!(
+        decode_terminal_receipt_v1(&cancelled_golden.replacen("\"cancelled\"", "\"unknown\"", 1))
+            .is_err()
+    );
+    let invalid_digest = format!("sha256:{}", "z".repeat(64));
+    assert!(
+        decode_terminal_receipt_v1(&cancelled_golden.replacen(
+            digest('d').as_str(),
+            &invalid_digest,
+            1,
+        ))
+        .is_err()
+    );
+    Ok(())
+}
+#[test]
+fn terminal_codec_preserves_legacy_v0_literals_and_requires_v1_replay_projections()
+-> Result<(), Box<dyn std::error::Error>> {
+    let legacy = r#"{"job":{"identity_sequence":99,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"cancelled"},"schema":"podway.store-terminal/v0"}"#;
+    let legacy_receipt = decode_terminal_receipt_v1(legacy)?;
+    assert!(legacy_receipt.job_projection().is_none());
+    assert!(legacy_receipt.session_projection().is_none());
+    assert_eq!(
+        encode_persisted_terminal_receipt_v1(&legacy_receipt)?,
+        legacy
+    );
+    assert_codec_error(
+        decode_terminal_receipt_v1(&legacy.replacen(
+            STORE_TERMINAL_SCHEMA_V0,
+            STORE_TERMINAL_SCHEMA_V1,
+            1,
+        )),
+        StoreCodecErrorV1::InvalidJson,
+    );
+
+    let session_id = session_id();
+    let enriched = PersistedTerminalReceiptV1::new_with_projections(
+        receipt(100),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: Revision::new(2),
+            revision_after: Revision::new(3),
+            changed: true,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(10),
+            Some(UnixMillis::new(11)),
+            UnixMillis::new(12),
+        )?,
+        Some(PersistedTerminalSessionProjectionV1::new(
+            session_id.clone(),
+            "Fixture task".to_owned(),
+            PersistedSessionLifecycleV1::Completed,
+            Revision::new(2),
+            Revision::new(3),
+        )?),
+    )?;
+    let golden = r#"{"job":{"identity_sequence":100,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"job_projection":{"claimed_at":11,"finished_at":12,"state":"succeeded","submitted_at":10},"result":{"kind":"success","payload":{"changed":true,"kind":"session_changed","revision_after":3,"revision_before":2,"session_id":"00000000-0000-4000-8000-000000000004"}},"schema":"podway.store-terminal/v1","session_projection":{"lifecycle":"completed","revision_after":3,"revision_before":2,"session_id":"00000000-0000-4000-8000-000000000004","task_title":"Fixture task"}}"#;
+    assert_eq!(encode_persisted_terminal_receipt_v1(&enriched)?, golden);
+    let decoded = decode_terminal_receipt_v1(golden)?;
+    assert_eq!(decoded, enriched);
+    let job_projection = decoded.job_projection().expect("projection is present");
+    assert_eq!(
+        job_projection.state(),
+        PersistedTerminalJobStateV1::Succeeded
+    );
+    assert_eq!(job_projection.submitted_at(), UnixMillis::new(10));
+    assert_eq!(job_projection.claimed_at(), Some(UnixMillis::new(11)));
+    assert_eq!(job_projection.finished_at(), UnixMillis::new(12));
+    let session_projection = decoded
+        .session_projection()
+        .expect("session projection is present");
+    assert_eq!(session_projection.session_id(), &session_id);
+    assert_eq!(session_projection.task_title(), "Fixture task");
+    assert_eq!(
+        session_projection.lifecycle(),
+        PersistedSessionLifecycleV1::Completed
+    );
+    assert_eq!(session_projection.revision_before(), Revision::new(2));
+    assert_eq!(session_projection.revision_after(), Revision::new(3));
+    assert_codec_error(
+        PersistedTerminalReceiptV1::new_with_projections(
+            receipt(101),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id: session_id.clone(),
+                revision_before: Revision::new(2),
+                revision_after: Revision::new(3),
+                changed: true,
+            }),
+            PersistedTerminalJobProjectionV1::new(
+                PersistedTerminalJobStateV1::Succeeded,
+                UnixMillis::new(10),
+                Some(UnixMillis::new(11)),
+                UnixMillis::new(12),
+            )?,
+            None,
+        ),
+        StoreCodecErrorV1::InvalidValue {
+            field: "terminal session projection",
+        },
+    );
+    assert_codec_error(
+        decode_terminal_receipt_v1(&golden.replacen("\"changed\":true", "\"changed\":false", 1)),
+        StoreCodecErrorV1::InvalidValue {
+            field: "terminal session projection",
+        },
+    );
+    assert_codec_error(
+        decode_terminal_receipt_v1(&golden.replace("\"revision_after\":3", "\"revision_after\":2")),
+        StoreCodecErrorV1::InvalidValue {
+            field: "terminal session projection",
+        },
+    );
+
+    assert!(
+        decode_terminal_receipt_v1(&golden.replacen("\"claimed_at\":11", "\"claimed_at\":13", 1,))
+            .is_err()
+    );
+    assert!(
+        decode_terminal_receipt_v1(&golden.replacen(
+            "\"task_title\":\"Fixture task\"",
+            "\"task_title\":\" \"",
+            1,
+        ))
+        .is_err()
+    );
+    assert!(
+        decode_terminal_receipt_v1(&golden.replacen(
+            "\"session_projection\":{\"lifecycle\":\"completed\",\"revision_after\":3",
+            "\"session_projection\":{\"lifecycle\":\"completed\",\"revision_after\":1",
+            1,
+        ))
+        .is_err()
+    );
+    assert!(
+        decode_terminal_receipt_v1(&golden.replacen(
+            "\"job_projection\":{",
+            "\"job_projection\":{\"unexpected\":true,",
+            1,
+        ))
+        .is_err()
+    );
+    Ok(())
+}
+#[test]
+fn terminal_v1_codec_rejects_inconsistent_job_and_session_projections() {
+    let timestamp_error = StoreCodecErrorV1::InvalidValue {
+        field: "terminal job timestamps",
+    };
+    for state in [
+        PersistedTerminalJobStateV1::Succeeded,
+        PersistedTerminalJobStateV1::Failed,
+    ] {
+        assert!(
+            PersistedTerminalJobProjectionV1::new(
+                state,
+                UnixMillis::new(10),
+                None,
+                UnixMillis::new(12),
+            )
+            .is_ok(),
+            "successful and failed administrative terminals may complete without a claim"
+        );
+    }
+    assert_codec_error(
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Cancelled,
+            UnixMillis::new(10),
+            Some(UnixMillis::new(11)),
+            UnixMillis::new(12),
+        ),
+        timestamp_error.clone(),
+    );
+    assert_codec_error(
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(12),
+            Some(UnixMillis::new(11)),
+            UnixMillis::new(10),
+        ),
+        timestamp_error.clone(),
+    );
+
+    let terminal_v1 = |state: &str, claimed_at: &str, result: &str| {
+        format!(
+            r#"{{"job":{{"identity_sequence":101,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}},"job_projection":{{{claimed_at}"finished_at":12,"state":"{state}","submitted_at":10}},"result":{result},"schema":"podway.store-terminal/v1"}}"#
+        )
+    };
+    let cleared_session = terminal_v1(
+        "succeeded",
+        r#""claimed_at":11,"#,
+        r#"{"kind":"success","payload":{"changed":true,"kind":"session_changed","revision_after":0,"revision_before":2,"session_id":"00000000-0000-4000-8000-000000000004"}}"#,
+    );
+    let decoded_cleared_session = decode_terminal_receipt_v1(&cleared_session)
+        .expect("session-clearing terminal receipt must decode");
+    assert!(decoded_cleared_session.session_projection().is_none());
+
+    assert_codec_error(
+        decode_terminal_receipt_v1(&terminal_v1(
+            "cancelled",
+            r#""claimed_at":11,"#,
+            r#"{"kind":"cancelled"}"#,
+        )),
+        StoreCodecErrorV1::InvalidValue {
+            field: "terminal job timestamps",
+        },
+    );
+
+    for malformed in [
+        terminal_v1(
+            "succeeded",
+            r#""claimed_at":11,"#,
+            r#"{"kind":"success","payload":{"changed":true,"item_id":"selected-item","kind":"item_changed","revision_after":0,"revision_before":2,"session_id":"00000000-0000-4000-8000-000000000004"}}"#,
+        ),
+        terminal_v1(
+            "succeeded",
+            r#""claimed_at":11,"#,
+            r#"{"kind":"success","payload":{"changed":false,"kind":"session_changed","revision_after":0,"revision_before":2,"session_id":"00000000-0000-4000-8000-000000000004"}}"#,
+        ),
+        terminal_v1(
+            "succeeded",
+            r#""claimed_at":11,"#,
+            r#"{"kind":"success","payload":{"changed":true,"kind":"session_changed","revision_after":0,"revision_before":0,"session_id":"00000000-0000-4000-8000-000000000004"}}"#,
+        ),
+    ] {
+        assert_codec_error(
+            decode_terminal_receipt_v1(&malformed),
+            StoreCodecErrorV1::InvalidValue {
+                field: "terminal session projection",
+            },
+        );
+    }
+}
+#[test]
+fn codecs_reject_unknown_fields_in_nested_v1_objects_with_exact_classification() {
+    assert_codec_error(
+        decode_command_v1(
+            r#"{"command":{"kind":"workspace_initialize","unexpected":true},"preconditions":{"expected_attempt_id":null,"expected_item_id":null,"expected_item_revision":null,"expected_session_revision":null},"schema":"podway.store-command/v1"}"#,
+        ),
+        StoreCodecErrorV1::InvalidValue {
+            field: "canonical command",
+        },
+    );
+    assert_codec_error(
+        decode_command_v1(
+            r#"{"command":{"kind":"workspace_initialize"},"preconditions":{"expected_attempt_id":null,"expected_item_id":null,"expected_item_revision":null,"expected_session_revision":null,"unexpected":true},"schema":"podway.store-command/v1"}"#,
+        ),
+        StoreCodecErrorV1::InvalidJson,
+    );
+    assert_codec_error(
+        decode_terminal_receipt_v1(
+            r#"{"job":{"identity_sequence":1,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","unexpected":true},"job_projection":{"finished_at":12,"state":"cancelled","submitted_at":10},"result":{"kind":"cancelled"},"schema":"podway.store-terminal/v1"}"#,
+        ),
+        StoreCodecErrorV1::InvalidJson,
+    );
+    assert_codec_error(
+        decode_terminal_receipt_v1(
+            r#"{"job":{"identity_sequence":1,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"job_projection":{"finished_at":12,"state":"cancelled","submitted_at":10},"result":{"kind":"cancelled","unexpected":true},"schema":"podway.store-terminal/v1"}"#,
+        ),
+        StoreCodecErrorV1::InvalidJson,
+    );
+    assert_codec_error(
+        decode_terminal_receipt_v1(
+            r#"{"job":{"identity_sequence":1,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"job_projection":{"claimed_at":11,"finished_at":12,"state":"succeeded","submitted_at":10},"result":{"kind":"success","payload":{"kind":"workspace_initialized","revision":1,"unexpected":true,"workspace_id":"00000000-0000-4000-8000-000000000001"}},"schema":"podway.store-terminal/v1"}"#,
+        ),
+        StoreCodecErrorV1::InvalidJson,
+    );
+    assert_codec_error(
+        decode_terminal_receipt_v1(
+            r#"{"job":{"identity_sequence":10,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"job_projection":{"claimed_at":11,"finished_at":12,"state":"failed","submitted_at":10},"result":{"kind":"failure","payload":{"field":"field","kind":"empty_value","unexpected":true}},"schema":"podway.store-terminal/v1"}"#,
+        ),
+        StoreCodecErrorV1::InvalidJson,
+    );
+}
+
+#[test]
+fn additive_production_apis_preserve_phase0_construction_and_session_revision_invariant()
+-> Result<(), Box<dyn std::error::Error>> {
+    let preconditions = RevisionAttemptItemPreconditionsV1::new(None, None, None, None)?;
+    assert_eq!(options().busy_timeout_ms(), 5_000);
+    assert!(options().with_busy_timeout_ms(5_001).is_err());
+    let claim = ClaimTokenV1::new(
+        identity(),
+        job_id(),
+        Revision::new(1),
+        WorkerIdV1::new("worker")?,
+    );
+    let persisted = ClaimedJobV1::new_persisted(
+        claim,
+        receipt(1),
+        ClaimedExecutionV1::new(DomainCommand::WorkspaceInitialize, preconditions),
+        None,
+    );
+    assert_eq!(
+        persisted.execution().command(),
+        &DomainCommand::WorkspaceInitialize
+    );
+    assert!(persisted.current_session().is_none());
+
+    let unchanged_transition = StateTransitionV1::new_persisted(
+        None,
+        Revision::new(1),
+        Revision::new(1),
+        PersistedSessionMutationV1::Unchanged,
+    )?;
+    assert_eq!(
+        unchanged_transition.persisted_session_mutation(),
+        &PersistedSessionMutationV1::Unchanged
+    );
+    let clear_transition = StateTransitionV1::new_persisted(
+        None,
+        Revision::new(4),
+        Revision::ZERO,
+        PersistedSessionMutationV1::Clear,
+    )?;
+    assert_eq!(
+        clear_transition.resulting_workspace_revision(),
+        Revision::ZERO
+    );
+    assert!(clear_transition.session_id().is_none());
+    assert!(matches!(
+        clear_transition.persisted_session_mutation(),
+        PersistedSessionMutationV1::Clear
+    ));
+    Ok(())
+}
