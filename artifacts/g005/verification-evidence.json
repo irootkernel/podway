@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "kind": "g005-verification-attestation",
+  "goalId": "G005",
+  "contract": "Podway v0.1.0 Phase 4 daemon IPC and real production vertical slice",
+  "attestationStatus": "passed",
+  "verifiedAtUtc": "2026-07-15T18:40:07Z",
+  "evidenceIdentity": {
+    "algorithm": "sha256",
+    "canonicalization": "podway.canonical-json/v1",
+    "digest": "360b85d38da88a8b737536284b7b641aa1baf10d9297acbe3d0eb4c6f84e7aac",
+    "normalization": "Hash canonical JSON with evidenceIdentity.digest set to null."
+  },
+  "sourceReport": {
+    "path": "artifacts/phase0/verification-logs/feac21cfefeb4304a6ae03754b7cbb78/verification-report.json",
+    "canonicalPath": "artifacts/phase0/verification-report.json",
+    "reportSha256": "6e6230d75c141c7674787d9f5acedadc78bdade03f261c62f04f0f164c5f993c",
+    "reportSelfDigest": "8fb19d6662ff9567fbffc6ea2aec0d9848f2e030cd38f17d80bd2a7fe53762d1",
+    "runId": "feac21cfefeb4304a6ae03754b7cbb78",
+    "sourceManifestSha256": "4470f5a8c0f2e0c15e7223dbf60948215e0da7e950e00603fd4606c7e0443bce",
+    "status": "passed"
+  },
+  "phase0Bindings": {
+    "locks": {
+      "0A": "1e9b58afde95c103cf9c84a25546354d2768fa496418032945630d93937a9f4b",
+      "0B": "7675c66841d120015c4e48d70f4c8b5d476f5961bf99f2b6c107f6cc777c0d09",
+      "0C": "9ac35914ce2bb26a14d1e28ba66c469f81e47f70ea6cf0ba8a7f49a1c859729b"
+    },
+    "handoffFileSha256": {
+      "0A": "0ebd7c8dcc0cf0149f57c017556fa79de80a32bcc69cc45e3d9a555e6bfd7e70",
+      "0B": "94b1cce89730c5326be31c44beb31416611579efcd99ca0bbc217c90ca431918",
+      "0C": "53962f4f2a6984e3a9da7568896145b30f1d981da81281c31b04fc8586925d88"
+    },
+    "receiptCheck": "passed"
+  },
+  "targetedVerification": {
+    "status": "passed",
+    "commands": [
+      "cargo fmt --all -- --check",
+      "cargo check --workspace --all-targets",
+      "cargo test --workspace --all-targets",
+      "cargo clippy --workspace --all-targets -- -D warnings",
+      "python3 tools/import_sot.py --check",
+      "python3 tools/verify_contracts.py --all",
+      "python3 -B tools/verify_verification_runner.py",
+      "python3 -B tools/run_verification.py --check",
+      "python3 tools/phase0_receipts.py --check",
+      "python3 tools/run_g005_vertical.py"
+    ],
+    "vertical": {
+      "status": "passed",
+      "test": "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict",
+      "binary": "target/debug/podwayd",
+      "surface": "cli+unix-socket+daemon+sqlite+git-worktree",
+      "runner": "tools/run_g005_vertical.py"
+    }
+  },
+  "coverage": [
+    "protocol framing and strict request/response envelopes",
+    "private Unix socket, same-UID peer validation, singleton and stale endpoint recovery",
+    "durable-identity scheduler serialization, quiesced rebind and fail-closed retirement",
+    "authoritative status/next waits, bounded blocking and request correlation",
+    "complete canonical admission documents and immutable terminal replay projections",
+    "restart recovery, clean retry, return/redo and completion guards",
+    "same-item conflict, identity alias convergence and independent-workspace overlap",
+    "crash/publication windows, disposable Store inspection and integrity classification",
+    "real public CLI daemon restart and original idempotent result replay"
+  ],
+  "aiSlopCleaner": {
+    "status": "passed",
+    "blockingFindings": [],
+    "evidenceAgents": [
+      "303-G005CleanerSchedulerRetry",
+      "304-G005CleanerRuntimeWorkspaceRetry",
+      "306-G005CleanerInspectorRetry",
+      "307-G005CleanerExecutionRetry",
+      "309-G005CleanerProductionRetry",
+      "312-G005CleanerReceiptCodec",
+      "314-G005CleanerWorkerTest",
+      "316-G005CleanerVerticalRunner",
+      "317-G005CleanerAdmissionRange",
+      "319-G005CleanerVerticalRange",
+      "320-G005CleanerWorkerSourceTail",
+      "322-G005CleanerProjectionlessLines",
+      "324-G005CleanerV2GoldenFinal"
+    ],
+    "evidence": "Final bounded read-only cleanup slices returned PASS across Store, execution, worker supervision, runtime/scheduler lifecycle, immutable production replay, exact v2 encoding, and the live public vertical surface. Earlier blockers were fixed before the final verification rerun."
+  },
+  "validationBatch": {
+    "batchId": "VB001",
+    "role": "deferred-member",
+    "finalGoalId": "G009",
+    "deferredLanes": [
+      "architectReview",
+      "executorQa"
+    ]
+  }
+}

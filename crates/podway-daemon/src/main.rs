@@ -1,0 +1,73 @@
+#![forbid(unsafe_code)]
+
+use std::{env, num::NonZeroUsize, path::PathBuf, process, thread};
+
+use nix::unistd::geteuid;
+use podway_daemon::{
+    runtime::{ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1},
+    server::ServerTransportTimeoutsV1,
+};
+use podway_service::ServiceRuntimePathsV1;
+use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
+use signal_hook::{
+    consts::{SIGINT, SIGTERM},
+    iterator::Signals,
+};
+
+const MAXIMUM_IN_FLIGHT_CONNECTIONS_V1: usize = 64;
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("podwayd: {error}");
+        process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("HOME is not set")?;
+    let temporary = env::var_os("TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    let paths = ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())?;
+    let configuration = ProductionDaemonRuntimeConfigV1::new(
+        WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
+        NonZeroUsize::new(MAXIMUM_IN_FLIGHT_CONNECTIONS_V1)
+            .expect("the production connection limit is nonzero"),
+        ServerTransportTimeoutsV1::default(),
+    );
+    let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    let signal_control = signals.handle();
+    let runtime =
+        ProductionDaemonRuntimeV1::bind(&paths, SqliteStoreOptionsV1::new(1)?, configuration)?;
+    let shutdown = runtime.shutdown_handle();
+    let relay = match thread::Builder::new()
+        .name("podwayd-signal-relay".to_owned())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                shutdown.request_shutdown();
+            }
+        }) {
+        Ok(relay) => relay,
+        Err(source) => {
+            signal_control.close();
+            runtime.shutdown_handle().request_shutdown();
+            if let Err(cleanup) = runtime.run() {
+                return Err(std::io::Error::other(format!(
+                    "cannot start signal relay ({source}); endpoint cleanup also failed: {cleanup}"
+                ))
+                .into());
+            }
+            return Err(source.into());
+        }
+    };
+
+    let runtime_result = runtime.run();
+    signal_control.close();
+    let relay_result = relay.join();
+
+    runtime_result?;
+    relay_result.map_err(|_| "signal relay panicked")?;
+    Ok(())
+}

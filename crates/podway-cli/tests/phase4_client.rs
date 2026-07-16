@@ -1,0 +1,381 @@
+use std::{
+    fs,
+    io::{self, Read, Write},
+    net::Shutdown,
+    os::unix::net::UnixListener,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
+};
+
+use podway_cli::client::{
+    DaemonClientErrorV1, DaemonClientIoOperationV1, DaemonClientTimeoutsV1, DaemonClientV1,
+};
+use podway_protocol::{
+    FrameErrorV1, OperationV1, ResponseEnvelopeV1, SliceCommandV1, SliceRequestV1,
+    decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1, encode_request_payload_v1,
+};
+use podway_service::ServiceRuntimePathsV1;
+
+const REQUEST_ID: &str = "123e4567-e89b-12d3-a456-426614174000";
+const WORKSPACE_ID: &str = "123e4567-e89b-12d3-a456-426614174001";
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct RuntimeFixture {
+    root: PathBuf,
+    paths: ServiceRuntimePathsV1,
+}
+
+impl RuntimeFixture {
+    fn new() -> Self {
+        let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "podway-cli-phase4-client-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("client fixture root must be created");
+        let launch_agents = root.join("launch-agents");
+        let application_support = root.join("application-support");
+        let logs = root.join("logs");
+        let runtime = root.join("runtime");
+        for directory in [&launch_agents, &application_support, &logs, &runtime] {
+            fs::create_dir(directory).expect("client fixture directory must be created");
+        }
+        let paths = ServiceRuntimePathsV1::from_directories(
+            launch_agents,
+            application_support,
+            logs,
+            runtime,
+        )
+        .expect("client fixture service paths must be valid");
+        Self { root, paths }
+    }
+
+    fn socket_path(&self) -> &Path {
+        self.paths.socket_path().as_path()
+    }
+}
+
+impl Drop for RuntimeFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+enum ServerBehavior {
+    FragmentedResponse(Vec<u8>),
+    DelayedFragmentedResponse { response: Vec<u8>, delay: Duration },
+    Response(Vec<u8>),
+    Stall(Duration),
+}
+
+struct FakeSocketServer {
+    request_receiver: mpsc::Receiver<Vec<u8>>,
+    handle: JoinHandle<io::Result<()>>,
+}
+
+impl FakeSocketServer {
+    fn start(fixture: &RuntimeFixture, behavior: ServerBehavior) -> Self {
+        let listener = UnixListener::bind(fixture.socket_path())
+            .expect("fake daemon socket must bind at the service-owned path");
+        let (request_sender, request_receiver) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut connection, _) = listener.accept()?;
+            let mut request_wire = Vec::new();
+            connection.read_to_end(&mut request_wire)?;
+            request_sender
+                .send(request_wire)
+                .map_err(|_| io::Error::other("test did not receive request wire"))?;
+            match behavior {
+                ServerBehavior::FragmentedResponse(response) => {
+                    for chunk in response.chunks(3) {
+                        connection.write_all(chunk)?;
+                    }
+                    connection.shutdown(Shutdown::Write)
+                }
+                ServerBehavior::DelayedFragmentedResponse { response, delay } => {
+                    for chunk in response.chunks(3) {
+                        if connection.write_all(chunk).is_err() {
+                            return Ok(());
+                        }
+                        thread::sleep(delay);
+                    }
+                    connection.shutdown(Shutdown::Write)
+                }
+                ServerBehavior::Response(response) => {
+                    connection.write_all(&response)?;
+                    connection.shutdown(Shutdown::Write)
+                }
+                ServerBehavior::Stall(duration) => {
+                    thread::sleep(duration);
+                    Ok(())
+                }
+            }
+        });
+        Self {
+            request_receiver,
+            handle,
+        }
+    }
+
+    fn request_wire(&self) -> Vec<u8> {
+        self.request_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fake daemon must receive the request before responding")
+    }
+
+    fn join(self) {
+        self.handle
+            .join()
+            .expect("fake daemon thread must not panic")
+            .expect("fake daemon I/O must succeed");
+    }
+}
+
+fn client(fixture: &RuntimeFixture) -> DaemonClientV1 {
+    DaemonClientV1::new(fixture.paths.clone())
+}
+
+fn client_with_read_timeout(fixture: &RuntimeFixture, read: Duration) -> DaemonClientV1 {
+    let timeouts =
+        DaemonClientTimeoutsV1::new(Duration::from_secs(1), read, Duration::from_secs(1))
+            .expect("non-zero client timeouts must be accepted");
+    DaemonClientV1::with_timeouts(fixture.paths.clone(), timeouts)
+}
+
+fn request() -> podway_protocol::RequestEnvelopeV1 {
+    decode_request_payload_v1(
+        format!(
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1}},"operation":"query","command":"session.status","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"options":{{"detach":false,"wait_timeout_ms":30000}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}}}}}}"#
+        )
+        .as_bytes(),
+    )
+    .expect("fixture request must satisfy the G005 session.status contract")
+}
+
+fn output_payload(command: &str) -> Vec<u8> {
+    format!(
+        r#"{{"schema":"podway.output/v1","request_id":"{REQUEST_ID}","command":"{command}","generated_at":"2026-07-15T12:34:56.789Z","result":{{}},"warnings":[]}}"#
+    )
+    .into_bytes()
+}
+fn mutation_request() -> podway_protocol::RequestEnvelopeV1 {
+    decode_request_payload_v1(
+        format!(
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1}},"operation":"mutate","command":"preset.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"start-fixture","options":{{"detach":true,"wait_timeout_ms":1234}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"preset":"sw-dev","task_title":"A bounded fixture task"}}}}"#
+        )
+        .as_bytes(),
+    )
+    .expect("fixture mutation request must satisfy the G005 preset.start contract")
+}
+
+fn error_payload() -> Vec<u8> {
+    format!(
+        r#"{{"schema":"podway.error/v1","request_id":"{REQUEST_ID}","command":"session.status","generated_at":"2026-07-15T12:34:56.789Z","code":"DAEMON_UNAVAILABLE","message":"daemon is restarting","retryable":true,"exit_code":6,"details":{{}}}}"#
+    )
+    .into_bytes()
+}
+
+#[test]
+fn fragmented_output_response_round_trips() {
+    let fixture = RuntimeFixture::new();
+    let frame =
+        encode_frame_v1(&output_payload("session.status")).expect("output response must frame");
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::FragmentedResponse(frame));
+
+    let response = client(&fixture)
+        .request(&request())
+        .expect("fragmented output response must decode");
+    assert!(matches!(response, ResponseEnvelopeV1::Output(_)));
+
+    let _ = server.request_wire();
+    server.join();
+}
+#[test]
+fn delayed_response_fragments_within_the_absolute_deadline_round_trip() {
+    let fixture = RuntimeFixture::new();
+    let frame =
+        encode_frame_v1(&output_payload("session.status")).expect("output response must frame");
+    let server = FakeSocketServer::start(
+        &fixture,
+        ServerBehavior::DelayedFragmentedResponse {
+            response: frame,
+            delay: Duration::from_millis(2),
+        },
+    );
+
+    let response = client_with_read_timeout(&fixture, Duration::from_millis(500))
+        .request(&request())
+        .expect("fragments delivered before the full deadline must decode");
+    assert!(matches!(response, ResponseEnvelopeV1::Output(_)));
+
+    let _ = server.request_wire();
+    server.join();
+}
+
+#[test]
+fn delayed_response_fragments_cannot_extend_the_absolute_read_deadline() {
+    let fixture = RuntimeFixture::new();
+    let frame =
+        encode_frame_v1(&output_payload("session.status")).expect("output response must frame");
+    let server = FakeSocketServer::start(
+        &fixture,
+        ServerBehavior::DelayedFragmentedResponse {
+            response: frame,
+            delay: Duration::from_millis(15),
+        },
+    );
+
+    let started = Instant::now();
+    let result = client_with_read_timeout(&fixture, Duration::from_millis(60)).request(&request());
+    let elapsed = started.elapsed();
+    assert!(matches!(
+        result,
+        Err(DaemonClientErrorV1::Timeout {
+            operation: DaemonClientIoOperationV1::Read
+        })
+    ));
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "the whole response must observe one absolute deadline; elapsed={elapsed:?}"
+    );
+
+    let _ = server.request_wire();
+    server.join();
+}
+
+#[test]
+fn error_response_round_trips_without_becoming_a_client_error() {
+    let fixture = RuntimeFixture::new();
+    let frame = encode_frame_v1(&error_payload()).expect("error response must frame");
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
+
+    let response = client(&fixture)
+        .request(&request())
+        .expect("daemon error envelopes are valid client responses");
+    assert!(
+        matches!(response, ResponseEnvelopeV1::Error(error) if error.code().as_str() == "DAEMON_UNAVAILABLE")
+    );
+
+    let _ = server.request_wire();
+    server.join();
+}
+#[test]
+fn malformed_framed_response_is_a_typed_response_decoding_failure() {
+    let fixture = RuntimeFixture::new();
+    let frame = encode_frame_v1(br#"{"schema":"podway.output/v1","invalid":true}"#)
+        .expect("malformed response fixture must still frame");
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
+
+    let result = client(&fixture).request(&request());
+    assert!(matches!(
+        result,
+        Err(DaemonClientErrorV1::ResponseDecoding { .. })
+    ));
+
+    let _ = server.request_wire();
+    server.join();
+}
+
+#[test]
+fn absent_daemon_is_a_typed_connection_failure() {
+    let fixture = RuntimeFixture::new();
+
+    assert!(matches!(
+        client(&fixture).request(&request()),
+        Err(DaemonClientErrorV1::Connection {
+            operation: DaemonClientIoOperationV1::Connect,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn response_timeout_is_a_typed_read_timeout() {
+    let fixture = RuntimeFixture::new();
+    let server =
+        FakeSocketServer::start(&fixture, ServerBehavior::Stall(Duration::from_millis(100)));
+
+    let result = client_with_read_timeout(&fixture, Duration::from_millis(20)).request(&request());
+    assert!(matches!(
+        result,
+        Err(DaemonClientErrorV1::Timeout {
+            operation: DaemonClientIoOperationV1::Read
+        })
+    ));
+
+    let _ = server.request_wire();
+    server.join();
+}
+
+#[test]
+fn truncated_response_is_a_typed_framing_failure() {
+    let fixture = RuntimeFixture::new();
+    let frame =
+        encode_frame_v1(&output_payload("session.status")).expect("output response must frame");
+    let truncated = frame[..frame.len() - 1].to_vec();
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(truncated));
+
+    let result = client(&fixture).request(&request());
+    assert!(matches!(
+        result,
+        Err(DaemonClientErrorV1::Framing {
+            source: FrameErrorV1::UnexpectedEof { .. }
+        })
+    ));
+
+    let _ = server.request_wire();
+    server.join();
+}
+
+#[test]
+fn trailing_response_data_is_a_typed_framing_failure() {
+    let fixture = RuntimeFixture::new();
+    let mut response =
+        encode_frame_v1(&output_payload("session.status")).expect("output response must frame");
+    response.push(0);
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(response));
+
+    let result = client(&fixture).request(&request());
+    assert!(matches!(
+        result,
+        Err(DaemonClientErrorV1::Framing {
+            source: FrameErrorV1::TrailingData
+        })
+    ));
+
+    let _ = server.request_wire();
+    server.join();
+}
+
+#[test]
+fn request_is_one_exact_frame_and_preserves_envelope_wait_preferences() {
+    let fixture = RuntimeFixture::new();
+    let frame =
+        encode_frame_v1(&output_payload("preset.start")).expect("output response must frame");
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
+    let request = mutation_request();
+    let expected_payload = encode_request_payload_v1(&request).expect("request must encode");
+    let expected_wire = encode_frame_v1(&expected_payload).expect("request must frame");
+
+    client(&fixture)
+        .request(&request)
+        .expect("fake daemon output must round-trip");
+    let request_wire = server.request_wire();
+    assert_eq!(request_wire, expected_wire);
+    let request_payload = decode_single_frame_v1(&request_wire)
+        .expect("the client wire must contain exactly one frame");
+    let decoded =
+        decode_request_payload_v1(request_payload).expect("request wire must use protocol codec");
+    let slice =
+        SliceRequestV1::from_envelope(&decoded).expect("request must remain in the G005 slice");
+    assert_eq!(decoded.operation(), OperationV1::Mutate);
+    assert!(matches!(slice.command(), SliceCommandV1::PresetStart(_)));
+    assert!(decoded.options().detach());
+    assert_eq!(decoded.options().wait_timeout_ms(), 1_234);
+    server.join();
+}

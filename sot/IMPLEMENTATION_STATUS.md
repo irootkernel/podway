@@ -10,11 +10,11 @@ This document is an informational implementation-progress index. It does not cha
 | `G002` | Phase 0: repository and executable contract lock | **complete / verified** | 2026-07-14 | `contracts/locks/phase-0a-contract-lock.json`; `contracts/locks/phase-0b-contract-lock.json`; `contracts/locks/phase-0c-contract-lock.json`; `artifacts/phase0/final-handoff-report.json` |
 | `G003` | Phase 1: domain, configuration, and presets | **complete / verified** | 2026-07-14 | `crates/podway-core/tests/`; `crates/podway-config/tests/`; `crates/podway-presets/tests/` |
 | `G004` | Phases 2–3: persistence queue and Git boundary | **complete / verified** | 2026-07-15 | `artifacts/g004/verification-evidence.json`; `crates/podway-store/tests/`; `crates/podway-git/tests/` |
-| `G005` | Phase 4: daemon IPC and real production vertical slice | pending status checkpoint | — | — |
+| `G005` | Phase 4: daemon IPC and real production vertical slice | **complete / verified** | 2026-07-15 | `artifacts/g005/verification-evidence.json`; `artifacts/g005/post-checkpoint-verification-evidence.json`; `tools/run_g005_vertical.py` |
 
 ## Current release boundary
 
-Completion of `G001` does not mean the complete product is released. Phases represented by `G006` through `G009` remain outside this status checkpoint until their own implementation and verification evidence exists.
+Completion of `G001` through `G005` does not mean the complete product is released. `G006` through `G009` remain deferred and unimplemented at this checkpoint.
 
 ## Evidence rules
 
