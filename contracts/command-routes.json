@@ -1,0 +1,319 @@
+{
+  "contract_version": "podway.command-routes/v1",
+  "owner": "architecture",
+  "prohibited_capabilities": [
+    "command_runner",
+    "git_mutation",
+    "network"
+  ],
+  "routes": [
+    {
+      "command": "help",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "version",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "completions",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.validate",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.show",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "preset.list",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "preset.show",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "preset.explain",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "daemon.install",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "daemon.uninstall",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "daemon.start",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "daemon.stop",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "daemon.restart",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "daemon.status",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "daemon.logs",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "workspace.init",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "workspace.doctor",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "workspace.show",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "workspace.repair",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.start",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.start_replace",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.status",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.next",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.complete",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.skip",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.retry",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.return",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.block",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.unblock",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.cancel",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.reopen",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.reset",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "workspace.reset_all",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "item.check",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "item.uncheck",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "item.set",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "item.add",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "item.remove",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "item.attach",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "item.clear",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "job.list",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "job.status",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "job.wait",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "job.cancel",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    }
+  ]
+}

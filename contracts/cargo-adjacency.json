@@ -1,0 +1,149 @@
+{
+  "contract_version": "podway.cargo-adjacency/v1",
+  "owner": "architecture",
+  "crates": [
+    {
+      "name": "podway-core",
+      "path": "crates/podway-core",
+      "approved_dependencies": [],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-protocol",
+      "path": "crates/podway-protocol",
+      "approved_dependencies": [
+        "podway-core"
+      ],
+      "forbidden_dependencies": [
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-config",
+      "path": "crates/podway-config",
+      "approved_dependencies": [
+        "podway-core"
+      ],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-store",
+      "path": "crates/podway-store",
+      "approved_dependencies": [
+        "podway-core"
+      ],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-config",
+        "podway-git",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-git",
+      "path": "crates/podway-git",
+      "approved_dependencies": [
+        "podway-core"
+      ],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-service",
+      "path": "crates/podway-service",
+      "approved_dependencies": [
+        "podway-core"
+      ],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-presets",
+      "path": "crates/podway-presets",
+      "approved_dependencies": [
+        "podway-core",
+        "podway-config"
+      ],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-daemon",
+      "path": "crates/podway-daemon",
+      "approved_dependencies": [
+        "podway-core",
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-presets"
+      ],
+      "forbidden_dependencies": [
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-cli",
+      "path": "crates/podway-cli",
+      "approved_dependencies": [
+        "podway-core",
+        "podway-protocol",
+        "podway-config",
+        "podway-presets",
+        "podway-service"
+      ],
+      "forbidden_dependencies": [
+        "podway-store",
+        "podway-git",
+        "podway-daemon"
+      ]
+    }
+  ]
+}

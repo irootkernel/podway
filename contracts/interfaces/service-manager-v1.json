@@ -1,0 +1,243 @@
+{
+  "$id": "urn:podway:contract:interface:service-manager:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allowed_dependencies": [
+    "podway-core"
+  ],
+  "consumers": [
+    "podway-cli",
+    "podway-daemon"
+  ],
+  "contract_version": "podway.service-manager-contract/v1",
+  "delegation_constraints": [
+    "cli_and_daemon_delegate_service_lifecycle",
+    "service_manager_is_single_service_lifecycle_owner"
+  ],
+  "error_type": {
+    "name": "ServiceErrorV1",
+    "variants": [
+      "InvalidMetadataV1",
+      "IoV1",
+      "LaunchctlFailureV1",
+      "LogUnavailableV1",
+      "PathSafetyV1",
+      "PermissionDeniedV1",
+      "StaleOrUnexpectedProcessV1",
+      "TimeoutV1"
+    ]
+  },
+  "forbidden_input_types": [
+    "ValidatedWorktreeV1",
+    "WorkspaceRuntimePathsV1"
+  ],
+  "invariant_ids": [
+    "ARC-008",
+    "INV-W05",
+    "OPS-001",
+    "OPS-002",
+    "SEC-002"
+  ],
+  "operations": [
+    {
+      "error_type": "ServiceErrorV1",
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "InstallSpecV1"
+        }
+      ],
+      "name": "install",
+      "outcome_type": "Result<ServiceOutcomeV1, ServiceErrorV1>",
+      "requirement_ids": [
+        "ARC-008",
+        "OPS-001"
+      ],
+      "verification_ids": [
+        "VFY-SERVICE-INSTALL-IDEMPOTENCY-V1"
+      ]
+    },
+    {
+      "error_type": "ServiceErrorV1",
+      "inputs": [
+        {
+          "name": "query",
+          "type": "LogQueryV1"
+        }
+      ],
+      "name": "logs",
+      "outcome_type": "Result<LogLocationV1, ServiceErrorV1>",
+      "requirement_ids": [
+        "ARC-008"
+      ],
+      "verification_ids": [
+        "VFY-SERVICE-LOG-LOCATION-V1"
+      ]
+    },
+    {
+      "error_type": "ServiceErrorV1",
+      "inputs": [],
+      "name": "restart",
+      "outcome_type": "Result<ServiceOutcomeV1, ServiceErrorV1>",
+      "requirement_ids": [
+        "ARC-008"
+      ],
+      "verification_ids": [
+        "VFY-SERVICE-RESTART-V1"
+      ]
+    },
+    {
+      "error_type": "ServiceErrorV1",
+      "inputs": [],
+      "name": "start",
+      "outcome_type": "Result<ServiceOutcomeV1, ServiceErrorV1>",
+      "requirement_ids": [
+        "ARC-008"
+      ],
+      "verification_ids": [
+        "VFY-SERVICE-START-V1"
+      ]
+    },
+    {
+      "error_type": "ServiceErrorV1",
+      "inputs": [],
+      "name": "status",
+      "outcome_type": "Result<ServiceStatusV1, ServiceErrorV1>",
+      "requirement_ids": [
+        "OPS-002"
+      ],
+      "verification_ids": [
+        "VFY-SERVICE-STATUS-V1"
+      ]
+    },
+    {
+      "error_type": "ServiceErrorV1",
+      "inputs": [],
+      "name": "stop",
+      "outcome_type": "Result<ServiceOutcomeV1, ServiceErrorV1>",
+      "requirement_ids": [
+        "ARC-008"
+      ],
+      "verification_ids": [
+        "VFY-SERVICE-STOP-V1"
+      ]
+    },
+    {
+      "constraints": [
+        "cannot_traverse_workspace_runtime_paths"
+      ],
+      "error_type": "ServiceErrorV1",
+      "inputs": [],
+      "name": "uninstall",
+      "outcome_type": "Result<ServiceOutcomeV1, ServiceErrorV1>",
+      "requirement_ids": [
+        "ARC-008",
+        "SEC-002"
+      ],
+      "verification_ids": [
+        "VFY-SERVICE-UNINSTALL-PATH-SAFETY-V1"
+      ]
+    },
+    {
+      "error_type": "ServiceErrorV1",
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "InstallSpecV1"
+        }
+      ],
+      "name": "update",
+      "outcome_type": "Result<ServiceOutcomeV1, ServiceErrorV1>",
+      "requirement_ids": [
+        "ARC-008",
+        "OPS-001"
+      ],
+      "verification_ids": [
+        "VFY-SERVICE-UPDATE-IDEMPOTENCY-V1"
+      ]
+    }
+  ],
+  "owner_crate": "podway-service",
+  "phase": "0B",
+  "prohibited_capabilities": [
+    "workspace_path_access",
+    "workspace_state_operation"
+  ],
+  "test_double": {
+    "assertions": [
+      "rejects_workspace_paths",
+      "rejects_workspace_state_operations"
+    ],
+    "capabilities": [
+      "captures_ordered_calls",
+      "injects_clock",
+      "injects_command_runner",
+      "injects_service_runtime_paths",
+      "scripts_outcomes_and_errors"
+    ],
+    "name": "RecordingServiceManagerV1"
+  },
+  "type_definitions": {
+    "InstallSpecV1": {
+      "fields": [
+        {
+          "name": "daemon_executable_path",
+          "type": "LocalPlatformPathV1"
+        },
+        {
+          "name": "label",
+          "type": "ServiceLabelV1"
+        },
+        {
+          "name": "runtime_paths",
+          "type": "ServiceRuntimePathsV1"
+        }
+      ]
+    },
+    "LogLocationV1": {
+      "fields": [
+        {
+          "name": "path",
+          "type": "LocalPlatformPathV1"
+        }
+      ]
+    },
+    "LogQueryV1": {
+      "fields": [
+        {
+          "name": "stream",
+          "type": "ServiceLogStreamV1"
+        }
+      ]
+    },
+    "ServiceOutcomeV1": {
+      "variants": [
+        "AlreadyInDesiredStateV1",
+        "ChangedV1",
+        "NotInstalledV1",
+        "RunningV1",
+        "StoppedV1"
+      ]
+    },
+    "ServiceRuntimePathsV1": {
+      "scope": "global_service_runtime"
+    },
+    "ServiceStatusV1": {
+      "variants": [
+        "NotInstalledV1",
+        "RunningV1",
+        "StoppedV1"
+      ]
+    }
+  },
+  "verification_ids": [
+    "VFY-SERVICE-INSTALL-IDEMPOTENCY-V1",
+    "VFY-SERVICE-LOG-LOCATION-V1",
+    "VFY-SERVICE-RECORDING-DOUBLE-V1",
+    "VFY-SERVICE-RESTART-V1",
+    "VFY-SERVICE-START-V1",
+    "VFY-SERVICE-STATUS-V1",
+    "VFY-SERVICE-STOP-V1",
+    "VFY-SERVICE-UNINSTALL-PATH-SAFETY-V1",
+    "VFY-SERVICE-UPDATE-IDEMPOTENCY-V1"
+  ]
+}

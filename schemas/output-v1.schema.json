@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:output:v1",
+  "title": "Podway Success Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "command",
+    "generated_at",
+    "result",
+    "warnings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.output/v1"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace": {
+      "$ref": "#/$defs/workspace"
+    },
+    "job": {
+      "$ref": "#/$defs/job"
+    },
+    "session": {
+      "$ref": "#/$defs/session"
+    },
+    "result": {
+      "type": "object"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "$defs": {
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uuid",
+        "root",
+        "latest_workspace_sequence"
+      ],
+      "properties": {
+        "uuid": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "latest_workspace_sequence": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sequence",
+        "state",
+        "submitted_at",
+        "finished_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "submitted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "claimed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "lifecycle",
+        "revision_before",
+        "revision_after"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "enum": [
+            "running",
+            "completed",
+            "cancelled"
+          ]
+        },
+        "revision_before": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "revision_after": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

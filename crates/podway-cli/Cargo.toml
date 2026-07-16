@@ -1,0 +1,22 @@
+[package]
+name = "podway-cli"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+autobins = false
+
+[dependencies]
+podway-core = { path = "../podway-core" }
+podway-protocol = { path = "../podway-protocol" }
+podway-config = { path = "../podway-config" }
+podway-presets = { path = "../podway-presets" }
+podway-service = { path = "../podway-service" }
+clap = { workspace = true }
+nix = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[[bin]]
+name = "podway"
+path = "src/main.rs"

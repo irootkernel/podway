@@ -1,0 +1,345 @@
+{
+  "$id": "urn:podway:contract:interface:store:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allowed_dependencies": [
+    "podway-core"
+  ],
+  "consumers": [
+    "podway-daemon"
+  ],
+  "contract_version": "podway.store-contract/v1",
+  "error_type": {
+    "name": "StoreErrorV1",
+    "variants": [
+      "AlreadyClaimedV1",
+      "CancellationLostV1",
+      "ClaimStaleV1",
+      "CorruptStateV1",
+      "IdempotencyDigestConflictV1",
+      "InternalInvariantViolationV1",
+      "InvalidStateV1",
+      "JobNotFoundV1",
+      "NewerStateV1",
+      "PreconditionConflictV1",
+      "StorageIntegrityV1",
+      "StorageUnavailableV1"
+    ]
+  },
+  "invariant_ids": [
+    "ARC-002",
+    "ARC-003",
+    "INV-S10",
+    "STO-001",
+    "STO-002",
+    "STO-003",
+    "STO-004",
+    "STO-005",
+    "STO-006",
+    "STO-007",
+    "STO-008",
+    "STO-009",
+    "STO-010",
+    "STO-011"
+  ],
+  "operations": [
+    {
+      "constraints": [
+        "idempotency_key_scope_is_durable_identity",
+        "same_identity_key_different_digest_is_conflict",
+        "same_identity_key_digest_returns_original_job_or_immutable_terminal_result"
+      ],
+      "error_type": "StoreErrorV1",
+      "inputs": [
+        {
+          "name": "identity",
+          "type": "&DurableWorktreeIdentityV1"
+        },
+        {
+          "name": "request",
+          "type": "AdmitRequestV1"
+        }
+      ],
+      "name": "admit",
+      "outcome_type": "Result<AdmitOutcomeV1, StoreErrorV1>",
+      "requirement_ids": [
+        "STO-001",
+        "STO-003"
+      ],
+      "verification_ids": [
+        "VFY-STORE-ADMIT-DURABILITY-V1",
+        "VFY-STORE-IDEMPOTENCY-V1"
+      ]
+    },
+    {
+      "constraints": [
+        "claim_and_preclaim_cancellation_are_one_conditional_transaction"
+      ],
+      "error_type": "StoreErrorV1",
+      "inputs": [
+        {
+          "name": "identity",
+          "type": "&DurableWorktreeIdentityV1"
+        },
+        {
+          "name": "job",
+          "type": "JobIdV1"
+        },
+        {
+          "name": "expected_job_revision",
+          "type": "RevisionV1"
+        },
+        {
+          "name": "now",
+          "type": "EpochMillisV1"
+        }
+      ],
+      "name": "cancel_before_claim",
+      "outcome_type": "Result<CancelOutcomeV1, StoreErrorV1>",
+      "requirement_ids": [
+        "ARC-003",
+        "STO-004"
+      ],
+      "verification_ids": [
+        "VFY-STORE-CANCEL-CLAIM-RACE-V1"
+      ]
+    },
+    {
+      "constraints": [
+        "lowest_eligible_identity_sequence_claims_first"
+      ],
+      "error_type": "StoreErrorV1",
+      "inputs": [
+        {
+          "name": "identity",
+          "type": "&DurableWorktreeIdentityV1"
+        },
+        {
+          "name": "worker",
+          "type": "WorkerIdV1"
+        },
+        {
+          "name": "now",
+          "type": "EpochMillisV1"
+        }
+      ],
+      "name": "claim_next",
+      "outcome_type": "Result<Option<ClaimedJobV1>, StoreErrorV1>",
+      "requirement_ids": [
+        "ARC-003"
+      ],
+      "verification_ids": [
+        "VFY-STORE-FIFO-CLAIM-V1"
+      ]
+    },
+    {
+      "constraints": [
+        "failure_result_forbids_state_transition",
+        "transition_and_terminal_result_are_atomic"
+      ],
+      "error_type": "StoreErrorV1",
+      "inputs": [
+        {
+          "name": "claim",
+          "type": "ClaimTokenV1"
+        },
+        {
+          "name": "expected_workspace_revision",
+          "type": "RevisionV1"
+        },
+        {
+          "name": "transition",
+          "type": "Option<StateTransitionV1>"
+        },
+        {
+          "name": "result",
+          "type": "TerminalResultV1"
+        },
+        {
+          "name": "now",
+          "type": "EpochMillisV1"
+        }
+      ],
+      "name": "commit_terminal",
+      "outcome_type": "Result<TerminalReceiptV1, StoreErrorV1>",
+      "requirement_ids": [
+        "INV-S10",
+        "STO-002",
+        "STO-005"
+      ],
+      "verification_ids": [
+        "VFY-STORE-ATOMIC-TERMINAL-V1",
+        "VFY-STORE-FAILURE-NO-TRANSITION-V1"
+      ]
+    },
+    {
+      "constraints": [
+        "workspace_view_is_read_only"
+      ],
+      "error_type": "StoreErrorV1",
+      "inputs": [
+        {
+          "name": "identity",
+          "type": "&DurableWorktreeIdentityV1"
+        }
+      ],
+      "name": "read_workspace_view",
+      "outcome_type": "Result<WorkspaceViewV1, StoreErrorV1>",
+      "requirement_ids": [
+        "STO-006"
+      ],
+      "verification_ids": [
+        "VFY-STORE-WORKSPACE-VIEW-V1"
+      ]
+    }
+  ],
+  "owner_crate": "podway-store",
+  "phase": "0B",
+  "type_definitions": {
+    "AdmitOutcomeV1": {
+      "variants": [
+        "Existing(JobReceiptOrTerminalV1)",
+        "New(JobReceiptV1)"
+      ]
+    },
+    "AdmitRequestV1": {
+      "fields": [
+        {
+          "name": "command",
+          "type": "CommandV1"
+        },
+        {
+          "name": "idempotency_key",
+          "type": "IdempotencyKeyV1"
+        },
+        {
+          "name": "job_id",
+          "type": "JobIdV1"
+        },
+        {
+          "name": "preconditions",
+          "type": "RevisionAttemptItemPreconditionsV1"
+        },
+        {
+          "name": "request_digest",
+          "type": "CanonicalRequestDigestV1"
+        },
+        {
+          "name": "submitted_at",
+          "type": "EpochMillisV1"
+        }
+      ]
+    },
+    "CancelOutcomeV1": {
+      "variants": [
+        "AlreadyTerminal(JobReceiptOrTerminalV1)",
+        "Cancelled(JobReceiptV1)"
+      ]
+    },
+    "ClaimedJobV1": {
+      "fields": [
+        {
+          "name": "claim",
+          "type": "ClaimTokenV1"
+        },
+        {
+          "name": "job",
+          "type": "JobReceiptV1"
+        }
+      ]
+    },
+    "ClaimTokenV1": {
+      "fields": [
+        {
+          "name": "identity",
+          "type": "DurableWorktreeIdentityV1"
+        },
+        {
+          "name": "job_id",
+          "type": "JobIdV1"
+        },
+        {
+          "name": "job_revision",
+          "type": "RevisionV1"
+        },
+        {
+          "name": "worker",
+          "type": "WorkerIdV1"
+        }
+      ]
+    },
+    "DurableWorktreeIdentityV1": {
+      "fields": [
+        {
+          "name": "common_dir_identity",
+          "type": "GitIdentityV1"
+        },
+        {
+          "name": "workspace_uuid",
+          "type": "WorkspaceUuidV1"
+        },
+        {
+          "name": "worktree_admin_identity",
+          "type": "GitIdentityV1"
+        }
+      ]
+    },
+    "JobReceiptOrTerminalV1": {
+      "variants": [
+        "JobReceiptV1",
+        "TerminalReceiptV1"
+      ]
+    },
+    "JobReceiptV1": {
+      "fields": [
+        {
+          "name": "identity_sequence",
+          "type": "u64"
+        },
+        {
+          "name": "job_id",
+          "type": "JobIdV1"
+        },
+        {
+          "name": "request_digest",
+          "type": "CanonicalRequestDigestV1"
+        }
+      ]
+    },
+    "StateTransitionV1": {
+      "kind": "core_transition_type"
+    },
+    "TerminalReceiptV1": {
+      "fields": [
+        {
+          "name": "job",
+          "type": "JobReceiptV1"
+        },
+        {
+          "name": "result",
+          "type": "TerminalResultV1"
+        }
+      ]
+    },
+    "TerminalResultV1": {
+      "variants": [
+        "Failure",
+        "Success"
+      ]
+    },
+    "WorkerIdV1": {
+      "kind": "opaque_identifier"
+    },
+    "WorkspaceViewV1": {
+      "kind": "read_model"
+    }
+  },
+  "verification_ids": [
+    "VFY-STORE-ADMIT-DURABILITY-V1",
+    "VFY-STORE-ATOMIC-TERMINAL-V1",
+    "VFY-STORE-CANCEL-CLAIM-RACE-V1",
+    "VFY-STORE-FAILURE-NO-TRANSITION-V1",
+    "VFY-STORE-FIFO-CLAIM-V1",
+    "VFY-STORE-IDEMPOTENCY-V1",
+    "VFY-STORE-WORKSPACE-VIEW-V1"
+  ]
+}

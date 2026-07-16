@@ -1,0 +1,136 @@
+schema: podway.procedure/v1
+id: sw-dev
+version: "1"
+name: Software Development
+description: General software change procedure focused on understanding, implementation, verification, and review.
+stages:
+  - id: understand
+    title: Understand the task
+    instructions:
+      - Clarify the requested outcome before changing implementation files.
+      - Make success and relevant constraints explicit.
+    items:
+      - id: goal
+        type: text
+        prompt: State the task goal in concrete terms.
+        required: true
+        min_length: 1
+        max_length: 8000
+      - id: acceptance-criteria
+        type: list
+        prompt: List the acceptance criteria.
+        required: true
+        min_items: 1
+        max_items: 50
+      - id: constraints
+        type: text
+        prompt: Record important constraints or exclusions.
+        required: false
+        max_length: 8000
+  - id: inspect
+    title: Inspect the current system
+    instructions:
+      - Inspect relevant code, configuration, tests, and current behavior before planning changes.
+    items:
+      - id: relevant-code-inspected
+        type: confirm
+        prompt: Relevant code, configuration, and tests were inspected.
+        required: true
+      - id: current-behavior
+        type: text
+        prompt: Summarize the relevant current behavior.
+        required: true
+        min_length: 1
+      - id: affected-components
+        type: list
+        prompt: List the components expected to be affected.
+        required: true
+        min_items: 1
+        max_items: 100
+  - id: plan
+    title: Plan the change
+    instructions:
+      - Define the smallest coherent implementation and verification plan.
+    items:
+      - id: implementation-plan
+        type: text
+        prompt: Describe the implementation plan.
+        required: true
+        min_length: 1
+      - id: risk-level
+        type: choice
+        prompt: Select the expected change risk.
+        required: true
+        choices: [low, medium, high]
+      - id: verification-plan
+        type: list
+        prompt: List the verification activities that will be performed.
+        required: true
+        min_items: 1
+        max_items: 100
+  - id: implement
+    title: Implement the change
+    instructions:
+      - Complete the planned implementation without claiming verification or review prematurely.
+    items:
+      - id: implementation-complete
+        type: confirm
+        prompt: The intended implementation change is complete.
+        required: true
+      - id: implementation-summary
+        type: text
+        prompt: Summarize the implementation that was completed.
+        required: true
+        min_length: 1
+  - id: verify
+    title: Verify the result
+    instructions:
+      - Perform the relevant checks for the current implementation.
+    items:
+      - id: relevant-checks-passed
+        type: confirm
+        prompt: Relevant verification completed successfully.
+        required: true
+      - id: verification-note
+        type: text
+        prompt: Summarize what was verified and the result.
+        required: true
+        min_length: 1
+      - id: verification-reference
+        type: artifact
+        prompt: Optionally reference a test report or verification artifact.
+        required: false
+  - id: review
+    title: Review the result
+    instructions:
+      - Review correctness, regressions, scope, maintainability, and unresolved findings.
+    items:
+      - id: review-complete
+        type: confirm
+        prompt: The completed change was reviewed.
+        required: true
+      - id: findings-resolved
+        type: confirm
+        prompt: Material review findings were resolved or explicitly accepted.
+        required: true
+      - id: review-note
+        type: text
+        prompt: Summarize the review outcome.
+        required: true
+        min_length: 1
+  - id: finish
+    title: Finish the task
+    instructions:
+      - Confirm that the requested result is ready to report or hand off.
+    items:
+      - id: task-result-ready
+        type: confirm
+        prompt: The requested task result is ready.
+        required: true
+      - id: final-summary
+        type: text
+        prompt: Summarize the final result and any remaining limitations.
+        required: true
+        min_length: 1
+rework:
+  allow_return_to: any_previous

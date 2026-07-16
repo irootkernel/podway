@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:next-result:v1",
+  "title": "Podway Next Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "stage",
+    "missing_required_items",
+    "blockers",
+    "allowed_actions",
+    "next_stage_after_completion",
+    "suggestions"
+  ],
+  "properties": {
+    "stage": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object"
+        }
+      ]
+    },
+    "missing_required_items": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "allowed_actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "skip",
+        "retry",
+        "return_to",
+        "cancel"
+      ],
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "skip": {
+          "type": "boolean"
+        },
+        "retry": {
+          "type": "boolean"
+        },
+        "return_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cancel": {
+          "type": "boolean"
+        }
+      }
+    },
+    "next_stage_after_completion": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object"
+        }
+      ]
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "argv"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "item_id": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

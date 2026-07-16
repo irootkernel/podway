@@ -1,0 +1,26 @@
+[package]
+name = "podway-daemon"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+autobins = false
+
+[dependencies]
+podway-core = { path = "../podway-core" }
+podway-protocol = { path = "../podway-protocol" }
+podway-config = { path = "../podway-config" }
+podway-store = { path = "../podway-store" }
+podway-git = { path = "../podway-git" }
+podway-service = { path = "../podway-service" }
+podway-presets = { path = "../podway-presets" }
+nix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+signal-hook.workspace = true
+uuid.workspace = true
+
+[[bin]]
+name = "podwayd"
+path = "src/main.rs"

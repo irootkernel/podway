@@ -1,0 +1,444 @@
+schema: podway.command-catalog/v1
+commands:
+- name: help
+  cli:
+  - help
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: version
+  cli:
+  - version
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: daemon.install
+  cli:
+  - daemon
+  - install
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: daemon.uninstall
+  cli:
+  - daemon
+  - uninstall
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: true
+- name: daemon.start
+  cli:
+  - daemon
+  - start
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: daemon.stop
+  cli:
+  - daemon
+  - stop
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: daemon.restart
+  cli:
+  - daemon
+  - restart
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: daemon.status
+  cli:
+  - daemon
+  - status
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: daemon.logs
+  cli:
+  - daemon
+  - logs
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: workspace.init
+  cli:
+  - init
+  operation: bootstrap
+  workspace_required: true
+  durable_job: true
+  session_mutation: false
+  destructive_confirmation: false
+  idempotency_scope: workspace
+- name: workspace.doctor
+  cli:
+  - doctor
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: workspace.show
+  cli:
+  - workspace
+  - show
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: workspace.repair
+  cli:
+  - workspace
+  - repair
+  operation: control
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: procedure.validate
+  cli:
+  - procedure
+  - validate
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: procedure.show
+  cli:
+  - procedure
+  - show
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: preset.list
+  cli:
+  - preset
+  - list
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: preset.show
+  cli:
+  - preset
+  - show
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: preset.explain
+  cli:
+  - preset
+  - explain
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: session.start
+  cli:
+  - start
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  idempotency_scope: workspace
+  maintenance_barrier: false
+- name: session.start_replace
+  cli:
+  - start
+  - --replace
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: true
+  maintenance_barrier: true
+  preconditions:
+  - session_id
+  - session_revision
+  idempotency_scope: workspace
+- name: session.status
+  cli:
+  - status
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: session.next
+  cli:
+  - next
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: session.complete
+  cli:
+  - complete
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+- name: session.skip
+  cli:
+  - skip
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+- name: session.retry
+  cli:
+  - retry
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+- name: session.return
+  cli:
+  - return
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+- name: session.block
+  cli:
+  - block
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+- name: session.unblock
+  cli:
+  - unblock
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+- name: session.cancel
+  cli:
+  - cancel
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+- name: session.reopen
+  cli:
+  - reopen
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - session_revision
+  idempotency_scope: session
+- name: session.reset
+  cli:
+  - reset
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: true
+  preconditions:
+  - session_id
+  - session_revision
+  idempotency_scope: workspace
+  maintenance_barrier: true
+- name: workspace.reset_all
+  cli:
+  - reset
+  - --all
+  operation: bootstrap
+  workspace_required: true
+  durable_job: true
+  session_mutation: false
+  destructive_confirmation: true
+  maintenance_barrier: true
+  preconditions:
+  - workspace_uuid_when_readable
+  idempotency_scope: workspace
+- name: item.check
+  cli:
+  - check
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - attempt_id
+  - item_revision
+  idempotency_scope: session
+- name: item.uncheck
+  cli:
+  - uncheck
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - attempt_id
+  - item_revision
+  idempotency_scope: session
+- name: item.set
+  cli:
+  - set
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - attempt_id
+  - item_revision
+  idempotency_scope: session
+- name: item.add
+  cli:
+  - add
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - attempt_id
+  - item_revision
+  idempotency_scope: session
+- name: item.remove
+  cli:
+  - remove
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - attempt_id
+  - item_revision
+  idempotency_scope: session
+- name: item.attach
+  cli:
+  - attach
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - attempt_id
+  - item_revision
+  idempotency_scope: session
+- name: item.clear
+  cli:
+  - clear
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - attempt_id
+  - item_revision
+  idempotency_scope: session
+- name: job.list
+  cli:
+  - job
+  - list
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: job.status
+  cli:
+  - job
+  - status
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: job.wait
+  cli:
+  - job
+  - wait
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: job.cancel
+  cli:
+  - job
+  - cancel
+  operation: control
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  preconditions:
+  - job_state

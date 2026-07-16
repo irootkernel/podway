@@ -1,0 +1,227 @@
+{
+  "$id": "urn:podway:contract:interface:git-resolver:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allowed_dependencies": [
+    "podway-core"
+  ],
+  "consumers": [
+    "podway-daemon"
+  ],
+  "contract_version": "podway.git-resolver-contract/v1",
+  "error_type": {
+    "name": "GitResolveErrorV1",
+    "variants": [
+      "BareRepositoryV1",
+      "CopiedWorkspaceUuidConflictV1",
+      "DeletedWorktreeV1",
+      "IdentityMismatchV1",
+      "InvalidSelectorV1",
+      "IoV1",
+      "MovedWorktreeUnresolvedV1",
+      "NonGitWorktreeV1",
+      "NonLocalSelectorV1",
+      "PathEscapeV1",
+      "PermissionDeniedV1",
+      "SelectorEncodingV1",
+      "SelectorSizeV1",
+      "SymlinkConflictV1",
+      "UnknownSelectorVersionV1",
+      "UnsupportedPlatformRepresentationV1"
+    ]
+  },
+  "invariant_ids": [
+    "ARC-005",
+    "INV-W01",
+    "INV-W02",
+    "INV-W03",
+    "INV-W04",
+    "INV-W05",
+    "SEC-002"
+  ],
+  "operations": [
+    {
+      "constraints": [
+        "daemon_authoritative",
+        "durable_identity_defines_workspace_equality",
+        "no_git_mutation_api",
+        "paths_do_not_define_workspace_equality"
+      ],
+      "error_type": "GitResolveErrorV1",
+      "inputs": [
+        {
+          "name": "selector",
+          "type": "WorktreeSelectorV1"
+        }
+      ],
+      "name": "resolve",
+      "outcome_type": "Result<ValidatedWorktreeV1, GitResolveErrorV1>",
+      "requirement_ids": [
+        "ARC-005",
+        "SEC-002"
+      ],
+      "verification_ids": [
+        "VFY-GIT-IDENTITY-V1",
+        "VFY-GIT-SELECTOR-REJECTION-V1",
+        "VFY-GIT-WORKTREE-CONTAINMENT-V1"
+      ]
+    }
+  ],
+  "owner_crate": "podway-git",
+  "phase": "0B",
+  "prohibited_capabilities": [
+    "git_mutation"
+  ],
+  "runtime_path_types": {
+    "ServiceRuntimePathsV1": {
+      "fields": [
+        {
+          "name": "global_lock_path",
+          "type": "LocalPlatformPathV1"
+        },
+        {
+          "name": "launch_agent_path",
+          "type": "LocalPlatformPathV1"
+        },
+        {
+          "name": "log_path",
+          "type": "LocalPlatformPathV1"
+        },
+        {
+          "name": "metadata_index_path",
+          "type": "LocalPlatformPathV1"
+        },
+        {
+          "name": "socket_path",
+          "type": "LocalPlatformPathV1"
+        }
+      ],
+      "scope": "global_service_runtime"
+    },
+    "WorkspaceRuntimePathsV1": {
+      "fields": [
+        {
+          "name": "database_path",
+          "type": "LocalPlatformPathV1"
+        },
+        {
+          "name": "jobs_path",
+          "type": "LocalPlatformPathV1"
+        },
+        {
+          "name": "state_path",
+          "type": "LocalPlatformPathV1"
+        }
+      ],
+      "requires": "ValidatedWorktreeV1",
+      "scope": "validated_workspace_runtime"
+    },
+    "separation_constraints": [
+      "service_runtime_paths_and_workspace_runtime_paths_are_disjoint",
+      "uninstall_cannot_traverse_workspace_runtime_paths"
+    ]
+  },
+  "type_definitions": {
+    "DurableWorktreeIdentityV1": {
+      "fields": [
+        {
+          "name": "common_dir_identity",
+          "type": "GitIdentityV1"
+        },
+        {
+          "name": "workspace_uuid",
+          "type": "WorkspaceUuidV1"
+        },
+        {
+          "name": "worktree_admin_identity",
+          "type": "GitIdentityV1"
+        }
+      ]
+    },
+    "PathBytesBase64UrlV1": {
+      "constraints": [
+        "base64url_encoding",
+        "lossless",
+        "local_path_only"
+      ],
+      "max_bytes": 16384,
+      "rejects": [
+        "malformed_encoding",
+        "non_local_input",
+        "nul_byte",
+        "oversize"
+      ]
+    },
+    "ValidatedWorktreeV1": {
+      "fields": [
+        {
+          "name": "common_dir_identity",
+          "type": "GitIdentityV1"
+        },
+        {
+          "name": "containment_proof",
+          "type": "ContainmentProofV1"
+        },
+        {
+          "name": "durable_identity",
+          "type": "DurableWorktreeIdentityV1"
+        },
+        {
+          "name": "kind",
+          "type": "MainOrLinkedWorktreeV1"
+        },
+        {
+          "name": "move_registry_repair",
+          "type": "MoveRegistryRepairV1"
+        },
+        {
+          "name": "root_display_path",
+          "type": "DisplayPathV1"
+        },
+        {
+          "name": "root_path_bytes_base64url",
+          "type": "PathBytesBase64UrlV1"
+        },
+        {
+          "name": "workspace_runtime_paths",
+          "type": "WorkspaceRuntimePathsV1"
+        },
+        {
+          "name": "workspace_uuid_status",
+          "type": "WorkspaceUuidStatusV1"
+        },
+        {
+          "name": "worktree_admin_identity",
+          "type": "GitIdentityV1"
+        }
+      ]
+    },
+    "WorktreeSelectorV1": {
+      "fields": [
+        {
+          "diagnostic_only": true,
+          "max_bytes": 16384,
+          "name": "display_path",
+          "type": "DisplayPathV1"
+        },
+        {
+          "name": "durable_identity",
+          "required": false,
+          "type": "DurableWorktreeIdentityV1"
+        },
+        {
+          "name": "path_hint_bytes_base64url",
+          "type": "PathBytesBase64UrlV1"
+        },
+        {
+          "name": "version",
+          "type": "WorktreeSelectorVersionV1"
+        }
+      ]
+    }
+  },
+  "verification_ids": [
+    "VFY-GIT-IDENTITY-V1",
+    "VFY-GIT-SELECTOR-REJECTION-V1",
+    "VFY-GIT-WORKTREE-CONTAINMENT-V1"
+  ]
+}

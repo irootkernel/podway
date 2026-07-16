@@ -1,0 +1,14 @@
+[package]
+name = "podway-config"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+podway-core = { path = "../podway-core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+serde_yaml.workspace = true
+yaml-rust2.workspace = true

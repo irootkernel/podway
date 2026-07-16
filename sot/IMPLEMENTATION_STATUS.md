@@ -7,7 +7,7 @@ This document is an informational implementation-progress index. It does not cha
 | Goal | Design scope | Status | Completed | Primary evidence |
 |---|---|---|---|---|
 | `G001` | Gate S: reconcile and revalidate the source of truth | **complete / verified** | 2026-07-13 | `VALIDATION_REPORT.md`; accepted S0 payload `022167d808f5f0f85711bfdfa94d1a0165de711a6eda51bb9209e9e873ea342d` |
-| `G002` | Phase 0: repository and executable contract lock | pending status checkpoint | — | — |
+| `G002` | Phase 0: repository and executable contract lock | **complete / verified** | 2026-07-14 | `contracts/locks/phase-0a-contract-lock.json`; `contracts/locks/phase-0b-contract-lock.json`; `contracts/locks/phase-0c-contract-lock.json`; `artifacts/phase0/final-handoff-report.json` |
 | `G003` | Phase 1: domain, configuration, and presets | pending status checkpoint | — | — |
 | `G004` | Phases 2–3: persistence queue and Git boundary | pending status checkpoint | — | — |
 | `G005` | Phase 4: daemon IPC and real production vertical slice | pending status checkpoint | — | — |

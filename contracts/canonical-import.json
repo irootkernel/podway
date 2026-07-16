@@ -1,0 +1,168 @@
+{
+  "contract_version": "podway.canonical-import/v1",
+  "generator_version": "phase-0a-v1",
+  "owner": "sot",
+  "copy_mode": "exact",
+  "imports": [
+    {
+      "source": "sot/schemas/README.md",
+      "destination": "schemas/README.md",
+      "source_sha256": "81b80b40eeadc3193f775f0a7fe5d6e94688329f08715bb8ed234b6d0935d654",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/schemas/error-v1.schema.json",
+      "destination": "schemas/error-v1.schema.json",
+      "source_sha256": "370c7392a0880b0d5ab2989f9c7262bbe2182aee8159b9e7c555c147db3f409b",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/schemas/ipc-request-v1.schema.json",
+      "destination": "schemas/ipc-request-v1.schema.json",
+      "source_sha256": "e9691a43b3615a15fede925df2a1b25525b10db6b4d7f1c693c69083364f21b5",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/schemas/next-result-v1.schema.json",
+      "destination": "schemas/next-result-v1.schema.json",
+      "source_sha256": "986f55e085ad54fabbc231c651007f0c81f33db940f5ef2979dbef86a6004781",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/schemas/output-v1.schema.json",
+      "destination": "schemas/output-v1.schema.json",
+      "source_sha256": "ebb8d60f949778746892dc4e563aa76ca5f5e910a0f117188caf14cd7e71dd76",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/schemas/procedure-v1.schema.json",
+      "destination": "schemas/procedure-v1.schema.json",
+      "source_sha256": "ef1d1102262f0413d9786afcf876feaddf24ee1dea190ba3148cbb655417efb5",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/schemas/registry-v1.schema.json",
+      "destination": "schemas/registry-v1.schema.json",
+      "source_sha256": "ae259c2fb9d5e285c8450a55b2f9133ab4758e32041905475fb0d1fd8ff3f2ad",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/schemas/status-result-v1.schema.json",
+      "destination": "schemas/status-result-v1.schema.json",
+      "source_sha256": "3e1a7f0b343aa68ab436eec5125f05433bd556cd0dc5c66a22f35e75a84c6248",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/schemas/workspace-v1.schema.json",
+      "destination": "schemas/workspace-v1.schema.json",
+      "source_sha256": "97ef41946030151af10573ec05ad324ab4f44147d4e1e857851b186381be94cc",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/spec/README.md",
+      "destination": "spec/README.md",
+      "source_sha256": "fd8692c708c2be7729a1e71b320d769c56873b32bbc23af535901821e4c24357",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/spec/command-catalog.yaml",
+      "destination": "spec/command-catalog.yaml",
+      "source_sha256": "cc0a008100e8555c2377e785a83c3cf80d73a2f0cc0f0b8a2857b39b343595fe",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/spec/error-codes.json",
+      "destination": "spec/error-codes.json",
+      "source_sha256": "3102851915bcb0148364e2b34944649407ffb9d5eaeb62265d25aedfbbbe074c",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/spec/launchagent.plist.template",
+      "destination": "spec/launchagent.plist.template",
+      "source_sha256": "44ba7d414649f7e12bfffc53701b7234c53c4046c0966fd9d1073a2a36c7be2a",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/spec/sqlite-v1.sql",
+      "destination": "spec/sqlite-v1.sql",
+      "source_sha256": "20ea04d9635b8e1632e6d3aa5f3a888eaca49307b43ade9b9991363b30607423",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/spec/state-transition-matrix.csv",
+      "destination": "spec/state-transition-matrix.csv",
+      "source_sha256": "665e83e720084efcd9f7b62fa9606da1135c5a7e195e78f3ecf834018458b860",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/presets/README.md",
+      "destination": "presets/README.md",
+      "source_sha256": "333d4d8fb7785e514884333984f644ea7881d53736c985d847a9f2424cbaa686",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/presets/analysis.yaml",
+      "destination": "presets/analysis.yaml",
+      "source_sha256": "da287731e4009d5325d4ac9eb3a5a981a1d659c62f9d14048ae3b3131fcace27",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/presets/bug-fix.yaml",
+      "destination": "presets/bug-fix.yaml",
+      "source_sha256": "20f5f3861dc7ae6e43b3bf6870af86972cb1a5b674ed6e4053c81945c8c1c4fb",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/presets/docs-only.yaml",
+      "destination": "presets/docs-only.yaml",
+      "source_sha256": "c355796c64b81d65e656e2ec4ebbcd31548077e9f464548ff896c179e7888e43",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    },
+    {
+      "source": "sot/presets/sw-dev.yaml",
+      "destination": "presets/sw-dev.yaml",
+      "source_sha256": "c30dc9f5644382f286b3c02fee8ceb2d8dee015cf3467c146b2cfac5da8c3782",
+      "copy_mode": "exact",
+      "owner": "sot",
+      "generator_version": "phase-0a-v1"
+    }
+  ]
+}

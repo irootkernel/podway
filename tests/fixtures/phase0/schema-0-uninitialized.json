@@ -1,0 +1,51 @@
+{
+  "fixture_version": "podway.phase0.schema-0-uninitialized/v1",
+  "fixture_kind": "compatibility-contract",
+  "scope": {
+    "proves": [
+      "schema-0/uninitialized identity",
+      "frozen initial-migration contract shape"
+    ],
+    "does_not_prove": [
+      "production Store behavior",
+      "production Git behavior",
+      "production daemon behavior",
+      "production Service behavior"
+    ]
+  },
+  "predecessor": {
+    "identity": "uninitialized-database",
+    "schema": "schema-0",
+    "storage": "non-file",
+    "is_database_file": false,
+    "tables": [],
+    "rows": []
+  },
+  "expected_schema_v1": {
+    "identity": "schema-v1",
+    "user_version": 1,
+    "ddl_path": "spec/sqlite-v1.sql",
+    "required_pragmas": {
+      "foreign_keys": "ON",
+      "journal_mode": "WAL",
+      "synchronous": "FULL",
+      "busy_timeout": 5000,
+      "trusted_schema": "OFF"
+    }
+  },
+  "expected_assertions": [
+    {
+      "id": "initial-migration-atomicity",
+      "assertion": "schema-v1 initialization commits atomically or leaves the uninitialized identity unchanged"
+    },
+    {
+      "id": "initial-migration-no-loss",
+      "assertion": "initialization preserves all state present at commit; the uninitialized identity supplies no predecessor rows"
+    },
+    {
+      "id": "initial-migration-no-duplicate",
+      "assertion": "replay does not duplicate schema_migrations or create a second schema-v1 state"
+    }
+  ],
+  "requirement_ids": ["STO-011", "REL-006"]
+}

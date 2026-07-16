@@ -1,0 +1,416 @@
+{
+  "fixture_version": "podway.phase0.reference-model/v1",
+  "product_version": "0.1.0",
+  "v1_identifiers": {
+    "canonical_import": "podway.canonical-import/v1",
+    "cargo_adjacency": "podway.cargo-adjacency/v1",
+    "command_routes": "podway.command-routes/v1",
+    "command_catalog": "podway.command-catalog/v1",
+    "error_catalog": "podway.error-catalog/v1",
+    "handoff_receipt": "podway.handoff-receipt/v1",
+    "handoff_schema_id": "urn:podway:schema:handoff-receipt:v1",
+    "json_schema_draft": "https://json-schema.org/draft/2020-12/schema",
+    "schema_v1": "schema-v1",
+    "schemas": {
+      "error": "urn:podway:schema:error:v1",
+      "ipc-request": "urn:podway:schema:ipc-request:v1",
+      "next-result": "urn:podway:schema:next-result:v1",
+      "output": "urn:podway:schema:output:v1",
+      "procedure": "urn:podway:schema:procedure:v1",
+      "registry": "urn:podway:schema:registry:v1",
+      "status-result": "urn:podway:schema:status-result:v1",
+      "workspace": "urn:podway:schema:workspace:v1"
+    }
+  },
+  "cargo_dag": [
+    {
+      "name": "podway-core",
+      "approved_dependencies": [],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-protocol",
+      "approved_dependencies": ["podway-core"],
+      "forbidden_dependencies": [
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-config",
+      "approved_dependencies": ["podway-core"],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-store",
+      "approved_dependencies": ["podway-core"],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-config",
+        "podway-git",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-git",
+      "approved_dependencies": ["podway-core"],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-service",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-service",
+      "approved_dependencies": ["podway-core"],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-presets",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-presets",
+      "approved_dependencies": ["podway-core", "podway-config"],
+      "forbidden_dependencies": [
+        "podway-protocol",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-daemon",
+        "podway-cli"
+      ]
+    },
+    {
+      "name": "podway-daemon",
+      "approved_dependencies": [
+        "podway-core",
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-service",
+        "podway-presets"
+      ],
+      "forbidden_dependencies": ["podway-cli"]
+    },
+    {
+      "name": "podway-cli",
+      "approved_dependencies": [
+        "podway-core",
+        "podway-protocol",
+        "podway-config",
+        "podway-presets",
+        "podway-service"
+      ],
+      "forbidden_dependencies": [
+        "podway-store",
+        "podway-git",
+        "podway-daemon"
+      ]
+    }
+  ],
+  "command_routes": {
+    "prohibited_capabilities": ["command_runner", "git_mutation", "network"],
+    "classes": [
+      {
+        "name": "local",
+        "owner": "podway-cli",
+        "path": ["podway-cli"],
+        "execution": "local",
+        "capabilities": [],
+        "commands": [
+          "help",
+          "version",
+          "completions",
+          "procedure.validate",
+          "procedure.show",
+          "preset.list",
+          "preset.show",
+          "preset.explain"
+        ]
+      },
+      {
+        "name": "service_lifecycle",
+        "owner": "podway-service",
+        "path": ["podway-cli", "podway-service"],
+        "execution": "service_lifecycle",
+        "capabilities": [],
+        "commands": [
+          "daemon.install",
+          "daemon.uninstall",
+          "daemon.start",
+          "daemon.stop",
+          "daemon.restart",
+          "daemon.status",
+          "daemon.logs"
+        ]
+      },
+      {
+        "name": "daemon",
+        "owner": "podway-daemon",
+        "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+        "execution": "daemon",
+        "capabilities": [],
+        "commands": [
+          "workspace.init",
+          "workspace.doctor",
+          "workspace.show",
+          "workspace.repair",
+          "session.start",
+          "session.start_replace",
+          "session.status",
+          "session.next",
+          "session.complete",
+          "session.skip",
+          "session.retry",
+          "session.return",
+          "session.block",
+          "session.unblock",
+          "session.cancel",
+          "session.reopen",
+          "session.reset",
+          "workspace.reset_all",
+          "item.check",
+          "item.uncheck",
+          "item.set",
+          "item.add",
+          "item.remove",
+          "item.attach",
+          "item.clear",
+          "job.list",
+          "job.status",
+          "job.wait",
+          "job.cancel"
+        ]
+      }
+    ]
+  },
+  "schema_zero_migration": {
+    "predecessor_identity": "uninitialized-database",
+    "predecessor_schema": "schema-0",
+    "predecessor_storage": "non-file",
+    "target_schema": "schema-v1",
+    "target_user_version": 1,
+    "ddl_path": "spec/sqlite-v1.sql",
+    "required_pragmas": {
+      "foreign_keys": "ON",
+      "journal_mode": "WAL",
+      "synchronous": "FULL",
+      "busy_timeout": 5000,
+      "trusted_schema": "OFF"
+    },
+    "requirement_ids": ["STO-011", "REL-006"]
+  },
+  "interfaces": {
+    "store": {
+      "path": "contracts/interfaces/store-v1.json",
+      "id": "urn:podway:contract:interface:store:v1",
+      "contract_version": "podway.store-contract/v1",
+      "owner_crate": "podway-store",
+      "phase": "0B",
+      "allowed_dependencies": ["podway-core"],
+      "consumers": ["podway-daemon"],
+      "contract_obligation_ids": [
+        "ARC-002",
+        "ARC-003",
+        "INV-S10",
+        "STO-001",
+        "STO-002",
+        "STO-003",
+        "STO-004",
+        "STO-005",
+        "STO-006",
+        "STO-007",
+        "STO-008",
+        "STO-009",
+        "STO-010",
+        "STO-011"
+      ]
+    },
+    "git_resolver": {
+      "path": "contracts/interfaces/git-resolver-v1.json",
+      "id": "urn:podway:contract:interface:git-resolver:v1",
+      "contract_version": "podway.git-resolver-contract/v1",
+      "owner_crate": "podway-git",
+      "phase": "0B",
+      "allowed_dependencies": ["podway-core"],
+      "consumers": ["podway-daemon"],
+      "contract_obligation_ids": [
+        "ARC-005",
+        "INV-W01",
+        "INV-W02",
+        "INV-W03",
+        "INV-W04",
+        "INV-W05",
+        "SEC-002"
+      ]
+    },
+    "service_manager": {
+      "path": "contracts/interfaces/service-manager-v1.json",
+      "id": "urn:podway:contract:interface:service-manager:v1",
+      "contract_version": "podway.service-manager-contract/v1",
+      "owner_crate": "podway-service",
+      "phase": "0B",
+      "allowed_dependencies": ["podway-core"],
+      "consumers": ["podway-cli", "podway-daemon"],
+      "contract_obligation_ids": [
+        "ARC-008",
+        "INV-W05",
+        "OPS-001",
+        "OPS-002",
+        "SEC-002"
+      ]
+    }
+  },
+  "requirement_groups": {
+    "product": [
+      "PRD-001",
+      "PRD-002",
+      "PRD-003",
+      "PRD-004",
+      "PRD-005",
+      "PRD-006",
+      "PRD-007",
+      "PRD-008"
+    ],
+    "architecture": [
+      "ARC-001",
+      "ARC-002",
+      "ARC-003",
+      "ARC-004",
+      "ARC-005",
+      "ARC-006",
+      "ARC-007",
+      "ARC-008"
+    ],
+    "procedure_and_domain": [
+      "DOM-001",
+      "DOM-002",
+      "DOM-003",
+      "DOM-004",
+      "DOM-005",
+      "DOM-006",
+      "DOM-007",
+      "DOM-008"
+    ],
+    "queue_and_storage": [
+      "STO-001",
+      "STO-002",
+      "STO-003",
+      "STO-004",
+      "STO-005",
+      "STO-006",
+      "STO-007",
+      "STO-008",
+      "STO-009",
+      "STO-010",
+      "STO-011"
+    ],
+    "interfaces": [
+      "API-001",
+      "API-002",
+      "API-003",
+      "API-004",
+      "API-005",
+      "API-006",
+      "API-007",
+      "API-008"
+    ],
+    "security_and_operations": [
+      "SEC-001",
+      "SEC-002",
+      "SEC-003",
+      "SEC-004",
+      "SEC-005",
+      "OPS-001",
+      "OPS-002",
+      "OPS-003",
+      "OPS-004"
+    ],
+    "release": [
+      "REL-001",
+      "REL-002",
+      "REL-003",
+      "REL-004",
+      "REL-005",
+      "REL-006",
+      "REL-007",
+      "REL-008"
+    ]
+  },
+  "handoffs": {
+    "0A": {
+      "file": "phase-0a-handoff.json",
+      "artifact": {
+        "kind": "phase-handoff",
+        "name": "phase-0a-contract-lock",
+        "version": "0.1.0"
+      },
+      "producer": "PHASE_0A",
+      "consumers": ["PHASE_0B", "PHASE_0C"],
+      "prerequisite_phases": [],
+      "enabled_gates": ["PHASE_0A_CONTRACTS", "PHASE_0A_IMPORTED_ASSETS"],
+      "affected_phases": ["0A", "0B", "0C", "1", "2", "3", "4", "5", "6", "7", "8", "RC"]
+    },
+    "0B": {
+      "file": "phase-0b-handoff.json",
+      "artifact": {
+        "kind": "phase-handoff",
+        "name": "phase-0b-interface-lock",
+        "version": "0.1.0"
+      },
+      "producer": "PHASE_0B",
+      "consumers": ["PHASE_0C"],
+      "prerequisite_phases": ["0A"],
+      "enabled_gates": ["PHASE_0B_INTERFACE_CONTRACTS", "PHASE_0B_REQUIREMENT_TRACEABILITY"],
+      "affected_phases": ["0B", "0C", "1", "2", "3", "4", "5", "6", "7", "8", "RC"]
+    },
+    "0C": {
+      "file": "phase-0c-handoff.json",
+      "artifact": {
+        "kind": "phase-handoff",
+        "name": "phase-0c-compatibility-lock",
+        "version": "0.1.0"
+      },
+      "producer": "PHASE_0C",
+      "consumers": ["PHASE_1"],
+      "prerequisite_phases": ["0A", "0B"],
+      "enabled_gates": ["PHASE_0C_COMPATIBILITY_FIXTURES", "PHASE_0C_CONTENT_ADDRESSED_HANDOFFS"],
+      "affected_phases": ["0C", "1", "2", "3", "4", "5", "6", "7", "8", "RC"]
+    }
+  }
+}

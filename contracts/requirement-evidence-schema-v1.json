@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "evidence_ref": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "kind": {
+          "enum": [
+            "artifact",
+            "command-output",
+            "fixture",
+            "review",
+            "test-report"
+          ]
+        },
+        "location": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "digest",
+        "kind",
+        "location"
+      ],
+      "type": "object"
+    },
+    "invalidation": {
+      "additionalProperties": false,
+      "properties": {
+        "change_refs": {
+          "items": {
+            "$ref": "#/$defs/reference"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "reverification_required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "change_refs",
+        "reverification_required"
+      ],
+      "type": "object"
+    },
+    "reference": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "location": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "digest",
+        "location"
+      ],
+      "type": "object"
+    },
+    "test_ref": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Z][A-Z0-9-]*$",
+          "type": "string"
+        },
+        "location": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "location"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:podway:schema:requirement-evidence:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "evidence_refs": {
+      "items": {
+        "$ref": "#/$defs/evidence_ref"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "invalidation": {
+      "$ref": "#/$defs/invalidation"
+    },
+    "obligation": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    },
+    "requirement_id": {
+      "pattern": "^[A-Z][A-Z0-9]*-[A-Z0-9]+$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "podway.requirement-evidence/v1"
+    },
+    "status": {
+      "enum": [
+        "blocked",
+        "failed",
+        "not_started",
+        "satisfied",
+        "superseded",
+        "waived"
+      ]
+    },
+    "test_refs": {
+      "items": {
+        "$ref": "#/$defs/test_ref"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "evidence_refs",
+    "invalidation",
+    "obligation",
+    "requirement_id",
+    "schema_version",
+    "status",
+    "test_refs"
+  ],
+  "title": "Podway Requirement Evidence v1",
+  "type": "object"
+}

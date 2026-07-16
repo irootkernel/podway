@@ -1,0 +1,51 @@
+[workspace]
+members = [
+    "crates/podway-core",
+    "crates/podway-protocol",
+    "crates/podway-config",
+    "crates/podway-store",
+    "crates/podway-git",
+    "crates/podway-service",
+    "crates/podway-presets",
+    "crates/podway-daemon",
+    "crates/podway-cli",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+assert_cmd = "2.0.16"
+clap = { version = "4.5.32", features = ["derive"] }
+plist = "1.7.0"
+predicates = "3.1.3"
+rusqlite = { version = "0.34.0", features = ["bundled"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+serde_yaml = "0.9.34"
+yaml-rust2 = "0.11.0"
+sha2 = "0.10.9"
+signal-hook = "0.3.18"
+tempfile = "3.19.1"
+thiserror = "2.0.12"
+tokio = { version = "1.44.2", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+nix = { version = "0.31.3", features = ["fs", "signal", "socket", "user"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+uuid = { version = "1.16.0", features = ["serde", "v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+warnings = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

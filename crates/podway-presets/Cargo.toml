@@ -1,0 +1,10 @@
+[package]
+name = "podway-presets"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+podway-core = { path = "../podway-core" }
+podway-config = { path = "../podway-config" }
+serde.workspace = true
