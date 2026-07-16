@@ -10,6 +10,7 @@ This manifest lists every design and implementation-contract file in the Podway 
 |---|---|
 | `README.md` | Master index, source precedence, reading order, and implementation handoff entry point |
 | `IMPLEMENTATION_HANDOFF.md` | Immediate kickoff sequence, first vertical slice, correctness milestone, and prohibited shortcuts |
+| `IMPLEMENTATION_STATUS.md` | Non-normative G001–G005 implementation and verification checkpoint index |
 | `DESIGN_VERSION` | Immutable design-package version identifier |
 | `LICENSE` | MIT license text for Podway |
 | `MANIFEST.md` | Complete package inventory |

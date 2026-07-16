@@ -27,6 +27,7 @@ Any contradiction should be fixed in all affected files before implementation pr
 ## Handoff shortcuts
 
 - [Implementation handoff](IMPLEMENTATION_HANDOFF.md): immediate kickoff sequence and prohibited shortcuts.
+- [Implementation status](IMPLEMENTATION_STATUS.md): non-normative G001–G005 implementation and verification checkpoints.
 - [Manifest](MANIFEST.md): complete archive inventory.
 - [Design version](DESIGN_VERSION): specification version consumed by the team.
 - [Validation report](VALIDATION_REPORT.md): package consistency checks completed before handoff.
