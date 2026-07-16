@@ -4,11 +4,11 @@
   "goalId": "G005",
   "originalCheckpointReceiptId": "84cf45e6-c73c-437b-b984-2d27d1f9f403",
   "attestationStatus": "passed",
-  "verifiedAtUtc": "2026-07-16T00:32:12Z",
+  "verifiedAtUtc": "2026-07-16T00:49:07Z",
   "evidenceIdentity": {
     "algorithm": "sha256",
     "canonicalization": "podway.canonical-json/v1",
-    "digest": "ccbdd86d28cc488b57fc33e4565e5c01191fb76c2bcf8b6ea40b9e008203cb4e",
+    "digest": "e16bfa6ac47d9f57e62e1f0513088e4323f8f8e7babb6153686af2a79e760e79",
     "normalization": "Hash canonical JSON with evidenceIdentity.digest set to null."
   },
   "postCheckpointSourceSet": {
@@ -62,12 +62,12 @@
     ]
   },
   "sourceReport": {
-    "path": "artifacts/phase0/verification-logs/722e4957db824aaa9eb33c83f82346cd/verification-report.json",
+    "path": "artifacts/phase0/verification-logs/689e7257bc0a416a83dc7c21b755db96/verification-report.json",
     "canonicalPath": "artifacts/phase0/verification-report.json",
-    "reportSha256": "61e7c0b55f2b4384bd751b91543e5ba0cf0f75574a1c3b355f92666525aa0e7f",
-    "reportSelfDigest": "e26da0c2698740f22d2ec8f383912b96746fce37ee6a0ad6a544723fa56c066a",
-    "runId": "722e4957db824aaa9eb33c83f82346cd",
-    "sourceManifestSha256": "a5b2e4f3b06a16bd6401e73af71675354b86c9eee9b3853fc2e6a038b38527f6",
+    "reportSha256": "11bc722fe55deb2c2d19326832c97019d85182ca40a2fec81bace681b00eba98",
+    "reportSelfDigest": "46de29c9cc3df14d3d6ecc615c9ae929750224858e961d59ba93843c412f9aca",
+    "runId": "689e7257bc0a416a83dc7c21b755db96",
+    "sourceManifestSha256": "4500e9f4996c12abaddbd12b591276a02d3854be1be899000ce67dde0979d6cf",
     "status": "passed"
   },
   "phase0Bindings": {
@@ -77,9 +77,9 @@
       "0C": "5d83c7323a33b8d1413bc3fe887455f0e15b92f4d0c564146e4765cb5daf2039"
     },
     "handoffFileSha256": {
-      "contracts/handoffs/phase-0a-handoff.json": "74cd4ee0e3ab41b260123b1009959dddb5171fb1d8bdd527d24061d55b121527",
-      "contracts/handoffs/phase-0b-handoff.json": "4092f74c87076c77a8dc8701d295a97769244e2410fb09bad33f18a0e6cd8c29",
-      "contracts/handoffs/phase-0c-handoff.json": "b109dbf186e1142de3e121474da55948aea8225e8133c80f8068a841a1f2e9b1"
+      "contracts/handoffs/phase-0a-handoff.json": "1b744ff4101728166047c9d4241176e5c3df5c21ae47488af2b64238eb8006e9",
+      "contracts/handoffs/phase-0b-handoff.json": "af03ec4fe205b8b6172416f65583cc514b6d0975fa91d276eeec993bb22b8211",
+      "contracts/handoffs/phase-0c-handoff.json": "5f22a741654a4d7ae16b49210345dbd11eb2fcb4a6740cd9bc8b7707093410e8"
     },
     "receiptCheck": "passed"
   },

@@ -11,6 +11,10 @@ This document is an informational implementation-progress index. It does not cha
 | `G003` | Phase 1: domain, configuration, and presets | **complete / verified** | 2026-07-14 | `crates/podway-core/tests/`; `crates/podway-config/tests/`; `crates/podway-presets/tests/` |
 | `G004` | Phases 2–3: persistence queue and Git boundary | **complete / verified** | 2026-07-15 | `artifacts/g004/verification-evidence.json`; `crates/podway-store/tests/`; `crates/podway-git/tests/` |
 | `G005` | Phase 4: daemon IPC and real production vertical slice | **complete / verified** | 2026-07-15 | `artifacts/g005/verification-evidence.json`; `artifacts/g005/post-checkpoint-verification-evidence.json`; `tools/run_g005_vertical.py` |
+| `G006` | Phase 5: CLI and versioned JSON | **deferred / unimplemented** | not started | `docs/70-delivery/70-implementation-plan.md`, Phase 5 |
+| `G007` | Phase 6: macOS service integration and packaging | **deferred / unimplemented** | not started | `docs/70-delivery/70-implementation-plan.md`, Phase 6 |
+| `G008` | Phase 7: preset dogfooding and UX correction | **deferred / unimplemented** | not started | `docs/70-delivery/70-implementation-plan.md`, Phase 7 |
+| `G009` | Phase 8: hardening, release artifacts, and final acceptance | **deferred / unimplemented** | not started | `docs/70-delivery/70-implementation-plan.md`, Phase 8 |
 
 ## Current release boundary
 
