@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:error:v1",
+  "title": "Podway Error Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "command",
+    "generated_at",
+    "code",
+    "message",
+    "retryable",
+    "exit_code",
+    "details"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.error/v1"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]+$"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "exit_code": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 6
+    },
+    "workspace": {
+      "type": "object"
+    },
+    "details": {
+      "type": "object"
+    }
+  }
+}

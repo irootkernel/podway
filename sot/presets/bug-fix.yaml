@@ -1,0 +1,122 @@
+schema: podway.procedure/v1
+id: bug-fix
+version: "1"
+name: Bug Fix
+description: Defect correction with explicit baseline, diagnosis, regression coverage, verification, and review.
+stages:
+  - id: reproduce
+    title: Establish the failing baseline
+    instructions:
+      - Reproduce the problem before implementation changes, or record a precise bounded baseline when direct reproduction is impossible.
+    items:
+      - id: baseline-established
+        type: confirm
+        prompt: The failing behavior was reproduced or a precise baseline was established.
+        required: true
+      - id: expected-behavior
+        type: text
+        prompt: Describe the expected behavior.
+        required: true
+        min_length: 1
+      - id: actual-behavior
+        type: text
+        prompt: Describe the observed failing behavior.
+        required: true
+        min_length: 1
+      - id: reproduction-reference
+        type: artifact
+        prompt: Optionally reference a reproducer or failing case.
+        required: false
+  - id: diagnose
+    title: Diagnose the cause
+    instructions:
+      - Identify the smallest causal explanation supported by the code and observed behavior.
+    items:
+      - id: cause
+        type: text
+        prompt: Summarize the diagnosed cause.
+        required: true
+        min_length: 1
+      - id: affected-components
+        type: list
+        prompt: List the components involved in the cause.
+        required: true
+        min_items: 1
+        max_items: 100
+  - id: regression
+    title: Define regression coverage
+    instructions:
+      - Define a check that distinguishes the fixed behavior from the failure.
+    items:
+      - id: regression-case
+        type: artifact
+        prompt: Reference the regression test or validation case.
+        required: true
+      - id: regression-behavior
+        type: text
+        prompt: Describe what the regression case proves.
+        required: true
+        min_length: 1
+  - id: fix
+    title: Implement the fix
+    instructions:
+      - Implement the smallest coherent correction for the diagnosed cause.
+    items:
+      - id: implementation-complete
+        type: confirm
+        prompt: The intended fix is complete.
+        required: true
+      - id: fix-summary
+        type: text
+        prompt: Summarize the implemented fix.
+        required: true
+        min_length: 1
+  - id: verify
+    title: Verify the fix
+    instructions:
+      - Verify the original failure, regression case, and relevant surrounding behavior.
+    items:
+      - id: original-failure-resolved
+        type: confirm
+        prompt: The original failing behavior is resolved.
+        required: true
+      - id: regression-check-passed
+        type: confirm
+        prompt: The regression check passes with the fix.
+        required: true
+      - id: verification-note
+        type: text
+        prompt: Summarize the verification performed.
+        required: true
+        min_length: 1
+  - id: review
+    title: Review the fix
+    instructions:
+      - Review cause alignment, regression risk, scope, and unresolved findings.
+    items:
+      - id: review-complete
+        type: confirm
+        prompt: The fix was reviewed.
+        required: true
+      - id: findings-resolved
+        type: confirm
+        prompt: Material review findings were resolved or explicitly accepted.
+        required: true
+      - id: scope-appropriate
+        type: confirm
+        prompt: The fix scope is appropriate for the diagnosed cause.
+        required: true
+  - id: finish
+    title: Finish the bug fix
+    items:
+      - id: task-result-ready
+        type: confirm
+        prompt: The bug-fix result is ready to report or hand off.
+        required: true
+      - id: final-summary
+        type: text
+        prompt: Summarize the fixed behavior and remaining limitations.
+        required: true
+        min_length: 1
+rework:
+  allow_return_to: any_previous

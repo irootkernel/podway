@@ -1,0 +1,111 @@
+# Product Overview
+
+## Product statement
+
+Podway is a local procedure guard for one task being performed in one Git worktree.
+
+It ensures that the current task follows an explicit ordered procedure. It shows the active stage, records the small set of required stage inputs, prevents accidental stage omission, and forces affected stages to be repeated after retry or return.
+
+The primary loop is:
+
+```text
+start one task session
+  -> inspect the current stage
+  -> satisfy the stage's required items
+  -> advance exactly one stage
+  -> retry or return when work must be repeated
+  -> complete the final stage
+  -> reset the worktree for the next task
+```
+
+Podway answers five operational questions:
+
+1. Which procedure governs this task?
+2. Which stage is active now?
+3. Which required items are still missing?
+4. What Podway action is valid next?
+5. Which later stages must be repeated after rework?
+
+## Product shape
+
+Podway consists of two binaries:
+
+- `podway`: the user-facing CLI;
+- `podwayd`: a user-scoped daemon and the sole normal writer of Podway state.
+
+The CLI submits mutations as durable jobs. The daemon processes one mutation at a time per worktree. Independent worktrees may progress concurrently.
+
+Each worktree stores its Podway state in:
+
+```text
+.podway/runtime/state.sqlite3
+```
+
+Deleting the worktree deletes the task session and all task-local operational data. Podway deliberately creates no global copy of task state.
+
+## Confirmed product decisions
+
+| Area | Decision |
+|---|---|
+| Unit of work | One current task session per Git worktree |
+| Procedure concurrency | Exactly one active stage attempt per session |
+| Write authority | `podwayd` is the sole normal writer |
+| Queue | Durable FIFO per worktree |
+| Cross-worktree behavior | Different worktrees may process mutations concurrently |
+| Workspace requirement | Git worktree required; workspace commands fail closed otherwise |
+| State location | Inside `.podway/runtime/` in the worktree |
+| Initial database state | schema-0/uninitialized; initialize or migrate transactionally to canonical schema-v1 |
+| Implementation | Rust |
+| Initial platform | macOS |
+| Service lifecycle | User LaunchAgent, started at login |
+| UI | CLI, versioned JSON, zsh/bash/fish completion |
+| Procedure data | Built-in presets and worktree-local YAML |
+| Stage requirements | Typed items, not a general evidence ledger |
+| Artifact handling | Path/reference, SHA-256 digest, byte size, and media type only |
+| Authentication | Same-user local trust; no worktree access key |
+| External integrations | Generic CLI and JSON only |
+| Built-in presets | `sw-dev`, `bug-fix`, `docs-only`, `analysis` |
+| License | MIT |
+
+## Success model
+
+Podway succeeds when it improves current-task discipline without becoming a second task-management system.
+
+A successful user experience has these properties:
+
+- `podway status` makes the task state understandable in one screen;
+- `podway next` identifies every missing required item and a concrete command that can satisfy it;
+- `podway complete` cannot advance an incomplete or blocked stage;
+- `podway retry` creates a clean attempt of the current stage;
+- `podway return` forces the destination and reached downstream stages to be performed again;
+- concurrent CLI or agent requests cannot silently overwrite or reorder state;
+- daemon failure never causes a mutation to be applied twice;
+- deleting the worktree deletes the Podway task state;
+- no Podway operation executes user commands, mutates Git, reaches the network, or stores artifact bytes.
+
+## Product principles
+
+1. **The current task comes first.** Historical data exists only to operate the current session correctly.
+2. **The next action must be explicit.** Users and agents should not infer the active stage from prose or chat history.
+3. **Rework is normal.** Retry and return are first-class transitions, not exceptional recovery paths.
+4. **Writes are serialized, not hidden.** The daemon provides deterministic ordering and durable admission.
+5. **Definitions are data.** Procedures contain no executable expressions, plugins, remote includes, or shell commands.
+6. **Automation consumes JSON.** Human text is informative; versioned JSON is the integration contract.
+7. **Local trust is stated honestly.** Podway prevents accidents, not malicious same-user behavior.
+8. **The worktree owns the task state.** There is no durable remote or global task ledger.
+
+## Public release boundary
+
+The complete `v0.1.0` public release is a macOS product with:
+
+- both binaries;
+- LaunchAgent installation and lifecycle management;
+- all commands defined in the CLI specification;
+- stable versioned JSON and IPC v1;
+- SQLite schema v1 and migrations;
+- the four built-in presets;
+- shell completion for zsh, bash, and fish;
+- complete crash, concurrency, Git, service, and preset conformance tests;
+- MIT licensing and release packaging.
+
+Linux support through a systemd user service is a later platform port. It must preserve the same domain, CLI, JSON, IPC semantics, and worktree-local state model.

@@ -1,0 +1,362 @@
+{
+  "schema": "podway.error-catalog/v1",
+  "exit_codes": {
+    "0": "success",
+    "1": "domain",
+    "2": "usage",
+    "3": "daemon",
+    "4": "conflict",
+    "5": "workspace",
+    "6": "internal"
+  },
+  "errors": [
+    {
+      "code": "DAEMON_NOT_INSTALLED",
+      "exit_code": 3,
+      "retryable": false,
+      "summary": "User service is not installed."
+    },
+    {
+      "code": "DAEMON_UNAVAILABLE",
+      "exit_code": 3,
+      "retryable": true,
+      "summary": "Daemon socket cannot be reached."
+    },
+    {
+      "code": "DAEMON_SHUTTING_DOWN",
+      "exit_code": 3,
+      "retryable": true,
+      "summary": "Daemon is draining and not accepting work."
+    },
+    {
+      "code": "DAEMON_VERSION_INCOMPATIBLE",
+      "exit_code": 3,
+      "retryable": false,
+      "summary": "CLI and daemon are not contract-compatible."
+    },
+    {
+      "code": "PROTOCOL_VERSION_UNSUPPORTED",
+      "exit_code": 3,
+      "retryable": false,
+      "summary": "Requested IPC protocol is unsupported."
+    },
+    {
+      "code": "REQUEST_TOO_LARGE",
+      "exit_code": 2,
+      "retryable": false,
+      "summary": "IPC request exceeds configured limits."
+    },
+    {
+      "code": "REQUEST_INVALID",
+      "exit_code": 2,
+      "retryable": false,
+      "summary": "Request is malformed or violates schema."
+    },
+    {
+      "code": "NOT_A_GIT_WORKTREE",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "No valid Git worktree contains the path."
+    },
+    {
+      "code": "BARE_GIT_REPOSITORY",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Bare repositories are unsupported."
+    },
+    {
+      "code": "WORKTREE_GONE",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "The worktree no longer exists."
+    },
+    {
+      "code": "WORKSPACE_NOT_INITIALIZED",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Podway workspace state is absent."
+    },
+    {
+      "code": "WORKSPACE_ALREADY_INITIALIZED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Workspace is already initialized."
+    },
+    {
+      "code": "WORKSPACE_INIT_CONFLICT",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Existing Podway files conflict with safe initialization."
+    },
+    {
+      "code": "WORKSPACE_ID_CONFLICT",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "The workspace UUID is active at another root."
+    },
+    {
+      "code": "WORKSPACE_CONFIG_INVALID",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Workspace configuration is invalid."
+    },
+    {
+      "code": "WORKSPACE_STATE_UNREADABLE",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Workspace state is corrupt or inaccessible."
+    },
+    {
+      "code": "WORKSPACE_SCHEMA_UNSUPPORTED",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Workspace schema is unsupported."
+    },
+    {
+      "code": "WORKSPACE_QUEUE_FULL",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "Workspace mutation queue is full."
+    },
+    {
+      "code": "WORKSPACE_MAINTENANCE",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "Workspace maintenance temporarily blocks mutation admission."
+    },
+    {
+      "code": "WORKSPACE_PATH_UNSAFE",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Podway workspace path is unsafe."
+    },
+    {
+      "code": "PATH_OUTSIDE_WORKTREE",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "A requested path escapes the worktree."
+    },
+    {
+      "code": "MIGRATION_FAILED",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Workspace migration failed."
+    },
+    {
+      "code": "PROCEDURE_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Procedure cannot be resolved."
+    },
+    {
+      "code": "PROCEDURE_INVALID",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Procedure is invalid."
+    },
+    {
+      "code": "PROCEDURE_SCHEMA_UNSUPPORTED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Procedure schema is unsupported."
+    },
+    {
+      "code": "PRESET_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Built-in preset does not exist."
+    },
+    {
+      "code": "SESSION_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "No current task session exists."
+    },
+    {
+      "code": "SESSION_ALREADY_EXISTS",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "A task session already exists."
+    },
+    {
+      "code": "SESSION_NOT_RUNNING",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The command requires a running session."
+    },
+    {
+      "code": "SESSION_NOT_COMPLETED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The command requires a completed session."
+    },
+    {
+      "code": "SESSION_CANCELLED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The session was cancelled."
+    },
+    {
+      "code": "SESSION_REVISION_CONFLICT",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The session changed after it was observed."
+    },
+    {
+      "code": "ATTEMPT_NOT_CURRENT",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The target attempt is no longer active."
+    },
+    {
+      "code": "STAGE_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The stage does not exist."
+    },
+    {
+      "code": "STAGE_NOT_SKIPPABLE",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The active stage cannot be skipped."
+    },
+    {
+      "code": "RETURN_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The return destination is not allowed."
+    },
+    {
+      "code": "REOPEN_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The session or destination cannot be reopened."
+    },
+    {
+      "code": "REQUIRED_ITEMS_MISSING",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Required items are missing."
+    },
+    {
+      "code": "BLOCKERS_PRESENT",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Open blockers prevent completion."
+    },
+    {
+      "code": "ITEM_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The item does not exist on the active stage."
+    },
+    {
+      "code": "ITEM_TYPE_MISMATCH",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The command is incompatible with the item type."
+    },
+    {
+      "code": "ITEM_CONSTRAINT_FAILED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The item value violates its constraints."
+    },
+    {
+      "code": "ITEM_REVISION_CONFLICT",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The item changed after it was observed."
+    },
+    {
+      "code": "ITEM_ALREADY_SET",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The item was expected to be unset."
+    },
+    {
+      "code": "LIST_VALUE_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The list value does not exist."
+    },
+    {
+      "code": "LIST_VALUE_DUPLICATE",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The unique list already contains the value."
+    },
+    {
+      "code": "ARTIFACT_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The local artifact does not exist."
+    },
+    {
+      "code": "ARTIFACT_UNREADABLE",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "The local artifact cannot be opened or hashed."
+    },
+    {
+      "code": "ARTIFACT_CHANGED",
+      "exit_code": 1,
+      "retryable": true,
+      "summary": "The local artifact no longer matches stored metadata."
+    },
+    {
+      "code": "ARTIFACT_MEDIA_TYPE_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The artifact media type is not allowed."
+    },
+    {
+      "code": "BLOCKER_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The blocker does not exist."
+    },
+    {
+      "code": "BLOCKER_NOT_CURRENT",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The blocker belongs to an old attempt."
+    },
+    {
+      "code": "IDEMPOTENCY_KEY_REUSED",
+      "exit_code": 2,
+      "retryable": false,
+      "summary": "The idempotency key is bound to another request."
+    },
+    {
+      "code": "JOB_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The job does not exist or was pruned."
+    },
+    {
+      "code": "JOB_NOT_CANCELLABLE",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The job is running or terminal."
+    },
+    {
+      "code": "JOB_WAIT_TIMEOUT",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The wait expired; the admitted job may continue."
+    },
+    {
+      "code": "CONFIRMATION_REQUIRED",
+      "exit_code": 2,
+      "retryable": false,
+      "summary": "The command requires explicit confirmation."
+    },
+    {
+      "code": "INTERNAL_ERROR",
+      "exit_code": 6,
+      "retryable": false,
+      "summary": "An unexpected internal error occurred."
+    }
+  ]
+}

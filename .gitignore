@@ -1,0 +1,32 @@
+.gjc
+.omo
+.omc
+.omx
+.kkachi
+.codegraph
+
+.DS_Store
+# Cargo build output
+/target/
+**/target/
+
+# Podway local runtime state and SQLite sidecars
+/.podway/
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Test, coverage, and temporary artifacts
+/coverage/
+/dist/
+*.lcov
+*.log
+*.swp
+*.tmp
+*.temp
+*~
+
+# Keep SOT and contract sources versioned; never ignore sot/ or contracts/.
+
+# Python bytecode
+__pycache__/
+*.py[cod]

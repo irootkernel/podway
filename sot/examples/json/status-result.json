@@ -1,0 +1,115 @@
+{
+  "task": {
+    "title": "fix duplicate login session creation",
+    "procedure": {
+      "id": "bug-fix",
+      "version": "1",
+      "name": "Bug Fix",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  },
+  "session": {
+    "id": "c1ddd90d-5b6b-40a9-a814-885c6215b916",
+    "lifecycle": "running",
+    "revision": 17,
+    "created_at": "2026-07-13T03:00:00.000Z",
+    "completed_at": null,
+    "cancelled_at": null
+  },
+  "current": {
+    "stage_id": "verify",
+    "stage_index": 4,
+    "title": "Verify the fix",
+    "attempt_id": "6f8e7dc4-6502-4857-9d38-1a4afedb50e4",
+    "attempt_number": 2,
+    "blocked": false,
+    "ready_to_complete": false
+  },
+  "stages": [
+    {
+      "id": "reproduce",
+      "index": 0,
+      "title": "Establish the failing baseline",
+      "status": "done",
+      "latest_attempt_number": 1
+    },
+    {
+      "id": "diagnose",
+      "index": 1,
+      "title": "Diagnose the cause",
+      "status": "done",
+      "latest_attempt_number": 1
+    },
+    {
+      "id": "regression",
+      "index": 2,
+      "title": "Define regression coverage",
+      "status": "done",
+      "latest_attempt_number": 1
+    },
+    {
+      "id": "fix",
+      "index": 3,
+      "title": "Implement the fix",
+      "status": "done",
+      "latest_attempt_number": 2
+    },
+    {
+      "id": "verify",
+      "index": 4,
+      "title": "Verify the fix",
+      "status": "current",
+      "latest_attempt_number": 2
+    },
+    {
+      "id": "review",
+      "index": 5,
+      "title": "Review the fix",
+      "status": "redo",
+      "latest_attempt_number": 1
+    },
+    {
+      "id": "finish",
+      "index": 6,
+      "title": "Finish the bug fix",
+      "status": "pending",
+      "latest_attempt_number": 0
+    }
+  ],
+  "items": [
+    {
+      "id": "original-failure-resolved",
+      "type": "confirm",
+      "prompt": "The original failing behavior is resolved.",
+      "required": true,
+      "satisfied": true,
+      "revision": 1,
+      "value": true
+    },
+    {
+      "id": "regression-check-passed",
+      "type": "confirm",
+      "prompt": "The regression check passes with the fix.",
+      "required": true,
+      "satisfied": false,
+      "revision": 0,
+      "value": null
+    },
+    {
+      "id": "verification-note",
+      "type": "text",
+      "prompt": "Summarize the verification performed.",
+      "required": true,
+      "satisfied": false,
+      "revision": 0,
+      "value": null
+    }
+  ],
+  "blockers": [],
+  "queue": {
+    "pending_mutations": false,
+    "queued_count": 0,
+    "running_job_id": null,
+    "latest_workspace_sequence": 41
+  }
+}

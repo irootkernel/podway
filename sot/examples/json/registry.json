@@ -1,0 +1,10 @@
+{
+  "schema": "podway.registry/v1",
+  "workspaces": [
+    {
+      "workspace_uuid": "83f9fbaa-3df8-4c23-8253-f94098b0af63",
+      "last_known_root": "/Users/example/src/project-wt",
+      "last_seen_at": "2026-07-13T03:00:00.000Z"
+    }
+  ]
+}
