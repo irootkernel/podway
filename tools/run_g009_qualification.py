@@ -6,11 +6,12 @@ and unseen holdout remain separate irreversible checkpoints.
 """
 from __future__ import annotations
 import argparse
-import base64
 import os
 import platform
 import resource
+import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -560,16 +561,106 @@ def holdout(args: argparse.Namespace) -> None:
     print(f"{out} {digest}")
 
 
-FUZZ_OUTPUT_MAX_BYTES = 1024 * 1024
+FUZZ_STREAM_MAX_BYTES = 1024 * 1024
+FUZZ_AGGREGATE_MAX_BYTES = 2 * FUZZ_STREAM_MAX_BYTES
+FUZZ_READ_CHUNK_BYTES = 64 * 1024
 
-def _fuzz_output_provenance(stream: str, output: bytes) -> dict[str, Any]:
-    if not isinstance(output, bytes) or len(output) > FUZZ_OUTPUT_MAX_BYTES:
-        fail(f"fuzz {stream} output cannot be captured within the evidence bound")
-    return {
-        "bytes": len(output),
-        "sha256": sha256_bytes(output),
-        "base64": base64.b64encode(output).decode("ascii"),
-    }
+
+def _write_fuzz_blob(data: bytes) -> dict[str, Any]:
+    digest = sha256_bytes(data)
+    root = EVIDENCE_ROOT.resolve()
+    path = EVIDENCE_ROOT / "fuzz" / "blobs" / f"{digest}.bin"
+    if EVIDENCE_ROOT.is_symlink():
+        fail("fuzz evidence root is unsafe")
+    for directory in (EVIDENCE_ROOT, EVIDENCE_ROOT / "fuzz", path.parent):
+        if directory.exists():
+            if directory.is_symlink() or not directory.is_dir():
+                fail("fuzz blob path is unsafe")
+        else:
+            directory.mkdir(mode=0o755)
+    if path.parent.resolve() != root / "fuzz" / "blobs":
+        fail("fuzz blob path escapes evidence root")
+    if path.exists():
+        if path.is_symlink() or not path.is_file() or bounded_bytes(path, FUZZ_STREAM_MAX_BYTES) != data:
+            fail("immutable fuzz blob already differs")
+    else:
+        fd, temporary = tempfile.mkstemp(prefix=".g009-fuzz-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, 0o444)
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                if path.is_symlink() or not path.is_file() or bounded_bytes(path, FUZZ_STREAM_MAX_BYTES) != data:
+                    fail("immutable fuzz blob race differs")
+            finally:
+                os.unlink(temporary)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    if not path.is_file() or path.is_symlink() or sha256_file(path) != digest:
+        fail("fuzz blob write or binding is absent")
+    return {"path": str(path.relative_to(EVIDENCE_ROOT)), "bytes": len(data), "sha256": digest}
+
+
+def _terminate_fuzz_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+
+
+def _stream_fuzz_command(argv: tuple[str, ...], *, cwd: Path, env: dict[str, str], timeout: float) -> dict[str, Any]:
+    """Capture fuzz output with live per-stream and aggregate limits."""
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    if process.stdout is None or process.stderr is None:
+        fail("fuzz stream setup is absent")
+    streams = {process.stdout.fileno(): ("stdout", process.stdout), process.stderr.fileno(): ("stderr", process.stderr)}
+    captured = {"stdout": bytearray(), "stderr": bytearray()}
+    overflow = {"stdout": False, "stderr": False}
+    reason = "completed"
+    deadline = time.monotonic() + timeout
+    while streams:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 and reason == "completed":
+            reason = "timeout"
+            _terminate_fuzz_process(process)
+        readable, _, _ = select.select(list(streams), [], [], max(0, min(remaining, 0.1)))
+        for fd in readable:
+            name, stream = streams[fd]
+            chunk = os.read(fd, FUZZ_READ_CHUNK_BYTES)
+            if not chunk:
+                streams.pop(fd)
+                stream.close()
+                continue
+            aggregate = len(captured["stdout"]) + len(captured["stderr"])
+            permitted = min(FUZZ_STREAM_MAX_BYTES - len(captured[name]), FUZZ_AGGREGATE_MAX_BYTES - aggregate)
+            if permitted > 0:
+                captured[name].extend(chunk[:permitted])
+            if len(chunk) > permitted and reason == "completed":
+                overflow[name] = True
+                reason = "output_overflow"
+                _terminate_fuzz_process(process)
+    returncode = process.wait(timeout=5)
+    return {"stdout": bytes(captured["stdout"]), "stderr": bytes(captured["stderr"]),
+            "stdout_overflow": overflow["stdout"], "stderr_overflow": overflow["stderr"],
+            "termination_reason": reason, "exit_code": returncode if returncode >= 0 else None,
+            "signal": -returncode if returncode < 0 else None, "timeout": reason == "timeout"}
+
 
 def _fuzz_provenance(profile_data: dict[str, Any], fuzz_env: dict[str, str]) -> dict[str, Any]:
     toolchain = profile_data["fuzz"]["toolchain"]
@@ -578,13 +669,8 @@ def _fuzz_provenance(profile_data: dict[str, Any], fuzz_env: dict[str, str]) -> 
         fail("rustup is required for fuzz provenance")
     tools: list[dict[str, str]] = []
     for name in ("rustc", "cargo"):
-        located = subprocess.run(
-            (rustup, "which", "--toolchain", toolchain["channel"], name),
-            cwd=ROOT,
-            capture_output=True,
-            check=False,
-            env={"PATH": os.environ.get("PATH", "")},
-        )
+        located = subprocess.run((rustup, "which", "--toolchain", toolchain["channel"], name), cwd=ROOT,
+                                 capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
         if located.returncode != 0:
             fail(f"cannot locate fuzz {name}")
         path = Path(located.stdout.decode("utf-8", "strict").strip()).resolve()
@@ -602,28 +688,33 @@ def _fuzz_provenance(profile_data: dict[str, Any], fuzz_env: dict[str, str]) -> 
     sources.extend(ROOT / "fuzz" / "fuzz_targets" / f"{target}.rs" for target in FUZZ_TARGETS)
     if any(not source.is_file() for source in sources):
         fail("fuzz source binding is absent")
-    return {
-        "source": identity_manifest(),
-        "profile_sha256": sha256_bytes(canonical_json(profile_data)),
-        "toolchain": {"channel": toolchain["channel"], "rustc": toolchain["rustc"], "tools": tools},
-        "sources": [
-            {"path": str(source.relative_to(ROOT)), "sha256": sha256_file(source)}
-            for source in sources
-        ],
-    }
+    return {"source": identity_manifest(), "profile_sha256": sha256_bytes(canonical_json(profile_data)),
+            "toolchain": {"channel": toolchain["channel"], "rustc": toolchain["rustc"], "tools": tools},
+            "sources": [{"path": str(source.relative_to(ROOT)), "sha256": sha256_file(source)} for source in sources]}
+
+
+def _fuzz_receipt(target: str, corpus: Path, argv: tuple[str, ...], captured: dict[str, Any],
+                  provenance: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+    stdout, stderr = _write_fuzz_blob(captured["stdout"]), _write_fuzz_blob(captured["stderr"])
+    stdout["overflow"], stderr["overflow"] = captured["stdout_overflow"], captured["stderr_overflow"]
+    status = "pass" if captured["exit_code"] == 0 and captured["termination_reason"] == "completed" else "fail"
+    receipt = {"schema": "podway.g009.fuzz-receipt/v1", "target": target, "corpus": str(corpus.relative_to(ROOT)),
+               "argv": list(argv), "limits": {"stream_bytes": FUZZ_STREAM_MAX_BYTES, "aggregate_bytes": FUZZ_AGGREGATE_MAX_BYTES,
+               "max_total_time": policy["seconds_per_target"], "timeout_seconds": policy["timeout_seconds"], "rss_limit_mb": policy["rss_limit_mb"]},
+               "stdout": stdout, "stderr": stderr, "termination_reason": captured["termination_reason"],
+               "exit_code": captured["exit_code"], "signal": captured["signal"], "timeout": captured["timeout"],
+               "status": status, "provenance": provenance}
+    path, digest = evidence("fuzz-receipts", receipt)
+    return {"path": str(path.relative_to(EVIDENCE_ROOT)), "sha256": digest, "status": status}
+
 
 def _run_fuzz_gate(profile_data: dict[str, Any]) -> dict[str, Any]:
-    policy = profile_data["fuzz"]["rc"]
-    toolchain = profile_data["fuzz"]["toolchain"]
+    policy, toolchain = profile_data["fuzz"]["rc"], profile_data["fuzz"]["toolchain"]
     rustup = shutil.which("rustup")
     if rustup is None:
         fail("rustup is required for fuzz qualification")
-    proxy_directory = Path(rustup).resolve().parent
-    fuzz_env = {
-        "PATH": f"{proxy_directory}{os.pathsep}{os.environ.get('PATH', '')}",
-        "RUSTUP_TOOLCHAIN": toolchain["channel"],
-        "ASAN_OPTIONS": profile_data["fuzz"]["sanitizer_env"]["ASAN_OPTIONS"],
-    }
+    fuzz_env = {"PATH": f"{Path(rustup).resolve().parent}{os.pathsep}{os.environ.get('PATH', '')}",
+                "RUSTUP_TOOLCHAIN": toolchain["channel"], "ASAN_OPTIONS": profile_data["fuzz"]["sanitizer_env"]["ASAN_OPTIONS"]}
     rustc = run_allowed(("rustc", "--version"), env=fuzz_env)
     if rustc.returncode != 0 or rustc.stdout.decode("utf-8", "strict").strip() != f"rustc {toolchain['rustc']}":
         fail("installed fuzz toolchain differs from the frozen profile")
@@ -633,23 +724,12 @@ def _run_fuzz_gate(profile_data: dict[str, Any]) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     for target in FUZZ_TARGETS:
         corpus = Path(tempfile.mkdtemp(prefix=f"{target}-", dir=root))
-        argv = ("cargo", "fuzz", "run", target, str(corpus), "--",
-                f"-max_total_time={policy['seconds_per_target']}",
-                f"-timeout={policy['timeout_seconds']}",
-                f"-rss_limit_mb={policy['rss_limit_mb']}")
-        try:
-            result = run_allowed(argv, cwd=ROOT / "fuzz", env=fuzz_env, timeout=policy["seconds_per_target"] + policy["timeout_seconds"])
-        except subprocess.TimeoutExpired:
-            fail(f"fuzz target exceeded profile timeout: {target}")
-        results.append({
-            "target": target,
-            "corpus": str(corpus.relative_to(ROOT)),
-            "argv": list(argv),
-            "exit_code": result.returncode,
-            "stdout": _fuzz_output_provenance("stdout", result.stdout),
-            "stderr": _fuzz_output_provenance("stderr", result.stderr),
-            "status": "pass" if result.returncode == 0 else "fail",
-        })
+        argv = ("cargo", "fuzz", "run", target, str(corpus), "--", f"-max_total_time={policy['seconds_per_target']}",
+                f"-timeout={policy['timeout_seconds']}", f"-rss_limit_mb={policy['rss_limit_mb']}")
+        captured = _stream_fuzz_command(argv, cwd=ROOT / "fuzz", env=fuzz_env,
+                                        timeout=policy["seconds_per_target"] + policy["timeout_seconds"])
+        receipt = _fuzz_receipt(target, corpus, argv, captured, provenance, policy)
+        results.append({"target": target, "corpus": str(corpus.relative_to(ROOT)), "receipt": receipt, "status": receipt["status"]})
     return {"provenance": provenance, "commands": results}
 
 def run_gate(gate_id: str, profile_data: dict[str, Any]) -> dict[str, Any]:

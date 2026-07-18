@@ -394,8 +394,8 @@ impl ServiceInstallMetadataV1 {
     pub const fn updated_at(&self) -> UnixMillis {
         self.updated_at
     }
-    fn with_generation(mut self) -> Self {
-        self.generation = Some(publication_generation_v1(&self));
+    fn with_generation_for_plist(mut self, plist_without_generation: &[u8]) -> Self {
+        self.generation = Some(publication_generation_v1(&self, plist_without_generation));
         self
     }
 }
@@ -1294,19 +1294,59 @@ pub enum DurabilityFailpointV1 {
 }
 
 #[cfg(any(test, debug_assertions))]
-static DURABILITY_FAILPOINT_V1: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+#[derive(Debug)]
+struct DurabilityFailpointSelectionV1 {
+    destination: PathBuf,
+    write_invocation: u64,
+    observed_writes: u64,
+    failpoint: DurabilityFailpointV1,
+}
+
+#[cfg(any(test, debug_assertions))]
+static DURABILITY_FAILPOINT_V1: Mutex<Option<DurabilityFailpointSelectionV1>> = Mutex::new(None);
 
 impl StdServiceFilesystemV1 {
     #[cfg(any(test, debug_assertions))]
-    pub fn inject_durability_failpoint_for_testing(failpoint: DurabilityFailpointV1) {
-        DURABILITY_FAILPOINT_V1.store(failpoint as u8 + 1, std::sync::atomic::Ordering::SeqCst);
+    pub fn inject_durability_failpoint_for_testing(
+        destination: impl AsRef<Path>,
+        write_invocation: u64,
+        failpoint: DurabilityFailpointV1,
+    ) {
+        assert!(write_invocation > 0, "write invocation must be non-zero");
+        *DURABILITY_FAILPOINT_V1
+            .lock()
+            .expect("durability failpoint lock") = Some(DurabilityFailpointSelectionV1 {
+            destination: destination.as_ref().to_path_buf(),
+            write_invocation,
+            observed_writes: 0,
+            failpoint,
+        });
     }
 
     #[cfg(any(test, debug_assertions))]
-    fn fail_at_durability_boundary(failpoint: DurabilityFailpointV1) {
-        if DURABILITY_FAILPOINT_V1.load(std::sync::atomic::Ordering::SeqCst) == failpoint as u8 + 1
-        {
+    fn fail_at_durability_boundary(path: &Path, failpoint: DurabilityFailpointV1) {
+        let selected = DURABILITY_FAILPOINT_V1
+            .lock()
+            .expect("durability failpoint lock");
+        if selected.as_ref().is_some_and(|selection| {
+            selection.destination == path
+                && selection.observed_writes == selection.write_invocation
+                && selection.failpoint == failpoint
+        }) {
             std::process::exit(86);
+        }
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn observe_atomic_write(path: &Path) {
+        let mut selected = DURABILITY_FAILPOINT_V1
+            .lock()
+            .expect("durability failpoint lock");
+        if let Some(selection) = selected
+            .as_mut()
+            .filter(|selection| selection.destination == path)
+        {
+            selection.observed_writes += 1;
         }
     }
 
@@ -1355,6 +1395,8 @@ impl ServiceFilesystemV1 for StdServiceFilesystemV1 {
         contents: &[u8],
         mode: u32,
     ) -> Result<(), ServiceFilesystemErrorV1> {
+        #[cfg(any(test, debug_assertions))]
+        Self::observe_atomic_write(path);
         let parent = path.parent().ok_or_else(|| {
             ServiceFilesystemErrorV1::other("service file has no parent directory")
         })?;
@@ -1374,24 +1416,30 @@ impl ServiceFilesystemV1 for StdServiceFilesystemV1 {
                         file.write_all(contents).map_err(Self::error)?;
                         #[cfg(any(test, debug_assertions))]
                         Self::fail_at_durability_boundary(
+                            path,
                             DurabilityFailpointV1::AfterTemporaryWrite,
                         );
                         file.sync_all().map_err(Self::error)?;
                         Self::set_mode(&temporary, mode)?;
                         #[cfg(any(test, debug_assertions))]
                         Self::fail_at_durability_boundary(
+                            path,
                             DurabilityFailpointV1::AfterFileSyncAndMode,
                         );
                         #[cfg(any(test, debug_assertions))]
-                        Self::fail_at_durability_boundary(DurabilityFailpointV1::BeforeRename);
+                        Self::fail_at_durability_boundary(
+                            path,
+                            DurabilityFailpointV1::BeforeRename,
+                        );
                         fs::rename(&temporary, path).map_err(Self::error)?;
                         #[cfg(any(test, debug_assertions))]
-                        Self::fail_at_durability_boundary(DurabilityFailpointV1::AfterRename);
+                        Self::fail_at_durability_boundary(path, DurabilityFailpointV1::AfterRename);
                         fs::File::open(parent)
                             .and_then(|directory| directory.sync_all())
                             .map_err(Self::error)?;
                         #[cfg(any(test, debug_assertions))]
                         Self::fail_at_durability_boundary(
+                            path,
                             DurabilityFailpointV1::AfterParentDirectorySync,
                         );
                         Ok(())
@@ -1693,9 +1741,10 @@ where
                     .filesystem
                     .read_file(plist_path)
                     .map_err(|e| self.fs_error(op, plist_path, e))?;
-                if plist_generation_v1(&plist)? != metadata.generation.as_deref() {
+                let expected = authenticated_plist_v1(&metadata, paths.log_path().as_path())?;
+                if metadata.generation.is_none() || plist != expected {
                     return Err(ServiceErrorV1::InvalidMetadataV1 {
-                        message: "service plist and metadata generations do not match".to_owned(),
+                        message: "service publication authentication does not match".to_owned(),
                     });
                 }
                 Ok(Some(metadata))
@@ -1802,34 +1851,50 @@ where
                 message: format!("daemon binary is not executable: {}", binary.display()),
             });
         }
-        let existing = self.metadata(paths)?;
-        if update_only && existing.is_none() {
-            return Ok(ServiceCommandResultV1::Outcome(
-                ServiceOutcomeV1::NotInstalledV1(ServiceNotInstalledV1::new(self.clock.now())),
-            ));
-        }
-        let now = self.clock.now();
-        let metadata = ServiceInstallMetadataV1::new(
-            binary,
-            existing
-                .as_ref()
-                .map_or(now, ServiceInstallMetadataV1::installed_at),
-            now,
-        )
-        .map_err(|e| ServiceErrorV1::InvalidMetadataV1 {
-            message: e.to_string(),
-        })?
-        .with_generation();
-        let plist = launch_agent_plist_with_generation_v1(
-            binary,
-            paths.log_path().as_path(),
-            metadata.generation.as_deref(),
-        );
         let plist_path = paths.launch_agent_path().as_path();
         let exists = self
             .filesystem
             .exists(plist_path)
             .map_err(|e| self.fs_error(op, plist_path, e))?;
+        let existing = match self.metadata(paths) {
+            Ok(metadata) => metadata,
+            Err(ServiceErrorV1::InvalidMetadataV1 { .. }) => None,
+            Err(error) => return Err(error),
+        };
+        if update_only && existing.is_none() && !exists {
+            return Ok(ServiceCommandResultV1::Outcome(
+                ServiceOutcomeV1::NotInstalledV1(ServiceNotInstalledV1::new(self.clock.now())),
+            ));
+        }
+        let now = self.clock.now();
+        let same_binary = existing
+            .as_ref()
+            .is_some_and(|metadata| metadata.daemon_binary() == binary);
+        let metadata = ServiceInstallMetadataV1::new(
+            binary,
+            existing
+                .as_ref()
+                .map_or(now, ServiceInstallMetadataV1::installed_at),
+            if same_binary {
+                existing
+                    .as_ref()
+                    .expect("same binary has existing metadata")
+                    .updated_at()
+            } else {
+                now
+            },
+        )
+        .map_err(|e| ServiceErrorV1::InvalidMetadataV1 {
+            message: e.to_string(),
+        })?;
+        let plist_without_generation =
+            launch_agent_plist_with_generation_v1(binary, paths.log_path().as_path(), None);
+        let metadata = metadata.with_generation_for_plist(&plist_without_generation);
+        let plist = launch_agent_plist_with_generation_v1(
+            binary,
+            paths.log_path().as_path(),
+            metadata.generation.as_deref(),
+        );
         let unchanged = existing.as_ref() == Some(&metadata)
             && exists
             && self
@@ -2122,44 +2187,125 @@ fn metadata_json_v1(metadata: &ServiceInstallMetadataV1) -> String {
     )
 }
 
-fn publication_generation_v1(metadata: &ServiceInstallMetadataV1) -> String {
-    let mut generation = format!(
-        "{:016x}-{:016x}-",
+fn publication_generation_v1(
+    metadata: &ServiceInstallMetadataV1,
+    plist_without_generation: &[u8],
+) -> String {
+    let stable_metadata = format!(
+        "{{\"version\":{},\"label\":\"{}\",\"daemon_binary\":\"{}\",\"installed_at\":{}}}",
+        metadata.version(),
+        metadata.label(),
+        json_escape(&metadata.daemon_binary().display().to_string()),
         metadata.installed_at().get(),
-        metadata.updated_at().get()
     );
-    for byte in metadata.daemon_binary().as_os_str().as_encoded_bytes() {
-        generation.push_str(&format!("{byte:02x}"));
-    }
-    generation
+    let mut authenticated =
+        Vec::with_capacity(plist_without_generation.len() + stable_metadata.len() + 1);
+    authenticated.extend_from_slice(plist_without_generation);
+    authenticated.push(b'\n');
+    authenticated.extend_from_slice(stable_metadata.as_bytes());
+    sha256_hex_v1(&authenticated)
 }
 
-fn plist_generation_v1(plist: &[u8]) -> Result<Option<&str>, ServiceErrorV1> {
-    let plist = std::str::from_utf8(plist).map_err(|_| ServiceErrorV1::InvalidMetadataV1 {
-        message: "plist is not UTF-8".to_owned(),
-    })?;
-    let marker = "<key>PodwayGeneration</key>\n  <string>";
-    match plist.split_once(marker) {
-        None => Ok(None),
-        Some((_, tail)) => {
-            let generation = tail
-                .split_once("</string>")
-                .map(|(value, _)| value)
-                .ok_or_else(|| ServiceErrorV1::InvalidMetadataV1 {
-                    message: "plist generation is malformed".to_owned(),
-                })?;
-            if generation.is_empty()
-                || !generation
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-            {
-                return Err(ServiceErrorV1::InvalidMetadataV1 {
-                    message: "plist generation is invalid".to_owned(),
-                });
-            }
-            Ok(Some(generation))
-        }
+fn authenticated_plist_v1(
+    metadata: &ServiceInstallMetadataV1,
+    log_path: &Path,
+) -> Result<Vec<u8>, ServiceErrorV1> {
+    let plist_without_generation =
+        launch_agent_plist_with_generation_v1(metadata.daemon_binary(), log_path, None);
+    let expected_generation = publication_generation_v1(metadata, &plist_without_generation);
+    if metadata.generation.as_deref() != Some(expected_generation.as_str()) {
+        return Err(ServiceErrorV1::InvalidMetadataV1 {
+            message: "metadata generation is invalid".to_owned(),
+        });
     }
+    Ok(launch_agent_plist_with_generation_v1(
+        metadata.daemon_binary(),
+        log_path,
+        Some(&expected_generation),
+    ))
+}
+
+fn sha256_hex_v1(input: &[u8]) -> String {
+    let mut state = [
+        0x6a09e667_u32,
+        0xbb67ae85,
+        0x3c6ef372,
+        0xa54ff53a,
+        0x510e527f,
+        0x9b05688c,
+        0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    let bit_length = (input.len() as u64).wrapping_mul(8);
+    let mut padded = input.to_vec();
+    padded.push(0x80);
+    let final_length = (padded.len() + 8).next_multiple_of(64);
+    padded.resize(final_length - 8, 0);
+    padded.extend_from_slice(&bit_length.to_be_bytes());
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    for chunk in padded.chunks_exact(64) {
+        let mut words = [0_u32; 64];
+        for (index, word) in words[..16].iter_mut().enumerate() {
+            *word = u32::from_be_bytes(
+                chunk[index * 4..index * 4 + 4]
+                    .try_into()
+                    .expect("SHA-256 block word"),
+            );
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for (index, constant) in K.iter().enumerate() {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choice = (e & f) ^ ((!e) & g);
+            let temporary1 = h
+                .wrapping_add(s1)
+                .wrapping_add(choice)
+                .wrapping_add(*constant)
+                .wrapping_add(words[index]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let temporary2 = s0.wrapping_add(majority);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temporary1);
+            d = c;
+            c = b;
+            b = a;
+            a = temporary1.wrapping_add(temporary2);
+        }
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+        state[5] = state[5].wrapping_add(f);
+        state[6] = state[6].wrapping_add(g);
+        state[7] = state[7].wrapping_add(h);
+    }
+    state.iter().map(|word| format!("{word:08x}")).collect()
 }
 
 fn parse_metadata_v1(bytes: &[u8]) -> Result<ServiceInstallMetadataV1, ServiceErrorV1> {
@@ -2202,7 +2348,11 @@ fn parse_metadata_v1(bytes: &[u8]) -> Result<ServiceInstallMetadataV1, ServiceEr
         message: e.to_string(),
     })?;
     if let Some(generation) = json_field(text, "generation") {
-        if generation != publication_generation_v1(&metadata) {
+        if generation.len() != 64
+            || !generation
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
             return Err(ServiceErrorV1::InvalidMetadataV1 {
                 message: "metadata generation is invalid".to_owned(),
             });

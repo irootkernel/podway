@@ -3,13 +3,16 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import tempfile
 import zipfile
 from datetime import date
 import tomllib
 from fractions import Fraction
 from pathlib import Path
+import sys
 from typing import Any
+import re
 from g009_common import QualificationError, TARGET, canonical_json, load_json, safe_extract_member, sha256_file
 from g009_performance import characterize, nearest_rank
 from g009_release import inspect_archive, load_rc, verify_rc_consumption
@@ -227,6 +230,111 @@ def validate_crash_registry(path: Path) -> None:
     if coverage.get("percent") != 100 or set(coverage) != {"required", "covered", "percent"}:
         raise QualificationError("crash coverage is not exact")
 
+def validate_fuzz_receipt(path: Path, evidence_root: Path, expected_source: dict[str, Any] | None = None) -> None:
+    root = evidence_root.resolve()
+    receipt_path = path.resolve()
+    if not receipt_path.is_relative_to(root) or receipt_path.is_symlink() or not receipt_path.is_file():
+        raise QualificationError("fuzz receipt path is unsafe or absent")
+    receipt = load_json(receipt_path)
+    required = {"schema", "target", "corpus", "argv", "limits", "stdout", "stderr", "termination_reason",
+                "exit_code", "signal", "timeout", "status", "provenance"}
+    if not isinstance(receipt, dict) or set(receipt) != required or receipt["schema"] != "podway.g009.fuzz-receipt/v1":
+        raise QualificationError("fuzz receipt schema is incomplete")
+    if receipt["target"] not in FUZZ_TARGETS or not isinstance(receipt["argv"], list) or not receipt["argv"]:
+        raise QualificationError("fuzz receipt target or argv is malformed")
+    limits = receipt["limits"]
+    if limits != {"stream_bytes": 1024 * 1024, "aggregate_bytes": 2 * 1024 * 1024,
+                  "max_total_time": 3600, "timeout_seconds": 5, "rss_limit_mb": 512}:
+        raise QualificationError("fuzz receipt limits drift")
+    streams = [receipt["stdout"], receipt["stderr"]]
+    if any(not isinstance(item, dict) or set(item) != {"path", "bytes", "sha256", "overflow"} for item in streams):
+        raise QualificationError("fuzz receipt blob binding is incomplete")
+    total = 0
+    for stream in streams:
+        relative, size, digest = stream["path"], stream["bytes"], stream["sha256"]
+        if (not isinstance(relative, str) or not re.fullmatch(r"fuzz/blobs/[0-9a-f]{64}\.bin", relative)
+                or not isinstance(size, int) or size < 0 or size > limits["stream_bytes"]
+                or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not isinstance(stream["overflow"], bool)):
+            raise QualificationError("fuzz blob metadata is malformed")
+        blob = (root / relative).resolve()
+        if not blob.is_relative_to(root) or blob.is_symlink() or not blob.is_file() or blob.stat().st_size != size or sha256_file(blob) != digest:
+            raise QualificationError("fuzz blob is absent or hash/size binding differs")
+        if relative != f"fuzz/blobs/{digest}.bin":
+            raise QualificationError("fuzz blob path is not content addressed")
+        total += size
+    if total > limits["aggregate_bytes"]:
+        raise QualificationError("fuzz blobs exceed aggregate capture limit")
+    reason = receipt["termination_reason"]
+    if reason not in {"completed", "timeout", "output_overflow"} or not isinstance(receipt["timeout"], bool):
+        raise QualificationError("fuzz termination receipt is malformed")
+    if (reason == "timeout") != receipt["timeout"]:
+        raise QualificationError("fuzz timeout binding differs")
+    if reason == "output_overflow" and not any(stream["overflow"] for stream in streams):
+        raise QualificationError("fuzz overflow has no overflowing stream")
+    if reason != "output_overflow" and any(stream["overflow"] for stream in streams):
+        raise QualificationError("fuzz stream overflow reason differs")
+    if not ((isinstance(receipt["exit_code"], int) and receipt["exit_code"] >= 0 and receipt["signal"] is None)
+            or (receipt["exit_code"] is None and isinstance(receipt["signal"], int) and receipt["signal"] > 0)):
+        raise QualificationError("fuzz exit status is malformed")
+    expected_status = "pass" if reason == "completed" and receipt["exit_code"] == 0 else "fail"
+    if receipt["status"] != expected_status:
+        raise QualificationError("fuzz receipt status is incomplete")
+    provenance = receipt["provenance"]
+    if not isinstance(provenance, dict) or set(provenance) != {"source", "profile_sha256", "toolchain", "sources"}:
+        raise QualificationError("fuzz receipt provenance is incomplete")
+    source = provenance["source"]
+    if (not isinstance(source, dict) or not isinstance(source.get("commit"), str) or not re.fullmatch(r"[0-9a-f]{40}", source["commit"])
+            or not isinstance(source.get("tree"), str) or not re.fullmatch(r"[0-9a-f]{40}", source["tree"])):
+        raise QualificationError("fuzz receipt lacks full commit/tree binding")
+    if expected_source is not None and source != expected_source:
+        raise QualificationError("fuzz receipt source differs from gate evidence")
+    if not isinstance(provenance["profile_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", provenance["profile_sha256"]):
+        raise QualificationError("fuzz receipt profile digest is malformed")
+    toolchain, sources = provenance["toolchain"], provenance["sources"]
+    if not isinstance(toolchain, dict) or not isinstance(toolchain.get("tools"), list) or not toolchain["tools"] or not isinstance(sources, list) or not sources:
+        raise QualificationError("fuzz receipt tool or source bindings are absent")
+    for tool in toolchain["tools"]:
+        if (not isinstance(tool, dict) or set(tool) != {"id", "path", "sha256"} or not isinstance(tool["id"], str)
+                or not isinstance(tool["path"], str) or not Path(tool["path"]).is_file()
+                or not isinstance(tool["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tool["sha256"])
+                or sha256_file(Path(tool["path"])) != tool["sha256"]):
+            raise QualificationError("fuzz receipt tool digest binding is malformed")
+    expected_sources = {"Cargo.lock", "fuzz/Cargo.toml", "tools/run_g009_qualification.py",
+                        *(f"fuzz/fuzz_targets/{target}.rs" for target in FUZZ_TARGETS)}
+    if {item.get("path") for item in sources if isinstance(item, dict)} != expected_sources:
+        raise QualificationError("fuzz receipt source set is incomplete")
+    for item in sources:
+        if (not isinstance(item, dict) or set(item) != {"path", "sha256"} or not isinstance(item["path"], str)
+                or not isinstance(item["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])):
+            raise QualificationError("fuzz receipt source digest binding is malformed")
+        source_path = (ROOT / item["path"]).resolve()
+        if not source_path.is_relative_to(ROOT) or not source_path.is_file() or sha256_file(source_path) != item["sha256"]:
+            raise QualificationError("fuzz receipt source binding differs")
+
+
+def validate_fuzz_gate(payload: dict[str, Any], evidence_root: Path) -> None:
+    commands = payload.get("commands")
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, dict) or not isinstance(provenance.get("source"), dict):
+        raise QualificationError("fuzz gate provenance is incomplete")
+    if not isinstance(commands, list) or [item.get("target") for item in commands if isinstance(item, dict)] != list(FUZZ_TARGETS):
+        raise QualificationError("fuzz gate lacks every target receipt")
+    for command in commands:
+        if not isinstance(command, dict) or set(command) != {"target", "corpus", "receipt", "status"}:
+            raise QualificationError("fuzz gate command receipt is malformed")
+        binding = command["receipt"]
+        if not isinstance(binding, dict) or set(binding) != {"path", "sha256", "status"}:
+            raise QualificationError("fuzz receipt reference is incomplete")
+        if not isinstance(binding["path"], str) or not re.fullmatch(r"fuzz-receipts/[0-9a-f]{64}\.json", binding["path"]):
+            raise QualificationError("fuzz receipt reference path is malformed")
+        receipt_path = (evidence_root.resolve() / binding["path"]).resolve()
+        if not receipt_path.is_relative_to(evidence_root.resolve()) or not receipt_path.is_file() or receipt_path.is_symlink() or sha256_file(receipt_path) != binding["sha256"]:
+            raise QualificationError("fuzz receipt reference is unbound")
+        validate_fuzz_receipt(receipt_path, evidence_root, provenance["source"])
+        receipt = load_json(receipt_path)
+        if binding["status"] != receipt["status"] or command["status"] != receipt["status"]:
+            raise QualificationError("fuzz receipt status binding differs")
 def validate_final(rc_path: Path, index_path: Path, review_path: Path, evidence_root: Path) -> None:
     rc = verify_rc_consumption(rc_path)
     index, envelope = load_json(index_path), load_json(review_path)
@@ -261,6 +369,8 @@ def validate_final(rc_path: Path, index_path: Path, review_path: Path, evidence_
         payload = load_json(artifact)
         if not isinstance(payload, dict) or payload.get("rc_sha256") != digest or payload.get("target") != TARGET or payload.get("source") != source or payload.get("blockers") != [] or payload.get("status") != "pass":
             raise QualificationError("indexed gate artifact is semantically unbound")
+        if row["gate_id"] == "G009-GATE-FUZZ":
+            validate_fuzz_gate(payload, resolved_root)
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -280,6 +390,17 @@ def self_test() -> None:
         escaping = base / "escaping.zip"
         with zipfile.ZipFile(escaping, "w") as archive: archive.writestr("../outside", b"x")
         reject(lambda: inspect_archive(escaping), "archive traversal")
+    from run_g009_qualification import _stream_fuzz_command
+    fixtures = (
+        ((sys.executable, "-c", "import sys;sys.stdout.buffer.write(b'ok')"), 1.0, "completed", 0),
+        ((sys.executable, "-c", "import sys;sys.exit(7)"), 1.0, "completed", 7),
+        ((sys.executable, "-c", "import time;time.sleep(60)"), 0.01, "timeout", None),
+        ((sys.executable, "-c", "import sys;sys.stdout.buffer.write(b'x'*(1024*1024+1))"), 1.0, "output_overflow", None),
+    )
+    for argv, timeout, reason, exit_code in fixtures:
+        captured = _stream_fuzz_command(argv, cwd=ROOT, env=dict(os.environ), timeout=timeout)
+        if captured["termination_reason"] != reason or (exit_code is not None and captured["exit_code"] != exit_code):
+            raise AssertionError(f"fuzz streaming sentinel failed: {reason}")
     checkpoints = [
         {"id": "G009-GATE-PREFLIGHT", "dispatch": {"command": "preflight", "required_args": ["--rc"]}},
         {"id": "G009-GATE-PERFORMANCE", "dispatch": {"command": "holdout", "required_args": ["--rc", "--warmups", "--samples", "--bin-dir"]}},
@@ -305,13 +426,17 @@ def main() -> int:
     parser.add_argument("--index", help="final acceptance index")
     parser.add_argument("--review", help="final review")
     parser.add_argument("--evidence-root", help="root containing indexed local evidence")
+    parser.add_argument("--fuzz-receipt", help="fuzz receipt to validate with --evidence-root")
     args = parser.parse_args()
     try:
-        final_requested = any((args.rc, args.index, args.review, args.evidence_root))
-        if not any((args.self_test, args.protocol, args.traceability, args.crash_registry, final_requested)): parser.error("supply --self-test and/or validation inputs")
+        final_requested = any((args.rc, args.index, args.review))
+        if not any((args.self_test, args.protocol, args.traceability, args.crash_registry, args.fuzz_receipt, final_requested)): parser.error("supply --self-test and/or validation inputs")
         if args.protocol: validate_protocol(Path(args.protocol))
         if args.traceability: validate_traceability(Path(args.traceability))
         if args.crash_registry: validate_crash_registry(Path(args.crash_registry))
+        if args.fuzz_receipt:
+            if not args.evidence_root: parser.error("--fuzz-receipt requires --evidence-root")
+            validate_fuzz_receipt(Path(args.fuzz_receipt), Path(args.evidence_root))
         if final_requested:
             if not all((args.rc, args.index, args.review, args.evidence_root)): parser.error("final validation requires --rc --index --review --evidence-root")
             validate_final(Path(args.rc), Path(args.index), Path(args.review), Path(args.evidence_root))

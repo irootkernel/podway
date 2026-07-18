@@ -253,7 +253,7 @@ fn assert_no_service_temporary_is_accepted(paths: &ServiceRuntimePathsV1) {
     }
 }
 
-fn run_publication_crash_child(root: &Path, point: &str) {
+fn run_publication_crash_child(root: &Path, destination: &str, point: &str) {
     let paths = paths(root);
     let old_binary = binary(root, "podwayd-old");
     let new_binary = binary(root, "podwayd-new");
@@ -269,7 +269,16 @@ fn run_publication_crash_child(root: &Path, point: &str) {
         .install(install_spec(&old_binary, &paths))
         .expect("publish complete old state");
 
-    StdServiceFilesystemV1::inject_durability_failpoint_for_testing(failpoint(point));
+    let destination = match destination {
+        "plist" => paths.launch_agent_path().as_path(),
+        "metadata" => paths.metadata_index_path().as_path(),
+        _ => panic!("unknown durability destination"),
+    };
+    StdServiceFilesystemV1::inject_durability_failpoint_for_testing(
+        destination,
+        1,
+        failpoint(point),
+    );
     let clock = FixedServiceClockV1::new(UnixMillis::new(2));
     let runner =
         MacosServiceCommandRunnerV1::new(StdServiceFilesystemV1, SuccessfulLaunchctl, clock, 501)
@@ -283,67 +292,88 @@ fn run_publication_crash_child(root: &Path, point: &str) {
 
 #[test]
 fn atomic_service_publication_crash_child_leaves_no_partial_state() {
-    if let (Some(root), Some(point)) = (
+    if let (Some(root), Some(destination), Some(point)) = (
         std::env::var_os("PODWAY_SERVICE_CRASH_CHILD_ROOT"),
+        std::env::var_os("PODWAY_SERVICE_DURABILITY_DESTINATION"),
         std::env::var_os("PODWAY_SERVICE_DURABILITY_FAILPOINT"),
     ) {
-        run_publication_crash_child(Path::new(&root), &point.to_string_lossy());
+        run_publication_crash_child(
+            Path::new(&root),
+            &destination.to_string_lossy(),
+            &point.to_string_lossy(),
+        );
         return;
     }
 
-    for point in [
-        "after-temporary-write",
-        "after-file-sync-mode",
-        "before-rename",
-        "after-rename",
-        "after-parent-sync",
-    ] {
-        let root = unique_root();
-        let child = Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "atomic_service_publication_crash_child_leaves_no_partial_state",
-                "--nocapture",
-            ])
-            .env("PODWAY_SERVICE_CRASH_CHILD_ROOT", &root)
-            .env("PODWAY_SERVICE_DURABILITY_FAILPOINT", point)
-            .status()
-            .expect("spawn crash child");
-        assert_eq!(
-            child.code(),
-            Some(86),
-            "{point} must terminate at its real boundary"
-        );
+    for destination in ["plist", "metadata"] {
+        for point in [
+            "after-temporary-write",
+            "after-file-sync-mode",
+            "before-rename",
+            "after-rename",
+            "after-parent-sync",
+        ] {
+            let root = unique_root();
+            let child = Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "atomic_service_publication_crash_child_leaves_no_partial_state",
+                    "--nocapture",
+                ])
+                .env("PODWAY_SERVICE_CRASH_CHILD_ROOT", &root)
+                .env("PODWAY_SERVICE_DURABILITY_FAILPOINT", point)
+                .env("PODWAY_SERVICE_DURABILITY_DESTINATION", destination)
+                .status()
+                .expect("spawn crash child");
+            assert_eq!(
+                child.code(),
+                Some(86),
+                "{destination}/{point} must terminate at its selected real boundary"
+            );
 
-        let paths = paths(&root);
-        let old_binary = root.join("bin/podwayd-old");
-        let new_binary = root.join("bin/podwayd-new");
-        let plist = paths.launch_agent_path().as_path();
-        let metadata = paths.metadata_index_path().as_path();
-        let observed_plist = fs::read(plist).expect("complete old or new plist");
-        let observed_metadata = fs::read(metadata).expect("complete old or new metadata");
-        let plist_is_old = observed_plist
-            .windows(old_binary.as_os_str().as_encoded_bytes().len())
-            .any(|value| value == old_binary.as_os_str().as_encoded_bytes());
-        let plist_is_new = observed_plist
-            .windows(new_binary.as_os_str().as_encoded_bytes().len())
-            .any(|value| value == new_binary.as_os_str().as_encoded_bytes());
-        let metadata_is_old = observed_metadata
-            .windows(old_binary.as_os_str().as_encoded_bytes().len())
-            .any(|value| value == old_binary.as_os_str().as_encoded_bytes());
-        let metadata_is_new = observed_metadata
-            .windows(new_binary.as_os_str().as_encoded_bytes().len())
-            .any(|value| value == new_binary.as_os_str().as_encoded_bytes());
-        assert!(
-            (plist_is_old && metadata_is_old)
-                || (plist_is_new && metadata_is_new)
-                || (plist_is_new && metadata_is_old),
-            "{point} may expose only old/old, new/new, or a detected mixed generation"
-        );
-        assert_mode_0600(plist, "replacement plist mode");
-        assert_mode_0600(metadata, "replacement metadata mode");
-        assert_no_service_temporary_is_accepted(&paths);
-        if plist_is_new && metadata_is_old {
+            let paths = paths(&root);
+            let old_binary = root.join("bin/podwayd-old");
+            let new_binary = root.join("bin/podwayd-new");
+            let plist = paths.launch_agent_path().as_path();
+            let metadata = paths.metadata_index_path().as_path();
+            let observed_plist = fs::read(plist).expect("complete old or new plist");
+            let observed_metadata = fs::read(metadata).expect("complete old or new metadata");
+            let plist_is_old = observed_plist
+                .windows(old_binary.as_os_str().as_encoded_bytes().len())
+                .any(|value| value == old_binary.as_os_str().as_encoded_bytes());
+            let plist_is_new = observed_plist
+                .windows(new_binary.as_os_str().as_encoded_bytes().len())
+                .any(|value| value == new_binary.as_os_str().as_encoded_bytes());
+            let metadata_is_old = observed_metadata
+                .windows(old_binary.as_os_str().as_encoded_bytes().len())
+                .any(|value| value == old_binary.as_os_str().as_encoded_bytes());
+            let metadata_is_new = observed_metadata
+                .windows(new_binary.as_os_str().as_encoded_bytes().len())
+                .any(|value| value == new_binary.as_os_str().as_encoded_bytes());
+            assert!(
+                (plist_is_old && metadata_is_old)
+                    || (plist_is_new && metadata_is_new)
+                    || (plist_is_new && metadata_is_old),
+                "{point} may expose only old/old, new/new, or a detected mixed generation"
+            );
+            assert_mode_0600(plist, "replacement plist mode");
+            assert_mode_0600(metadata, "replacement metadata mode");
+            assert_no_service_temporary_is_accepted(&paths);
+            if plist_is_new && metadata_is_old {
+                let clock = FixedServiceClockV1::new(UnixMillis::new(3));
+                let runner = MacosServiceCommandRunnerV1::new(
+                    StdServiceFilesystemV1,
+                    SuccessfulLaunchctl,
+                    clock,
+                    501,
+                )
+                .expect("mixed-state observer");
+                let error = ServiceManagerV1::new(runner, clock, paths.clone())
+                    .status()
+                    .expect_err("mixed publication must be rejected");
+                assert!(matches!(error, ServiceErrorV1::InvalidMetadataV1 { .. }));
+            }
+
             let clock = FixedServiceClockV1::new(UnixMillis::new(3));
             let runner = MacosServiceCommandRunnerV1::new(
                 StdServiceFilesystemV1,
@@ -351,45 +381,32 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
                 clock,
                 501,
             )
-            .expect("mixed-state observer");
-            let error = ServiceManagerV1::new(runner, clock, paths.clone())
+            .expect("retry runner");
+            let manager = ServiceManagerV1::new(runner, clock, paths.clone());
+            manager
+                .install(install_spec(&new_binary, &paths))
+                .expect("retry convergence");
+            assert!(
+                fs::read(plist)
+                    .expect("converged plist")
+                    .windows(new_binary.as_os_str().as_encoded_bytes().len())
+                    .any(|value| value == new_binary.as_os_str().as_encoded_bytes()),
+                "{point} retry must converge to the complete new plist"
+            );
+            assert!(
+                fs::read(metadata)
+                    .expect("converged metadata")
+                    .windows(new_binary.as_os_str().as_encoded_bytes().len())
+                    .any(|value| value == new_binary.as_os_str().as_encoded_bytes()),
+                "{point} retry must converge to complete new metadata"
+            );
+            assert_mode_0600(plist, "converged plist mode");
+            assert_mode_0600(metadata, "converged metadata mode");
+            manager
                 .status()
-                .expect_err("mixed publication must be rejected");
-            assert!(matches!(error, ServiceErrorV1::InvalidMetadataV1 { .. }));
+                .expect("retry must restore a coherent publication");
+            fs::remove_dir_all(root).expect("remove fixture");
         }
-
-        let clock = FixedServiceClockV1::new(UnixMillis::new(3));
-        let runner = MacosServiceCommandRunnerV1::new(
-            StdServiceFilesystemV1,
-            SuccessfulLaunchctl,
-            clock,
-            501,
-        )
-        .expect("retry runner");
-        let manager = ServiceManagerV1::new(runner, clock, paths.clone());
-        manager
-            .install(install_spec(&new_binary, &paths))
-            .expect("retry convergence");
-        assert!(
-            fs::read(plist)
-                .expect("converged plist")
-                .windows(new_binary.as_os_str().as_encoded_bytes().len())
-                .any(|value| value == new_binary.as_os_str().as_encoded_bytes()),
-            "{point} retry must converge to the complete new plist"
-        );
-        assert!(
-            fs::read(metadata)
-                .expect("converged metadata")
-                .windows(new_binary.as_os_str().as_encoded_bytes().len())
-                .any(|value| value == new_binary.as_os_str().as_encoded_bytes()),
-            "{point} retry must converge to complete new metadata"
-        );
-        assert_mode_0600(plist, "converged plist mode");
-        assert_mode_0600(metadata, "converged metadata mode");
-        manager
-            .status()
-            .expect("retry must restore a coherent publication");
-        fs::remove_dir_all(root).expect("remove fixture");
     }
 }
 

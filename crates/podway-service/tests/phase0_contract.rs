@@ -681,8 +681,19 @@ fn phase6_install_is_idempotent_and_plist_is_canonical() {
 
     runner.run(command.clone()).expect("first install succeeds");
     let event_count = filesystem.events.lock().expect("test lock").len();
+    let later_runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(9_999)),
+        501,
+    )
+    .expect("non-root service runner");
     assert!(matches!(
-        runner.run(command),
+        later_runner.run(command),
         Ok(ServiceCommandResultV1::Outcome(
             ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
         ))
@@ -705,18 +716,6 @@ fn phase6_install_is_idempotent_and_plist_is_canonical() {
 #[test]
 fn phase6_restart_boots_out_removes_stale_socket_then_bootstraps() {
     let filesystem = Phase6Filesystem::default();
-    filesystem.files.lock().expect("test lock").insert(
-        service_paths().launch_agent_path().as_path().to_path_buf(),
-        b"plist".to_vec(),
-    );
-    filesystem.files.lock().expect("test lock").insert(
-        service_paths().metadata_index_path().as_path().to_path_buf(),
-        br#"{"version":1,"label":"dev.podway.podwayd","daemon_binary":"/Applications/Podway/podwayd","installed_at":1,"updated_at":1}"#.to_vec(),
-    );
-    filesystem.files.lock().expect("test lock").insert(
-        service_paths().socket_path().as_path().to_path_buf(),
-        Vec::new(),
-    );
     let runner = MacosServiceCommandRunnerV1::new(
         filesystem.clone(),
         Phase6Launchctl {
@@ -728,6 +727,16 @@ fn phase6_restart_boots_out_removes_stale_socket_then_bootstraps() {
         501,
     )
     .expect("non-root service runner");
+    runner
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_003),
+            spec: phase6_spec(),
+        })
+        .expect("initial install");
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().socket_path().as_path().to_path_buf(),
+        Vec::new(),
+    );
 
     assert!(matches!(
         runner.run(ServiceCommandV1::Restart {
@@ -755,7 +764,7 @@ fn phase6_restart_boots_out_removes_stale_socket_then_bootstraps() {
         .expect("socket cleanup");
     let bootstrap = events
         .iter()
-        .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
+        .rposition(|event| event.starts_with("launchctl:bootstrap gui/501"))
         .expect("bootstrap");
     assert!(bootout < remove && remove < bootstrap);
 }
@@ -846,14 +855,12 @@ fn phase6_start_stop_status_and_logs_cover_installed_lifecycle_states() {
             ServiceOutcomeV1::NotInstalledV1(_)
         ))
     ));
-    filesystem.files.lock().expect("test lock").insert(
-        service_paths().launch_agent_path().as_path().to_path_buf(),
-        b"plist".to_vec(),
-    );
-    filesystem.files.lock().expect("test lock").insert(
-        service_paths().metadata_index_path().as_path().to_path_buf(),
-        br#"{"version":1,"label":"dev.podway.podwayd","daemon_binary":"/Applications/Podway/podwayd","installed_at":1,"updated_at":1}"#.to_vec(),
-    );
+    runner
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_005),
+            spec: phase6_spec(),
+        })
+        .expect("initial install");
     assert!(matches!(
         runner.run(ServiceCommandV1::Start {
             requested_at: UnixMillis::new(3_005),
@@ -1007,8 +1014,72 @@ fn phase6_status_rejects_incompatible_metadata_and_reports_running_when_loaded()
             requested_at: UnixMillis::new(3_007),
             paths: service_paths(),
         }),
-        Ok(ServiceCommandResultV1::Status(ServiceStatusV1::RunningV1(
-            _
-        )))
+        Err(ServiceErrorV1::InvalidMetadataV1 { .. })
+    ));
+}
+#[test]
+fn phase6_authenticated_generation_rejects_plist_semantic_tampering_and_install_repairs_it() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_008)),
+        501,
+    )
+    .expect("non-root service runner");
+    let install = ServiceCommandV1::Install {
+        requested_at: UnixMillis::new(3_008),
+        spec: phase6_spec(),
+    };
+    runner.run(install.clone()).expect("initial install");
+    let plist_path = service_paths().launch_agent_path().as_path().to_path_buf();
+    let tampered =
+        String::from_utf8(filesystem.files.lock().expect("test lock")[&plist_path].clone())
+            .expect("plist UTF-8")
+            .replace(
+                "<key>RunAtLoad</key>\n  <true/>",
+                "<key>RunAtLoad</key>\n  <false/>",
+            )
+            .into_bytes();
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .insert(plist_path, tampered);
+    for command in [
+        ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_008),
+            paths: service_paths(),
+        },
+        ServiceCommandV1::Start {
+            requested_at: UnixMillis::new(3_008),
+            paths: service_paths(),
+        },
+        ServiceCommandV1::Restart {
+            requested_at: UnixMillis::new(3_008),
+            paths: service_paths(),
+        },
+    ] {
+        assert!(matches!(
+            runner.run(command),
+            Err(ServiceErrorV1::InvalidMetadataV1 { .. })
+        ));
+    }
+    assert!(matches!(
+        runner.run(install),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_008),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Status(_))
     ));
 }
