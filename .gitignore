@@ -19,6 +19,10 @@
 /coverage/
 /dist/
 *.lcov
+/artifacts/g*/
+/artifacts/phase0/verification-logs/
+/artifacts/phase0/verification-report.json
+/artifacts/phase0/verification-report.pointer.json
 *.log
 *.swp
 *.tmp
