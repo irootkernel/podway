@@ -66,12 +66,16 @@
     {"id": "G009-GATE-LIFECYCLE", "dispatch": {"command": "lifecycle", "required_args": ["--rc", "--archive", "--require-clean-user"]}},
     {"id": "G009-GATE-FINAL-001", "dispatch": {"command": "final-review", "required_args": ["--rc", "--traceability", "--evidence-root", "--reviewer", "--require-final-001"]}}
   ],
+  "external_prerequisites": [
+    {"id": "G009-APPROVALS-OWNER-E-F", "kind": "detached-human-approvals", "required_roles": ["owner", "E", "F"], "rc_input_roles": ["approvals", "signer-contract"], "workflow_behavior": "consume-only"}
+  ],
   "invalidation": {
     "new_rc_inputs": ["source.commit", "source.tree", "Cargo.lock", "profile", "target", "host", "tool.identities", "fixture.digests", "crash_registry", "obs_policy", "fuzz_policy", "baseline", "thresholds", "signing_posture", "exceptions"],
     "package_downstream": ["archive.member", "archive.bytes", "signing_posture"],
     "reject": ["dirty-source", "wrong-target", "non-arm64-host", "Rosetta", "universal-binary", "rounded-performance-metric", "post-hoc-threshold", "missing-approval-role", "missing-sample", "stale-evidence", "unbound-exception", "incomplete-crash-coverage", "high-or-critical-defect"]
   },
   "minimum_macos": "11.0",
+  "minimum_macos_scope": "build-and-Mach-O-load-command-target-only",
   "observability": {
     "active_log_max_bytes": 10485760,
     "fallback_ring_capacity": 256,
@@ -118,6 +122,6 @@
     {"adapter_id": "G009-W04", "fixture": "g009/item-update-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W04", "measured_commands": [["podway", "set", "target-audience", "updated"]], "name": "item-update"},
     {"adapter_id": "G009-W05", "fixture": "g009/artifact-hashing-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W05", "measured_commands": [["podway", "attach", "draft-reference", ".g009-artifact.bin"]], "name": "artifact-hashing"},
     {"adapter_id": "G009-W06", "fixture": "g009/db-growth-pruning-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W06", "measured_commands": [["podway", "status"]], "name": "status-after-database-growth"},
-    {"adapter_id": "G009-W07", "fixture": "g009/maximum-input-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 512}, "id": "G009-W07", "measured_commands": [["podway", "set", "target-audience", "<65536-byte-string>"]], "name": "maximum-input-rss-completion-or-rejection", "required_outcome": "complete-or-explicit-rejection"}
+    {"adapter_id": "G009-W07", "fixture": "g009/maximum-input-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 512}, "id": "G009-W07", "input_generator": {"adapter_contract": {"argument_index": 2, "argument_source": "generated_utf8_string", "argv_prefix": ["podway", "set", "target-audience"], "id": "G009-W07"}, "algorithm": "repeat-utf8-code-point", "code_point": "U+0078", "digest": {"algorithm": "sha256", "derivation": "sha256(generated_utf8_bytes)", "hex": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3"}, "utf8_byte_length": 65536, "version": 1}, "measured_commands": [["podway", "set", "target-audience", "<65536-byte-string>"]], "name": "maximum-input-rss-completion-or-rejection", "required_outcome": "complete-or-explicit-rejection"}
   ]
 }

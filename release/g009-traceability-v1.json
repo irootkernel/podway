@@ -1,5 +1,5 @@
 {
-  "coverage": {"required_acceptance_families": 10, "required_g009_contracts": 20, "result": "intent-only", "status": "incomplete-until-current-rc-evidence"},
+  "coverage": {"required_acceptance_families": 12, "required_acceptance_ids": ["ACC-01", "ACC-02", "ACC-03", "ACC-04", "ACC-05", "ACC-06", "ACC-07", "ACC-08", "ACC-09", "ACC-10", "ACC-11", "FINAL-001"], "required_g009_contracts": 20, "result": "intent-only", "status": "incomplete-until-current-rc-evidence"},
   "evidence_root": "artifacts/g009",
   "rows": [
     {"acceptance_family": "product-purpose", "contract_ids": ["G009-GATE-G005", "G009-GATE-PERFORMANCE"], "evidence_role": "production-vertical-and-workload-holdout", "executable_gate": "G009-GATE-G005", "exception_eligible": false, "id": "ACC-01", "owner": "quality"},
@@ -12,7 +12,7 @@
     {"acceptance_family": "macos-operation", "contract_ids": ["G009-GATE-LIFECYCLE", "G009-GATE-PACKAGE"], "evidence_role": "native-clean-user-service-lifecycle", "executable_gate": "G009-GATE-LIFECYCLE", "exception_eligible": false, "id": "ACC-08", "owner": "release-engineering"},
     {"acceptance_family": "safety-and-trust", "contract_ids": ["G009-GATE-SECURITY", "G009-GATE-OBS", "G009-GATE-FUZZ"], "evidence_role": "security-negative-proofs-redaction-and-fuzz", "executable_gate": "G009-GATE-SECURITY", "exception_eligible": false, "id": "ACC-09", "owner": "security"},
     {"acceptance_family": "built-in-presets", "contract_ids": ["G009-GATE-G008", "G009-GATE-CONTRACTS"], "evidence_role": "four-preset-end-to-end-retry-return", "executable_gate": "G009-GATE-G008", "exception_eligible": false, "id": "ACC-10", "owner": "quality"},
-    {"acceptance_family": "distribution", "contract_ids": ["G009-GATE-PACKAGE", "G009-GATE-LIFECYCLE", "G009-GATE-MIGRATION", "G009-GATE-FINAL-001"], "evidence_role": "native-archive-migration-signing-status-and-final-review", "executable_gate": "G009-GATE-PACKAGE", "exception_eligible": true, "id": "ACC-11", "owner": "release-engineering"},
+    {"acceptance_family": "distribution", "contract_ids": ["G009-GATE-PACKAGE", "G009-GATE-LIFECYCLE", "G009-GATE-MIGRATION", "G009-GATE-FINAL-001"], "evidence_role": "native-archive-migration-signing-status-and-final-review", "executable_gate": "G009-GATE-PACKAGE", "exception_eligible": false, "id": "ACC-11", "owner": "release-engineering"},
     {"acceptance_family": "final-acceptance-rule", "contract_ids": ["G009-GATE-FINAL-001"], "evidence_role": "immutable-final-review", "executable_gate": "G009-GATE-FINAL-001", "exception_eligible": false, "id": "FINAL-001", "owner": "release-engineering"},
     {"contract_id": "G009-GATE-PREFLIGHT", "evidence_role": "host-target-tool-profile-manifest", "executable_gate": "G009-GATE-PREFLIGHT", "id": "G009-CTR-01", "invalidation_inputs": ["target", "host", "rust", "release_profile"], "owner": "release-engineering"},
     {"contract_id": "G009-GATE-FORMAT", "evidence_role": "formatter-checkpoint", "executable_gate": "G009-GATE-FORMAT", "id": "G009-CTR-02", "invalidation_inputs": ["source.tree"], "owner": "release-engineering"},

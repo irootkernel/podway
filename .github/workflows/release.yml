@@ -3,15 +3,16 @@ name: Native Apple Silicon release qualification
 on:
   workflow_dispatch:
     inputs:
-      checkpoint:
-        description: Qualification checkpoint to execute
-        required: true
-        type: choice
-        options:
-          - integration
-          - native-rc
       rc_intent:
-        description: Immutable G009 RC intent path
+        description: Immutable G009 RC intent under artifacts/g009/rc
+        required: true
+        type: string
+      reviewer_primary:
+        description: First named detached final reviewer
+        required: true
+        type: string
+      reviewer_secondary:
+        description: Second named detached final reviewer
         required: true
         type: string
 
@@ -20,7 +21,7 @@ permissions:
 
 jobs:
   qualify:
-    name: ${{ inputs.checkpoint }} qualification
+    name: Native Apple Silicon release qualification
     runs-on: [self-hosted, macOS, ARM64, podway-release]
     timeout-minutes: 420
     env:
@@ -30,7 +31,9 @@ jobs:
 
     steps:
       - name: Check out the immutable source revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
 
       - name: Reject non-native or translated hosts
         shell: bash
@@ -57,55 +60,134 @@ jobs:
               raise SystemExit("Rust 1.85.0 host is not native aarch64-apple-darwin")
           PY
 
+      - name: Validate immutable workspace-local qualification inputs
+        shell: bash
+        env:
+          RC_INTENT_INPUT: ${{ inputs.rc_intent }}
+          REVIEWER_PRIMARY_INPUT: ${{ inputs.reviewer_primary }}
+          REVIEWER_SECONDARY_INPUT: ${{ inputs.reviewer_secondary }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          rc_root = (workspace / "artifacts/g009/rc").resolve(strict=True)
+          supplied = Path(os.environ["RC_INTENT_INPUT"])
+          candidate = supplied if supplied.is_absolute() else workspace / supplied
+          rc_path = candidate.resolve(strict=True)
+          if (not rc_path.is_relative_to(rc_root) or rc_path.is_symlink()
+                  or not rc_path.is_file()):
+              raise SystemExit("RC intent must be a canonical, non-symlink file under artifacts/g009/rc")
+
+          archive = workspace / "dist/podway-0.1.0-aarch64-apple-darwin.zip"
+          archive_path = archive.resolve(strict=False)
+          if archive_path != workspace / "dist/podway-0.1.0-aarch64-apple-darwin.zip":
+              raise SystemExit("archive path must be the canonical workspace-local release artifact path")
+
+          reviewers = [os.environ["REVIEWER_PRIMARY_INPUT"], os.environ["REVIEWER_SECONDARY_INPUT"]]
+          if any(not reviewer.strip() or "\n" in reviewer or "\r" in reviewer for reviewer in reviewers):
+              raise SystemExit("final reviewers must be non-empty single-line names")
+          if reviewers[0] == reviewers[1]:
+              raise SystemExit("final reviewers must be distinct")
+
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as output:
+              output.write(f"RC_PATH={rc_path}\n")
+              output.write(f"ARCHIVE_PATH={archive_path}\n")
+              output.write(f"BIN_DIR={workspace / 'target/aarch64-apple-darwin/release'}\n")
+              output.write(f"REVIEWER_PRIMARY={reviewers[0]}\n")
+              output.write(f"REVIEWER_SECONDARY={reviewers[1]}\n")
+          PY
+
       - name: Preflight the immutable qualification inputs
         shell: bash
-        run: >-
-          python3 tools/run_g009_qualification.py preflight
-          --profile release/g009-qualification-v1.json
-          --target aarch64-apple-darwin
+        run: |
+          python3 tools/run_g009_qualification.py preflight \
+            --profile release/g009-qualification-v1.json \
+            --target aarch64-apple-darwin
 
       - name: Build locked native release binaries
         shell: bash
-        run: cargo +1.85.0 build --locked --release --target aarch64-apple-darwin --bins
+        run: |
+          cargo +1.85.0 build --locked --release --target aarch64-apple-darwin --bins
 
       - name: Reject Intel, Rosetta, and universal binary output
         shell: bash
         run: |
-          for binary in target/aarch64-apple-darwin/release/podway target/aarch64-apple-darwin/release/podwayd; do
+          for binary in "$BIN_DIR/podway" "$BIN_DIR/podwayd"; do
             test -f "$binary"
             test "$(lipo -archs "$binary")" = "arm64"
           done
 
-      - name: Run bounded integration fuzz qualification
-        if: ${{ inputs.checkpoint == 'integration' }}
+      - name: Execute exact G009 profile gates
         shell: bash
-        run: >-
-          python3 tools/run_g009_qualification.py full-gates
-          --only fuzz-phase4
-          --seconds 600
-          --rc "${{ inputs.rc_intent }}"
+        run: |
+          for gate in \
+            G009-GATE-FORMAT \
+            G009-GATE-CHECK \
+            G009-GATE-CLIPPY \
+            G009-GATE-NATIVE-TESTS \
+            G009-GATE-CONTRACTS \
+            G009-GATE-G005 \
+            G009-GATE-G008 \
+            G009-GATE-CRASH \
+            G009-GATE-OBS \
+            G009-GATE-FUZZ \
+            G009-GATE-AUDIT \
+            G009-GATE-DENY \
+            G009-GATE-COVERAGE \
+            G009-GATE-SECURITY \
+            G009-GATE-MIGRATION; do
+            python3 tools/run_g009_qualification.py full-gates --rc "$RC_PATH" --only "$gate"
+          done
 
-      - name: Run bounded native RC fuzz qualification
-        if: ${{ inputs.checkpoint == 'native-rc' }}
+      - name: Run the frozen unseen workload holdout
         shell: bash
-        run: >-
-          python3 tools/run_g009_qualification.py full-gates
-          --only fuzz-native-rc
-          --seconds 3600
-          --rc "${{ inputs.rc_intent }}"
+        run: |
+          python3 tools/run_g009_qualification.py holdout \
+            --rc "$RC_PATH" \
+            --warmups 5 \
+            --samples 30 \
+            --bin-dir "$BIN_DIR"
 
-      - name: Package only after native RC qualification
-        if: ${{ inputs.checkpoint == 'native-rc' }}
+      - name: Package the RC-bound native binaries
         shell: bash
-        run: >-
-          python3 tools/run_g009_qualification.py package
-          --rc "${{ inputs.rc_intent }}"
-          --archive dist/podway-0.1.0-aarch64-apple-darwin.zip
+        run: |
+          python3 tools/run_g009_qualification.py package \
+            --rc "$RC_PATH" \
+            --archive "$ARCHIVE_PATH" \
+            --bin-dir "$BIN_DIR"
 
-      - name: Require final verification before a native RC can pass
-        if: ${{ inputs.checkpoint == 'native-rc' }}
+      - name: Validate the immutable release archive path
         shell: bash
-        run: >-
-          python3 tools/run_g009_qualification.py verify-final
-          --rc "${{ inputs.rc_intent }}"
-          --archive dist/podway-0.1.0-aarch64-apple-darwin.zip
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          archive = Path(os.environ["ARCHIVE_PATH"])
+          resolved = archive.resolve(strict=True)
+          expected = (workspace / "dist/podway-0.1.0-aarch64-apple-darwin.zip").resolve(strict=True)
+          if resolved != expected or archive.is_symlink() or not resolved.is_file():
+              raise SystemExit("archive is not the canonical, non-symlink workspace-local release artifact")
+          PY
+
+      - name: Qualify clean-user lifecycle
+        shell: bash
+        run: |
+          python3 tools/run_g009_qualification.py lifecycle \
+            --rc "$RC_PATH" \
+            --archive "$ARCHIVE_PATH" \
+            --require-clean-user
+
+      - name: Record final detached review
+        shell: bash
+        run: |
+          python3 tools/run_g009_qualification.py final-review \
+            --rc "$RC_PATH" \
+            --traceability release/g009-traceability-v1.json \
+            --evidence-root artifacts/g009 \
+            --reviewer "$REVIEWER_PRIMARY" \
+            --reviewer "$REVIEWER_SECONDARY" \
+            --require-final-001

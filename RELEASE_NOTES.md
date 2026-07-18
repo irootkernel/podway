@@ -4,7 +4,7 @@
 
 Podway 0.1.0 publishes the public v1 IPC, output, error, workspace, procedure, and SQLite contracts. Existing uninitialized or schema-0 state is upgraded transactionally to schema-v1; an incomplete upgrade is not accepted as an installed schema-v1 state.
 
-This release is supported only on native Apple Silicon: `aarch64-apple-darwin` (`arm64`) with a minimum macOS deployment target of 11.0. Intel, Rosetta-translated, and universal-binary builds are not qualified release artifacts.
+This release is supported only on native Apple Silicon: `aarch64-apple-darwin` (`arm64`). The 11.0 value is a minimum build deployment target and Mach-O load-command target only; runtime lifecycle qualification was performed only on the recorded current Apple-Silicon release host. This release does not claim macOS 11 runtime support without host evidence. Intel, Rosetta-translated, and universal-binary builds are not qualified release artifacts.
 
 ## Trust boundary
 
