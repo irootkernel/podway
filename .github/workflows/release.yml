@@ -3,26 +3,40 @@ name: Native Apple Silicon release qualification
 on:
   workflow_dispatch:
     inputs:
-      rc_intent:
-        description: Immutable G009 RC intent under artifacts/g009/rc
+      upstream_repository:
+        description: Trusted repository that produced the immutable RC artifact
         required: true
         type: string
-      reviewer_primary:
-        description: First named detached final reviewer
+      upstream_run_id:
+        description: Immutable completed upstream workflow run ID
         required: true
         type: string
-      reviewer_secondary:
-        description: Second named detached final reviewer
+      upstream_artifact_id:
+        description: Immutable upstream artifact ID containing the RC and review attestation
+        required: true
+        type: string
+      rc_sha256:
+        description: Expected lowercase SHA-256 digest of the RC intent
+        required: true
+        type: string
+      source_commit:
+        description: Lowercase source commit SHA bound into the RC
+        required: true
+        type: string
+      reviewer_keyring_sha256:
+        description: Expected lowercase SHA-256 digest of the detached reviewer keyring
         required: true
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
   qualify:
     name: Native Apple Silicon release qualification
     runs-on: [self-hosted, macOS, ARM64, podway-release]
+    environment: release-final-review
     timeout-minutes: 420
     env:
       CARGO_BUILD_TARGET: aarch64-apple-darwin
@@ -30,10 +44,197 @@ jobs:
       RUSTUP_TOOLCHAIN: "1.85.0"
 
     steps:
-      - name: Check out the immutable source revision
+      - name: Check out the RC-bound immutable source revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          clean: true
+          fetch-depth: 1
           persist-credentials: false
+          ref: ${{ inputs.source_commit }}
+
+      - name: Download the immutable upstream RC artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ inputs.upstream_artifact_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: ${{ github.workspace }}/artifacts/g009
+          repository: ${{ inputs.upstream_repository }}
+          run-id: ${{ inputs.upstream_run_id }}
+
+      - name: Validate immutable RC acquisition and workspace containment
+        shell: bash
+        env:
+          UPSTREAM_REPOSITORY: ${{ inputs.upstream_repository }}
+          UPSTREAM_RUN_ID: ${{ inputs.upstream_run_id }}
+          UPSTREAM_ARTIFACT_ID: ${{ inputs.upstream_artifact_id }}
+          EXPECTED_RC_SHA256: ${{ inputs.rc_sha256 }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_REVIEWER_KEYRING_SHA256: ${{ inputs.reviewer_keyring_sha256 }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import shutil
+          from pathlib import Path
+
+          def fail(message):
+              raise SystemExit(f"immutable RC acquisition rejected: {message}")
+
+          def safe_value(name, pattern):
+              value = os.environ[name]
+              if not re.fullmatch(pattern, value):
+                  fail(f"invalid {name}")
+              return value
+
+          rc_digest = safe_value("EXPECTED_RC_SHA256", r"[0-9a-f]{64}")
+          source_commit = safe_value("EXPECTED_SOURCE_COMMIT", r"[0-9a-f]{40}")
+          safe_value("UPSTREAM_RUN_ID", r"[1-9][0-9]*")
+          safe_value("UPSTREAM_ARTIFACT_ID", r"[1-9][0-9]*")
+          repository = safe_value("UPSTREAM_REPOSITORY", r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          input_root = workspace / "artifacts/g009"
+          if input_root.is_symlink() or input_root.resolve(strict=True) != input_root:
+              fail("download root is not canonical")
+          if not input_root.is_relative_to(workspace):
+              fail("download root escapes workspace")
+
+          rc_name = f"{rc_digest}.json"
+          if not re.fullmatch(r"[0-9a-f]{64}\.json", rc_name):
+              fail("RC basename is not safe lowercase content-addressed form")
+          reviewer_payloads = {
+              "owner": input_root / "final/owner-attestation.json",
+              "E": input_root / "final/E-attestation.json",
+              "F": input_root / "final/F-attestation.json",
+          }
+          reviewer_signatures = {
+              "owner": input_root / "final/owner-attestation.asc",
+              "E": input_root / "final/E-attestation.asc",
+              "F": input_root / "final/F-attestation.asc",
+          }
+          keyring_name = "final/reviewer-keyring.gpg"
+          allowed_files = {
+              rc_name,
+              keyring_name,
+              *(path.relative_to(input_root).as_posix() for path in reviewer_payloads.values()),
+              *(path.relative_to(input_root).as_posix() for path in reviewer_signatures.values()),
+          }
+          allowed_directories = {"final", "bound-inputs"}
+
+          for path in input_root.rglob("*"):
+              if path.is_symlink():
+                  fail(f"symlink artifact component: {path.relative_to(workspace)}")
+              if any(ord(character) < 32 or ord(character) == 127 for character in path.name):
+                  fail(f"control character in artifact component: {path.relative_to(workspace)}")
+              if not path.resolve(strict=True).is_relative_to(input_root):
+                  fail(f"artifact component escapes input root: {path.relative_to(workspace)}")
+              relative = path.relative_to(input_root).as_posix()
+              if path.is_file() and relative not in allowed_files and not relative.startswith("bound-inputs/"):
+                  fail(f"unexpected immutable artifact file: {relative}")
+              if (
+                  path.is_dir()
+                  and relative not in allowed_directories
+                  and not relative.startswith("bound-inputs/")
+              ):
+                  fail(f"unexpected immutable artifact directory: {relative}")
+
+          rc_path = input_root / rc_name
+          keyring_path = input_root / keyring_name
+          bound_files = [(rc_path, rc_digest, "RC"),
+                         (keyring_path, safe_value("EXPECTED_REVIEWER_KEYRING_SHA256", r"[0-9a-f]{64}"), "reviewer keyring")]
+          bound_files.extend((path, None, f"{role} reviewer {kind}")
+                             for kind, values in (("attestation", reviewer_payloads), ("signature", reviewer_signatures))
+                             for role, path in values.items())
+          for path, digest, role in bound_files:
+              if path.is_symlink() or not path.is_file() or path.resolve(strict=True) != path:
+                  fail(f"{role} is absent, symlinked, or non-canonical")
+              if not path.resolve(strict=True).is_relative_to(workspace):
+                  fail(f"{role} escapes workspace")
+              if digest is not None and hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                  fail(f"{role} digest mismatch")
+
+          try:
+              rc = json.loads(rc_path.read_text(encoding="utf-8"))
+          except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+              fail(f"invalid RC JSON: {error}")
+          if not isinstance(rc, dict) or not isinstance(rc.get("source"), dict):
+              fail("RC source identity missing")
+          if rc["source"].get("commit") != source_commit:
+              fail("RC source commit does not match requested commit")
+          inputs = rc.get("inputs")
+          if not isinstance(inputs, list) or not inputs:
+              fail("RC bound inputs are missing")
+          expected_staged = set()
+          for item in inputs:
+              if (
+                  not isinstance(item, dict)
+                  or set(item) != {"role", "path", "sha256"}
+                  or not isinstance(item["path"], str)
+                  or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+              ):
+                  fail("RC bound input is malformed")
+              relative = Path(item["path"])
+              if relative.is_absolute() or ".." in relative.parts or "." in relative.parts:
+                  fail(f"unsafe RC input path: {item['role']}")
+              destination = workspace / relative
+              resolved_parent = destination.parent.resolve(strict=False)
+              if not resolved_parent.is_relative_to(workspace) or destination.is_symlink():
+                  fail(f"RC input destination escapes workspace: {item['role']}")
+              staged = input_root / "bound-inputs" / relative
+              expected_staged.add(staged.relative_to(input_root).as_posix())
+              if destination.is_file():
+                  candidate = destination
+              else:
+                  if not (
+                      relative.as_posix().startswith("artifacts/g009/")
+                      or relative.as_posix().startswith("target/aarch64-apple-darwin/release/")
+                  ):
+                      fail(f"refusing to materialize non-evidence RC input: {item['role']}")
+                  if staged.is_symlink() or not staged.is_file():
+                      fail(f"missing staged RC input: {item['role']}")
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(staged, destination)
+                  candidate = destination
+              if hashlib.sha256(candidate.read_bytes()).hexdigest() != item["sha256"]:
+                  fail(f"RC input digest mismatch: {item['role']}")
+          staged_root = input_root / "bound-inputs"
+          actual_staged = {
+              path.relative_to(input_root).as_posix()
+              for path in staged_root.rglob("*")
+              if path.is_file()
+          } if staged_root.is_dir() else set()
+          if actual_staged - expected_staged:
+              fail("immutable artifact contains unexpected staged RC inputs")
+          head = subprocess.check_output(
+              ("git", "rev-parse", "HEAD"), cwd=workspace, text=True
+          ).strip()
+          if head != source_commit:
+              fail("checked-out commit does not match RC source commit")
+
+          archive_path = workspace / "dist/podway-0.1.0-aarch64-apple-darwin.zip"
+          if archive_path.is_symlink() or archive_path.resolve(strict=False) != archive_path:
+              fail("archive path is not canonical")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as output:
+              output.write(f"RC_PATH={rc_path}\n")
+              output.write(f"RC_SHA256={rc_digest}\n")
+              output.write(f"REVIEWER_KEYRING_PATH={keyring_path}\n")
+              output.write(f"OWNER_ATTESTATION_PATH={reviewer_payloads['owner']}\n")
+              output.write(f"OWNER_SIGNATURE_PATH={reviewer_signatures['owner']}\n")
+              output.write(f"E_ATTESTATION_PATH={reviewer_payloads['E']}\n")
+              output.write(f"E_SIGNATURE_PATH={reviewer_signatures['E']}\n")
+              output.write(f"F_ATTESTATION_PATH={reviewer_payloads['F']}\n")
+              output.write(f"F_SIGNATURE_PATH={reviewer_signatures['F']}\n")
+              output.write(f"SOURCE_COMMIT={source_commit}\n")
+              output.write(f"UPSTREAM_REPOSITORY={repository}\n")
+              output.write(f"UPSTREAM_RUN_ID={os.environ['UPSTREAM_RUN_ID']}\n")
+              output.write(f"UPSTREAM_ARTIFACT_ID={os.environ['UPSTREAM_ARTIFACT_ID']}\n")
+              output.write(f"ARCHIVE_PATH={archive_path}\n")
+              output.write(f"BIN_DIR={workspace / 'target/aarch64-apple-darwin/release'}\n")
+          PY
 
       - name: Reject non-native or translated hosts
         shell: bash
@@ -60,51 +261,11 @@ jobs:
               raise SystemExit("Rust 1.85.0 host is not native aarch64-apple-darwin")
           PY
 
-      - name: Validate immutable workspace-local qualification inputs
-        shell: bash
-        env:
-          RC_INTENT_INPUT: ${{ inputs.rc_intent }}
-          REVIEWER_PRIMARY_INPUT: ${{ inputs.reviewer_primary }}
-          REVIEWER_SECONDARY_INPUT: ${{ inputs.reviewer_secondary }}
-        run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
-          rc_root = (workspace / "artifacts/g009/rc").resolve(strict=True)
-          supplied = Path(os.environ["RC_INTENT_INPUT"])
-          candidate = supplied if supplied.is_absolute() else workspace / supplied
-          rc_path = candidate.resolve(strict=True)
-          if (not rc_path.is_relative_to(rc_root) or rc_path.is_symlink()
-                  or not rc_path.is_file()):
-              raise SystemExit("RC intent must be a canonical, non-symlink file under artifacts/g009/rc")
-
-          archive = workspace / "dist/podway-0.1.0-aarch64-apple-darwin.zip"
-          archive_path = archive.resolve(strict=False)
-          if archive_path != workspace / "dist/podway-0.1.0-aarch64-apple-darwin.zip":
-              raise SystemExit("archive path must be the canonical workspace-local release artifact path")
-
-          reviewers = [os.environ["REVIEWER_PRIMARY_INPUT"], os.environ["REVIEWER_SECONDARY_INPUT"]]
-          if any(not reviewer.strip() or "\n" in reviewer or "\r" in reviewer for reviewer in reviewers):
-              raise SystemExit("final reviewers must be non-empty single-line names")
-          if reviewers[0] == reviewers[1]:
-              raise SystemExit("final reviewers must be distinct")
-
-          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as output:
-              output.write(f"RC_PATH={rc_path}\n")
-              output.write(f"ARCHIVE_PATH={archive_path}\n")
-              output.write(f"BIN_DIR={workspace / 'target/aarch64-apple-darwin/release'}\n")
-              output.write(f"REVIEWER_PRIMARY={reviewers[0]}\n")
-              output.write(f"REVIEWER_SECONDARY={reviewers[1]}\n")
-          PY
-
       - name: Preflight the immutable qualification inputs
         shell: bash
         run: |
           python3 tools/run_g009_qualification.py preflight \
-            --profile release/g009-qualification-v1.json \
-            --target aarch64-apple-darwin
+            --rc "$RC_PATH"
 
       - name: Build locked native release binaries
         shell: bash
@@ -119,27 +280,12 @@ jobs:
             test "$(lipo -archs "$binary")" = "arm64"
           done
 
-      - name: Execute exact G009 profile gates
+      - name: Execute exact G009 profile gates in canonical order
         shell: bash
         run: |
-          for gate in \
-            G009-GATE-FORMAT \
-            G009-GATE-CHECK \
-            G009-GATE-CLIPPY \
-            G009-GATE-NATIVE-TESTS \
-            G009-GATE-CONTRACTS \
-            G009-GATE-G005 \
-            G009-GATE-G008 \
-            G009-GATE-CRASH \
-            G009-GATE-OBS \
-            G009-GATE-FUZZ \
-            G009-GATE-AUDIT \
-            G009-GATE-DENY \
-            G009-GATE-COVERAGE \
-            G009-GATE-SECURITY \
-            G009-GATE-MIGRATION; do
-            python3 tools/run_g009_qualification.py full-gates --rc "$RC_PATH" --only "$gate"
-          done
+          python3 tools/run_g009_qualification.py full-gates \
+            --rc "$RC_PATH" \
+            --only G009-GATE-FORMAT,G009-GATE-CHECK,G009-GATE-CLIPPY,G009-GATE-NATIVE-TESTS,G009-GATE-CONTRACTS,G009-GATE-G005,G009-GATE-G008,G009-GATE-CRASH,G009-GATE-OBS,G009-GATE-FUZZ,G009-GATE-AUDIT,G009-GATE-DENY,G009-GATE-COVERAGE,G009-GATE-SECURITY,G009-GATE-MIGRATION
 
       - name: Run the frozen unseen workload holdout
         shell: bash
@@ -168,7 +314,7 @@ jobs:
           workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
           archive = Path(os.environ["ARCHIVE_PATH"])
           resolved = archive.resolve(strict=True)
-          expected = (workspace / "dist/podway-0.1.0-aarch64-apple-darwin.zip").resolve(strict=True)
+          expected = workspace / "dist/podway-0.1.0-aarch64-apple-darwin.zip"
           if resolved != expected or archive.is_symlink() or not resolved.is_file():
               raise SystemExit("archive is not the canonical, non-symlink workspace-local release artifact")
           PY
@@ -181,13 +327,53 @@ jobs:
             --archive "$ARCHIVE_PATH" \
             --require-clean-user
 
-      - name: Record final detached review
+      - name: Build the current-run final acceptance index
         shell: bash
         run: |
-          python3 tools/run_g009_qualification.py final-review \
+          checkpoints=()
+          for checkpoint in \
+            artifacts/g009/g009-gate-preflight/*.json \
+            artifacts/g009/g009-gate-gates/*.json \
+            artifacts/g009/g009-gate-performance/*.json \
+            artifacts/g009/g009-gate-package/*.json \
+            artifacts/g009/g009-gate-lifecycle/*.json; do
+            test -f "$checkpoint"
+            checkpoints+=(--checkpoint "$checkpoint")
+          done
+          index_result="$(python3 tools/run_g009_qualification.py acceptance-index \
             --rc "$RC_PATH" \
             --traceability release/g009-traceability-v1.json \
             --evidence-root artifacts/g009 \
-            --reviewer "$REVIEWER_PRIMARY" \
-            --reviewer "$REVIEWER_SECONDARY" \
-            --require-final-001
+            "${checkpoints[@]}")"
+          read -r ACCEPTANCE_INDEX_PATH ACCEPTANCE_INDEX_SHA256 <<< "$index_result"
+          test -n "$ACCEPTANCE_INDEX_PATH"
+          test -n "$ACCEPTANCE_INDEX_SHA256"
+          printf 'ACCEPTANCE_INDEX_PATH=%s\n' "$ACCEPTANCE_INDEX_PATH" >> "$GITHUB_ENV"
+
+      - name: Record final detached review
+        shell: bash
+        run: |
+          review_result="$(python3 tools/run_g009_qualification.py final-review \
+            --rc "$RC_PATH" \
+            --traceability release/g009-traceability-v1.json \
+            --index "$ACCEPTANCE_INDEX_PATH" \
+            --reviewer owner \
+            --reviewer E \
+            --reviewer F \
+            --reviewer-keyring "$REVIEWER_KEYRING_PATH" \
+            --attestation "owner=$OWNER_ATTESTATION_PATH=$OWNER_SIGNATURE_PATH" \
+            --attestation "E=$E_ATTESTATION_PATH=$E_SIGNATURE_PATH" \
+            --attestation "F=$F_ATTESTATION_PATH=$F_SIGNATURE_PATH")"
+          read -r FINAL_REVIEW_PATH FINAL_REVIEW_SHA256 <<< "$review_result"
+          test -n "$FINAL_REVIEW_PATH"
+          test -n "$FINAL_REVIEW_SHA256"
+          printf 'FINAL_REVIEW_PATH=%s\n' "$FINAL_REVIEW_PATH" >> "$GITHUB_ENV"
+
+      - name: Strictly verify final acceptance last
+        shell: bash
+        run: |
+          python3 tools/verify_g009_qualification.py \
+            --rc "$RC_PATH" \
+            --index "$ACCEPTANCE_INDEX_PATH" \
+            --review "$FINAL_REVIEW_PATH" \
+            --evidence-root artifacts/g009

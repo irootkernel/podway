@@ -1,0 +1,108 @@
+{
+  "schema": "podway.g009.release-policy/v1",
+  "version": 1,
+  "rc_transport": {
+    "trusted_upstream_artifact": true,
+    "immutable_locator": {"scheme": "sha256", "format": "sha256:<64-lowercase-hex-digits>", "argument": "--rc", "trusted_upstream_artifact_required": true},
+    "forbid": ["local-path", "file-uri", "relative-path", "branch", "tag", "latest", "mutable-url"],
+    "required_rc_schema": "podway.g009.rc-intent/v1",
+    "consumer_verification": {
+      "before_each_gate": true,
+      "required_bindings": ["rc_sha256", "source.commit", "source.tree", "target", "host", "inputs", "binaries", "signing"],
+      "verify_input_sha256": true,
+      "verify_binary_sha256": true,
+      "verify_detached_signature": true,
+      "reject_on_identity_or_signature_failure": true
+    }
+  },
+  "native_platform": {
+    "system": "Darwin",
+    "host_arch": "arm64",
+    "target": "aarch64-apple-darwin",
+    "mach_o_arch": "arm64",
+    "require_native_execution": true,
+    "forbid": ["x86_64", "Rosetta", "translated-process", "universal-binary", "fat-binary"]
+  },
+  "acceptance_index": {
+    "schema": "podway.g009.acceptance-index/v1",
+    "required_upstream_gate_ids": [
+      "G009-GATE-PREFLIGHT",
+      "G009-GATE-FORMAT",
+      "G009-GATE-CHECK",
+      "G009-GATE-CLIPPY",
+      "G009-GATE-NATIVE-TESTS",
+      "G009-GATE-CONTRACTS",
+      "G009-GATE-G005",
+      "G009-GATE-G008",
+      "G009-GATE-CRASH",
+      "G009-GATE-OBS",
+      "G009-GATE-FUZZ",
+      "G009-GATE-AUDIT",
+      "G009-GATE-DENY",
+      "G009-GATE-COVERAGE",
+      "G009-GATE-SECURITY",
+      "G009-GATE-MIGRATION",
+      "G009-GATE-PERFORMANCE",
+      "G009-GATE-PACKAGE",
+      "G009-GATE-LIFECYCLE"
+    ],
+    "required_upstream_gate_count": 19,
+    "forbid_as_prerequisite": ["G009-GATE-FINAL-001", "FINAL-001"],
+    "final_001_is_output_only": true,
+    "require_exact_set": true,
+    "require_pass_status": true,
+    "require_rc_sha256_binding": true
+  },
+  "traceability": {
+    "required_acceptance_ids": ["ACC-01", "ACC-02", "ACC-03", "ACC-04", "ACC-05", "ACC-06", "ACC-07", "ACC-08", "ACC-09", "ACC-10", "ACC-11", "FINAL-001"],
+    "required_acceptance_count": 12,
+    "required_contract_ids": ["G009-CTR-01", "G009-CTR-02", "G009-CTR-03", "G009-CTR-04", "G009-CTR-05", "G009-CTR-06", "G009-CTR-07", "G009-CTR-08", "G009-CTR-09", "G009-CTR-10", "G009-CTR-11", "G009-CTR-12", "G009-CTR-13", "G009-CTR-14", "G009-CTR-15", "G009-CTR-16", "G009-CTR-17", "G009-CTR-18", "G009-CTR-19", "G009-CTR-20"],
+    "required_contract_count": 20,
+    "exact_row_count": 32,
+    "one_row_per_required_id": true,
+    "no_unknown_ids": true
+  },
+  "final_reviewer_attestation": {
+    "required_roles": ["owner", "E", "F"],
+    "required_role_count": 3,
+    "require_distinct_identities": true,
+    "detached": true,
+    "signature_algorithm": "openpgp-gpgv",
+    "required_signed_digest_fields": ["rc_sha256", "traceability_sha256", "acceptance_index_sha256"],
+    "attestation_required_fields": ["reviewer", "payload_sha256", "signature_sha256"],
+    "attestation_transport": "REVIEWER=PAYLOAD=SIGNATURE",
+    "reject_unbound_or_duplicate_role": true
+  },
+  "w07_generator": {
+    "id": "G009-W07",
+    "authoritative_fields": ["algorithm", "code_point", "utf8_byte_length", "digest.algorithm", "digest.derivation", "digest.hex", "version"],
+    "algorithm": "repeat-utf8-code-point",
+    "code_point": "U+0078",
+    "utf8_byte_length": 65536,
+    "digest": {"algorithm": "sha256", "derivation": "sha256(generated_utf8_bytes)", "hex": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3"},
+    "version": 1,
+    "reject_non_authoritative_generator_fields": true
+  },
+  "dependency_exceptions": {
+    "record_schema": "podway.g009.dependency-exception/v1",
+    "additional_properties": false,
+    "required_fields": ["id", "crate", "owner", "reason", "expires_on"],
+    "crate_format": "<crate>@=<exact-version>",
+    "expiry": {"format": "YYYY-MM-DD", "valid_only_before": "expires_on", "fail_on_or_after": true},
+    "unique_record_fields": ["id", "crate"],
+    "all_records_must_be_current": true,
+    "require_exact_cargo_deny_skip_set": true,
+    "records": [
+      {"id": "G009-DEP-EX-01", "crate": "foldhash@=0.1.5", "owner": "release-engineering", "reason": "rusqlite/hashlink 0.10 transition", "expires_on": "2026-10-18"},
+      {"id": "G009-DEP-EX-02", "crate": "hashbrown@=0.15.5", "owner": "release-engineering", "reason": "rusqlite/hashlink 0.10 transition", "expires_on": "2026-10-18"},
+      {"id": "G009-DEP-EX-03", "crate": "hashbrown@=0.16.1", "owner": "release-engineering", "reason": "yaml-rust2/hashlink 0.11 transition", "expires_on": "2026-10-18"},
+      {"id": "G009-DEP-EX-04", "crate": "hashlink@=0.10.0", "owner": "release-engineering", "reason": "rusqlite 0.34 transition", "expires_on": "2026-10-18"}
+    ]
+  },
+  "exception_eligibility": {
+    "acceptance_rows_exception_eligible": false,
+    "only_dependency_exceptions_may_suppress_duplicate_version_findings": true,
+    "dependency_exception_does_not_waive": ["rc-identity", "signature", "upstream-gate", "final-attestation", "native-platform", "acceptance-index"],
+    "reject_unknown_or_expired_exception": true
+  }
+}

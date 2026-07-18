@@ -1,13 +1,99 @@
 """G009 archive integrity and RC intent validation."""
 from __future__ import annotations
 import hashlib
+import subprocess
 import zipfile
 from pathlib import Path
 from typing import Any
-from g009_common import ARCHIVE_ROOT, QualificationError, bounded_bytes, fail, load_json, require_digest, safe_extract_member, sha256_bytes
+from g009_common import ARCHIVE_ROOT, EVIDENCE_ROOT, QualificationError, bounded_bytes, canonical_json, fail, load_json, require_digest, safe_extract_member, sha256_bytes, sha256_file
 
 MAX_ARCHIVE_MEMBERS = 256
 MAX_ARCHIVE_UNCOMPRESSED = 512 * 1024 * 1024
+
+def _repo() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _input(rc: dict[str, Any], role: str) -> Path:
+    matches = [item for item in rc["inputs"] if item["role"] == role]
+    if len(matches) != 1:
+        fail(f"RC lacks exactly one {role} input")
+    return (_repo() / matches[0]["path"]).resolve()
+
+
+def _current_source() -> dict[str, str]:
+    outputs: dict[str, str] = {}
+    for label, argv in (("commit", ("git", "rev-parse", "HEAD")), ("tree", ("git", "rev-parse", "HEAD^{tree}"))):
+        result = subprocess.run(argv, cwd=_repo(), capture_output=True, check=False)
+        if result.returncode != 0:
+            fail(f"cannot resolve checked-out source {label}")
+        outputs[label] = result.stdout.decode("ascii", "strict").strip()
+    return outputs
+
+
+def _verify_approvals(rc: dict[str, Any]) -> None:
+    characterization = _input(rc, "characterization")
+    characterization_value = load_json(characterization)
+    baseline = load_json(_input(rc, "baseline"))
+    thresholds = load_json(_input(rc, "thresholds"))
+    approvals = load_json(_input(rc, "approvals"))
+    contract = load_json(_input(rc, "signer-contract"))
+    if not isinstance(characterization_value, dict) or characterization_value.get("schema") != "podway.g009.characterization/v1" or characterization_value.get("target") != rc["target"] or not isinstance(baseline, dict) or not isinstance(thresholds, dict):
+        fail("RC performance inputs are malformed")
+    from g009_performance import characterize, thresholds as derive_thresholds
+    if characterize(characterization_value.get("workloads")) != baseline:
+        fail("RC characterization baseline is not mechanically exact")
+    if derive_thresholds(baseline) != thresholds:
+        fail("RC thresholds are not mechanically derived")
+    if not isinstance(contract, dict) or contract.get("schema") != "podway.g009.approval-signers/v1" or set(contract) != {"schema", "keyring", "signers"}:
+        fail("approval signer contract is not exact")
+    keyring = Path(contract["keyring"])
+    signers = contract.get("signers")
+    if not keyring.is_file() or keyring.is_symlink() or not isinstance(signers, list) or len(signers) != 3:
+        fail("approval trust root is unavailable")
+    by_role = {item.get("role"): item for item in signers if isinstance(item, dict)}
+    if set(by_role) != {"owner", "E", "F"} or any(set(item) != {"role", "signer", "fingerprint"} or not all(isinstance(item.get(key), str) and item[key] for key in ("signer", "fingerprint")) for item in by_role.values()):
+        fail("approval signer roles are incomplete")
+    if not isinstance(approvals, dict) or approvals.get("schema") != "podway.g009.approvals/v1" or approvals.get("characterization_sha256") != sha256_file(characterization) or not isinstance(approvals.get("approvals"), list) or len(approvals["approvals"]) != 3:
+        fail("approval bundle is stale or incomplete")
+    baseline_digest = sha256_bytes(canonical_json(baseline))
+    thresholds_digest = sha256_bytes(canonical_json(thresholds))
+    roles: set[str] = set()
+    signers_seen: set[str] = set()
+    for approval in approvals["approvals"]:
+        if not isinstance(approval, dict) or set(approval) != {"role", "signer", "fingerprint", "characterization_sha256", "baseline_sha256", "thresholds_sha256", "payload", "signature"}:
+            fail("approval has mutable or missing fields")
+        role = approval["role"]
+        expected = by_role.get(role)
+        if expected is None or approval["signer"] != expected["signer"] or approval["fingerprint"] != expected["fingerprint"] or approval["characterization_sha256"] != sha256_file(characterization) or approval["baseline_sha256"] != baseline_digest or approval["thresholds_sha256"] != thresholds_digest:
+            fail("approval binding or signer contract mismatch")
+        payload, signature = Path(approval["payload"]), Path(approval["signature"])
+        if not payload.is_file() or payload.is_symlink() or not signature.is_file() or signature.is_symlink():
+            fail("approval detached signature inputs are unsafe")
+        statement = canonical_json({"role": role, "signer": approval["signer"], "fingerprint": approval["fingerprint"], "characterization_sha256": approval["characterization_sha256"], "baseline_sha256": baseline_digest, "thresholds_sha256": thresholds_digest})
+        if bounded_bytes(payload) != statement:
+            fail("approval payload is not the exact bound statement")
+        verified = subprocess.run(("gpgv", "--keyring", str(keyring), "--status-fd", "1", str(signature), str(payload)), capture_output=True, check=False)
+        if verified.returncode != 0 or expected["fingerprint"] not in verified.stdout.decode("utf-8", "replace"):
+            fail("detached approval signature did not verify against trust root")
+        if role in roles or approval["signer"] in signers_seen:
+            fail("approval roles/signers must be distinct")
+        roles.add(role)
+        signers_seen.add(approval["signer"])
+    if roles != {"owner", "E", "F"}:
+        fail("missing explicit owner/E/F approvals")
+
+
+def verify_rc_consumption(path: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    digest = sha256_file(resolved)
+    if not resolved.is_relative_to(EVIDENCE_ROOT.resolve()) or resolved.is_symlink() or resolved.name != f"{digest}.json":
+        fail("RC must be an immutable digest-addressed evidence artifact")
+    rc = load_rc(resolved)
+    if _current_source() != {"commit": rc["source"]["commit"], "tree": rc["source"]["tree"]}:
+        fail("checked-out source commit/tree differs from immutable RC")
+    _verify_approvals(rc)
+    return rc
 
 def load_rc(path: Path) -> dict[str, Any]:
     rc = load_json(path)
@@ -26,8 +112,8 @@ def load_rc(path: Path) -> dict[str, Any]:
     if signing["posture"] == "signed-public":
         fail("signed-public requires an external credentialed release implementation")
     inputs = rc.get("inputs")
-    repo = Path(__file__).resolve().parents[1]
-    required_roles = {"profile", "baseline", "thresholds", "approvals", "signer-contract", "lockfile", "interfaces", "handoffs", "crash-registry", "fuzz-policy", "observability-policy", "podway", "podwayd"}
+    repo = _repo()
+    required_roles = {"profile", "characterization", "baseline", "thresholds", "approvals", "signer-contract", "lockfile", "interfaces", "handoffs", "crash-registry", "fuzz-policy", "observability-policy", "podway", "podwayd"}
     if not isinstance(inputs, list) or {item.get("role") for item in inputs if isinstance(item, dict)} != required_roles or len(inputs) != len(required_roles): fail("RC has incomplete input roles")
     for item in inputs:
         if not isinstance(item, dict) or set(item) != {"role", "path", "sha256"}: fail("RC has malformed input")

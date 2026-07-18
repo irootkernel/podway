@@ -1,6 +1,6 @@
 # G009 release dependency policy. Registry wildcard dependencies are denied.
 # Local workspace paths are exempt because Cargo models versionless path dependencies as wildcards.
-# Duplicate exceptions are exact, owner=release-engineering, expires=2026-10-18.
+# Duplicate-exception metadata and expiry are machine-validated in release/g009-release-policy-v1.json.
 
 [advisories]
 ignore = []
@@ -23,10 +23,10 @@ allow-wildcard-paths = true
 highlight = "all"
 deny = []
 skip = [
-  { crate = "foldhash@=0.1.5", reason = "owner=release-engineering; expires=2026-10-18; rusqlite/hashlink 0.10 transition" },
-  { crate = "hashbrown@=0.15.5", reason = "owner=release-engineering; expires=2026-10-18; rusqlite/hashlink 0.10 transition" },
-  { crate = "hashbrown@=0.16.1", reason = "owner=release-engineering; expires=2026-10-18; yaml-rust2/hashlink 0.11 transition" },
-  { crate = "hashlink@=0.10.0", reason = "owner=release-engineering; expires=2026-10-18; rusqlite 0.34 transition" },
+  { crate = "foldhash@=0.1.5", reason = "G009-DEP-EX-01" },
+  { crate = "hashbrown@=0.15.5", reason = "G009-DEP-EX-02" },
+  { crate = "hashbrown@=0.16.1", reason = "G009-DEP-EX-03" },
+  { crate = "hashlink@=0.10.0", reason = "G009-DEP-EX-04" },
 ]
 skip-tree = []
 

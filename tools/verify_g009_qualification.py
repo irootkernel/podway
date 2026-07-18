@@ -5,20 +5,126 @@ import argparse
 import json
 import tempfile
 import zipfile
+from datetime import date
+import tomllib
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 from g009_common import QualificationError, TARGET, canonical_json, load_json, safe_extract_member, sha256_file
 from g009_performance import characterize, nearest_rank
-from g009_release import inspect_archive, load_rc
+from g009_release import inspect_archive, load_rc, verify_rc_consumption
 from run_g009_qualification import FUZZ_TARGETS, GATES
 
 ARCHIVE_ROOT = "podway-0.1.0-aarch64-apple-darwin"
+ROOT = Path(__file__).resolve().parents[1]
 
 def reject(fn: Any, label: str) -> None:
     try: fn()
     except QualificationError: return
     raise AssertionError(f"sentinel did not reject {label}")
+
+def validate_release_policy(path: Path) -> None:
+    value = load_json(path)
+    expected_acceptance = [f"ACC-{number:02d}" for number in range(1, 12)] + ["FINAL-001"]
+    expected_contracts = [f"G009-CTR-{number:02d}" for number in range(1, 21)]
+    policy = value if isinstance(value, dict) else {}
+    trace = policy.get("traceability")
+    index = policy.get("acceptance_index")
+    reviewers = policy.get("final_reviewer_attestation")
+    exceptions = policy.get("dependency_exceptions")
+    if (
+        policy.get("schema") != "podway.g009.release-policy/v1"
+        or policy.get("version") != 1
+        or not isinstance(trace, dict)
+        or trace.get("required_acceptance_ids") != expected_acceptance
+        or trace.get("required_contract_ids") != expected_contracts
+        or trace.get("exact_row_count") != 32
+        or not isinstance(index, dict)
+        or index.get("required_upstream_gate_count") != 19
+        or len(index.get("required_upstream_gate_ids", [])) != 19
+        or "G009-GATE-FINAL-001" in index.get("required_upstream_gate_ids", [])
+        or index.get("final_001_is_output_only") is not True
+        or not isinstance(reviewers, dict)
+        or reviewers.get("required_roles") != ["owner", "E", "F"]
+        or reviewers.get("signature_algorithm") != "openpgp-gpgv"
+        or not isinstance(exceptions, dict)
+        or exceptions.get("require_exact_cargo_deny_skip_set") is not True
+    ):
+        raise QualificationError("release policy exact contract drift")
+    records = exceptions.get("records")
+    if not isinstance(records, list) or len(records) != 4:
+        raise QualificationError("dependency exception policy is incomplete")
+    expected_skips: set[tuple[str, str]] = set()
+    seen_ids: set[str] = set()
+    today = date.today()
+    for record in records:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"id", "crate", "owner", "reason", "expires_on"}
+            or not all(isinstance(record[field], str) and record[field] for field in record)
+            or record["id"] in seen_ids
+        ):
+            raise QualificationError("dependency exception record is malformed")
+        try:
+            expires_on = date.fromisoformat(record["expires_on"])
+        except ValueError as error:
+            raise QualificationError("dependency exception expiry is malformed") from error
+        if today >= expires_on:
+            raise QualificationError(f"dependency exception expired: {record['id']}")
+        seen_ids.add(record["id"])
+        expected_skips.add((record["crate"], record["id"]))
+    with (ROOT / "deny.toml").open("rb") as source:
+        deny = tomllib.load(source)
+    skips = deny.get("bans", {}).get("skip")
+    if (
+        not isinstance(skips, list)
+        or {(item.get("crate"), item.get("reason")) for item in skips if isinstance(item, dict)}
+        != expected_skips
+    ):
+        raise QualificationError("cargo-deny skips do not match release policy")
+
+def validate_workflow_parity(path: Path, expected_gates: list[str]) -> None:
+    text = path.read_text(encoding="utf-8")
+    required_once = [
+        "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+        "tools/run_g009_qualification.py preflight",
+        "tools/run_g009_qualification.py full-gates",
+        "tools/run_g009_qualification.py holdout",
+        "tools/run_g009_qualification.py package",
+        "tools/run_g009_qualification.py lifecycle",
+        "tools/run_g009_qualification.py acceptance-index",
+        "tools/run_g009_qualification.py final-review",
+        "tools/verify_g009_qualification.py",
+    ]
+    if any(text.count(token) != 1 for token in required_once):
+        raise QualificationError("release workflow command or action parity drift")
+    expected_only = ",".join(expected_gates)
+    if f"--only {expected_only}" not in text:
+        raise QualificationError("release workflow gate order drift")
+    ordered = [
+        "tools/run_g009_qualification.py preflight",
+        "tools/run_g009_qualification.py full-gates",
+        "tools/run_g009_qualification.py holdout",
+        "tools/run_g009_qualification.py package",
+        "tools/run_g009_qualification.py lifecycle",
+        "tools/run_g009_qualification.py acceptance-index",
+        "tools/run_g009_qualification.py final-review",
+        "tools/verify_g009_qualification.py",
+    ]
+    offsets = [text.index(token) for token in ordered]
+    if offsets != sorted(offsets):
+        raise QualificationError("release workflow checkpoint order drift")
+    for required in (
+        '--reviewer owner',
+        '--reviewer E',
+        '--reviewer F',
+        '--attestation "owner=$OWNER_ATTESTATION_PATH=$OWNER_SIGNATURE_PATH"',
+        '--attestation "E=$E_ATTESTATION_PATH=$E_SIGNATURE_PATH"',
+        '--attestation "F=$F_ATTESTATION_PATH=$F_SIGNATURE_PATH"',
+    ):
+        if required not in text:
+            raise QualificationError("release workflow reviewer attestation parity drift")
 
 def validate_protocol(path: Path) -> dict[str, Any]:
     value = load_json(path)
@@ -29,6 +135,14 @@ def validate_protocol(path: Path) -> dict[str, Any]:
     if not isinstance(perf, dict) or perf.get("warmups") != 5 or perf.get("characterization_samples") != 30 or perf.get("holdout_samples") != 30 or perf.get("rounding_permitted") is not False: raise QualificationError("profile performance protocol drift")
     workloads = value.get("workloads")
     if not isinstance(workloads, list) or len(workloads) != 7 or len({item.get("id") for item in workloads if isinstance(item, dict)}) != 7: raise QualificationError("profile workload cardinality drift")
+    policy_path = value.get("release_policy")
+    if policy_path != "release/g009-release-policy-v1.json":
+        raise QualificationError("profile release policy reference drift")
+    validate_release_policy(ROOT / policy_path)
+    validate_workflow_parity(
+        ROOT / ".github/workflows/release.yml",
+        [gate["id"] for gate in value["gates"]],
+    )
     validate_gate_declarations(value)
     fuzz = value.get("fuzz")
     if not isinstance(fuzz, dict) or fuzz.get("corpus_root") != "artifacts/g009/fuzz/corpus" or fuzz.get("surfaces") != list(FUZZ_TARGETS):
@@ -55,11 +169,11 @@ def validate_gate_declarations(value: dict[str, Any]) -> None:
             raise QualificationError("profile gate dispatch is not executable")
     checkpoints = value.get("workflow_checkpoints")
     checkpoint_dispatches = {
-        "G009-GATE-PREFLIGHT": {"command": "preflight", "required_args": ["--profile", "--target"]},
+        "G009-GATE-PREFLIGHT": {"command": "preflight", "required_args": ["--rc"]},
         "G009-GATE-PERFORMANCE": {"command": "holdout", "required_args": ["--rc", "--warmups", "--samples", "--bin-dir"]},
         "G009-GATE-PACKAGE": {"command": "package", "required_args": ["--rc", "--archive", "--bin-dir"]},
         "G009-GATE-LIFECYCLE": {"command": "lifecycle", "required_args": ["--rc", "--archive", "--require-clean-user"]},
-        "G009-GATE-FINAL-001": {"command": "final-review", "required_args": ["--rc", "--traceability", "--evidence-root", "--reviewer", "--require-final-001"]},
+        "G009-GATE-FINAL-001": {"command": "final-review", "required_args": ["--rc", "--traceability", "--index", "--reviewer", "--reviewer-keyring", "--attestation"]},
     }
     if not isinstance(checkpoints, list) or {item.get("id") for item in checkpoints if isinstance(item, dict)} != set(checkpoint_dispatches):
         raise QualificationError("workflow checkpoint replacements drift")
@@ -69,10 +183,30 @@ def validate_gate_declarations(value: dict[str, Any]) -> None:
 
 def validate_traceability(path: Path) -> None:
     value = load_json(path)
-    if not isinstance(value, dict) or value.get("schema") != "podway.g009.traceability/v1" or not isinstance(value.get("rows"), list): raise QualificationError("invalid traceability")
-    rows = value["rows"]; ids = [row.get("id") for row in rows if isinstance(row, dict)]
-    gates = [row.get("executable_gate") for row in rows if isinstance(row, dict) and row.get("executable_gate")]
-    if len(ids) != len(set(ids)) or "FINAL-001" not in ids or not gates: raise QualificationError("traceability is incomplete")
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != "podway.g009.traceability/v1"
+        or value.get("version") != 1
+        or value.get("release_policy") != "release/g009-release-policy-v1.json"
+        or not isinstance(value.get("rows"), list)
+    ):
+        raise QualificationError("invalid traceability")
+    validate_release_policy(ROOT / value["release_policy"])
+    rows = value["rows"]
+    acceptance_ids = [row.get("id") for row in rows[:12] if isinstance(row, dict)]
+    contract_ids = [row.get("id") for row in rows[12:] if isinstance(row, dict)]
+    if (
+        len(rows) != 32
+        or acceptance_ids != [f"ACC-{number:02d}" for number in range(1, 12)] + ["FINAL-001"]
+        or contract_ids != [f"G009-CTR-{number:02d}" for number in range(1, 21)]
+        or any(
+            not isinstance(row, dict) or row.get("exception_eligible") is not False
+            for row in rows[:12]
+        )
+        or rows[11].get("executable_gate") != "G009-GATE-FINAL-001"
+        or rows[31].get("executable_gate") != "G009-GATE-FINAL-001"
+    ):
+        raise QualificationError("traceability exact row contract drift")
 
 def validate_crash_registry(path: Path) -> None:
     value = load_json(path)
@@ -88,17 +222,27 @@ def validate_crash_registry(path: Path) -> None:
         raise QualificationError("crash coverage is not exact")
 
 def validate_final(rc_path: Path, index_path: Path, review_path: Path, evidence_root: Path) -> None:
-    rc = load_rc(rc_path)
-    index, review = load_json(index_path), load_json(review_path)
+    rc = verify_rc_consumption(rc_path)
+    index, envelope = load_json(index_path), load_json(review_path)
+    review = envelope.get("review") if isinstance(envelope, dict) else None
     digest = sha256_file(rc_path)
     source = rc.get("source")
-    if not isinstance(index, dict) or not isinstance(review, dict) or index.get("rc_sha256") != digest or review.get("rc_sha256") != digest or index.get("target") != TARGET or review.get("target") != TARGET or index.get("source") != source or review.get("source") != source or review.get("status") != "passed" or review.get("blockers") != []:
+    if not isinstance(index, dict) or not isinstance(review, dict) or index.get("rc_sha256") != digest or review.get("rc_sha256") != digest or review.get("acceptance_index_sha256") != sha256_file(index_path) or index.get("target") != TARGET or review.get("target") != TARGET or index.get("source") != source or review.get("source") != source or envelope.get("checkpoint_id") != "G009-GATE-FINAL-001" or review.get("status") != "passed" or review.get("blockers") != []:
         raise QualificationError("final evidence is stale or incomplete")
     reviewers = review.get("reviewers")
-    if not isinstance(reviewers, list) or len(reviewers) < 2 or len(set(reviewers)) != len(reviewers) or not all(isinstance(name, str) and name for name in reviewers):
-        raise QualificationError("final review lacks distinct named reviewers")
+    if reviewers != ["owner", "E", "F"]:
+        raise QualificationError("final review lacks exact ordered owner/E/F reviewers")
+    attestations = review.get("attestations")
+    if (
+        not isinstance(attestations, list)
+        or [item.get("reviewer") for item in attestations if isinstance(item, dict)]
+        != reviewers
+    ):
+        raise QualificationError("final reviewer attestations are incomplete")
     rows = index.get("evidence")
-    if not isinstance(rows, list) or not rows: raise QualificationError("final index has no evidence")
+    upstream = index.get("upstream_gate_ids")
+    if not isinstance(rows, list) or not rows or not isinstance(upstream, list) or [row.get("gate_id") for row in rows if isinstance(row, dict)] != upstream:
+        raise QualificationError("final index has no ordered upstream evidence")
     resolved_root = evidence_root.resolve()
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"gate_id", "path", "sha256", "rc_sha256", "target", "source", "blockers"}:
@@ -109,7 +253,7 @@ def validate_final(rc_path: Path, index_path: Path, review_path: Path, evidence_
         if not artifact.is_relative_to(resolved_root) or not artifact.is_file() or artifact.is_symlink() or sha256_file(artifact) != row["sha256"]:
             raise QualificationError("indexed evidence drift")
         payload = load_json(artifact)
-        if not isinstance(payload, dict) or payload.get("rc_sha256") != digest or payload.get("target") != TARGET or payload.get("source") != source or payload.get("blockers") != []:
+        if not isinstance(payload, dict) or payload.get("rc_sha256") != digest or payload.get("target") != TARGET or payload.get("source") != source or payload.get("blockers") != [] or payload.get("status") != "pass":
             raise QualificationError("indexed gate artifact is semantically unbound")
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -131,11 +275,11 @@ def self_test() -> None:
         with zipfile.ZipFile(escaping, "w") as archive: archive.writestr("../outside", b"x")
         reject(lambda: inspect_archive(escaping), "archive traversal")
     checkpoints = [
-        {"id": "G009-GATE-PREFLIGHT", "dispatch": {"command": "preflight", "required_args": ["--profile", "--target"]}},
+        {"id": "G009-GATE-PREFLIGHT", "dispatch": {"command": "preflight", "required_args": ["--rc"]}},
         {"id": "G009-GATE-PERFORMANCE", "dispatch": {"command": "holdout", "required_args": ["--rc", "--warmups", "--samples", "--bin-dir"]}},
         {"id": "G009-GATE-PACKAGE", "dispatch": {"command": "package", "required_args": ["--rc", "--archive", "--bin-dir"]}},
         {"id": "G009-GATE-LIFECYCLE", "dispatch": {"command": "lifecycle", "required_args": ["--rc", "--archive", "--require-clean-user"]}},
-        {"id": "G009-GATE-FINAL-001", "dispatch": {"command": "final-review", "required_args": ["--rc", "--traceability", "--evidence-root", "--reviewer", "--require-final-001"]}},
+        {"id": "G009-GATE-FINAL-001", "dispatch": {"command": "final-review", "required_args": ["--rc", "--traceability", "--index", "--reviewer", "--reviewer-keyring", "--attestation"]}},
     ]
     declared = [{"id": gate, "dispatch": {"command": "full-gates", "only": gate, "required_args": ["--rc", "--only"]}} for gate in GATES]
     reject(lambda: validate_gate_declarations({"gates": declared[:-1], "workflow_checkpoints": checkpoints}), "missing allowlisted gate")

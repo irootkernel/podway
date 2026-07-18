@@ -19,6 +19,7 @@
     "sidecars_are_members": false,
     "zip": {"deterministic": true, "safe_extraction_required": true}
   },
+  "release_policy": "release/g009-release-policy-v1.json",
   "evidence": {
     "committed_results_permitted": false,
     "local_root": "artifacts/g009",
@@ -60,11 +61,11 @@
     {"dispatch": {"command": "full-gates", "only": "G009-GATE-MIGRATION", "required_args": ["--rc", "--only"]}, "evidence_role": "migration", "id": "G009-GATE-MIGRATION", "owner": "durability"}
   ],
   "workflow_checkpoints": [
-    {"id": "G009-GATE-PREFLIGHT", "dispatch": {"command": "preflight", "required_args": ["--profile", "--target"]}},
+    {"id": "G009-GATE-PREFLIGHT", "dispatch": {"command": "preflight", "required_args": ["--rc"]}},
     {"id": "G009-GATE-PERFORMANCE", "dispatch": {"command": "holdout", "required_args": ["--rc", "--warmups", "--samples", "--bin-dir"]}},
     {"id": "G009-GATE-PACKAGE", "dispatch": {"command": "package", "required_args": ["--rc", "--archive", "--bin-dir"]}},
     {"id": "G009-GATE-LIFECYCLE", "dispatch": {"command": "lifecycle", "required_args": ["--rc", "--archive", "--require-clean-user"]}},
-    {"id": "G009-GATE-FINAL-001", "dispatch": {"command": "final-review", "required_args": ["--rc", "--traceability", "--evidence-root", "--reviewer", "--require-final-001"]}}
+    {"id": "G009-GATE-FINAL-001", "dispatch": {"command": "final-review", "required_args": ["--rc", "--traceability", "--index", "--reviewer", "--reviewer-keyring", "--attestation"]}}
   ],
   "external_prerequisites": [
     {"id": "G009-APPROVALS-OWNER-E-F", "kind": "detached-human-approvals", "required_roles": ["owner", "E", "F"], "rc_input_roles": ["approvals", "signer-contract"], "workflow_behavior": "consume-only"}
