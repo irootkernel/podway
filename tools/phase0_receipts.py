@@ -1052,7 +1052,7 @@ def validate_receipt(
             "schema_version",
         },
     )
-    if value["schema_version"] != reference["v1_identifiers"]["handoff_receipt"] or value["phase"] != "0C" or value["acceptance"] != "accepted":
+    if value["schema_version"] != reference["v1_identifiers"]["handoff_receipt"] or value["phase"] != phase or value["acceptance"] != "accepted":
         fail("handoff_receipt_drift", f"handoff {phase} receipt schema, phase, or acceptance drift")
     handoff = reference["handoffs"][phase]
     artifact = require_object(value["artifact"], f"handoff {phase} artifact", {"digest", "kind", "name", "version"})
@@ -1493,7 +1493,7 @@ def build_receipts(
             "consumer_proofs": verification[phase]["consumer_proofs"],
             "enabled_gates": verification[phase]["enabled_gates"],
             "invalidation": verification[phase]["invalidation"],
-            "phase": "0C",
+            "phase": phase,
             "prerequisites": prerequisites,
             "producer_proof": verification[phase]["producer_proof"],
             "receipt_identity": {
