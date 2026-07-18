@@ -118,6 +118,11 @@ impl LaunchctlRunnerV1 for AlreadyBootstrappedLaunchctl {
                 b"bootstrap-completed\n",
                 "retry may only observe the documented already-bootstrapped state"
             );
+            return Ok(LaunchctlOutputV1 {
+                exit_status: 5,
+                stdout: String::new(),
+                stderr: "Bootstrap failed: 5: Input/output error".to_owned(),
+            });
         }
         Ok(LaunchctlOutputV1::success())
     }
@@ -153,8 +158,8 @@ fn paths(root: &Path) -> ServiceRuntimePathsV1 {
     .expect("service paths")
 }
 
-fn binary(root: &Path) -> PathBuf {
-    let binary = root.join("bin/podwayd");
+fn binary(root: &Path, name: &str) -> PathBuf {
+    let binary = root.join(format!("bin/{name}"));
     fs::create_dir_all(binary.parent().expect("binary parent")).expect("create binary parent");
     fs::write(&binary, b"#!/bin/sh\nexit 0\n").expect("write binary");
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).expect("chmod binary");
@@ -172,17 +177,66 @@ fn failpoint(name: &str) -> DurabilityFailpointV1 {
     }
 }
 
+fn assert_mode_0600(path: &Path, description: &str) {
+    assert_eq!(
+        fs::metadata(path).expect(description).permissions().mode() & 0o777,
+        0o600,
+        "{description} must remain private"
+    );
+}
+
+fn assert_no_service_temporary_is_accepted(paths: &ServiceRuntimePathsV1) {
+    for path in [
+        paths.launch_agent_path().as_path(),
+        paths.metadata_index_path().as_path(),
+    ] {
+        let published = fs::read(path).expect("complete published service file");
+        let parent = path.parent().expect("service file parent");
+        let temporary_prefix = format!(
+            ".{}.",
+            path.file_name()
+                .expect("service file name")
+                .to_string_lossy()
+        );
+        for entry in fs::read_dir(parent).expect("read service file parent") {
+            let entry = entry.expect("directory entry");
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(&temporary_prefix) && name.ends_with(".tmp") {
+                assert_ne!(
+                    fs::read(entry.path()).expect("temporary contents"),
+                    published,
+                    "temporary service file must not be accepted as {path:?}"
+                );
+            }
+        }
+    }
+}
+
 fn run_publication_crash_child(root: &Path, point: &str) {
     let paths = paths(root);
-    let binary = binary(root);
+    let old_binary = binary(root, "podwayd-old");
+    let new_binary = binary(root, "podwayd-new");
+    let old_clock = FixedServiceClockV1::new(UnixMillis::new(1));
+    let old_runner = MacosServiceCommandRunnerV1::new(
+        StdServiceFilesystemV1,
+        SuccessfulLaunchctl,
+        old_clock,
+        501,
+    )
+    .expect("old-state runner");
+    ServiceManagerV1::new(old_runner, old_clock, paths.clone())
+        .install(install_spec(&old_binary, &paths))
+        .expect("publish complete old state");
+
     StdServiceFilesystemV1::inject_durability_failpoint_for_testing(failpoint(point));
-    let clock = FixedServiceClockV1::new(UnixMillis::new(1));
+    let clock = FixedServiceClockV1::new(UnixMillis::new(2));
     let runner =
         MacosServiceCommandRunnerV1::new(StdServiceFilesystemV1, SuccessfulLaunchctl, clock, 501)
-            .expect("runner");
+            .expect("replacement runner");
     let _ = runner.run(podway_service::ServiceCommandV1::Install {
-        requested_at: UnixMillis::new(1),
-        spec: install_spec(&binary, &paths),
+        requested_at: UnixMillis::new(2),
+        spec: install_spec(&new_binary, &paths),
     });
     panic!("durability failpoint must terminate the child");
 }
@@ -222,27 +276,31 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
         );
 
         let paths = paths(&root);
+        let old_binary = root.join("bin/podwayd-old");
+        let new_binary = root.join("bin/podwayd-new");
+        let old_plist =
+            podway_service::launch_agent_plist_v1(&old_binary, paths.log_path().as_path());
+        let new_plist =
+            podway_service::launch_agent_plist_v1(&new_binary, paths.log_path().as_path());
         let plist = paths.launch_agent_path().as_path();
-        if plist.exists() {
-            let contents = fs::read(plist).expect("published plist");
-            assert!(
-                contents
-                    .windows(SERVICE_LABEL_V1.len())
-                    .any(|part| part == SERVICE_LABEL_V1.as_bytes()),
-                "{point} may publish only the complete successor"
-            );
-            assert_eq!(
-                fs::metadata(plist)
-                    .expect("plist mode")
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
-        }
+        let metadata = paths.metadata_index_path().as_path();
+        let observed_plist = fs::read(plist).expect("complete old or new plist");
+        assert!(
+            observed_plist == old_plist || observed_plist == new_plist,
+            "{point} may expose only the complete old or complete new plist"
+        );
+        assert!(
+            fs::read(metadata)
+                .expect("complete old metadata")
+                .windows(old_binary.as_os_str().as_encoded_bytes().len())
+                .any(|value| value == old_binary.as_os_str().as_encoded_bytes()),
+            "{point} must preserve complete old metadata until replacement can commit"
+        );
+        assert_mode_0600(plist, "replacement plist mode");
+        assert_mode_0600(metadata, "replacement metadata mode");
+        assert_no_service_temporary_is_accepted(&paths);
 
-        let binary = binary(&root);
-        let clock = FixedServiceClockV1::new(UnixMillis::new(2));
+        let clock = FixedServiceClockV1::new(UnixMillis::new(3));
         let runner = MacosServiceCommandRunnerV1::new(
             StdServiceFilesystemV1,
             SuccessfulLaunchctl,
@@ -252,31 +310,29 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
         .expect("retry runner");
         let manager = ServiceManagerV1::new(runner, clock, paths.clone());
         manager
-            .install(install_spec(&binary, &paths))
+            .install(install_spec(&new_binary, &paths))
             .expect("retry convergence");
         assert_eq!(
-            fs::metadata(plist)
-                .expect("converged plist mode")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
+            fs::read(plist).expect("converged plist"),
+            new_plist,
+            "{point} retry must converge to the complete new plist"
         );
-        assert_eq!(
-            fs::metadata(paths.metadata_index_path().as_path())
-                .expect("converged metadata mode")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
+        assert!(
+            fs::read(metadata)
+                .expect("converged metadata")
+                .windows(new_binary.as_os_str().as_encoded_bytes().len())
+                .any(|value| value == new_binary.as_os_str().as_encoded_bytes()),
+            "{point} retry must converge to complete new metadata"
         );
+        assert_mode_0600(plist, "converged plist mode");
+        assert_mode_0600(metadata, "converged metadata mode");
         fs::remove_dir_all(root).expect("remove fixture");
     }
 }
 
 fn run_removal_crash_child(root: &Path) {
     let paths = paths(root);
-    let binary = binary(root);
+    let binary = binary(root, "podwayd");
     fs::create_dir_all(
         paths
             .launch_agent_path()
@@ -380,7 +436,7 @@ fn service_removal_crash_child_preserves_complete_prior_state() {
 
 fn run_bootstrap_crash_child(root: &Path) {
     let paths = paths(root);
-    let binary = binary(root);
+    let binary = binary(root, "podwayd");
     let clock = FixedServiceClockV1::new(UnixMillis::new(1));
     let runner = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,

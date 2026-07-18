@@ -1493,6 +1493,15 @@ impl LaunchctlOutputV1 {
             stderr: String::new(),
         }
     }
+    /// The documented `launchctl bootstrap` duplicate-load response.
+    ///
+    /// A duplicate bootstrap is not a successful side effect. Reconciliation accepts only this
+    /// exact typed process result, because it proves launchd already owns the requested label.
+    pub fn already_loaded_bootstrap(&self) -> bool {
+        self.exit_status == 5
+            && self.stdout.is_empty()
+            && self.stderr.trim_end() == "Bootstrap failed: 5: Input/output error"
+    }
 }
 /// The process-backed `launchctl` adapter used by CLI composition on macOS.
 #[derive(Clone, Debug)]
@@ -1681,15 +1690,26 @@ where
         op: ServiceOperationV1,
         paths: &ServiceRuntimePathsV1,
     ) -> Result<(), ServiceErrorV1> {
-        self.launch(
-            op,
-            vec![
-                "bootstrap".to_owned(),
-                self.domain(),
-                paths.launch_agent_path().as_path().display().to_string(),
-            ],
-        )?;
-        Ok(())
+        let arguments = vec![
+            "bootstrap".to_owned(),
+            self.domain(),
+            paths.launch_agent_path().as_path().display().to_string(),
+        ];
+        self.observe(ServiceObservationV1::LaunchctlSideEffectRequested);
+        let output = self.launchctl.run(&arguments)?;
+        if output.exit_status == 0 || output.already_loaded_bootstrap() {
+            self.observe(ServiceObservationV1::LaunchctlSideEffectCompleted);
+            return Ok(());
+        }
+        Err(ServiceErrorV1::LaunchctlFailureV1 {
+            operation: op,
+            exit_status: Some(output.exit_status),
+            message: if output.stderr.is_empty() {
+                output.stdout
+            } else {
+                output.stderr
+            },
+        })
     }
 
     fn bootout(&self, op: ServiceOperationV1) -> Result<(), ServiceErrorV1> {
