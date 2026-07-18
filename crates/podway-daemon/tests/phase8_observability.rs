@@ -61,6 +61,62 @@ impl LogSinkV1 for BlockingSink {
         Ok(())
     }
 }
+struct BlockingClock {
+    gate: Arc<(Mutex<bool>, Condvar)>,
+}
+impl ClockV1 for BlockingClock {
+    fn unix_seconds(&self) -> u64 {
+        let (locked, ready) = &*self.gate;
+        let mut released = locked.lock().unwrap();
+        while !*released {
+            released = ready.wait(released).unwrap();
+        }
+        1
+    }
+}
+struct CountedBlockingSink {
+    gate: Arc<(Mutex<(bool, bool)>, Condvar)>,
+    writes: AtomicU64,
+}
+impl LogSinkV1 for CountedBlockingSink {
+    fn write_event(&self, _: &str) -> io::Result<()> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        let (locked, ready) = &*self.gate;
+        let mut state = locked.lock().unwrap();
+        state.1 = true;
+        ready.notify_all();
+        while !state.0 {
+            state = ready.wait(state).unwrap();
+        }
+        Ok(())
+    }
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+struct FirstWriteBlockingSink {
+    gate: Arc<(Mutex<(bool, bool)>, Condvar)>,
+    events: Mutex<Vec<String>>,
+}
+impl LogSinkV1 for FirstWriteBlockingSink {
+    fn write_event(&self, event: &str) -> io::Result<()> {
+        let (locked, ready) = &*self.gate;
+        let mut state = locked.lock().unwrap();
+        if !state.1 {
+            state.1 = true;
+            ready.notify_all();
+            while !state.0 {
+                state = ready.wait(state).unwrap();
+            }
+        }
+        drop(state);
+        self.events.lock().unwrap().push(event.to_owned());
+        Ok(())
+    }
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
 struct PanicSink;
 impl LogSinkV1 for PanicSink {
     fn write_event(&self, _: &str) -> io::Result<()> {
@@ -168,11 +224,14 @@ fn sink_open_degradation_is_typed_and_counts_every_event() {
 }
 
 #[test]
-fn worker_panic_is_reported_without_returning_an_error_to_the_producer() {
+fn worker_panic_clears_gauges_and_counts_the_lost_event() {
     let observability = ObservabilityV1::start(Arc::new(PanicSink), Arc::new(FakeClock::new(1)));
     observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
     let counters = observability.shutdown();
     assert_eq!(counters.worker_panics, 1);
+    assert_eq!(counters.unflushed, 1);
+    assert_eq!(counters.writing, 0);
+    assert_eq!(counters.queued, 0);
 }
 
 #[test]
@@ -229,7 +288,7 @@ fn blocked_final_flush_is_bounded_and_classified() {
     let counters = observability.shutdown();
     assert!(started.elapsed() >= Duration::from_secs(1));
     assert_eq!(counters.shutdown_timeouts, 1);
-    assert_eq!(counters.flushing, 1);
+    assert_eq!(counters.flushing, 0);
     let (locked, ready) = &*gate;
     *locked.lock().unwrap() = true;
     ready.notify_all();
@@ -245,4 +304,79 @@ fn cloneable_emitter_keeps_runtime_observation_separate_from_owner_lifecycle() {
     let counters = observability.shutdown();
     assert_eq!(counters.queued, 0);
     assert_eq!(sink.events.lock().unwrap().len(), 2);
+}
+#[test]
+fn producer_does_not_call_a_blocking_clock() {
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let observability = ObservabilityV1::start(
+        Arc::new(FakeSink::default()),
+        Arc::new(BlockingClock { gate: gate.clone() }),
+    );
+    let started = Instant::now();
+    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
+    assert!(started.elapsed() < Duration::from_millis(100));
+    let (locked, ready) = &*gate;
+    *locked.lock().unwrap() = true;
+    ready.notify_all();
+    observability.shutdown();
+}
+
+#[test]
+fn dropping_owner_accounts_for_blocked_and_queued_events() {
+    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
+    let sink = Arc::new(CountedBlockingSink {
+        gate: gate.clone(),
+        writes: AtomicU64::new(0),
+    });
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FakeClock::new(1)));
+    let emitter = observability.emitter();
+    emitter.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
+    emitter.emit(EventCategoryV1::Scheduler, SeverityV1::Info);
+    let (locked, ready) = &*gate;
+    let mut state = locked.lock().unwrap();
+    while !state.1 {
+        state = ready.wait(state).unwrap();
+    }
+    drop(state);
+    let started = Instant::now();
+    drop(observability);
+    assert!(started.elapsed() >= Duration::from_secs(1));
+    let counters = emitter.counters();
+    assert_eq!(counters.shutdown_timeouts, 1);
+    assert_eq!(counters.unflushed, 2);
+    assert_eq!(counters.writing, 0);
+    assert_eq!(sink.writes.load(Ordering::Relaxed), 1);
+    let mut state = locked.lock().unwrap();
+    state.0 = true;
+    ready.notify_all();
+}
+
+#[test]
+fn fallback_entries_precede_primary_backlog_after_blocked_writer() {
+    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
+    let sink = Arc::new(FirstWriteBlockingSink {
+        gate: gate.clone(),
+        events: Mutex::new(Vec::new()),
+    });
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FakeClock::new(1)));
+    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
+    let (locked, ready) = &*gate;
+    let mut state = locked.lock().unwrap();
+    while !state.1 {
+        state = ready.wait(state).unwrap();
+    }
+    drop(state);
+    for _ in 0..PRIMARY_CAPACITY_V1 {
+        observability.emit(EventCategoryV1::Scheduler, SeverityV1::Info);
+    }
+    observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
+    let mut state = locked.lock().unwrap();
+    state.0 = true;
+    ready.notify_all();
+    drop(state);
+    observability.shutdown();
+    let events = sink.events.lock().unwrap();
+    assert!(events[0].contains("severity=INFO category=lifecycle"));
+    assert!(events[1].contains("severity=ERROR category=service_outcome"));
+    assert!(events[2].contains("severity=INFO category=scheduler"));
 }

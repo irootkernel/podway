@@ -178,9 +178,14 @@ impl ClockV1 for SystemClockV1 {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PendingEvent {
+    category: EventCategoryV1,
+    severity: SeverityV1,
+}
 struct Queue {
-    primary: VecDeque<String>,
-    fallback: VecDeque<String>,
+    primary: VecDeque<PendingEvent>,
+    fallback: VecDeque<PendingEvent>,
     stopping: bool,
 }
 struct Shared {
@@ -279,6 +284,10 @@ impl ObservabilityV1 {
     }
     /// Requests bounded shutdown; a blocked worker is detached and the exact remaining state is counted.
     pub fn shutdown(mut self) -> ObservabilityCountersV1 {
+        self.stop_and_wait();
+        self.counters()
+    }
+    fn stop_and_wait(&mut self) {
         self.emitter.request_stop();
         if let Some(done) = self.done.take() {
             match done.recv_timeout(MAX_SHUTDOWN_FLUSH_V1) {
@@ -294,6 +303,7 @@ impl ObservabilityV1 {
                             .worker_join_failures
                             .fetch_add(1, Ordering::Relaxed);
                     }
+                    self.clear_gauges();
                 }
                 Ok(WorkerReport::Panicked) => {
                     self.emitter
@@ -302,6 +312,7 @@ impl ObservabilityV1 {
                         .worker_panics
                         .fetch_add(1, Ordering::Relaxed);
                     let _ = self.worker.take().map(thread::JoinHandle::join);
+                    self.record_unflushed_and_clear_gauges();
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.emitter
@@ -309,7 +320,7 @@ impl ObservabilityV1 {
                         .counters
                         .shutdown_timeouts
                         .fetch_add(1, Ordering::Relaxed);
-                    self.record_unflushed();
+                    self.record_unflushed_and_clear_gauges();
                     self.worker.take();
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -318,25 +329,49 @@ impl ObservabilityV1 {
                         .counters
                         .worker_disconnects
                         .fetch_add(1, Ordering::Relaxed);
-                    self.record_unflushed();
+                    self.record_unflushed_and_clear_gauges();
                     self.worker.take();
                 }
             }
         }
         self.emitter.shared.stopped.store(true, Ordering::Release);
-        self.counters()
     }
-    fn record_unflushed(&self) {
+    fn clear_gauges(&self) {
+        self.emitter
+            .shared
+            .counters
+            .writing
+            .store(0, Ordering::Release);
+        self.emitter
+            .shared
+            .counters
+            .flushing
+            .store(0, Ordering::Release);
+        self.emitter.shared.in_flight.store(0, Ordering::Release);
+    }
+    fn record_unflushed_and_clear_gauges(&self) {
         let queued = self.emitter.shared.counters.queued.load(Ordering::Acquire);
-        self.emitter.shared.counters.unflushed.fetch_add(
-            queued.saturating_add(self.emitter.shared.in_flight.load(Ordering::Acquire)),
-            Ordering::Relaxed,
-        );
+        let in_flight = self.emitter.shared.in_flight.swap(0, Ordering::AcqRel);
+        self.emitter
+            .shared
+            .counters
+            .unflushed
+            .fetch_add(queued.saturating_add(in_flight), Ordering::Relaxed);
+        self.emitter
+            .shared
+            .counters
+            .writing
+            .store(0, Ordering::Release);
+        self.emitter
+            .shared
+            .counters
+            .flushing
+            .store(0, Ordering::Release);
     }
 }
 impl Drop for ObservabilityV1 {
     fn drop(&mut self) {
-        self.emitter.request_stop();
+        self.stop_and_wait();
     }
 }
 impl ObservabilityEmitterV1 {
@@ -352,7 +387,7 @@ impl ObservabilityEmitterV1 {
                 .fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let event = format_event(self.shared.clock.unix_seconds(), category, severity);
+        let event = PendingEvent { category, severity };
         let deadline = std::time::Instant::now() + MAX_EMIT_WAIT_V1;
         loop {
             match self.shared.queue.try_lock() {
@@ -471,15 +506,28 @@ fn writer_loop(shared: Arc<Shared>) {
             Some(event) => {
                 shared.in_flight.store(1, Ordering::Release);
                 shared.counters.writing.store(1, Ordering::Release);
-                if shared
-                    .sink
-                    .as_ref()
-                    .is_some_and(|sink| sink.write_event(&event).is_err())
-                {
+                let write_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let formatted =
+                        format_event(shared.clock.unix_seconds(), event.category, event.severity);
                     shared
-                        .counters
-                        .sink_failures
-                        .fetch_add(1, Ordering::Relaxed);
+                        .sink
+                        .as_ref()
+                        .is_some_and(|sink| sink.write_event(&formatted).is_err())
+                }));
+                match write_result {
+                    Ok(true) => {
+                        shared
+                            .counters
+                            .sink_failures
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(false) => {}
+                    Err(panic) => {
+                        shared.counters.writing.store(0, Ordering::Release);
+                        shared.in_flight.store(0, Ordering::Release);
+                        shared.counters.unflushed.fetch_add(1, Ordering::Relaxed);
+                        std::panic::resume_unwind(panic);
+                    }
                 }
                 shared.counters.writing.store(0, Ordering::Release);
                 shared.in_flight.store(0, Ordering::Release);
