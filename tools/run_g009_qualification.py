@@ -167,18 +167,29 @@ def _run(argv: tuple[str, ...], cwd: Path, env: dict[str, str], timeout: float =
     if result.returncode != 0: fail(f"native workload command failed ({result.returncode}): {' '.join(argv[:3])}")
     return result
 
-def _socket_path(env: dict[str, str]) -> Path:
-    return Path(env["TMPDIR"]) / f"podway-{os.getuid()}" / "podwayd.sock"
+def _socket_paths(env: dict[str, str]) -> tuple[Path, ...]:
+    primary = Path(env["TMPDIR"]) / f"podway-{os.getuid()}" / "podwayd.sock"
+    fallback = Path("/tmp") / f"podway-{os.getuid()}" / "podwayd.sock"
+    return (primary,) if primary == fallback else (primary, fallback)
+
 
 def _start_daemon(podwayd: Path, cwd: Path, env: dict[str, str]) -> tuple[subprocess.Popen[bytes], Path]:
-    socket = _socket_path(env)
+    candidates = _socket_paths(env)
+    if any(candidate.exists() for candidate in candidates):
+        fail("refusing a pre-existing Podway socket before workload startup")
     process = subprocess.Popen((str(podwayd), "--service"), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if process.poll() is not None:
             _, stderr = process.communicate()
             fail(f"podwayd exited before socket readiness: {sha256_bytes(stderr)}")
-        if socket.exists(): return process, socket
+        ready = [candidate for candidate in candidates if candidate.exists()]
+        if len(ready) == 1:
+            return process, ready[0]
+        if len(ready) > 1:
+            process.terminate()
+            process.wait(timeout=5)
+            fail("podwayd created multiple socket candidates")
         time.sleep(0.01)
     process.terminate(); process.wait(timeout=5); fail("podwayd did not create its socket")
 
