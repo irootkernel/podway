@@ -256,7 +256,16 @@ def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[st
         try:
             fixture = Path(holder.name) / "fixture"; fixture.mkdir(mode=0o700)
             home, temporary = fixture / "home", fixture / "tmp"
-            home.mkdir(mode=0o700); temporary.mkdir(mode=0o700)
+            home.mkdir(mode=0o700)
+            temporary.mkdir(mode=0o700)
+            for relative in (
+                Path("Library/Application Support/Podway"),
+                Path("Library/LaunchAgents"),
+                Path("Library/Logs/Podway"),
+            ):
+                directory = home / relative
+                directory.mkdir(parents=True, mode=0o700)
+                os.chmod(directory, 0o700)
             env = {"HOME": str(home), "TMPDIR": str(temporary), "PATH": os.environ.get("PATH", "")}
             if item["id"] == "G009-W01":
                 started = time.monotonic_ns()
