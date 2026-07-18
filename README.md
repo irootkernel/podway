@@ -10,8 +10,8 @@ contracts, and compatibility requirements.
 
 ## Platform and safety boundary
 
-Podway is macOS-first. Linux CI validates source compatibility and builds only; it is
-not a Linux release or support commitment.
+Podway supports native Apple Silicon macOS (`aarch64-apple-darwin`) only. Intel,
+Rosetta-translated, universal-binary, and Linux builds are not release targets.
 
 The product is intentionally local and constrained:
 

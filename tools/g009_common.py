@@ -8,24 +8,57 @@ import os
 import platform
 import re
 import stat
+import subprocess
 import tempfile
 from fractions import Fraction
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_ROOT = ROOT / "artifacts" / "g009"
+CONTROLLER_ROOT = Path(__file__).resolve().parents[1]
+
+
+class QualificationError(RuntimeError):
+    pass
+
+
+def fail(message: str) -> None:
+    raise QualificationError(message)
+
+
+def candidate_root(*, required: bool = True) -> Path | None:
+    raw = os.environ.get("G009_CANDIDATE_ROOT")
+    if not raw:
+        if required:
+            fail("G009_CANDIDATE_ROOT is required; release tools run only from the trusted controller")
+        return None
+    supplied = Path(raw)
+    if not supplied.is_absolute() or supplied.is_symlink() or not supplied.is_dir():
+        fail("G009_CANDIDATE_ROOT must name an absolute, non-symlink candidate directory")
+    resolved = supplied.resolve()
+    if (
+        resolved == CONTROLLER_ROOT
+        or resolved.is_relative_to(CONTROLLER_ROOT)
+        or CONTROLLER_ROOT.is_relative_to(resolved)
+    ):
+        fail("G009_CANDIDATE_ROOT must be separate and non-overlapping with the controller root")
+    return resolved
+
+
+def require_candidate_root() -> Path:
+    root = candidate_root()
+    assert root is not None
+    return root
+
+
+# Candidate-scoped commands require G009_CANDIDATE_ROOT explicitly. Controller-only
+# policy and final-review commands remain usable without checking out candidate code.
+ROOT = candidate_root(required=False) or CONTROLLER_ROOT
+EVIDENCE_ROOT = CONTROLLER_ROOT / "artifacts" / "g009"
 TARGET = "aarch64-apple-darwin"
 ARCHIVE_ROOT = "podway-0.1.0-aarch64-apple-darwin"
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_FILE_BYTES = 128 * 1024 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-class QualificationError(RuntimeError):
-    pass
-
-def fail(message: str) -> None:
-    raise QualificationError(message)
 
 def _no_duplicate_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
@@ -39,28 +72,42 @@ def _reject_constant(value: str) -> None:
     fail(f"non-finite JSON value: {value}")
 
 def bounded_bytes(path: Path, limit: int = MAX_FILE_BYTES) -> bytes:
+    """Read one regular, non-symlink file through a no-follow descriptor."""
     try:
-        size = path.stat().st_size
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
-        fail(f"cannot stat {path}: {exc}")
-    if size > limit:
-        fail(f"read exceeds {limit} byte limit: {path}")
+        fail(f"cannot safely open {path}: {exc}")
     try:
-        with path.open("rb") as handle:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            fail(f"input is not a regular file: {path}")
+        if metadata.st_size > limit:
+            fail(f"read exceeds {limit} byte limit: {path}")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
             data = handle.read(limit + 1)
     except OSError as exc:
         fail(f"cannot read {path}: {exc}")
+    finally:
+        os.close(fd)
     if len(data) > limit:
         fail(f"read exceeds {limit} byte limit: {path}")
     return data
 
-def load_json(path: Path, limit: int = MAX_JSON_BYTES) -> Any:
-    raw = bounded_bytes(path, limit)
+def load_json_bytes(raw: bytes, label: str = "<bytes>", limit: int = MAX_JSON_BYTES) -> Any:
+    if len(raw) > limit:
+        fail(f"read exceeds {limit} byte limit: {label}")
     try:
-        return json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_object,
-                          parse_constant=_reject_constant)
+        return json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_no_duplicate_object,
+            parse_constant=_reject_constant,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        fail(f"invalid JSON {path}: {exc}")
+        fail(f"invalid JSON {label}: {exc}")
+
+
+def load_json(path: Path, limit: int = MAX_JSON_BYTES) -> Any:
+    return load_json_bytes(bounded_bytes(path, limit), str(path), limit)
 
 def _canonical(value: Any) -> str:
     if value is None: return "null"
@@ -156,10 +203,20 @@ def host_manifest() -> dict[str, str]:
     return {"machine": platform.machine(), "system": platform.system(), "platform": platform.platform()}
 
 def require_arm64_host(target: str) -> None:
-    if target != TARGET: fail(f"only target {TARGET} is accepted")
+    if target != TARGET:
+        fail(f"only target {TARGET} is accepted")
     host = host_manifest()
     if host["system"] != "Darwin" or host["machine"] != "arm64":
         fail(f"requires native Darwin arm64 host, got {host['system']} {host['machine']}")
+    translated = subprocess.run(
+        ("/usr/sbin/sysctl", "-in", "sysctl.proc_translated"),
+        capture_output=True,
+        check=False,
+        env={"PATH": os.environ.get("PATH", "")},
+        timeout=5,
+    )
+    if translated.returncode != 0 or translated.stdout.strip() != b"0":
+        fail("requires an untranslated native Apple Silicon process")
 
 def require_digest(value: Any, label: str) -> str:
     if not isinstance(value, str) or not SHA256_RE.fullmatch(value): fail(f"invalid {label} SHA-256")

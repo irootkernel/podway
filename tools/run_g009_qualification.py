@@ -6,10 +6,11 @@ and unseen holdout remain separate irreversible checkpoints.
 """
 from __future__ import annotations
 import argparse
+import io
+import re
 import os
-import platform
-import resource
 import select
+import platform
 import shutil
 import signal
 import subprocess
@@ -21,12 +22,12 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from g009_common import (EVIDENCE_ROOT, ROOT, TARGET, ARCHIVE_ROOT, QualificationError,
-    bounded_bytes, canonical_json, content_addressed_json, fail, host_manifest, load_json,
-    require_arm64_host, safe_relative, sha256_bytes, sha256_file)
+from g009_common import (CONTROLLER_ROOT, EVIDENCE_ROOT, ROOT, TARGET, ARCHIVE_ROOT,
+    QualificationError, atomic_immutable_json, bounded_bytes, canonical_json, content_addressed_json, fail,
+    host_manifest, load_json, load_json_bytes, require_arm64_host, require_candidate_root,
+    safe_relative, sha256_bytes, sha256_file)
 from g009_performance import SAMPLES, WARMUPS, characterize as calculate_baseline, evaluate_holdout, thresholds
-from g009_release import inspect_archive, load_rc, require_bound_file
-from g009_release import inspect_archive, require_bound_file, verify_rc_consumption
+from g009_release import inspect_archive, rc_input_root, require_bound_file, resolve_rc_input, verify_rc_consumption, verify_role_signatures
 
 # User input never supplies executable vectors. These logical gate identifiers are the
 # complete subprocess allowlist; profile declarations are checked against this map.
@@ -35,12 +36,15 @@ GATES: dict[str, tuple[tuple[str, ...], ...]] = {
     "G009-GATE-CHECK": (("cargo", "+1.85.0", "check", "--workspace", "--all-targets", "--target", TARGET),),
     "G009-GATE-CLIPPY": (("cargo", "+1.85.0", "clippy", "--workspace", "--all-targets", "--all-features", "--target", TARGET, "--", "-D", "warnings"),),
     "G009-GATE-NATIVE-TESTS": (("cargo", "+1.85.0", "test", "--workspace", "--all-targets", "--target", TARGET),),
-    "G009-GATE-CONTRACTS": (("python3", "tools/run_verification.py", "--run"),),
-    "G009-GATE-G005": (("python3", "tools/run_g005_vertical.py"),),
-    "G009-GATE-G008": (("python3", "tools/run_g008_dogfood.py"),),
+    "G009-GATE-CONTRACTS": (("python3", str(CONTROLLER_ROOT / "tools/run_verification.py"), "--run"),),
+    "G009-GATE-G005": (("python3", str(CONTROLLER_ROOT / "tools/run_g005_vertical.py")),),
+    "G009-GATE-G008": (("python3", str(CONTROLLER_ROOT / "tools/run_g008_dogfood.py")),),
     "G009-GATE-CRASH": (
-        ("python3", "tools/verify_g009_qualification.py", "--crash-registry", "quality/crash-boundaries-v1.json"),
+        ("python3", str(CONTROLLER_ROOT / "tools/verify_g009_qualification.py"), "--crash-registry", "quality/crash-boundaries-v1.json"),
         ("cargo", "+1.85.0", "test", "-p", "podway-store", "--test", "phase2_crash_matrix", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-daemon", "--test", "phase4_execution", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-daemon", "--test", "phase4_registry", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-daemon", "--test", "phase5_reset_runtime", "--target", TARGET),
         ("cargo", "+1.85.0", "test", "-p", "podway-service", "--test", "phase8_crash_boundaries", "--target", TARGET),
     ),
     "G009-GATE-OBS": (
@@ -62,6 +66,18 @@ GATES: dict[str, tuple[tuple[str, ...], ...]] = {
     "G009-GATE-COVERAGE": (("cargo", "+1.85.0", "llvm-cov", "report", "--target", TARGET, "--summary-only"),),
     "G009-GATE-FUZZ": (),
 }
+CONTROLLER_SOURCE_IDS = (
+    ".github/workflows/release.yml",
+    ".github/workflows/release-final-review.yml",
+    "tools/g009_common.py",
+    "tools/g009_performance.py",
+    "tools/g009_release.py",
+    "tools/run_g009_qualification.py",
+    "tools/run_verification.py",
+    "tools/run_g005_vertical.py",
+    "tools/run_g008_dogfood.py",
+    "tools/verify_g009_qualification.py",
+)
 FUZZ_TARGETS = ("frame_decoder", "request_envelope", "response_additive", "config_procedure", "canonical_json", "selector")
 IDENTITY_COMMANDS = (("git", "status", "--porcelain"), ("git", "rev-parse", "HEAD"),
                      ("git", "rev-parse", "HEAD^{tree}"), ("rustc", "+1.85.0", "--version"),
@@ -74,6 +90,101 @@ def resolved_tool_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
             fail("rustup is required for pinned Rust commands")
         return (rustup, "run", argv[1][1:], argv[0], *argv[2:])
     return argv
+def _protected_roots() -> tuple[Path, Path]:
+    immutable_raw = os.environ.get("G009_IMMUTABLE_INPUT_ROOT")
+    if immutable_raw is None:
+        fail("protected RC input root is unavailable")
+    immutable_root = Path(immutable_raw)
+    if not immutable_root.is_absolute() or immutable_root.is_symlink() or not immutable_root.is_dir():
+        fail("protected RC input root is unsafe")
+    protected_roots = (CONTROLLER_ROOT.resolve(), immutable_root.resolve())
+    candidate_root = require_candidate_root()
+    if any(
+        left == right or left.is_relative_to(right) or right.is_relative_to(left)
+        for index, left in enumerate(protected_roots)
+        for right in protected_roots[index + 1:]
+    ) or any(
+        candidate_root == root
+        or candidate_root.is_relative_to(root)
+        or root.is_relative_to(candidate_root)
+        for root in protected_roots
+    ):
+        fail("protected roots must be disjoint from controlled roots")
+    return protected_roots
+
+
+def _github_command_channels() -> tuple[Path, ...]:
+    channels = []
+    for name in ("GITHUB_ENV", "GITHUB_OUTPUT", "GITHUB_PATH", "GITHUB_STATE", "GITHUB_STEP_SUMMARY"):
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        path = Path(raw)
+        if not path.is_absolute() or any(character in raw for character in ('"', "\n", "\r")):
+            fail(f"{name} cannot be represented in the sandbox policy")
+        channels.append(path)
+    return tuple(channels)
+
+
+def sandboxed_candidate_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
+    protected_roots = _protected_roots()
+    rendered_roots = [str(path) for path in protected_roots]
+    if any(character in root for root in rendered_roots for character in ('"', "\n", "\r")):
+        fail("protected path cannot be represented in the sandbox policy")
+    deny_rules = "".join(
+        f'(deny file-write* (subpath "{root}"))' for root in rendered_roots
+    )
+    deny_rules += "".join(
+        f'(deny file-write* (literal "{path}"))' for path in _github_command_channels()
+    )
+    profile_text = f"(version 1)(allow default){deny_rules}"
+    return ("/usr/bin/sandbox-exec", "-p", profile_text, *argv)
+
+
+def assert_descendant_write_protection() -> None:
+    controller_root, immutable_root = _protected_roots()
+    controller_probe = controller_root / "tools" / "run_g009_qualification.py"
+    immutable_probe = next(
+        (
+            path
+            for path in sorted(immutable_root.iterdir())
+            if not path.is_symlink() and path.is_file()
+        ),
+        None,
+    )
+    if not controller_probe.is_file() or immutable_probe is None:
+        fail("protected-write sentinel inputs are unavailable")
+    child = (
+        "import os, sys\n"
+        "for raw in sys.argv[1:]:\n"
+        "    try:\n"
+        "        descriptor = os.open(raw, os.O_WRONLY)\n"
+        "    except OSError:\n"
+        "        continue\n"
+        "    else:\n"
+        "        os.close(descriptor)\n"
+        "        raise SystemExit(f'protected path was writable: {raw}')\n"
+    )
+    argv = (
+        "/bin/sh",
+        "-c",
+        '"$1" -c "$2" "$3" "$4"',
+        "g009-seatbelt-descendant-sentinel",
+        sys.executable,
+        child,
+        str(controller_probe),
+        str(immutable_probe),
+    )
+    result = subprocess.run(
+        sandboxed_candidate_argv(argv),
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+        env={"PATH": os.environ.get("PATH", "")},
+        timeout=15,
+    )
+    if result.returncode != 0:
+        fail("sandbox descendant protected-write sentinel failed")
 
 
 def run_allowed(
@@ -83,12 +194,17 @@ def run_allowed(
     env: dict[str, str] | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
+    environment = {"PATH": os.environ.get("PATH", "")}
+    if env is not None:
+        environment.update(env)
+    environment["G009_CANDIDATE_ROOT"] = str(require_candidate_root())
+    resolved = resolved_tool_argv(argv)
     return subprocess.run(
-        resolved_tool_argv(argv),
+        sandboxed_candidate_argv(resolved),
         cwd=cwd,
         capture_output=True,
         check=False,
-        env=env or {"PATH": os.environ.get("PATH", "")},
+        env=environment,
         timeout=timeout,
     )
 
@@ -103,12 +219,52 @@ WORKLOAD_COMMANDS = {
     "G009-W07": [["podway", "set", "target-audience", "<65536-byte-string>"]],
 }
 def _w07_generator(item: dict[str, Any]) -> dict[str, Any]:
-    generated = item.get("input_generator")
-    if not isinstance(generated, dict) or set(generated) != {"adapter_contract", "algorithm", "code_point", "digest", "utf8_byte_length", "version"}:
+    if item.get("input_generator_ref") != "release/g009-release-policy-v1.json#/w07_generator" or "input_generator" in item:
+        fail("W07 must use the sole controller-owned generator reference")
+    contract = item.get("adapter_contract")
+    if contract != {
+        "id": "G009-W07",
+        "argv_prefix": ["podway", "set", "target-audience"],
+        "argument_index": 2,
+        "argument_source": "generated_utf8_string",
+    }:
+        fail("W07 adapter contract drift")
+    policy = load_json(CONTROLLER_ROOT / "release/g009-release-policy-v1.json")
+    if not isinstance(policy, dict) or policy.get("schema") != "podway.g009.release-policy/v1":
+        fail("W07 release policy is invalid")
+    generated = policy.get("w07_generator")
+    if not isinstance(generated, dict) or set(generated) != {
+        "id",
+        "authoritative_fields",
+        "algorithm",
+        "code_point",
+        "utf8_byte_length",
+        "digest",
+        "version",
+        "reject_non_authoritative_generator_fields",
+    }:
         fail("W07 input generator is incomplete")
-    contract = generated["adapter_contract"]
     digest = generated["digest"]
-    if generated["algorithm"] != "repeat-utf8-code-point" or generated["version"] != 1 or not isinstance(contract, dict) or contract != {"id": "G009-W07", "argv_prefix": ["podway", "set", "target-audience"], "argument_index": 2, "argument_source": "generated_utf8_string"} or not isinstance(digest, dict) or digest.get("algorithm") != "sha256" or digest.get("derivation") != "sha256(generated_utf8_bytes)" or not isinstance(digest.get("hex"), str):
+    if (
+        generated["id"] != "G009-W07"
+        or generated["authoritative_fields"] != [
+            "algorithm",
+            "code_point",
+            "utf8_byte_length",
+            "digest.algorithm",
+            "digest.derivation",
+            "digest.hex",
+            "version",
+        ]
+        or generated["reject_non_authoritative_generator_fields"] is not True
+        or generated["algorithm"] != "repeat-utf8-code-point"
+        or generated["version"] != 1
+        or not isinstance(digest, dict)
+        or set(digest) != {"algorithm", "derivation", "hex"}
+        or digest.get("algorithm") != "sha256"
+        or digest.get("derivation") != "sha256(generated_utf8_bytes)"
+        or not isinstance(digest.get("hex"), str)
+    ):
         fail("W07 input generator contract drift")
     code_point = generated["code_point"]
     if not isinstance(code_point, str) or not code_point.startswith("U+"):
@@ -124,7 +280,13 @@ def _w07_generator(item: dict[str, Any]) -> dict[str, Any]:
     payload = encoded * (length // len(encoded))
     if sha256_bytes(payload) != digest["hex"]:
         fail("W07 generator digest does not bind generated UTF-8 bytes")
-    return {"code_point": code_point, "utf8_byte_length": length, "sha256": digest["hex"], "argument_index": contract["argument_index"], "bytes": payload}
+    return {
+        "code_point": code_point,
+        "utf8_byte_length": length,
+        "sha256": digest["hex"],
+        "argument_index": contract["argument_index"],
+        "bytes": payload,
+    }
 
 
 
@@ -205,6 +367,147 @@ def identity_manifest(require_clean: bool = True) -> dict[str, Any]:
     return {"commit": text(("git", "rev-parse", "HEAD")), "tree": text(("git", "rev-parse", "HEAD^{tree}")), "tools": [tool("rustc", ("rustc", "+1.85.0", "--version")), tool("cargo", ("cargo", "+1.85.0", "--version"))]}
 
 
+def _public_source(source: dict[str, Any]) -> dict[str, Any]:
+    tools = source.get("tools")
+    if not isinstance(tools, list):
+        fail("source tool manifest is missing")
+    return {
+        "commit": source["commit"],
+        "tree": source["tree"],
+        "tools": [
+            {
+                "id": tool["id"],
+                "version": tool["version"],
+                "path_sha256": tool["path_sha256"],
+            }
+            for tool in tools
+        ],
+    }
+
+
+def controller_source_bindings() -> list[dict[str, str]]:
+    return [
+        {"id": source_id, "path_sha256": sha256_file(CONTROLLER_ROOT / source_id)}
+        for source_id in CONTROLLER_SOURCE_IDS
+    ]
+
+
+def require_arm64_tool(path: Path, tool_id: str) -> None:
+    def has_arm64_slice(executable: Path) -> bool:
+        observed = subprocess.run(
+            ("/usr/bin/lipo", "-archs", str(executable)),
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            env={"PATH": os.environ.get("PATH", "")},
+            timeout=30,
+        )
+        architectures = observed.stdout.decode("ascii", "strict").strip().split() if observed.returncode == 0 else []
+        return any(architecture.startswith("arm64") for architecture in architectures)
+
+    if has_arm64_slice(path):
+        return
+    launcher = bounded_bytes(path, 64 * 1024).decode("utf-8", "strict")
+    if not launcher.startswith("#!"):
+        fail(f"release tool lacks a native arm64 executable slice: {tool_id}")
+    interpreter_tokens = launcher.splitlines()[0][2:].strip().split()
+    if not interpreter_tokens:
+        fail(f"release tool has an invalid script interpreter: {tool_id}")
+    interpreter = Path(interpreter_tokens[0])
+    if interpreter == Path("/usr/bin/env"):
+        if len(interpreter_tokens) != 2 or shutil.which(interpreter_tokens[1]) is None:
+            fail(f"release tool script interpreter is unresolved: {tool_id}")
+        interpreter = Path(shutil.which(interpreter_tokens[1]) or "")
+    if not interpreter.is_absolute() or not has_arm64_slice(interpreter.resolve()):
+        fail(f"release tool script interpreter is not arm64-native: {tool_id}")
+    for target in re.findall(r'\bexec\s+"([^"]+)"', launcher):
+        executable = Path(target)
+        if not executable.is_absolute() or not executable.is_file() or not has_arm64_slice(executable.resolve()):
+            fail(f"release tool script exec target is not arm64-native: {tool_id}")
+
+
+def release_tool_manifest(source: dict[str, Any]) -> dict[str, Any]:
+    stable = {tool["id"]: tool for tool in source["tools"]}
+    rustup_raw = shutil.which("rustup")
+    if rustup_raw is None:
+        fail("rustup is unavailable")
+    rustup = Path(rustup_raw).resolve()
+    llvm_cov = Path(shutil.which("cargo-llvm-cov") or "")
+    candidates: list[tuple[str, Path, tuple[str, ...] | None]] = [
+        ("rustc", Path(stable["rustc"]["path"]), None),
+        ("cargo", Path(stable["cargo"]["path"]), None),
+        ("rustup", rustup, (str(rustup), "--version")),
+        ("cargo-audit", Path(shutil.which("cargo-audit") or ""), None),
+        ("cargo-deny", Path(shutil.which("cargo-deny") or ""), None),
+        ("cargo-llvm-cov", llvm_cov, (str(llvm_cov), "llvm-cov", "--version")),
+        ("cargo-fuzz", Path(shutil.which("cargo-fuzz") or ""), None),
+        ("python3", Path(sys.executable).resolve(), (sys.executable, "--version")),
+        ("git", Path("/usr/bin/git"), ("/usr/bin/git", "--version")),
+        ("gpgv", Path(shutil.which("gpgv") or ""), None),
+        ("lipo", Path("/usr/bin/lipo"), None),
+        ("sysctl", Path("/usr/sbin/sysctl"), None),
+        ("ps", Path("/bin/ps"), None),
+        ("launchctl", Path("/bin/launchctl"), None),
+        ("bash", Path("/bin/bash"), ("/bin/bash", "--version")),
+        ("sandbox-exec", Path("/usr/bin/sandbox-exec"), None),
+    ]
+    for tool_id, channel, name in (
+        ("rustc-nightly", "nightly-2026-07-17", "rustc"),
+        ("cargo-nightly", "nightly-2026-07-17", "cargo"),
+    ):
+        located = subprocess.run(
+            (str(rustup), "which", "--toolchain", channel, name),
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            env={"PATH": os.environ.get("PATH", "")},
+            timeout=30,
+        )
+        if located.returncode != 0:
+            fail(f"{tool_id} is unavailable")
+        path = Path(located.stdout.decode("utf-8", "strict").strip()).resolve()
+        candidates.append((tool_id, path, (str(rustup), "run", channel, name, "--version")))
+    records: list[dict[str, str]] = []
+    system_version = f"macos-{platform.mac_ver()[0]}"
+    for tool_id, supplied, version_argv in candidates:
+        path = supplied.resolve()
+        if not str(supplied) or not path.is_file():
+            fail(f"release tool is unsafe or missing: {tool_id}")
+        if version_argv is None and tool_id in stable:
+            version = stable[tool_id]["version"]
+        elif version_argv is None and tool_id in {"lipo", "sysctl", "ps", "launchctl", "sandbox-exec"}:
+            version = system_version
+        else:
+            argv = version_argv or (str(path), "--version")
+            observed = subprocess.run(
+                argv,
+                cwd=ROOT,
+                capture_output=True,
+                check=False,
+                env={"PATH": os.environ.get("PATH", "")},
+                timeout=30,
+            )
+            if observed.returncode != 0:
+                fail(f"cannot identify release tool: {tool_id}")
+            version = (observed.stdout or observed.stderr).decode("utf-8", "strict").splitlines()[0].strip()
+        if not version:
+            fail(f"release tool version is empty: {tool_id}")
+        require_arm64_tool(path, tool_id)
+        records.append({
+            "id": tool_id,
+            "version": version,
+            "path_sha256": sha256_file(path),
+            "architecture": "arm64",
+        })
+    records.sort(key=lambda item: item["id"])
+    return {
+        "schema": "podway.g009.release-tool-manifest/v1",
+        "source": _public_source(source),
+        "tools": records,
+        "controller_sources": controller_source_bindings(),
+    }
+
+
 def evidence(category: str, value: dict[str, Any]) -> tuple[Path, str]:
     record = dict(value)
     record.setdefault("schema", "podway.g009.checkpoint/v1")
@@ -212,18 +515,19 @@ def evidence(category: str, value: dict[str, Any]) -> tuple[Path, str]:
     return content_addressed_json(category, record)
 
 
+def _bound_path(role: str, path: Path) -> Path:
+    root = rc_input_root(role)
+    supplied = path if path.is_absolute() else root / path
+    resolved = supplied.resolve()
+    if supplied.is_symlink() or not resolved.is_relative_to(root) or not resolved.is_file():
+        fail(f"bound input {role} is unsafe or outside its authoritative root")
+    return resolved
+
 def _bound(role: str, path: Path) -> dict[str, str]:
-    resolved = path.resolve()
-    if not resolved.is_relative_to(ROOT) or not resolved.is_file(): fail(f"bound input {role} is unsafe or missing")
-    return {"role": role, "path": str(resolved.relative_to(ROOT)), "sha256": sha256_file(resolved)}
+    resolved = _bound_path(role, path)
+    return {"role": role, "path": str(resolved.relative_to(rc_input_root(role))), "sha256": sha256_file(resolved)}
 
 
-def _input_from_rc(rc: dict[str, Any], role: str) -> Path:
-    items = [item for item in rc["inputs"] if item["role"] == role]
-    if len(items) != 1: fail(f"RC lacks unique {role} input")
-    path = (ROOT / items[0]["path"]).resolve()
-    if sha256_file(path) != items[0]["sha256"]: fail(f"stale RC input: {role}")
-    return path
 
 
 
@@ -231,20 +535,20 @@ def _input_from_rc(rc: dict[str, Any], role: str) -> Path:
 def _native_worktree() -> tuple[tempfile.TemporaryDirectory[str], Path]:
     holder = tempfile.TemporaryDirectory(prefix="g009-worktree-")
     path = Path(holder.name) / "workspace"
-    result = subprocess.run(("git", "worktree", "add", "--detach", str(path), "HEAD"), cwd=ROOT, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+    result = subprocess.run(sandboxed_candidate_argv(("git", "worktree", "add", "--detach", str(path), "HEAD")), cwd=ROOT, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
     if result.returncode != 0:
         holder.cleanup(); fail("unable to create isolated temporary worktree")
     return holder, path
 
 
 def _remove_worktree(path: Path, holder: tempfile.TemporaryDirectory[str]) -> None:
-    result = subprocess.run(("git", "worktree", "remove", "--force", str(path)), cwd=ROOT, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+    result = subprocess.run(sandboxed_candidate_argv(("git", "worktree", "remove", "--force", str(path))), cwd=ROOT, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
     if result.returncode != 0 or path.exists(): fail("unable to remove isolated workload worktree")
     holder.cleanup()
 
 
 def _run(argv: tuple[str, ...], cwd: Path, env: dict[str, str], timeout: float = 15) -> subprocess.CompletedProcess[bytes]:
-    try: result = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, timeout=timeout, env=env)
+    try: result = subprocess.run(sandboxed_candidate_argv(argv), cwd=cwd, capture_output=True, check=False, timeout=timeout, env=env)
     except subprocess.TimeoutExpired: fail(f"native workload command timed out: {argv[0]}")
     if result.returncode != 0: fail(f"native workload command failed ({result.returncode}): {' '.join(argv[:3])}")
     return result
@@ -259,7 +563,7 @@ def _start_daemon(podwayd: Path, cwd: Path, env: dict[str, str]) -> tuple[subpro
     candidates = _socket_paths(env)
     if any(candidate.exists() for candidate in candidates):
         fail("refusing a pre-existing Podway socket before workload startup")
-    process = subprocess.Popen((str(podwayd), "--service"), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    process = subprocess.Popen(sandboxed_candidate_argv((str(podwayd), "--service")), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -317,8 +621,12 @@ rework:
     )
     return procedure
 
-def _adapter_commands(workload_id: str, podway: Path, workspace: Path, w07: dict[str, Any] | None = None) -> tuple[tuple[str, ...], ...]:
+def _adapter_commands(workload_id: str, podway: Path, workspace: Path, w07: dict[str, Any] | None = None,
+                      podwayd: Path | None = None) -> tuple[tuple[str, ...], ...]:
     artifact = workspace / ".g009-artifact.bin"; artifact.write_bytes(b"g009-artifact-v1\n" * 4096)
+    if workload_id == "G009-W01":
+        if podwayd is None: fail("W01 daemon adapter is absent")
+        return ((str(podwayd), "--service"),)
     if workload_id == "G009-W02": return ((str(podway), "status"), (str(podway), "next"))
     if workload_id == "G009-W03": return ((str(podway), "start", "--procedure", ".g009-procedure.yaml", "--task", "G009-linked"),)
     if workload_id == "G009-W04": return ((str(podway), "set", "target-audience", "updated"),)
@@ -329,25 +637,49 @@ def _adapter_commands(workload_id: str, podway: Path, workspace: Path, w07: dict
         return ((str(podway), "set", "target-audience", w07["bytes"].decode("utf-8", "strict")),)
     fail(f"unknown workload adapter: {workload_id}")
 
-def _measure(argvs: tuple[tuple[str, ...], ...], cwd: Path, env: dict[str, str], bound: dict[str, int], allow_rejection: bool = False, daemon: subprocess.Popen[bytes] | None = None) -> dict[str, Any]:
-    started = time.monotonic_ns(); stdout = bytearray(); stderr = bytearray(); exit_code = 0; rss_kib = 0
+def _rss_kib(pid: int) -> int:
+    sample = subprocess.run(("/bin/ps", "-o", "rss=", "-p", str(pid)), capture_output=True, check=False,
+                            env={"PATH": os.environ.get("PATH", "")})
+    value = sample.stdout.strip()
+    if sample.returncode != 0 or not value.isdigit():
+        fail(f"cannot sample RSS for live process {pid}")
+    return int(value)
+
+def _measure(argvs: tuple[tuple[str, ...], ...], cwd: Path, env: dict[str, str], bound: dict[str, int],
+             allow_rejection: bool = False, daemon: subprocess.Popen[bytes] | None = None) -> dict[str, Any]:
+    started = time.monotonic_ns(); stdout = bytearray(); stderr = bytearray(); exit_code = 0
+    cli_peak_kib = 0; daemon_peak_kib = 0
     for argv in argvs:
         if daemon is not None and daemon.poll() is not None: fail("podwayd exited unexpectedly during workload")
-        try: result = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, timeout=bound["max_completion_ms"] / 1000, env=env)
-        except subprocess.TimeoutExpired: fail("workload command timed out")
-        if result.returncode != 0 and not allow_rejection:
-            fail(f"native workload command failed ({result.returncode}): {' '.join(argv[1:3])}")
-        if allow_rejection and result.returncode != 0 and (result.returncode != 2 or b"validation" not in result.stderr.lower()):
+        process = subprocess.Popen(sandboxed_candidate_argv(argv), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        deadline = time.monotonic() + bound["max_completion_ms"] / 1000
+        while process.poll() is None:
+            cli_peak_kib = max(cli_peak_kib, _rss_kib(process.pid))
+            if daemon is not None:
+                if daemon.poll() is not None: fail("podwayd exited unexpectedly during workload")
+                daemon_peak_kib = max(daemon_peak_kib, _rss_kib(daemon.pid))
+            if time.monotonic() >= deadline:
+                process.kill(); process.wait(timeout=5); fail("workload command timed out")
+            time.sleep(0.005)
+        result = process.communicate()
+        if result[0] is None or result[1] is None: fail("workload process output is unavailable")
+        completed = subprocess.CompletedProcess(argv, process.returncode, result[0], result[1])
+        if completed.returncode != 0 and not allow_rejection:
+            fail(f"native workload command failed ({completed.returncode}): {' '.join(argv[1:3])}")
+        if allow_rejection and completed.returncode != 0 and (completed.returncode != 2 or b"validation" not in completed.stderr.lower()):
             fail("maximum-input command did not return the exact validation rejection")
-        if daemon is not None:
-            sample = subprocess.run(("ps", "-o", "rss=", "-p", str(daemon.pid)), capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
-            if sample.returncode != 0 or not sample.stdout.strip().isdigit(): fail("cannot measure live daemon RSS")
-            rss_kib = max(rss_kib, int(sample.stdout.strip()))
-        exit_code = result.returncode
-        stdout.extend(result.stdout); stderr.extend(result.stderr)
+        exit_code = completed.returncode
+        stdout.extend(completed.stdout); stderr.extend(completed.stderr)
     elapsed = time.monotonic_ns() - started
-    if elapsed > bound["max_completion_ms"] * 1_000_000 or rss_kib > bound["max_rss_mib"] * 1024: fail("workload exceeded frozen resource bound")
-    return {"elapsed_ns": elapsed, "rss_kib": rss_kib, "exit_code": exit_code, "stdout_sha256": sha256_bytes(bytes(stdout)), "stderr_sha256": sha256_bytes(bytes(stderr)), "value": {"numerator": elapsed, "denominator": 1}}
+    peak_kib = max(cli_peak_kib, daemon_peak_kib)
+    if peak_kib <= 0:
+        fail("workload completed without a valid RSS sample")
+    if elapsed > bound["max_completion_ms"] * 1_000_000 or peak_kib > bound["max_rss_mib"] * 1024:
+        fail("workload exceeded frozen resource bound")
+    return {"elapsed_ns": elapsed, "rss_kib": peak_kib,
+            "process_rss_kib": {"cli_peak": cli_peak_kib, "daemon_peak": daemon_peak_kib},
+            "exit_code": exit_code, "stdout_sha256": sha256_bytes(bytes(stdout)),
+            "stderr_sha256": sha256_bytes(bytes(stderr)), "value": {"numerator": elapsed, "denominator": 1}}
 def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[str, Any]:
     podway, podwayd = (bin_dir / "podway").resolve(), (bin_dir / "podwayd").resolve()
     if not all(path.is_file() and os.access(path, os.X_OK) for path in (podway, podwayd)): fail("prebuilt podway binaries are missing or not executable")
@@ -375,10 +707,13 @@ def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[st
                 started = time.monotonic_ns()
                 daemon, socket = _start_daemon(podwayd, workspace, env)
                 elapsed = time.monotonic_ns() - started
-                maximum = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
-                rss_kib = maximum // 1024 if platform.system() == "Darwin" else maximum
-                if elapsed > item["hard_bounds"]["max_completion_ms"] * 1_000_000 or rss_kib > item["hard_bounds"]["max_rss_mib"] * 1024: fail("cold start exceeded frozen resource bound")
-                return {"elapsed_ns": elapsed, "rss_kib": rss_kib, "exit_code": 0, "stdout_sha256": sha256_bytes(b""), "stderr_sha256": sha256_bytes(b""), "value": {"numerator": elapsed, "denominator": 1}}
+                rss_kib = _rss_kib(daemon.pid)
+                if elapsed > item["hard_bounds"]["max_completion_ms"] * 1_000_000 or rss_kib > item["hard_bounds"]["max_rss_mib"] * 1024:
+                    fail("cold start exceeded frozen resource bound")
+                return {"elapsed_ns": elapsed, "rss_kib": rss_kib,
+                        "process_rss_kib": {"cli_peak": 0, "daemon_peak": rss_kib},
+                        "exit_code": 0, "stdout_sha256": sha256_bytes(b""), "stderr_sha256": sha256_bytes(b""),
+                        "value": {"numerator": elapsed, "denominator": 1}}
             daemon, socket = _start_daemon(podwayd, workspace, env)
             procedure = _prepare_task(podway, workspace, env)
             if item["id"] == "G009-W06":
@@ -393,8 +728,7 @@ def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[st
                 linked_procedure.write_bytes(procedure.read_bytes())
                 measured_workspace = linked
             return _measure(
-                _adapter_commands(item["id"], podway, measured_workspace),
-                _adapter_commands(item["id"], podway, measured_workspace, w07),
+                _adapter_commands(item["id"], podway, measured_workspace, w07, podwayd),
                 measured_workspace,
                 env,
                 item["hard_bounds"],
@@ -407,7 +741,7 @@ def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[st
             finally:
                 linked_path = Path(holder.name) / "linked"
                 if linked_path.exists():
-                    removal = subprocess.run(("git", "worktree", "remove", "--force", str(linked_path)), cwd=workspace, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+                    removal = subprocess.run(sandboxed_candidate_argv(("git", "worktree", "remove", "--force", str(linked_path))), cwd=workspace, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
                     if removal.returncode != 0: fail("unable to remove linked workload worktree")
                 _remove_worktree(workspace, holder)
     workloads: dict[str, Any] = {}
@@ -455,7 +789,7 @@ def _rc_evidence(rc_path: Path, checkpoint_id: str, **value: Any) -> tuple[Path,
 def preflight(args: argparse.Namespace) -> None:
     rc_path = Path(args.rc)
     rc = verify_rc_consumption(rc_path)
-    profile_path = _input_from_rc(rc, "profile")
+    profile_path = resolve_rc_input(rc, "profile")
     profile(profile_path)
     require_arm64_host(rc["target"])
     out, digest = _rc_evidence(rc_path, "G009-GATE-PREFLIGHT",
@@ -480,7 +814,7 @@ def characterize(args: argparse.Namespace) -> None:
     print(f"{out} {digest}")
 
 
-def _verified_approvals(approvals_path: Path, signer_contract_path: Path, characterization: Path, baseline: dict[str, Any], threshold: dict[str, Any]) -> list[dict[str, Any]]:
+def _verified_approvals(approvals_path: Path, signer_contract_path: Path, profile_path: Path, characterization: Path, baseline: dict[str, Any], threshold: dict[str, Any]) -> list[dict[str, Any]]:
     contract, bundle = load_json(signer_contract_path), load_json(approvals_path)
     if not isinstance(contract, dict) or contract.get("schema") != "podway.g009.approval-signers/v1" or set(contract) != {"schema", "keyring", "signers"}:
         fail("approval signer contract is not exact")
@@ -491,21 +825,22 @@ def _verified_approvals(approvals_path: Path, signer_contract_path: Path, charac
     by_role = {item.get("role"): item for item in signers if isinstance(item, dict)}
     if set(by_role) != {"owner", "E", "F"} or any(set(item) != {"role", "signer", "fingerprint"} or not all(isinstance(item[key], str) and item[key] for key in ("signer", "fingerprint")) for item in by_role.values()):
         fail("approval signer roles are incomplete")
-    if not isinstance(bundle, dict) or bundle.get("schema") != "podway.g009.approvals/v1" or bundle.get("characterization_sha256") != sha256_file(characterization) or not isinstance(bundle.get("approvals"), list) or len(bundle["approvals"]) != 3:
+    if not isinstance(bundle, dict) or bundle.get("schema") != "podway.g009.approvals/v1" or bundle.get("profile_sha256") != sha256_file(profile_path) or bundle.get("characterization_sha256") != sha256_file(characterization) or not isinstance(bundle.get("approvals"), list) or len(bundle["approvals"]) != 3:
         fail("approval bundle is stale or incomplete")
     baseline_digest, threshold_digest = sha256_bytes(canonical_json(baseline)), sha256_bytes(canonical_json(threshold))
+    profile_digest = sha256_file(profile_path)
     seen_roles: set[str] = set(); seen_signers: set[str] = set()
     for approval in bundle["approvals"]:
-        if not isinstance(approval, dict) or set(approval) != {"role", "signer", "fingerprint", "characterization_sha256", "baseline_sha256", "thresholds_sha256", "payload", "signature"}:
+        if not isinstance(approval, dict) or set(approval) != {"role", "signer", "fingerprint", "profile_sha256", "characterization_sha256", "baseline_sha256", "thresholds_sha256", "payload", "signature"}:
             fail("approval has mutable or missing fields")
         role = approval["role"]; expected = by_role.get(role)
-        if expected is None or approval["signer"] != expected["signer"] or approval["fingerprint"] != expected["fingerprint"] or approval["characterization_sha256"] != sha256_file(characterization) or approval["baseline_sha256"] != baseline_digest or approval["thresholds_sha256"] != threshold_digest:
+        if expected is None or approval["signer"] != expected["signer"] or approval["fingerprint"] != expected["fingerprint"] or approval["profile_sha256"] != profile_digest or approval["characterization_sha256"] != sha256_file(characterization) or approval["baseline_sha256"] != baseline_digest or approval["thresholds_sha256"] != threshold_digest:
             fail("approval binding or signer contract mismatch")
         if role in seen_roles or approval["signer"] in seen_signers: fail("approval roles/signers must be distinct")
         payload, signature = Path(approval["payload"]), Path(approval["signature"])
         if not payload.is_file() or not signature.is_file() or payload.is_symlink() or signature.is_symlink():
             fail("approval detached signature inputs are unsafe")
-        expected_payload = canonical_json({"role": role, "signer": approval["signer"], "fingerprint": approval["fingerprint"], "characterization_sha256": approval["characterization_sha256"], "baseline_sha256": baseline_digest, "thresholds_sha256": threshold_digest})
+        expected_payload = canonical_json({"role": role, "signer": approval["signer"], "fingerprint": approval["fingerprint"], "profile_sha256": profile_digest, "characterization_sha256": approval["characterization_sha256"], "baseline_sha256": baseline_digest, "thresholds_sha256": threshold_digest})
         if bounded_bytes(payload) != expected_payload:
             fail("approval payload is not the exact bound statement")
         check = subprocess.run(("gpgv", "--keyring", str(keyring), "--status-fd", "1", str(signature), str(payload)), capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
@@ -521,21 +856,25 @@ def approve_baseline(args: argparse.Namespace) -> None:
     approvals_path = Path(args.approval[0])
     if len(args.approval) != 1: fail("approvals must be supplied as one immutable bundle")
     baseline, threshold = data["baseline"], thresholds(data["baseline"])
-    approvals = _verified_approvals(approvals_path, Path(args.signer_contract), Path(args.characterization), baseline, threshold)
-    for category, value in (("performance/baseline", baseline), ("performance/thresholds", threshold), ("performance/approvals", {"schema": "podway.g009.approvals/v1", "characterization_sha256": sha256_file(Path(args.characterization)), "approvals": approvals})):
+    approvals = _verified_approvals(approvals_path, Path(args.signer_contract), Path(args.profile), Path(args.characterization), baseline, threshold)
+    for category, value in (("performance/baseline", baseline), ("performance/thresholds", threshold), ("performance/approvals", {"schema": "podway.g009.approvals/v1", "profile_sha256": sha256_file(Path(args.profile)), "characterization_sha256": sha256_file(Path(args.characterization)), "approvals": approvals})):
         out, digest = evidence(category, value); print(f"{out} {digest}")
 
 def freeze_rc(args: argparse.Namespace) -> None:
-    p = profile(Path(args.profile)); require_arm64_host(TARGET); source = identity_manifest()
-    baseline, approved = load_json(Path(args.baseline)), load_json(Path(args.thresholds))
+    profile_path = _bound_path("profile", Path(args.profile))
+    characterization_path = _bound_path("characterization", Path(args.characterization))
+    baseline_path = _bound_path("baseline", Path(args.baseline))
+    thresholds_path = _bound_path("thresholds", Path(args.thresholds))
+    approval_path = _bound_path("approvals", Path(args.approvals))
+    signer_contract = _bound_path("signer-contract", Path(args.signer_contract))
+    p = profile(profile_path); require_arm64_host(TARGET); source = identity_manifest()
+    baseline, approved = load_json(baseline_path), load_json(thresholds_path)
     if thresholds(baseline) != approved: fail("thresholds are not mechanically derived")
-    approval_path, signer_contract = Path(args.approvals), Path(args.signer_contract)
-    _verified_approvals(approval_path, signer_contract, Path(args.characterization), baseline, approved)
+    _verified_approvals(approval_path, signer_contract, profile_path, characterization_path, baseline, approved)
     posture = args.signing_posture
     if posture not in p["signing_postures"]: fail("unapproved signing posture")
-    if posture == "signed-public": fail("signed-public requires external credentialed signing/notarization")
     signing = {"posture": "unsigned-internal", "codesign": "not_attempted_missing_credentials", "notarization": "not_attempted_missing_credentials", "stapling": "not_applicable_zip", "gatekeeper": "not_claimed"}
-    inputs = [_bound("profile", Path(args.profile)), _bound("characterization", Path(args.characterization)), _bound("baseline", Path(args.baseline)), _bound("thresholds", Path(args.thresholds)), _bound("approvals", approval_path), _bound("signer-contract", signer_contract), _bound("lockfile", ROOT / "Cargo.lock")]
+    inputs = [_bound("profile", profile_path), _bound("characterization", characterization_path), _bound("baseline", baseline_path), _bound("thresholds", thresholds_path), _bound("approvals", approval_path), _bound("signer-contract", signer_contract), _bound("lockfile", ROOT / "Cargo.lock")]
     for raw in args.input:
         try: role, supplied = raw.split("=", 1)
         except ValueError: fail("--input must be ROLE=PATH")
@@ -551,7 +890,7 @@ def freeze_rc(args: argparse.Namespace) -> None:
 def holdout(args: argparse.Namespace) -> None:
     rc = verify_rc_consumption(Path(args.rc)); require_arm64_host(rc["target"])
     if args.warmups != WARMUPS or args.samples != SAMPLES: fail("holdout requires exactly 5 warmups and 30 samples")
-    profile_path = _input_from_rc(rc, "profile"); baseline = load_json(_input_from_rc(rc, "baseline")); approved = load_json(_input_from_rc(rc, "thresholds"))
+    profile_path = resolve_rc_input(rc, "profile"); baseline = load_json(resolve_rc_input(rc, "baseline")); approved = load_json(resolve_rc_input(rc, "thresholds"))
     p = profile(profile_path)
     measured = _collect(p, Path(args.bin_dir).resolve(), "holdout")
     decision = evaluate_holdout(measured["workloads"], baseline, approved)
@@ -625,7 +964,7 @@ def _terminate_fuzz_process(process: subprocess.Popen[bytes]) -> None:
 
 def _stream_fuzz_command(argv: tuple[str, ...], *, cwd: Path, env: dict[str, str], timeout: float) -> dict[str, Any]:
     """Capture fuzz output with live per-stream and aggregate limits."""
-    process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+    process = subprocess.Popen(sandboxed_candidate_argv(argv), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=True)
     if process.stdout is None or process.stderr is None:
         fail("fuzz stream setup is absent")
@@ -744,10 +1083,17 @@ def run_gate(gate_id: str, profile_data: dict[str, Any]) -> dict[str, Any]:
             "status": "pass" if all(item["status"] == "pass" for item in fuzz["commands"]) else "fail",
         }
     results = []
+    if gate_id == "G009-GATE-COVERAGE":
+        collection = ("cargo", "+1.85.0", "llvm-cov", "--workspace", "--all-targets", "--target", TARGET)
+        result = run_allowed(collection)
+        results.append({"argv": list(collection), "exit_code": result.returncode, "stdout_sha256": sha256_bytes(result.stdout),
+                        "stderr_sha256": sha256_bytes(result.stderr), "status": "pass" if result.returncode == 0 else "fail",
+                        "phase": "isolated-current-run-collection"})
     for argv in commands:
         result = run_allowed(argv)
         results.append({"argv": list(argv), "exit_code": result.returncode, "stdout_sha256": sha256_bytes(result.stdout),
-                        "stderr_sha256": sha256_bytes(result.stderr), "status": "pass" if result.returncode == 0 else "fail"})
+                        "stderr_sha256": sha256_bytes(result.stderr), "status": "pass" if result.returncode == 0 else "fail",
+                        **({"phase": "current-run-report"} if gate_id == "G009-GATE-COVERAGE" else {})})
     return {"gate_id": gate_id, "commands": results, "status": "pass" if all(item["status"] == "pass" for item in results) else "fail"}
 
 def full_gates(args: argparse.Namespace) -> None:
@@ -755,9 +1101,20 @@ def full_gates(args: argparse.Namespace) -> None:
     if not selected or len(set(selected)) != len(selected): fail("gate selection is empty or duplicates a gate")
     unknown = [gate for gate in selected if gate not in GATES]
     if unknown: fail(f"gate is not allowlisted: {unknown[0]}")
-    rc = verify_rc_consumption(Path(args.rc)); require_arm64_host(rc["target"])
-    profile_data = profile(_input_from_rc(rc, "profile"))
-    results = [run_gate(gate, profile_data) for gate in selected]
+    rc_path = Path(args.rc)
+    rc = verify_rc_consumption(rc_path); require_arm64_host(rc["target"])
+    profile_data = profile(resolve_rc_input(rc, "profile"))
+    assert_descendant_write_protection()
+    results = []
+    frozen_controller_sources = controller_source_bindings()
+    for gate in selected:
+        if controller_source_bindings() != frozen_controller_sources:
+            fail("controller source changed during qualification")
+        rc = verify_rc_consumption(rc_path)
+        require_arm64_host(rc["target"])
+        results.append(run_gate(gate, profile_data))
+        if controller_source_bindings() != frozen_controller_sources:
+            fail("candidate execution changed controller source")
     if any(item["status"] != "pass" for item in results): fail("one or more real gates failed")
     out, digest = _rc_evidence(Path(args.rc), "G009-GATE-GATES", results=results)
     print(f"{out} {digest}")
@@ -783,9 +1140,13 @@ def _verify_release_binary(path: Path, name: str) -> None:
         fail(f"{name} version is not 0.1.0")
 
 def _archive_member_bytes(bin_dir: Path) -> dict[str, bytes]:
-    podway, podwayd = (bin_dir / "podway").resolve(), (bin_dir / "podwayd").resolve()
+    bin_root = bin_dir.resolve()
+    if bin_dir.is_symlink() or not bin_root.is_relative_to(ROOT.resolve()):
+        fail("binary directory is unsafe")
+    podway, podwayd = bin_dir / "podway", bin_dir / "podwayd"
     for binary, name in ((podway, "podway"), (podwayd, "podwayd")):
-        if not binary.is_file() or not os.access(binary, os.X_OK): fail(f"missing executable {name}")
+        if binary.is_symlink() or not binary.is_file() or not binary.resolve().is_relative_to(bin_root) or not os.access(binary, os.X_OK):
+            fail(f"missing or unsafe executable {name}")
         _verify_release_binary(binary, name)
     members = {f"{ARCHIVE_ROOT}/bin/podway": bounded_bytes(podway),
                f"{ARCHIVE_ROOT}/bin/podwayd": bounded_bytes(podwayd),
@@ -799,8 +1160,14 @@ def _archive_member_bytes(bin_dir: Path) -> dict[str, bytes]:
             if not result.stdout: fail(f"empty {shell} completion output")
             members[f"{ARCHIVE_ROOT}/share/completions/podway.{shell}"] = result.stdout
     for source_root, archive_prefix in ((ROOT / "presets", "share/podway/presets"), (ROOT / "schemas", "share/podway/schemas")):
-        if not source_root.is_dir(): fail(f"missing shipped directory: {source_root}")
+        if source_root.is_symlink() or not source_root.is_dir():
+            fail(f"missing or unsafe shipped directory: {source_root}")
+        resolved_root = source_root.resolve()
+        if not resolved_root.is_relative_to(ROOT.resolve()):
+            fail("shipped directory escapes candidate root")
         for source in sorted(path for path in source_root.rglob("*") if path.is_file()):
+            if source.is_symlink() or not source.resolve().is_relative_to(resolved_root):
+                fail("shipped member escapes its declared root")
             relative = source.relative_to(source_root).as_posix()
             safe_relative(relative)
             members[f"{ARCHIVE_ROOT}/{archive_prefix}/{relative}"] = bounded_bytes(source)
@@ -848,9 +1215,11 @@ def _write_checksum(path: Path) -> None:
 
 def package(args: argparse.Namespace) -> None:
     rc = verify_rc_consumption(Path(args.rc)); require_arm64_host(rc["target"])
-    if rc["signing"]["posture"] == "signed-public": fail("package never signs or claims notarization")
-    profile_data = profile(_input_from_rc(rc, "profile"))
-    archive, bin_dir = Path(args.archive).resolve(), Path(args.bin_dir).resolve()
+    profile_data = profile(resolve_rc_input(rc, "profile"))
+    archive_input, bin_input = Path(args.archive), Path(args.bin_dir)
+    if archive_input.is_symlink() or bin_input.is_symlink():
+        fail("package paths may not be symlinks")
+    archive, bin_dir = archive_input.resolve(), bin_input.resolve()
     for name in ("podway", "podwayd"):
         binary = (bin_dir / name).resolve()
         require_bound_file(rc, name, binary)
@@ -882,8 +1251,11 @@ def _launchctl_absent(uid: int) -> None:
 
 
 def _safe_extract_archive(archive: Path, destination: Path) -> Path:
-    inspect_archive(archive)
-    with zipfile.ZipFile(archive) as bundle:
+    inspected = inspect_archive(archive)
+    archive_bytes = bounded_bytes(archive)
+    if sha256_bytes(archive_bytes) != inspected["archive_sha256"]:
+        fail("archive changed after validation")
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as bundle:
         for info in bundle.infolist():
             name = info.filename
             if info.is_dir() or not name.startswith(ARCHIVE_ROOT + "/") or ".." in Path(name).parts: fail("unsafe archive member")
@@ -915,7 +1287,7 @@ def lifecycle(args: argparse.Namespace) -> None:
         environment = {"HOME": str(home), "PATH": os.environ.get("PATH", "")}
         try:
             for argv in commands:
-                result = subprocess.run(argv, cwd=worktree, capture_output=True, check=False, timeout=30, env=environment)
+                result = subprocess.run(sandboxed_candidate_argv(argv), cwd=worktree, capture_output=True, check=False, timeout=30, env=environment)
                 receipts.append({"argv": list(argv), "exit_code": result.returncode, "stdout_sha256": sha256_bytes(result.stdout), "stderr_sha256": sha256_bytes(result.stderr)})
                 if result.returncode != 0: fail(f"lifecycle command failed: {' '.join(argv[1:3])}")
                 if argv[2] == "install": installed = True
@@ -924,7 +1296,7 @@ def lifecycle(args: argparse.Namespace) -> None:
             _launchctl_absent(uid)
         finally:
             if installed and not uninstalled:
-                cleanup = subprocess.run((str(podway), "daemon", "uninstall"), cwd=worktree, capture_output=True, check=False, timeout=30, env=environment)
+                cleanup = subprocess.run(sandboxed_candidate_argv((str(podway), "daemon", "uninstall")), cwd=worktree, capture_output=True, check=False, timeout=30, env=environment)
                 receipts.append({"argv": [str(podway), "daemon", "uninstall"], "exit_code": cleanup.returncode, "stdout_sha256": sha256_bytes(cleanup.stdout), "stderr_sha256": sha256_bytes(cleanup.stderr), "cleanup": True})
                 if cleanup.returncode != 0: fail("lifecycle cleanup uninstall failed")
             _remove_worktree(worktree, holder)
@@ -999,84 +1371,536 @@ def _review_evidence(index: Path, rc_digest: str, source: dict[str, Any], target
     if not isinstance(evidence_rows, list) or not evidence_rows:
         fail("acceptance index has no evidence")
     return evidence_rows
+def _parse_roles(values: list[str], option: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values:
+        role, separator, binding = value.partition("=")
+        if not separator or role in parsed:
+            fail(f"{option} must bind each role exactly once")
+        parsed[role] = binding
+    if list(parsed) != ["owner", "E", "F"]:
+        fail(f"{option} requires ordered owner/E/F bindings")
+    return parsed
 
+def _safe_file(path: Path, root: Path, label: str) -> Path:
+    if path.is_symlink():
+        fail(f"{label} is a symlink")
+    resolved = path.resolve(strict=True)
+    if not resolved.is_relative_to(root.resolve()) or not resolved.is_file():
+        fail(f"{label} escapes its trusted root")
+    return resolved
 
-def _verify_reviewer_attestations(args: argparse.Namespace, rc_digest: str, index_digest: str, trace_digest: str) -> list[dict[str, str]]:
-    if not args.reviewer_keyring or len(args.attestation) != len(args.reviewer):
-        fail("each final reviewer requires one detached attestation and a keyring")
-    keyring = Path(args.reviewer_keyring)
-    if not keyring.is_file() or keyring.is_symlink():
-        fail("reviewer keyring is unsafe or missing")
-    verified: list[dict[str, str]] = []
-    reviewers = set(args.reviewer)
-    for raw in args.attestation:
-        try:
-            reviewer, payload_raw, signature_raw = raw.split("=", 2)
-        except ValueError:
-            fail("--attestation must be REVIEWER=PAYLOAD=SIGNATURE")
-        if reviewer not in reviewers or any(item["reviewer"] == reviewer for item in verified):
-            fail("reviewer attestation is missing or duplicated")
-        payload, signature = Path(payload_raw), Path(signature_raw)
-        statement = canonical_json({"reviewer": reviewer, "rc_sha256": rc_digest, "acceptance_index_sha256": index_digest, "traceability_sha256": trace_digest})
-        if not payload.is_file() or payload.is_symlink() or not signature.is_file() or signature.is_symlink() or bounded_bytes(payload) != statement:
-            fail("reviewer attestation is not an exact detached statement")
-        result = subprocess.run(("gpgv", "--keyring", str(keyring), str(signature), str(payload)), capture_output=True, check=False)
-        if result.returncode != 0:
-            fail("reviewer detached attestation did not verify")
-        verified.append({"reviewer": reviewer, "payload_sha256": sha256_file(payload), "signature_sha256": sha256_file(signature)})
-    if {item["reviewer"] for item in verified} != reviewers:
-        fail("reviewer attestations do not cover final reviewers")
-    return verified
+def _qualification_descriptor(path: Path) -> dict[str, Any]:
+    descriptor = load_json(path)
+    required = {
+        "schema",
+        "qualification_archive_sha256",
+        "acceptance_index_sha256",
+        "rc_sha256",
+        "traceability_sha256",
+        "release_policy_sha256",
+        "tool_manifest_sha256",
+        "source",
+        "target",
+    }
+    if not isinstance(descriptor, dict) or set(descriptor) != required or descriptor["schema"] != "podway.g009.qualification-bundle/v1":
+        fail("qualification bundle descriptor is malformed")
+    digest_fields = (
+        "qualification_archive_sha256",
+        "acceptance_index_sha256",
+        "rc_sha256",
+        "traceability_sha256",
+        "release_policy_sha256",
+        "tool_manifest_sha256",
+    )
+    if descriptor["target"] != TARGET or not all(isinstance(descriptor[key], str) and re.fullmatch(r"[0-9a-f]{64}", descriptor[key]) for key in digest_fields):
+        fail("qualification bundle descriptor has invalid identities")
+    if sha256_file(CONTROLLER_ROOT / "release/g009-release-policy-v1.json") != descriptor["release_policy_sha256"]:
+        fail("qualification release policy differs from the trusted controller")
+    source = descriptor["source"]
+    if (
+        not isinstance(source, dict)
+        or set(source) != {"commit", "tree", "tools"}
+        or not all(isinstance(source.get(key), str) and re.fullmatch(r"[0-9a-f]{40}", source[key]) for key in ("commit", "tree"))
+        or not isinstance(source.get("tools"), list)
+        or {item.get("id") for item in source["tools"] if isinstance(item, dict)} != {"cargo", "rustc"}
+    ):
+        fail("qualification source provenance is malformed")
+    return descriptor
 
+def _verify_review_inputs(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, str], dict[str, tuple[Path, Path]]]:
+    descriptor_path = Path(args.qualification_bundle)
+    descriptor = _qualification_descriptor(descriptor_path)
+    root = descriptor_path.parent
+    archive = _safe_file(root / "qualification-bundle.zip", root, "qualification archive")
+    index = _safe_file(root / "acceptance-index.json", root, "acceptance index")
+    archive_bytes = bounded_bytes(archive)
+    if sha256_bytes(archive_bytes) != descriptor["qualification_archive_sha256"] or sha256_file(index) != descriptor["acceptance_index_sha256"]:
+        fail("qualification bundle members do not bind descriptor")
+    index_value = load_json(index)
+    evidence_rows = index_value.get("evidence") if isinstance(index_value, dict) else None
+    if (
+        not isinstance(index_value, dict)
+        or index_value.get("rc_sha256") != descriptor["rc_sha256"]
+        or index_value.get("target") != descriptor["target"]
+        or index_value.get("status") != "pass"
+        or index_value.get("blockers") != []
+        or not isinstance(evidence_rows, list)
+        or not evidence_rows
+    ):
+        fail("qualification acceptance index is stale or malformed")
+    policy_gate_ids = load_json(CONTROLLER_ROOT / "release/g009-release-policy-v1.json").get("acceptance_index", {}).get("required_upstream_gate_ids")
+    if (
+        not isinstance(policy_gate_ids, list)
+        or index_value.get("checkpoint_id") != "G009-GATE-ACCEPTANCE-INDEX"
+        or index_value.get("upstream_gate_ids") != policy_gate_ids
+        or index_value.get("acceptance_ids") != [f"ACC-{number:02d}" for number in range(1, 12)]
+        or len(evidence_rows) != len(policy_gate_ids)
+        or [row.get("gate_id") for row in evidence_rows if isinstance(row, dict)] != policy_gate_ids
+    ):
+        fail("qualification acceptance index does not reconstruct the exact gate contract")
+    expected_names = {
+        "rc.json",
+        "traceability.json",
+        "release-policy.json",
+        "acceptance-index.json",
+        "archive.zip",
+        "archive.zip.sha256",
+        "tool-manifest.json",
+        "receipt.json",
+    }
+    for row in evidence_rows:
+        relative = row.get("path") if isinstance(row, dict) else None
+        digest = row.get("sha256") if isinstance(row, dict) else None
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"gate_id", "path", "sha256", "rc_sha256", "target", "source", "blockers"}
+            or row["rc_sha256"] != descriptor["rc_sha256"]
+            or row["target"] != descriptor["target"]
+            or _public_source(row["source"]) != descriptor["source"]
+            or row["blockers"] != []
+            or not isinstance(relative, str)
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            fail("qualification evidence envelope binding differs")
+        expected_names.add(f"evidence/{relative}")
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as bundle:
+            names = bundle.namelist()
+            if len(names) != len(set(names)) or set(names) != expected_names:
+                fail("qualification bundle membership is not the exact acceptance set")
+            for row in evidence_rows:
+                raw_evidence = bundle.read(f"evidence/{row['path']}")
+                if sha256_bytes(raw_evidence) != row["sha256"]:
+                    fail("qualification evidence member digest differs")
+                payload = load_json_bytes(raw_evidence, f"evidence/{row['path']}")
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("status") != "pass"
+                    or payload.get("rc_sha256") != descriptor["rc_sha256"]
+                    or payload.get("target") != descriptor["target"]
+                    or payload.get("source") != row["source"]
+                    or payload.get("blockers") != []
+                ):
+                    fail("qualification evidence payload is not a current pass envelope")
+                if row["gate_id"] in GATES:
+                    results = payload.get("results")
+                    if not isinstance(results, list):
+                        fail("qualification aggregate gate evidence is incomplete")
+                    matched = [
+                        item for item in results
+                        if isinstance(item, dict)
+                        and item.get("gate_id") == row["gate_id"]
+                        and item.get("status") == "pass"
+                    ]
+                    if payload.get("checkpoint_id") != "G009-GATE-GATES" or len(matched) != 1:
+                        fail("qualification aggregate gate evidence is incomplete")
+                elif payload.get("checkpoint_id") != row["gate_id"]:
+                    fail("qualification checkpoint identity differs")
+            if sha256_bytes(bundle.read("tool-manifest.json")) != descriptor["tool_manifest_sha256"]:
+                fail("qualification tool manifest digest differs")
+            if sha256_bytes(bundle.read("release-policy.json")) != descriptor["release_policy_sha256"]:
+                fail("qualification release policy digest differs")
+            tool_manifest = load_json_bytes(bundle.read("tool-manifest.json"), "qualification tool manifest")
+            expected_tool_ids = {
+                "bash", "cargo", "cargo-audit", "cargo-deny", "cargo-fuzz",
+                "cargo-llvm-cov", "cargo-nightly", "git", "gpgv", "launchctl",
+                "lipo", "ps", "python3", "rustc", "rustc-nightly", "rustup",
+                "sandbox-exec", "sysctl",
+            }
+            tools = tool_manifest.get("tools") if isinstance(tool_manifest, dict) else None
+            controller_sources = tool_manifest.get("controller_sources") if isinstance(tool_manifest, dict) else None
+            if (
+                not isinstance(tool_manifest, dict)
+                or set(tool_manifest) != {"schema", "source", "tools", "controller_sources"}
+                or tool_manifest.get("schema") != "podway.g009.release-tool-manifest/v1"
+                or tool_manifest.get("source") != descriptor["source"]
+                or not isinstance(tools, list)
+                or {item.get("id") for item in tools if isinstance(item, dict)} != expected_tool_ids
+                or len(tools) != len(expected_tool_ids)
+                or any(
+                    not isinstance(item, dict)
+                    or set(item) != {"id", "version", "path_sha256", "architecture"}
+                    or item.get("architecture") != "arm64"
+                    or not isinstance(item.get("version"), str)
+                    or not item["version"]
+                    or not isinstance(item.get("path_sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", item["path_sha256"])
+                    for item in tools
+                )
+                or controller_sources != controller_source_bindings()
+            ):
+                fail("qualification tool manifest schema or exact set differs")
+            policy_value = load_json_bytes(bundle.read("release-policy.json"), "qualification release policy")
+            if not isinstance(policy_value, dict) or policy_value.get("schema") != "podway.g009.release-policy/v1":
+                fail("qualification release policy schema differs")
+    except (KeyError, zipfile.BadZipFile) as exc:
+        fail(f"qualification bundle archive is invalid: {exc}")
+    keyring = _safe_file(Path(args.reviewer_keyring), Path(args.reviewer_keyring).parent, "reviewer keyring")
+    if not re.fullmatch(r"[0-9a-f]{64}", args.reviewer_keyring_sha256) or sha256_file(keyring) != args.reviewer_keyring_sha256:
+        fail("reviewer keyring digest binding failed")
+    fingerprints = _parse_roles(args.reviewer_fingerprint, "--reviewer-fingerprint")
+    if any(not re.fullmatch(r"[0-9A-F]{40}", value) for value in fingerprints.values()) or len(set(fingerprints.values())) != 3:
+        fail("reviewer fingerprints must be distinct uppercase 40-hex values")
+    raw_attestations = _parse_roles(args.attestation, "--attestation")
+    attestations: dict[str, tuple[Path, Path]] = {}
+    statement = canonical_json({
+        "qualification_archive_sha256": descriptor["qualification_archive_sha256"],
+        "acceptance_index_sha256": descriptor["acceptance_index_sha256"],
+        "rc_sha256": descriptor["rc_sha256"],
+        "traceability_sha256": descriptor["traceability_sha256"],
+        "release_policy_sha256": descriptor["release_policy_sha256"],
+        "tool_manifest_sha256": descriptor["tool_manifest_sha256"],
+    })
+    for role, value in raw_attestations.items():
+        payload_raw, separator, signature_raw = value.partition("=")
+        if not separator:
+            fail("--attestation must be ROLE=PAYLOAD=SIGNATURE")
+        payload = _safe_file(Path(payload_raw), Path(payload_raw).parent, f"{role} payload")
+        signature = _safe_file(Path(signature_raw), Path(signature_raw).parent, f"{role} signature")
+        if bounded_bytes(payload) != statement:
+            fail("reviewer attestation is not an exact bundle-bound statement")
+        attestations[role] = (payload, signature)
+    verify_role_signatures(
+        [{"role": role, "payload": payload, "signature": signature} for role, (payload, signature) in attestations.items()],
+        [{"role": role, "fingerprint": fingerprint} for role, fingerprint in fingerprints.items()],
+        keyring,
+    )
+    return descriptor, fingerprints, attestations
 
 def final_review(args: argparse.Namespace) -> None:
-    rc_path = Path(args.rc); rc = verify_rc_consumption(rc_path); trace_path = Path(args.traceability); index_path = Path(args.index)
-    source = rc["source"]
-    evidence_rows = _review_evidence(index_path, sha256_file(rc_path), source, rc["target"])
-    expected = _upstream_gate_ids(load_json(trace_path))
-    if [row.get("gate_id") for row in evidence_rows] != expected:
-        fail("acceptance index does not retain exact upstream gate order")
-    reviewers = args.reviewer
-    if reviewers != ["owner", "E", "F"]:
-        fail("final review requires exact ordered owner/E/F reviewers")
-    attestations = _verify_reviewer_attestations(args, sha256_file(rc_path), sha256_file(index_path), sha256_file(trace_path))
-    review = {"schema": "podway.g009.final-review/v1", "status": "passed", "rc_sha256": sha256_file(rc_path), "acceptance_index_sha256": sha256_file(index_path), "target": rc["target"], "source": source, "traceability_sha256": sha256_file(trace_path), "evidence_count": len(evidence_rows), "reviewers": reviewers, "attestations": attestations, "blockers": [], "signing": rc["signing"]}
-    out, digest = _rc_evidence(rc_path, "G009-GATE-FINAL-001", review=review)
-    print(f"{out} {digest}")
+    descriptor, fingerprints, attestations = _verify_review_inputs(args)
+    review = {
+        "schema": "podway.g009.final-review/v2", "status": "passed",
+        "qualification_bundle_sha256": sha256_file(Path(args.qualification_bundle)),
+        "qualification_archive_sha256": descriptor["qualification_archive_sha256"],
+        "acceptance_index_sha256": descriptor["acceptance_index_sha256"],
+        "rc_sha256": descriptor["rc_sha256"],
+        "traceability_sha256": descriptor["traceability_sha256"],
+        "release_policy_sha256": descriptor["release_policy_sha256"],
+        "tool_manifest_sha256": descriptor["tool_manifest_sha256"],
+        "source": descriptor["source"],
+        "target": descriptor["target"],
+        "reviewers": ["owner", "E", "F"], "reviewer_keyring_sha256": args.reviewer_keyring_sha256,
+        "attestations": [{"role": role, "fingerprint": fingerprints[role],
+                          "payload_sha256": sha256_file(attestations[role][0]),
+                          "signature_sha256": sha256_file(attestations[role][1])}
+                         for role in ("owner", "E", "F")],
+        "blockers": [],
+    }
+    digest = sha256_bytes(canonical_json(review))
+    output = EVIDENCE_ROOT / "final-review" / f"{digest}.json"
+    atomic_immutable_json(output, review)
+    print(f"{output} {digest}")
+
+def _bundle_member(path: Path, root: Path, label: str) -> tuple[str, bytes]:
+    resolved = _safe_file(path, root, f"bundle member {label}")
+    return label, bounded_bytes(resolved)
+def _write_immutable_file(path: Path, data: bytes, root: Path) -> None:
+    if path.is_symlink() or not path.parent.resolve().is_relative_to(root.resolve()):
+        fail("immutable output path is unsafe")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if not path.is_file() or bounded_bytes(path) != data:
+            fail("immutable output already differs")
+        return
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".g009-output-", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o444)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file() or bounded_bytes(path) != data:
+                fail("immutable output race differs")
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
-def verify_final(args: argparse.Namespace) -> None:
-    if args.index or args.review:
-        if not args.index or not args.review: fail("both final index and review are required")
-        index, envelope = load_json(Path(args.index)), load_json(Path(args.review))
-        review = envelope.get("review") if isinstance(envelope, dict) else None
-        if not isinstance(index, dict) or not isinstance(review, dict) or envelope.get("checkpoint_id") != "G009-GATE-FINAL-001" or review.get("status") != "passed" or review.get("acceptance_index_sha256") != sha256_file(Path(args.index)) or index.get("rc_sha256") != review.get("rc_sha256") or index.get("target") != TARGET or review.get("target") != TARGET or index.get("source") != review.get("source") or review.get("blockers") != [] or review.get("reviewers") != ["owner", "E", "F"]: fail("final index/review validation failed")
-        print("final index and review are current and structurally valid"); return
-    if not args.rc or not args.archive: fail("verify-final requires RC/archive or index/review")
-    rc = verify_rc_consumption(Path(args.rc)); report = inspect_archive(Path(args.archive))
-    if rc["signing"]["posture"] == "unsigned-internal" and rc["signing"].get("gatekeeper") != "not_claimed": fail("unsigned RC makes a Gatekeeper claim")
-    print(f"RC-bound archive is valid: {report['archive_sha256']}")
 
+def _write_bundle(output: Path, members: dict[str, bytes]) -> tuple[Path, str]:
+    if output.is_symlink() or not output.parent.resolve().is_relative_to(EVIDENCE_ROOT.resolve()):
+        fail("bundle output must be under controller evidence root")
+    manifest = {"schema": "podway.g009.bundle-manifest/v1", "members": [
+        {"path": name, "size": len(data), "sha256": sha256_bytes(data)}
+        for name, data in sorted(members.items())
+    ]}
+    payloads = dict(members); payloads["manifest.json"] = canonical_json(manifest)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".g009-bundle-", suffix=".zip", dir=output.parent)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=True) as archive:
+            for name, data in sorted(payloads.items()):
+                safe_relative(name)
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.create_system = 3
+                info.external_attr = 0o100644 << 16
+                archive.writestr(info, data)
+        _write_immutable_file(output, bounded_bytes(temporary), EVIDENCE_ROOT)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return output.resolve(), sha256_file(output)
 
+def qualification_bundle(args: argparse.Namespace) -> None:
+    rc = verify_rc_consumption(Path(args.rc))
+    archive = Path(args.archive)
+    report = inspect_archive(archive)
+    index = Path(args.index)
+    traceability = Path(args.traceability)
+    policy = CONTROLLER_ROOT / "release/g009-release-policy-v1.json"
+    evidence_root = Path(args.evidence_root)
+    evidence_rows = _review_evidence(index, sha256_file(Path(args.rc)), rc["source"], rc["target"])
+    public_source = _public_source(rc["source"])
+    tool_manifest = release_tool_manifest(rc["source"])
+    tool_manifest_bytes = canonical_json(tool_manifest)
+    members = dict([
+        _bundle_member(Path(args.rc), EVIDENCE_ROOT, "rc.json"),
+        _bundle_member(traceability, CONTROLLER_ROOT, "traceability.json"),
+        _bundle_member(policy, CONTROLLER_ROOT, "release-policy.json"),
+        _bundle_member(index, evidence_root, "acceptance-index.json"),
+        _bundle_member(archive, archive.parent, "archive.zip"),
+        _bundle_member(archive.with_name(archive.name + ".sha256"), archive.parent, "archive.zip.sha256"),
+    ])
+    members["tool-manifest.json"] = tool_manifest_bytes
+    for row in evidence_rows:
+        name, data = _bundle_member(evidence_root / row["path"], evidence_root, f"evidence/{row['path']}")
+        members[name] = data
+    members["receipt.json"] = canonical_json({
+        "schema": "podway.g009.qualification-bundle-receipt/v1",
+        "rc_sha256": sha256_file(Path(args.rc)),
+        "archive_sha256": report["archive_sha256"],
+        "index_sha256": sha256_file(index),
+        "traceability_sha256": sha256_file(traceability),
+        "release_policy_sha256": sha256_file(policy),
+        "tool_manifest_sha256": sha256_bytes(tool_manifest_bytes),
+        "source": public_source,
+    })
+    out = Path(args.out)
+    if out.is_symlink() or (out.exists() and not out.is_dir()) or not out.parent.resolve().is_relative_to(CONTROLLER_ROOT.resolve()):
+        fail("qualification output directory is unsafe")
+    out.mkdir(parents=True, exist_ok=True)
+    if not out.resolve().is_relative_to(CONTROLLER_ROOT.resolve()):
+        fail("qualification output directory escapes controller root")
+    bundle, digest = _write_bundle(EVIDENCE_ROOT / "qualification" / f"{sha256_file(index)}.zip", members)
+    for source_path, name in ((bundle, "qualification-bundle.zip"), (index, "acceptance-index.json")):
+        destination = out / name
+        _write_immutable_file(destination, bounded_bytes(source_path), CONTROLLER_ROOT)
+    descriptor = {
+        "schema": "podway.g009.qualification-bundle/v1",
+        "qualification_archive_sha256": digest,
+        "acceptance_index_sha256": sha256_file(index),
+        "rc_sha256": sha256_file(Path(args.rc)),
+        "traceability_sha256": sha256_file(traceability),
+        "release_policy_sha256": sha256_file(policy),
+        "tool_manifest_sha256": sha256_bytes(tool_manifest_bytes),
+        "source": public_source,
+        "target": rc["target"],
+    }
+    descriptor_path = out / "qualification-bundle.json"
+    _write_immutable_file(descriptor_path, canonical_json(descriptor), CONTROLLER_ROOT)
+    print(f"{descriptor_path.resolve()} {sha256_file(descriptor_path)}")
+
+def final_bundle(args: argparse.Namespace) -> None:
+    qualification = Path(args.qualification_bundle)
+    index = Path(args.index)
+    review = Path(args.review)
+    traceability = Path(args.traceability)
+    descriptor = _qualification_descriptor(qualification)
+    final = load_json(review)
+    required_review = {
+        "schema",
+        "status",
+        "qualification_bundle_sha256",
+        "qualification_archive_sha256",
+        "acceptance_index_sha256",
+        "rc_sha256",
+        "traceability_sha256",
+        "release_policy_sha256",
+        "tool_manifest_sha256",
+        "source",
+        "target",
+        "reviewers",
+        "reviewer_keyring_sha256",
+        "attestations",
+        "blockers",
+    }
+    if (
+        not isinstance(final, dict)
+        or set(final) != required_review
+        or final.get("schema") != "podway.g009.final-review/v2"
+        or final.get("status") != "passed"
+        or final.get("blockers") != []
+        or final.get("reviewers") != ["owner", "E", "F"]
+        or final.get("qualification_bundle_sha256") != sha256_file(qualification)
+        or any(final.get(field) != descriptor[field] for field in (
+            "qualification_archive_sha256",
+            "acceptance_index_sha256",
+            "rc_sha256",
+            "traceability_sha256",
+            "release_policy_sha256",
+            "tool_manifest_sha256",
+            "source",
+            "target",
+        ))
+        or sha256_file(index) != descriptor["acceptance_index_sha256"]
+        or sha256_file(traceability) != descriptor["traceability_sha256"]
+    ):
+        fail("final review or release member binding is not passed and exact")
+    supplied_attestations = _parse_roles(args.attestation, "--attestation")
+    final_attestations = final.get("attestations")
+    if not isinstance(final_attestations, list) or [item.get("role") for item in final_attestations if isinstance(item, dict)] != ["owner", "E", "F"]:
+        fail("final review attestation set is incomplete")
+    members = dict([
+        _bundle_member(qualification, qualification.parent, "qualification-bundle.json"),
+        _bundle_member(qualification.parent / "qualification-bundle.zip", qualification.parent, "qualification-bundle.zip"),
+        _bundle_member(index, index.parent, "acceptance-index.json"),
+        _bundle_member(review, review.parent, "final-review.json"),
+        _bundle_member(traceability, CONTROLLER_ROOT, "traceability.json"),
+    ])
+    qualification_archive = bounded_bytes(_safe_file(
+        qualification.parent / "qualification-bundle.zip",
+        qualification.parent,
+        "qualification archive",
+    ))
+    try:
+        with zipfile.ZipFile(io.BytesIO(qualification_archive)) as bundle:
+            policy_bytes = bundle.read("release-policy.json")
+            tool_manifest_bytes = bundle.read("tool-manifest.json")
+    except (KeyError, zipfile.BadZipFile) as exc:
+        fail(f"qualification bundle policy/tool members are invalid: {exc}")
+    if (
+        sha256_bytes(policy_bytes) != descriptor["release_policy_sha256"]
+        or sha256_bytes(tool_manifest_bytes) != descriptor["tool_manifest_sha256"]
+    ):
+        fail("qualification bundle policy/tool digests differ")
+    members["release-policy.json"] = policy_bytes
+    members["tool-manifest.json"] = tool_manifest_bytes
+    for final_attestation, (role, value) in zip(final_attestations, supplied_attestations.items()):
+        payload_raw, separator, signature_raw = value.partition("=")
+        if not separator:
+            fail("--attestation must be ROLE=PAYLOAD=SIGNATURE")
+        payload = _safe_file(Path(payload_raw), Path(payload_raw).parent, f"{role} payload")
+        signature = _safe_file(Path(signature_raw), Path(signature_raw).parent, f"{role} signature")
+        if (
+            final_attestation.get("role") != role
+            or final_attestation.get("payload_sha256") != sha256_file(payload)
+            or final_attestation.get("signature_sha256") != sha256_file(signature)
+        ):
+            fail("final bundle attestation differs from final review")
+        members[f"attestations/{role}.payload"] = bounded_bytes(payload)
+        members[f"attestations/{role}.signature"] = bounded_bytes(signature)
+    strict_path = Path(args.strict_verifier_receipt)
+    strict = load_json(strict_path)
+    required_receipt = {
+        "schema",
+        "status",
+        "qualification_bundle_sha256",
+        "qualification_archive_sha256",
+        "acceptance_index_sha256",
+        "rc_sha256",
+        "traceability_sha256",
+        "release_policy_sha256",
+        "tool_manifest_sha256",
+        "final_review_sha256",
+        "reviewer_keyring_sha256",
+        "source",
+        "target",
+        "attestations",
+    }
+    if (
+        not isinstance(strict, dict)
+        or set(strict) != required_receipt
+        or strict.get("schema") != "podway.g009.strict-verifier-receipt/v1"
+        or strict.get("status") != "passed"
+        or strict.get("qualification_bundle_sha256") != sha256_file(qualification)
+        or strict.get("final_review_sha256") != sha256_file(review)
+        or strict.get("reviewer_keyring_sha256") != final["reviewer_keyring_sha256"]
+        or strict.get("attestations") != final_attestations
+        or any(strict.get(field) != descriptor[field] for field in (
+            "qualification_archive_sha256",
+            "acceptance_index_sha256",
+            "rc_sha256",
+            "traceability_sha256",
+            "release_policy_sha256",
+            "tool_manifest_sha256",
+            "source",
+            "target",
+        ))
+    ):
+        fail("strict-verifier receipt is stale or incomplete")
+    members["strict-verifier-receipt.json"] = _bundle_member(
+        strict_path, strict_path.parent, "strict verifier receipt"
+    )[1]
+    members["receipt.json"] = canonical_json({
+        "schema": "podway.g009.final-bundle-receipt/v1",
+        "qualification_bundle_sha256": sha256_file(qualification),
+        "index_sha256": sha256_file(index),
+        "review_sha256": sha256_file(review),
+        "traceability_sha256": sha256_file(traceability),
+        "release_policy_sha256": descriptor["release_policy_sha256"],
+        "tool_manifest_sha256": descriptor["tool_manifest_sha256"],
+        "strict_verifier_receipt_sha256": sha256_file(strict_path),
+        "reviewers": final["reviewers"],
+        "attestations": final_attestations,
+    })
+    output, digest = _write_bundle(Path(args.output), members)
+    print(f"{output} {digest}")
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest="command", required=True)
     def command(name: str) -> argparse.ArgumentParser: return sub.add_parser(name)
     x=command("preflight"); x.add_argument("--rc", required=True); x.set_defaults(fn=preflight)
     x=command("characterize"); x.add_argument("--profile", required=True); x.add_argument("--target", required=True); x.add_argument("--warmups", type=int, required=True); x.add_argument("--samples", type=int, required=True); x.add_argument("--bin-dir", required=True); x.set_defaults(fn=characterize)
-    x=command("approve-baseline"); x.add_argument("--characterization", required=True); x.add_argument("--roles", required=True); x.add_argument("--approval", action="append"); x.add_argument("--signer-contract", required=True); x.set_defaults(fn=approve_baseline)
-    x=command("freeze-rc"); x.add_argument("--profile", required=True); x.add_argument("--baseline", required=True); x.add_argument("--thresholds", required=True); x.add_argument("--characterization", required=True); x.add_argument("--approvals", required=True); x.add_argument("--signer-contract", required=True); x.add_argument("--input", action="append", default=[], metavar="ROLE=PATH"); x.add_argument("--signing-posture", required=True, choices=("unsigned-internal", "signed-public")); x.set_defaults(fn=freeze_rc)
+    x=command("approve-baseline"); x.add_argument("--profile", required=True); x.add_argument("--characterization", required=True); x.add_argument("--roles", required=True); x.add_argument("--approval", action="append"); x.add_argument("--signer-contract", required=True); x.set_defaults(fn=approve_baseline)
+    x=command("freeze-rc"); x.add_argument("--profile", required=True); x.add_argument("--baseline", required=True); x.add_argument("--thresholds", required=True); x.add_argument("--characterization", required=True); x.add_argument("--approvals", required=True); x.add_argument("--signer-contract", required=True); x.add_argument("--input", action="append", default=[], metavar="ROLE=PATH"); x.add_argument("--signing-posture", required=True, choices=("unsigned-internal",)); x.set_defaults(fn=freeze_rc)
     x=command("holdout"); x.add_argument("--rc", required=True); x.add_argument("--warmups", type=int, required=True); x.add_argument("--samples", type=int, required=True); x.add_argument("--bin-dir", required=True); x.set_defaults(fn=holdout)
     x=command("full-gates"); x.add_argument("--rc", required=True); x.add_argument("--only"); x.set_defaults(fn=full_gates)
     x=command("package"); x.add_argument("--rc", required=True); x.add_argument("--archive", required=True); x.add_argument("--bin-dir", required=True); x.set_defaults(fn=package)
     x=command("lifecycle"); x.add_argument("--rc", required=True); x.add_argument("--archive", required=True); x.add_argument("--require-clean-user", action="store_true"); x.set_defaults(fn=lifecycle)
-    x=command("verify-final"); x.add_argument("--rc"); x.add_argument("--archive"); x.add_argument("--index"); x.add_argument("--review"); x.set_defaults(fn=verify_final)
     x=command("acceptance-index"); x.add_argument("--rc", required=True); x.add_argument("--traceability", required=True); x.add_argument("--evidence-root", required=True); x.add_argument("--checkpoint", action="append", required=True); x.set_defaults(fn=acceptance_index)
-    x=command("final-review"); x.add_argument("--rc", required=True); x.add_argument("--traceability", required=True); x.add_argument("--index", required=True); x.add_argument("--reviewer", action="append", default=[]); x.add_argument("--reviewer-keyring", required=True); x.add_argument("--attestation", action="append", default=[]); x.set_defaults(fn=final_review)
+    x=command("final-review"); x.add_argument("--qualification-bundle", required=True); x.add_argument("--reviewer-keyring", required=True); x.add_argument("--reviewer-keyring-sha256", required=True); x.add_argument("--reviewer-fingerprint", action="append", required=True); x.add_argument("--attestation", action="append", required=True); x.set_defaults(fn=final_review)
+    x=command("qualification-bundle"); x.add_argument("--rc", required=True); x.add_argument("--traceability", required=True); x.add_argument("--index", required=True); x.add_argument("--archive", required=True); x.add_argument("--evidence-root", required=True); x.add_argument("--out", required=True); x.set_defaults(fn=qualification_bundle)
+    x=command("final-bundle"); x.add_argument("--qualification-bundle", required=True); x.add_argument("--index", required=True); x.add_argument("--review", required=True); x.add_argument("--traceability", required=True); x.add_argument("--attestation", action="append", required=True); x.add_argument("--strict-verifier-receipt", required=True); x.add_argument("--output", required=True); x.set_defaults(fn=final_bundle)
     return p
 
 
 def main() -> int:
-    try: args = parser().parse_args(); args.fn(args); return 0
-    except QualificationError as exc: print(f"G009 qualification failed closed: {exc}", file=sys.stderr); return 2
+    try:
+        args = parser().parse_args()
+        if args.command not in {"final-review", "final-bundle"}:
+            require_candidate_root()
+        args.fn(args)
+        return 0
+    except QualificationError as exc:
+        print(f"G009 qualification failed closed: {exc}", file=sys.stderr)
+        return 2
     except (OSError, subprocess.SubprocessError) as exc: print(f"G009 qualification failed closed: {exc}", file=sys.stderr); return 2
 if __name__ == "__main__": raise SystemExit(main())

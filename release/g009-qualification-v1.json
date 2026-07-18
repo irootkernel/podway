@@ -1,7 +1,15 @@
 {
   "archive": {
-    "checksum": {"algorithm": "sha256", "detached_sidecar_suffix": ".sha256", "final_bytes_only": true},
-    "internal_manifest": {"algorithm": "sha256", "path": "payload-digests-v1.json", "self_excluded": true},
+    "checksum": {
+      "algorithm": "sha256",
+      "detached_sidecar_suffix": ".sha256",
+      "final_bytes_only": true
+    },
+    "internal_manifest": {
+      "algorithm": "sha256",
+      "path": "payload-digests-v1.json",
+      "self_excluded": true
+    },
     "members": [
       "bin/podway",
       "bin/podwayd",
@@ -17,23 +25,44 @@
     ],
     "root": "podway-0.1.0-aarch64-apple-darwin/",
     "sidecars_are_members": false,
-    "zip": {"deterministic": true, "safe_extraction_required": true}
+    "zip": {
+      "deterministic": true,
+      "safe_extraction_required": true
+    }
   },
   "release_policy": "release/g009-release-policy-v1.json",
   "evidence": {
     "committed_results_permitted": false,
     "local_root": "artifacts/g009",
     "schema": "podway.g009.checkpoint/v1",
-    "status_values": ["not-run", "pass", "fail", "blocked"],
+    "status_values": [
+      "not-run",
+      "pass",
+      "fail",
+      "blocked"
+    ],
     "untrusted_mutable_pointers_forbidden": true
   },
   "fuzz": {
-    "toolchain": {"channel": "nightly-2026-07-17", "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"},
-    "sanitizer_env": {"ASAN_OPTIONS": "quarantine_size_mb=16:thread_local_quarantine_size_kb=64:detect_odr_violation=0"},
-    "change_budget": {"seconds_per_target": 60},
+    "toolchain": {
+      "channel": "nightly-2026-07-17",
+      "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"
+    },
+    "sanitizer_env": {
+      "ASAN_OPTIONS": "quarantine_size_mb=16:thread_local_quarantine_size_kb=64:detect_odr_violation=0"
+    },
+    "change_budget": {
+      "seconds_per_target": 60
+    },
     "corpus_root": "artifacts/g009/fuzz/corpus",
-    "pre_rc": {"seconds_per_target": 600},
-    "rc": {"rss_limit_mb": 512, "seconds_per_target": 3600, "timeout_seconds": 5},
+    "pre_rc": {
+      "seconds_per_target": 600
+    },
+    "rc": {
+      "rss_limit_mb": 512,
+      "seconds_per_target": 3600,
+      "timeout_seconds": 5
+    },
     "surfaces": [
       "frame_decoder",
       "request_envelope",
@@ -44,36 +73,338 @@
     ]
   },
   "gates": [
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-FORMAT", "required_args": ["--rc", "--only"]}, "evidence_role": "format", "id": "G009-GATE-FORMAT", "owner": "release-engineering"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-CHECK", "required_args": ["--rc", "--only"]}, "evidence_role": "check", "id": "G009-GATE-CHECK", "owner": "release-engineering"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-CLIPPY", "required_args": ["--rc", "--only"]}, "evidence_role": "clippy", "id": "G009-GATE-CLIPPY", "owner": "release-engineering"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-NATIVE-TESTS", "required_args": ["--rc", "--only"]}, "evidence_role": "native-tests", "id": "G009-GATE-NATIVE-TESTS", "owner": "quality"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-CONTRACTS", "required_args": ["--rc", "--only"]}, "evidence_role": "contract-suite", "id": "G009-GATE-CONTRACTS", "owner": "quality"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-G005", "required_args": ["--rc", "--only"]}, "evidence_role": "production-vertical", "id": "G009-GATE-G005", "owner": "quality"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-G008", "required_args": ["--rc", "--only"]}, "evidence_role": "preset-dogfood", "id": "G009-GATE-G008", "owner": "quality"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-CRASH", "required_args": ["--rc", "--only"]}, "evidence_role": "crash-coverage", "id": "G009-GATE-CRASH", "owner": "durability"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-OBS", "required_args": ["--rc", "--only"]}, "evidence_role": "observability", "id": "G009-GATE-OBS", "owner": "daemon"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-FUZZ", "required_args": ["--rc", "--only"]}, "evidence_role": "fuzz", "id": "G009-GATE-FUZZ", "owner": "security"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-AUDIT", "required_args": ["--rc", "--only"]}, "evidence_role": "audit", "id": "G009-GATE-AUDIT", "owner": "security"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-DENY", "required_args": ["--rc", "--only"]}, "evidence_role": "deny", "id": "G009-GATE-DENY", "owner": "security"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-COVERAGE", "required_args": ["--rc", "--only"]}, "evidence_role": "coverage", "id": "G009-GATE-COVERAGE", "owner": "quality"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-SECURITY", "required_args": ["--rc", "--only"]}, "evidence_role": "security-boundary", "id": "G009-GATE-SECURITY", "owner": "security"},
-    {"dispatch": {"command": "full-gates", "only": "G009-GATE-MIGRATION", "required_args": ["--rc", "--only"]}, "evidence_role": "migration", "id": "G009-GATE-MIGRATION", "owner": "durability"}
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-FORMAT",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "format",
+      "id": "G009-GATE-FORMAT",
+      "owner": "release-engineering"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-CHECK",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "check",
+      "id": "G009-GATE-CHECK",
+      "owner": "release-engineering"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-CLIPPY",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "clippy",
+      "id": "G009-GATE-CLIPPY",
+      "owner": "release-engineering"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-NATIVE-TESTS",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "native-tests",
+      "id": "G009-GATE-NATIVE-TESTS",
+      "owner": "quality"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-CONTRACTS",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "contract-suite",
+      "id": "G009-GATE-CONTRACTS",
+      "owner": "quality"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-G005",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "production-vertical",
+      "id": "G009-GATE-G005",
+      "owner": "quality"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-G008",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "preset-dogfood",
+      "id": "G009-GATE-G008",
+      "owner": "quality"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-CRASH",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "crash-coverage",
+      "id": "G009-GATE-CRASH",
+      "owner": "durability"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-OBS",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "observability",
+      "id": "G009-GATE-OBS",
+      "owner": "daemon"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-FUZZ",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "fuzz",
+      "id": "G009-GATE-FUZZ",
+      "owner": "security"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-AUDIT",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "audit",
+      "id": "G009-GATE-AUDIT",
+      "owner": "security"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-DENY",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "deny",
+      "id": "G009-GATE-DENY",
+      "owner": "security"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-COVERAGE",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "coverage",
+      "id": "G009-GATE-COVERAGE",
+      "owner": "quality"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-SECURITY",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "security-boundary",
+      "id": "G009-GATE-SECURITY",
+      "owner": "security"
+    },
+    {
+      "dispatch": {
+        "command": "full-gates",
+        "only": "G009-GATE-MIGRATION",
+        "required_args": [
+          "--rc",
+          "--only"
+        ]
+      },
+      "evidence_role": "migration",
+      "id": "G009-GATE-MIGRATION",
+      "owner": "durability"
+    }
   ],
   "workflow_checkpoints": [
-    {"id": "G009-GATE-PREFLIGHT", "dispatch": {"command": "preflight", "required_args": ["--rc"]}},
-    {"id": "G009-GATE-PERFORMANCE", "dispatch": {"command": "holdout", "required_args": ["--rc", "--warmups", "--samples", "--bin-dir"]}},
-    {"id": "G009-GATE-PACKAGE", "dispatch": {"command": "package", "required_args": ["--rc", "--archive", "--bin-dir"]}},
-    {"id": "G009-GATE-LIFECYCLE", "dispatch": {"command": "lifecycle", "required_args": ["--rc", "--archive", "--require-clean-user"]}},
-    {"id": "G009-GATE-FINAL-001", "dispatch": {"command": "final-review", "required_args": ["--rc", "--traceability", "--index", "--reviewer", "--reviewer-keyring", "--attestation"]}}
+    {
+      "id": "G009-GATE-PREFLIGHT",
+      "dispatch": {
+        "command": "preflight",
+        "required_args": [
+          "--rc"
+        ]
+      }
+    },
+    {
+      "id": "G009-GATE-PERFORMANCE",
+      "dispatch": {
+        "command": "holdout",
+        "required_args": [
+          "--rc",
+          "--warmups",
+          "--samples",
+          "--bin-dir"
+        ]
+      }
+    },
+    {
+      "id": "G009-GATE-PACKAGE",
+      "dispatch": {
+        "command": "package",
+        "required_args": [
+          "--rc",
+          "--archive",
+          "--bin-dir"
+        ]
+      }
+    },
+    {
+      "id": "G009-GATE-LIFECYCLE",
+      "dispatch": {
+        "command": "lifecycle",
+        "required_args": [
+          "--rc",
+          "--archive",
+          "--require-clean-user"
+        ]
+      }
+    },
+    {
+      "id": "G009-GATE-FINAL-001",
+      "dispatch": {
+        "command": "final-review",
+        "required_args": [
+          "--qualification-bundle",
+          "--reviewer-keyring",
+          "--reviewer-keyring-sha256",
+          "--reviewer-fingerprint",
+          "--attestation"
+        ]
+      }
+    }
   ],
   "external_prerequisites": [
-    {"id": "G009-APPROVALS-OWNER-E-F", "kind": "detached-human-approvals", "required_roles": ["owner", "E", "F"], "rc_input_roles": ["approvals", "signer-contract"], "workflow_behavior": "consume-only"}
+    {
+      "id": "G009-APPROVALS-OWNER-E-F",
+      "kind": "protected-environment-detached-human-approvals",
+      "environment": "release-qualification",
+      "required_roles": [
+        "owner",
+        "E",
+        "F"
+      ],
+      "secret_sources": [
+        "G009_QUALIFICATION_KEYRING_B64",
+        "G009_QUALIFICATION_OWNER_FINGERPRINT",
+        "G009_QUALIFICATION_E_FINGERPRINT",
+        "G009_QUALIFICATION_F_FINGERPRINT"
+      ],
+      "rc_input_roles": [
+        "approvals",
+        "signer-contract"
+      ],
+      "workflow_behavior": "verify-against-protected-identities"
+    },
+    {
+      "id": "G009-FINAL-REVIEW-OWNER-E-F",
+      "kind": "protected-environment-detached-attestations",
+      "environment": "release-final-review",
+      "required_roles": [
+        "owner",
+        "E",
+        "F"
+      ],
+      "secret_sources": [
+        "G009_REVIEWER_KEYRING_B64",
+        "G009_OWNER_FINGERPRINT",
+        "G009_E_FINGERPRINT",
+        "G009_F_FINGERPRINT"
+      ],
+      "workflow_behavior": "verify-after-qualification-index"
+    }
   ],
   "invalidation": {
-    "new_rc_inputs": ["source.commit", "source.tree", "Cargo.lock", "profile", "target", "host", "tool.identities", "fixture.digests", "crash_registry", "obs_policy", "fuzz_policy", "baseline", "thresholds", "signing_posture", "exceptions"],
-    "package_downstream": ["archive.member", "archive.bytes", "signing_posture"],
-    "reject": ["dirty-source", "wrong-target", "non-arm64-host", "Rosetta", "universal-binary", "rounded-performance-metric", "post-hoc-threshold", "missing-approval-role", "missing-sample", "stale-evidence", "unbound-exception", "incomplete-crash-coverage", "high-or-critical-defect"]
+    "new_rc_inputs": [
+      "source.commit",
+      "source.tree",
+      "Cargo.lock",
+      "profile",
+      "target",
+      "host",
+      "tool.identities",
+      "fixture.digests",
+      "crash_registry",
+      "obs_policy",
+      "fuzz_policy",
+      "baseline",
+      "thresholds",
+      "signing_posture",
+      "exceptions"
+    ],
+    "package_downstream": [
+      "archive.member",
+      "archive.bytes",
+      "signing_posture"
+    ],
+    "reject": [
+      "dirty-source",
+      "wrong-target",
+      "non-arm64-host",
+      "Rosetta",
+      "universal-binary",
+      "rounded-performance-metric",
+      "post-hoc-threshold",
+      "missing-approval-role",
+      "missing-sample",
+      "stale-evidence",
+      "unbound-exception",
+      "incomplete-crash-coverage",
+      "high-or-critical-defect"
+    ]
   },
   "minimum_macos": "11.0",
   "minimum_macos_scope": "build-and-Mach-O-load-command-target-only",
@@ -91,7 +422,11 @@
     "event_max_bytes": 8192
   },
   "performance": {
-    "approval_roles": ["owner", "E", "F"],
+    "approval_roles": [
+      "owner",
+      "E",
+      "F"
+    ],
     "characterization_samples": 30,
     "formulas": {
       "mad": "median(abs(x_i-median)) using exact rationals",
@@ -107,22 +442,172 @@
     "warmups": 5
   },
   "profile": "deterministic-intent",
-  "release_profile": {"codegen-units": 1, "lto": "thin", "panic": "abort", "strip": "symbols"},
-  "rust": {"channel": "1.85.0", "version": "1.85.0"},
+  "release_profile": {
+    "codegen-units": 1,
+    "lto": "thin",
+    "panic": "abort",
+    "strip": "symbols"
+  },
+  "rust": {
+    "channel": "1.85.0",
+    "version": "1.85.0"
+  },
   "schema": "podway.g009.qualification/v1",
   "signing_postures": {
-    "signed-public": {"codesign": "required", "gatekeeper": "required", "notarization": "required", "stapling": "not_applicable_zip"},
-    "unsigned-internal": {"codesign": "not_attempted_missing_credentials", "gatekeeper": "not_claimed", "notarization": "not_attempted_missing_credentials", "stapling": "not_applicable_zip"}
+    "unsigned-internal": {
+      "codesign": "not_attempted_missing_credentials",
+      "gatekeeper": "not_claimed",
+      "notarization": "not_attempted_missing_credentials",
+      "stapling": "not_applicable_zip"
+    }
   },
-  "target": {"arch": "arm64", "host_arch": "arm64", "native_required": true, "triple": "aarch64-apple-darwin", "universal_forbidden": true, "x86_64_forbidden": true},
+  "target": {
+    "arch": "arm64",
+    "host_arch": "arm64",
+    "native_required": true,
+    "triple": "aarch64-apple-darwin",
+    "universal_forbidden": true,
+    "x86_64_forbidden": true
+  },
   "version": 1,
   "workloads": [
-    {"adapter_id": "G009-W01", "fixture": "g009/daemon-cold-start-v1", "hard_bounds": {"max_completion_ms": 5000, "max_rss_mib": 256}, "id": "G009-W01", "measured_commands": [["podwayd", "--service"]], "name": "daemon-cold-start"},
-    {"adapter_id": "G009-W02", "fixture": "g009/status-next-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W02", "measured_commands": [["podway", "status"], ["podway", "next"]], "name": "status-next"},
-    {"adapter_id": "G009-W03", "fixture": "g009/multi-worktree-admission-v1", "hard_bounds": {"max_completion_ms": 5000, "max_rss_mib": 256}, "id": "G009-W03", "measured_commands": [["podway", "start", "--procedure", ".g009-procedure.yaml", "--task", "G009-linked"]], "name": "multi-worktree-admission"},
-    {"adapter_id": "G009-W04", "fixture": "g009/item-update-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W04", "measured_commands": [["podway", "set", "target-audience", "updated"]], "name": "item-update"},
-    {"adapter_id": "G009-W05", "fixture": "g009/artifact-hashing-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W05", "measured_commands": [["podway", "attach", "draft-reference", ".g009-artifact.bin"]], "name": "artifact-hashing"},
-    {"adapter_id": "G009-W06", "fixture": "g009/db-growth-pruning-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W06", "measured_commands": [["podway", "status"]], "name": "status-after-database-growth"},
-    {"adapter_id": "G009-W07", "fixture": "g009/maximum-input-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 512}, "id": "G009-W07", "input_generator": {"adapter_contract": {"argument_index": 2, "argument_source": "generated_utf8_string", "argv_prefix": ["podway", "set", "target-audience"], "id": "G009-W07"}, "algorithm": "repeat-utf8-code-point", "code_point": "U+0078", "digest": {"algorithm": "sha256", "derivation": "sha256(generated_utf8_bytes)", "hex": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3"}, "utf8_byte_length": 65536, "version": 1}, "measured_commands": [["podway", "set", "target-audience", "<65536-byte-string>"]], "name": "maximum-input-rss-completion-or-rejection", "required_outcome": "complete-or-explicit-rejection"}
+    {
+      "adapter_id": "G009-W01",
+      "fixture": "g009/daemon-cold-start-v1",
+      "hard_bounds": {
+        "max_completion_ms": 5000,
+        "max_rss_mib": 256
+      },
+      "id": "G009-W01",
+      "measured_commands": [
+        [
+          "podwayd",
+          "--service"
+        ]
+      ],
+      "name": "daemon-cold-start"
+    },
+    {
+      "adapter_id": "G009-W02",
+      "fixture": "g009/status-next-v1",
+      "hard_bounds": {
+        "max_completion_ms": 2000,
+        "max_rss_mib": 128
+      },
+      "id": "G009-W02",
+      "measured_commands": [
+        [
+          "podway",
+          "status"
+        ],
+        [
+          "podway",
+          "next"
+        ]
+      ],
+      "name": "status-next"
+    },
+    {
+      "adapter_id": "G009-W03",
+      "fixture": "g009/multi-worktree-admission-v1",
+      "hard_bounds": {
+        "max_completion_ms": 5000,
+        "max_rss_mib": 256
+      },
+      "id": "G009-W03",
+      "measured_commands": [
+        [
+          "podway",
+          "start",
+          "--procedure",
+          ".g009-procedure.yaml",
+          "--task",
+          "G009-linked"
+        ]
+      ],
+      "name": "multi-worktree-admission"
+    },
+    {
+      "adapter_id": "G009-W04",
+      "fixture": "g009/item-update-v1",
+      "hard_bounds": {
+        "max_completion_ms": 2000,
+        "max_rss_mib": 128
+      },
+      "id": "G009-W04",
+      "measured_commands": [
+        [
+          "podway",
+          "set",
+          "target-audience",
+          "updated"
+        ]
+      ],
+      "name": "item-update"
+    },
+    {
+      "adapter_id": "G009-W05",
+      "fixture": "g009/artifact-hashing-v1",
+      "hard_bounds": {
+        "max_completion_ms": 10000,
+        "max_rss_mib": 256
+      },
+      "id": "G009-W05",
+      "measured_commands": [
+        [
+          "podway",
+          "attach",
+          "draft-reference",
+          ".g009-artifact.bin"
+        ]
+      ],
+      "name": "artifact-hashing"
+    },
+    {
+      "adapter_id": "G009-W06",
+      "fixture": "g009/db-growth-pruning-v1",
+      "hard_bounds": {
+        "max_completion_ms": 10000,
+        "max_rss_mib": 256
+      },
+      "id": "G009-W06",
+      "measured_commands": [
+        [
+          "podway",
+          "status"
+        ]
+      ],
+      "name": "status-after-database-growth"
+    },
+    {
+      "adapter_id": "G009-W07",
+      "fixture": "g009/maximum-input-v1",
+      "hard_bounds": {
+        "max_completion_ms": 10000,
+        "max_rss_mib": 512
+      },
+      "id": "G009-W07",
+      "input_generator_ref": "release/g009-release-policy-v1.json#/w07_generator",
+      "adapter_contract": {
+        "argument_index": 2,
+        "argument_source": "generated_utf8_string",
+        "argv_prefix": [
+          "podway",
+          "set",
+          "target-audience"
+        ],
+        "id": "G009-W07"
+      },
+      "measured_commands": [
+        [
+          "podway",
+          "set",
+          "target-audience",
+          "<65536-byte-string>"
+        ]
+      ],
+      "name": "maximum-input-rss-completion-or-rejection",
+      "required_outcome": "complete-or-explicit-rejection"
+    }
   ]
 }

@@ -1,14 +1,157 @@
 {
   "schema": "podway.g009.release-policy/v1",
   "version": 1,
+  "trust_anchors": {
+    "repository": {
+      "github_context": "github.repository",
+      "allow_dispatch_repository_override": false
+    },
+    "controller": {
+      "github_context": "github.workflow_sha",
+      "require_full_commit_sha": true
+    },
+    "candidate_provenance": {
+      "required_fields": [
+        "source.commit",
+        "source.tree"
+      ],
+      "commit_format": "40-lowercase-hex",
+      "tree_format": "40-lowercase-hex",
+      "require_exact_match": true
+    },
+    "reviewer_keyring": {
+      "source": "GitHub Environment release-final-review secret G009_REVIEWER_KEYRING_B64",
+      "materialized_path_argument": "--reviewer-keyring",
+      "require_sha256_argument": "--reviewer-keyring-sha256",
+      "sha256_format": "64-lowercase-hex",
+      "repository_controlled": true,
+      "fail_closed_when_unavailable": true
+    },
+    "reviewer_fingerprints": {
+      "source": "GitHub Environment release-final-review secrets G009_OWNER_FINGERPRINT, G009_E_FINGERPRINT, G009_F_FINGERPRINT",
+      "roles": [
+        "owner",
+        "E",
+        "F"
+      ],
+      "format": "40-uppercase-hex",
+      "require_exact_validsig_primary_fingerprint": true,
+      "require_distinct": true,
+      "fail_closed_when_unavailable": true
+    }
+  },
+  "tool_policy": {
+    "identity_requirement": "version-sha256-and-arm64-execution",
+    "required_tools": [
+      {
+        "id": "bash"
+      },
+      {
+        "id": "cargo",
+        "version": "1.85.0"
+      },
+      {
+        "id": "cargo-audit"
+      },
+      {
+        "id": "cargo-deny"
+      },
+      {
+        "id": "cargo-fuzz"
+      },
+      {
+        "id": "cargo-llvm-cov"
+      },
+      {
+        "id": "cargo-nightly",
+        "version": "nightly-2026-07-17"
+      },
+      {
+        "id": "git"
+      },
+      {
+        "id": "gpgv"
+      },
+      {
+        "id": "launchctl"
+      },
+      {
+        "id": "lipo"
+      },
+      {
+        "id": "ps"
+      },
+      {
+        "id": "python3"
+      },
+      {
+        "id": "rustc",
+        "version": "1.85.0"
+      },
+      {
+        "id": "rustc-nightly",
+        "version": "nightly-2026-07-17"
+      },
+      {
+        "id": "rustup"
+      },
+      {
+        "id": "sandbox-exec"
+      },
+      {
+        "id": "sysctl"
+      }
+    ],
+    "require_exact_tool_set": true
+  },
+  "stage_contract": {
+    "stage_1": {
+      "name": "trusted-controller-qualification",
+      "candidate_is_separate": true,
+      "outputs": [
+        "immutable-acceptance-index",
+        "immutable-archive-bundle"
+      ]
+    },
+    "stage_2": {
+      "name": "independent-final-review",
+      "requires_stage_1_index": true,
+      "requires_independently_anchored_owner_E_F_signatures": true,
+      "outputs": [
+        "final-bundle"
+      ]
+    }
+  },
   "rc_transport": {
     "trusted_upstream_artifact": true,
-    "immutable_locator": {"scheme": "sha256", "format": "sha256:<64-lowercase-hex-digits>", "argument": "--rc", "trusted_upstream_artifact_required": true},
-    "forbid": ["local-path", "file-uri", "relative-path", "branch", "tag", "latest", "mutable-url"],
+    "immutable_locator": {
+      "scheme": "sha256",
+      "format": "sha256:<64-lowercase-hex-digits>",
+      "argument": "--rc",
+      "trusted_upstream_artifact_required": true
+    },
+    "forbid": [
+      "local-path",
+      "file-uri",
+      "relative-path",
+      "branch",
+      "tag",
+      "latest",
+      "mutable-url"
+    ],
     "required_rc_schema": "podway.g009.rc-intent/v1",
     "consumer_verification": {
       "before_each_gate": true,
-      "required_bindings": ["rc_sha256", "source.commit", "source.tree", "target", "host", "inputs", "binaries", "signing"],
+      "required_bindings": [
+        "rc_sha256",
+        "source.commit",
+        "source.tree",
+        "target",
+        "host",
+        "inputs",
+        "binaries",
+        "signing"
+      ],
       "verify_input_sha256": true,
       "verify_binary_sha256": true,
       "verify_detached_signature": true,
@@ -21,7 +164,13 @@
     "target": "aarch64-apple-darwin",
     "mach_o_arch": "arm64",
     "require_native_execution": true,
-    "forbid": ["x86_64", "Rosetta", "translated-process", "universal-binary", "fat-binary"]
+    "forbid": [
+      "x86_64",
+      "Rosetta",
+      "translated-process",
+      "universal-binary",
+      "fat-binary"
+    ]
   },
   "acceptance_index": {
     "schema": "podway.g009.acceptance-index/v1",
@@ -47,62 +196,672 @@
       "G009-GATE-LIFECYCLE"
     ],
     "required_upstream_gate_count": 19,
-    "forbid_as_prerequisite": ["G009-GATE-FINAL-001", "FINAL-001"],
+    "forbid_as_prerequisite": [
+      "G009-GATE-FINAL-001",
+      "FINAL-001"
+    ],
     "final_001_is_output_only": true,
     "require_exact_set": true,
     "require_pass_status": true,
     "require_rc_sha256_binding": true
   },
   "traceability": {
-    "required_acceptance_ids": ["ACC-01", "ACC-02", "ACC-03", "ACC-04", "ACC-05", "ACC-06", "ACC-07", "ACC-08", "ACC-09", "ACC-10", "ACC-11", "FINAL-001"],
+    "required_acceptance_ids": [
+      "ACC-01",
+      "ACC-02",
+      "ACC-03",
+      "ACC-04",
+      "ACC-05",
+      "ACC-06",
+      "ACC-07",
+      "ACC-08",
+      "ACC-09",
+      "ACC-10",
+      "ACC-11",
+      "FINAL-001"
+    ],
     "required_acceptance_count": 12,
-    "required_contract_ids": ["G009-CTR-01", "G009-CTR-02", "G009-CTR-03", "G009-CTR-04", "G009-CTR-05", "G009-CTR-06", "G009-CTR-07", "G009-CTR-08", "G009-CTR-09", "G009-CTR-10", "G009-CTR-11", "G009-CTR-12", "G009-CTR-13", "G009-CTR-14", "G009-CTR-15", "G009-CTR-16", "G009-CTR-17", "G009-CTR-18", "G009-CTR-19", "G009-CTR-20"],
+    "required_contract_ids": [
+      "G009-CTR-01",
+      "G009-CTR-02",
+      "G009-CTR-03",
+      "G009-CTR-04",
+      "G009-CTR-05",
+      "G009-CTR-06",
+      "G009-CTR-07",
+      "G009-CTR-08",
+      "G009-CTR-09",
+      "G009-CTR-10",
+      "G009-CTR-11",
+      "G009-CTR-12",
+      "G009-CTR-13",
+      "G009-CTR-14",
+      "G009-CTR-15",
+      "G009-CTR-16",
+      "G009-CTR-17",
+      "G009-CTR-18",
+      "G009-CTR-19",
+      "G009-CTR-20"
+    ],
     "required_contract_count": 20,
     "exact_row_count": 32,
     "one_row_per_required_id": true,
-    "no_unknown_ids": true
+    "no_unknown_ids": true,
+    "execution_order": [
+      "G009-GATE-PREFLIGHT",
+      "G009-GATE-FORMAT",
+      "G009-GATE-CHECK",
+      "G009-GATE-CLIPPY",
+      "G009-GATE-NATIVE-TESTS",
+      "G009-GATE-CONTRACTS",
+      "G009-GATE-G005",
+      "G009-GATE-G008",
+      "G009-GATE-CRASH",
+      "G009-GATE-OBS",
+      "G009-GATE-FUZZ",
+      "G009-GATE-AUDIT",
+      "G009-GATE-DENY",
+      "G009-GATE-COVERAGE",
+      "G009-GATE-SECURITY",
+      "G009-GATE-MIGRATION",
+      "G009-GATE-PERFORMANCE",
+      "G009-GATE-PACKAGE",
+      "G009-GATE-LIFECYCLE"
+    ],
+    "invalidation_rule": {
+      "require_exact_row_inputs": true,
+      "invalidate_on_any_declared_input_change": true,
+      "reject_stale_evidence": true
+    },
+    "coverage": {
+      "acceptance_mapping_cardinality": {
+        "ACC-01": 2,
+        "ACC-02": 2,
+        "ACC-03": 3,
+        "ACC-04": 2,
+        "ACC-05": 2,
+        "ACC-06": 3,
+        "ACC-07": 2,
+        "ACC-08": 2,
+        "ACC-09": 3,
+        "ACC-10": 2,
+        "ACC-11": 3,
+        "FINAL-001": 1
+      },
+      "acceptance_row_count": 12,
+      "contract_mapping_cardinality": {
+        "G009-CTR-01": 1,
+        "G009-CTR-02": 1,
+        "G009-CTR-03": 1,
+        "G009-CTR-04": 1,
+        "G009-CTR-05": 1,
+        "G009-CTR-06": 1,
+        "G009-CTR-07": 1,
+        "G009-CTR-08": 1,
+        "G009-CTR-09": 1,
+        "G009-CTR-10": 1,
+        "G009-CTR-11": 1,
+        "G009-CTR-12": 1,
+        "G009-CTR-13": 1,
+        "G009-CTR-14": 1,
+        "G009-CTR-15": 1,
+        "G009-CTR-16": 1,
+        "G009-CTR-17": 1,
+        "G009-CTR-18": 1,
+        "G009-CTR-19": 1,
+        "G009-CTR-20": 1
+      },
+      "contract_row_count": 20,
+      "exact_row_count": 32,
+      "required_acceptance_families": 12,
+      "required_acceptance_ids": [
+        "ACC-01",
+        "ACC-02",
+        "ACC-03",
+        "ACC-04",
+        "ACC-05",
+        "ACC-06",
+        "ACC-07",
+        "ACC-08",
+        "ACC-09",
+        "ACC-10",
+        "ACC-11",
+        "FINAL-001"
+      ],
+      "required_g009_contracts": 20,
+      "result": "intent-only",
+      "status": "incomplete-until-current-rc-evidence"
+    },
+    "semantic_rows": [
+      {
+        "acceptance_family": "product-purpose",
+        "contract_ids": [
+          "G009-GATE-G005",
+          "G009-GATE-PERFORMANCE"
+        ],
+        "evidence_role": "production-vertical-and-workload-holdout",
+        "executable_gate": "G009-GATE-G005",
+        "exception_eligible": false,
+        "id": "ACC-01",
+        "owner": "quality"
+      },
+      {
+        "acceptance_family": "procedure-semantics",
+        "contract_ids": [
+          "G009-GATE-NATIVE-TESTS",
+          "G009-GATE-G008"
+        ],
+        "evidence_role": "procedure-property-and-preset-dogfood",
+        "executable_gate": "G009-GATE-NATIVE-TESTS",
+        "exception_eligible": false,
+        "id": "ACC-02",
+        "owner": "quality"
+      },
+      {
+        "acceptance_family": "daemon-and-queue",
+        "contract_ids": [
+          "G009-GATE-NATIVE-TESTS",
+          "G009-GATE-CRASH",
+          "G009-GATE-OBS"
+        ],
+        "evidence_role": "daemon-integration-crash-and-source-coverage",
+        "executable_gate": "G009-GATE-CRASH",
+        "exception_eligible": false,
+        "id": "ACC-03",
+        "owner": "durability"
+      },
+      {
+        "acceptance_family": "crash-safety",
+        "contract_ids": [
+          "G009-GATE-CRASH",
+          "G009-GATE-MIGRATION"
+        ],
+        "evidence_role": "source-derived-crash-registry-and-abrupt-child-recovery",
+        "executable_gate": "G009-GATE-CRASH",
+        "exception_eligible": false,
+        "id": "ACC-04",
+        "owner": "durability"
+      },
+      {
+        "acceptance_family": "git-and-filesystem-boundary",
+        "contract_ids": [
+          "G009-GATE-NATIVE-TESTS",
+          "G009-GATE-SECURITY"
+        ],
+        "evidence_role": "workspace-path-and-symlink-tests",
+        "executable_gate": "G009-GATE-NATIVE-TESTS",
+        "exception_eligible": false,
+        "id": "ACC-05",
+        "owner": "quality"
+      },
+      {
+        "acceptance_family": "persistence",
+        "contract_ids": [
+          "G009-GATE-CRASH",
+          "G009-GATE-MIGRATION",
+          "G009-GATE-COVERAGE"
+        ],
+        "evidence_role": "sqlite-migration-crash-and-coverage",
+        "executable_gate": "G009-GATE-MIGRATION",
+        "exception_eligible": false,
+        "id": "ACC-06",
+        "owner": "durability"
+      },
+      {
+        "acceptance_family": "interfaces",
+        "contract_ids": [
+          "G009-GATE-CONTRACTS",
+          "G009-GATE-FUZZ"
+        ],
+        "evidence_role": "versioned-json-help-completion-and-protocol-fuzz",
+        "executable_gate": "G009-GATE-CONTRACTS",
+        "exception_eligible": false,
+        "id": "ACC-07",
+        "owner": "quality"
+      },
+      {
+        "acceptance_family": "macos-operation",
+        "contract_ids": [
+          "G009-GATE-LIFECYCLE",
+          "G009-GATE-PACKAGE"
+        ],
+        "evidence_role": "native-clean-user-service-lifecycle",
+        "executable_gate": "G009-GATE-LIFECYCLE",
+        "exception_eligible": false,
+        "id": "ACC-08",
+        "owner": "release-engineering"
+      },
+      {
+        "acceptance_family": "safety-and-trust",
+        "contract_ids": [
+          "G009-GATE-SECURITY",
+          "G009-GATE-OBS",
+          "G009-GATE-FUZZ"
+        ],
+        "evidence_role": "security-negative-proofs-redaction-and-fuzz",
+        "executable_gate": "G009-GATE-SECURITY",
+        "exception_eligible": false,
+        "id": "ACC-09",
+        "owner": "security"
+      },
+      {
+        "acceptance_family": "built-in-presets",
+        "contract_ids": [
+          "G009-GATE-G008",
+          "G009-GATE-CONTRACTS"
+        ],
+        "evidence_role": "four-preset-end-to-end-retry-return",
+        "executable_gate": "G009-GATE-G008",
+        "exception_eligible": false,
+        "id": "ACC-10",
+        "owner": "quality"
+      },
+      {
+        "acceptance_family": "distribution",
+        "contract_ids": [
+          "G009-GATE-PACKAGE",
+          "G009-GATE-LIFECYCLE",
+          "G009-GATE-MIGRATION"
+        ],
+        "evidence_role": "native-archive-migration-and-signing-status",
+        "executable_gate": "G009-GATE-PACKAGE",
+        "exception_eligible": false,
+        "id": "ACC-11",
+        "owner": "release-engineering"
+      },
+      {
+        "acceptance_family": "final-acceptance-rule",
+        "contract_ids": [
+          "G009-GATE-FINAL-001"
+        ],
+        "evidence_role": "immutable-final-review",
+        "executable_gate": "G009-GATE-FINAL-001",
+        "exception_eligible": false,
+        "id": "FINAL-001",
+        "owner": "release-engineering"
+      },
+      {
+        "contract_id": "G009-GATE-PREFLIGHT",
+        "evidence_role": "host-target-tool-profile-manifest",
+        "executable_gate": "G009-GATE-PREFLIGHT",
+        "id": "G009-CTR-01",
+        "invalidation_inputs": [
+          "target",
+          "host",
+          "rust",
+          "release_profile"
+        ],
+        "owner": "release-engineering"
+      },
+      {
+        "contract_id": "G009-GATE-FORMAT",
+        "evidence_role": "formatter-checkpoint",
+        "executable_gate": "G009-GATE-FORMAT",
+        "id": "G009-CTR-02",
+        "invalidation_inputs": [
+          "source.tree"
+        ],
+        "owner": "release-engineering"
+      },
+      {
+        "contract_id": "G009-GATE-CHECK",
+        "evidence_role": "native-compile-checkpoint",
+        "executable_gate": "G009-GATE-CHECK",
+        "id": "G009-CTR-03",
+        "invalidation_inputs": [
+          "source.tree",
+          "Cargo.lock",
+          "target",
+          "rust"
+        ],
+        "owner": "release-engineering"
+      },
+      {
+        "contract_id": "G009-GATE-CLIPPY",
+        "evidence_role": "native-lint-checkpoint",
+        "executable_gate": "G009-GATE-CLIPPY",
+        "id": "G009-CTR-04",
+        "invalidation_inputs": [
+          "source.tree",
+          "Cargo.lock",
+          "target",
+          "rust"
+        ],
+        "owner": "release-engineering"
+      },
+      {
+        "contract_id": "G009-GATE-NATIVE-TESTS",
+        "evidence_role": "native-test-checkpoint",
+        "executable_gate": "G009-GATE-NATIVE-TESTS",
+        "id": "G009-CTR-05",
+        "invalidation_inputs": [
+          "source.tree",
+          "target",
+          "fixtures"
+        ],
+        "owner": "quality"
+      },
+      {
+        "contract_id": "G009-GATE-CONTRACTS",
+        "evidence_role": "canonical-contract-report",
+        "executable_gate": "G009-GATE-CONTRACTS",
+        "id": "G009-CTR-06",
+        "invalidation_inputs": [
+          "source.tree",
+          "schemas",
+          "presets"
+        ],
+        "owner": "quality"
+      },
+      {
+        "contract_id": "G009-GATE-G005",
+        "evidence_role": "production-vertical-report",
+        "executable_gate": "G009-GATE-G005",
+        "id": "G009-CTR-07",
+        "invalidation_inputs": [
+          "source.tree",
+          "fixtures"
+        ],
+        "owner": "quality"
+      },
+      {
+        "contract_id": "G009-GATE-G008",
+        "evidence_role": "preset-dogfood-report",
+        "executable_gate": "G009-GATE-G008",
+        "id": "G009-CTR-08",
+        "invalidation_inputs": [
+          "source.tree",
+          "presets",
+          "schemas"
+        ],
+        "owner": "quality"
+      },
+      {
+        "contract_id": "G009-GATE-CRASH",
+        "evidence_role": "crash-window-coverage-and-abrupt-child-report",
+        "executable_gate": "G009-GATE-CRASH",
+        "id": "G009-CTR-09",
+        "invalidation_inputs": [
+          "crash_registry",
+          "mapped_durable_source"
+        ],
+        "owner": "durability"
+      },
+      {
+        "contract_id": "G009-GATE-OBS",
+        "evidence_role": "bounded-observability-source-and-test-report",
+        "executable_gate": "G009-GATE-OBS",
+        "id": "G009-CTR-10",
+        "invalidation_inputs": [
+          "observability",
+          "mapped_durable_source"
+        ],
+        "owner": "daemon"
+      },
+      {
+        "contract_id": "G009-GATE-FUZZ",
+        "evidence_role": "six-surface-native-fuzz-index",
+        "executable_gate": "G009-GATE-FUZZ",
+        "id": "G009-CTR-11",
+        "invalidation_inputs": [
+          "fuzz_targets",
+          "corpus",
+          "target",
+          "rust"
+        ],
+        "owner": "security"
+      },
+      {
+        "contract_id": "G009-GATE-AUDIT",
+        "evidence_role": "cargo-audit-report",
+        "executable_gate": "G009-GATE-AUDIT",
+        "id": "G009-CTR-12",
+        "invalidation_inputs": [
+          "Cargo.lock",
+          "advisory-db"
+        ],
+        "owner": "security"
+      },
+      {
+        "contract_id": "G009-GATE-DENY",
+        "evidence_role": "cargo-deny-report",
+        "executable_gate": "G009-GATE-DENY",
+        "id": "G009-CTR-13",
+        "invalidation_inputs": [
+          "Cargo.lock",
+          "deny.toml"
+        ],
+        "owner": "security"
+      },
+      {
+        "contract_id": "G009-GATE-COVERAGE",
+        "evidence_role": "native-lcov",
+        "executable_gate": "G009-GATE-COVERAGE",
+        "id": "G009-CTR-14",
+        "invalidation_inputs": [
+          "source.tree",
+          "target",
+          "test-selection"
+        ],
+        "owner": "quality"
+      },
+      {
+        "contract_id": "G009-GATE-SECURITY",
+        "evidence_role": "negative-security-proof",
+        "executable_gate": "G009-GATE-SECURITY",
+        "id": "G009-CTR-15",
+        "invalidation_inputs": [
+          "source.tree",
+          "security-policy"
+        ],
+        "owner": "security"
+      },
+      {
+        "contract_id": "G009-GATE-MIGRATION",
+        "evidence_role": "schema-0-to-v1-migration-evidence",
+        "executable_gate": "G009-GATE-MIGRATION",
+        "id": "G009-CTR-16",
+        "invalidation_inputs": [
+          "schema",
+          "migration-fixture",
+          "source.tree"
+        ],
+        "owner": "durability"
+      },
+      {
+        "contract_id": "G009-GATE-PERFORMANCE",
+        "evidence_role": "approved-baseline-and-unseen-holdout",
+        "executable_gate": "G009-GATE-PERFORMANCE",
+        "id": "G009-CTR-17",
+        "invalidation_inputs": [
+          "source.tree",
+          "fixtures",
+          "host",
+          "baseline",
+          "thresholds"
+        ],
+        "owner": "release-engineering"
+      },
+      {
+        "contract_id": "G009-GATE-PACKAGE",
+        "evidence_role": "member-manifest-archive-checksum-provenance",
+        "executable_gate": "G009-GATE-PACKAGE",
+        "id": "G009-CTR-18",
+        "invalidation_inputs": [
+          "archive.members",
+          "binary.bytes",
+          "signing_posture"
+        ],
+        "owner": "release-engineering"
+      },
+      {
+        "contract_id": "G009-GATE-LIFECYCLE",
+        "evidence_role": "clean-user-install-upgrade-uninstall",
+        "executable_gate": "G009-GATE-LIFECYCLE",
+        "id": "G009-CTR-19",
+        "invalidation_inputs": [
+          "archive.bytes",
+          "service",
+          "schema",
+          "host"
+        ],
+        "owner": "release-engineering"
+      },
+      {
+        "contract_id": "G009-GATE-FINAL-001",
+        "evidence_role": "current-rc-final-acceptance-index",
+        "executable_gate": "G009-GATE-FINAL-001",
+        "id": "G009-CTR-20",
+        "invalidation_inputs": [
+          "all-upstream-checkpoints",
+          "exceptions",
+          "defect-register"
+        ],
+        "owner": "release-engineering"
+      }
+    ],
+    "evidence_root": "artifacts/g009"
   },
   "final_reviewer_attestation": {
-    "required_roles": ["owner", "E", "F"],
+    "required_roles": [
+      "owner",
+      "E",
+      "F"
+    ],
     "required_role_count": 3,
     "require_distinct_identities": true,
     "detached": true,
     "signature_algorithm": "openpgp-gpgv",
-    "required_signed_digest_fields": ["rc_sha256", "traceability_sha256", "acceptance_index_sha256"],
-    "attestation_required_fields": ["reviewer", "payload_sha256", "signature_sha256"],
+    "required_signed_digest_fields": [
+      "qualification_archive_sha256",
+      "acceptance_index_sha256",
+      "rc_sha256",
+      "traceability_sha256",
+      "release_policy_sha256",
+      "tool_manifest_sha256"
+    ],
+    "attestation_required_fields": [
+      "role",
+      "fingerprint",
+      "payload_sha256",
+      "signature_sha256"
+    ],
     "attestation_transport": "REVIEWER=PAYLOAD=SIGNATURE",
     "reject_unbound_or_duplicate_role": true
   },
+  "crash_coverage": {
+    "required_ids": [
+      "C01",
+      "C02",
+      "C03",
+      "C04",
+      "C05",
+      "C06",
+      "C07",
+      "C08",
+      "C09",
+      "C10",
+      "C11",
+      "C12",
+      "C13",
+      "C14",
+      "D01",
+      "D02",
+      "S01",
+      "S02",
+      "S03"
+    ],
+    "store_registry": "crates/podway-store/src/lib.rs::PHASE2_CRASH_BOUNDARY_REGISTRY_V1",
+    "require_resolvable_source_locators": true,
+    "require_resolvable_test_locators": true,
+    "require_exact_windows": true
+  },
   "w07_generator": {
     "id": "G009-W07",
-    "authoritative_fields": ["algorithm", "code_point", "utf8_byte_length", "digest.algorithm", "digest.derivation", "digest.hex", "version"],
+    "authoritative_fields": [
+      "algorithm",
+      "code_point",
+      "utf8_byte_length",
+      "digest.algorithm",
+      "digest.derivation",
+      "digest.hex",
+      "version"
+    ],
     "algorithm": "repeat-utf8-code-point",
     "code_point": "U+0078",
     "utf8_byte_length": 65536,
-    "digest": {"algorithm": "sha256", "derivation": "sha256(generated_utf8_bytes)", "hex": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3"},
+    "digest": {
+      "algorithm": "sha256",
+      "derivation": "sha256(generated_utf8_bytes)",
+      "hex": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3"
+    },
     "version": 1,
     "reject_non_authoritative_generator_fields": true
   },
   "dependency_exceptions": {
     "record_schema": "podway.g009.dependency-exception/v1",
     "additional_properties": false,
-    "required_fields": ["id", "crate", "owner", "reason", "expires_on"],
+    "required_fields": [
+      "id",
+      "crate",
+      "owner",
+      "reason",
+      "expires_on"
+    ],
     "crate_format": "<crate>@=<exact-version>",
-    "expiry": {"format": "YYYY-MM-DD", "valid_only_before": "expires_on", "fail_on_or_after": true},
-    "unique_record_fields": ["id", "crate"],
+    "expiry": {
+      "format": "YYYY-MM-DD",
+      "valid_only_before": "expires_on",
+      "fail_on_or_after": true
+    },
+    "unique_record_fields": [
+      "id",
+      "crate"
+    ],
     "all_records_must_be_current": true,
     "require_exact_cargo_deny_skip_set": true,
     "records": [
-      {"id": "G009-DEP-EX-01", "crate": "foldhash@=0.1.5", "owner": "release-engineering", "reason": "rusqlite/hashlink 0.10 transition", "expires_on": "2026-10-18"},
-      {"id": "G009-DEP-EX-02", "crate": "hashbrown@=0.15.5", "owner": "release-engineering", "reason": "rusqlite/hashlink 0.10 transition", "expires_on": "2026-10-18"},
-      {"id": "G009-DEP-EX-03", "crate": "hashbrown@=0.16.1", "owner": "release-engineering", "reason": "yaml-rust2/hashlink 0.11 transition", "expires_on": "2026-10-18"},
-      {"id": "G009-DEP-EX-04", "crate": "hashlink@=0.10.0", "owner": "release-engineering", "reason": "rusqlite 0.34 transition", "expires_on": "2026-10-18"}
+      {
+        "id": "G009-DEP-EX-01",
+        "crate": "foldhash@=0.1.5",
+        "owner": "release-engineering",
+        "reason": "rusqlite/hashlink 0.10 transition",
+        "expires_on": "2026-10-18"
+      },
+      {
+        "id": "G009-DEP-EX-02",
+        "crate": "hashbrown@=0.15.5",
+        "owner": "release-engineering",
+        "reason": "rusqlite/hashlink 0.10 transition",
+        "expires_on": "2026-10-18"
+      },
+      {
+        "id": "G009-DEP-EX-03",
+        "crate": "hashbrown@=0.16.1",
+        "owner": "release-engineering",
+        "reason": "yaml-rust2/hashlink 0.11 transition",
+        "expires_on": "2026-10-18"
+      },
+      {
+        "id": "G009-DEP-EX-04",
+        "crate": "hashlink@=0.10.0",
+        "owner": "release-engineering",
+        "reason": "rusqlite 0.34 transition",
+        "expires_on": "2026-10-18"
+      }
     ]
   },
   "exception_eligibility": {
     "acceptance_rows_exception_eligible": false,
     "only_dependency_exceptions_may_suppress_duplicate_version_findings": true,
-    "dependency_exception_does_not_waive": ["rc-identity", "signature", "upstream-gate", "final-attestation", "native-platform", "acceptance-index"],
+    "dependency_exception_does_not_waive": [
+      "rc-identity",
+      "signature",
+      "upstream-gate",
+      "final-attestation",
+      "native-platform",
+      "acceptance-index"
+    ],
     "reject_unknown_or_expired_exception": true
   }
 }

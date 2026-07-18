@@ -53,4 +53,4 @@ Do not:
 
 ## Handoff completion
 
-The project is complete only when `docs/60-quality/61-product-acceptance.md` passes and the release artifacts in `docs/50-operations/52-release-and-packaging.md` are produced for both macOS architectures.
+The project is complete only when `docs/60-quality/61-product-acceptance.md` passes and the native Apple Silicon macOS release artifacts in `docs/50-operations/52-release-and-packaging.md` are produced.

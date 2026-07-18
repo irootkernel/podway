@@ -9,7 +9,21 @@ from pathlib import Path
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+def verification_root() -> Path:
+    controller_root = Path(__file__).resolve().parents[1]
+    candidate = os.environ.get("G009_CANDIDATE_ROOT")
+    if candidate is None:
+        return controller_root
+    supplied = Path(candidate)
+    if not supplied.is_absolute() or supplied.is_symlink() or not supplied.is_dir():
+        raise SystemExit("G009_CANDIDATE_ROOT must name an absolute, non-symlink candidate directory")
+    root = supplied.resolve()
+    if root == controller_root or root.is_relative_to(controller_root) or controller_root.is_relative_to(root):
+        raise SystemExit("G009_CANDIDATE_ROOT must be separate and non-overlapping with the controller root")
+    return root
+
+
+ROOT = verification_root()
 TEST_NAME = "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict"
 
 
