@@ -35,6 +35,8 @@ def validate_protocol(path: Path) -> dict[str, Any]:
         raise QualificationError("profile fuzz surfaces or corpus root drift")
     if fuzz.get("toolchain") != {"channel": "nightly-2026-07-17", "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"}:
         raise QualificationError("profile fuzz toolchain drift")
+    if fuzz.get("sanitizer_env") != {"ASAN_OPTIONS": "quarantine_size_mb=16:thread_local_quarantine_size_kb=64:detect_odr_violation=0"}:
+        raise QualificationError("profile fuzz sanitizer environment drift")
     if fuzz.get("pre_rc") != {"seconds_per_target": 600} or fuzz.get("change_budget") != {"seconds_per_target": 60} or fuzz.get("rc") != {"rss_limit_mb": 512, "seconds_per_target": 3600, "timeout_seconds": 5}:
         raise QualificationError("profile fuzz bounds drift")
     return value

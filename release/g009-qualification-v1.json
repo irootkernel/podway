@@ -28,6 +28,7 @@
   },
   "fuzz": {
     "toolchain": {"channel": "nightly-2026-07-17", "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"},
+    "sanitizer_env": {"ASAN_OPTIONS": "quarantine_size_mb=16:thread_local_quarantine_size_kb=64:detect_odr_violation=0"},
     "change_budget": {"seconds_per_target": 60},
     "corpus_root": "artifacts/g009/fuzz/corpus",
     "pre_rc": {"seconds_per_target": 600},

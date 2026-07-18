@@ -128,6 +128,8 @@ def profile(path: Path) -> dict[str, Any]:
         fail("fuzz target contract drift")
     if fuzz.get("toolchain") != {"channel": "nightly-2026-07-17", "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"}:
         fail("fuzz toolchain contract drift")
+    if fuzz.get("sanitizer_env") != {"ASAN_OPTIONS": "quarantine_size_mb=16:thread_local_quarantine_size_kb=64:detect_odr_violation=0"}:
+        fail("fuzz sanitizer environment drift")
     if fuzz.get("pre_rc") != {"seconds_per_target": 600} or fuzz.get("change_budget") != {"seconds_per_target": 60} or fuzz.get("rc") != {"rss_limit_mb": 512, "seconds_per_target": 3600, "timeout_seconds": 5}:
         fail("fuzz budget contract drift")
     gates = value.get("gates")
@@ -467,6 +469,7 @@ def _run_fuzz_gate(profile_data: dict[str, Any]) -> list[dict[str, Any]]:
     fuzz_env = {
         "PATH": f"{proxy_directory}{os.pathsep}{os.environ.get('PATH', '')}",
         "RUSTUP_TOOLCHAIN": toolchain["channel"],
+        "ASAN_OPTIONS": profile_data["fuzz"]["sanitizer_env"]["ASAN_OPTIONS"],
     }
     rustc = run_allowed(("rustc", "--version"), env=fuzz_env)
     if rustc.returncode != 0 or rustc.stdout.decode("utf-8", "strict").strip() != f"rustc {toolchain['rustc']}":
