@@ -241,7 +241,7 @@ def _adapter_commands(workload_id: str, podway: Path, workspace: Path) -> tuple[
     if workload_id == "G009-W03": return ((str(podway), "start", "--procedure", ".g009-procedure.yaml", "--task", "G009-linked"),)
     if workload_id == "G009-W04": return ((str(podway), "set", "target-audience", "updated"),)
     if workload_id == "G009-W05": return ((str(podway), "attach", "draft-reference", artifact.name),)
-    if workload_id == "G009-W06": return ((str(podway), "reset", "--all", "--force", "--yes"), (str(podway), "status"))
+    if workload_id == "G009-W06": return ((str(podway), "status"),)
     if workload_id == "G009-W07": return ((str(podway), "set", "target-audience", "x" * 65536),)
     fail(f"unknown workload adapter: {workload_id}")
 
