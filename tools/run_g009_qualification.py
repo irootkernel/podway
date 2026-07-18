@@ -30,16 +30,45 @@ from g009_release import inspect_archive, load_rc
 GATES: dict[str, tuple[str, ...]] = {
     "verification": ("python3", "tools/run_verification.py", "--run"),
     "g005-vertical": ("python3", "tools/run_g005_vertical.py"),
-    "fmt": ("cargo", "+1.85.0", "fmt", "--check"),
+    "g008-dogfood": ("python3", "tools/run_g008_dogfood.py"),
+    "fmt": ("cargo", "+1.85.0", "fmt", "--all", "--", "--check"),
     "check": ("cargo", "+1.85.0", "check", "--workspace", "--locked", "--target", TARGET),
+    "test": ("cargo", "+1.85.0", "test", "--workspace", "--all-targets", "--all-features", "--target", TARGET),
     "clippy": ("cargo", "+1.85.0", "clippy", "--workspace", "--all-targets", "--all-features", "--target", TARGET, "--", "-D", "warnings"),
+    "coverage": ("cargo", "+1.85.0", "llvm-cov", "report", "--target", TARGET, "--summary-only"),
     "audit": ("cargo", "+1.85.0", "audit", "--deny", "warnings"),
     "deny": ("cargo", "+1.85.0", "deny", "check", "advisories", "bans", "licenses", "sources"),
+    "qualification-contracts": ("python3", "tools/verify_g009_qualification.py", "--protocol", "release/g009-qualification-v1.json", "--traceability", "release/g009-traceability-v1.json", "--crash-registry", "quality/crash-boundaries-v1.json"),
 }
 IDENTITY_COMMANDS = (("git", "status", "--porcelain"), ("git", "rev-parse", "HEAD"),
                      ("git", "rev-parse", "HEAD^{tree}"), ("rustc", "+1.85.0", "--version"),
                      ("cargo", "+1.85.0", "--version"))
 LABEL = "dev.podway.podwayd"
+def resolved_tool_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
+    if len(argv) > 1 and argv[0] in {"cargo", "rustc"} and argv[1].startswith("+"):
+        rustup = shutil.which("rustup")
+        if rustup is None:
+            fail("rustup is required for pinned Rust commands")
+        return (rustup, "run", argv[1][1:], argv[0], *argv[2:])
+    return argv
+
+
+def run_allowed(
+    argv: tuple[str, ...],
+    *,
+    cwd: Path = ROOT,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        resolved_tool_argv(argv),
+        cwd=cwd,
+        capture_output=True,
+        check=False,
+        env=env or {"PATH": os.environ.get("PATH", "")},
+        timeout=timeout,
+    )
+
 WORKLOAD_VECTORS = {
     "G009-W01": ("podwayd", "--foreground"),
     "G009-W02": ("podway", "status", "--json"),
@@ -74,15 +103,25 @@ def profile(path: Path) -> dict[str, Any]:
 def identity_manifest(require_clean: bool = True) -> dict[str, Any]:
     outputs: dict[tuple[str, ...], bytes] = {}
     for argv in IDENTITY_COMMANDS:
-        result = subprocess.run(argv, cwd=ROOT, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+        result = run_allowed(argv)
         if result.returncode != 0: fail(f"identity command failed: {' '.join(argv)}")
         outputs[argv] = result.stdout
     if require_clean and outputs[("git", "status", "--porcelain")]: fail("source tree is dirty")
     def text(argv: tuple[str, ...]) -> str: return outputs[argv].decode("utf-8", "strict").strip()
     def tool(name: str, argv: tuple[str, ...]) -> dict[str, str]:
-        executable = shutil.which(name)
-        if not executable or "1.85.0" not in text(argv): fail(f"{name} is not the pinned 1.85.0 tool")
-        binary = Path(executable).resolve()
+        rustup = shutil.which("rustup")
+        if rustup is None or "1.85.0" not in text(argv):
+            fail(f"{name} is not the pinned 1.85.0 tool")
+        located = subprocess.run(
+            (rustup, "which", "--toolchain", "1.85.0", name),
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            env={"PATH": os.environ.get("PATH", "")},
+        )
+        if located.returncode != 0:
+            fail(f"cannot locate pinned {name}")
+        binary = Path(located.stdout.decode("utf-8", "strict").strip()).resolve()
         return {"id": name, "version": text(argv), "path": str(binary), "path_sha256": sha256_file(binary)}
     return {"commit": text(("git", "rev-parse", "HEAD")), "tree": text(("git", "rev-parse", "HEAD^{tree}")), "tools": [tool("rustc", ("rustc", "+1.85.0", "--version")), tool("cargo", ("cargo", "+1.85.0", "--version"))]}
 
@@ -249,7 +288,7 @@ def holdout(args: argparse.Namespace) -> None:
 def run_gate(gate_id: str) -> dict[str, Any]:
     argv = GATES.get(gate_id)
     if argv is None: fail(f"gate is not allowlisted: {gate_id}")
-    result = subprocess.run(argv, cwd=ROOT, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+    result = run_allowed(argv)
     return {"gate_id": gate_id, "argv": list(argv), "exit_code": result.returncode, "stdout_sha256": sha256_bytes(result.stdout), "stderr_sha256": sha256_bytes(result.stderr), "status": "pass" if result.returncode == 0 else "fail"}
 
 
