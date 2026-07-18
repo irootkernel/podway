@@ -98,6 +98,7 @@ pub struct ObservabilityCountersV1 {
     pub queued: u64,
     pub writing: u64,
     pub flush_failures: u64,
+    pub final_flush_losses: u64,
     pub flushing: u64,
     pub admission_contention: u64,
     pub admission_poisoned: u64,
@@ -109,6 +110,27 @@ pub struct ObservabilityCountersV1 {
     pub worker_join_failures: u64,
     pub shutdown_timeouts: u64,
 }
+/// The immutable terminal state of the sole observability owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservabilityFinalizationV1 {
+    Completed,
+    Detached,
+    Indeterminate,
+}
+/// A frozen shutdown snapshot. Its counters never observe work performed after detachment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObservabilityShutdownReportV1 {
+    counters: ObservabilityCountersV1,
+    finalization: ObservabilityFinalizationV1,
+}
+impl ObservabilityShutdownReportV1 {
+    pub const fn counters(&self) -> ObservabilityCountersV1 {
+        self.counters
+    }
+    pub const fn finalization(&self) -> ObservabilityFinalizationV1 {
+        self.finalization
+    }
+}
 #[derive(Default)]
 struct Counters {
     primary_dropped: AtomicU64,
@@ -119,6 +141,7 @@ struct Counters {
     queued: AtomicU64,
     writing: AtomicU64,
     flush_failures: AtomicU64,
+    final_flush_losses: AtomicU64,
     flushing: AtomicU64,
     admission_contention: AtomicU64,
     admission_poisoned: AtomicU64,
@@ -141,6 +164,7 @@ macro_rules! counters_snapshot {
             queued: $c.queued.load(Ordering::Relaxed),
             writing: $c.writing.load(Ordering::Relaxed),
             flush_failures: $c.flush_failures.load(Ordering::Relaxed),
+            final_flush_losses: $c.final_flush_losses.load(Ordering::Relaxed),
             flushing: $c.flushing.load(Ordering::Relaxed),
             admission_contention: $c.admission_contention.load(Ordering::Relaxed),
             admission_poisoned: $c.admission_poisoned.load(Ordering::Relaxed),
@@ -197,6 +221,7 @@ struct Shared {
     stopped: AtomicBool,
     in_flight: AtomicU64,
     degraded: bool,
+    frozen_report: Mutex<Option<ObservabilityShutdownReportV1>>,
 }
 /// Cloneable, non-blocking producer held by runtime code. It never owns worker lifecycle.
 #[derive(Clone)]
@@ -212,7 +237,6 @@ pub struct ObservabilityV1 {
 #[derive(Clone, Copy)]
 enum WorkerReport {
     Completed,
-    Panicked,
 }
 
 impl ObservabilityV1 {
@@ -238,6 +262,7 @@ impl ObservabilityV1 {
             stopped: AtomicBool::new(false),
             in_flight: AtomicU64::new(0),
             degraded,
+            frozen_report: Mutex::new(None),
         });
         if degraded {
             shared
@@ -254,16 +279,8 @@ impl ObservabilityV1 {
             let (sender, receiver) = mpsc::channel();
             let worker_shared = Arc::clone(&shared);
             let worker = thread::spawn(move || {
-                let report = if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    writer_loop(worker_shared)
-                }))
-                .is_ok()
-                {
-                    WorkerReport::Completed
-                } else {
-                    WorkerReport::Panicked
-                };
-                let _ = sender.send(report);
+                writer_loop(worker_shared);
+                let _ = sender.send(WorkerReport::Completed);
             });
             (Some(receiver), Some(worker))
         };
@@ -282,37 +299,38 @@ impl ObservabilityV1 {
     pub fn counters(&self) -> ObservabilityCountersV1 {
         self.emitter.counters()
     }
-    /// Requests bounded shutdown; a blocked worker is detached and the exact remaining state is counted.
+    /// Preserves the legacy counter-only result. Prefer [`Self::shutdown_report`] for terminal state.
     pub fn shutdown(mut self) -> ObservabilityCountersV1 {
-        self.stop_and_wait();
-        self.counters()
+        self.stop_and_wait().counters()
     }
-    fn stop_and_wait(&mut self) {
+    /// Requests bounded shutdown and returns one immutable terminal report.
+    pub fn shutdown_report(mut self) -> ObservabilityShutdownReportV1 {
+        self.stop_and_wait()
+    }
+    fn stop_and_wait(&mut self) -> ObservabilityShutdownReportV1 {
+        if let Some(report) = self.emitter.frozen_report() {
+            return report;
+        }
         self.emitter.request_stop();
-        if let Some(done) = self.done.take() {
-            match done.recv_timeout(MAX_SHUTDOWN_FLUSH_V1) {
+        let finalization = match self.done.take() {
+            Some(done) => match done.recv_timeout(MAX_SHUTDOWN_FLUSH_V1) {
                 Ok(WorkerReport::Completed) => {
-                    if self
-                        .worker
-                        .take()
-                        .is_some_and(|worker| worker.join().is_err())
-                    {
+                    let joined = match self.worker.take() {
+                        Some(worker) => worker.join().is_ok(),
+                        None => true,
+                    };
+                    if joined {
+                        self.clear_gauges();
+                        ObservabilityFinalizationV1::Completed
+                    } else {
                         self.emitter
                             .shared
                             .counters
                             .worker_join_failures
                             .fetch_add(1, Ordering::Relaxed);
+                        self.record_known_lost_and_clear_gauges();
+                        ObservabilityFinalizationV1::Indeterminate
                     }
-                    self.clear_gauges();
-                }
-                Ok(WorkerReport::Panicked) => {
-                    self.emitter
-                        .shared
-                        .counters
-                        .worker_panics
-                        .fetch_add(1, Ordering::Relaxed);
-                    let _ = self.worker.take().map(thread::JoinHandle::join);
-                    self.record_unflushed_and_clear_gauges();
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.emitter
@@ -320,8 +338,8 @@ impl ObservabilityV1 {
                         .counters
                         .shutdown_timeouts
                         .fetch_add(1, Ordering::Relaxed);
-                    self.record_unflushed_and_clear_gauges();
                     self.worker.take();
+                    ObservabilityFinalizationV1::Detached
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     self.emitter
@@ -329,12 +347,26 @@ impl ObservabilityV1 {
                         .counters
                         .worker_disconnects
                         .fetch_add(1, Ordering::Relaxed);
-                    self.record_unflushed_and_clear_gauges();
-                    self.worker.take();
+                    if let Some(Err(_)) = self.worker.take().map(thread::JoinHandle::join) {
+                        self.emitter
+                            .shared
+                            .counters
+                            .worker_panics
+                            .fetch_add(1, Ordering::Relaxed);
+                        self.emitter
+                            .shared
+                            .counters
+                            .worker_join_failures
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    self.record_known_lost_and_clear_gauges();
+                    ObservabilityFinalizationV1::Indeterminate
                 }
-            }
-        }
+            },
+            None => ObservabilityFinalizationV1::Completed,
+        };
         self.emitter.shared.stopped.store(true, Ordering::Release);
+        self.emitter.freeze_report(finalization)
     }
     fn clear_gauges(&self) {
         self.emitter
@@ -349,24 +381,43 @@ impl ObservabilityV1 {
             .store(0, Ordering::Release);
         self.emitter.shared.in_flight.store(0, Ordering::Release);
     }
-    fn record_unflushed_and_clear_gauges(&self) {
-        let queued = self.emitter.shared.counters.queued.load(Ordering::Acquire);
+    fn record_known_lost_and_clear_gauges(&self) {
+        let queued = match self.emitter.shared.queue.lock() {
+            Ok(mut queue) => {
+                let queued =
+                    u64::try_from(queue.primary.len().saturating_add(queue.fallback.len()))
+                        .unwrap_or(u64::MAX);
+                queue.primary.clear();
+                queue.fallback.clear();
+                self.emitter
+                    .shared
+                    .counters
+                    .queued
+                    .store(0, Ordering::Release);
+                queued
+            }
+            Err(poison) => {
+                let mut queue = poison.into_inner();
+                let queued =
+                    u64::try_from(queue.primary.len().saturating_add(queue.fallback.len()))
+                        .unwrap_or(u64::MAX);
+                queue.primary.clear();
+                queue.fallback.clear();
+                self.emitter
+                    .shared
+                    .counters
+                    .queued
+                    .store(0, Ordering::Release);
+                queued
+            }
+        };
         let in_flight = self.emitter.shared.in_flight.swap(0, Ordering::AcqRel);
         self.emitter
             .shared
             .counters
             .unflushed
             .fetch_add(queued.saturating_add(in_flight), Ordering::Relaxed);
-        self.emitter
-            .shared
-            .counters
-            .writing
-            .store(0, Ordering::Release);
-        self.emitter
-            .shared
-            .counters
-            .flushing
-            .store(0, Ordering::Release);
+        self.clear_gauges();
     }
 }
 impl Drop for ObservabilityV1 {
@@ -456,7 +507,32 @@ impl ObservabilityEmitterV1 {
         }
     }
     pub fn counters(&self) -> ObservabilityCountersV1 {
-        self.shared.counters.snapshot()
+        self.frozen_report().map_or_else(
+            || self.shared.counters.snapshot(),
+            |report| report.counters(),
+        )
+    }
+    fn frozen_report(&self) -> Option<ObservabilityShutdownReportV1> {
+        self.shared
+            .frozen_report
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .copied()
+    }
+    fn freeze_report(
+        &self,
+        finalization: ObservabilityFinalizationV1,
+    ) -> ObservabilityShutdownReportV1 {
+        let mut frozen = self
+            .shared
+            .frozen_report
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *frozen.get_or_insert(ObservabilityShutdownReportV1 {
+            counters: self.shared.counters.snapshot(),
+            finalization,
+        })
     }
     fn request_stop(&self) {
         self.shared.stopped.store(true, Ordering::Release);
@@ -520,6 +596,7 @@ fn writer_loop(shared: Arc<Shared>) {
                             .counters
                             .sink_failures
                             .fetch_add(1, Ordering::Relaxed);
+                        shared.counters.unflushed.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok(false) => {}
                     Err(panic) => {
@@ -546,6 +623,10 @@ fn writer_loop(shared: Arc<Shared>) {
                     shared
                         .counters
                         .sink_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                    shared
+                        .counters
+                        .final_flush_losses
                         .fetch_add(1, Ordering::Relaxed);
                 }
                 shared.counters.flushing.store(0, Ordering::Release);
@@ -636,13 +717,33 @@ fn prune_retention(path: &Path, clock: &dyn ClockV1) -> io::Result<()> {
     let cutoff = clock
         .unix_seconds()
         .saturating_sub(RETENTION_DAYS_V1 * 24 * 60 * 60);
-    for index in 1..=RETAINED_ROTATIONS_V1 + 1 {
-        let candidate = path.with_extension(format!("log.{index}"));
-        let metadata = match fs::metadata(&candidate) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no file name"))?
+        .to_string_lossy();
+    let prefix = format!("{file_name}.");
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        let candidate = entry.path();
+        if candidate == path {
+            continue;
+        }
+        let candidate_name = entry.file_name();
+        let Some(suffix) = candidate_name
+            .to_string_lossy()
+            .strip_prefix(&prefix)
+            .map(str::to_owned)
+        else {
+            continue;
         };
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() {
+            continue;
+        }
         let modified = metadata
             .modified()?
             .duration_since(UNIX_EPOCH)

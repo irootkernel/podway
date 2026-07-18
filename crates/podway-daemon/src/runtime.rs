@@ -360,7 +360,10 @@ impl ProductionDaemonRuntimeV1 {
             configuration.worker_id().clone(),
         );
         let (dispatcher, worker) = composition.into_parts();
-        let recovery_report = recover_registered_workspaces(&manager, &worker, registry);
+        emit_observation(&observability, EventCategoryV1::Admission, SeverityV1::Info);
+        emit_observation(&observability, EventCategoryV1::Scheduler, SeverityV1::Info);
+        let recovery_report =
+            recover_registered_workspaces(&manager, &worker, registry, &observability);
         let admission = ShutdownAdmissionV1::new();
         let transport = Arc::new(ProductionTransportV1::new(
             PeerUidVerifierV1::for_current_user(),
@@ -460,6 +463,7 @@ fn recover_registered_workspaces(
     manager: &Arc<WorkspaceRuntimeManagerV1>,
     worker: &ProductionMutationWorkerV1,
     registry: WorkspaceRegistryV1,
+    observability: &Option<ObservabilityEmitterV1>,
 ) -> ProductionDaemonRecoveryReportV1 {
     let clock = NativeProductionClockV1::default();
     let mut outcomes = Vec::with_capacity(registry.workspaces().len());
@@ -579,7 +583,18 @@ fn recover_registered_workspaces(
         outcomes[index] = Some(entry);
     }
 
-    ProductionDaemonRecoveryReportV1::new(outcomes.into_iter().flatten().collect())
+    let report = ProductionDaemonRecoveryReportV1::new(outcomes.into_iter().flatten().collect());
+    emit_observation(
+        observability,
+        EventCategoryV1::MigrationOrIntegrity,
+        if report.unavailable_workspace_count() == 0 {
+            SeverityV1::Info
+        } else {
+            SeverityV1::Warn
+        },
+    );
+    emit_observation(observability, EventCategoryV1::Scheduler, SeverityV1::Info);
+    report
 }
 
 fn selector_from_registry_entry(

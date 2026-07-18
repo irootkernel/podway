@@ -9,7 +9,8 @@ use std::{
 };
 
 use podway_daemon::observability::{
-    FALLBACK_CAPACITY_V1, PRIMARY_CAPACITY_V1, RETAINED_ROTATIONS_V1, ROTATION_BYTES_V1,
+    FALLBACK_CAPACITY_V1, ObservabilityFinalizationV1, PRIMARY_CAPACITY_V1, RETAINED_ROTATIONS_V1,
+    ROTATION_BYTES_V1,
 };
 use podway_daemon::{
     ClockV1, EventCategoryV1, LogSinkV1, ObservabilityV1, RotatingFileSinkV1, SeverityV1,
@@ -142,6 +143,15 @@ impl LogSinkV1 for BlockingFlushSink {
         Ok(())
     }
 }
+struct FlushFailSink;
+impl LogSinkV1 for FlushFailSink {
+    fn write_event(&self, _: &str) -> io::Result<()> {
+        Ok(())
+    }
+    fn flush(&self) -> io::Result<()> {
+        Err(io::Error::other("fake final flush failure"))
+    }
+}
 
 fn fake_filesystem_path(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -229,6 +239,8 @@ fn worker_panic_clears_gauges_and_counts_the_lost_event() {
     observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
     let counters = observability.shutdown();
     assert_eq!(counters.worker_panics, 1);
+    assert_eq!(counters.worker_disconnects, 1);
+    assert_eq!(counters.worker_join_failures, 1);
     assert_eq!(counters.unflushed, 1);
     assert_eq!(counters.writing, 0);
     assert_eq!(counters.queued, 0);
@@ -285,10 +297,12 @@ fn blocked_final_flush_is_bounded_and_classified() {
     );
     observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
     let started = Instant::now();
-    let counters = observability.shutdown();
+    let report = observability.shutdown_report();
+    let counters = report.counters();
     assert!(started.elapsed() >= Duration::from_secs(1));
+    assert_eq!(report.finalization(), ObservabilityFinalizationV1::Detached);
     assert_eq!(counters.shutdown_timeouts, 1);
-    assert_eq!(counters.flushing, 0);
+    assert_eq!(counters.flushing, 1);
     let (locked, ready) = &*gate;
     *locked.lock().unwrap() = true;
     ready.notify_all();
@@ -343,8 +357,8 @@ fn dropping_owner_accounts_for_blocked_and_queued_events() {
     assert!(started.elapsed() >= Duration::from_secs(1));
     let counters = emitter.counters();
     assert_eq!(counters.shutdown_timeouts, 1);
-    assert_eq!(counters.unflushed, 2);
-    assert_eq!(counters.writing, 0);
+    assert_eq!(counters.unflushed, 0);
+    assert_eq!(counters.writing, 1);
     assert_eq!(sink.writes.load(Ordering::Relaxed), 1);
     let mut state = locked.lock().unwrap();
     state.0 = true;
@@ -379,4 +393,69 @@ fn fallback_entries_precede_primary_backlog_after_blocked_writer() {
     assert!(events[0].contains("severity=INFO category=lifecycle"));
     assert!(events[1].contains("severity=ERROR category=service_outcome"));
     assert!(events[2].contains("severity=INFO category=scheduler"));
+}
+#[test]
+fn write_and_final_flush_losses_are_counted_in_completed_report() {
+    let write_observability = ObservabilityV1::start(
+        Arc::new(FakeSink {
+            events: Mutex::new(Vec::new()),
+            fail: true,
+        }),
+        Arc::new(FakeClock::new(1)),
+    );
+    write_observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
+    let write_report = write_observability.shutdown_report();
+    assert_eq!(
+        write_report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    assert_eq!(write_report.counters().unflushed, 1);
+
+    let flush_observability =
+        ObservabilityV1::start(Arc::new(FlushFailSink), Arc::new(FakeClock::new(1)));
+    let flush_report = flush_observability.shutdown_report();
+    assert_eq!(
+        flush_report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    assert_eq!(flush_report.counters().final_flush_losses, 1);
+    assert_eq!(flush_report.counters().flush_failures, 1);
+}
+
+#[test]
+fn frozen_timeout_report_preserves_indeterminate_work_snapshot() {
+    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
+    let sink = Arc::new(CountedBlockingSink {
+        gate: gate.clone(),
+        writes: AtomicU64::new(0),
+    });
+    let observability = ObservabilityV1::start(sink, Arc::new(FakeClock::new(1)));
+    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
+    observability.emit(EventCategoryV1::Scheduler, SeverityV1::Info);
+    let (locked, ready) = &*gate;
+    let mut state = locked.lock().unwrap();
+    while !state.1 {
+        state = ready.wait(state).unwrap();
+    }
+    drop(state);
+    let report = observability.shutdown_report();
+    assert_eq!(report.finalization(), ObservabilityFinalizationV1::Detached);
+    assert_eq!(report.counters().unflushed, 0);
+    assert_eq!(report.counters().writing, 1);
+    assert_eq!(report.counters().queued, 1);
+    let mut state = locked.lock().unwrap();
+    state.0 = true;
+    ready.notify_all();
+}
+
+#[test]
+fn retention_prunes_arbitrary_numeric_rotations_but_never_active_destination() {
+    let path = fake_filesystem_path("arbitrary-retention");
+    fs::write(&path, "active").unwrap();
+    let arbitrary = path.with_extension("log.42");
+    fs::write(&arbitrary, "stale").unwrap();
+    let _sink = RotatingFileSinkV1::open(&path, Arc::new(FakeClock::new(u64::MAX))).unwrap();
+    assert!(path.exists());
+    assert!(!arbitrary.exists());
+    let _ = fs::remove_dir_all(path.parent().unwrap());
 }

@@ -5,6 +5,7 @@ use std::{env, num::NonZeroUsize, path::PathBuf, process, sync::Arc, thread};
 use nix::unistd::geteuid;
 use podway_daemon::{
     EventCategoryV1, ObservabilityV1, RotatingFileSinkV1, SeverityV1, SystemClockV1,
+    observability::ObservabilityShutdownReportV1,
     runtime::{ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1},
     server::ServerTransportTimeoutsV1,
 };
@@ -74,7 +75,7 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         Ok(runtime) => runtime,
         Err(error) => {
             observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
-            observability.shutdown();
+            report_observability_shutdown(observability.shutdown_report());
             return Err(error.into());
         }
     };
@@ -92,7 +93,7 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
             runtime.shutdown_handle().request_shutdown();
             let runtime_result = runtime.run();
             observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
-            observability.shutdown();
+            report_observability_shutdown(observability.shutdown_report());
             if let Err(cleanup) = runtime_result {
                 return Err(std::io::Error::other(format!(
                     "cannot start signal relay ({source}); endpoint cleanup also failed: {cleanup}"
@@ -114,9 +115,19 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
             SeverityV1::Error
         },
     );
-    observability.shutdown();
+    report_observability_shutdown(observability.shutdown_report());
 
     runtime_result?;
     relay_result.map_err(|_| "signal relay panicked")?;
     Ok(())
+}
+fn report_observability_shutdown(report: ObservabilityShutdownReportV1) {
+    let counters = report.counters();
+    eprintln!(
+        "podwayd observability finalization={:?} degraded_dropped={} unflushed={} final_flush_losses={}",
+        report.finalization(),
+        counters.degraded_dropped,
+        counters.unflushed,
+        counters.final_flush_losses,
+    );
 }
