@@ -25,7 +25,7 @@ use crate::{
         ArtifactVerifierV1, DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1,
         ExecutionIdSourceV1, ProcedureProviderV1, WorkspaceRevalidatorV1,
     },
-    observability::{EventCategoryV1, ObservabilityEmitterV1, SeverityV1},
+    observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
     read_service::{MonotonicClockV1, MonotonicDeadlineV1},
     runtime_workspace::WorkspaceSchedulerContextV1,
     scheduler::{
@@ -393,12 +393,10 @@ where
         completion_mode: WorkerCompletionModeV1,
     ) -> Result<WorkerSubmissionV1, WorkerErrorV1> {
         if scheduler.context_snapshot().recovery_required() {
-            self.emit(EventCategoryV1::Scheduler, SeverityV1::Warn);
             return Err(WorkerErrorV1::RetirementRejected);
         }
         let outcome = scheduler.with_serialized(|context| {
             if context.recovery_required() {
-                self.emit(EventCategoryV1::Scheduler, SeverityV1::Warn);
                 return Err(WorkerErrorV1::RetirementRejected);
             }
             context
@@ -410,16 +408,7 @@ where
                 .ok_or(WorkerErrorV1::RetirementRejected)?
                 .map_err(Into::into)
         })?;
-        self.emit(EventCategoryV1::Admission, SeverityV1::Info);
         let Some(job) = job_to_drive(&outcome) else {
-            self.emit(
-                EventCategoryV1::Idempotency,
-                if terminal_replay(&outcome).is_some() {
-                    SeverityV1::Info
-                } else {
-                    SeverityV1::Warn
-                },
-            );
             let completion = match completion_mode {
                 WorkerCompletionModeV1::Detached => None,
                 WorkerCompletionModeV1::WaitUntil(_) => terminal_replay(&outcome)
@@ -430,9 +419,7 @@ where
                 completion,
             });
         };
-
         let notification = self.notify_authoritative_change(scheduler);
-        self.emit(EventCategoryV1::Scheduler, SeverityV1::Info);
         let _drain = self.drain_workspace_detached(Arc::clone(scheduler));
         notification?;
         let completion = match completion_mode {
@@ -502,11 +489,19 @@ where
     ) -> Result<WorkerWaitResultV1, WorkerErrorV1> {
         loop {
             let context = scheduler.context_snapshot();
-            let view = self.read_required_job(context.as_ref(), job)?;
+            let view = match self.read_required_job(context.as_ref(), job) {
+                Ok(view) => view,
+                Err(error) => {
+                    self.emit(EventOperationV1::JobWait, EventOutcomeV1::Failed);
+                    return Err(error);
+                }
+            };
             if let Some(receipt) = view.terminal_receipt().cloned() {
+                self.emit(EventOperationV1::JobWait, EventOutcomeV1::Succeeded);
                 return Ok(WorkerWaitResultV1::Terminal(Box::new(receipt)));
             }
             if self.inner.clock.now_millis() >= deadline.millis() {
+                self.emit(EventOperationV1::JobWait, EventOutcomeV1::Rejected);
                 return Ok(WorkerWaitResultV1::TimedOut(Box::new(view)));
             }
 
@@ -514,11 +509,19 @@ where
             // means a completion raced this waiter; the next loop performs a fresh Store read.
             let scheduler_version = scheduler.progress_version();
             let context_notification = context.notification_version();
-            let view = self.read_required_job(context.as_ref(), job)?;
+            let view = match self.read_required_job(context.as_ref(), job) {
+                Ok(view) => view,
+                Err(error) => {
+                    self.emit(EventOperationV1::JobWait, EventOutcomeV1::Failed);
+                    return Err(error);
+                }
+            };
             if let Some(receipt) = view.terminal_receipt().cloned() {
+                self.emit(EventOperationV1::JobWait, EventOutcomeV1::Succeeded);
                 return Ok(WorkerWaitResultV1::Terminal(Box::new(receipt)));
             }
             if self.inner.clock.now_millis() >= deadline.millis() {
+                self.emit(EventOperationV1::JobWait, EventOutcomeV1::Rejected);
                 return Ok(WorkerWaitResultV1::TimedOut(Box::new(view)));
             }
             if scheduler.progress_version() != scheduler_version {
@@ -618,15 +621,8 @@ where
                 }))
             });
             match attempt {
-                None | Some(Ok(Ok(None))) => {
-                    self.emit(EventCategoryV1::CancelOrClaim, SeverityV1::Debug);
-                    return Ok(report);
-                }
+                None | Some(Ok(Ok(None))) => return Ok(report),
                 Some(Ok(Ok(Some(_terminal)))) => {
-                    self.emit(
-                        EventCategoryV1::TerminalOrRequeueOrSaturation,
-                        SeverityV1::Info,
-                    );
                     report.terminal_job_count = report
                         .terminal_job_count
                         .checked_add(1)
@@ -635,18 +631,8 @@ where
                         return self.fail_closed_drain(context, error);
                     }
                 }
-                Some(Ok(Err(error))) => {
-                    self.emit(
-                        EventCategoryV1::TerminalOrRequeueOrSaturation,
-                        SeverityV1::Error,
-                    );
-                    return self.fail_closed_drain(context, error.into());
-                }
+                Some(Ok(Err(error))) => return self.fail_closed_drain(context, error.into()),
                 Some(Err(_)) => {
-                    self.emit(
-                        EventCategoryV1::TerminalOrRequeueOrSaturation,
-                        SeverityV1::Error,
-                    );
                     return self.fail_closed_drain(context, WorkerErrorV1::BackgroundPanicked);
                 }
             }
@@ -724,9 +710,9 @@ where
         })
     }
 
-    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
+    fn emit(&self, operation: EventOperationV1, outcome: EventOutcomeV1) {
         if let Some(observability) = &self.inner.observability {
-            observability.emit(category, severity);
+            observability.emit(EventRecordV1::new(operation, outcome));
         }
     }
     fn read_required_job(

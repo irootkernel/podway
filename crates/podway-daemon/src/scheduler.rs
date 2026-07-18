@@ -15,7 +15,7 @@ use podway_store::{DurableWorktreeIdentityV1, GitIdentityV1, WorkspaceUuidV1};
 
 use crate::{
     DaemonCompositionErrorV1, SchedulerGenerationV1,
-    observability::{EventCategoryV1, ObservabilityV1, SeverityV1},
+    observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
 };
 
 /// The durable identity fields used to select one workspace scheduler.
@@ -443,7 +443,7 @@ impl<C> WorkspaceSchedulerRetirementRetryV1<C> {
         F: FnOnce(&WorkspaceSchedulerV1<C>) -> Result<(), E>,
     {
         begin_retirement_retry(self).map_err(WorkspaceSchedulerRetirementErrorV1::Start)?;
-        finish_retirement(self, close)
+        finish_retirement(self, close, EventOutcomeV1::Retried)
     }
 }
 
@@ -467,8 +467,8 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
         Self::with_observability(None)
     }
 
-    /// Adds an optional non-authoritative categorical event producer.
-    pub fn with_observability(observability: Option<Arc<Mutex<ObservabilityV1>>>) -> Self {
+    /// Adds an optional non-authoritative typed event producer.
+    pub fn with_observability(observability: Option<ObservabilityEmitterV1>) -> Self {
         Self {
             inner: Arc::new(WorkspaceSchedulerRegistryInnerV1 {
                 state: Mutex::new(WorkspaceSchedulerRegistryStateV1 {
@@ -531,10 +531,6 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
                     scheduler,
                     close_in_progress: false,
                 }) => {
-                    self.inner.emit(
-                        EventCategoryV1::TerminalOrRequeueOrSaturation,
-                        SeverityV1::Warn,
-                    );
                     return Err(DaemonCompositionErrorV1::SchedulerRetiring {
                         generation: scheduler.generation(),
                     });
@@ -580,8 +576,10 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
                 WorkspaceSchedulerRegistrySlotV1::Active(Arc::clone(&scheduler)),
             );
             drop(state);
-            self.inner
-                .emit(EventCategoryV1::Scheduler, SeverityV1::Info);
+            self.inner.emit(EventRecordV1::new(
+                EventOperationV1::SchedulerCreated,
+                EventOutcomeV1::Succeeded,
+            ));
             self.inner.changed.notify_all();
             return Ok(scheduler);
         }
@@ -602,7 +600,7 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
     {
         let retry = begin_retirement(Arc::clone(&self.inner), scheduler)
             .map_err(WorkspaceSchedulerRetirementErrorV1::Start)?;
-        finish_retirement(&retry, close)
+        finish_retirement(&retry, close, EventOutcomeV1::Succeeded)
     }
 }
 
@@ -623,7 +621,7 @@ impl<C> Default for WorkspaceSchedulerRegistryV1<C> {
 struct WorkspaceSchedulerRegistryInnerV1<C> {
     state: Mutex<WorkspaceSchedulerRegistryStateV1<C>>,
     changed: Condvar,
-    observability: Option<Arc<Mutex<ObservabilityV1>>>,
+    observability: Option<ObservabilityEmitterV1>,
 }
 
 struct WorkspaceSchedulerRegistryStateV1<C> {
@@ -720,6 +718,7 @@ fn begin_retirement_retry<C>(
 fn finish_retirement<C, F, E>(
     retry: &WorkspaceSchedulerRetirementRetryV1<C>,
     close: F,
+    success_outcome: EventOutcomeV1,
 ) -> Result<(), WorkspaceSchedulerRetirementErrorV1<C, E>>
 where
     F: FnOnce(&WorkspaceSchedulerV1<C>) -> Result<(), E>,
@@ -741,6 +740,10 @@ where
             }
             drop(state);
             if is_current {
+                retry.inner.emit(EventRecordV1::new(
+                    EventOperationV1::SchedulerRetired,
+                    success_outcome,
+                ));
                 retry.inner.changed.notify_all();
                 Ok(())
             } else {
@@ -751,6 +754,10 @@ where
             let key = retry.scheduler.key().clone();
             let generation = retry.scheduler.generation();
             if clear_close_in_progress(retry) {
+                retry.inner.emit(EventRecordV1::new(
+                    EventOperationV1::SchedulerRetired,
+                    EventOutcomeV1::Failed,
+                ));
                 Err(WorkspaceSchedulerRetirementErrorV1::CloseFailed {
                     source,
                     retry: retry.clone(),
@@ -795,13 +802,9 @@ fn clear_close_in_progress<C>(retry: &WorkspaceSchedulerRetirementRetryV1<C>) ->
 }
 
 impl<C> WorkspaceSchedulerRegistryInnerV1<C> {
-    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
-        let observer = self
-            .observability
-            .as_ref()
-            .and_then(|observability| observability.try_lock().ok());
-        if let Some(observability) = observer {
-            observability.emit(category, severity);
+    fn emit(&self, event: EventRecordV1) {
+        if let Some(observability) = &self.observability {
+            observability.emit(event);
         }
     }
 }
@@ -870,11 +873,15 @@ mod tests {
             let close_entered = Arc::clone(&close_entered);
             let close_complete = Arc::clone(&close_complete);
             thread::spawn(move || {
-                finish_retirement(&retry, |_| {
-                    close_entered.wait();
-                    close_complete.wait();
-                    Ok::<(), ()>(())
-                })
+                finish_retirement(
+                    &retry,
+                    |_| {
+                        close_entered.wait();
+                        close_complete.wait();
+                        Ok::<(), ()>(())
+                    },
+                    EventOutcomeV1::Succeeded,
+                )
             })
         };
 

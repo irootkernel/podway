@@ -37,6 +37,7 @@ use podway_store::{
 use crate::{
     DaemonCompositionErrorV1,
     execution::{PreparedWorkspaceResetAllV1, ResetStoreInspectionV1, ValidatedUnavailableStoreV1},
+    observability::ObservabilityEmitterV1,
     registry::{RegistryErrorV1, RegistryStoreV1, WorkspaceRegistryEntryV1, WorkspaceRegistryV1},
     scheduler::{WorkspaceSchedulerKeyV1, WorkspaceSchedulerRegistryV1, WorkspaceSchedulerV1},
     workspace::{
@@ -1393,6 +1394,25 @@ pub struct WorkspaceRuntimeManagerV1 {
 
 impl WorkspaceRuntimeManagerV1 {
     pub fn new(paths: &ServiceRuntimePathsV1, inspection_options: SqliteStoreOptionsV1) -> Self {
+        Self::with_observability(paths, inspection_options, None)
+    }
+
+    /// Constructs a manager whose registry and scheduler lifecycle share one event emitter.
+    pub fn with_observability(
+        paths: &ServiceRuntimePathsV1,
+        inspection_options: SqliteStoreOptionsV1,
+        observability: Option<ObservabilityEmitterV1>,
+    ) -> Self {
+        let (registry, schedulers) = match observability {
+            Some(emitter) => (
+                RegistryStoreV1::with_observability(paths, Some(emitter.clone())),
+                WorkspaceSchedulerRegistryV1::with_observability(Some(emitter)),
+            ),
+            None => (
+                RegistryStoreV1::new(paths),
+                WorkspaceSchedulerRegistryV1::new(),
+            ),
+        };
         Self {
             resolver: WorkspaceResolverV1::new(
                 NativeGitResolverV1::new(),
@@ -1400,8 +1420,8 @@ impl WorkspaceRuntimeManagerV1 {
             ),
             layout_initializer: WorkspaceLayoutInitializerV1::new(),
             inspection_options,
-            registry: RegistryStoreV1::new(paths),
-            schedulers: WorkspaceSchedulerRegistryV1::new(),
+            registry,
+            schedulers,
             maintenance: process_maintenance_coordinator_v1(),
         }
     }

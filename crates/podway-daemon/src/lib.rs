@@ -34,8 +34,9 @@ use podway_protocol::OperationV1;
 use podway_store::StoreContractV1;
 
 pub use observability::{
-    ClockV1, EventCategoryV1, LogSinkV1, ObservabilityCountersV1, ObservabilityV1,
-    RotatingFileSinkV1, SeverityV1, SystemClockV1,
+    ClockErrorV1, ClockV1, EventOperationV1, EventOutcomeV1, EventRecordV1, LogSinkV1,
+    ObservabilityCountersV1, ObservabilityFinalizationV1, ObservabilityV1, RotatingFileSinkV1,
+    SystemClockV1,
 };
 pub use podway_config::{WORKSPACE_SCHEMA_V1, WorkspaceConfigV1};
 pub use podway_presets::{EmbeddedPreset, list as embedded_presets_v1};

@@ -9,11 +9,10 @@ use std::{
     fmt, fs,
     io::Read,
     path::{Component, Path},
-    sync::{Arc, Mutex},
 };
 
 use crate::{
-    observability::{EventCategoryV1, ObservabilityV1, SeverityV1},
+    observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
     workspace::ResetMarkerV1,
 };
 use podway_config::{
@@ -521,7 +520,7 @@ where
     procedures: Procedures,
     artifacts: Artifacts,
     workspaces: Workspaces,
-    observability: Option<Arc<Mutex<ObservabilityV1>>>,
+    observability: Option<ObservabilityEmitterV1>,
 }
 
 impl<Store, Ids, Clock, Procedures, Artifacts, Workspaces>
@@ -545,7 +544,7 @@ where
         Self::with_observability(store, ids, clock, procedures, artifacts, workspaces, None)
     }
 
-    /// Adds an optional non-authoritative categorical event producer.
+    /// Adds an optional non-authoritative typed event producer.
     pub fn with_observability(
         store: Store,
         ids: Ids,
@@ -553,7 +552,7 @@ where
         procedures: Procedures,
         artifacts: Artifacts,
         workspaces: Workspaces,
-        observability: Option<Arc<Mutex<ObservabilityV1>>>,
+        observability: Option<ObservabilityEmitterV1>,
     ) -> Self {
         Self {
             store,
@@ -622,7 +621,10 @@ where
                     &idempotency_key,
                     &request_digest,
                 )? {
-                    self.emit(EventCategoryV1::Idempotency, SeverityV1::Info);
+                    self.emit(
+                        EventOperationV1::IdempotentReplay,
+                        EventOutcomeV1::Succeeded,
+                    );
                     return Ok(ResetAllPreparationOutcomeV1::Existing(outcome));
                 }
                 let expected_workspace_uuid =
@@ -677,7 +679,6 @@ where
             target_workspace_uuid,
             self.clock.now(),
         );
-        self.emit(EventCategoryV1::MigrationOrIntegrity, SeverityV1::Info);
         Ok(ResetAllPreparationOutcomeV1::New(
             PreparedWorkspaceResetAllV1 {
                 marker,
@@ -697,7 +698,9 @@ where
         request: &SliceRequestV1,
         idempotency_key: IdempotencyKeyV1,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
-        self.admit_with_expected_workspace(None, request, idempotency_key)
+        let result = self.admit_with_expected_workspace(None, request, idempotency_key);
+        self.emit_admission_result(&result);
+        result
     }
 
     /// The scheduler binding supplies a durable workspace identity, so an exact idempotency replay
@@ -709,7 +712,10 @@ where
         request: &SliceRequestV1,
         idempotency_key: IdempotencyKeyV1,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
-        self.admit_with_expected_workspace(Some(expected_workspace), request, idempotency_key)
+        let result =
+            self.admit_with_expected_workspace(Some(expected_workspace), request, idempotency_key);
+        self.emit_admission_result(&result);
+        result
     }
 
     fn admit_with_expected_workspace(
@@ -731,7 +737,6 @@ where
                 &idempotency_key,
                 &request_digest,
             )? {
-                self.emit(EventCategoryV1::Idempotency, SeverityV1::Info);
                 return Ok(outcome);
             }
         }
@@ -765,7 +770,6 @@ where
             .store
             .admit(binding.identity(), admitted)
             .map_err(ExecutionErrorV1::from)?;
-        self.emit(EventCategoryV1::Admission, SeverityV1::Info);
         Ok(outcome)
     }
 
@@ -781,11 +785,20 @@ where
             .bound_manager_workspace(scheduled_workspace)
             .map_err(ExecutionErrorV1::from_boundary)?;
         let now = self.clock.now();
-        let Some(claimed) = self.store.claim_next(workspace.identity(), worker, now)? else {
-            self.emit(EventCategoryV1::Scheduler, SeverityV1::Debug);
-            return Ok(None);
+        let claimed = match self.store.claim_next(workspace.identity(), worker, now) {
+            Ok(Some(claimed)) => {
+                self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Succeeded);
+                claimed
+            }
+            Ok(None) => {
+                self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Rejected);
+                return Ok(None);
+            }
+            Err(error) => {
+                self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Failed);
+                return Err(error.into());
+            }
         };
-        self.emit(EventCategoryV1::CancelOrClaim, SeverityV1::Info);
         self.execute_claimed(&workspace, claimed, now).map(Some)
     }
 
@@ -918,10 +931,7 @@ where
                 now,
             )
             .map_err(ExecutionErrorV1::from)?;
-        self.emit(
-            EventCategoryV1::TerminalOrRequeueOrSaturation,
-            SeverityV1::Info,
-        );
+        self.emit(EventOperationV1::JobTerminal, EventOutcomeV1::Succeeded);
         Ok(receipt)
     }
 
@@ -962,10 +972,7 @@ where
                 now,
             )
             .map_err(ExecutionErrorV1::from)?;
-        self.emit(
-            EventCategoryV1::TerminalOrRequeueOrSaturation,
-            SeverityV1::Info,
-        );
+        self.emit(EventOperationV1::JobTerminal, EventOutcomeV1::Succeeded);
         Ok(receipt)
     }
 
@@ -986,10 +993,7 @@ where
                 now,
             )
             .map_err(ExecutionErrorV1::from)?;
-        self.emit(
-            EventCategoryV1::TerminalOrRequeueOrSaturation,
-            SeverityV1::Warn,
-        );
+        self.emit(EventOperationV1::JobTerminal, EventOutcomeV1::Failed);
         Ok(receipt)
     }
 
@@ -1011,13 +1015,23 @@ where
         }
         Ok(binding)
     }
-    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
-        let observer = self
-            .observability
-            .as_ref()
-            .and_then(|observability| observability.try_lock().ok());
-        if let Some(observability) = observer {
-            observability.emit(category, severity);
+    fn emit_admission_result(&self, result: &Result<AdmitOutcomeV1, ExecutionErrorV1>) {
+        let (operation, outcome) = match result {
+            Ok(AdmitOutcomeV1::New(_)) => {
+                (EventOperationV1::JobAdmission, EventOutcomeV1::Succeeded)
+            }
+            Ok(AdmitOutcomeV1::Existing(_)) => (
+                EventOperationV1::IdempotentReplay,
+                EventOutcomeV1::Succeeded,
+            ),
+            Err(_) => (EventOperationV1::JobAdmission, EventOutcomeV1::Rejected),
+        };
+        self.emit(operation, outcome);
+    }
+
+    fn emit(&self, operation: EventOperationV1, outcome: EventOutcomeV1) {
+        if let Some(observability) = &self.observability {
+            observability.emit(EventRecordV1::new(operation, outcome));
         }
     }
 

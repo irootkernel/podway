@@ -1,7 +1,6 @@
 //! Bounded, non-authoritative daemon diagnostics.
 //!
-//! Events intentionally carry only a stable category and severity. Callers cannot attach request,
-//! task, item, artifact, or user supplied data to this interface.
+//! Event records are closed, typed, and carry no caller-provided strings or identifiers.
 
 use std::{
     collections::VecDeque,
@@ -19,115 +18,159 @@ use std::{
 };
 
 pub const MAX_EVENT_BYTES_V1: usize = 8 * 1024;
-pub const MAX_STRING_BYTES_V1: usize = 256;
 pub const PRIMARY_CAPACITY_V1: usize = 4096;
 pub const FALLBACK_CAPACITY_V1: usize = 256;
 pub const MAX_WRITER_CYCLE_V1: Duration = Duration::from_millis(50);
 pub const MAX_SHUTDOWN_FLUSH_V1: Duration = Duration::from_secs(2);
 pub const ROTATION_BYTES_V1: u64 = 10 * 1024 * 1024;
 pub const RETAINED_ROTATIONS_V1: usize = 5;
-pub const RETENTION_DAYS_V1: u64 = 7;
 
+/// The concrete daemon operation being observed. This intentionally has no catch-all variant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EventCategoryV1 {
-    Lifecycle,
-    StaleSocketOrLock,
-    Scheduler,
-    Admission,
-    Idempotency,
-    CancelOrClaim,
-    TerminalOrRequeueOrSaturation,
-    MigrationOrIntegrity,
-    MoveOrRepair,
-    ServiceOutcome,
-    Rotation,
-    StaleEvidence,
+pub enum EventOperationV1 {
+    DaemonStart,
+    DaemonStop,
+    SchedulerCreated,
+    SchedulerRetired,
+    ConnectionAccepted,
+    PeerAdmission,
+    AdmissionSaturation,
+    JobAdmission,
+    IdempotentReplay,
+    JobClaim,
+    JobTerminal,
+    QueueSaturation,
+    IntegrityCheck,
+    ArtifactMove,
+    TransportServiceRequest,
+    ServiceDispatch,
+    JobWait,
+    HandlerJoin,
+    ConnectionSetup,
+    ResponseWrite,
 }
-impl EventCategoryV1 {
+impl EventOperationV1 {
     const fn name(self) -> &'static str {
         match self {
-            Self::Lifecycle => "lifecycle",
-            Self::StaleSocketOrLock => "stale_socket_or_lock",
-            Self::Scheduler => "scheduler",
-            Self::Admission => "admission",
-            Self::Idempotency => "idempotency",
-            Self::CancelOrClaim => "cancel_or_claim",
-            Self::TerminalOrRequeueOrSaturation => "terminal_or_requeue_or_saturation",
-            Self::MigrationOrIntegrity => "migration_or_integrity",
-            Self::MoveOrRepair => "move_or_repair",
-            Self::ServiceOutcome => "service_outcome",
-            Self::Rotation => "rotation",
-            Self::StaleEvidence => "stale_evidence",
+            Self::DaemonStart => "daemon_start",
+            Self::DaemonStop => "daemon_stop",
+            Self::SchedulerCreated => "scheduler_created",
+            Self::SchedulerRetired => "scheduler_retired",
+            Self::ConnectionAccepted => "connection_accepted",
+            Self::PeerAdmission => "peer_admission",
+            Self::AdmissionSaturation => "admission_saturation",
+            Self::JobAdmission => "job_admission",
+            Self::IdempotentReplay => "idempotent_replay",
+            Self::JobClaim => "job_claim",
+            Self::JobTerminal => "job_terminal",
+            Self::QueueSaturation => "queue_saturation",
+            Self::IntegrityCheck => "integrity_check",
+            Self::ArtifactMove => "artifact_move",
+            Self::TransportServiceRequest => "transport_service_request",
+            Self::ServiceDispatch => "service_dispatch",
+            Self::JobWait => "job_wait",
+            Self::HandlerJoin => "handler_join",
+            Self::ConnectionSetup => "connection_setup",
+            Self::ResponseWrite => "response_write",
         }
     }
 }
+
+/// A bounded outcome for an [`EventOperationV1`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SeverityV1 {
-    Debug,
-    Info,
-    Warn,
-    Error,
+pub enum EventOutcomeV1 {
+    Succeeded,
+    Rejected,
+    Retried,
+    Failed,
+    Saturated,
 }
-impl SeverityV1 {
+impl EventOutcomeV1 {
     const fn name(self) -> &'static str {
         match self {
-            Self::Debug => "DEBUG",
-            Self::Info => "INFO",
-            Self::Warn => "WARN",
-            Self::Error => "ERROR",
+            Self::Succeeded => "succeeded",
+            Self::Rejected => "rejected",
+            Self::Retried => "retried",
+            Self::Failed => "failed",
+            Self::Saturated => "saturated",
         }
     }
     const fn uses_fallback(self) -> bool {
-        matches!(self, Self::Warn | Self::Error)
+        matches!(self, Self::Rejected | Self::Failed | Self::Saturated)
     }
 }
 
-pub const REDACTED_V1: &str = "[redacted]";
-pub fn redact_v1(_: &str) -> &'static str {
-    REDACTED_V1
+/// The only event accepted by the observability queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EventRecordV1 {
+    operation: EventOperationV1,
+    outcome: EventOutcomeV1,
+}
+impl EventRecordV1 {
+    pub const fn new(operation: EventOperationV1, outcome: EventOutcomeV1) -> Self {
+        Self { operation, outcome }
+    }
+    pub const fn operation(self) -> EventOperationV1 {
+        self.operation
+    }
+    pub const fn outcome(self) -> EventOutcomeV1 {
+        self.outcome
+    }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClockErrorV1 {
+    BeforeUnixEpoch,
+}
+
+/// Wall-clock boundary. A clock failure is a value; only a clock panic is caught as a panic.
+pub trait ClockV1: Send + Sync + 'static {
+    fn unix_seconds(&self) -> Result<u64, ClockErrorV1>;
+}
+#[derive(Default)]
+pub struct SystemClockV1;
+impl ClockV1 for SystemClockV1 {
+    fn unix_seconds(&self) -> Result<u64, ClockErrorV1> {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .map_err(|_| ClockErrorV1::BeforeUnixEpoch)
+    }
+}
+
+pub trait LogSinkV1: Send + Sync + 'static {
+    fn write_event(&self, event: &str) -> io::Result<()>;
+    fn flush(&self) -> io::Result<()>;
+}
+
+/// All cumulative fields saturate. Gauges are bounded at zero and are never decremented below it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ObservabilityCountersV1 {
-    /// Total events accepted into a queue. This is conserved by `written + unflushed + pending`.
     pub accepted: u64,
-    /// Successfully written events.
     pub written: u64,
-    /// Events rejected before queueing; each rejected event is counted in exactly one drop field.
     pub primary_dropped: u64,
     pub fallback_dropped: u64,
-    pub stderr_dropped: u64,
     pub stopped_dropped: u64,
     pub degraded_dropped: u64,
-    /// Events known to have been lost after acceptance because their write failed or panicked.
     pub unflushed: u64,
-    /// Current pending work, not cumulative losses.
     pub queued: u64,
     pub writing: u64,
     pub flushing: u64,
-    /// Failure incidents, not event cardinalities.
     pub write_failures: u64,
     pub flush_failures: u64,
-    pub clock_failures: u64,
+    pub clock_errors: u64,
+    pub clock_panics: u64,
     pub sink_failures: u64,
-    pub admission_contention: u64,
-    pub admission_poisoned: u64,
-    pub bootstrap_failures: u64,
-    pub worker_panics: u64,
-    pub worker_disconnects: u64,
-    pub worker_join_failures: u64,
-    pub shutdown_timeouts: u64,
-    /// At least one cumulative counter reached `u64::MAX`; all totals remain monotonic.
+    /// Set exactly once when any cumulative counter first saturates.
     pub counters_saturated: bool,
 }
-/// The immutable terminal state of the sole observability owner.
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObservabilityFinalizationV1 {
     Completed,
     Detached,
     Indeterminate,
 }
-/// A frozen shutdown snapshot. Its counters never observe work performed after detachment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ObservabilityShutdownReportV1 {
     counters: ObservabilityCountersV1,
@@ -141,109 +184,133 @@ impl ObservabilityShutdownReportV1 {
         self.finalization
     }
 }
+
 #[derive(Default)]
 struct Counters {
+    sequence: AtomicU64,
+    writer: Mutex<()>,
     accepted: AtomicU64,
     written: AtomicU64,
     primary_dropped: AtomicU64,
     fallback_dropped: AtomicU64,
-    stderr_dropped: AtomicU64,
-    sink_failures: AtomicU64,
+    stopped_dropped: AtomicU64,
+    degraded_dropped: AtomicU64,
     unflushed: AtomicU64,
     queued: AtomicU64,
     writing: AtomicU64,
-    flush_failures: AtomicU64,
-    write_failures: AtomicU64,
-    clock_failures: AtomicU64,
     flushing: AtomicU64,
-    admission_contention: AtomicU64,
-    admission_poisoned: AtomicU64,
-    stopped_dropped: AtomicU64,
-    degraded_dropped: AtomicU64,
-    bootstrap_failures: AtomicU64,
-    worker_panics: AtomicU64,
-    worker_disconnects: AtomicU64,
-    worker_join_failures: AtomicU64,
-    shutdown_timeouts: AtomicU64,
+    write_failures: AtomicU64,
+    flush_failures: AtomicU64,
+    clock_errors: AtomicU64,
+    clock_panics: AtomicU64,
+    sink_failures: AtomicU64,
     saturated: AtomicBool,
 }
-macro_rules! counters_snapshot {
-    ($c:expr) => {
-        ObservabilityCountersV1 {
-            accepted: $c.accepted.load(Ordering::Relaxed),
-            written: $c.written.load(Ordering::Relaxed),
-            primary_dropped: $c.primary_dropped.load(Ordering::Relaxed),
-            fallback_dropped: $c.fallback_dropped.load(Ordering::Relaxed),
-            stderr_dropped: $c.stderr_dropped.load(Ordering::Relaxed),
-            stopped_dropped: $c.stopped_dropped.load(Ordering::Relaxed),
-            degraded_dropped: $c.degraded_dropped.load(Ordering::Relaxed),
-            sink_failures: $c.sink_failures.load(Ordering::Relaxed),
-            unflushed: $c.unflushed.load(Ordering::Relaxed),
-            queued: $c.queued.load(Ordering::Relaxed),
-            writing: $c.writing.load(Ordering::Relaxed),
-            flush_failures: $c.flush_failures.load(Ordering::Relaxed),
-            write_failures: $c.write_failures.load(Ordering::Relaxed),
-            clock_failures: $c.clock_failures.load(Ordering::Relaxed),
-            flushing: $c.flushing.load(Ordering::Relaxed),
-            admission_contention: $c.admission_contention.load(Ordering::Relaxed),
-            admission_poisoned: $c.admission_poisoned.load(Ordering::Relaxed),
-            bootstrap_failures: $c.bootstrap_failures.load(Ordering::Relaxed),
-            worker_panics: $c.worker_panics.load(Ordering::Relaxed),
-            worker_disconnects: $c.worker_disconnects.load(Ordering::Relaxed),
-            worker_join_failures: $c.worker_join_failures.load(Ordering::Relaxed),
-            shutdown_timeouts: $c.shutdown_timeouts.load(Ordering::Relaxed),
-            counters_saturated: $c.saturated.load(Ordering::Relaxed),
-        }
-    };
-}
-fn saturating_add(counter: &AtomicU64, saturated: &AtomicBool, amount: u64) {
-    let mut current = counter.load(Ordering::Relaxed);
-    loop {
-        let next = current.saturating_add(amount);
-        if next == u64::MAX && current != u64::MAX {
-            saturated.store(true, Ordering::Relaxed);
-        }
-        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => return,
-            Err(actual) => current = actual,
+impl Counters {
+    fn begin(&self) {
+        self.sequence.fetch_add(1, Ordering::AcqRel);
+    }
+    fn end(&self) {
+        self.sequence.fetch_add(1, Ordering::Release);
+    }
+    fn mutate(&self, mutation: impl FnOnce(&Self)) {
+        let _writer = self
+            .writer
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        self.begin();
+        mutation(self);
+        self.end();
+    }
+    fn add_in_transaction(&self, counter: &AtomicU64, amount: u64) {
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_add(amount);
+            match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => {
+                    if next == u64::MAX && current != u64::MAX {
+                        self.saturated.store(true, Ordering::Release);
+                    }
+                    break;
+                }
+                Err(actual) => current = actual,
+            }
         }
     }
-}
-impl Counters {
-    fn snapshot(&self) -> ObservabilityCountersV1 {
-        counters_snapshot!(self)
+    fn set_gauge_in_transaction(&self, gauge: &AtomicU64, value: u64) {
+        gauge.store(value, Ordering::Release);
+    }
+    fn increment_gauge_in_transaction(&self, gauge: &AtomicU64) {
+        gauge
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                Some(value.saturating_add(1))
+            })
+            .ok();
+    }
+    fn decrement_gauge_in_transaction(&self, gauge: &AtomicU64) {
+        gauge
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                Some(value.saturating_sub(1))
+            })
+            .ok();
     }
     fn add(&self, counter: &AtomicU64, amount: u64) {
-        saturating_add(counter, &self.saturated, amount);
+        self.mutate(|counters| counters.add_in_transaction(counter, amount));
+    }
+    fn record_enqueue(&self) {
+        self.mutate(|counters| {
+            counters.increment_gauge_in_transaction(&counters.queued);
+            counters.add_in_transaction(&counters.accepted, 1);
+        });
+    }
+    fn record_dequeue_for_write(&self) {
+        self.mutate(|counters| {
+            counters.decrement_gauge_in_transaction(&counters.queued);
+            counters.increment_gauge_in_transaction(&counters.writing);
+        });
+    }
+    fn record_write_success(&self) {
+        self.mutate(|counters| {
+            counters.decrement_gauge_in_transaction(&counters.writing);
+            counters.add_in_transaction(&counters.written, 1);
+        });
+    }
+    fn snapshot(&self) -> ObservabilityCountersV1 {
+        loop {
+            let before = self.sequence.load(Ordering::Acquire);
+            if !before.is_multiple_of(2) {
+                thread::yield_now();
+                continue;
+            }
+            let snapshot = ObservabilityCountersV1 {
+                accepted: self.accepted.load(Ordering::Relaxed),
+                written: self.written.load(Ordering::Relaxed),
+                primary_dropped: self.primary_dropped.load(Ordering::Relaxed),
+                fallback_dropped: self.fallback_dropped.load(Ordering::Relaxed),
+                stopped_dropped: self.stopped_dropped.load(Ordering::Relaxed),
+                degraded_dropped: self.degraded_dropped.load(Ordering::Relaxed),
+                unflushed: self.unflushed.load(Ordering::Relaxed),
+                queued: self.queued.load(Ordering::Relaxed),
+                writing: self.writing.load(Ordering::Relaxed),
+                flushing: self.flushing.load(Ordering::Relaxed),
+                write_failures: self.write_failures.load(Ordering::Relaxed),
+                flush_failures: self.flush_failures.load(Ordering::Relaxed),
+                clock_errors: self.clock_errors.load(Ordering::Relaxed),
+                clock_panics: self.clock_panics.load(Ordering::Relaxed),
+                sink_failures: self.sink_failures.load(Ordering::Relaxed),
+                counters_saturated: self.saturated.load(Ordering::Acquire),
+            };
+            if before == self.sequence.load(Ordering::Acquire) {
+                return snapshot;
+            }
+        }
     }
 }
 
-pub trait LogSinkV1: Send + Sync + 'static {
-    fn write_event(&self, event: &str) -> io::Result<()>;
-    fn flush(&self) -> io::Result<()>;
-}
-pub trait ClockV1: Send + Sync + 'static {
-    fn unix_seconds(&self) -> u64;
-}
-#[derive(Default)]
-pub struct SystemClockV1;
-impl ClockV1 for SystemClockV1 {
-    fn unix_seconds(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PendingEvent {
-    category: EventCategoryV1,
-    severity: SeverityV1,
-}
 struct Queue {
-    primary: VecDeque<PendingEvent>,
-    fallback: VecDeque<PendingEvent>,
+    primary: VecDeque<EventRecordV1>,
+    fallback: VecDeque<EventRecordV1>,
     stopping: bool,
 }
 struct Shared {
@@ -255,31 +322,31 @@ struct Shared {
     stopped: AtomicBool,
     in_flight: AtomicU64,
     degraded: bool,
+    queue_saturated: AtomicBool,
     frozen_report: Mutex<Option<ObservabilityShutdownReportV1>>,
 }
-/// Cloneable, non-blocking producer held by runtime code. It never owns worker lifecycle.
 #[derive(Clone)]
 pub struct ObservabilityEmitterV1 {
     shared: Arc<Shared>,
 }
-/// Sole owner of the writer worker. Shutdown consumes this value exactly once.
 pub struct ObservabilityV1 {
     emitter: ObservabilityEmitterV1,
-    done: Option<mpsc::Receiver<WorkerReport>>,
+    done: Option<mpsc::Receiver<()>>,
     worker: Option<thread::JoinHandle<()>>,
-}
-#[derive(Clone, Copy)]
-enum WorkerReport {
-    Completed,
 }
 
 impl ObservabilityV1 {
     pub fn start(sink: Arc<dyn LogSinkV1>, clock: Arc<dyn ClockV1>) -> Self {
         Self::start_inner(Some(sink), clock)
     }
-    /// A typed bootstrap degradation: no sink could be opened, so every subsequent event is counted.
     pub fn start_degraded(clock: Arc<dyn ClockV1>) -> Self {
-        Self::start_inner(None, clock)
+        let observability = Self::start_inner(None, clock);
+        observability
+            .emitter
+            .shared
+            .counters
+            .add(&observability.emitter.shared.counters.sink_failures, 1);
+        observability
     }
     fn start_inner(sink: Option<Arc<dyn LogSinkV1>>, clock: Arc<dyn ClockV1>) -> Self {
         let degraded = sink.is_none();
@@ -295,12 +362,10 @@ impl ObservabilityV1 {
             clock,
             stopped: AtomicBool::new(false),
             in_flight: AtomicU64::new(0),
+            queue_saturated: AtomicBool::new(false),
             degraded,
             frozen_report: Mutex::new(None),
         });
-        if degraded {
-            shared.counters.add(&shared.counters.bootstrap_failures, 1);
-        }
         let emitter = ObservabilityEmitterV1 {
             shared: Arc::clone(&shared),
         };
@@ -309,11 +374,13 @@ impl ObservabilityV1 {
         } else {
             let (sender, receiver) = mpsc::channel();
             let worker_shared = Arc::clone(&shared);
-            let worker = thread::spawn(move || {
-                writer_loop(worker_shared);
-                let _ = sender.send(WorkerReport::Completed);
-            });
-            (Some(receiver), Some(worker))
+            (
+                Some(receiver),
+                Some(thread::spawn(move || {
+                    writer_loop(worker_shared);
+                    let _ = sender.send(());
+                })),
+            )
         };
         Self {
             emitter,
@@ -324,20 +391,14 @@ impl ObservabilityV1 {
     pub fn emitter(&self) -> ObservabilityEmitterV1 {
         self.emitter.clone()
     }
-    pub fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
-        self.emitter.emit(category, severity);
+    pub fn emit(&self, event: EventRecordV1) {
+        self.emitter.emit(event);
     }
     pub fn counters(&self) -> ObservabilityCountersV1 {
         self.emitter.counters()
     }
-    /// Requests bounded shutdown and returns one immutable terminal report.
-    ///
-    /// This replaces the counter-only shutdown result so callers cannot discard finalization.
     pub fn shutdown(mut self) -> ObservabilityShutdownReportV1 {
         self.stop_and_wait()
-    }
-    pub fn shutdown_report(self) -> ObservabilityShutdownReportV1 {
-        self.shutdown()
     }
     fn stop_and_wait(&mut self) -> ObservabilityShutdownReportV1 {
         if let Some(report) = self.emitter.frozen_report() {
@@ -346,47 +407,23 @@ impl ObservabilityV1 {
         self.emitter.request_stop();
         let finalization = match self.done.take() {
             Some(done) => match done.recv_timeout(MAX_SHUTDOWN_FLUSH_V1) {
-                Ok(WorkerReport::Completed) => {
-                    let joined = match self.worker.take() {
-                        Some(worker) => worker.join().is_ok(),
-                        None => true,
-                    };
-                    if joined {
+                Ok(()) => match self.worker.take().map(thread::JoinHandle::join) {
+                    Some(Ok(())) | None => {
                         self.clear_gauges();
                         ObservabilityFinalizationV1::Completed
-                    } else {
-                        self.emitter
-                            .shared
-                            .counters
-                            .add(&self.emitter.shared.counters.worker_join_failures, 1);
-                        self.record_known_lost_and_clear_gauges();
+                    }
+                    Some(Err(_)) => {
+                        self.record_lost_and_clear();
                         ObservabilityFinalizationV1::Indeterminate
                     }
-                }
+                },
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    self.emitter
-                        .shared
-                        .counters
-                        .add(&self.emitter.shared.counters.shutdown_timeouts, 1);
                     self.worker.take();
                     ObservabilityFinalizationV1::Detached
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.emitter
-                        .shared
-                        .counters
-                        .add(&self.emitter.shared.counters.worker_disconnects, 1);
-                    if let Some(Err(_)) = self.worker.take().map(thread::JoinHandle::join) {
-                        self.emitter
-                            .shared
-                            .counters
-                            .add(&self.emitter.shared.counters.worker_panics, 1);
-                        self.emitter
-                            .shared
-                            .counters
-                            .add(&self.emitter.shared.counters.worker_join_failures, 1);
-                    }
-                    self.record_known_lost_and_clear_gauges();
+                    self.worker.take();
+                    self.record_lost_and_clear();
                     ObservabilityFinalizationV1::Indeterminate
                 }
             },
@@ -396,54 +433,32 @@ impl ObservabilityV1 {
         self.emitter.freeze_report(finalization)
     }
     fn clear_gauges(&self) {
-        self.emitter
-            .shared
-            .counters
-            .writing
-            .store(0, Ordering::Release);
-        self.emitter
-            .shared
-            .counters
-            .flushing
-            .store(0, Ordering::Release);
+        let counters = &self.emitter.shared.counters;
+        counters.mutate(|counters| {
+            counters.set_gauge_in_transaction(&counters.writing, 0);
+            counters.set_gauge_in_transaction(&counters.flushing, 0);
+        });
         self.emitter.shared.in_flight.store(0, Ordering::Release);
     }
-    fn record_known_lost_and_clear_gauges(&self) {
-        let queued = match self.emitter.shared.queue.lock() {
-            Ok(mut queue) => {
-                let queued =
-                    u64::try_from(queue.primary.len().saturating_add(queue.fallback.len()))
-                        .unwrap_or(u64::MAX);
-                queue.primary.clear();
-                queue.fallback.clear();
-                self.emitter
-                    .shared
-                    .counters
-                    .queued
-                    .store(0, Ordering::Release);
-                queued
-            }
-            Err(poison) => {
-                let mut queue = poison.into_inner();
-                let queued =
-                    u64::try_from(queue.primary.len().saturating_add(queue.fallback.len()))
-                        .unwrap_or(u64::MAX);
-                queue.primary.clear();
-                queue.fallback.clear();
-                self.emitter
-                    .shared
-                    .counters
-                    .queued
-                    .store(0, Ordering::Release);
-                queued
-            }
-        };
-        let in_flight = self.emitter.shared.in_flight.swap(0, Ordering::AcqRel);
-        self.emitter.shared.counters.add(
-            &self.emitter.shared.counters.unflushed,
-            queued.saturating_add(in_flight),
-        );
-        self.clear_gauges();
+    fn record_lost_and_clear(&self) {
+        let mut queue = self
+            .emitter
+            .shared
+            .queue
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let lost = u64::try_from(queue.primary.len().saturating_add(queue.fallback.len()))
+            .unwrap_or(u64::MAX)
+            .saturating_add(self.emitter.shared.in_flight.swap(0, Ordering::AcqRel));
+        queue.primary.clear();
+        queue.fallback.clear();
+        let counters = &self.emitter.shared.counters;
+        counters.mutate(|counters| {
+            counters.set_gauge_in_transaction(&counters.queued, 0);
+            counters.set_gauge_in_transaction(&counters.writing, 0);
+            counters.set_gauge_in_transaction(&counters.flushing, 0);
+            counters.add_in_transaction(&counters.unflushed, lost);
+        });
     }
 }
 impl Drop for ObservabilityV1 {
@@ -451,16 +466,19 @@ impl Drop for ObservabilityV1 {
         self.stop_and_wait();
     }
 }
+
 impl ObservabilityEmitterV1 {
-    /// Performs exactly one non-blocking queue try-lock. Contention loses this event immediately.
-    pub fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
+    /// Performs one non-blocking queue try-lock. Contention loses this event immediately.
+    pub fn emit(&self, event: EventRecordV1) {
+        if self.frozen_report().is_some() {
+            return;
+        }
         if self.shared.degraded {
             self.shared
                 .counters
                 .add(&self.shared.counters.degraded_dropped, 1);
             return;
         }
-        let event = PendingEvent { category, severity };
         match self.shared.queue.try_lock() {
             Ok(mut queue) => {
                 if queue.stopping || self.shared.stopped.load(Ordering::Acquire) {
@@ -471,41 +489,49 @@ impl ObservabilityEmitterV1 {
                 }
                 if queue.primary.len() < PRIMARY_CAPACITY_V1 {
                     queue.primary.push_back(event);
-                    self.shared.counters.queued.fetch_add(1, Ordering::Release);
-                    self.shared.counters.add(&self.shared.counters.accepted, 1);
+                    self.shared.counters.record_enqueue();
                     self.shared.available.notify_one();
-                    return;
-                }
-                if severity.uses_fallback() && queue.fallback.len() < FALLBACK_CAPACITY_V1 {
+                } else if event.outcome.uses_fallback()
+                    && queue.fallback.len() < FALLBACK_CAPACITY_V1.saturating_sub(1)
+                {
                     queue.fallback.push_back(event);
-                    self.shared.counters.queued.fetch_add(1, Ordering::Release);
-                    self.shared.counters.add(&self.shared.counters.accepted, 1);
+                    self.shared.counters.record_enqueue();
                     self.shared.available.notify_one();
-                    return;
-                }
-                let drop_counter = if severity.uses_fallback() {
-                    &self.shared.counters.fallback_dropped
+                } else if queue.fallback.len() < FALLBACK_CAPACITY_V1
+                    && self
+                        .shared
+                        .queue_saturated
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                {
+                    queue.fallback.push_back(EventRecordV1::new(
+                        EventOperationV1::QueueSaturation,
+                        EventOutcomeV1::Saturated,
+                    ));
+                    self.shared.counters.mutate(|counters| {
+                        counters.increment_gauge_in_transaction(&counters.queued);
+                        counters.add_in_transaction(&counters.accepted, 1);
+                        if event.outcome.uses_fallback() {
+                            counters.add_in_transaction(&counters.fallback_dropped, 1);
+                        } else {
+                            counters.add_in_transaction(&counters.primary_dropped, 1);
+                        }
+                    });
+                    self.shared.available.notify_one();
+                } else if event.outcome.uses_fallback() {
+                    self.shared
+                        .counters
+                        .add(&self.shared.counters.fallback_dropped, 1);
                 } else {
-                    &self.shared.counters.primary_dropped
-                };
-                self.shared.counters.add(drop_counter, 1);
+                    self.shared
+                        .counters
+                        .add(&self.shared.counters.primary_dropped, 1);
+                }
             }
-            Err(TryLockError::Poisoned(_)) => {
-                self.shared
-                    .counters
-                    .add(&self.shared.counters.admission_poisoned, 1);
-                self.shared
-                    .counters
-                    .add(&self.shared.counters.primary_dropped, 1);
-            }
-            Err(TryLockError::WouldBlock) => {
-                self.shared
-                    .counters
-                    .add(&self.shared.counters.admission_contention, 1);
-                self.shared
-                    .counters
-                    .add(&self.shared.counters.primary_dropped, 1);
-            }
+            Err(TryLockError::Poisoned(_)) | Err(TryLockError::WouldBlock) => self
+                .shared
+                .counters
+                .add(&self.shared.counters.primary_dropped, 1),
         }
     }
     pub fn counters(&self) -> ObservabilityCountersV1 {
@@ -538,20 +564,13 @@ impl ObservabilityEmitterV1 {
     }
     fn request_stop(&self) {
         self.shared.stopped.store(true, Ordering::Release);
-        match self.shared.queue.lock() {
-            Ok(mut queue) => {
-                queue.stopping = true;
-                self.shared.available.notify_all();
-            }
-            Err(poison) => {
-                self.shared
-                    .counters
-                    .add(&self.shared.counters.admission_poisoned, 1);
-                let mut queue = poison.into_inner();
-                queue.stopping = true;
-                self.shared.available.notify_all();
-            }
-        }
+        let mut queue = self
+            .shared
+            .queue
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        queue.stopping = true;
+        self.shared.available.notify_all();
     }
 }
 
@@ -569,83 +588,89 @@ fn writer_loop(shared: Arc<Shared>) {
                     .unwrap_or_else(|poison| poison.into_inner());
                 queue = next;
             }
-            // WARN/ERROR is strict priority, so sustained primary traffic cannot starve it.
-            let event = queue
-                .fallback
-                .pop_front()
-                .or_else(|| queue.primary.pop_front());
+            let (event, primary_relieved) = match queue.fallback.pop_front() {
+                Some(event) => (Some(event), false),
+                None => match queue.primary.pop_front() {
+                    Some(event) => (Some(event), true),
+                    None => (None, false),
+                },
+            };
+            if primary_relieved {
+                shared.queue_saturated.store(false, Ordering::Release);
+            }
             if event.is_some() {
-                shared.counters.queued.fetch_sub(1, Ordering::AcqRel);
+                shared.counters.record_dequeue_for_write();
             }
             event
         };
         match event {
             Some(event) => {
                 shared.in_flight.store(1, Ordering::Release);
-                shared.counters.writing.store(1, Ordering::Release);
-                let timestamp = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     shared.clock.unix_seconds()
-                }));
-                let write_result = timestamp.map(|seconds| {
-                    let formatted = format_event(seconds, event.category, event.severity);
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        shared
-                            .sink
-                            .as_ref()
-                            .expect("non-degraded writer has a sink")
-                            .write_event(&formatted)
-                    }))
-                });
-                match write_result {
-                    Ok(Ok(Ok(()))) => {
-                        shared.counters.add(&shared.counters.written, 1);
+                })) {
+                    Ok(Ok(seconds)) => {
+                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            shared
+                                .sink
+                                .as_ref()
+                                .expect("writer sink")
+                                .write_event(&format_event(seconds, event))
+                        })) {
+                            Ok(Ok(())) => shared.counters.record_write_success(),
+                            Ok(Err(_)) | Err(_) => shared.counters.mutate(|counters| {
+                                counters.decrement_gauge_in_transaction(&counters.writing);
+                                counters.add_in_transaction(&counters.write_failures, 1);
+                                counters.add_in_transaction(&counters.sink_failures, 1);
+                                counters.add_in_transaction(&counters.unflushed, 1);
+                            }),
+                        }
                     }
-                    Ok(Ok(Err(_))) | Ok(Err(_)) => {
-                        shared.counters.add(&shared.counters.write_failures, 1);
-                        shared.counters.add(&shared.counters.sink_failures, 1);
-                        shared.counters.add(&shared.counters.unflushed, 1);
-                    }
-                    Err(_) => {
-                        shared.counters.add(&shared.counters.clock_failures, 1);
-                        shared.counters.add(&shared.counters.unflushed, 1);
-                    }
+                    Ok(Err(_)) => shared.counters.mutate(|counters| {
+                        counters.decrement_gauge_in_transaction(&counters.writing);
+                        counters.add_in_transaction(&counters.clock_errors, 1);
+                        counters.add_in_transaction(&counters.unflushed, 1);
+                    }),
+                    Err(_) => shared.counters.mutate(|counters| {
+                        counters.decrement_gauge_in_transaction(&counters.writing);
+                        counters.add_in_transaction(&counters.clock_panics, 1);
+                        counters.add_in_transaction(&counters.unflushed, 1);
+                    }),
                 }
-                shared.counters.writing.store(0, Ordering::Release);
                 shared.in_flight.store(0, Ordering::Release);
             }
             None => {
-                shared.counters.flushing.store(1, Ordering::Release);
-                let flush_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    shared
-                        .sink
-                        .as_ref()
-                        .expect("non-degraded writer has a sink")
-                        .flush()
+                shared.counters.mutate(|counters| {
+                    counters.increment_gauge_in_transaction(&counters.flushing);
+                });
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    shared.sink.as_ref().expect("writer sink").flush()
                 }));
-                if !matches!(flush_result, Ok(Ok(()))) {
-                    shared.counters.add(&shared.counters.flush_failures, 1);
-                    shared.counters.add(&shared.counters.sink_failures, 1);
-                }
-                shared.counters.flushing.store(0, Ordering::Release);
+                shared.counters.mutate(|counters| {
+                    counters.decrement_gauge_in_transaction(&counters.flushing);
+                    if !matches!(result, Ok(Ok(()))) {
+                        counters.add_in_transaction(&counters.flush_failures, 1);
+                        counters.add_in_transaction(&counters.sink_failures, 1);
+                    }
+                });
                 return;
             }
         }
     }
 }
-fn format_event(seconds: u64, category: EventCategoryV1, severity: SeverityV1) -> String {
-    let event = format!(
-        "ts={seconds} severity={} category={} detail={REDACTED_V1}\n",
-        severity.name(),
-        category.name()
+fn format_event(seconds: u64, event: EventRecordV1) -> String {
+    let formatted = format!(
+        "ts={seconds} operation={} outcome={}\n",
+        event.operation.name(),
+        event.outcome.name()
     );
-    debug_assert!(event.len() <= MAX_EVENT_BYTES_V1 && REDACTED_V1.len() <= MAX_STRING_BYTES_V1);
-    event
+    debug_assert!(formatted.len() <= MAX_EVENT_BYTES_V1);
+    formatted
 }
 
-/// Local file sink with fixed-size rotation and deterministic retention pruning.
+/// Local file sink with fixed-size rotation. Only this sink's five numbered files are owned.
 pub struct RotatingFileSinkV1 {
     path: PathBuf,
-    clock: Arc<dyn ClockV1>,
     state: Mutex<FileState>,
 }
 struct FileState {
@@ -653,17 +678,16 @@ struct FileState {
     bytes: u64,
 }
 impl RotatingFileSinkV1 {
-    pub fn open(path: impl AsRef<Path>, clock: Arc<dyn ClockV1>) -> io::Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        prune_retention(&path, clock.as_ref())?;
+        retain_exact_rotations(&path)?;
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let bytes = file.metadata()?.len();
         Ok(Self {
             path,
-            clock,
             state: Mutex::new(FileState { file, bytes }),
         })
     }
@@ -682,7 +706,7 @@ impl RotatingFileSinkV1 {
         for index in (1..RETAINED_ROTATIONS_V1).rev() {
             let from = self.path.with_extension(format!("log.{index}"));
             let to = self.path.with_extension(format!("log.{}", index + 1));
-            match fs::rename(&from, &to) {
+            match fs::rename(from, to) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
@@ -700,7 +724,8 @@ impl RotatingFileSinkV1 {
             .append(true)
             .open(&self.path)?;
         state.bytes = 0;
-        prune_retention(&self.path, self.clock.as_ref())
+        retain_exact_rotations(&self.path)?;
+        Ok(())
     }
 }
 fn remove_if_present(path: &Path) -> io::Result<()> {
@@ -710,55 +735,29 @@ fn remove_if_present(path: &Path) -> io::Result<()> {
         Err(error) => Err(error),
     }
 }
-fn prune_retention(path: &Path, clock: &dyn ClockV1) -> io::Result<()> {
-    let cutoff = clock
-        .unix_seconds()
-        .saturating_sub(RETENTION_DAYS_V1 * 24 * 60 * 60);
+fn retain_exact_rotations(path: &Path) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
+    let name = path
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no file name"))?
         .to_string_lossy();
-    let prefix = format!("{file_name}.");
-    let mut numeric_rotations = Vec::new();
+    let prefix = format!("{name}.");
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
         let candidate = entry.path();
-        if candidate == path {
-            continue;
-        }
-        let candidate_name = entry.file_name();
-        let Some(suffix) = candidate_name
+        let suffix = entry
+            .file_name()
             .to_string_lossy()
             .strip_prefix(&prefix)
-            .map(str::to_owned)
-        else {
-            continue;
-        };
-        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-            continue;
-        }
-        let Ok(index) = suffix.parse::<u64>() else {
-            continue;
-        };
-        let metadata = entry.metadata()?;
-        if !metadata.is_file() {
-            continue;
-        }
-        let modified = metadata
-            .modified()?
-            .duration_since(UNIX_EPOCH)
-            .map_err(io::Error::other)?;
-        if modified.as_secs() < cutoff {
+            .map(str::to_owned);
+        let Some(suffix) = suffix else { continue };
+        if !suffix.is_empty()
+            && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            && !matches!(suffix.as_str(), "1" | "2" | "3" | "4" | "5")
+            && entry.metadata()?.is_file()
+        {
             remove_if_present(&candidate)?;
-        } else {
-            numeric_rotations.push((index, candidate));
         }
-    }
-    // `.1` is newest, so retain the five lowest numeric rotations regardless of their gaps.
-    numeric_rotations.sort_unstable_by_key(|(index, _)| *index);
-    for (_, candidate) in numeric_rotations.into_iter().skip(RETAINED_ROTATIONS_V1) {
-        remove_if_present(&candidate)?;
     }
     Ok(())
 }
@@ -790,9 +789,8 @@ impl LogSinkV1 for RotatingFileSinkV1 {
     }
 }
 impl fmt::Debug for ObservabilityEmitterV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ObservabilityEmitterV1")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObservabilityEmitterV1")
             .field("counters", &self.counters())
             .finish()
     }
@@ -802,5 +800,72 @@ impl fmt::Debug for ObservabilityV1 {
         f.debug_struct("ObservabilityV1")
             .field("counters", &self.counters())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cumulative_counters_saturate_without_wrapping_near_u64_max() {
+        let counters = Counters::default();
+
+        counters.record_enqueue();
+        let queued = counters.snapshot();
+        assert_eq!(
+            queued.accepted,
+            queued.written + queued.queued + queued.writing
+        );
+
+        counters.record_dequeue_for_write();
+        let writing = counters.snapshot();
+        assert_eq!(
+            writing.accepted,
+            writing.written + writing.queued + writing.writing
+        );
+
+        counters.record_write_success();
+        let written = counters.snapshot();
+        assert_eq!(
+            written.accepted,
+            written.written + written.queued + written.writing
+        );
+
+        counters.accepted.store(u64::MAX - 1, Ordering::Relaxed);
+        counters.written.store(u64::MAX - 1, Ordering::Relaxed);
+
+        counters.record_enqueue();
+        let saturated_enqueue = counters.snapshot();
+        assert_eq!(saturated_enqueue.accepted, u64::MAX);
+        assert_eq!(saturated_enqueue.written, u64::MAX - 1);
+        assert_eq!(saturated_enqueue.queued, 1);
+        assert_eq!(saturated_enqueue.writing, 0);
+        assert_eq!(
+            saturated_enqueue.accepted,
+            saturated_enqueue.written + saturated_enqueue.queued + saturated_enqueue.writing
+        );
+        assert!(saturated_enqueue.counters_saturated);
+
+        counters.record_dequeue_for_write();
+        let saturated_dequeue = counters.snapshot();
+        assert_eq!(saturated_dequeue.accepted, u64::MAX);
+        assert_eq!(saturated_dequeue.written, u64::MAX - 1);
+        assert_eq!(saturated_dequeue.queued, 0);
+        assert_eq!(saturated_dequeue.writing, 1);
+        assert_eq!(
+            saturated_dequeue.accepted,
+            saturated_dequeue.written + saturated_dequeue.queued + saturated_dequeue.writing
+        );
+        assert!(saturated_dequeue.counters_saturated);
+
+        counters.record_write_success();
+        let saturated_written = counters.snapshot();
+        assert_eq!(saturated_written.accepted, u64::MAX);
+        assert_eq!(saturated_written.written, u64::MAX);
+        assert_eq!(saturated_written.queued, 0);
+        assert_eq!(saturated_written.writing, 0);
+        assert_eq!(saturated_written.accepted, saturated_written.written);
+        assert!(saturated_written.counters_saturated);
     }
 }

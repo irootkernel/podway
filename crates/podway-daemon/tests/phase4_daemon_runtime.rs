@@ -5,7 +5,7 @@
 mod support_phase4_workspace;
 
 use std::{
-    fs,
+    fs, io,
     net::Shutdown,
     num::NonZeroUsize,
     os::unix::{
@@ -14,13 +14,16 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread,
 };
 
 use podway_core::UnixMillis;
 use podway_daemon::{
     dispatch::{DispatchFailureKindV1, WorkspaceRuntimeV1},
+    observability::{
+        ClockErrorV1, ClockV1, LogSinkV1, ObservabilityFinalizationV1, ObservabilityV1,
+    },
     production::{NativeProductionClockV1, ProductionWorkspaceRuntimeV1},
     runtime::{
         ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1, WorkspaceRecoveryEntryV1,
@@ -42,6 +45,41 @@ use support_phase4_workspace::{
     TemporaryDirectoryV1, copy_tree, git_worktrees, non_utf8_child_path, read_file,
     selector as git_selector,
 };
+const MAX_CAPTURED_OBSERVABILITY_EVENTS_V1: usize = 64;
+
+#[derive(Default)]
+struct CapturingObservabilitySinkV1 {
+    events: Mutex<Vec<String>>,
+}
+
+impl LogSinkV1 for CapturingObservabilitySinkV1 {
+    fn write_event(&self, event: &str) -> io::Result<()> {
+        let mut events = self
+            .events
+            .lock()
+            .expect("observability event lock must not be poisoned");
+        if events.len() == MAX_CAPTURED_OBSERVABILITY_EVENTS_V1 {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "observability test sink capacity exhausted",
+            ));
+        }
+        events.push(event.to_owned());
+        Ok(())
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct FixedObservabilityClockV1;
+
+impl ClockV1 for FixedObservabilityClockV1 {
+    fn unix_seconds(&self) -> Result<u64, ClockErrorV1> {
+        Ok(42)
+    }
+}
 
 struct RuntimePathsFixtureV1 {
     paths: ServiceRuntimePathsV1,
@@ -125,10 +163,25 @@ fn request(
     operation: OperationV1,
     selector: &WorktreeSelectorWireV1,
 ) -> (RequestEnvelopeV1, SliceRequestV1) {
-    let payload = serde_json::json!({"selector": selector})
-        .as_object()
-        .expect("fixture payload must be an object")
-        .clone();
+    request_with_payload(
+        request_number,
+        command,
+        operation,
+        selector,
+        serde_json::json!({"selector": selector})
+            .as_object()
+            .expect("fixture payload must be an object")
+            .clone(),
+    )
+}
+
+fn request_with_payload(
+    request_number: u64,
+    command: &str,
+    operation: OperationV1,
+    selector: &WorktreeSelectorWireV1,
+    payload: serde_json::Map<String, serde_json::Value>,
+) -> (RequestEnvelopeV1, SliceRequestV1) {
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{request_number:012x}"))
             .expect("fixture request ID must be valid"),
@@ -145,8 +198,15 @@ fn request(
                 .expect("fixture idempotency key must be valid")
         }),
         preconditions: PreconditionsV1::default(),
-        options: RequestOptionsV1::new(operation != OperationV1::Query, 0)
-            .expect("fixture request options must be valid"),
+        options: RequestOptionsV1::new(
+            false,
+            if operation == OperationV1::Query {
+                0
+            } else {
+                5_000
+            },
+        )
+        .expect("fixture request options must be valid"),
         payload,
     })
     .expect("fixture request must be valid");
@@ -178,9 +238,15 @@ fn startup_recovery_serves_a_real_workspace_without_public_store_mutation_access
     drop(workspace_runtime);
     drop(manager);
 
-    let runtime =
-        ProductionDaemonRuntimeV1::bind(paths.paths(), options, configuration("recovery-worker"))
-            .expect("startup recovery must bind the endpoint and recover the workspace");
+    let sink = Arc::new(CapturingObservabilitySinkV1::default());
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedObservabilityClockV1));
+    let runtime = ProductionDaemonRuntimeV1::bind_with_observability(
+        paths.paths(),
+        options,
+        configuration("recovery-worker"),
+        Some(observability.emitter()),
+    )
+    .expect("startup recovery must bind the endpoint and recover the workspace");
     assert!(matches!(
         runtime.recovery_report().workspaces(),
         [WorkspaceRecoveryEntryV1::Recovered(report)]
@@ -210,6 +276,33 @@ fn startup_recovery_serves_a_real_workspace_without_public_store_mutation_access
         }
     }
 
+    let initialize = request_with_payload(
+        3,
+        "session.start",
+        OperationV1::Mutate,
+        &workspace_selector,
+        serde_json::json!({
+            "selector": workspace_selector,
+            "preset": "sw-dev",
+            "task_title": "Observability production trace"
+        })
+        .as_object()
+        .expect("session start payload must be an object")
+        .clone(),
+    );
+    let payload = encode_request_payload_v1(&initialize.0).expect("init request must encode");
+    let mut client = UnixStream::connect(&socket_path)
+        .expect("client must connect for workspace initialization");
+    write_frame_v1(&mut client, &payload).expect("client must write framed init request");
+    client
+        .shutdown(Shutdown::Write)
+        .expect("client must half-close init request");
+    let response_payload = read_single_frame_v1(&mut client)
+        .expect("daemon must return one init response frame")
+        .expect("daemon must return an init response frame");
+    let _response = decode_response_payload_v1(&response_payload)
+        .expect("init response must satisfy the public protocol");
+
     shutdown.request_shutdown();
     assert!(
         server
@@ -222,6 +315,59 @@ fn startup_recovery_serves_a_real_workspace_without_public_store_mutation_access
     assert!(
         !socket_path.exists(),
         "owned socket must be removed at shutdown"
+    );
+
+    assert_eq!(
+        observability.shutdown().finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    let events = sink
+        .events
+        .lock()
+        .expect("observability event lock must not be poisoned");
+    let count = |operation: &str, outcome: &str| {
+        events
+            .iter()
+            .filter(|event| {
+                event.as_str() == format!("ts=42 operation={operation} outcome={outcome}\n")
+            })
+            .count()
+    };
+    for operation in [
+        "daemon_start",
+        "integrity_check",
+        "scheduler_created",
+        "job_admission",
+        "job_claim",
+        "job_terminal",
+        "daemon_stop",
+    ] {
+        assert_eq!(
+            count(operation, "succeeded"),
+            1,
+            "{operation} must have one authoritative successful owner event"
+        );
+    }
+    for operation in ["connection_accepted", "service_dispatch"] {
+        let event_count = events
+            .iter()
+            .filter(|event| event.contains(&format!("operation={operation} ")))
+            .count();
+        assert_eq!(
+            event_count, 2,
+            "{operation} must have one authoritative event per request"
+        );
+    }
+    assert_eq!(count("connection_accepted", "succeeded"), 2);
+    assert_eq!(count("service_dispatch", "succeeded"), 1);
+    assert_eq!(count("service_dispatch", "rejected"), 1);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.contains("operation=transport_service_request "))
+            .count(),
+        0,
+        "transport must not duplicate successful service-dispatch ownership"
     );
 }
 

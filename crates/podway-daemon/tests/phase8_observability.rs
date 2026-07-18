@@ -2,10 +2,10 @@ use std::{
     fs, io,
     path::PathBuf,
     sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicU64, Ordering},
+        Arc, Barrier, Condvar, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    thread,
 };
 
 use podway_daemon::observability::{
@@ -13,31 +13,84 @@ use podway_daemon::observability::{
     ROTATION_BYTES_V1,
 };
 use podway_daemon::{
-    ClockV1, EventCategoryV1, LogSinkV1, ObservabilityV1, RotatingFileSinkV1, SeverityV1,
+    ClockErrorV1, ClockV1, EventOperationV1, EventOutcomeV1, EventRecordV1, LogSinkV1,
+    ObservabilityV1, RotatingFileSinkV1,
 };
 
-struct FakeClock(AtomicU64);
-impl FakeClock {
-    fn new(seconds: u64) -> Self {
-        Self(AtomicU64::new(seconds))
+struct FixedClock(u64);
+impl ClockV1 for FixedClock {
+    fn unix_seconds(&self) -> Result<u64, ClockErrorV1> {
+        Ok(self.0)
     }
 }
-impl ClockV1 for FakeClock {
-    fn unix_seconds(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
+struct ErrorClock;
+impl ClockV1 for ErrorClock {
+    fn unix_seconds(&self) -> Result<u64, ClockErrorV1> {
+        Err(ClockErrorV1::BeforeUnixEpoch)
+    }
+}
+struct PanicClock;
+impl ClockV1 for PanicClock {
+    fn unix_seconds(&self) -> Result<u64, ClockErrorV1> {
+        panic!("clock panic")
     }
 }
 
 #[derive(Default)]
-struct FakeSink {
+struct Sink {
     events: Mutex<Vec<String>>,
-    fail: bool,
 }
-impl LogSinkV1 for FakeSink {
+impl LogSinkV1 for Sink {
     fn write_event(&self, event: &str) -> io::Result<()> {
-        if self.fail {
-            return Err(io::Error::other("fake sink failure"));
+        self.events.lock().unwrap().push(event.to_owned());
+        Ok(())
+    }
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+struct WriteErrorSink {
+    events: Mutex<Vec<String>>,
+}
+impl LogSinkV1 for WriteErrorSink {
+    fn write_event(&self, event: &str) -> io::Result<()> {
+        self.events.lock().unwrap().push(event.to_owned());
+        Err(io::Error::other("write error"))
+    }
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+struct PanicWriteSink;
+impl LogSinkV1 for PanicWriteSink {
+    fn write_event(&self, _: &str) -> io::Result<()> {
+        panic!("write panic")
+    }
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+struct PanicFlushSink;
+impl LogSinkV1 for PanicFlushSink {
+    fn write_event(&self, _: &str) -> io::Result<()> {
+        Ok(())
+    }
+    fn flush(&self) -> io::Result<()> {
+        panic!("flush panic")
+    }
+}
+struct PermitSink {
+    permits: Arc<(Mutex<usize>, Condvar)>,
+    events: Arc<Mutex<Vec<String>>>,
+}
+impl LogSinkV1 for PermitSink {
+    fn write_event(&self, event: &str) -> io::Result<()> {
+        let (lock, ready) = &*self.permits;
+        let mut permits = lock.lock().unwrap();
+        while *permits == 0 {
+            permits = ready.wait(permits).unwrap();
         }
+        *permits -= 1;
         self.events.lock().unwrap().push(event.to_owned());
         Ok(())
     }
@@ -46,114 +99,300 @@ impl LogSinkV1 for FakeSink {
     }
 }
 
-struct BlockingSink {
-    gate: Arc<(Mutex<bool>, Condvar)>,
+const ADMISSION_OK: EventRecordV1 =
+    EventRecordV1::new(EventOperationV1::JobAdmission, EventOutcomeV1::Succeeded);
+const SERVICE_FAILED: EventRecordV1 = EventRecordV1::new(
+    EventOperationV1::TransportServiceRequest,
+    EventOutcomeV1::Failed,
+);
+
+#[test]
+fn event_records_are_closed_bounded_and_private() {
+    let sink = Arc::new(Sink::default());
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedClock(42)));
+    observability.emit(ADMISSION_OK);
+    observability.shutdown();
+    assert_eq!(
+        sink.events.lock().unwrap().as_slice(),
+        ["ts=42 operation=job_admission outcome=succeeded\n"]
+    );
 }
-impl LogSinkV1 for BlockingSink {
-    fn write_event(&self, _: &str) -> io::Result<()> {
-        let (locked, ready) = &*self.gate;
-        let mut released = locked.lock().unwrap();
-        while !*released {
-            released = ready.wait(released).unwrap();
-        }
-        Ok(())
+
+#[test]
+fn saturated_outcome_is_stably_serialized_and_uses_priority_queue() {
+    let sink = Arc::new(Sink::default());
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedClock(7)));
+    observability.emit(EventRecordV1::new(
+        EventOperationV1::QueueSaturation,
+        EventOutcomeV1::Saturated,
+    ));
+    observability.shutdown();
+    assert_eq!(
+        sink.events.lock().unwrap().as_slice(),
+        ["ts=7 operation=queue_saturation outcome=saturated\n"]
+    );
+}
+
+#[test]
+fn clock_errors_and_panics_are_counted_separately() {
+    let error = ObservabilityV1::start(Arc::new(Sink::default()), Arc::new(ErrorClock));
+    error.emit(ADMISSION_OK);
+    let error = error.shutdown().counters();
+    assert_eq!(
+        (error.clock_errors, error.clock_panics, error.unflushed),
+        (1, 0, 1)
+    );
+
+    let panic = ObservabilityV1::start(Arc::new(Sink::default()), Arc::new(PanicClock));
+    panic.emit(ADMISSION_OK);
+    let panic = panic.shutdown().counters();
+    assert_eq!(
+        (panic.clock_errors, panic.clock_panics, panic.unflushed),
+        (0, 1, 1)
+    );
+}
+#[test]
+fn sink_write_errors_preserve_output_and_are_accounted() {
+    let sink = Arc::new(WriteErrorSink {
+        events: Mutex::new(Vec::new()),
+    });
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedClock(42)));
+    observability.emit(ADMISSION_OK);
+    let report = observability.shutdown();
+    let counters = report.counters();
+    assert_eq!(
+        sink.events.lock().unwrap().as_slice(),
+        ["ts=42 operation=job_admission outcome=succeeded\n"]
+    );
+    assert_eq!(
+        (
+            counters.accepted,
+            counters.written,
+            counters.write_failures,
+            counters.sink_failures,
+            counters.unflushed
+        ),
+        (1, 0, 1, 1, 1)
+    );
+}
+#[test]
+fn sink_write_panics_are_accounted_without_panicking_shutdown() {
+    let observability = ObservabilityV1::start(Arc::new(PanicWriteSink), Arc::new(FixedClock(1)));
+    observability.emit(ADMISSION_OK);
+    let report = observability.shutdown();
+    assert_eq!(
+        report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    assert_eq!(
+        (
+            report.counters().accepted,
+            report.counters().written,
+            report.counters().write_failures,
+            report.counters().sink_failures,
+            report.counters().unflushed,
+        ),
+        (1, 0, 1, 1, 1)
+    );
+}
+
+#[test]
+fn snapshots_and_frozen_reports_are_coherent() {
+    let sink = Arc::new(Sink::default());
+    let observability = ObservabilityV1::start(sink, Arc::new(FixedClock(1)));
+    let emitter = observability.emitter();
+    for _ in 0..64 {
+        emitter.emit(ADMISSION_OK);
+        let counters = emitter.counters();
+        assert_eq!(
+            counters.accepted,
+            counters.written + counters.unflushed + counters.queued + counters.writing
+        );
     }
-    fn flush(&self) -> io::Result<()> {
-        Ok(())
+    let report = observability.shutdown();
+    assert_eq!(
+        report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    let frozen = report.counters();
+    emitter.emit(SERVICE_FAILED);
+    assert_eq!(emitter.counters(), frozen);
+}
+
+#[test]
+fn failure_only_saturation_storm_reserves_marker_capacity_and_accounts_trigger() {
+    let permits = Arc::new((Mutex::new(0), Condvar::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observability = ObservabilityV1::start(
+        Arc::new(PermitSink {
+            permits: Arc::clone(&permits),
+            events: Arc::clone(&events),
+        }),
+        Arc::new(FixedClock(1)),
+    );
+
+    observability.emit(SERVICE_FAILED);
+    while observability.counters().writing != 1 {
+        thread::yield_now();
     }
-}
-struct BlockingClock {
-    gate: Arc<(Mutex<bool>, Condvar)>,
-}
-impl ClockV1 for BlockingClock {
-    fn unix_seconds(&self) -> u64 {
-        let (locked, ready) = &*self.gate;
-        let mut released = locked.lock().unwrap();
-        while !*released {
-            released = ready.wait(released).unwrap();
-        }
-        1
+    for _ in 0..PRIMARY_CAPACITY_V1 {
+        observability.emit(SERVICE_FAILED);
     }
-}
-struct CountedBlockingSink {
-    gate: Arc<(Mutex<(bool, bool)>, Condvar)>,
-    writes: AtomicU64,
-}
-impl LogSinkV1 for CountedBlockingSink {
-    fn write_event(&self, _: &str) -> io::Result<()> {
-        self.writes.fetch_add(1, Ordering::Relaxed);
-        let (locked, ready) = &*self.gate;
-        let mut state = locked.lock().unwrap();
-        state.1 = true;
-        ready.notify_all();
-        while !state.0 {
-            state = ready.wait(state).unwrap();
-        }
-        Ok(())
+    for _ in 0..FALLBACK_CAPACITY_V1 + 8 {
+        observability.emit(SERVICE_FAILED);
     }
-    fn flush(&self) -> io::Result<()> {
-        Ok(())
-    }
+
+    let attempted = 1 + PRIMARY_CAPACITY_V1 + FALLBACK_CAPACITY_V1 + 8;
+    let counters = observability.counters();
+    assert_eq!(counters.fallback_dropped, 9);
+    assert_eq!(
+        counters.accepted + counters.primary_dropped + counters.fallback_dropped,
+        attempted as u64 + 1,
+    );
+
+    let (lock, ready) = &*permits;
+    *lock.lock().unwrap() = counters.accepted as usize;
+    ready.notify_all();
+    let report = observability.shutdown();
+    let markers = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.as_str() == "ts=1 operation=queue_saturation outcome=saturated\n")
+        .count();
+    assert_eq!(markers, 1);
+    assert_eq!(report.counters().accepted, report.counters().written);
+    assert_eq!(report.counters().unflushed, 0);
 }
-struct FirstWriteBlockingSink {
-    gate: Arc<(Mutex<(bool, bool)>, Condvar)>,
-    events: Mutex<Vec<String>>,
-}
-impl LogSinkV1 for FirstWriteBlockingSink {
-    fn write_event(&self, event: &str) -> io::Result<()> {
-        let (locked, ready) = &*self.gate;
-        let mut state = locked.lock().unwrap();
-        if !state.1 {
-            state.1 = true;
-            ready.notify_all();
-            while !state.0 {
-                state = ready.wait(state).unwrap();
+
+#[test]
+fn concurrent_counter_writers_and_snapshots_preserve_conservation_and_gauge_bounds() {
+    const WRITERS: usize = 4;
+    const EVENTS_PER_WRITER: usize = 512;
+
+    let observability = ObservabilityV1::start(Arc::new(Sink::default()), Arc::new(FixedClock(1)));
+    let emitter = observability.emitter();
+    let start = Arc::new(Barrier::new(WRITERS + 1));
+    let complete = Arc::new(AtomicUsize::new(0));
+    let attempted = Arc::new(AtomicUsize::new(0));
+    let mut writers = Vec::with_capacity(WRITERS);
+
+    for _ in 0..WRITERS {
+        let emitter = emitter.clone();
+        let start = Arc::clone(&start);
+        let complete = Arc::clone(&complete);
+        let attempted = Arc::clone(&attempted);
+        writers.push(thread::spawn(move || {
+            start.wait();
+            for _ in 0..EVENTS_PER_WRITER {
+                attempted.fetch_add(1, Ordering::Release);
+                emitter.emit(ADMISSION_OK);
             }
-        }
-        drop(state);
-        self.events.lock().unwrap().push(event.to_owned());
-        Ok(())
+            complete.fetch_add(1, Ordering::Release);
+        }));
     }
-    fn flush(&self) -> io::Result<()> {
-        Ok(())
+
+    start.wait();
+    while complete.load(Ordering::Acquire) != WRITERS {
+        let counters = emitter.counters();
+        let accounted = counters.accepted + counters.primary_dropped + counters.fallback_dropped;
+        assert!(accounted <= attempted.load(Ordering::Acquire) as u64);
+        assert_eq!(
+            counters.accepted,
+            counters.written + counters.unflushed + counters.queued + counters.writing
+        );
+        assert!(counters.writing <= 1);
+        assert!(counters.flushing <= 1);
     }
-}
-struct PanicSink;
-impl LogSinkV1 for PanicSink {
-    fn write_event(&self, _: &str) -> io::Result<()> {
-        panic!("test worker panic");
+    for writer in writers {
+        writer.join().expect("counter writer must not panic");
     }
-    fn flush(&self) -> io::Result<()> {
-        Ok(())
-    }
-}
-struct BlockingFlushSink {
-    gate: Arc<(Mutex<bool>, Condvar)>,
-}
-impl LogSinkV1 for BlockingFlushSink {
-    fn write_event(&self, _: &str) -> io::Result<()> {
-        Ok(())
-    }
-    fn flush(&self) -> io::Result<()> {
-        let (locked, ready) = &*self.gate;
-        let mut released = locked.lock().unwrap();
-        while !*released {
-            released = ready.wait(released).unwrap();
-        }
-        Ok(())
-    }
-}
-struct FlushFailSink;
-impl LogSinkV1 for FlushFailSink {
-    fn write_event(&self, _: &str) -> io::Result<()> {
-        Ok(())
-    }
-    fn flush(&self) -> io::Result<()> {
-        Err(io::Error::other("fake final flush failure"))
-    }
+
+    let report = observability.shutdown();
+    let counters = report.counters();
+    assert_eq!(
+        counters.accepted + counters.primary_dropped + counters.fallback_dropped,
+        (WRITERS * EVENTS_PER_WRITER) as u64
+    );
+    assert_eq!(
+        counters.accepted,
+        counters.written + counters.unflushed + counters.queued + counters.writing
+    );
 }
 
-fn fake_filesystem_path(name: &str) -> PathBuf {
+#[test]
+fn each_queue_saturation_episode_emits_one_marker_after_real_primary_relief() {
+    let permits = Arc::new((Mutex::new(0), Condvar::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observability = ObservabilityV1::start(
+        Arc::new(PermitSink {
+            permits: Arc::clone(&permits),
+            events: Arc::clone(&events),
+        }),
+        Arc::new(FixedClock(1)),
+    );
+
+    observability.emit(ADMISSION_OK);
+    while observability.counters().writing != 1 {
+        thread::yield_now();
+    }
+
+    for _ in 0..PRIMARY_CAPACITY_V1 {
+        observability.emit(ADMISSION_OK);
+    }
+    observability.emit(SERVICE_FAILED);
+    observability.emit(ADMISSION_OK);
+    observability.emit(SERVICE_FAILED);
+
+    let (lock, ready) = &*permits;
+    *lock.lock().unwrap() = 1;
+    ready.notify_all();
+    while observability.counters().queued != (PRIMARY_CAPACITY_V1 + 2) as u64 {
+        thread::yield_now();
+    }
+
+    observability.emit(ADMISSION_OK);
+
+    for queued in [
+        (PRIMARY_CAPACITY_V1 + 1) as u64,
+        PRIMARY_CAPACITY_V1 as u64,
+        (PRIMARY_CAPACITY_V1 - 1) as u64,
+    ] {
+        *lock.lock().unwrap() += 1;
+        ready.notify_all();
+        while observability.counters().queued != queued {
+            thread::yield_now();
+        }
+    }
+
+    observability.emit(ADMISSION_OK);
+    observability.emit(ADMISSION_OK);
+
+    *lock.lock().unwrap() = PRIMARY_CAPACITY_V1 * 2 + FALLBACK_CAPACITY_V1;
+    ready.notify_all();
+    observability.shutdown();
+
+    let markers = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.as_str() == "ts=1 operation=queue_saturation outcome=saturated\n")
+        .count();
+    assert_eq!(markers, 2);
+}
+
+#[test]
+fn flush_panics_are_accounted_without_panicking_shutdown() {
+    let observability = ObservabilityV1::start(Arc::new(PanicFlushSink), Arc::new(FixedClock(1)));
+    let report = observability.shutdown();
+    assert_eq!(
+        report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    assert_eq!(report.counters().flush_failures, 1);
+}
+
+fn temporary_path(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "podway-observability-{name}-{}",
         std::process::id()
@@ -164,336 +403,45 @@ fn fake_filesystem_path(name: &str) -> PathBuf {
 }
 
 #[test]
-fn events_are_categorical_and_redacted() {
-    let clock = Arc::new(FakeClock::new(42));
-    let sink = Arc::new(FakeSink::default());
-    let observability = ObservabilityV1::start(sink.clone(), clock);
-    observability.emit(EventCategoryV1::Admission, SeverityV1::Info);
-    observability.shutdown();
-    let events = sink.events.lock().unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(
-        events.as_slice(),
-        ["ts=42 severity=INFO category=admission detail=[redacted]\n"]
-    );
-    assert!(!events[0].contains("request-value"));
-}
-
-#[test]
-fn saturated_queues_count_drops_without_blocking_domain_work() {
-    let gate = Arc::new((Mutex::new(false), Condvar::new()));
-    let sink = Arc::new(BlockingSink { gate: gate.clone() });
-    let observability = ObservabilityV1::start(sink, Arc::new(FakeClock::new(1)));
-    let started = Instant::now();
-    for _ in 0..PRIMARY_CAPACITY_V1 + FALLBACK_CAPACITY_V1 + 8 {
-        observability.emit(
-            EventCategoryV1::TerminalOrRequeueOrSaturation,
-            SeverityV1::Error,
-        );
+fn rotation_owns_exactly_canonical_numbered_files() {
+    let path = temporary_path("retention");
+    for suffix in ["0", "00", "01", "6", "99", "000000000000000000000"] {
+        fs::write(
+            path.with_extension(format!("log.{suffix}")),
+            "obsolete rotation",
+        )
+        .unwrap();
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "producer admission must not wait for stderr or the blocked writer"
-    );
-    let counters = observability.counters();
-    assert!(counters.fallback_dropped > 0);
-    assert_eq!(
-        counters.accepted + counters.primary_dropped + counters.fallback_dropped,
-        (PRIMARY_CAPACITY_V1 + FALLBACK_CAPACITY_V1 + 8) as u64
-    );
-    assert_eq!(counters.stderr_dropped, 0);
-    let (locked, ready) = &*gate;
-    *locked.lock().unwrap() = true;
-    ready.notify_all();
-    observability.shutdown();
-}
-
-#[test]
-fn sink_failures_are_counted_and_never_returned_to_producer() {
-    let observability = ObservabilityV1::start(
-        Arc::new(FakeSink {
-            events: Mutex::new(Vec::new()),
-            fail: true,
-        }),
-        Arc::new(FakeClock::new(1)),
-    );
-    observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
-    let report = observability.shutdown();
-    assert_eq!(
-        report.finalization(),
-        ObservabilityFinalizationV1::Completed
-    );
-    assert!(report.counters().sink_failures >= 1);
-}
-#[test]
-fn sink_open_degradation_is_typed_and_counts_every_event() {
-    let observability = ObservabilityV1::start_degraded(Arc::new(FakeClock::new(1)));
-    let emitter = observability.emitter();
-    emitter.emit(EventCategoryV1::Lifecycle, SeverityV1::Warn);
-    emitter.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
-    let report = observability.shutdown();
-    let counters = report.counters();
-    assert_eq!(
-        report.finalization(),
-        ObservabilityFinalizationV1::Completed
-    );
-    assert_eq!(counters.bootstrap_failures, 1);
-    assert_eq!(counters.degraded_dropped, 2);
-    assert_eq!(counters.sink_failures, 0);
-}
-#[test]
-fn worker_panic_clears_gauges_and_counts_the_lost_event() {
-    let observability = ObservabilityV1::start(Arc::new(PanicSink), Arc::new(FakeClock::new(1)));
-    observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
-    let report = observability.shutdown();
-    let counters = report.counters();
-    assert_eq!(
-        report.finalization(),
-        ObservabilityFinalizationV1::Completed
-    );
-    assert_eq!(counters.write_failures, 1);
-    assert_eq!(counters.unflushed, 1);
-    assert_eq!(counters.writing, 0);
-    assert_eq!(counters.queued, 0);
-}
-#[test]
-fn rotation_retains_five_and_fake_clock_prunes_stale_files() {
-    let path = fake_filesystem_path("rotation");
-    let sink = RotatingFileSinkV1::open(&path, Arc::new(FakeClock::new(0))).unwrap();
-    for index in 1..=RETAINED_ROTATIONS_V1 + 1 {
-        fs::write(path.with_extension(format!("log.{index}")), "stale").unwrap();
-    }
+    fs::write(path.with_extension("log.keep"), "neighbor").unwrap();
+    let sink = RotatingFileSinkV1::open(&path).unwrap();
     let event = "x".repeat(8 * 1024);
-    for _ in 0..=(ROTATION_BYTES_V1 as usize / event.len()) {
+    for _ in 0..=(ROTATION_BYTES_V1 as usize / event.len()) * (RETAINED_ROTATIONS_V1 + 1) {
         sink.write_event(&event).unwrap();
     }
-    assert!(path.exists());
     for index in 1..=RETAINED_ROTATIONS_V1 {
         assert!(path.with_extension(format!("log.{index}")).exists());
     }
-    assert!(
-        !path
-            .with_extension(format!("log.{}", RETAINED_ROTATIONS_V1 + 1))
-            .exists()
-    );
-
-    let stale_path = fake_filesystem_path("retention");
-    fs::write(stale_path.with_extension("log.1"), "stale").unwrap();
-    let _stale_sink =
-        RotatingFileSinkV1::open(&stale_path, Arc::new(FakeClock::new(u64::MAX))).unwrap();
-    assert!(
-        !stale_path.with_extension("log.1").exists(),
-        "retention must prune stale rotations during sink open"
-    );
+    for suffix in ["0", "00", "01", "6", "99", "000000000000000000000"] {
+        assert!(!path.with_extension(format!("log.{suffix}")).exists());
+    }
+    assert!(path.with_extension("log.keep").exists());
     let _ = fs::remove_dir_all(path.parent().unwrap());
-    let _ = fs::remove_dir_all(stale_path.parent().unwrap());
 }
 
 #[test]
-fn shutdown_flushes_queued_events() {
-    let sink = Arc::new(FakeSink::default());
-    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FakeClock::new(9)));
-    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Warn);
+fn degraded_mode_bootstrap_failure_is_accounted_and_post_freeze_is_non_mutating() {
+    let observability = ObservabilityV1::start_degraded(Arc::new(FixedClock(1)));
+    let emitter = observability.emitter();
+    emitter.emit(ADMISSION_OK);
     let report = observability.shutdown();
     assert_eq!(
-        report.finalization(),
-        ObservabilityFinalizationV1::Completed
+        (
+            report.counters().sink_failures,
+            report.counters().degraded_dropped
+        ),
+        (1, 1)
     );
-    assert_eq!(report.counters().unflushed, 0);
-    assert_eq!(sink.events.lock().unwrap().len(), 1);
-}
-#[test]
-fn blocked_final_flush_is_bounded_and_classified() {
-    let gate = Arc::new((Mutex::new(false), Condvar::new()));
-    let observability = ObservabilityV1::start(
-        Arc::new(BlockingFlushSink { gate: gate.clone() }),
-        Arc::new(FakeClock::new(1)),
-    );
-    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
-    let started = Instant::now();
-    let report = observability.shutdown_report();
-    let counters = report.counters();
-    assert!(started.elapsed() >= Duration::from_secs(1));
-    assert_eq!(report.finalization(), ObservabilityFinalizationV1::Detached);
-    assert_eq!(counters.shutdown_timeouts, 1);
-    assert_eq!(counters.flushing, 1);
-    let (locked, ready) = &*gate;
-    *locked.lock().unwrap() = true;
-    ready.notify_all();
-}
-
-#[test]
-fn cloneable_emitter_keeps_runtime_observation_separate_from_owner_lifecycle() {
-    let sink = Arc::new(FakeSink::default());
-    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FakeClock::new(0)));
-    let runtime_emitter = observability.emitter();
-    runtime_emitter.emit(EventCategoryV1::StaleEvidence, SeverityV1::Debug);
-    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
-    let report = observability.shutdown();
-    assert_eq!(
-        report.finalization(),
-        ObservabilityFinalizationV1::Completed
-    );
-    assert_eq!(report.counters().queued, 0);
-    assert_eq!(sink.events.lock().unwrap().len(), 2);
-}
-#[test]
-fn producer_does_not_call_a_blocking_clock() {
-    let gate = Arc::new((Mutex::new(false), Condvar::new()));
-    let observability = ObservabilityV1::start(
-        Arc::new(FakeSink::default()),
-        Arc::new(BlockingClock { gate: gate.clone() }),
-    );
-    let started = Instant::now();
-    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
-    assert!(started.elapsed() < Duration::from_millis(100));
-    let (locked, ready) = &*gate;
-    *locked.lock().unwrap() = true;
-    ready.notify_all();
-    observability.shutdown();
-}
-
-#[test]
-fn dropping_owner_accounts_for_blocked_and_queued_events() {
-    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
-    let sink = Arc::new(CountedBlockingSink {
-        gate: gate.clone(),
-        writes: AtomicU64::new(0),
-    });
-    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FakeClock::new(1)));
-    let emitter = observability.emitter();
-    emitter.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
-    emitter.emit(EventCategoryV1::Scheduler, SeverityV1::Info);
-    let (locked, ready) = &*gate;
-    let mut state = locked.lock().unwrap();
-    while !state.1 {
-        state = ready.wait(state).unwrap();
-    }
-    drop(state);
-    let started = Instant::now();
-    drop(observability);
-    assert!(started.elapsed() >= Duration::from_secs(1));
-    let counters = emitter.counters();
-    assert_eq!(counters.shutdown_timeouts, 1);
-    assert_eq!(counters.unflushed, 0);
-    assert_eq!(counters.writing, 1);
-    assert_eq!(sink.writes.load(Ordering::Relaxed), 1);
-    let mut state = locked.lock().unwrap();
-    state.0 = true;
-    ready.notify_all();
-}
-
-#[test]
-fn fallback_entries_precede_primary_backlog_after_blocked_writer() {
-    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
-    let sink = Arc::new(FirstWriteBlockingSink {
-        gate: gate.clone(),
-        events: Mutex::new(Vec::new()),
-    });
-    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FakeClock::new(1)));
-    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
-    let (locked, ready) = &*gate;
-    let mut state = locked.lock().unwrap();
-    while !state.1 {
-        state = ready.wait(state).unwrap();
-    }
-    drop(state);
-    for _ in 0..PRIMARY_CAPACITY_V1 {
-        observability.emit(EventCategoryV1::Scheduler, SeverityV1::Info);
-    }
-    observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
-    let mut state = locked.lock().unwrap();
-    state.0 = true;
-    ready.notify_all();
-    drop(state);
-    observability.shutdown();
-    let events = sink.events.lock().unwrap();
-    assert!(events[0].contains("severity=INFO category=lifecycle"));
-    assert!(events[1].contains("severity=ERROR category=service_outcome"));
-    assert!(events[2].contains("severity=INFO category=scheduler"));
-}
-#[test]
-fn write_losses_and_flush_failure_incidents_are_distinct_in_completed_report() {
-    let write_observability = ObservabilityV1::start(
-        Arc::new(FakeSink {
-            events: Mutex::new(Vec::new()),
-            fail: true,
-        }),
-        Arc::new(FakeClock::new(1)),
-    );
-    write_observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
-    let write_report = write_observability.shutdown_report();
-    assert_eq!(
-        write_report.finalization(),
-        ObservabilityFinalizationV1::Completed
-    );
-    assert_eq!(write_report.counters().unflushed, 1);
-    assert_eq!(write_report.counters().write_failures, 1);
-    assert_eq!(
-        write_report.counters().accepted,
-        write_report.counters().written + write_report.counters().unflushed,
-    );
-
-    let flush_observability =
-        ObservabilityV1::start(Arc::new(FlushFailSink), Arc::new(FakeClock::new(1)));
-    let flush_report = flush_observability.shutdown_report();
-    assert_eq!(
-        flush_report.finalization(),
-        ObservabilityFinalizationV1::Completed
-    );
-    assert_eq!(flush_report.counters().flush_failures, 1);
-    assert_eq!(flush_report.counters().unflushed, 0);
-}
-
-#[test]
-fn frozen_timeout_report_preserves_indeterminate_work_snapshot() {
-    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
-    let sink = Arc::new(CountedBlockingSink {
-        gate: gate.clone(),
-        writes: AtomicU64::new(0),
-    });
-    let observability = ObservabilityV1::start(sink, Arc::new(FakeClock::new(1)));
-    let emitter = observability.emitter();
-    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
-    observability.emit(EventCategoryV1::Scheduler, SeverityV1::Info);
-    let (locked, ready) = &*gate;
-    let mut state = locked.lock().unwrap();
-    while !state.1 {
-        state = ready.wait(state).unwrap();
-    }
-    drop(state);
-    let report = observability.shutdown_report();
-    assert_eq!(report.finalization(), ObservabilityFinalizationV1::Detached);
-    assert_eq!(report.counters().unflushed, 0);
-    assert_eq!(report.counters().writing, 1);
-    assert_eq!(report.counters().queued, 1);
     let frozen = report.counters();
-    emitter.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
+    emitter.emit(ADMISSION_OK);
     assert_eq!(emitter.counters(), frozen);
-    let mut state = locked.lock().unwrap();
-    state.0 = true;
-    ready.notify_all();
-}
-
-#[test]
-fn retention_enforces_five_fresh_numeric_rotations_and_preserves_neighbors() {
-    let path = fake_filesystem_path("arbitrary-retention");
-    fs::write(&path, "active").unwrap();
-    for index in 1..=RETAINED_ROTATIONS_V1 + 1 {
-        fs::write(path.with_extension(format!("log.{index}")), "rotation").unwrap();
-    }
-    let neighbor = path.with_extension("log.backup");
-    fs::write(&neighbor, "neighbor").unwrap();
-    let _sink = RotatingFileSinkV1::open(&path, Arc::new(FakeClock::new(0))).unwrap();
-    assert!(path.exists());
-    for index in 1..=RETAINED_ROTATIONS_V1 {
-        assert!(path.with_extension(format!("log.{index}")).exists());
-    }
-    assert!(
-        !path
-            .with_extension(format!("log.{}", RETAINED_ROTATIONS_V1 + 1))
-            .exists()
-    );
-    assert!(neighbor.exists());
-    let _ = fs::remove_dir_all(path.parent().unwrap());
 }

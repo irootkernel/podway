@@ -17,7 +17,7 @@ use crate::{
     dispatch::DispatchResponseMetadataV1,
     endpoint::{EndpointErrorV1, SingletonEndpointGuardV1, SingletonEndpointV1},
     execution::ExecutionClockV1,
-    observability::{EventCategoryV1, ObservabilityEmitterV1, SeverityV1},
+    observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
     peer::{NativePeerCredentialSourceV1, PeerUidVerifierV1},
     production::{
         NativeProductionClockV1, ProductionMutationWorkerV1, ProductionRequestDispatcherV1,
@@ -332,24 +332,36 @@ impl ProductionDaemonRuntimeV1 {
         Self::bind_with_observability(paths, inspection_options, configuration, None)
     }
 
-    /// Binds a daemon with an optional non-authoritative categorical event producer.
+    /// Binds a daemon with an optional non-authoritative typed event producer.
     pub fn bind_with_observability(
         paths: &ServiceRuntimePathsV1,
         inspection_options: SqliteStoreOptionsV1,
         configuration: ProductionDaemonRuntimeConfigV1,
         observability: Option<ObservabilityEmitterV1>,
     ) -> Result<Self, ProductionDaemonStartupErrorV1> {
-        let endpoint = SingletonEndpointV1::acquire(paths)
-            .map_err(ProductionDaemonStartupErrorV1::EndpointAcquire)?;
-        emit_observation(&observability, EventCategoryV1::Lifecycle, SeverityV1::Info);
-        let manager = Arc::new(WorkspaceRuntimeManagerV1::new(paths, inspection_options));
+        let endpoint = match SingletonEndpointV1::acquire(paths) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                emit_observation(
+                    &observability,
+                    EventOperationV1::DaemonStart,
+                    EventOutcomeV1::Failed,
+                );
+                return Err(ProductionDaemonStartupErrorV1::EndpointAcquire(error));
+            }
+        };
+        let manager = Arc::new(WorkspaceRuntimeManagerV1::with_observability(
+            paths,
+            inspection_options,
+            observability.clone(),
+        ));
         let registry = match manager.registry().load() {
             Ok(registry) => registry,
             Err(registry) => {
                 emit_observation(
                     &observability,
-                    EventCategoryV1::MigrationOrIntegrity,
-                    SeverityV1::Warn,
+                    EventOperationV1::DaemonStart,
+                    EventOutcomeV1::Failed,
                 );
                 return Err(shutdown_after_registry_load_failure(endpoint, registry));
             }
@@ -377,6 +389,11 @@ impl ProductionDaemonRuntimeV1 {
             observability.clone(),
         );
 
+        emit_observation(
+            &observability,
+            EventOperationV1::DaemonStart,
+            EventOutcomeV1::Succeeded,
+        );
         Ok(Self {
             endpoint,
             manager,
@@ -416,7 +433,11 @@ impl ProductionDaemonRuntimeV1 {
         } = self;
         let accept_result = accept_loop.run(endpoint.listener());
         let shutdown_result = endpoint.shutdown();
-        emit_observation(&observability, EventCategoryV1::Lifecycle, SeverityV1::Info);
+        emit_observation(
+            &observability,
+            EventOperationV1::DaemonStop,
+            daemon_stop_outcome(accept_result.is_ok(), shutdown_result.is_ok()),
+        );
 
         match (accept_result, shutdown_result) {
             (Ok(()), Ok(())) => Ok(ProductionDaemonShutdownReportV1::from_recovery(
@@ -440,13 +461,24 @@ impl ProductionDaemonRuntimeV1 {
 
 fn emit_observation(
     observability: &Option<ObservabilityEmitterV1>,
-    category: EventCategoryV1,
-    severity: SeverityV1,
+    operation: EventOperationV1,
+    outcome: EventOutcomeV1,
 ) {
     if let Some(observability) = observability {
-        observability.emit(category, severity);
+        observability.emit(EventRecordV1::new(operation, outcome));
     }
 }
+const fn daemon_stop_outcome(
+    accept_loop_succeeded: bool,
+    endpoint_shutdown_succeeded: bool,
+) -> EventOutcomeV1 {
+    if accept_loop_succeeded && endpoint_shutdown_succeeded {
+        EventOutcomeV1::Succeeded
+    } else {
+        EventOutcomeV1::Failed
+    }
+}
+
 fn shutdown_after_registry_load_failure(
     endpoint: SingletonEndpointGuardV1,
     registry: RegistryErrorV1,
@@ -587,14 +619,13 @@ fn recover_registered_workspaces(
     let report = ProductionDaemonRecoveryReportV1::new(outcomes.into_iter().flatten().collect());
     emit_observation(
         observability,
-        EventCategoryV1::MigrationOrIntegrity,
+        EventOperationV1::IntegrityCheck,
         if report.unavailable_workspace_count() == 0 {
-            SeverityV1::Info
+            EventOutcomeV1::Succeeded
         } else {
-            SeverityV1::Warn
+            EventOutcomeV1::Failed
         },
     );
-    emit_observation(observability, EventCategoryV1::Scheduler, SeverityV1::Info);
     report
 }
 
@@ -711,6 +742,26 @@ fn unavailable_reason_from_worker_error(
         | WorkerErrorV1::BackgroundPanicked
         | WorkerErrorV1::RetirementRejected => {
             WorkspaceRecoveryUnavailableReasonV1::DaemonUnavailable
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EventOutcomeV1, daemon_stop_outcome};
+
+    #[test]
+    fn daemon_stop_requires_complete_runtime_success() {
+        for (accept_loop_succeeded, endpoint_shutdown_succeeded, expected) in [
+            (true, true, EventOutcomeV1::Succeeded),
+            (false, true, EventOutcomeV1::Failed),
+            (true, false, EventOutcomeV1::Failed),
+            (false, false, EventOutcomeV1::Failed),
+        ] {
+            assert_eq!(
+                daemon_stop_outcome(accept_loop_succeeded, endpoint_shutdown_succeeded),
+                expected
+            );
         }
     }
 }

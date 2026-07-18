@@ -56,7 +56,7 @@ use crate::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeWorkspaceRevalidatorV1,
         WallUtcExecutionClockV1,
     },
-    observability::{EventCategoryV1, ObservabilityEmitterV1, SeverityV1},
+    observability::ObservabilityEmitterV1,
     read_service::{
         AuthoritativeReadServiceV1, MonotonicClockV1, MonotonicDeadlineV1, ReadNotificationErrorV1,
         ReadNotificationV1, ReadNotificationVersionV1, ReadServiceErrorV1, ReadWaitOutcomeV1,
@@ -294,23 +294,19 @@ impl NativeContextExecutionV1 {
         Self { observability }
     }
 
-    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
-        if let Some(observability) = &self.observability {
-            observability.emit(category, severity);
-        }
-    }
-
     fn engine(
         context: &WorkspaceSchedulerContextV1,
+        observability: Option<ObservabilityEmitterV1>,
     ) -> Result<ProductionExecutionEngineV1, crate::execution::ExecutionErrorV1> {
         let options = context.store_options().clone();
-        Ok(DaemonExecutionEngineV1::new(
+        Ok(DaemonExecutionEngineV1::with_observability(
             context.store_for_mutation(),
             NativeExecutionIdSourceV1,
             WallUtcExecutionClockV1,
             EmbeddedPresetProcedureProviderV1,
             NativeArtifactVerifierV1::new(SqliteWorkspaceBindingInspectorV1::new(options.clone())),
             NativeWorkspaceRevalidatorV1::new(SqliteWorkspaceBindingInspectorV1::new(options)),
+            observability,
         ))
     }
     /// Builds a preparation-only engine for a reset whose previous Store cannot be read. Its
@@ -345,16 +341,11 @@ impl WorkerExecutionV1<WorkspaceSchedulerContextV1> for NativeContextExecutionV1
                 },
             );
         }
-        let result = Self::engine(context)?.admit_for_workspace(binding, request, idempotency_key);
-        self.emit(
-            EventCategoryV1::Admission,
-            if result.is_ok() {
-                SeverityV1::Info
-            } else {
-                SeverityV1::Warn
-            },
-        );
-        result
+        Self::engine(context, self.observability.clone())?.admit_for_workspace(
+            binding,
+            request,
+            idempotency_key,
+        )
     }
 
     fn execute_next(
@@ -370,16 +361,7 @@ impl WorkerExecutionV1<WorkspaceSchedulerContextV1> for NativeContextExecutionV1
                 },
             );
         }
-        let result = Self::engine(context)?.execute_next(binding, worker);
-        self.emit(
-            EventCategoryV1::CancelOrClaim,
-            match &result {
-                Ok(Some(_)) => SeverityV1::Info,
-                Ok(None) => SeverityV1::Debug,
-                Err(_) => SeverityV1::Error,
-            },
-        );
-        result
+        Self::engine(context, self.observability.clone())?.execute_next(binding, worker)
     }
 }
 
@@ -792,7 +774,7 @@ impl ProductionMutationWorkerV1 {
                 DispatchFailureKindV1::WorkspaceMaintenance,
             ));
         }
-        let engine = NativeContextExecutionV1::engine(context.as_ref())
+        let engine = NativeContextExecutionV1::engine(context.as_ref(), None)
             .map_err(map_reset_preparation_error)?;
         match engine.prepare_workspace_reset_all(request, &source_identity, idempotency_key.clone())
         {
@@ -1039,7 +1021,7 @@ pub fn compose_dispatcher_with_worker_v1(
 }
 
 /// Builds the exact production dispatcher and worker pair with an optional non-authoritative
-/// categorical producer.
+/// typed event producer.
 pub fn compose_dispatcher_with_worker_and_observability_v1(
     manager: Arc<WorkspaceRuntimeManagerV1>,
     worker_id: WorkerIdV1,

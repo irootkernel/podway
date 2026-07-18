@@ -18,7 +18,9 @@ use std::{
 };
 
 use podway_daemon::{
-    observability::{ClockV1, LogSinkV1, ObservabilityFinalizationV1, ObservabilityV1},
+    observability::{
+        ClockErrorV1, ClockV1, LogSinkV1, ObservabilityFinalizationV1, ObservabilityV1,
+    },
     peer::{FixedPeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1},
     server::{
         BoundedAcceptLoopV1, ConnectionHandlerSpawnerV1, FixedResponseMetadataSourceV1,
@@ -66,8 +68,8 @@ impl LogSinkV1 for CapturingObservabilitySink {
 struct FixedObservabilityClock;
 
 impl ClockV1 for FixedObservabilityClock {
-    fn unix_seconds(&self) -> u64 {
-        42
+    fn unix_seconds(&self) -> Result<u64, ClockErrorV1> {
+        Ok(42)
     }
 }
 
@@ -577,6 +579,281 @@ fn read_timeout_returns_sanitized_internal_error_and_retains_frame_io_evidence()
 }
 
 #[test]
+fn disconnected_client_response_failure_emits_typed_failed_evidence() {
+    let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::new(CapturingObservabilitySink::default());
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedObservabilityClock));
+    let transport = Arc::new(UnixServerTransportV1::with_metadata_and_observability(
+        PeerUidVerifierV1::new(EXPECTED_UID, FixedPeerCredentialSourceV1::uid(EXPECTED_UID)),
+        BlockingDispatcher {
+            gate: Arc::clone(&gate),
+            calls,
+            completed: Arc::new(AtomicUsize::new(0)),
+        },
+        ServerTransportTimeoutsV1::default(),
+        metadata(),
+        Some(observability.emitter()),
+    ));
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &request_frame(&request()));
+    wait_for_dispatcher_entry(&gate);
+    drop(client);
+    release_dispatcher(&gate);
+
+    assert!(matches!(
+        handler.join().expect("handler must not panic"),
+        Err(ServerConnectionErrorV1::ResponseWrite(_))
+            | Err(ServerConnectionErrorV1::ResponseFlush(_))
+    ));
+    let report = observability.shutdown();
+    assert_eq!(
+        report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    assert_eq!(
+        sink.events
+            .lock()
+            .expect("observability events lock must not be poisoned")
+            .as_slice(),
+        [
+            "ts=42 operation=service_dispatch outcome=succeeded\n",
+            "ts=42 operation=response_write outcome=failed\n",
+        ]
+    );
+}
+#[test]
+fn accept_loop_does_not_add_a_service_failure_for_handler_completion() {
+    let fixture = SocketFixture::new();
+    let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::new(CapturingObservabilitySink::default());
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedObservabilityClock));
+    let emitter = observability.emitter();
+    let transport = Arc::new(UnixServerTransportV1::with_metadata_and_observability(
+        PeerUidVerifierV1::new(EXPECTED_UID, FixedPeerCredentialSourceV1::uid(EXPECTED_UID)),
+        BlockingDispatcher {
+            gate: Arc::clone(&gate),
+            calls: Arc::clone(&calls),
+            completed: Arc::new(AtomicUsize::new(0)),
+        },
+        ServerTransportTimeoutsV1::default(),
+        metadata(),
+        Some(emitter.clone()),
+    ));
+    let admission = ShutdownAdmissionV1::new();
+    let accept_loop = BoundedAcceptLoopV1::new_with_observability(
+        transport,
+        admission.clone(),
+        NonZeroUsize::new(1).expect("one is nonzero"),
+        Some(emitter),
+    );
+    let listener = fixture
+        .listener
+        .try_clone()
+        .expect("listener must clone for accept loop");
+    let loop_thread = thread::spawn(move || accept_loop.run(&listener));
+
+    let mut client = UnixStream::connect(&fixture.socket_path).expect("client must connect");
+    send_and_half_close(&mut client, &request_frame(&request()));
+    wait_for_dispatcher_entry(&gate);
+    drop(client);
+    release_dispatcher(&gate);
+    admission.request_shutdown();
+
+    assert!(
+        loop_thread
+            .join()
+            .expect("accept loop must not panic")
+            .is_ok()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let report = observability.shutdown();
+    assert_eq!(
+        report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    let events = sink
+        .events
+        .lock()
+        .expect("observability events lock must not be poisoned");
+    assert_eq!(
+        events.first().map(String::as_str),
+        Some("ts=42 operation=connection_accepted outcome=succeeded\n")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "ts=42 operation=service_dispatch outcome=succeeded\n")
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event == "ts=42 operation=transport_service_request outcome=failed\n")
+    );
+}
+#[test]
+fn accept_loop_rejects_queued_connections_at_capacity_with_one_saturation_event() {
+    let fixture = SocketFixture::new();
+    let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::new(CapturingObservabilitySink::default());
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedObservabilityClock));
+    let emitter = observability.emitter();
+    let transport = Arc::new(UnixServerTransportV1::with_metadata_and_observability(
+        PeerUidVerifierV1::new(EXPECTED_UID, FixedPeerCredentialSourceV1::uid(EXPECTED_UID)),
+        BlockingDispatcher {
+            gate: Arc::clone(&gate),
+            calls: Arc::clone(&calls),
+            completed: Arc::new(AtomicUsize::new(0)),
+        },
+        ServerTransportTimeoutsV1::default(),
+        metadata(),
+        Some(emitter.clone()),
+    ));
+    let admission = ShutdownAdmissionV1::new();
+    let accept_loop = BoundedAcceptLoopV1::new_with_observability(
+        transport,
+        admission.clone(),
+        NonZeroUsize::new(1).expect("one is nonzero"),
+        Some(emitter),
+    );
+    let listener = fixture
+        .listener
+        .try_clone()
+        .expect("listener must clone for accept loop");
+    let loop_thread = thread::spawn(move || accept_loop.run(&listener));
+
+    let mut first = UnixStream::connect(&fixture.socket_path).expect("first client must connect");
+    send_and_half_close(&mut first, &request_frame(&request()));
+    wait_for_dispatcher_entry(&gate);
+
+    let mut rejected = UnixStream::connect(&fixture.socket_path)
+        .expect("second client must queue while the first handler is admitted");
+    rejected
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .expect("rejected client read timeout must configure");
+    assert_eq!(
+        rejected
+            .read(&mut [0_u8; 1])
+            .expect("capacity-rejected client must close"),
+        0
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    admission.request_shutdown();
+    release_dispatcher(&gate);
+    match read_response(&mut first) {
+        ResponseEnvelopeV1::Output(_) => {}
+        ResponseEnvelopeV1::Error(error) => panic!("admitted request must finish: {error:?}"),
+    }
+    assert!(
+        loop_thread
+            .join()
+            .expect("accept loop must not panic")
+            .is_ok()
+    );
+
+    let report = observability.shutdown();
+    assert_eq!(
+        report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    let events = sink
+        .events
+        .lock()
+        .expect("observability events lock must not be poisoned");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                event.as_str() == "ts=42 operation=connection_accepted outcome=succeeded\n"
+            })
+            .count(),
+        2,
+        "both the admitted and capacity-rejected sockets must reach the accept boundary"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                event.as_str() == "ts=42 operation=admission_saturation outcome=saturated\n"
+            })
+            .count(),
+        1,
+        "one capacity episode must report one saturation event"
+    );
+}
+
+#[test]
+fn accept_loop_records_peer_rejection_without_service_failure() {
+    let fixture = SocketFixture::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::new(CapturingObservabilitySink::default());
+    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedObservabilityClock));
+    let emitter = observability.emitter();
+    let transport = Arc::new(UnixServerTransportV1::with_metadata_and_observability(
+        PeerUidVerifierV1::new(
+            EXPECTED_UID,
+            FixedPeerCredentialSourceV1::uid(EXPECTED_UID + 1),
+        ),
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        ServerTransportTimeoutsV1::default(),
+        metadata(),
+        Some(emitter.clone()),
+    ));
+    let admission = ShutdownAdmissionV1::new();
+    let accept_loop = BoundedAcceptLoopV1::new_with_observability(
+        transport,
+        admission.clone(),
+        NonZeroUsize::new(1).expect("one is nonzero"),
+        Some(emitter),
+    );
+    let listener = fixture
+        .listener
+        .try_clone()
+        .expect("listener must clone for accept loop");
+    let loop_thread = thread::spawn(move || accept_loop.run(&listener));
+
+    let mut client = UnixStream::connect(&fixture.socket_path).expect("client must connect");
+    assert_eq!(
+        client
+            .read(&mut [0_u8; 1])
+            .expect("rejected client must close"),
+        0
+    );
+    admission.request_shutdown();
+
+    assert!(
+        loop_thread
+            .join()
+            .expect("accept loop must not panic")
+            .is_ok()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let report = observability.shutdown();
+    assert_eq!(
+        report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    assert_eq!(
+        sink.events
+            .lock()
+            .expect("observability events lock must not be poisoned")
+            .as_slice(),
+        [
+            "ts=42 operation=connection_accepted outcome=succeeded\n",
+            "ts=42 operation=peer_admission outcome=rejected\n",
+        ]
+    );
+}
+#[test]
 fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
     let fixture = SocketFixture::new();
     let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
@@ -644,14 +921,20 @@ fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
     assert!(
         events
             .iter()
-            .any(|event| event.contains("category=admission")),
-        "the real accept boundary must emit admission evidence"
+            .any(|event| event.contains("operation=connection_accepted outcome=succeeded")),
+        "the real accept boundary must emit accepted-connection evidence"
     );
     assert!(
         events
             .iter()
-            .any(|event| event.contains("category=service_outcome")),
+            .any(|event| event.contains("operation=service_dispatch outcome=succeeded")),
         "the real dispatch boundary must emit service outcome evidence"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.contains("operation=admission_saturation outcome=saturated")),
+        "shutdown closure is not admission saturation"
     );
     drop(second);
 }

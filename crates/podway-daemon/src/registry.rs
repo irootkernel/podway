@@ -16,7 +16,9 @@ use std::{
     },
 };
 
-use crate::observability::{EventCategoryV1, ObservabilityV1, SeverityV1};
+use crate::observability::{
+    EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1,
+};
 use nix::{
     errno::Errno,
     fcntl::{Flock, FlockArg, OFlag, open},
@@ -456,7 +458,7 @@ pub struct RegistryStoreV1 {
     failpoint: Option<RegistryFailpointV1>,
     failpoint_action: RegistryFailpointActionV1,
     in_process_lock: Mutex<()>,
-    observability: Option<Arc<Mutex<ObservabilityV1>>>,
+    observability: Option<ObservabilityEmitterV1>,
 }
 
 impl RegistryStoreV1 {
@@ -466,7 +468,7 @@ impl RegistryStoreV1 {
 
     pub(crate) fn with_observability(
         paths: &ServiceRuntimePathsV1,
-        observability: Option<Arc<Mutex<ObservabilityV1>>>,
+        observability: Option<ObservabilityEmitterV1>,
     ) -> Self {
         Self::with_optional_failpoint(
             paths,
@@ -491,7 +493,7 @@ impl RegistryStoreV1 {
         paths: &ServiceRuntimePathsV1,
         failpoint: Option<RegistryFailpointV1>,
         failpoint_action: RegistryFailpointActionV1,
-        observability: Option<Arc<Mutex<ObservabilityV1>>>,
+        observability: Option<ObservabilityEmitterV1>,
     ) -> Self {
         Self {
             registry_path: paths.workspace_registry_path().as_path().to_path_buf(),
@@ -511,14 +513,12 @@ impl RegistryStoreV1 {
         let result = self.with_locked(|parent, current_uid| {
             read_registry_v1(&self.registry_path, parent, current_uid)
         });
-        self.emit(
-            EventCategoryV1::MigrationOrIntegrity,
-            if result.is_ok() {
-                SeverityV1::Debug
-            } else {
-                SeverityV1::Warn
-            },
-        );
+        if result.is_err() {
+            self.emit(EventRecordV1::new(
+                EventOperationV1::IntegrityCheck,
+                EventOutcomeV1::Failed,
+            ));
+        }
         result
     }
 
@@ -772,9 +772,6 @@ impl RegistryStoreV1 {
             ensure_private_parent_v1(&parent, current_uid)?;
             operation(&parent, current_uid)
         })();
-        if result.is_err() {
-            self.emit(EventCategoryV1::MigrationOrIntegrity, SeverityV1::Warn);
-        }
         let unlock = Flock::unlock(lock).map_err(|(_, source)| RegistryErrorV1::LockRelease {
             path: lock_path,
             source,
@@ -813,13 +810,9 @@ impl RegistryStoreV1 {
         Ok(parent.join(lock_name))
     }
 
-    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
-        let observer = self
-            .observability
-            .as_ref()
-            .and_then(|observability| observability.try_lock().ok());
-        if let Some(observability) = observer {
-            observability.emit(category, severity);
+    fn emit(&self, event: EventRecordV1) {
+        if let Some(observability) = &self.observability {
+            observability.emit(event);
         }
     }
     fn trigger_failpoint(&self, point: RegistryFailpointV1) -> Result<(), RegistryErrorV1> {
@@ -1065,7 +1058,10 @@ fn persist_registry_v1(
     }
     store.trigger_failpoint(RegistryFailpointV1::AfterRenameBeforeParentSync)?;
     sync_parent_v1(parent)?;
-    store.emit(EventCategoryV1::MoveOrRepair, SeverityV1::Info);
+    store.emit(EventRecordV1::new(
+        EventOperationV1::ArtifactMove,
+        EventOutcomeV1::Succeeded,
+    ));
     Ok(())
 }
 

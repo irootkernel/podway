@@ -28,7 +28,7 @@ use podway_protocol::{
 use serde_json::{Map, Value};
 
 use crate::{
-    observability::{EventCategoryV1, ObservabilityEmitterV1, SeverityV1},
+    observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
     peer::{PeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1},
 };
 
@@ -453,6 +453,41 @@ impl<Source, Dispatcher, Metadata> UnixServerTransportV1<Source, Dispatcher, Met
     }
 }
 
+trait ConnectionSetupV1 {
+    fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()>;
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+}
+
+impl ConnectionSetupV1 for UnixStream {
+    fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+        UnixStream::set_nonblocking(self, nonblocking)
+    }
+
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        UnixStream::set_read_timeout(self, timeout)
+    }
+
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        UnixStream::set_write_timeout(self, timeout)
+    }
+}
+
+fn configure_connection(
+    connection: &impl ConnectionSetupV1,
+    timeouts: ServerTransportTimeoutsV1,
+) -> Result<(), ServerConnectionErrorV1> {
+    connection
+        .set_nonblocking(false)
+        .map_err(ServerConnectionErrorV1::ConfigureBlocking)?;
+    connection
+        .set_read_timeout(Some(timeouts.read()))
+        .map_err(ServerConnectionErrorV1::ConfigureReadTimeout)?;
+    connection
+        .set_write_timeout(Some(timeouts.write()))
+        .map_err(ServerConnectionErrorV1::ConfigureWriteTimeout)
+}
+
 impl<Source, Dispatcher, Metadata> UnixServerTransportV1<Source, Dispatcher, Metadata>
 where
     Source: PeerCredentialSourceV1,
@@ -467,20 +502,19 @@ where
         if let Err(error) = self.verifier.verify(&connection) {
             emit_observation(
                 &self.observability,
-                EventCategoryV1::Admission,
-                SeverityV1::Warn,
+                EventOperationV1::PeerAdmission,
+                EventOutcomeV1::Rejected,
             );
             return Err(ServerConnectionErrorV1::Peer(error));
         }
-        connection
-            .set_nonblocking(false)
-            .map_err(ServerConnectionErrorV1::ConfigureBlocking)?;
-        connection
-            .set_read_timeout(Some(self.timeouts.read()))
-            .map_err(ServerConnectionErrorV1::ConfigureReadTimeout)?;
-        connection
-            .set_write_timeout(Some(self.timeouts.write()))
-            .map_err(ServerConnectionErrorV1::ConfigureWriteTimeout)?;
+        if let Err(error) = configure_connection(&connection, self.timeouts) {
+            emit_observation(
+                &self.observability,
+                EventOperationV1::ConnectionSetup,
+                EventOutcomeV1::Failed,
+            );
+            return Err(error);
+        }
 
         let (frame, recorded) = {
             let mut recorder = RecordingReaderV1::new(&mut connection);
@@ -492,8 +526,8 @@ where
             Ok(None) => {
                 emit_observation(
                     &self.observability,
-                    EventCategoryV1::ServiceOutcome,
-                    SeverityV1::Warn,
+                    EventOperationV1::TransportServiceRequest,
+                    EventOutcomeV1::Rejected,
                 );
                 return self.write_transport_error(
                     &mut connection,
@@ -504,8 +538,8 @@ where
             Err(error) => {
                 emit_observation(
                     &self.observability,
-                    EventCategoryV1::ServiceOutcome,
-                    SeverityV1::Warn,
+                    EventOperationV1::TransportServiceRequest,
+                    EventOutcomeV1::Rejected,
                 );
                 let context = recover_request_context_from_recorded_frame(&recorded);
                 self.write_transport_error(&mut connection, context, classify_frame_error(&error))?;
@@ -528,8 +562,8 @@ where
             Err(error) => {
                 emit_observation(
                     &self.observability,
-                    EventCategoryV1::ServiceOutcome,
-                    SeverityV1::Warn,
+                    EventOperationV1::TransportServiceRequest,
+                    EventOutcomeV1::Rejected,
                 );
                 return self.write_transport_error(
                     &mut connection,
@@ -543,8 +577,8 @@ where
             Err(_) => {
                 emit_observation(
                     &self.observability,
-                    EventCategoryV1::ServiceOutcome,
-                    SeverityV1::Warn,
+                    EventOperationV1::TransportServiceRequest,
+                    EventOutcomeV1::Rejected,
                 );
                 return self.write_transport_error(
                     &mut connection,
@@ -558,10 +592,10 @@ where
         if response_matches_request(&response, &request) && response.validate().is_ok() {
             emit_observation(
                 &self.observability,
-                EventCategoryV1::ServiceOutcome,
+                EventOperationV1::ServiceDispatch,
                 match &response {
-                    ResponseEnvelopeV1::Output(_) => SeverityV1::Info,
-                    ResponseEnvelopeV1::Error(_) => SeverityV1::Warn,
+                    ResponseEnvelopeV1::Output(_) => EventOutcomeV1::Succeeded,
+                    ResponseEnvelopeV1::Error(_) => EventOutcomeV1::Rejected,
                 },
             );
             return self.write_response(&mut connection, &response);
@@ -569,8 +603,8 @@ where
 
         emit_observation(
             &self.observability,
-            EventCategoryV1::ServiceOutcome,
-            SeverityV1::Error,
+            EventOperationV1::ServiceDispatch,
+            EventOutcomeV1::Failed,
         );
         let response = self.transport_error_response(
             Some(RequestContextV1::from_request(&request)),
@@ -669,12 +703,22 @@ where
         connection: &mut UnixStream,
         response: &ResponseEnvelopeV1,
     ) -> Result<(), ServerConnectionErrorV1> {
-        let payload = encode_response_payload_v1(response)
-            .map_err(ServerConnectionErrorV1::ResponseEncode)?;
-        write_frame_v1(connection, &payload).map_err(ServerConnectionErrorV1::ResponseWrite)?;
-        connection
-            .flush()
-            .map_err(ServerConnectionErrorV1::ResponseFlush)
+        let result = (|| {
+            let payload = encode_response_payload_v1(response)
+                .map_err(ServerConnectionErrorV1::ResponseEncode)?;
+            write_frame_v1(connection, &payload).map_err(ServerConnectionErrorV1::ResponseWrite)?;
+            connection
+                .flush()
+                .map_err(ServerConnectionErrorV1::ResponseFlush)
+        })();
+        if result.is_err() {
+            emit_observation(
+                &self.observability,
+                EventOperationV1::ResponseWrite,
+                EventOutcomeV1::Failed,
+            );
+        }
+        result
     }
 }
 
@@ -795,11 +839,11 @@ fn response_matches_request(response: &ResponseEnvelopeV1, request: &RequestEnve
 
 fn emit_observation(
     observability: &Option<ObservabilityEmitterV1>,
-    category: EventCategoryV1,
-    severity: SeverityV1,
+    operation: EventOperationV1,
+    outcome: EventOutcomeV1,
 ) {
     if let Some(observability) = observability {
-        observability.emit(category, severity);
+        observability.emit(EventRecordV1::new(operation, outcome));
     }
 }
 /// Failures that invalidate the admission invariant.
@@ -834,6 +878,13 @@ struct ShutdownAdmissionInnerV1 {
 struct ShutdownAdmissionStateV1 {
     accepting: bool,
     in_flight: usize,
+}
+
+#[derive(Debug)]
+enum ShutdownAdmissionOutcomeV1 {
+    Admitted(ShutdownAdmissionTicketV1),
+    Closed,
+    AtCapacity,
 }
 
 impl ShutdownAdmissionV1 {
@@ -892,15 +943,20 @@ impl ShutdownAdmissionV1 {
     fn try_admit(
         &self,
         maximum: NonZeroUsize,
-    ) -> Result<Option<ShutdownAdmissionTicketV1>, ShutdownAdmissionErrorV1> {
+    ) -> Result<ShutdownAdmissionOutcomeV1, ShutdownAdmissionErrorV1> {
         let mut state = self.lock_state()?;
-        if !state.accepting || state.in_flight >= maximum.get() {
-            return Ok(None);
+        if !state.accepting {
+            return Ok(ShutdownAdmissionOutcomeV1::Closed);
+        }
+        if state.in_flight >= maximum.get() {
+            return Ok(ShutdownAdmissionOutcomeV1::AtCapacity);
         }
         state.in_flight += 1;
-        Ok(Some(ShutdownAdmissionTicketV1 {
-            admission: self.clone(),
-        }))
+        Ok(ShutdownAdmissionOutcomeV1::Admitted(
+            ShutdownAdmissionTicketV1 {
+                admission: self.clone(),
+            },
+        ))
     }
 
     fn at_capacity(&self, maximum: NonZeroUsize) -> Result<bool, ShutdownAdmissionErrorV1> {
@@ -1074,12 +1130,18 @@ where
     /// The loop intentionally owns no endpoint path state. Callers pass the listener supplied by
     /// [`crate::endpoint::SingletonEndpointGuardV1`].
     pub fn run(&self, listener: &UnixListener) -> Result<(), ServerAcceptLoopErrorV1> {
-        listener
-            .set_nonblocking(true)
-            .map_err(ServerAcceptLoopErrorV1::ConfigureNonblocking)?;
+        if let Err(error) = listener.set_nonblocking(true) {
+            emit_observation(
+                &self.observability,
+                EventOperationV1::ConnectionSetup,
+                EventOutcomeV1::Failed,
+            );
+            return Err(ServerAcceptLoopErrorV1::ConfigureNonblocking(error));
+        }
 
         let mut handlers = Vec::new();
         let mut terminal_error = None;
+        let mut saturation_reported = false;
         loop {
             match self.admission.try_is_accepting() {
                 Ok(true) => {}
@@ -1087,33 +1149,32 @@ where
                 Err(error) => {
                     emit_observation(
                         &self.observability,
-                        EventCategoryV1::Admission,
-                        SeverityV1::Error,
+                        EventOperationV1::ConnectionSetup,
+                        EventOutcomeV1::Failed,
                     );
                     terminal_error = Some(ServerAcceptLoopErrorV1::Admission(error));
                     break;
                 }
             }
             if reap_finished_handlers(&mut handlers) {
+                emit_observation(
+                    &self.observability,
+                    EventOperationV1::HandlerJoin,
+                    EventOutcomeV1::Failed,
+                );
                 self.admission.request_shutdown();
                 terminal_error = Some(ServerAcceptLoopErrorV1::HandlerPanicked);
                 continue;
             }
             match self.admission.at_capacity(self.maximum_in_flight) {
-                Ok(true) => {
+                Ok(true) => {}
+                Ok(false) => saturation_reported = false,
+                Err(error) => {
                     emit_observation(
                         &self.observability,
-                        EventCategoryV1::TerminalOrRequeueOrSaturation,
-                        SeverityV1::Warn,
+                        EventOperationV1::ConnectionSetup,
+                        EventOutcomeV1::Failed,
                     );
-                    if let Err(error) = self.admission.wait_for_progress(self.poll_interval) {
-                        terminal_error = Some(ServerAcceptLoopErrorV1::Admission(error));
-                        break;
-                    }
-                    continue;
-                }
-                Ok(false) => {}
-                Err(error) => {
                     terminal_error = Some(ServerAcceptLoopErrorV1::Admission(error));
                     break;
                 }
@@ -1121,28 +1182,30 @@ where
 
             match listener.accept() {
                 Ok((connection, _)) => {
+                    emit_observation(
+                        &self.observability,
+                        EventOperationV1::ConnectionAccepted,
+                        EventOutcomeV1::Succeeded,
+                    );
                     let ticket = match self.admission.try_admit(self.maximum_in_flight) {
-                        Ok(Some(ticket)) => {
-                            emit_observation(
-                                &self.observability,
-                                EventCategoryV1::Admission,
-                                SeverityV1::Info,
-                            );
-                            ticket
-                        }
-                        Ok(None) => {
-                            emit_observation(
-                                &self.observability,
-                                EventCategoryV1::Admission,
-                                SeverityV1::Warn,
-                            );
+                        Ok(ShutdownAdmissionOutcomeV1::Admitted(ticket)) => ticket,
+                        Ok(ShutdownAdmissionOutcomeV1::Closed) => continue,
+                        Ok(ShutdownAdmissionOutcomeV1::AtCapacity) => {
+                            if !saturation_reported {
+                                emit_observation(
+                                    &self.observability,
+                                    EventOperationV1::AdmissionSaturation,
+                                    EventOutcomeV1::Saturated,
+                                );
+                                saturation_reported = true;
+                            }
                             continue;
                         }
                         Err(error) => {
                             emit_observation(
                                 &self.observability,
-                                EventCategoryV1::Admission,
-                                SeverityV1::Error,
+                                EventOperationV1::ConnectionSetup,
+                                EventOutcomeV1::Failed,
                             );
                             terminal_error = Some(ServerAcceptLoopErrorV1::Admission(error));
                             break;
@@ -1151,17 +1214,15 @@ where
                     let transport = Arc::clone(&self.transport);
                     let handler = Box::new(move || {
                         let _ticket = ticket;
-                        if let Err(error) = transport.handle_connection(connection) {
-                            eprintln!("podwayd connection failed: {error}");
-                        }
+                        let _ = transport.handle_connection(connection);
                     });
                     match self.handler_spawner.spawn(handler) {
                         Ok(handler) => handlers.push(handler),
                         Err(error) => {
                             emit_observation(
                                 &self.observability,
-                                EventCategoryV1::Scheduler,
-                                SeverityV1::Error,
+                                EventOperationV1::ConnectionSetup,
+                                EventOutcomeV1::Failed,
                             );
                             self.admission.request_shutdown();
                             terminal_error = Some(ServerAcceptLoopErrorV1::SpawnHandler(error));
@@ -1171,6 +1232,11 @@ where
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if let Err(error) = self.admission.wait_for_progress(self.poll_interval) {
+                        emit_observation(
+                            &self.observability,
+                            EventOperationV1::ConnectionSetup,
+                            EventOutcomeV1::Failed,
+                        );
                         terminal_error = Some(ServerAcceptLoopErrorV1::Admission(error));
                         break;
                     }
@@ -1179,8 +1245,8 @@ where
                 Err(error) => {
                     emit_observation(
                         &self.observability,
-                        EventCategoryV1::Admission,
-                        SeverityV1::Error,
+                        EventOperationV1::ConnectionSetup,
+                        EventOutcomeV1::Failed,
                     );
                     self.admission.request_shutdown();
                     terminal_error = Some(ServerAcceptLoopErrorV1::Accept(error));
@@ -1190,6 +1256,11 @@ where
         }
 
         if reap_all_handlers(handlers) {
+            emit_observation(
+                &self.observability,
+                EventOperationV1::HandlerJoin,
+                EventOutcomeV1::Failed,
+            );
             terminal_error.get_or_insert(ServerAcceptLoopErrorV1::HandlerPanicked);
         }
         match terminal_error {
@@ -1280,12 +1351,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn admission_outcomes_distinguish_capacity_from_shutdown_closure() {
+        let admission = ShutdownAdmissionV1::new();
+        let maximum = NonZeroUsize::new(1).expect("one is nonzero");
+        let ticket = match admission
+            .try_admit(maximum)
+            .expect("fresh admission state must not be poisoned")
+        {
+            ShutdownAdmissionOutcomeV1::Admitted(ticket) => ticket,
+            ShutdownAdmissionOutcomeV1::Closed | ShutdownAdmissionOutcomeV1::AtCapacity => {
+                panic!("fresh admission state must admit one ticket")
+            }
+        };
+
+        assert!(matches!(
+            admission.try_admit(maximum),
+            Ok(ShutdownAdmissionOutcomeV1::AtCapacity)
+        ));
+        drop(ticket);
+        admission.request_shutdown();
+        assert!(matches!(
+            admission.try_admit(maximum),
+            Ok(ShutdownAdmissionOutcomeV1::Closed)
+        ));
+    }
+    #[test]
     fn poisoned_admission_closes_and_releases_existing_tickets() {
         let admission = ShutdownAdmissionV1::new();
-        let ticket = admission
+        let ticket = match admission
             .try_admit(NonZeroUsize::new(1).expect("one is nonzero"))
             .expect("fresh admission state must not be poisoned")
-            .expect("fresh admission state must admit one ticket");
+        {
+            ShutdownAdmissionOutcomeV1::Admitted(ticket) => ticket,
+            ShutdownAdmissionOutcomeV1::Closed | ShutdownAdmissionOutcomeV1::AtCapacity => {
+                panic!("fresh admission state must admit one ticket")
+            }
+        };
         let inner = Arc::clone(&admission.inner);
         let poisoner = thread::spawn(move || {
             let _guard = inner.state.lock().expect("fresh state lock must succeed");
@@ -1309,5 +1410,84 @@ mod tests {
             .into_inner();
         assert!(!state.accepting);
         assert_eq!(state.in_flight, 0);
+    }
+    #[derive(Clone, Copy)]
+    enum SetupFailureV1 {
+        Blocking,
+        ReadTimeout,
+        WriteTimeout,
+    }
+
+    struct FailingConnectionSetupV1 {
+        failure: SetupFailureV1,
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl ConnectionSetupV1 for FailingConnectionSetupV1 {
+        fn set_nonblocking(&self, _: bool) -> io::Result<()> {
+            self.calls.set(self.calls.get() + 1);
+            match self.failure {
+                SetupFailureV1::Blocking => Err(io::Error::other("injected blocking failure")),
+                SetupFailureV1::ReadTimeout | SetupFailureV1::WriteTimeout => Ok(()),
+            }
+        }
+
+        fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+            self.calls.set(self.calls.get() + 1);
+            match self.failure {
+                SetupFailureV1::ReadTimeout => {
+                    Err(io::Error::other("injected read timeout failure"))
+                }
+                SetupFailureV1::Blocking | SetupFailureV1::WriteTimeout => Ok(()),
+            }
+        }
+
+        fn set_write_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+            self.calls.set(self.calls.get() + 1);
+            match self.failure {
+                SetupFailureV1::WriteTimeout => {
+                    Err(io::Error::other("injected write timeout failure"))
+                }
+                SetupFailureV1::Blocking | SetupFailureV1::ReadTimeout => Ok(()),
+            }
+        }
+    }
+
+    #[test]
+    fn connection_setup_failures_are_typed_and_stop_at_the_failing_step() {
+        for (failure, expected_calls) in [
+            (SetupFailureV1::Blocking, 1),
+            (SetupFailureV1::ReadTimeout, 2),
+            (SetupFailureV1::WriteTimeout, 3),
+        ] {
+            let connection = FailingConnectionSetupV1 {
+                failure,
+                calls: std::cell::Cell::new(0),
+            };
+            let error = configure_connection(&connection, ServerTransportTimeoutsV1::default())
+                .expect_err("injected setup operation must fail");
+
+            assert_eq!(connection.calls.get(), expected_calls);
+            match failure {
+                SetupFailureV1::Blocking => {
+                    assert!(matches!(
+                        error,
+                        ServerConnectionErrorV1::ConfigureBlocking(_)
+                    ));
+                }
+                SetupFailureV1::ReadTimeout => {
+                    assert!(matches!(
+                        error,
+                        ServerConnectionErrorV1::ConfigureReadTimeout(_)
+                    ));
+                }
+                SetupFailureV1::WriteTimeout => {
+                    assert!(matches!(
+                        error,
+                        ServerConnectionErrorV1::ConfigureWriteTimeout(_)
+                    ));
+                }
+            }
+        }
     }
 }
