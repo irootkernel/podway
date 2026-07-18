@@ -318,7 +318,7 @@ fn bootstrap_side_effect_crash_child_reconciles_to_one_installed_state() {
         fs::read(paths.launch_agent_path().as_path()).expect("complete plist after bootstrap");
     assert!(
         plist_before_retry
-            .windows(SERVICE_LABEL_V1.as_bytes().len())
+            .windows(SERVICE_LABEL_V1.len())
             .any(|window| window == SERVICE_LABEL_V1.as_bytes()),
         "the published plist must be complete and compatible"
     );

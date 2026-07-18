@@ -14,13 +14,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import struct
 import zipfile
 from pathlib import Path
 from typing import Any
 
 from g009_common import (EVIDENCE_ROOT, ROOT, TARGET, ARCHIVE_ROOT, QualificationError,
     bounded_bytes, canonical_json, content_addressed_json, fail, host_manifest, load_json,
-    require_arm64_host, sha256_bytes, sha256_file)
+    require_arm64_host, safe_relative, sha256_bytes, sha256_file)
 from g009_performance import SAMPLES, WARMUPS, characterize as calculate_baseline, evaluate_holdout, thresholds
 from g009_release import inspect_archive, load_rc
 
@@ -422,9 +423,92 @@ def full_gates(args: argparse.Namespace) -> None:
     print(f"{out} {digest}")
 
 
+def _verify_release_binary(path: Path, name: str) -> None:
+    raw = bounded_bytes(path, 4096)
+    if len(raw) < 8 or raw[:4] != b"\xcf\xfa\xed\xfe":
+        fail(f"{name} is not a thin 64-bit Mach-O")
+    if struct.unpack_from("<I", raw, 4)[0] != 0x0100000C:
+        fail(f"{name} is not arm64 Mach-O")
+    result = _run((str(path), "--version"), ROOT, {"PATH": os.environ.get("PATH", "")})
+    if result.stdout.decode("utf-8", "strict").strip() != f"{name} 0.1.0":
+        fail(f"{name} version is not 0.1.0")
+
+def _archive_member_bytes(bin_dir: Path) -> dict[str, bytes]:
+    podway, podwayd = (bin_dir / "podway").resolve(), (bin_dir / "podwayd").resolve()
+    for binary, name in ((podway, "podway"), (podwayd, "podwayd")):
+        if not binary.is_file() or not os.access(binary, os.X_OK): fail(f"missing executable {name}")
+        _verify_release_binary(binary, name)
+    members = {f"{ARCHIVE_ROOT}/bin/podway": bounded_bytes(podway),
+               f"{ARCHIVE_ROOT}/bin/podwayd": bounded_bytes(podwayd),
+               f"{ARCHIVE_ROOT}/LICENSE": bounded_bytes(ROOT / "sot/LICENSE"),
+               f"{ARCHIVE_ROOT}/README.md": bounded_bytes(ROOT / "README.md"),
+               f"{ARCHIVE_ROOT}/RELEASE_NOTES.md": bounded_bytes(ROOT / "RELEASE_NOTES.md")}
+    with tempfile.TemporaryDirectory(prefix="g009-completions-") as raw:
+        directory = Path(raw)
+        for shell in ("bash", "zsh", "fish"):
+            result = _run((str(podway), "completions", shell), ROOT, {"HOME": str(directory), "TMPDIR": str(directory), "PATH": os.environ.get("PATH", "")})
+            if not result.stdout: fail(f"empty {shell} completion output")
+            members[f"{ARCHIVE_ROOT}/share/completions/podway.{shell}"] = result.stdout
+    for source_root, archive_prefix in ((ROOT / "presets", "share/podway/presets"), (ROOT / "schemas", "share/podway/schemas")):
+        if not source_root.is_dir(): fail(f"missing shipped directory: {source_root}")
+        for source in sorted(path for path in source_root.rglob("*") if path.is_file()):
+            relative = source.relative_to(source_root).as_posix()
+            safe_relative(relative)
+            members[f"{ARCHIVE_ROOT}/{archive_prefix}/{relative}"] = bounded_bytes(source)
+    return members
+
+def _deterministic_zip(path: Path, members: dict[str, bytes]) -> None:
+    if path.parent.resolve().is_relative_to(ROOT.resolve()) is False: fail("archive output escapes repository")
+    manifest_path = f"{ARCHIVE_ROOT}/payload-digests-v1.json"
+    manifest = {"schema": "podway.g009.payload-digests/v1", "members": [
+        {"path": name, "sha256": sha256_bytes(data), "size": len(data)}
+        for name, data in sorted(members.items())]}
+    members = dict(members)
+    members[manifest_path] = canonical_json(manifest)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9, strict_timestamps=True) as archive:
+            for name in sorted(members):
+                safe_relative(name)
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.create_system = 3
+                info.external_attr = ((0o100755 if name.startswith(f"{ARCHIVE_ROOT}/bin/") else 0o100644) << 16)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(info, members[name], compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+        if path.exists():
+            if bounded_bytes(path) != bounded_bytes(temporary): fail(f"refusing mismatched existing archive: {path}")
+            temporary.unlink()
+        else:
+            os.replace(temporary, path)
+    finally:
+        if temporary.exists(): temporary.unlink()
+
+def _write_checksum(path: Path) -> None:
+    sidecar = path.with_name(path.name + ".sha256")
+    payload = (sha256_file(path) + "\n").encode("ascii")
+    if sidecar.exists():
+        if bounded_bytes(sidecar, 1024) != payload: fail("refusing mismatched existing detached checksum")
+        return
+    temporary = sidecar.with_name(f".{sidecar.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_bytes(payload)
+        os.replace(temporary, sidecar)
+    finally:
+        if temporary.exists(): temporary.unlink()
+
 def package(args: argparse.Namespace) -> None:
-    rc = load_rc(Path(args.rc)); archive = Path(args.archive)
-    if not archive.with_name(archive.name + ".sha256").is_file(): fail("missing final archive checksum")
+    rc = load_rc(Path(args.rc)); require_arm64_host(rc["target"])
+    if rc["signing"]["posture"] == "signed-public": fail("package never signs or claims notarization")
+    profile_data = profile(_input_from_rc(rc, "profile"))
+    archive = Path(args.archive).resolve()
+    members = _archive_member_bytes(Path(args.bin_dir).resolve())
+    required = profile_data["archive"].get("members")
+    if not isinstance(required, list): fail("profile archive member declaration is invalid")
+    required_files = {"bin/podway", "bin/podwayd", "share/completions/podway.zsh", "share/completions/podway.bash", "share/completions/podway.fish", "LICENSE", "README.md", "RELEASE_NOTES.md", "payload-digests-v1.json"}
+    if not required_files.issubset(set(required)): fail("profile lacks required archive members")
+    _deterministic_zip(archive, members)
+    _write_checksum(archive)
     report = inspect_archive(archive)
     out, digest = evidence("release/package", {"checkpoint_id": "Q6", "rc_sha256": sha256_file(Path(args.rc)), "source": identity_manifest(), "archive": report, "signing": rc["signing"], "blockers": []})
     print(f"{out} {digest}")
@@ -540,7 +624,7 @@ def parser() -> argparse.ArgumentParser:
     x=command("freeze-rc"); x.add_argument("--profile", required=True); x.add_argument("--baseline", required=True); x.add_argument("--thresholds", required=True); x.add_argument("--approvals"); x.add_argument("--input", action="append", default=[], metavar="ROLE=PATH"); x.add_argument("--signing-posture", required=True, choices=("unsigned-internal", "signed-public")); x.add_argument("--developer-id"); x.add_argument("--notary-profile"); x.set_defaults(fn=freeze_rc)
     x=command("holdout"); x.add_argument("--rc", required=True); x.add_argument("--warmups", type=int, required=True); x.add_argument("--samples", type=int, required=True); x.add_argument("--bin-dir", required=True); x.set_defaults(fn=holdout)
     x=command("full-gates"); x.add_argument("--rc", required=True); x.add_argument("--only"); x.set_defaults(fn=full_gates)
-    x=command("package"); x.add_argument("--rc", required=True); x.add_argument("--archive", required=True); x.set_defaults(fn=package)
+    x=command("package"); x.add_argument("--rc", required=True); x.add_argument("--archive", required=True); x.add_argument("--bin-dir", required=True); x.set_defaults(fn=package)
     x=command("lifecycle"); x.add_argument("--rc", required=True); x.add_argument("--archive", required=True); x.add_argument("--require-clean-user", action="store_true"); x.set_defaults(fn=lifecycle)
     x=command("verify-final"); x.add_argument("--rc"); x.add_argument("--archive"); x.add_argument("--index"); x.add_argument("--review"); x.set_defaults(fn=verify_final)
     x=command("final-review"); x.add_argument("--rc", required=True); x.add_argument("--traceability", required=True); x.add_argument("--evidence-root", required=True); x.add_argument("--reviewer", action="append", default=[]); x.add_argument("--require-final-001", action="store_true"); x.set_defaults(fn=final_review)
