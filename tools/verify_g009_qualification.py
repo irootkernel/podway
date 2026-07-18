@@ -192,6 +192,10 @@ def validate_traceability(path: Path) -> None:
     ):
         raise QualificationError("invalid traceability")
     validate_release_policy(ROOT / value["release_policy"])
+    policy = load_json(ROOT / value["release_policy"])
+    expected_contract_gates = policy["acceptance_index"]["required_upstream_gate_ids"] + [
+        "G009-GATE-FINAL-001"
+    ]
     rows = value["rows"]
     acceptance_ids = [row.get("id") for row in rows[:12] if isinstance(row, dict)]
     contract_ids = [row.get("id") for row in rows[12:] if isinstance(row, dict)]
@@ -205,6 +209,8 @@ def validate_traceability(path: Path) -> None:
         )
         or rows[11].get("executable_gate") != "G009-GATE-FINAL-001"
         or rows[31].get("executable_gate") != "G009-GATE-FINAL-001"
+        or [row.get("executable_gate") for row in rows[12:] if isinstance(row, dict)]
+        != expected_contract_gates
     ):
         raise QualificationError("traceability exact row contract drift")
 
