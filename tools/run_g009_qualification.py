@@ -229,7 +229,7 @@ rework:
     )
     _run((str(podway), "init"), workspace, env)
     _run(
-        (str(podway), "start", "--procedure", str(procedure), "--task", "G009"),
+        (str(podway), "start", "--procedure", procedure.name, "--task", "G009"),
         workspace,
         env,
     )
@@ -238,9 +238,9 @@ rework:
 def _adapter_commands(workload_id: str, podway: Path, workspace: Path) -> tuple[tuple[str, ...], ...]:
     artifact = workspace / ".g009-artifact.bin"; artifact.write_bytes(b"g009-artifact-v1\n" * 4096)
     if workload_id == "G009-W02": return ((str(podway), "status"), (str(podway), "next"))
-    if workload_id == "G009-W03": return ((str(podway), "start", "--procedure", str(workspace / ".g009-procedure.yaml"), "--task", "G009-linked"),)
+    if workload_id == "G009-W03": return ((str(podway), "start", "--procedure", ".g009-procedure.yaml", "--task", "G009-linked"),)
     if workload_id == "G009-W04": return ((str(podway), "set", "target-audience", "updated"),)
-    if workload_id == "G009-W05": return ((str(podway), "attach", "draft-reference", str(artifact)),)
+    if workload_id == "G009-W05": return ((str(podway), "attach", "draft-reference", artifact.name),)
     if workload_id == "G009-W06": return ((str(podway), "reset", "--all", "--force", "--yes"), (str(podway), "status"))
     if workload_id == "G009-W07": return ((str(podway), "set", "target-audience", "x" * 65536),)
     fail(f"unknown workload adapter: {workload_id}")
