@@ -27,7 +27,10 @@ use podway_protocol::{
 };
 use serde_json::{Map, Value};
 
-use crate::peer::{PeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1};
+use crate::{
+    observability::{EventCategoryV1, ObservabilityEmitterV1, SeverityV1},
+    peer::{PeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1},
+};
 
 /// The documented default deadline for one framed request or response operation.
 pub const DEFAULT_FRAME_IO_TIMEOUT_V1: Duration = Duration::from_secs(5);
@@ -383,6 +386,7 @@ pub struct UnixServerTransportV1<Source, Dispatcher, Metadata = SystemResponseMe
     dispatcher: Arc<Dispatcher>,
     metadata: Arc<Metadata>,
     timeouts: ServerTransportTimeoutsV1,
+    observability: Option<ObservabilityEmitterV1>,
 }
 
 impl<Source, Dispatcher> UnixServerTransportV1<Source, Dispatcher, SystemResponseMetadataSourceV1> {
@@ -391,11 +395,21 @@ impl<Source, Dispatcher> UnixServerTransportV1<Source, Dispatcher, SystemRespons
         dispatcher: Dispatcher,
         timeouts: ServerTransportTimeoutsV1,
     ) -> Self {
-        Self::with_metadata(
+        Self::new_with_observability(verifier, dispatcher, timeouts, None)
+    }
+
+    pub fn new_with_observability(
+        verifier: PeerUidVerifierV1<Source>,
+        dispatcher: Dispatcher,
+        timeouts: ServerTransportTimeoutsV1,
+        observability: Option<ObservabilityEmitterV1>,
+    ) -> Self {
+        Self::with_metadata_and_observability(
             verifier,
             dispatcher,
             timeouts,
             SystemResponseMetadataSourceV1::default(),
+            observability,
         )
     }
 }
@@ -407,11 +421,22 @@ impl<Source, Dispatcher, Metadata> UnixServerTransportV1<Source, Dispatcher, Met
         timeouts: ServerTransportTimeoutsV1,
         metadata: Metadata,
     ) -> Self {
+        Self::with_metadata_and_observability(verifier, dispatcher, timeouts, metadata, None)
+    }
+
+    pub fn with_metadata_and_observability(
+        verifier: PeerUidVerifierV1<Source>,
+        dispatcher: Dispatcher,
+        timeouts: ServerTransportTimeoutsV1,
+        metadata: Metadata,
+        observability: Option<ObservabilityEmitterV1>,
+    ) -> Self {
         Self {
             verifier: Arc::new(verifier),
             dispatcher: Arc::new(dispatcher),
             metadata: Arc::new(metadata),
             timeouts,
+            observability,
         }
     }
 
@@ -439,9 +464,14 @@ where
         &self,
         mut connection: UnixStream,
     ) -> Result<(), ServerConnectionErrorV1> {
-        self.verifier
-            .verify(&connection)
-            .map_err(ServerConnectionErrorV1::Peer)?;
+        if let Err(error) = self.verifier.verify(&connection) {
+            emit_observation(
+                &self.observability,
+                EventCategoryV1::Admission,
+                SeverityV1::Warn,
+            );
+            return Err(ServerConnectionErrorV1::Peer(error));
+        }
         connection
             .set_nonblocking(false)
             .map_err(ServerConnectionErrorV1::ConfigureBlocking)?;
@@ -460,6 +490,11 @@ where
         let payload = match frame {
             Ok(Some(payload)) => payload,
             Ok(None) => {
+                emit_observation(
+                    &self.observability,
+                    EventCategoryV1::ServiceOutcome,
+                    SeverityV1::Warn,
+                );
                 return self.write_transport_error(
                     &mut connection,
                     None,
@@ -467,6 +502,11 @@ where
                 );
             }
             Err(error) => {
+                emit_observation(
+                    &self.observability,
+                    EventCategoryV1::ServiceOutcome,
+                    SeverityV1::Warn,
+                );
                 let context = recover_request_context_from_recorded_frame(&recorded);
                 self.write_transport_error(&mut connection, context, classify_frame_error(&error))?;
                 return match error {
@@ -486,6 +526,11 @@ where
         let request = match decode_request_payload_v1(&payload) {
             Ok(request) => request,
             Err(error) => {
+                emit_observation(
+                    &self.observability,
+                    EventCategoryV1::ServiceOutcome,
+                    SeverityV1::Warn,
+                );
                 return self.write_transport_error(
                     &mut connection,
                     recover_request_context(&payload),
@@ -496,6 +541,11 @@ where
         let slice_request = match SliceRequestV1::from_envelope(&request) {
             Ok(slice_request) => slice_request,
             Err(_) => {
+                emit_observation(
+                    &self.observability,
+                    EventCategoryV1::ServiceOutcome,
+                    SeverityV1::Warn,
+                );
                 return self.write_transport_error(
                     &mut connection,
                     Some(RequestContextV1::from_request(&request)),
@@ -506,9 +556,22 @@ where
 
         let response = self.dispatcher.dispatch(&request, &slice_request);
         if response_matches_request(&response, &request) && response.validate().is_ok() {
+            emit_observation(
+                &self.observability,
+                EventCategoryV1::ServiceOutcome,
+                match &response {
+                    ResponseEnvelopeV1::Output(_) => SeverityV1::Info,
+                    ResponseEnvelopeV1::Error(_) => SeverityV1::Warn,
+                },
+            );
             return self.write_response(&mut connection, &response);
         }
 
+        emit_observation(
+            &self.observability,
+            EventCategoryV1::ServiceOutcome,
+            SeverityV1::Error,
+        );
         let response = self.transport_error_response(
             Some(RequestContextV1::from_request(&request)),
             TransportErrorKindV1::Internal,
@@ -730,6 +793,15 @@ fn response_matches_request(response: &ResponseEnvelopeV1, request: &RequestEnve
     }
 }
 
+fn emit_observation(
+    observability: &Option<ObservabilityEmitterV1>,
+    category: EventCategoryV1,
+    severity: SeverityV1,
+) {
+    if let Some(observability) = observability {
+        observability.emit(category, severity);
+    }
+}
 /// Failures that invalidate the admission invariant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShutdownAdmissionErrorV1 {
@@ -903,6 +975,7 @@ pub struct BoundedAcceptLoopV1<Source, Dispatcher, Metadata = SystemResponseMeta
     maximum_in_flight: NonZeroUsize,
     poll_interval: Duration,
     handler_spawner: Arc<dyn ConnectionHandlerSpawnerV1>,
+    observability: Option<ObservabilityEmitterV1>,
 }
 
 impl<Source, Dispatcher, Metadata> BoundedAcceptLoopV1<Source, Dispatcher, Metadata> {
@@ -911,12 +984,22 @@ impl<Source, Dispatcher, Metadata> BoundedAcceptLoopV1<Source, Dispatcher, Metad
         admission: ShutdownAdmissionV1,
         maximum_in_flight: NonZeroUsize,
     ) -> Self {
+        Self::new_with_observability(transport, admission, maximum_in_flight, None)
+    }
+
+    pub fn new_with_observability(
+        transport: Arc<UnixServerTransportV1<Source, Dispatcher, Metadata>>,
+        admission: ShutdownAdmissionV1,
+        maximum_in_flight: NonZeroUsize,
+        observability: Option<ObservabilityEmitterV1>,
+    ) -> Self {
         Self {
             transport,
             admission,
             maximum_in_flight,
             poll_interval: DEFAULT_ACCEPT_POLL_INTERVAL_V1,
             handler_spawner: Arc::new(ThreadConnectionHandlerSpawnerV1),
+            observability,
         }
     }
 
@@ -943,6 +1026,25 @@ impl<Source, Dispatcher, Metadata> BoundedAcceptLoopV1<Source, Dispatcher, Metad
         poll_interval: Duration,
         handler_spawner: Arc<dyn ConnectionHandlerSpawnerV1>,
     ) -> Result<Self, ServerTransportConfigurationErrorV1> {
+        Self::with_poll_interval_handler_spawner_and_observability(
+            transport,
+            admission,
+            maximum_in_flight,
+            poll_interval,
+            handler_spawner,
+            None,
+        )
+    }
+
+    /// Constructs an accept loop with deterministic handler and observation boundaries.
+    pub fn with_poll_interval_handler_spawner_and_observability(
+        transport: Arc<UnixServerTransportV1<Source, Dispatcher, Metadata>>,
+        admission: ShutdownAdmissionV1,
+        maximum_in_flight: NonZeroUsize,
+        poll_interval: Duration,
+        handler_spawner: Arc<dyn ConnectionHandlerSpawnerV1>,
+        observability: Option<ObservabilityEmitterV1>,
+    ) -> Result<Self, ServerTransportConfigurationErrorV1> {
         if poll_interval.is_zero() {
             return Err(ServerTransportConfigurationErrorV1::ZeroAcceptPollInterval);
         }
@@ -952,6 +1054,7 @@ impl<Source, Dispatcher, Metadata> BoundedAcceptLoopV1<Source, Dispatcher, Metad
             maximum_in_flight,
             poll_interval,
             handler_spawner,
+            observability,
         })
     }
 
@@ -982,6 +1085,11 @@ where
                 Ok(true) => {}
                 Ok(false) => break,
                 Err(error) => {
+                    emit_observation(
+                        &self.observability,
+                        EventCategoryV1::Admission,
+                        SeverityV1::Error,
+                    );
                     terminal_error = Some(ServerAcceptLoopErrorV1::Admission(error));
                     break;
                 }
@@ -993,6 +1101,11 @@ where
             }
             match self.admission.at_capacity(self.maximum_in_flight) {
                 Ok(true) => {
+                    emit_observation(
+                        &self.observability,
+                        EventCategoryV1::TerminalOrRequeueOrSaturation,
+                        SeverityV1::Warn,
+                    );
                     if let Err(error) = self.admission.wait_for_progress(self.poll_interval) {
                         terminal_error = Some(ServerAcceptLoopErrorV1::Admission(error));
                         break;
@@ -1009,9 +1122,28 @@ where
             match listener.accept() {
                 Ok((connection, _)) => {
                     let ticket = match self.admission.try_admit(self.maximum_in_flight) {
-                        Ok(Some(ticket)) => ticket,
-                        Ok(None) => continue,
+                        Ok(Some(ticket)) => {
+                            emit_observation(
+                                &self.observability,
+                                EventCategoryV1::Admission,
+                                SeverityV1::Info,
+                            );
+                            ticket
+                        }
+                        Ok(None) => {
+                            emit_observation(
+                                &self.observability,
+                                EventCategoryV1::Admission,
+                                SeverityV1::Warn,
+                            );
+                            continue;
+                        }
                         Err(error) => {
+                            emit_observation(
+                                &self.observability,
+                                EventCategoryV1::Admission,
+                                SeverityV1::Error,
+                            );
                             terminal_error = Some(ServerAcceptLoopErrorV1::Admission(error));
                             break;
                         }
@@ -1026,6 +1158,11 @@ where
                     match self.handler_spawner.spawn(handler) {
                         Ok(handler) => handlers.push(handler),
                         Err(error) => {
+                            emit_observation(
+                                &self.observability,
+                                EventCategoryV1::Scheduler,
+                                SeverityV1::Error,
+                            );
                             self.admission.request_shutdown();
                             terminal_error = Some(ServerAcceptLoopErrorV1::SpawnHandler(error));
                             break;
@@ -1040,6 +1177,11 @@ where
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => {
+                    emit_observation(
+                        &self.observability,
+                        EventCategoryV1::Admission,
+                        SeverityV1::Error,
+                    );
                     self.admission.request_shutdown();
                     terminal_error = Some(ServerAcceptLoopErrorV1::Accept(error));
                     break;

@@ -21,7 +21,7 @@ use crate::{
     peer::{NativePeerCredentialSourceV1, PeerUidVerifierV1},
     production::{
         NativeProductionClockV1, ProductionMutationWorkerV1, ProductionRequestDispatcherV1,
-        compose_dispatcher_with_worker_v1,
+        compose_dispatcher_with_worker_and_observability_v1,
     },
     registry::{RegistryErrorV1, WorkspaceRegistryEntryV1, WorkspaceRegistryV1},
     runtime_workspace::{
@@ -355,25 +355,26 @@ impl ProductionDaemonRuntimeV1 {
             }
         };
 
-        let composition = compose_dispatcher_with_worker_v1(
+        let composition = compose_dispatcher_with_worker_and_observability_v1(
             Arc::clone(&manager),
             configuration.worker_id().clone(),
+            observability.clone(),
         );
         let (dispatcher, worker) = composition.into_parts();
-        emit_observation(&observability, EventCategoryV1::Admission, SeverityV1::Info);
-        emit_observation(&observability, EventCategoryV1::Scheduler, SeverityV1::Info);
         let recovery_report =
             recover_registered_workspaces(&manager, &worker, registry, &observability);
         let admission = ShutdownAdmissionV1::new();
-        let transport = Arc::new(ProductionTransportV1::new(
+        let transport = Arc::new(ProductionTransportV1::new_with_observability(
             PeerUidVerifierV1::for_current_user(),
             dispatcher,
             configuration.transport_timeouts(),
+            observability.clone(),
         ));
-        let accept_loop = ProductionAcceptLoopV1::new(
+        let accept_loop = ProductionAcceptLoopV1::new_with_observability(
             transport,
             admission.clone(),
             configuration.maximum_in_flight_connections(),
+            observability.clone(),
         );
 
         Ok(Self {

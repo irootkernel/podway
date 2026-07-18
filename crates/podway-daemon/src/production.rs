@@ -56,6 +56,7 @@ use crate::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeWorkspaceRevalidatorV1,
         WallUtcExecutionClockV1,
     },
+    observability::{EventCategoryV1, ObservabilityEmitterV1, SeverityV1},
     read_service::{
         AuthoritativeReadServiceV1, MonotonicClockV1, MonotonicDeadlineV1, ReadNotificationErrorV1,
         ReadNotificationV1, ReadNotificationVersionV1, ReadServiceErrorV1, ReadWaitOutcomeV1,
@@ -275,8 +276,10 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
 
 /// A context-specific production executor. It creates the existing engine with the scheduler-owned
 /// Store slot and options; reset preparation may use only an explicitly unavailable slot.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct NativeContextExecutionV1;
+#[derive(Clone, Debug, Default)]
+pub(crate) struct NativeContextExecutionV1 {
+    observability: Option<ObservabilityEmitterV1>,
+}
 type ProductionExecutionEngineV1 = DaemonExecutionEngineV1<
     Arc<WorkspaceStoreSlotV1>,
     NativeExecutionIdSourceV1,
@@ -287,6 +290,16 @@ type ProductionExecutionEngineV1 = DaemonExecutionEngineV1<
 >;
 
 impl NativeContextExecutionV1 {
+    fn new(observability: Option<ObservabilityEmitterV1>) -> Self {
+        Self { observability }
+    }
+
+    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
+        if let Some(observability) = &self.observability {
+            observability.emit(category, severity);
+        }
+    }
+
     fn engine(
         context: &WorkspaceSchedulerContextV1,
     ) -> Result<ProductionExecutionEngineV1, crate::execution::ExecutionErrorV1> {
@@ -332,7 +345,16 @@ impl WorkerExecutionV1<WorkspaceSchedulerContextV1> for NativeContextExecutionV1
                 },
             );
         }
-        Self::engine(context)?.admit_for_workspace(binding, request, idempotency_key)
+        let result = Self::engine(context)?.admit_for_workspace(binding, request, idempotency_key);
+        self.emit(
+            EventCategoryV1::Admission,
+            if result.is_ok() {
+                SeverityV1::Info
+            } else {
+                SeverityV1::Warn
+            },
+        );
+        result
     }
 
     fn execute_next(
@@ -348,7 +370,16 @@ impl WorkerExecutionV1<WorkspaceSchedulerContextV1> for NativeContextExecutionV1
                 },
             );
         }
-        Self::engine(context)?.execute_next(binding, worker)
+        let result = Self::engine(context)?.execute_next(binding, worker);
+        self.emit(
+            EventCategoryV1::CancelOrClaim,
+            match &result {
+                Ok(Some(_)) => SeverityV1::Info,
+                Ok(None) => SeverityV1::Debug,
+                Err(_) => SeverityV1::Error,
+            },
+        );
+        result
     }
 }
 
@@ -701,11 +732,21 @@ impl ProductionMutationWorkerV1 {
         clock: Arc<NativeProductionClockV1>,
         manager: Arc<WorkspaceRuntimeManagerV1>,
     ) -> Self {
+        Self::new_with_observability(worker_id, clock, manager, None)
+    }
+
+    pub fn new_with_observability(
+        worker_id: WorkerIdV1,
+        clock: Arc<NativeProductionClockV1>,
+        manager: Arc<WorkspaceRuntimeManagerV1>,
+        observability: Option<ObservabilityEmitterV1>,
+    ) -> Self {
         Self {
-            worker: DaemonWorkerV1::new(
-                Arc::new(NativeContextExecutionV1),
+            worker: DaemonWorkerV1::new_with_observability(
+                Arc::new(NativeContextExecutionV1::new(observability.clone())),
                 Arc::clone(&clock),
                 worker_id,
+                observability,
             ),
             clock,
             manager,
@@ -994,9 +1035,23 @@ pub fn compose_dispatcher_with_worker_v1(
     manager: Arc<WorkspaceRuntimeManagerV1>,
     worker_id: WorkerIdV1,
 ) -> ProductionDispatcherCompositionV1 {
+    compose_dispatcher_with_worker_and_observability_v1(manager, worker_id, None)
+}
+
+/// Builds the exact production dispatcher and worker pair with an optional non-authoritative
+/// categorical producer.
+pub fn compose_dispatcher_with_worker_and_observability_v1(
+    manager: Arc<WorkspaceRuntimeManagerV1>,
+    worker_id: WorkerIdV1,
+    observability: Option<ObservabilityEmitterV1>,
+) -> ProductionDispatcherCompositionV1 {
     let clock = Arc::new(NativeProductionClockV1::default());
-    let worker =
-        ProductionMutationWorkerV1::new(worker_id, Arc::clone(&clock), Arc::clone(&manager));
+    let worker = ProductionMutationWorkerV1::new_with_observability(
+        worker_id,
+        Arc::clone(&clock),
+        Arc::clone(&manager),
+        observability,
+    );
     let dispatcher = RequestDispatcherV1Adapter::new(
         ProductionWorkspaceRuntimeV1::new(manager, Arc::clone(&clock)),
         ProductionReadServiceV1::new(Arc::clone(&clock)),

@@ -124,10 +124,30 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
 fn report_observability_shutdown(report: ObservabilityShutdownReportV1) {
     let counters = report.counters();
     eprintln!(
-        "podwayd observability finalization={:?} degraded_dropped={} unflushed={} final_flush_losses={}",
+        "podwayd observability finalization={:?} accepted={} written={} primary_dropped={} fallback_dropped={} stderr_dropped={} stopped_dropped={} degraded_dropped={} unflushed={} queued={} writing={} flushing={} write_failures={} flush_failures={} clock_failures={} sink_failures={} admission_contention={} admission_poisoned={} bootstrap_failures={} worker_panics={} worker_disconnects={} worker_join_failures={} shutdown_timeouts={} counters_saturated={}",
         report.finalization(),
+        counters.accepted,
+        counters.written,
+        counters.primary_dropped,
+        counters.fallback_dropped,
+        counters.stderr_dropped,
+        counters.stopped_dropped,
         counters.degraded_dropped,
         counters.unflushed,
-        counters.final_flush_losses,
+        counters.queued,
+        counters.writing,
+        counters.flushing,
+        counters.write_failures,
+        counters.flush_failures,
+        counters.clock_failures,
+        counters.sink_failures,
+        counters.admission_contention,
+        counters.admission_poisoned,
+        counters.bootstrap_failures,
+        counters.worker_panics,
+        counters.worker_disconnects,
+        counters.worker_join_failures,
+        counters.shutdown_timeouts,
+        counters.counters_saturated,
     );
 }

@@ -22,7 +22,6 @@ pub const MAX_EVENT_BYTES_V1: usize = 8 * 1024;
 pub const MAX_STRING_BYTES_V1: usize = 256;
 pub const PRIMARY_CAPACITY_V1: usize = 4096;
 pub const FALLBACK_CAPACITY_V1: usize = 256;
-pub const MAX_EMIT_WAIT_V1: Duration = Duration::from_millis(2);
 pub const MAX_WRITER_CYCLE_V1: Duration = Duration::from_millis(50);
 pub const MAX_SHUTDOWN_FLUSH_V1: Duration = Duration::from_secs(2);
 pub const ROTATION_BYTES_V1: u64 = 10 * 1024 * 1024;
@@ -90,25 +89,36 @@ pub fn redact_v1(_: &str) -> &'static str {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ObservabilityCountersV1 {
+    /// Total events accepted into a queue. This is conserved by `written + unflushed + pending`.
+    pub accepted: u64,
+    /// Successfully written events.
+    pub written: u64,
+    /// Events rejected before queueing; each rejected event is counted in exactly one drop field.
     pub primary_dropped: u64,
     pub fallback_dropped: u64,
     pub stderr_dropped: u64,
-    pub sink_failures: u64,
-    pub unflushed: u64,
-    pub queued: u64,
-    pub writing: u64,
-    pub flush_failures: u64,
-    pub final_flush_losses: u64,
-    pub flushing: u64,
-    pub admission_contention: u64,
-    pub admission_poisoned: u64,
     pub stopped_dropped: u64,
     pub degraded_dropped: u64,
+    /// Events known to have been lost after acceptance because their write failed or panicked.
+    pub unflushed: u64,
+    /// Current pending work, not cumulative losses.
+    pub queued: u64,
+    pub writing: u64,
+    pub flushing: u64,
+    /// Failure incidents, not event cardinalities.
+    pub write_failures: u64,
+    pub flush_failures: u64,
+    pub clock_failures: u64,
+    pub sink_failures: u64,
+    pub admission_contention: u64,
+    pub admission_poisoned: u64,
     pub bootstrap_failures: u64,
     pub worker_panics: u64,
     pub worker_disconnects: u64,
     pub worker_join_failures: u64,
     pub shutdown_timeouts: u64,
+    /// At least one cumulative counter reached `u64::MAX`; all totals remain monotonic.
+    pub counters_saturated: bool,
 }
 /// The immutable terminal state of the sole observability owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,6 +143,8 @@ impl ObservabilityShutdownReportV1 {
 }
 #[derive(Default)]
 struct Counters {
+    accepted: AtomicU64,
+    written: AtomicU64,
     primary_dropped: AtomicU64,
     fallback_dropped: AtomicU64,
     stderr_dropped: AtomicU64,
@@ -141,7 +153,8 @@ struct Counters {
     queued: AtomicU64,
     writing: AtomicU64,
     flush_failures: AtomicU64,
-    final_flush_losses: AtomicU64,
+    write_failures: AtomicU64,
+    clock_failures: AtomicU64,
     flushing: AtomicU64,
     admission_contention: AtomicU64,
     admission_poisoned: AtomicU64,
@@ -152,35 +165,56 @@ struct Counters {
     worker_disconnects: AtomicU64,
     worker_join_failures: AtomicU64,
     shutdown_timeouts: AtomicU64,
+    saturated: AtomicBool,
 }
 macro_rules! counters_snapshot {
     ($c:expr) => {
         ObservabilityCountersV1 {
+            accepted: $c.accepted.load(Ordering::Relaxed),
+            written: $c.written.load(Ordering::Relaxed),
             primary_dropped: $c.primary_dropped.load(Ordering::Relaxed),
             fallback_dropped: $c.fallback_dropped.load(Ordering::Relaxed),
             stderr_dropped: $c.stderr_dropped.load(Ordering::Relaxed),
+            stopped_dropped: $c.stopped_dropped.load(Ordering::Relaxed),
+            degraded_dropped: $c.degraded_dropped.load(Ordering::Relaxed),
             sink_failures: $c.sink_failures.load(Ordering::Relaxed),
             unflushed: $c.unflushed.load(Ordering::Relaxed),
             queued: $c.queued.load(Ordering::Relaxed),
             writing: $c.writing.load(Ordering::Relaxed),
             flush_failures: $c.flush_failures.load(Ordering::Relaxed),
-            final_flush_losses: $c.final_flush_losses.load(Ordering::Relaxed),
+            write_failures: $c.write_failures.load(Ordering::Relaxed),
+            clock_failures: $c.clock_failures.load(Ordering::Relaxed),
             flushing: $c.flushing.load(Ordering::Relaxed),
             admission_contention: $c.admission_contention.load(Ordering::Relaxed),
             admission_poisoned: $c.admission_poisoned.load(Ordering::Relaxed),
-            stopped_dropped: $c.stopped_dropped.load(Ordering::Relaxed),
-            degraded_dropped: $c.degraded_dropped.load(Ordering::Relaxed),
             bootstrap_failures: $c.bootstrap_failures.load(Ordering::Relaxed),
             worker_panics: $c.worker_panics.load(Ordering::Relaxed),
             worker_disconnects: $c.worker_disconnects.load(Ordering::Relaxed),
             worker_join_failures: $c.worker_join_failures.load(Ordering::Relaxed),
             shutdown_timeouts: $c.shutdown_timeouts.load(Ordering::Relaxed),
+            counters_saturated: $c.saturated.load(Ordering::Relaxed),
         }
     };
+}
+fn saturating_add(counter: &AtomicU64, saturated: &AtomicBool, amount: u64) {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_add(amount);
+        if next == u64::MAX && current != u64::MAX {
+            saturated.store(true, Ordering::Relaxed);
+        }
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(actual) => current = actual,
+        }
+    }
 }
 impl Counters {
     fn snapshot(&self) -> ObservabilityCountersV1 {
         counters_snapshot!(self)
+    }
+    fn add(&self, counter: &AtomicU64, amount: u64) {
+        saturating_add(counter, &self.saturated, amount);
     }
 }
 
@@ -265,10 +299,7 @@ impl ObservabilityV1 {
             frozen_report: Mutex::new(None),
         });
         if degraded {
-            shared
-                .counters
-                .bootstrap_failures
-                .fetch_add(1, Ordering::Relaxed);
+            shared.counters.add(&shared.counters.bootstrap_failures, 1);
         }
         let emitter = ObservabilityEmitterV1 {
             shared: Arc::clone(&shared),
@@ -299,13 +330,14 @@ impl ObservabilityV1 {
     pub fn counters(&self) -> ObservabilityCountersV1 {
         self.emitter.counters()
     }
-    /// Preserves the legacy counter-only result. Prefer [`Self::shutdown_report`] for terminal state.
-    pub fn shutdown(mut self) -> ObservabilityCountersV1 {
-        self.stop_and_wait().counters()
-    }
     /// Requests bounded shutdown and returns one immutable terminal report.
-    pub fn shutdown_report(mut self) -> ObservabilityShutdownReportV1 {
+    ///
+    /// This replaces the counter-only shutdown result so callers cannot discard finalization.
+    pub fn shutdown(mut self) -> ObservabilityShutdownReportV1 {
         self.stop_and_wait()
+    }
+    pub fn shutdown_report(self) -> ObservabilityShutdownReportV1 {
+        self.shutdown()
     }
     fn stop_and_wait(&mut self) -> ObservabilityShutdownReportV1 {
         if let Some(report) = self.emitter.frozen_report() {
@@ -326,8 +358,7 @@ impl ObservabilityV1 {
                         self.emitter
                             .shared
                             .counters
-                            .worker_join_failures
-                            .fetch_add(1, Ordering::Relaxed);
+                            .add(&self.emitter.shared.counters.worker_join_failures, 1);
                         self.record_known_lost_and_clear_gauges();
                         ObservabilityFinalizationV1::Indeterminate
                     }
@@ -336,8 +367,7 @@ impl ObservabilityV1 {
                     self.emitter
                         .shared
                         .counters
-                        .shutdown_timeouts
-                        .fetch_add(1, Ordering::Relaxed);
+                        .add(&self.emitter.shared.counters.shutdown_timeouts, 1);
                     self.worker.take();
                     ObservabilityFinalizationV1::Detached
                 }
@@ -345,19 +375,16 @@ impl ObservabilityV1 {
                     self.emitter
                         .shared
                         .counters
-                        .worker_disconnects
-                        .fetch_add(1, Ordering::Relaxed);
+                        .add(&self.emitter.shared.counters.worker_disconnects, 1);
                     if let Some(Err(_)) = self.worker.take().map(thread::JoinHandle::join) {
                         self.emitter
                             .shared
                             .counters
-                            .worker_panics
-                            .fetch_add(1, Ordering::Relaxed);
+                            .add(&self.emitter.shared.counters.worker_panics, 1);
                         self.emitter
                             .shared
                             .counters
-                            .worker_join_failures
-                            .fetch_add(1, Ordering::Relaxed);
+                            .add(&self.emitter.shared.counters.worker_join_failures, 1);
                     }
                     self.record_known_lost_and_clear_gauges();
                     ObservabilityFinalizationV1::Indeterminate
@@ -412,11 +439,10 @@ impl ObservabilityV1 {
             }
         };
         let in_flight = self.emitter.shared.in_flight.swap(0, Ordering::AcqRel);
-        self.emitter
-            .shared
-            .counters
-            .unflushed
-            .fetch_add(queued.saturating_add(in_flight), Ordering::Relaxed);
+        self.emitter.shared.counters.add(
+            &self.emitter.shared.counters.unflushed,
+            queued.saturating_add(in_flight),
+        );
         self.clear_gauges();
     }
 }
@@ -426,83 +452,59 @@ impl Drop for ObservabilityV1 {
     }
 }
 impl ObservabilityEmitterV1 {
+    /// Performs exactly one non-blocking queue try-lock. Contention loses this event immediately.
     pub fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
         if self.shared.degraded {
             self.shared
                 .counters
-                .degraded_dropped
-                .fetch_add(1, Ordering::Relaxed);
-            self.shared
-                .counters
-                .sink_failures
-                .fetch_add(1, Ordering::Relaxed);
+                .add(&self.shared.counters.degraded_dropped, 1);
             return;
         }
         let event = PendingEvent { category, severity };
-        let deadline = std::time::Instant::now() + MAX_EMIT_WAIT_V1;
-        loop {
-            match self.shared.queue.try_lock() {
-                Ok(mut queue) => {
-                    if queue.stopping || self.shared.stopped.load(Ordering::Acquire) {
-                        self.shared
-                            .counters
-                            .stopped_dropped
-                            .fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
-                    if queue.primary.len() < PRIMARY_CAPACITY_V1 {
-                        queue.primary.push_back(event);
-                        self.shared.counters.queued.fetch_add(1, Ordering::Release);
-                        self.shared.available.notify_one();
-                        return;
-                    }
+        match self.shared.queue.try_lock() {
+            Ok(mut queue) => {
+                if queue.stopping || self.shared.stopped.load(Ordering::Acquire) {
                     self.shared
                         .counters
-                        .primary_dropped
-                        .fetch_add(1, Ordering::Relaxed);
-                    if severity.uses_fallback() && queue.fallback.len() < FALLBACK_CAPACITY_V1 {
-                        queue.fallback.push_back(event);
-                        self.shared.counters.queued.fetch_add(1, Ordering::Release);
-                        self.shared.available.notify_one();
-                        return;
-                    }
-                    if severity.uses_fallback() {
-                        self.shared
-                            .counters
-                            .fallback_dropped
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
+                        .add(&self.shared.counters.stopped_dropped, 1);
                     return;
                 }
-                Err(TryLockError::Poisoned(_)) => {
-                    self.shared
-                        .counters
-                        .admission_poisoned
-                        .fetch_add(1, Ordering::Relaxed);
-                    self.shared
-                        .counters
-                        .primary_dropped
-                        .fetch_add(1, Ordering::Relaxed);
+                if queue.primary.len() < PRIMARY_CAPACITY_V1 {
+                    queue.primary.push_back(event);
+                    self.shared.counters.queued.fetch_add(1, Ordering::Release);
+                    self.shared.counters.add(&self.shared.counters.accepted, 1);
+                    self.shared.available.notify_one();
                     return;
                 }
-                Err(TryLockError::WouldBlock) if std::time::Instant::now() >= deadline => {
-                    self.shared
-                        .counters
-                        .admission_contention
-                        .fetch_add(1, Ordering::Relaxed);
-                    self.shared
-                        .counters
-                        .primary_dropped
-                        .fetch_add(1, Ordering::Relaxed);
-                    if severity.uses_fallback() {
-                        self.shared
-                            .counters
-                            .fallback_dropped
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
+                if severity.uses_fallback() && queue.fallback.len() < FALLBACK_CAPACITY_V1 {
+                    queue.fallback.push_back(event);
+                    self.shared.counters.queued.fetch_add(1, Ordering::Release);
+                    self.shared.counters.add(&self.shared.counters.accepted, 1);
+                    self.shared.available.notify_one();
                     return;
                 }
-                Err(TryLockError::WouldBlock) => thread::yield_now(),
+                let drop_counter = if severity.uses_fallback() {
+                    &self.shared.counters.fallback_dropped
+                } else {
+                    &self.shared.counters.primary_dropped
+                };
+                self.shared.counters.add(drop_counter, 1);
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                self.shared
+                    .counters
+                    .add(&self.shared.counters.admission_poisoned, 1);
+                self.shared
+                    .counters
+                    .add(&self.shared.counters.primary_dropped, 1);
+            }
+            Err(TryLockError::WouldBlock) => {
+                self.shared
+                    .counters
+                    .add(&self.shared.counters.admission_contention, 1);
+                self.shared
+                    .counters
+                    .add(&self.shared.counters.primary_dropped, 1);
             }
         }
     }
@@ -544,8 +546,7 @@ impl ObservabilityEmitterV1 {
             Err(poison) => {
                 self.shared
                     .counters
-                    .admission_poisoned
-                    .fetch_add(1, Ordering::Relaxed);
+                    .add(&self.shared.counters.admission_poisoned, 1);
                 let mut queue = poison.into_inner();
                 queue.stopping = true;
                 self.shared.available.notify_all();
@@ -582,28 +583,31 @@ fn writer_loop(shared: Arc<Shared>) {
             Some(event) => {
                 shared.in_flight.store(1, Ordering::Release);
                 shared.counters.writing.store(1, Ordering::Release);
-                let write_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let formatted =
-                        format_event(shared.clock.unix_seconds(), event.category, event.severity);
-                    shared
-                        .sink
-                        .as_ref()
-                        .is_some_and(|sink| sink.write_event(&formatted).is_err())
+                let timestamp = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    shared.clock.unix_seconds()
                 }));
-                match write_result {
-                    Ok(true) => {
+                let write_result = timestamp.map(|seconds| {
+                    let formatted = format_event(seconds, event.category, event.severity);
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         shared
-                            .counters
-                            .sink_failures
-                            .fetch_add(1, Ordering::Relaxed);
-                        shared.counters.unflushed.fetch_add(1, Ordering::Relaxed);
+                            .sink
+                            .as_ref()
+                            .expect("non-degraded writer has a sink")
+                            .write_event(&formatted)
+                    }))
+                });
+                match write_result {
+                    Ok(Ok(Ok(()))) => {
+                        shared.counters.add(&shared.counters.written, 1);
                     }
-                    Ok(false) => {}
-                    Err(panic) => {
-                        shared.counters.writing.store(0, Ordering::Release);
-                        shared.in_flight.store(0, Ordering::Release);
-                        shared.counters.unflushed.fetch_add(1, Ordering::Relaxed);
-                        std::panic::resume_unwind(panic);
+                    Ok(Ok(Err(_))) | Ok(Err(_)) => {
+                        shared.counters.add(&shared.counters.write_failures, 1);
+                        shared.counters.add(&shared.counters.sink_failures, 1);
+                        shared.counters.add(&shared.counters.unflushed, 1);
+                    }
+                    Err(_) => {
+                        shared.counters.add(&shared.counters.clock_failures, 1);
+                        shared.counters.add(&shared.counters.unflushed, 1);
                     }
                 }
                 shared.counters.writing.store(0, Ordering::Release);
@@ -611,23 +615,16 @@ fn writer_loop(shared: Arc<Shared>) {
             }
             None => {
                 shared.counters.flushing.store(1, Ordering::Release);
-                if shared
-                    .sink
-                    .as_ref()
-                    .is_some_and(|sink| sink.flush().is_err())
-                {
+                let flush_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     shared
-                        .counters
-                        .flush_failures
-                        .fetch_add(1, Ordering::Relaxed);
-                    shared
-                        .counters
-                        .sink_failures
-                        .fetch_add(1, Ordering::Relaxed);
-                    shared
-                        .counters
-                        .final_flush_losses
-                        .fetch_add(1, Ordering::Relaxed);
+                        .sink
+                        .as_ref()
+                        .expect("non-degraded writer has a sink")
+                        .flush()
+                }));
+                if !matches!(flush_result, Ok(Ok(()))) {
+                    shared.counters.add(&shared.counters.flush_failures, 1);
+                    shared.counters.add(&shared.counters.sink_failures, 1);
                 }
                 shared.counters.flushing.store(0, Ordering::Release);
                 return;
@@ -723,6 +720,7 @@ fn prune_retention(path: &Path, clock: &dyn ClockV1) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no file name"))?
         .to_string_lossy();
     let prefix = format!("{file_name}.");
+    let mut numeric_rotations = Vec::new();
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
         let candidate = entry.path();
@@ -740,6 +738,9 @@ fn prune_retention(path: &Path, clock: &dyn ClockV1) -> io::Result<()> {
         if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
             continue;
         }
+        let Ok(index) = suffix.parse::<u64>() else {
+            continue;
+        };
         let metadata = entry.metadata()?;
         if !metadata.is_file() {
             continue;
@@ -750,7 +751,14 @@ fn prune_retention(path: &Path, clock: &dyn ClockV1) -> io::Result<()> {
             .map_err(io::Error::other)?;
         if modified.as_secs() < cutoff {
             remove_if_present(&candidate)?;
+        } else {
+            numeric_rotations.push((index, candidate));
         }
+    }
+    // `.1` is newest, so retain the five lowest numeric rotations regardless of their gaps.
+    numeric_rotations.sort_unstable_by_key(|(index, _)| *index);
+    for (_, candidate) in numeric_rotations.into_iter().skip(RETAINED_ROTATIONS_V1) {
+        remove_if_present(&candidate)?;
     }
     Ok(())
 }
@@ -779,6 +787,14 @@ impl LogSinkV1 for RotatingFileSinkV1 {
             .unwrap_or_else(|poison| poison.into_inner())
             .file
             .flush()
+    }
+}
+impl fmt::Debug for ObservabilityEmitterV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObservabilityEmitterV1")
+            .field("counters", &self.counters())
+            .finish()
     }
 }
 impl fmt::Debug for ObservabilityV1 {

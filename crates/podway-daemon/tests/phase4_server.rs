@@ -18,6 +18,7 @@ use std::{
 };
 
 use podway_daemon::{
+    observability::{ClockV1, LogSinkV1, ObservabilityFinalizationV1, ObservabilityV1},
     peer::{FixedPeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1},
     server::{
         BoundedAcceptLoopV1, ConnectionHandlerSpawnerV1, FixedResponseMetadataSourceV1,
@@ -43,6 +44,32 @@ const GENERATED_AT: &str = "2026-07-15T12:34:56.789Z";
 const EXPECTED_UID: u32 = 501;
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[derive(Default)]
+struct CapturingObservabilitySink {
+    events: Mutex<Vec<String>>,
+}
+
+impl LogSinkV1 for CapturingObservabilitySink {
+    fn write_event(&self, event: &str) -> io::Result<()> {
+        self.events
+            .lock()
+            .expect("observability events lock must not be poisoned")
+            .push(event.to_owned());
+        Ok(())
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct FixedObservabilityClock;
+
+impl ClockV1 for FixedObservabilityClock {
+    fn unix_seconds(&self) -> u64 {
+        42
+    }
+}
 
 struct SocketFixture {
     root: PathBuf,
@@ -555,7 +582,11 @@ fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
     let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
     let calls = Arc::new(AtomicUsize::new(0));
     let completed = Arc::new(AtomicUsize::new(0));
-    let transport = Arc::new(UnixServerTransportV1::with_metadata(
+    let observation_sink = Arc::new(CapturingObservabilitySink::default());
+    let observability =
+        ObservabilityV1::start(observation_sink.clone(), Arc::new(FixedObservabilityClock));
+    let emitter = observability.emitter();
+    let transport = Arc::new(UnixServerTransportV1::with_metadata_and_observability(
         PeerUidVerifierV1::new(EXPECTED_UID, FixedPeerCredentialSourceV1::uid(EXPECTED_UID)),
         BlockingDispatcher {
             gate: Arc::clone(&gate),
@@ -564,15 +595,15 @@ fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
         },
         ServerTransportTimeoutsV1::default(),
         metadata(),
+        Some(emitter.clone()),
     ));
     let admission = ShutdownAdmissionV1::new();
-    let accept_loop = BoundedAcceptLoopV1::with_poll_interval(
+    let accept_loop = BoundedAcceptLoopV1::new_with_observability(
         Arc::clone(&transport),
         admission.clone(),
         NonZeroUsize::new(1).expect("one is nonzero"),
-        Duration::from_millis(1),
-    )
-    .expect("positive accept poll interval is valid");
+        Some(emitter),
+    );
     let listener = fixture
         .listener
         .try_clone()
@@ -601,6 +632,27 @@ fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(completed.load(Ordering::SeqCst), 1);
     assert_eq!(admission.in_flight(), 0);
+    let report = observability.shutdown();
+    assert_eq!(
+        report.finalization(),
+        ObservabilityFinalizationV1::Completed
+    );
+    let events = observation_sink
+        .events
+        .lock()
+        .expect("observability events lock must not be poisoned");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("category=admission")),
+        "the real accept boundary must emit admission evidence"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.contains("category=service_outcome")),
+        "the real dispatch boundary must emit service outcome evidence"
+    );
     drop(second);
 }
 #[test]

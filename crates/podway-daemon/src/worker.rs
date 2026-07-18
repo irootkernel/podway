@@ -25,6 +25,7 @@ use crate::{
         ArtifactVerifierV1, DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1,
         ExecutionIdSourceV1, ProcedureProviderV1, WorkspaceRevalidatorV1,
     },
+    observability::{EventCategoryV1, ObservabilityEmitterV1, SeverityV1},
     read_service::{MonotonicClockV1, MonotonicDeadlineV1},
     runtime_workspace::WorkspaceSchedulerContextV1,
     scheduler::{
@@ -338,6 +339,7 @@ where
     execution: Arc<Execution>,
     clock: Arc<Clock>,
     worker_id: WorkerIdV1,
+    observability: Option<ObservabilityEmitterV1>,
     context: std::marker::PhantomData<fn() -> Context>,
 }
 
@@ -361,11 +363,21 @@ where
     Clock: WorkerClockV1 + 'static,
 {
     pub fn new(execution: Arc<Execution>, clock: Arc<Clock>, worker_id: WorkerIdV1) -> Self {
+        Self::new_with_observability(execution, clock, worker_id, None)
+    }
+
+    pub fn new_with_observability(
+        execution: Arc<Execution>,
+        clock: Arc<Clock>,
+        worker_id: WorkerIdV1,
+        observability: Option<ObservabilityEmitterV1>,
+    ) -> Self {
         Self {
             inner: Arc::new(DaemonWorkerInnerV1 {
                 execution,
                 clock,
                 worker_id,
+                observability,
                 context: std::marker::PhantomData,
             }),
         }
@@ -381,10 +393,12 @@ where
         completion_mode: WorkerCompletionModeV1,
     ) -> Result<WorkerSubmissionV1, WorkerErrorV1> {
         if scheduler.context_snapshot().recovery_required() {
+            self.emit(EventCategoryV1::Scheduler, SeverityV1::Warn);
             return Err(WorkerErrorV1::RetirementRejected);
         }
         let outcome = scheduler.with_serialized(|context| {
             if context.recovery_required() {
+                self.emit(EventCategoryV1::Scheduler, SeverityV1::Warn);
                 return Err(WorkerErrorV1::RetirementRejected);
             }
             context
@@ -396,7 +410,16 @@ where
                 .ok_or(WorkerErrorV1::RetirementRejected)?
                 .map_err(Into::into)
         })?;
+        self.emit(EventCategoryV1::Admission, SeverityV1::Info);
         let Some(job) = job_to_drive(&outcome) else {
+            self.emit(
+                EventCategoryV1::Idempotency,
+                if terminal_replay(&outcome).is_some() {
+                    SeverityV1::Info
+                } else {
+                    SeverityV1::Warn
+                },
+            );
             let completion = match completion_mode {
                 WorkerCompletionModeV1::Detached => None,
                 WorkerCompletionModeV1::WaitUntil(_) => terminal_replay(&outcome)
@@ -409,6 +432,7 @@ where
         };
 
         let notification = self.notify_authoritative_change(scheduler);
+        self.emit(EventCategoryV1::Scheduler, SeverityV1::Info);
         let _drain = self.drain_workspace_detached(Arc::clone(scheduler));
         notification?;
         let completion = match completion_mode {
@@ -594,8 +618,15 @@ where
                 }))
             });
             match attempt {
-                None | Some(Ok(Ok(None))) => return Ok(report),
+                None | Some(Ok(Ok(None))) => {
+                    self.emit(EventCategoryV1::CancelOrClaim, SeverityV1::Debug);
+                    return Ok(report);
+                }
                 Some(Ok(Ok(Some(_terminal)))) => {
+                    self.emit(
+                        EventCategoryV1::TerminalOrRequeueOrSaturation,
+                        SeverityV1::Info,
+                    );
                     report.terminal_job_count = report
                         .terminal_job_count
                         .checked_add(1)
@@ -605,9 +636,17 @@ where
                     }
                 }
                 Some(Ok(Err(error))) => {
+                    self.emit(
+                        EventCategoryV1::TerminalOrRequeueOrSaturation,
+                        SeverityV1::Error,
+                    );
                     return self.fail_closed_drain(context, error.into());
                 }
                 Some(Err(_)) => {
+                    self.emit(
+                        EventCategoryV1::TerminalOrRequeueOrSaturation,
+                        SeverityV1::Error,
+                    );
                     return self.fail_closed_drain(context, WorkerErrorV1::BackgroundPanicked);
                 }
             }
@@ -685,6 +724,11 @@ where
         })
     }
 
+    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
+        if let Some(observability) = &self.inner.observability {
+            observability.emit(category, severity);
+        }
+    }
     fn read_required_job(
         &self,
         context: &Context,
