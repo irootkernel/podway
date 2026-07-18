@@ -838,6 +838,13 @@ fn suggestions(next: &podway_core::NextWorkViewV1) -> Vec<CommandSuggestionResul
             })
             .collect();
     }
+    if next.missing_required_items().is_empty() {
+        return vec![CommandSuggestionResultV1 {
+            command: "session.complete".to_owned(),
+            argv: vec!["podway".to_owned(), "complete".to_owned()],
+            item_id: None,
+        }];
+    }
 
     next.missing_required_items()
         .iter()

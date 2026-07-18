@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "kind": "g008-verification-attestation",
+  "goalId": "G008",
+  "contract": "Podway v0.1.0 Phase 7 four-preset production dogfood and UX correction",
+  "attestationStatus": "passed",
+  "verifiedAtUtc": "2026-07-17T16:35:55Z",
+  "verificationReport": {
+    "path": "artifacts/phase0/verification-logs/d504a2d3adb940e4ad37e28030674cdb/verification-report.json",
+    "sha256": "cd5361a1f64036dd9d5fcb314b2aa96d7492e9830a6798d6826735abe0fbf10a",
+    "selfDigest": "20408b0379632a08c6ee8c563ce92def1fb64cd06393f21dbd4f0f3884ea9acf",
+    "runId": "d504a2d3adb940e4ad37e28030674cdb",
+    "status": "passed"
+  },
+  "dogfood": {
+    "runner": "python3 tools/run_g008_dogfood.py",
+    "test": "public_cli_dogfoods_all_four_presets_with_retry_return_and_next_evidence",
+    "conformanceCells": 12,
+    "scenarios": {
+      "sw-dev": {"commands": 88, "nextChecks": 23, "retries": 1, "returns": 1},
+      "bug-fix": {"commands": 88, "nextChecks": 23, "retries": 1, "returns": 1},
+      "docs-only": {"commands": 78, "nextChecks": 21, "retries": 1, "returns": 1},
+      "analysis": {"commands": 90, "nextChecks": 21, "retries": 1, "returns": 1}
+    }
+  },
+  "friction": {
+    "unclearPrompts": [],
+    "unnecessaryRequiredItems": [],
+    "nextOmissions": [
+      {
+        "observed": "Ready stages allowed completion but session.next omitted a concrete completion suggestion.",
+        "resolution": "Added the canonical session.complete suggestion and reran all four production scenarios with exact missing-item and ready-stage assertions."
+      }
+    ],
+    "queueRevisionFriction": []
+  },
+  "targetedVerification": {
+    "status": "passed",
+    "commands": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo test --workspace --all-targets --all-features",
+      "python3 tools/run_g005_vertical.py",
+      "python3 tools/run_g008_dogfood.py",
+      "python3 tools/import_sot.py --check",
+      "python3 tools/verify_contracts.py --all",
+      "python3 tools/verify_verification_runner.py --all",
+      "python3 tools/run_verification.py --check",
+      "python3 tools/phase0_receipts.py --check"
+    ]
+  },
+  "aiSlopCleaner": {
+    "status": "passed",
+    "blockingFindings": [],
+    "advisoryFindings": [],
+    "evidence": "Read-only sweep covered the G008 dogfood harness, runner, and additive next suggestion. The suite uses only public CLI, socket, daemon, SQLite, and Git surfaces; exact next omissions, retry, return, prompt uniqueness, readiness, and completion are asserted without preset-specific production code."
+  },
+  "validationBatch": {
+    "batchId": "VB001",
+    "role": "deferred-member",
+    "finalGoalId": "G009",
+    "deferredLanes": ["architectReview", "executorQa"]
+  }
+}

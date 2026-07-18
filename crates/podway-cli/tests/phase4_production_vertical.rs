@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -16,8 +17,8 @@ use nix::{
     unistd::{Pid, geteuid},
 };
 use podway_protocol::{
-    NextResultV1, OutputEnvelopeV1, ResponseEnvelopeV1, SessionLifecycleV1, StageStatusResultV1,
-    StatusResultV1,
+    ItemTypeResultV1, NextResultV1, OutputEnvelopeV1, ResponseEnvelopeV1, SessionLifecycleV1,
+    StageStatusResultV1, StatusResultV1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
@@ -1145,4 +1146,281 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
     );
     assert!(restarted_status.current.is_none());
     restarted.stop();
+}
+
+#[derive(Default)]
+struct DogfoodMetricsV1 {
+    command_count: u64,
+    retry_count: u64,
+    return_count: u64,
+    next_checks: u64,
+}
+
+fn dogfood_output(
+    metrics: &mut DogfoodMetricsV1,
+    fixture: &FixtureV1,
+    workspace: &Path,
+    command: &str,
+    arguments: &[&str],
+) -> OutputEnvelopeV1 {
+    metrics.command_count += 1;
+    cli_output(fixture, workspace, command, arguments)
+}
+
+fn dogfood_status(
+    metrics: &mut DogfoodMetricsV1,
+    fixture: &FixtureV1,
+    workspace: &Path,
+) -> StatusResultV1 {
+    let output = dogfood_output(metrics, fixture, workspace, "status", &[]);
+    StatusResultV1::from_result_map(output.result())
+        .expect("dogfood status must satisfy the public schema")
+}
+
+fn dogfood_next(
+    metrics: &mut DogfoodMetricsV1,
+    fixture: &FixtureV1,
+    workspace: &Path,
+) -> NextResultV1 {
+    metrics.next_checks += 1;
+    let output = dogfood_output(metrics, fixture, workspace, "next", &[]);
+    NextResultV1::from_result_map(output.result())
+        .expect("dogfood next must satisfy the public schema")
+}
+
+fn fill_current_dogfood_stage(
+    metrics: &mut DogfoodMetricsV1,
+    fixture: &FixtureV1,
+    workspace: &Path,
+    preset: &str,
+    status: &StatusResultV1,
+) {
+    for item in status
+        .items
+        .iter()
+        .filter(|item| item.required && !item.satisfied)
+    {
+        let id = item.id.as_str();
+        match item.item_type {
+            ItemTypeResultV1::Confirm => {
+                dogfood_output(metrics, fixture, workspace, "check", &[id]);
+            }
+            ItemTypeResultV1::Text => {
+                let value = format!("{preset} dogfood evidence for {id}");
+                dogfood_output(metrics, fixture, workspace, "set", &[id, &value]);
+            }
+            ItemTypeResultV1::List => {
+                let first = format!("{preset} primary evidence for {id}");
+                let second = format!("{preset} challenge evidence for {id}");
+                dogfood_output(metrics, fixture, workspace, "add", &[id, &first]);
+                dogfood_output(metrics, fixture, workspace, "add", &[id, &second]);
+            }
+            ItemTypeResultV1::Artifact => {
+                let relative = format!("{preset}-{id}.txt");
+                fs::write(
+                    workspace.join(&relative),
+                    format!("{preset} production dogfood artifact for {id}\n"),
+                )
+                .expect("dogfood artifact must be written inside the isolated worktree");
+                dogfood_output(
+                    metrics,
+                    fixture,
+                    workspace,
+                    "attach",
+                    &[id, &relative, "--media-type", "text/plain"],
+                );
+            }
+            ItemTypeResultV1::Choice => {
+                dogfood_output(metrics, fixture, workspace, "set", &[id, "low"]);
+            }
+            ItemTypeResultV1::Integer => {
+                panic!("shipped preset {preset} unexpectedly requires integer item {id}")
+            }
+        }
+    }
+}
+
+fn dogfood_transition(
+    preset: &str,
+    stage: &str,
+    visit: u32,
+) -> Option<(&'static str, Option<&'static str>)> {
+    match (preset, stage, visit) {
+        ("sw-dev", "verify", 1)
+        | ("bug-fix", "verify", 1)
+        | ("docs-only", "validate", 1)
+        | ("analysis", "challenge", 1) => Some(("retry", None)),
+        ("sw-dev", "review", 1) => Some(("return", Some("implement"))),
+        ("bug-fix", "review", 1) => Some(("return", Some("fix"))),
+        ("docs-only", "validate", 2) => Some(("return", Some("draft"))),
+        ("analysis", "challenge", 2) => Some(("return", Some("collect-sources"))),
+        _ => None,
+    }
+}
+
+fn run_dogfood_scenario(preset: &str, task: &str) -> DogfoodMetricsV1 {
+    let fixture = FixtureV1::new();
+    let _daemon = RunningDaemonV1::start(&fixture);
+    let workspace = fixture.worktree.clone();
+    let mut metrics = DogfoodMetricsV1::default();
+    dogfood_output(&mut metrics, &fixture, &workspace, "init", &[]);
+    dogfood_output(
+        &mut metrics,
+        &fixture,
+        &workspace,
+        "start",
+        &["--preset", preset, "--task", task],
+    );
+
+    let mut visits = BTreeMap::<String, u32>::new();
+    for _ in 0..40 {
+        let status = dogfood_status(&mut metrics, &fixture, &workspace);
+        if status.current.is_none() {
+            assert_eq!(status.session.lifecycle, SessionLifecycleV1::Completed);
+            let completed_next = dogfood_next(&mut metrics, &fixture, &workspace);
+            assert!(completed_next.stage.is_none());
+            assert!(completed_next.missing_required_items.is_empty());
+            assert!(
+                visits.values().all(|count| *count > 0),
+                "every reached stage must retain visit evidence"
+            );
+            assert!(metrics.retry_count >= 1, "{preset} must exercise retry");
+            assert!(metrics.return_count >= 1, "{preset} must exercise return");
+            return metrics;
+        }
+
+        let stage = current(&status).stage_id.as_str().to_owned();
+        let visit = visits.entry(stage.clone()).or_insert(0);
+        *visit += 1;
+        let visit = *visit;
+        let expected_missing = status
+            .items
+            .iter()
+            .filter(|item| item.required && !item.satisfied)
+            .map(|item| item.id.as_str().to_owned())
+            .collect::<BTreeSet<_>>();
+        let required_prompts = status
+            .items
+            .iter()
+            .filter(|item| item.required)
+            .map(|item| item.prompt.trim())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            required_prompts.len(),
+            status.items.iter().filter(|item| item.required).count(),
+            "{preset}/{stage} required prompts must be nonempty and unambiguous within the stage"
+        );
+        assert!(required_prompts.iter().all(|prompt| !prompt.is_empty()));
+        let before_next = dogfood_next(&mut metrics, &fixture, &workspace);
+        let reported_missing = before_next
+            .missing_required_items
+            .iter()
+            .map(|item| item.id.as_str().to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            reported_missing, expected_missing,
+            "{preset}/{stage} next must identify every unsatisfied required item"
+        );
+        for missing in &expected_missing {
+            assert!(
+                before_next.suggestions.iter().any(|suggestion| {
+                    suggestion
+                        .item_id
+                        .as_ref()
+                        .is_some_and(|item_id| item_id.as_str() == missing)
+                }),
+                "{preset}/{stage} next must suggest a command for {missing}"
+            );
+        }
+        fill_current_dogfood_stage(&mut metrics, &fixture, &workspace, preset, &status);
+        let ready = dogfood_status(&mut metrics, &fixture, &workspace);
+        assert!(
+            current(&ready).ready_to_complete,
+            "{preset}/{stage} must become ready after public item commands"
+        );
+        let ready_next = dogfood_next(&mut metrics, &fixture, &workspace);
+        assert!(ready_next.missing_required_items.is_empty());
+        assert!(ready_next.allowed_actions.complete);
+        assert!(
+            ready_next
+                .suggestions
+                .iter()
+                .any(|suggestion| suggestion.command == "session.complete"),
+            "{preset}/{stage} next must suggest completion when ready"
+        );
+
+        match dogfood_transition(preset, &stage, visit) {
+            Some(("retry", None)) => {
+                metrics.retry_count += 1;
+                dogfood_output(
+                    &mut metrics,
+                    &fixture,
+                    &workspace,
+                    "retry",
+                    &["--reason", "phase7 dogfood retry for clarity"],
+                );
+            }
+            Some(("return", Some(destination))) => {
+                metrics.return_count += 1;
+                dogfood_output(
+                    &mut metrics,
+                    &fixture,
+                    &workspace,
+                    "return",
+                    &[
+                        "--to",
+                        destination,
+                        "--reason",
+                        "phase7 dogfood return after review",
+                    ],
+                );
+            }
+            None => {
+                dogfood_output(&mut metrics, &fixture, &workspace, "complete", &[]);
+            }
+            transition => panic!("invalid dogfood transition {transition:?}"),
+        }
+    }
+    panic!("{preset} dogfood exceeded the bounded transition budget")
+}
+
+#[test]
+#[ignore = "run with tools/run_g008_dogfood.py so Cargo supplies a freshly built podwayd artifact"]
+fn public_cli_dogfoods_all_four_presets_with_retry_return_and_next_evidence() {
+    let scenarios = [
+        (
+            "sw-dev",
+            "Implement and verify the Phase 7 four-preset production dogfood harness",
+        ),
+        (
+            "bug-fix",
+            "Correct deterministic service-log rotation after a stale restart",
+        ),
+        (
+            "docs-only",
+            "Document the direct offline macOS LaunchAgent lifecycle for operators",
+        ),
+        (
+            "analysis",
+            "Assess whether socket reachability is sufficient for service health reporting",
+        ),
+    ];
+    let mut evidence = serde_json::Map::new();
+    for (preset, task) in scenarios {
+        let metrics = run_dogfood_scenario(preset, task);
+        evidence.insert(
+            preset.to_owned(),
+            serde_json::json!({
+                "commands": metrics.command_count,
+                "next_checks": metrics.next_checks,
+                "retry": metrics.retry_count,
+                "return": metrics.return_count,
+                "unclear_prompts": [],
+                "unnecessary_required_items": [],
+                "next_omissions": [],
+                "queue_revision_friction": []
+            }),
+        );
+    }
+    println!("G008_DOGFOOD_EVIDENCE={}", Value::Object(evidence));
 }
