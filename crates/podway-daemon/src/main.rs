@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{env, num::NonZeroUsize, path::PathBuf, process, thread};
+use std::{env, num::NonZeroUsize, path::PathBuf, process, sync::Arc, thread};
 
 use nix::unistd::geteuid;
 use podway_daemon::{
@@ -46,30 +46,38 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp"));
     let paths = ServiceRuntimePathsV1::for_user(&home, temporary, geteuid().as_raw())?;
-    let observability = RotatingFileSinkV1::open(
-        home.join("Library/Logs/podway/podwayd.log"),
-        std::sync::Arc::new(SystemClockV1),
-    )
-    .ok()
-    .map(|sink| {
-        ObservabilityV1::start(
-            std::sync::Arc::new(sink),
-            std::sync::Arc::new(SystemClockV1),
-        )
-    });
-    if let Some(observability) = &observability {
-        observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
-    }
     let configuration = ProductionDaemonRuntimeConfigV1::new(
         WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
         NonZeroUsize::new(MAXIMUM_IN_FLIGHT_CONNECTIONS_V1)
             .expect("the production connection limit is nonzero"),
         ServerTransportTimeoutsV1::default(),
     );
+    let inspection_options = SqliteStoreOptionsV1::new(1)?;
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
     let signal_control = signals.handle();
-    let runtime =
-        ProductionDaemonRuntimeV1::bind(&paths, SqliteStoreOptionsV1::new(1)?, configuration)?;
+    let clock = Arc::new(SystemClockV1);
+    let observability = match RotatingFileSinkV1::open(paths.log_path().as_path(), clock.clone()) {
+        Ok(sink) => ObservabilityV1::start(Arc::new(sink), clock),
+        Err(error) => {
+            // Bootstrap has no functioning sink; this is explicit degraded-mode evidence.
+            eprintln!("podwayd observability bootstrap sink-open failure: {error}");
+            ObservabilityV1::start_degraded(clock)
+        }
+    };
+    observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
+    let runtime = match ProductionDaemonRuntimeV1::bind_with_observability(
+        &paths,
+        inspection_options,
+        configuration,
+        Some(observability.emitter()),
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
+            observability.shutdown();
+            return Err(error.into());
+        }
+    };
     let shutdown = runtime.shutdown_handle();
     let relay = match thread::Builder::new()
         .name("podwayd-signal-relay".to_owned())
@@ -83,9 +91,8 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
             signal_control.close();
             runtime.shutdown_handle().request_shutdown();
             let runtime_result = runtime.run();
-            if let Some(observability) = observability {
-                observability.shutdown();
-            }
+            observability.emit(EventCategoryV1::ServiceOutcome, SeverityV1::Error);
+            observability.shutdown();
             if let Err(cleanup) = runtime_result {
                 return Err(std::io::Error::other(format!(
                     "cannot start signal relay ({source}); endpoint cleanup also failed: {cleanup}"
@@ -99,10 +106,15 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     let runtime_result = runtime.run();
     signal_control.close();
     let relay_result = relay.join();
-    if let Some(observability) = observability {
-        observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
-        observability.shutdown();
-    }
+    observability.emit(
+        EventCategoryV1::ServiceOutcome,
+        if runtime_result.is_ok() && relay_result.is_ok() {
+            SeverityV1::Info
+        } else {
+            SeverityV1::Error
+        },
+    );
+    observability.shutdown();
 
     runtime_result?;
     relay_result.map_err(|_| "signal relay panicked")?;

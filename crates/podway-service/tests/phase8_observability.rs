@@ -89,19 +89,29 @@ fn service_observer_emits_only_stable_categories_at_production_boundaries() {
     );
 
     let events = observer.0.lock().expect("observer lock").clone();
-    for expected in [
-        ServiceObservationV1::AtomicPlistPublished,
-        ServiceObservationV1::AtomicMetadataPublished,
-        ServiceObservationV1::LaunchctlSideEffectRequested,
-        ServiceObservationV1::LaunchctlSideEffectCompleted,
-        ServiceObservationV1::LogRotationCompleted,
-        ServiceObservationV1::StaleSocketRemoved,
-        ServiceObservationV1::UninstallLogsPreserved,
-        ServiceObservationV1::ServiceOutcome,
-        ServiceObservationV1::Error,
-    ] {
-        assert!(events.contains(&expected), "missing {expected:?}");
-    }
+    assert_eq!(
+        events,
+        vec![
+            ServiceObservationV1::AtomicPlistPublished,
+            ServiceObservationV1::LogRotationCompleted,
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
+            ServiceObservationV1::AtomicMetadataPublished,
+            ServiceObservationV1::ServiceOutcome,
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
+            ServiceObservationV1::StaleSocketRemoved,
+            ServiceObservationV1::LogRotationCompleted,
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
+            ServiceObservationV1::ServiceOutcome,
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
+            ServiceObservationV1::UninstallLogsPreserved,
+            ServiceObservationV1::ServiceOutcome,
+            ServiceObservationV1::Error,
+        ]
+    );
 
     fs::remove_dir_all(root).expect("remove fixture");
 }
