@@ -11,6 +11,7 @@ from typing import Any
 from g009_common import QualificationError, TARGET, canonical_json, load_json, safe_extract_member, sha256_file
 from g009_performance import characterize, nearest_rank
 from g009_release import inspect_archive, load_rc
+from run_g009_qualification import FUZZ_TARGETS, GATES
 
 ARCHIVE_ROOT = "podway-0.1.0-aarch64-apple-darwin"
 
@@ -28,7 +29,41 @@ def validate_protocol(path: Path) -> dict[str, Any]:
     if not isinstance(perf, dict) or perf.get("warmups") != 5 or perf.get("characterization_samples") != 30 or perf.get("holdout_samples") != 30 or perf.get("rounding_permitted") is not False: raise QualificationError("profile performance protocol drift")
     workloads = value.get("workloads")
     if not isinstance(workloads, list) or len(workloads) != 7 or len({item.get("id") for item in workloads if isinstance(item, dict)}) != 7: raise QualificationError("profile workload cardinality drift")
+    validate_gate_declarations(value)
+    fuzz = value.get("fuzz")
+    if not isinstance(fuzz, dict) or fuzz.get("corpus_root") != "artifacts/g009/fuzz/corpus" or fuzz.get("surfaces") != list(FUZZ_TARGETS):
+        raise QualificationError("profile fuzz surfaces or corpus root drift")
+    if fuzz.get("toolchain") != {"channel": "nightly-2026-07-17", "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"}:
+        raise QualificationError("profile fuzz toolchain drift")
+    if fuzz.get("pre_rc") != {"seconds_per_target": 600} or fuzz.get("change_budget") != {"seconds_per_target": 60} or fuzz.get("rc") != {"rss_limit_mb": 512, "seconds_per_target": 3600, "timeout_seconds": 5}:
+        raise QualificationError("profile fuzz bounds drift")
     return value
+
+def validate_gate_declarations(value: dict[str, Any]) -> None:
+    gates = value.get("gates")
+    if not isinstance(gates, list) or len(gates) != len(GATES):
+        raise QualificationError("profile gate cardinality drift")
+    ids = {item.get("id") for item in gates if isinstance(item, dict)}
+    if ids != set(GATES):
+        raise QualificationError("profile gate allowlist drift")
+    for gate in gates:
+        if not isinstance(gate, dict):
+            raise QualificationError("malformed profile gate")
+        if gate.get("dispatch") != {"command": "full-gates", "only": gate["id"], "required_args": ["--rc", "--only"]}:
+            raise QualificationError("profile gate dispatch is not executable")
+    checkpoints = value.get("workflow_checkpoints")
+    checkpoint_dispatches = {
+        "G009-GATE-PREFLIGHT": {"command": "preflight", "required_args": ["--profile", "--target"]},
+        "G009-GATE-PERFORMANCE": {"command": "holdout", "required_args": ["--rc", "--warmups", "--samples", "--bin-dir"]},
+        "G009-GATE-PACKAGE": {"command": "package", "required_args": ["--rc", "--archive", "--bin-dir"]},
+        "G009-GATE-LIFECYCLE": {"command": "lifecycle", "required_args": ["--rc", "--archive", "--require-clean-user"]},
+        "G009-GATE-FINAL-001": {"command": "final-review", "required_args": ["--rc", "--traceability", "--evidence-root", "--reviewer", "--require-final-001"]},
+    }
+    if not isinstance(checkpoints, list) or {item.get("id") for item in checkpoints if isinstance(item, dict)} != set(checkpoint_dispatches):
+        raise QualificationError("workflow checkpoint replacements drift")
+    for checkpoint in checkpoints:
+        if not isinstance(checkpoint, dict) or checkpoint.get("dispatch") != checkpoint_dispatches[checkpoint["id"]]:
+            raise QualificationError("workflow checkpoint replacement is incomplete")
 
 def validate_traceability(path: Path) -> None:
     value = load_json(path)
@@ -82,6 +117,18 @@ def self_test() -> None:
         escaping = base / "escaping.zip"
         with zipfile.ZipFile(escaping, "w") as archive: archive.writestr("../outside", b"x")
         reject(lambda: inspect_archive(escaping), "archive traversal")
+    checkpoints = [
+        {"id": "G009-GATE-PREFLIGHT", "dispatch": {"command": "preflight", "required_args": ["--profile", "--target"]}},
+        {"id": "G009-GATE-PERFORMANCE", "dispatch": {"command": "holdout", "required_args": ["--rc", "--warmups", "--samples", "--bin-dir"]}},
+        {"id": "G009-GATE-PACKAGE", "dispatch": {"command": "package", "required_args": ["--rc", "--archive", "--bin-dir"]}},
+        {"id": "G009-GATE-LIFECYCLE", "dispatch": {"command": "lifecycle", "required_args": ["--rc", "--archive", "--require-clean-user"]}},
+        {"id": "G009-GATE-FINAL-001", "dispatch": {"command": "final-review", "required_args": ["--rc", "--traceability", "--evidence-root", "--reviewer", "--require-final-001"]}},
+    ]
+    declared = [{"id": gate, "dispatch": {"command": "full-gates", "only": gate, "required_args": ["--rc", "--only"]}} for gate in GATES]
+    reject(lambda: validate_gate_declarations({"gates": declared[:-1], "workflow_checkpoints": checkpoints}), "missing allowlisted gate")
+    drifted = [dict(gate) for gate in declared]
+    drifted[0]["dispatch"] = {"command": "full-gates", "only": "unknown", "required_args": ["--rc", "--only"]}
+    reject(lambda: validate_gate_declarations({"gates": drifted, "workflow_checkpoints": checkpoints}), "unknown logical gate dispatch")
     if nearest_rank([Fraction(number, 1) for number in range(1, 31)], 95, 100) != Fraction(29, 1): raise AssertionError("nearest rank rounded")
     print("G009 deterministic negative sentinels passed")
 

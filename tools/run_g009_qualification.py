@@ -25,21 +25,41 @@ from g009_common import (EVIDENCE_ROOT, ROOT, TARGET, ARCHIVE_ROOT, Qualificatio
 from g009_performance import SAMPLES, WARMUPS, characterize as calculate_baseline, evaluate_holdout, thresholds
 from g009_release import inspect_archive, load_rc
 
-# User input never supplies executable vectors. The profile's frozen workload vectors and these
-# gates are the complete subprocess allowlist.
-GATES: dict[str, tuple[str, ...]] = {
-    "verification": ("python3", "tools/run_verification.py", "--run"),
-    "g005-vertical": ("python3", "tools/run_g005_vertical.py"),
-    "g008-dogfood": ("python3", "tools/run_g008_dogfood.py"),
-    "fmt": ("cargo", "+1.85.0", "fmt", "--all", "--", "--check"),
-    "check": ("cargo", "+1.85.0", "check", "--workspace", "--locked", "--target", TARGET),
-    "test": ("cargo", "+1.85.0", "test", "--workspace", "--all-targets", "--all-features", "--target", TARGET),
-    "clippy": ("cargo", "+1.85.0", "clippy", "--workspace", "--all-targets", "--all-features", "--target", TARGET, "--", "-D", "warnings"),
-    "coverage": ("cargo", "+1.85.0", "llvm-cov", "report", "--target", TARGET, "--summary-only"),
-    "audit": ("cargo", "+1.85.0", "audit", "--deny", "warnings"),
-    "deny": ("cargo", "+1.85.0", "deny", "check", "advisories", "bans", "licenses", "sources"),
-    "qualification-contracts": ("python3", "tools/verify_g009_qualification.py", "--protocol", "release/g009-qualification-v1.json", "--traceability", "release/g009-traceability-v1.json", "--crash-registry", "quality/crash-boundaries-v1.json"),
+# User input never supplies executable vectors. These logical gate identifiers are the
+# complete subprocess allowlist; profile declarations are checked against this map.
+GATES: dict[str, tuple[tuple[str, ...], ...]] = {
+    "G009-GATE-FORMAT": (("cargo", "+1.85.0", "fmt", "--all", "--", "--check"),),
+    "G009-GATE-CHECK": (("cargo", "+1.85.0", "check", "--workspace", "--all-targets", "--target", TARGET),),
+    "G009-GATE-CLIPPY": (("cargo", "+1.85.0", "clippy", "--workspace", "--all-targets", "--all-features", "--target", TARGET, "--", "-D", "warnings"),),
+    "G009-GATE-NATIVE-TESTS": (("cargo", "+1.85.0", "test", "--workspace", "--all-targets", "--target", TARGET),),
+    "G009-GATE-CONTRACTS": (("python3", "tools/run_verification.py", "--run"),),
+    "G009-GATE-G005": (("python3", "tools/run_g005_vertical.py"),),
+    "G009-GATE-G008": (("python3", "tools/run_g008_dogfood.py"),),
+    "G009-GATE-CRASH": (
+        ("python3", "tools/verify_g009_qualification.py", "--crash-registry", "quality/crash-boundaries-v1.json"),
+        ("cargo", "+1.85.0", "test", "-p", "podway-store", "--test", "phase2_crash_matrix", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-service", "--test", "phase8_crash_boundaries", "--target", TARGET),
+    ),
+    "G009-GATE-OBS": (
+        ("cargo", "+1.85.0", "test", "-p", "podway-daemon", "--test", "phase8_observability", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-service", "--test", "phase8_observability", "--target", TARGET),
+    ),
+    "G009-GATE-SECURITY": (
+        ("cargo", "+1.85.0", "test", "-p", "podway-cli", "--test", "phase4_commands", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-daemon", "--test", "phase4_endpoint", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-daemon", "--test", "phase4_registry", "--target", TARGET),
+    ),
+    "G009-GATE-MIGRATION": (
+        ("cargo", "+1.85.0", "test", "-p", "podway-store", "--test", "phase2_schema_codec", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-store", "--test", "phase2_integrity", "--target", TARGET),
+        ("cargo", "+1.85.0", "test", "-p", "podway-store", "--test", "phase2_reset_lifecycle", "--target", TARGET),
+    ),
+    "G009-GATE-AUDIT": (("cargo", "+1.85.0", "audit", "--deny", "warnings"),),
+    "G009-GATE-DENY": (("cargo", "+1.85.0", "deny", "check", "advisories", "bans", "licenses", "sources"),),
+    "G009-GATE-COVERAGE": (("cargo", "+1.85.0", "llvm-cov", "report", "--target", TARGET, "--summary-only"),),
+    "G009-GATE-FUZZ": (),
 }
+FUZZ_TARGETS = ("frame_decoder", "request_envelope", "response_additive", "config_procedure", "canonical_json", "selector")
 IDENTITY_COMMANDS = (("git", "status", "--porcelain"), ("git", "rev-parse", "HEAD"),
                      ("git", "rev-parse", "HEAD^{tree}"), ("rustc", "+1.85.0", "--version"),
                      ("cargo", "+1.85.0", "--version"))
@@ -103,6 +123,28 @@ def profile(path: Path) -> dict[str, Any]:
         if item.get("measured_commands") != WORKLOAD_COMMANDS[workload_id]:
             fail("workload command contract differs from its native adapter")
         if not isinstance(item.get("hard_bounds"), dict) or not all(isinstance(item["hard_bounds"].get(key), int) and item["hard_bounds"][key] > 0 for key in ("max_completion_ms", "max_rss_mib")): fail("malformed workload hard bounds")
+    fuzz = value.get("fuzz")
+    if not isinstance(fuzz, dict) or fuzz.get("corpus_root") != "artifacts/g009/fuzz/corpus" or fuzz.get("surfaces") != list(FUZZ_TARGETS):
+        fail("fuzz target contract drift")
+    if fuzz.get("toolchain") != {"channel": "nightly-2026-07-17", "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"}:
+        fail("fuzz toolchain contract drift")
+    if fuzz.get("pre_rc") != {"seconds_per_target": 600} or fuzz.get("change_budget") != {"seconds_per_target": 60} or fuzz.get("rc") != {"rss_limit_mb": 512, "seconds_per_target": 3600, "timeout_seconds": 5}:
+        fail("fuzz budget contract drift")
+    gates = value.get("gates")
+    if not isinstance(gates, list) or {item.get("id") for item in gates if isinstance(item, dict)} != set(GATES) or len(gates) != len(GATES):
+        fail("profile gate declarations drift from the runner allowlist")
+    for item in gates:
+        dispatch = item.get("dispatch") if isinstance(item, dict) else None
+        if not isinstance(dispatch, dict) or dispatch != {"command": "full-gates", "only": item["id"], "required_args": ["--rc", "--only"]}:
+            fail("profile gate dispatch declaration is not executable")
+    checkpoints = value.get("workflow_checkpoints")
+    checkpoint_ids = {"G009-GATE-PREFLIGHT", "G009-GATE-PERFORMANCE", "G009-GATE-PACKAGE", "G009-GATE-LIFECYCLE", "G009-GATE-FINAL-001"}
+    if not isinstance(checkpoints, list) or {item.get("id") for item in checkpoints if isinstance(item, dict)} != checkpoint_ids:
+        fail("workflow checkpoint replacements drift")
+    for item in checkpoints:
+        dispatch = item.get("dispatch") if isinstance(item, dict) else None
+        if not isinstance(dispatch, dict) or not isinstance(dispatch.get("command"), str) or not dispatch["command"] or not isinstance(dispatch.get("required_args"), list) or not dispatch["required_args"]:
+            fail("workflow checkpoint replacement is incomplete")
     return value
 
 
@@ -415,17 +457,59 @@ def holdout(args: argparse.Namespace) -> None:
     out, digest = evidence("performance/holdout", measured); print(f"{out} {digest}")
 
 
-def run_gate(gate_id: str) -> dict[str, Any]:
-    argv = GATES.get(gate_id)
-    if argv is None: fail(f"gate is not allowlisted: {gate_id}")
-    result = run_allowed(argv)
-    return {"gate_id": gate_id, "argv": list(argv), "exit_code": result.returncode, "stdout_sha256": sha256_bytes(result.stdout), "stderr_sha256": sha256_bytes(result.stderr), "status": "pass" if result.returncode == 0 else "fail"}
+def _run_fuzz_gate(profile_data: dict[str, Any]) -> list[dict[str, Any]]:
+    policy = profile_data["fuzz"]["rc"]
+    toolchain = profile_data["fuzz"]["toolchain"]
+    rustup = shutil.which("rustup")
+    if rustup is None:
+        fail("rustup is required for fuzz qualification")
+    proxy_directory = Path(rustup).resolve().parent
+    fuzz_env = {
+        "PATH": f"{proxy_directory}{os.pathsep}{os.environ.get('PATH', '')}",
+        "RUSTUP_TOOLCHAIN": toolchain["channel"],
+    }
+    rustc = run_allowed(("rustc", "--version"), env=fuzz_env)
+    if rustc.returncode != 0 or rustc.stdout.decode("utf-8", "strict").strip() != f"rustc {toolchain['rustc']}":
+        fail("installed fuzz toolchain differs from the frozen profile")
+    root = ROOT / profile_data["fuzz"]["corpus_root"]
+    root.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    for target in FUZZ_TARGETS:
+        corpus = Path(tempfile.mkdtemp(prefix=f"{target}-", dir=root))
+        argv = ("cargo", "fuzz", "run", target, str(corpus), "--",
+                f"-max_total_time={policy['seconds_per_target']}",
+                f"-timeout={policy['timeout_seconds']}",
+                f"-rss_limit_mb={policy['rss_limit_mb']}")
+        try:
+            result = run_allowed(argv, cwd=ROOT / "fuzz", env=fuzz_env, timeout=policy["seconds_per_target"] + policy["timeout_seconds"])
+        except subprocess.TimeoutExpired:
+            fail(f"fuzz target exceeded profile timeout: {target}")
+        results.append({"target": target, "corpus": str(corpus.relative_to(ROOT)), "argv": list(argv),
+                        "exit_code": result.returncode, "stdout_sha256": sha256_bytes(result.stdout),
+                        "stderr_sha256": sha256_bytes(result.stderr), "status": "pass" if result.returncode == 0 else "fail"})
+    return results
 
+def run_gate(gate_id: str, profile_data: dict[str, Any]) -> dict[str, Any]:
+    commands = GATES.get(gate_id)
+    if commands is None: fail(f"gate is not allowlisted: {gate_id}")
+    if gate_id == "G009-GATE-FUZZ":
+        results = _run_fuzz_gate(profile_data)
+        return {"gate_id": gate_id, "commands": results, "status": "pass" if all(item["status"] == "pass" for item in results) else "fail"}
+    results = []
+    for argv in commands:
+        result = run_allowed(argv)
+        results.append({"argv": list(argv), "exit_code": result.returncode, "stdout_sha256": sha256_bytes(result.stdout),
+                        "stderr_sha256": sha256_bytes(result.stderr), "status": "pass" if result.returncode == 0 else "fail"})
+    return {"gate_id": gate_id, "commands": results, "status": "pass" if all(item["status"] == "pass" for item in results) else "fail"}
 
 def full_gates(args: argparse.Namespace) -> None:
-    rc = load_rc(Path(args.rc)); require_arm64_host(rc["target"])
     selected = args.only.split(",") if args.only else list(GATES)
-    results = [run_gate(gate) for gate in selected]
+    if not selected or len(set(selected)) != len(selected): fail("gate selection is empty or duplicates a gate")
+    unknown = [gate for gate in selected if gate not in GATES]
+    if unknown: fail(f"gate is not allowlisted: {unknown[0]}")
+    rc = load_rc(Path(args.rc)); require_arm64_host(rc["target"])
+    profile_data = profile(_input_from_rc(rc, "profile"))
+    results = [run_gate(gate, profile_data) for gate in selected]
     if any(item["status"] != "pass" for item in results): fail("one or more real gates failed")
     out, digest = evidence("gates", {"checkpoint_id": "Q5", "rc_sha256": sha256_file(Path(args.rc)), "source": identity_manifest(), "results": results, "blockers": []})
     print(f"{out} {digest}")

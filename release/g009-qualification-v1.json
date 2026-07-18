@@ -27,6 +27,7 @@
     "untrusted_mutable_pointers_forbidden": true
   },
   "fuzz": {
+    "toolchain": {"channel": "nightly-2026-07-17", "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"},
     "change_budget": {"seconds_per_target": 60},
     "corpus_root": "artifacts/g009/fuzz/corpus",
     "pre_rc": {"seconds_per_target": 600},
@@ -41,26 +42,28 @@
     ]
   },
   "gates": [
-    {"argv": ["python3", "tools/run_g009_qualification.py", "preflight"], "evidence_role": "preflight", "id": "G009-GATE-PREFLIGHT", "owner": "release-engineering"},
-    {"argv": ["cargo", "+1.85.0", "fmt", "--check"], "evidence_role": "format", "id": "G009-GATE-FORMAT", "owner": "release-engineering"},
-    {"argv": ["cargo", "+1.85.0", "check", "--workspace", "--all-targets", "--target", "aarch64-apple-darwin"], "evidence_role": "check", "id": "G009-GATE-CHECK", "owner": "release-engineering"},
-    {"argv": ["cargo", "+1.85.0", "clippy", "--workspace", "--all-targets", "--all-features", "--target", "aarch64-apple-darwin", "--", "-D", "warnings"], "evidence_role": "clippy", "id": "G009-GATE-CLIPPY", "owner": "release-engineering"},
-    {"argv": ["cargo", "+1.85.0", "test", "--workspace", "--all-targets", "--target", "aarch64-apple-darwin"], "evidence_role": "native-tests", "id": "G009-GATE-NATIVE-TESTS", "owner": "quality"},
-    {"argv": ["python3", "tools/run_verification.py", "--run"], "evidence_role": "contract-suite", "id": "G009-GATE-CONTRACTS", "owner": "quality"},
-    {"argv": ["python3", "tools/run_g005_vertical.py"], "evidence_role": "production-vertical", "id": "G009-GATE-G005", "owner": "quality"},
-    {"argv": ["python3", "tools/run_g008_dogfood.py"], "evidence_role": "preset-dogfood", "id": "G009-GATE-G008", "owner": "quality"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "crash"], "evidence_role": "crash-coverage", "id": "G009-GATE-CRASH", "owner": "durability"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "obs-source-coverage"], "evidence_role": "observability", "id": "G009-GATE-OBS", "owner": "daemon"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "fuzz-native-rc", "--seconds", "3600"], "evidence_role": "fuzz", "id": "G009-GATE-FUZZ", "owner": "security"},
-    {"argv": ["cargo", "+1.85.0", "audit", "--deny", "warnings"], "evidence_role": "audit", "id": "G009-GATE-AUDIT", "owner": "security"},
-    {"argv": ["cargo", "+1.85.0", "deny", "check", "advisories", "bans", "licenses", "sources"], "evidence_role": "deny", "id": "G009-GATE-DENY", "owner": "security"},
-    {"argv": ["cargo", "+1.85.0", "llvm-cov", "--workspace", "--all-features", "--all-targets", "--target", "aarch64-apple-darwin", "--lcov"], "evidence_role": "coverage", "id": "G009-GATE-COVERAGE", "owner": "quality"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "holdout", "--warmups", "5", "--samples", "30"], "evidence_role": "performance-holdout", "id": "G009-GATE-PERFORMANCE", "owner": "release-engineering"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "security"], "evidence_role": "security-boundary", "id": "G009-GATE-SECURITY", "owner": "security"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "migration"], "evidence_role": "migration", "id": "G009-GATE-MIGRATION", "owner": "durability"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "package"], "evidence_role": "archive", "id": "G009-GATE-PACKAGE", "owner": "release-engineering"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "lifecycle", "--require-clean-user"], "evidence_role": "clean-lifecycle", "id": "G009-GATE-LIFECYCLE", "owner": "release-engineering"},
-    {"argv": ["python3", "tools/run_g009_qualification.py", "final-review", "--require-final-001"], "evidence_role": "final-review", "id": "G009-GATE-FINAL-001", "owner": "release-engineering"}
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-FORMAT", "required_args": ["--rc", "--only"]}, "evidence_role": "format", "id": "G009-GATE-FORMAT", "owner": "release-engineering"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-CHECK", "required_args": ["--rc", "--only"]}, "evidence_role": "check", "id": "G009-GATE-CHECK", "owner": "release-engineering"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-CLIPPY", "required_args": ["--rc", "--only"]}, "evidence_role": "clippy", "id": "G009-GATE-CLIPPY", "owner": "release-engineering"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-NATIVE-TESTS", "required_args": ["--rc", "--only"]}, "evidence_role": "native-tests", "id": "G009-GATE-NATIVE-TESTS", "owner": "quality"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-CONTRACTS", "required_args": ["--rc", "--only"]}, "evidence_role": "contract-suite", "id": "G009-GATE-CONTRACTS", "owner": "quality"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-G005", "required_args": ["--rc", "--only"]}, "evidence_role": "production-vertical", "id": "G009-GATE-G005", "owner": "quality"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-G008", "required_args": ["--rc", "--only"]}, "evidence_role": "preset-dogfood", "id": "G009-GATE-G008", "owner": "quality"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-CRASH", "required_args": ["--rc", "--only"]}, "evidence_role": "crash-coverage", "id": "G009-GATE-CRASH", "owner": "durability"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-OBS", "required_args": ["--rc", "--only"]}, "evidence_role": "observability", "id": "G009-GATE-OBS", "owner": "daemon"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-FUZZ", "required_args": ["--rc", "--only"]}, "evidence_role": "fuzz", "id": "G009-GATE-FUZZ", "owner": "security"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-AUDIT", "required_args": ["--rc", "--only"]}, "evidence_role": "audit", "id": "G009-GATE-AUDIT", "owner": "security"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-DENY", "required_args": ["--rc", "--only"]}, "evidence_role": "deny", "id": "G009-GATE-DENY", "owner": "security"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-COVERAGE", "required_args": ["--rc", "--only"]}, "evidence_role": "coverage", "id": "G009-GATE-COVERAGE", "owner": "quality"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-SECURITY", "required_args": ["--rc", "--only"]}, "evidence_role": "security-boundary", "id": "G009-GATE-SECURITY", "owner": "security"},
+    {"dispatch": {"command": "full-gates", "only": "G009-GATE-MIGRATION", "required_args": ["--rc", "--only"]}, "evidence_role": "migration", "id": "G009-GATE-MIGRATION", "owner": "durability"}
+  ],
+  "workflow_checkpoints": [
+    {"id": "G009-GATE-PREFLIGHT", "dispatch": {"command": "preflight", "required_args": ["--profile", "--target"]}},
+    {"id": "G009-GATE-PERFORMANCE", "dispatch": {"command": "holdout", "required_args": ["--rc", "--warmups", "--samples", "--bin-dir"]}},
+    {"id": "G009-GATE-PACKAGE", "dispatch": {"command": "package", "required_args": ["--rc", "--archive", "--bin-dir"]}},
+    {"id": "G009-GATE-LIFECYCLE", "dispatch": {"command": "lifecycle", "required_args": ["--rc", "--archive", "--require-clean-user"]}},
+    {"id": "G009-GATE-FINAL-001", "dispatch": {"command": "final-review", "required_args": ["--rc", "--traceability", "--evidence-root", "--reviewer", "--require-final-001"]}}
   ],
   "invalidation": {
     "new_rc_inputs": ["source.commit", "source.tree", "Cargo.lock", "profile", "target", "host", "tool.identities", "fixture.digests", "crash_registry", "obs_policy", "fuzz_policy", "baseline", "thresholds", "signing_posture", "exceptions"],
