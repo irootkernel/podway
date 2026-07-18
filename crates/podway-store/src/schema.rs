@@ -117,8 +117,8 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
                 | StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup),
             ) = options.failpoint()
             {
-                if failpoint == StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup
-                    && let Some(armed) = temporary_cleanup_armed
+                if let (StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup, Some(armed)) =
+                    (failpoint, temporary_cleanup_armed)
                 {
                     *armed = true;
                 }

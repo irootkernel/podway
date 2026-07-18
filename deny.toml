@@ -1,0 +1,30 @@
+# G009 release dependency policy. Any exception must be an explicit, time-bounded review
+# change to this committed file; cargo-deny output remains local release evidence.
+
+[advisories]
+ignore = []
+yanked = "deny"
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

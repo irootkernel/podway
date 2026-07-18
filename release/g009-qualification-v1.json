@@ -1,0 +1,119 @@
+{
+  "archive": {
+    "checksum": {"algorithm": "sha256", "detached_sidecar_suffix": ".sha256", "final_bytes_only": true},
+    "internal_manifest": {"algorithm": "sha256", "path": "payload-digests-v1.json", "self_excluded": true},
+    "members": [
+      "bin/podway",
+      "bin/podwayd",
+      "share/completions/podway.zsh",
+      "share/completions/podway.bash",
+      "share/completions/podway.fish",
+      "share/podway/presets",
+      "share/podway/schemas",
+      "LICENSE",
+      "README.md",
+      "RELEASE_NOTES.md",
+      "payload-digests-v1.json"
+    ],
+    "root": "podway-0.1.0-aarch64-apple-darwin/",
+    "sidecars_are_members": false,
+    "zip": {"deterministic": true, "safe_extraction_required": true}
+  },
+  "evidence": {
+    "committed_results_permitted": false,
+    "local_root": "artifacts/g009",
+    "schema": "podway.g009.checkpoint/v1",
+    "status_values": ["not-run", "pass", "fail", "blocked"],
+    "untrusted_mutable_pointers_forbidden": true
+  },
+  "fuzz": {
+    "change_budget": {"seconds_per_target": 60},
+    "corpus_root": "artifacts/g009/fuzz/corpus",
+    "pre_rc": {"seconds_per_target": 600},
+    "rc": {"rss_limit_mb": 512, "seconds_per_target": 3600, "timeout_seconds": 5},
+    "surfaces": [
+      "protocol_frames",
+      "request_versions",
+      "response_additive",
+      "config_procedure",
+      "canonical_json",
+      "selector"
+    ]
+  },
+  "gates": [
+    {"argv": ["python3", "tools/run_g009_qualification.py", "preflight"], "evidence_role": "preflight", "id": "G009-GATE-PREFLIGHT", "owner": "release-engineering"},
+    {"argv": ["cargo", "+1.85.0", "fmt", "--check"], "evidence_role": "format", "id": "G009-GATE-FORMAT", "owner": "release-engineering"},
+    {"argv": ["cargo", "+1.85.0", "check", "--workspace", "--all-targets", "--target", "aarch64-apple-darwin"], "evidence_role": "check", "id": "G009-GATE-CHECK", "owner": "release-engineering"},
+    {"argv": ["cargo", "+1.85.0", "clippy", "--workspace", "--all-targets", "--all-features", "--target", "aarch64-apple-darwin", "--", "-D", "warnings"], "evidence_role": "clippy", "id": "G009-GATE-CLIPPY", "owner": "release-engineering"},
+    {"argv": ["cargo", "+1.85.0", "test", "--workspace", "--all-targets", "--target", "aarch64-apple-darwin"], "evidence_role": "native-tests", "id": "G009-GATE-NATIVE-TESTS", "owner": "quality"},
+    {"argv": ["python3", "tools/run_verification.py", "--run"], "evidence_role": "contract-suite", "id": "G009-GATE-CONTRACTS", "owner": "quality"},
+    {"argv": ["python3", "tools/run_g005_vertical.py"], "evidence_role": "production-vertical", "id": "G009-GATE-G005", "owner": "quality"},
+    {"argv": ["python3", "tools/run_g008_dogfood.py"], "evidence_role": "preset-dogfood", "id": "G009-GATE-G008", "owner": "quality"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "crash"], "evidence_role": "crash-coverage", "id": "G009-GATE-CRASH", "owner": "durability"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "obs-source-coverage"], "evidence_role": "observability", "id": "G009-GATE-OBS", "owner": "daemon"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "fuzz-native-rc", "--seconds", "3600"], "evidence_role": "fuzz", "id": "G009-GATE-FUZZ", "owner": "security"},
+    {"argv": ["cargo", "+1.85.0", "audit", "--deny", "warnings"], "evidence_role": "audit", "id": "G009-GATE-AUDIT", "owner": "security"},
+    {"argv": ["cargo", "+1.85.0", "deny", "check", "advisories", "bans", "licenses", "sources"], "evidence_role": "deny", "id": "G009-GATE-DENY", "owner": "security"},
+    {"argv": ["cargo", "+1.85.0", "llvm-cov", "--workspace", "--all-features", "--all-targets", "--target", "aarch64-apple-darwin", "--lcov"], "evidence_role": "coverage", "id": "G009-GATE-COVERAGE", "owner": "quality"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "holdout", "--warmups", "5", "--samples", "30"], "evidence_role": "performance-holdout", "id": "G009-GATE-PERFORMANCE", "owner": "release-engineering"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "security"], "evidence_role": "security-boundary", "id": "G009-GATE-SECURITY", "owner": "security"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "full-gates", "--only", "migration"], "evidence_role": "migration", "id": "G009-GATE-MIGRATION", "owner": "durability"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "package"], "evidence_role": "archive", "id": "G009-GATE-PACKAGE", "owner": "release-engineering"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "lifecycle", "--require-clean-user"], "evidence_role": "clean-lifecycle", "id": "G009-GATE-LIFECYCLE", "owner": "release-engineering"},
+    {"argv": ["python3", "tools/run_g009_qualification.py", "final-review", "--require-final-001"], "evidence_role": "final-review", "id": "G009-GATE-FINAL-001", "owner": "release-engineering"}
+  ],
+  "invalidation": {
+    "new_rc_inputs": ["source.commit", "source.tree", "Cargo.lock", "profile", "target", "host", "tool.identities", "fixture.digests", "crash_registry", "obs_policy", "fuzz_policy", "baseline", "thresholds", "signing_posture", "exceptions"],
+    "package_downstream": ["archive.member", "archive.bytes", "signing_posture"],
+    "reject": ["dirty-source", "wrong-target", "non-arm64-host", "Rosetta", "universal-binary", "rounded-performance-metric", "post-hoc-threshold", "missing-approval-role", "missing-sample", "stale-evidence", "unbound-exception", "incomplete-crash-coverage", "high-or-critical-defect"]
+  },
+  "minimum_macos": "11.0",
+  "observability": {
+    "active_log_max_bytes": 10485760,
+    "fallback_ring_capacity": 256,
+    "flush_cycle_max_ms": 50,
+    "primary_queue_capacity": 4096,
+    "retention_days": 7,
+    "rotated_log_limit": 5,
+    "shutdown_flush_max_ms": 2000,
+    "stderr_max_bytes": 1024,
+    "string_max_bytes": 256,
+    "warn_error_wait_max_ms": 2,
+    "event_max_bytes": 8192
+  },
+  "performance": {
+    "approval_roles": ["owner", "E", "F"],
+    "characterization_samples": 30,
+    "formulas": {
+      "mad": "median(abs(x_i-median)) using exact rationals",
+      "median": "n odd: x[(n+1)/2]; n even: (x[n/2]+x[n/2+1])/2",
+      "percentile": "sorted 1-indexed x: p_q=x[ceil(q*n)]",
+      "stability_reject": "MAD/median > 1/10, or a zero/undefined denominator",
+      "throughput_pass": "holdout median >= 4/5 * characterization median AND holdout p5 >= 4/5 * characterization p5",
+      "latency_pass": "holdout median <= 6/5 * characterization median AND holdout p95 <= 6/5 * characterization p95"
+    },
+    "holdout_samples": 30,
+    "rounding_permitted": false,
+    "unseen_holdout_required": true,
+    "warmups": 5
+  },
+  "profile": "deterministic-intent",
+  "release_profile": {"codegen-units": 1, "lto": "thin", "panic": "abort", "strip": "symbols"},
+  "rust": {"channel": "1.85.0", "version": "1.85.0"},
+  "schema": "podway.g009.qualification/v1",
+  "signing_postures": {
+    "signed-public": {"codesign": "required", "gatekeeper": "required", "notarization": "required", "stapling": "not_applicable_zip"},
+    "unsigned-internal": {"codesign": "not_attempted_missing_credentials", "gatekeeper": "not_claimed", "notarization": "not_attempted_missing_credentials", "stapling": "not_applicable_zip"}
+  },
+  "target": {"arch": "arm64", "host_arch": "arm64", "native_required": true, "triple": "aarch64-apple-darwin", "universal_forbidden": true, "x86_64_forbidden": true},
+  "version": 1,
+  "workloads": [
+    {"command_vector": ["podwayd", "--foreground"], "fixture": "g009/daemon-cold-start-v1", "hard_bounds": {"max_completion_ms": 5000, "max_rss_mib": 256}, "id": "G009-W01", "name": "daemon-cold-start"},
+    {"command_vector": ["podway", "status", "--json"], "fixture": "g009/status-next-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W02", "name": "status-next"},
+    {"command_vector": ["podway", "session", "start", "--json"], "fixture": "g009/multi-worktree-admission-v1", "hard_bounds": {"max_completion_ms": 5000, "max_rss_mib": 256}, "id": "G009-W03", "name": "multi-worktree-admission"},
+    {"command_vector": ["podway", "item", "set", "--json"], "fixture": "g009/item-update-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W04", "name": "item-update"},
+    {"command_vector": ["podway", "item", "attach", "--json"], "fixture": "g009/artifact-hashing-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W05", "name": "artifact-hashing"},
+    {"command_vector": ["podway", "status", "--json"], "fixture": "g009/db-growth-pruning-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W06", "name": "db-growth-pruning"},
+    {"command_vector": ["podway", "item", "set", "--json"], "fixture": "g009/maximum-input-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 512}, "id": "G009-W07", "name": "maximum-input-rss-completion-or-rejection", "required_outcome": "complete-or-explicit-rejection"}
+  ]
+}

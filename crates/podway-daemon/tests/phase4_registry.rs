@@ -18,6 +18,9 @@ use std::{
 };
 
 use podway_core::WorkspaceId;
+#[path = "../src/observability.rs"]
+#[allow(dead_code)]
+mod observability;
 #[path = "../src/registry.rs"]
 #[allow(dead_code)]
 mod registry_under_test;

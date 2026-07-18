@@ -960,9 +960,7 @@ impl<'a> JsonParser<'a> {
         if let Ok(value) = number.parse::<i64>() {
             return Ok(Value::Number(Number::from(value)));
         }
-        if !number.starts_with('-')
-            && let Ok(value) = number.parse::<u64>()
-        {
+        if let (false, Ok(value)) = (number.starts_with('-'), number.parse::<u64>()) {
             return Ok(Value::Number(Number::from(value)));
         }
         Err(ConfigError::NonCanonicalNumber)

@@ -13,7 +13,10 @@ use std::{
 
 use podway_store::{DurableWorktreeIdentityV1, GitIdentityV1, WorkspaceUuidV1};
 
-use crate::{DaemonCompositionErrorV1, SchedulerGenerationV1};
+use crate::{
+    DaemonCompositionErrorV1, SchedulerGenerationV1,
+    observability::{EventCategoryV1, ObservabilityV1, SeverityV1},
+};
 
 /// The durable identity fields used to select one workspace scheduler.
 ///
@@ -461,6 +464,11 @@ pub struct WorkspaceSchedulerRegistryV1<C> {
 
 impl<C> WorkspaceSchedulerRegistryV1<C> {
     pub fn new() -> Self {
+        Self::with_observability(None)
+    }
+
+    /// Adds an optional non-authoritative categorical event producer.
+    pub fn with_observability(observability: Option<Arc<Mutex<ObservabilityV1>>>) -> Self {
         Self {
             inner: Arc::new(WorkspaceSchedulerRegistryInnerV1 {
                 state: Mutex::new(WorkspaceSchedulerRegistryStateV1 {
@@ -469,6 +477,7 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
                     creating: HashSet::new(),
                 }),
                 changed: Condvar::new(),
+                observability,
             }),
         }
     }
@@ -522,6 +531,10 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
                     scheduler,
                     close_in_progress: false,
                 }) => {
+                    self.inner.emit(
+                        EventCategoryV1::TerminalOrRequeueOrSaturation,
+                        SeverityV1::Warn,
+                    );
                     return Err(DaemonCompositionErrorV1::SchedulerRetiring {
                         generation: scheduler.generation(),
                     });
@@ -567,6 +580,8 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
                 WorkspaceSchedulerRegistrySlotV1::Active(Arc::clone(&scheduler)),
             );
             drop(state);
+            self.inner
+                .emit(EventCategoryV1::Scheduler, SeverityV1::Info);
             self.inner.changed.notify_all();
             return Ok(scheduler);
         }
@@ -608,6 +623,7 @@ impl<C> Default for WorkspaceSchedulerRegistryV1<C> {
 struct WorkspaceSchedulerRegistryInnerV1<C> {
     state: Mutex<WorkspaceSchedulerRegistryStateV1<C>>,
     changed: Condvar,
+    observability: Option<Arc<Mutex<ObservabilityV1>>>,
 }
 
 struct WorkspaceSchedulerRegistryStateV1<C> {
@@ -764,16 +780,30 @@ fn clear_close_in_progress<C>(retry: &WorkspaceSchedulerRetirementRetryV1<C>) ->
             close_in_progress: true,
         }) if scheduler.generation() == generation && Arc::ptr_eq(scheduler, &retry.scheduler)
     );
-    if is_current
-        && let Some(WorkspaceSchedulerRegistrySlotV1::Retiring {
+    if let (
+        true,
+        Some(WorkspaceSchedulerRegistrySlotV1::Retiring {
             close_in_progress, ..
-        }) = state.slots.get_mut(&key)
+        }),
+    ) = (is_current, state.slots.get_mut(&key))
     {
         *close_in_progress = false;
     }
     drop(state);
     retry.inner.changed.notify_all();
     is_current
+}
+
+impl<C> WorkspaceSchedulerRegistryInnerV1<C> {
+    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
+        let observer = self
+            .observability
+            .as_ref()
+            .and_then(|observability| observability.try_lock().ok());
+        if let Some(observability) = observer {
+            observability.emit(category, severity);
+        }
+    }
 }
 
 fn mutex_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

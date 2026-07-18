@@ -9,9 +9,13 @@ use std::{
     fmt, fs,
     io::Read,
     path::{Component, Path},
+    sync::{Arc, Mutex},
 };
 
-use crate::workspace::ResetMarkerV1;
+use crate::{
+    observability::{EventCategoryV1, ObservabilityV1, SeverityV1},
+    workspace::ResetMarkerV1,
+};
 use podway_config::{
     MAX_PROCEDURE_DOCUMENT_BYTES_V1, ProcedureFormatV1, ProcedureSourceLabel,
     ProcedureWarningPolicyV1, parse_procedure_v1,
@@ -517,6 +521,7 @@ where
     procedures: Procedures,
     artifacts: Artifacts,
     workspaces: Workspaces,
+    observability: Option<Arc<Mutex<ObservabilityV1>>>,
 }
 
 impl<Store, Ids, Clock, Procedures, Artifacts, Workspaces>
@@ -537,6 +542,19 @@ where
         artifacts: Artifacts,
         workspaces: Workspaces,
     ) -> Self {
+        Self::with_observability(store, ids, clock, procedures, artifacts, workspaces, None)
+    }
+
+    /// Adds an optional non-authoritative categorical event producer.
+    pub fn with_observability(
+        store: Store,
+        ids: Ids,
+        clock: Clock,
+        procedures: Procedures,
+        artifacts: Artifacts,
+        workspaces: Workspaces,
+        observability: Option<Arc<Mutex<ObservabilityV1>>>,
+    ) -> Self {
         Self {
             store,
             ids,
@@ -544,6 +562,7 @@ where
             procedures,
             artifacts,
             workspaces,
+            observability,
         }
     }
 
@@ -603,6 +622,7 @@ where
                     &idempotency_key,
                     &request_digest,
                 )? {
+                    self.emit(EventCategoryV1::Idempotency, SeverityV1::Info);
                     return Ok(ResetAllPreparationOutcomeV1::Existing(outcome));
                 }
                 let expected_workspace_uuid =
@@ -657,6 +677,7 @@ where
             target_workspace_uuid,
             self.clock.now(),
         );
+        self.emit(EventCategoryV1::MigrationOrIntegrity, SeverityV1::Info);
         Ok(ResetAllPreparationOutcomeV1::New(
             PreparedWorkspaceResetAllV1 {
                 marker,
@@ -710,6 +731,7 @@ where
                 &idempotency_key,
                 &request_digest,
             )? {
+                self.emit(EventCategoryV1::Idempotency, SeverityV1::Info);
                 return Ok(outcome);
             }
         }
@@ -739,9 +761,12 @@ where
             now,
             canonical_execution,
         );
-        self.store
+        let outcome = self
+            .store
             .admit(binding.identity(), admitted)
-            .map_err(Into::into)
+            .map_err(ExecutionErrorV1::from)?;
+        self.emit(EventCategoryV1::Admission, SeverityV1::Info);
+        Ok(outcome)
     }
 
     /// Revalidates the manager-selected workspace before claiming at most one job. A transient
@@ -757,8 +782,10 @@ where
             .map_err(ExecutionErrorV1::from_boundary)?;
         let now = self.clock.now();
         let Some(claimed) = self.store.claim_next(workspace.identity(), worker, now)? else {
+            self.emit(EventCategoryV1::Scheduler, SeverityV1::Debug);
             return Ok(None);
         };
+        self.emit(EventCategoryV1::CancelOrClaim, SeverityV1::Info);
         self.execute_claimed(&workspace, claimed, now).map(Some)
     }
 
@@ -881,7 +908,8 @@ where
                 );
             }
         };
-        self.store
+        let receipt = self
+            .store
             .commit_terminal(
                 claimed.claim().clone(),
                 expected_workspace_revision,
@@ -889,7 +917,12 @@ where
                 TerminalResultV1::Success(result),
                 now,
             )
-            .map_err(Into::into)
+            .map_err(ExecutionErrorV1::from)?;
+        self.emit(
+            EventCategoryV1::TerminalOrRequeueOrSaturation,
+            SeverityV1::Info,
+        );
+        Ok(receipt)
     }
 
     fn commit_workspace_initialization(
@@ -919,7 +952,8 @@ where
             workspace_id: claimed.claim().identity().workspace_uuid().clone(),
             revision: Revision::ZERO,
         };
-        self.store
+        let receipt = self
+            .store
             .commit_terminal(
                 claimed.claim().clone(),
                 Revision::ZERO,
@@ -927,7 +961,12 @@ where
                 TerminalResultV1::Success(result),
                 now,
             )
-            .map_err(Into::into)
+            .map_err(ExecutionErrorV1::from)?;
+        self.emit(
+            EventCategoryV1::TerminalOrRequeueOrSaturation,
+            SeverityV1::Info,
+        );
+        Ok(receipt)
     }
 
     fn commit_domain_failure(
@@ -937,7 +976,8 @@ where
         error: DomainError,
         now: UnixMillis,
     ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
-        self.store
+        let receipt = self
+            .store
             .commit_terminal(
                 claimed.claim().clone(),
                 expected_workspace_revision,
@@ -945,7 +985,12 @@ where
                 TerminalResultV1::Failure(error),
                 now,
             )
-            .map_err(Into::into)
+            .map_err(ExecutionErrorV1::from)?;
+        self.emit(
+            EventCategoryV1::TerminalOrRequeueOrSaturation,
+            SeverityV1::Warn,
+        );
+        Ok(receipt)
     }
 
     fn bound_workspace(
@@ -965,6 +1010,15 @@ where
             }));
         }
         Ok(binding)
+    }
+    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
+        let observer = self
+            .observability
+            .as_ref()
+            .and_then(|observability| observability.try_lock().ok());
+        if let Some(observability) = observer {
+            observability.emit(category, severity);
+        }
     }
 
     fn bound_manager_workspace(

@@ -1451,9 +1451,8 @@ fn create_workspace_ignore_temp(
             let primary = map_io(&path, GitReadOperationV1::InitializeWorkspaceLayout, error);
             return Err(staged.abort_pre_exchange(podway, primary));
         }
-        if let Some(mode) = final_mode
-            && let Err(error) = rustix_fs::fchmod(&staged.file, mode)
-        {
+        let chmod_result = final_mode.map(|mode| rustix_fs::fchmod(&staged.file, mode));
+        if let Some(Err(error)) = chmod_result {
             let primary =
                 map_rustix_io(&path, GitReadOperationV1::InitializeWorkspaceLayout, error);
             return Err(staged.abort_pre_exchange(podway, primary));
@@ -2811,9 +2810,7 @@ fn map_revalidation_error(
 }
 
 fn map_io(path: &Path, operation: GitReadOperationV1, error: std::io::Error) -> GitResolverErrorV1 {
-    if error.kind() == std::io::ErrorKind::PermissionDenied
-        && let Ok(path) = lossless_path(path)
-    {
+    if let (std::io::ErrorKind::PermissionDenied, Ok(path)) = (error.kind(), lossless_path(path)) {
         return GitResolverErrorV1::PermissionDenied { path };
     }
     GitResolverErrorV1::Io { operation }

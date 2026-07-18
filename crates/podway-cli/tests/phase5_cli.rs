@@ -23,12 +23,25 @@ use serde_json::Value;
 
 fn run(arguments: &[&str]) -> Output {
     let isolated = unique_fixture_path("podway-cli-phase5-no-daemon");
-    Command::new(env!("CARGO_BIN_EXE_podway"))
+    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
         .args(arguments)
         .env("HOME", &isolated)
         .env("TMPDIR", &isolated)
         .output()
-        .expect("podway binary must run")
+        .expect("podway binary must run");
+    if arguments
+        .windows(2)
+        .any(|window| window == ["daemon", "install"])
+    {
+        let _ = Command::new("launchctl")
+            .args([
+                "bootout",
+                &format!("gui/{}/dev.podway.podwayd", geteuid().as_raw()),
+            ])
+            .output();
+    }
+    let _ = fs::remove_dir_all(isolated);
+    output
 }
 
 fn one_json(output: &Output) -> Value {

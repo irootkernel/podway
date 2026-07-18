@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+#[path = "../src/observability.rs"]
+#[allow(dead_code)]
+mod observability;
 #[allow(dead_code)]
 mod support_phase4_workspace;
 

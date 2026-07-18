@@ -6,23 +6,53 @@
 //! direct service lifecycle requests into typed runner commands, keeping command execution,
 //! clocks, and runtime paths injectable at the composition boundary.
 
+use podway_core::UnixMillis;
 use std::{
     collections::VecDeque,
     error::Error,
     fmt,
     fs::{self, OpenOptions},
     io::{Read, Write},
+    panic::{self, AssertUnwindSafe},
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
-
-use podway_core::UnixMillis;
 
 pub const SERVICE_LABEL_V1: &str = "dev.podway.podwayd";
 pub const SERVICE_METADATA_VERSION_V1: u16 = 1;
 pub const SERVICE_LOG_MAX_BYTES_V1: u64 = 10 * 1024 * 1024;
 pub const SERVICE_LOG_RETAINED_FILES_V1: u8 = 5;
+/// A non-authoritative, content-free observation emitted by the service adapter.
+///
+/// Variants are stable categories only; paths, command arguments, process output, metadata, and
+/// error messages must never be included in an observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceObservationV1 {
+    ServiceOutcome,
+    Error,
+    StaleSocketRemoved,
+    LogRotationCompleted,
+    AtomicPlistPublished,
+    AtomicMetadataPublished,
+    LaunchctlSideEffectRequested,
+    LaunchctlSideEffectCompleted,
+    UninstallLogsPreserved,
+    UninstallLogsPurged,
+}
+
+/// Receives best-effort service observations. Implementations must not influence service results.
+pub trait ServiceObserverV1: Send + Sync {
+    fn observe(&self, observation: ServiceObservationV1);
+}
+
+/// The default observer deliberately discards every observation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoopServiceObserverV1;
+
+impl ServiceObserverV1 for NoopServiceObserverV1 {
+    fn observe(&self, _: ServiceObservationV1) {}
+}
 
 /// The only public service-lifecycle boundary.
 ///
@@ -1465,6 +1495,7 @@ pub struct MacosServiceCommandRunnerV1<F, L, C> {
     filesystem: F,
     launchctl: L,
     clock: C,
+    observer: Arc<dyn ServiceObserverV1>,
     user_id: u32,
 }
 
@@ -1480,6 +1511,22 @@ where
         clock: C,
         user_id: u32,
     ) -> Result<Self, ServicePathErrorV1> {
+        Self::new_with_observer(
+            filesystem,
+            launchctl,
+            clock,
+            user_id,
+            Arc::new(NoopServiceObserverV1),
+        )
+    }
+
+    pub fn new_with_observer(
+        filesystem: F,
+        launchctl: L,
+        clock: C,
+        user_id: u32,
+        observer: Arc<dyn ServiceObserverV1>,
+    ) -> Result<Self, ServicePathErrorV1> {
         if user_id == 0 {
             return Err(ServicePathErrorV1::RootUser);
         }
@@ -1487,6 +1534,7 @@ where
             filesystem,
             launchctl,
             clock,
+            observer,
             user_id,
         })
     }
@@ -1517,14 +1565,19 @@ where
             }
         }
     }
+    fn observe(&self, observation: ServiceObservationV1) {
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| self.observer.observe(observation)));
+    }
 
     fn launch(
         &self,
         op: ServiceOperationV1,
         arguments: Vec<String>,
     ) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
+        self.observe(ServiceObservationV1::LaunchctlSideEffectRequested);
         let output = self.launchctl.run(&arguments)?;
         if output.exit_status == 0 {
+            self.observe(ServiceObservationV1::LaunchctlSideEffectCompleted);
             Ok(output)
         } else {
             Err(ServiceErrorV1::LaunchctlFailureV1 {
@@ -1611,9 +1664,11 @@ where
             self.filesystem
                 .remove_file(socket)
                 .map_err(|error| self.fs_error(op, socket, error))?;
+            self.observe(ServiceObservationV1::StaleSocketRemoved);
         }
         Ok(())
     }
+
     fn rotate_log(
         &self,
         op: ServiceOperationV1,
@@ -1622,7 +1677,9 @@ where
         let log = paths.log_path().as_path();
         self.filesystem
             .rotate_file(log, SERVICE_LOG_MAX_BYTES_V1, SERVICE_LOG_RETAINED_FILES_V1)
-            .map_err(|error| self.fs_error(op, log, error))
+            .map_err(|error| self.fs_error(op, log, error))?;
+        self.observe(ServiceObservationV1::LogRotationCompleted);
+        Ok(())
     }
 
     fn install_or_update(
@@ -1679,6 +1736,7 @@ where
         self.filesystem
             .write_atomically(plist_path, &plist, 0o600)
             .map_err(|e| self.fs_error(op, plist_path, e))?;
+        self.observe(ServiceObservationV1::AtomicPlistPublished);
         self.rotate_log(op, paths)?;
         self.bootstrap(op, paths)?;
         let now = self.clock.now();
@@ -1696,6 +1754,7 @@ where
         self.filesystem
             .write_atomically(metadata_path, metadata_json_v1(&metadata).as_bytes(), 0o600)
             .map_err(|e| self.fs_error(op, metadata_path, e))?;
+        self.observe(ServiceObservationV1::AtomicMetadataPublished);
         Ok(ServiceCommandResultV1::Outcome(
             ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(now, Some(metadata))),
         ))
@@ -1765,6 +1824,9 @@ where
             self.filesystem
                 .remove_directory_contents(log_directory)
                 .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, log_directory, e))?;
+            self.observe(ServiceObservationV1::UninstallLogsPurged);
+        } else {
+            self.observe(ServiceObservationV1::UninstallLogsPreserved);
         }
         Ok(ServiceCommandResultV1::Outcome(
             ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(self.clock.now(), None)),
@@ -1779,7 +1841,7 @@ where
     C: ServiceClockV1,
 {
     fn run(&self, command: ServiceCommandV1) -> Result<ServiceCommandResultV1, ServiceErrorV1> {
-        match command {
+        let result = (|| match command {
             ServiceCommandV1::Install { spec, .. } => {
                 self.install_or_update(ServiceOperationV1::Install, spec, false)
             }
@@ -1862,10 +1924,12 @@ where
                         )),
                     ));
                 }
-                match self
+                self.observe(ServiceObservationV1::LaunchctlSideEffectRequested);
+                let output = self
                     .launchctl
-                    .run(&["print".to_owned(), self.loaded_target()])?
-                {
+                    .run(&["print".to_owned(), self.loaded_target()])?;
+                self.observe(ServiceObservationV1::LaunchctlSideEffectCompleted);
+                match output {
                     LaunchctlOutputV1 {
                         exit_status: 0,
                         stdout,
@@ -1900,7 +1964,13 @@ where
             ServiceCommandV1::UninstallWithOptions { paths, options, .. } => {
                 self.uninstall(&paths, options)
             }
-        }
+        })();
+        self.observe(if result.is_ok() {
+            ServiceObservationV1::ServiceOutcome
+        } else {
+            ServiceObservationV1::Error
+        });
+        result
     }
 }
 

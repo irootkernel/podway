@@ -1817,9 +1817,7 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
             "--verbose applies only to status",
         ));
     }
-    if wire == "workspace.reset_all"
-        && let Command::Reset(args) = command
-    {
+    if let (true, Command::Reset(args)) = (wire == "workspace.reset_all", command) {
         if !args.force {
             return Err(LocalFailure::request_invalid(
                 "reset --all requires --force",
@@ -2495,9 +2493,11 @@ fn render_response_with_clock_and_writers(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> i32 {
-    if let ResponseEnvelopeV1::Output(output) = response
-        && let Err(failure) = validate_typed_output_result(output)
-    {
+    let output_validation = match response {
+        ResponseEnvelopeV1::Output(output) => Some(validate_typed_output_result(output)),
+        ResponseEnvelopeV1::Error(_) => None,
+    };
+    if let Some(Err(failure)) = output_validation {
         return render_local_failure_with_clock_and_writers(
             failure,
             json_output,
@@ -2510,10 +2510,14 @@ fn render_response_with_clock_and_writers(
         if serde_json::to_writer(&mut *stdout, response).is_err() || writeln!(stdout).is_err() {
             return LOCAL_CLIENT_EXIT;
         }
-    } else if (!quiet || matches!(response, ResponseEnvelopeV1::Error(_)))
-        && let Err(failure) = render_human_response(response, stdout, stderr)
-    {
-        return render_local_failure_with_clock_and_writers(failure, false, clock, stdout, stderr);
+    } else {
+        let human_result = (!quiet || matches!(response, ResponseEnvelopeV1::Error(_)))
+            .then(|| render_human_response(response, stdout, stderr));
+        if let Some(Err(failure)) = human_result {
+            return render_local_failure_with_clock_and_writers(
+                failure, false, clock, stdout, stderr,
+            );
+        }
     }
     match response {
         ResponseEnvelopeV1::Output(_) => 0,

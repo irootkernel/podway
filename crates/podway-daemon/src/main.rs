@@ -4,6 +4,7 @@ use std::{env, num::NonZeroUsize, path::PathBuf, process, thread};
 
 use nix::unistd::geteuid;
 use podway_daemon::{
+    EventCategoryV1, ObservabilityV1, RotatingFileSinkV1, SeverityV1, SystemClockV1,
     runtime::{ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1},
     server::ServerTransportTimeoutsV1,
 };
@@ -44,7 +45,21 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     let temporary = env::var_os("TMPDIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    let paths = ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())?;
+    let paths = ServiceRuntimePathsV1::for_user(&home, temporary, geteuid().as_raw())?;
+    let observability = RotatingFileSinkV1::open(
+        home.join("Library/Logs/podway/podwayd.log"),
+        std::sync::Arc::new(SystemClockV1),
+    )
+    .ok()
+    .map(|sink| {
+        ObservabilityV1::start(
+            std::sync::Arc::new(sink),
+            std::sync::Arc::new(SystemClockV1),
+        )
+    });
+    if let Some(observability) = &observability {
+        observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
+    }
     let configuration = ProductionDaemonRuntimeConfigV1::new(
         WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
         NonZeroUsize::new(MAXIMUM_IN_FLIGHT_CONNECTIONS_V1)
@@ -67,7 +82,11 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         Err(source) => {
             signal_control.close();
             runtime.shutdown_handle().request_shutdown();
-            if let Err(cleanup) = runtime.run() {
+            let runtime_result = runtime.run();
+            if let Some(observability) = observability {
+                observability.shutdown();
+            }
+            if let Err(cleanup) = runtime_result {
                 return Err(std::io::Error::other(format!(
                     "cannot start signal relay ({source}); endpoint cleanup also failed: {cleanup}"
                 ))
@@ -80,6 +99,10 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     let runtime_result = runtime.run();
     signal_control.close();
     let relay_result = relay.join();
+    if let Some(observability) = observability {
+        observability.emit(EventCategoryV1::Lifecycle, SeverityV1::Info);
+        observability.shutdown();
+    }
 
     runtime_result?;
     relay_result.map_err(|_| "signal relay panicked")?;

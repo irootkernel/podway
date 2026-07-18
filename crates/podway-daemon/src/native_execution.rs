@@ -4,7 +4,10 @@
 //! re-established through the Store/Git two-pass resolver; local artifact bytes remain outside
 //! durable state and are read only through the descriptor-anchored Git resolver.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use podway_core::{
     ArtifactLocationKindV1, ArtifactValueV1, AttemptId, BlockerId, DomainError, ItemId, JobId,
@@ -23,6 +26,7 @@ use crate::{
         ArtifactVerifierV1, ExecutionBoundaryErrorV1, ExecutionClockV1, ExecutionIdSourceV1,
         WorkspaceRevalidatorV1,
     },
+    observability::{EventCategoryV1, ObservabilityV1, SeverityV1},
     workspace::{
         ResolvedWorkspaceV1, WorkspaceBindingInspectorV1, WorkspaceResolutionErrorV1,
         WorkspaceResolverV1,
@@ -135,6 +139,7 @@ impl ExecutionClockV1 for WallUtcExecutionClockV1 {
 /// identity before a binding is returned.
 pub struct NativeWorkspaceRevalidatorV1<I> {
     resolver: WorkspaceResolverV1<NativeGitResolverV1, I>,
+    observability: Option<Arc<Mutex<ObservabilityV1>>>,
 }
 
 impl<I> NativeWorkspaceRevalidatorV1<I>
@@ -142,8 +147,16 @@ where
     I: WorkspaceBindingInspectorV1,
 {
     pub fn new(binding_inspector: I) -> Self {
+        Self::with_observability(binding_inspector, None)
+    }
+
+    pub fn with_observability(
+        binding_inspector: I,
+        observability: Option<Arc<Mutex<ObservabilityV1>>>,
+    ) -> Self {
         Self {
             resolver: WorkspaceResolverV1::new(NativeGitResolverV1::new(), binding_inspector),
+            observability,
         }
     }
 
@@ -187,10 +200,16 @@ where
             .resolver
             .resolve_existing(selector, expected_workspace_id.as_ref())
             .map_err(workspace_resolution_boundary_error_v1)?;
-        Ok(WorkspaceBindingV1::new(
+        let binding = WorkspaceBindingV1::new(
             resolved.store_identity().clone(),
             resolved.workspace_root().clone(),
-        ))
+        );
+        emit_observation(
+            &self.observability,
+            EventCategoryV1::MigrationOrIntegrity,
+            SeverityV1::Debug,
+        );
+        Ok(binding)
     }
 
     fn revalidate_binding(
@@ -208,6 +227,7 @@ where
 pub struct NativeArtifactVerifierV1<I> {
     resolver: WorkspaceResolverV1<NativeGitResolverV1, I>,
     git_resolver: NativeGitResolverV1,
+    observability: Option<Arc<Mutex<ObservabilityV1>>>,
 }
 
 impl<I> NativeArtifactVerifierV1<I>
@@ -215,9 +235,17 @@ where
     I: WorkspaceBindingInspectorV1,
 {
     pub fn new(binding_inspector: I) -> Self {
+        Self::with_observability(binding_inspector, None)
+    }
+
+    pub fn with_observability(
+        binding_inspector: I,
+        observability: Option<Arc<Mutex<ObservabilityV1>>>,
+    ) -> Self {
         Self {
             resolver: WorkspaceResolverV1::new(NativeGitResolverV1::new(), binding_inspector),
             git_resolver: NativeGitResolverV1::new(),
+            observability,
         }
     }
 
@@ -259,13 +287,19 @@ where
                 "artifact resolver returned a path outside the requested worktree location",
             ));
         }
-        ArtifactValueV1::local_path(
+        let artifact = ArtifactValueV1::local_path(
             path,
             hashed.digest().clone(),
             hashed.byte_length(),
             media_type,
         )
-        .map_err(ExecutionBoundaryErrorV1::domain)
+        .map_err(ExecutionBoundaryErrorV1::domain)?;
+        emit_observation(
+            &self.observability,
+            EventCategoryV1::MoveOrRepair,
+            SeverityV1::Debug,
+        );
+        Ok(artifact)
     }
 }
 
@@ -316,6 +350,18 @@ where
     }
 }
 
+fn emit_observation(
+    observability: &Option<Arc<Mutex<ObservabilityV1>>>,
+    category: EventCategoryV1,
+    severity: SeverityV1,
+) {
+    let observer = observability
+        .as_ref()
+        .and_then(|observability| observability.try_lock().ok());
+    if let Some(observability) = observer {
+        observability.emit(category, severity);
+    }
+}
 fn worktree_selector_from_wire_v1(
     selector: &WorktreeSelectorWireV1,
 ) -> Result<WorktreeSelectorV1, ExecutionBoundaryErrorV1> {

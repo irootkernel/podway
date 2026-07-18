@@ -11,6 +11,7 @@ pub mod dispatch;
 pub mod endpoint;
 pub mod execution;
 pub mod native_execution;
+pub mod observability;
 pub mod peer;
 pub mod production;
 pub mod read_service;
@@ -32,6 +33,10 @@ use podway_git::{DurableWorktreeIdentityV1, GitResolverContractV1};
 use podway_protocol::OperationV1;
 use podway_store::StoreContractV1;
 
+pub use observability::{
+    ClockV1, EventCategoryV1, LogSinkV1, ObservabilityCountersV1, ObservabilityV1,
+    RotatingFileSinkV1, SeverityV1, SystemClockV1,
+};
 pub use podway_config::{WORKSPACE_SCHEMA_V1, WorkspaceConfigV1};
 pub use podway_presets::{EmbeddedPreset, list as embedded_presets_v1};
 pub use podway_service::ServiceManagerV1;

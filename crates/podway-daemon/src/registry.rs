@@ -16,6 +16,7 @@ use std::{
     },
 };
 
+use crate::observability::{EventCategoryV1, ObservabilityV1, SeverityV1};
 use nix::{
     errno::Errno,
     fcntl::{Flock, FlockArg, OFlag, open},
@@ -455,11 +456,24 @@ pub struct RegistryStoreV1 {
     failpoint: Option<RegistryFailpointV1>,
     failpoint_action: RegistryFailpointActionV1,
     in_process_lock: Mutex<()>,
+    observability: Option<Arc<Mutex<ObservabilityV1>>>,
 }
 
 impl RegistryStoreV1 {
     pub(crate) fn new(paths: &ServiceRuntimePathsV1) -> Self {
-        Self::with_optional_failpoint(paths, None, RegistryFailpointActionV1::ReturnError)
+        Self::with_observability(paths, None)
+    }
+
+    pub(crate) fn with_observability(
+        paths: &ServiceRuntimePathsV1,
+        observability: Option<Arc<Mutex<ObservabilityV1>>>,
+    ) -> Self {
+        Self::with_optional_failpoint(
+            paths,
+            None,
+            RegistryFailpointActionV1::ReturnError,
+            observability,
+        )
     }
 
     #[cfg(test)]
@@ -470,19 +484,21 @@ impl RegistryStoreV1 {
         failpoint: RegistryFailpointV1,
         failpoint_action: RegistryFailpointActionV1,
     ) -> Self {
-        Self::with_optional_failpoint(paths, Some(failpoint), failpoint_action)
+        Self::with_optional_failpoint(paths, Some(failpoint), failpoint_action, None)
     }
 
     fn with_optional_failpoint(
         paths: &ServiceRuntimePathsV1,
         failpoint: Option<RegistryFailpointV1>,
         failpoint_action: RegistryFailpointActionV1,
+        observability: Option<Arc<Mutex<ObservabilityV1>>>,
     ) -> Self {
         Self {
             registry_path: paths.workspace_registry_path().as_path().to_path_buf(),
             failpoint,
             failpoint_action,
             in_process_lock: Mutex::new(()),
+            observability,
         }
     }
 
@@ -492,9 +508,18 @@ impl RegistryStoreV1 {
 
     /// Loads the complete strict document. A missing file is the empty registry.
     pub fn load(&self) -> Result<WorkspaceRegistryV1, RegistryErrorV1> {
-        self.with_locked(|parent, current_uid| {
+        let result = self.with_locked(|parent, current_uid| {
             read_registry_v1(&self.registry_path, parent, current_uid)
-        })
+        });
+        self.emit(
+            EventCategoryV1::MigrationOrIntegrity,
+            if result.is_ok() {
+                SeverityV1::Debug
+            } else {
+                SeverityV1::Warn
+            },
+        );
+        result
     }
 
     /// Performs an exact UUID lookup against a consistently loaded registry document.
@@ -747,6 +772,9 @@ impl RegistryStoreV1 {
             ensure_private_parent_v1(&parent, current_uid)?;
             operation(&parent, current_uid)
         })();
+        if result.is_err() {
+            self.emit(EventCategoryV1::MigrationOrIntegrity, SeverityV1::Warn);
+        }
         let unlock = Flock::unlock(lock).map_err(|(_, source)| RegistryErrorV1::LockRelease {
             path: lock_path,
             source,
@@ -785,6 +813,15 @@ impl RegistryStoreV1 {
         Ok(parent.join(lock_name))
     }
 
+    fn emit(&self, category: EventCategoryV1, severity: SeverityV1) {
+        let observer = self
+            .observability
+            .as_ref()
+            .and_then(|observability| observability.try_lock().ok());
+        if let Some(observability) = observer {
+            observability.emit(category, severity);
+        }
+    }
     fn trigger_failpoint(&self, point: RegistryFailpointV1) -> Result<(), RegistryErrorV1> {
         if self.failpoint != Some(point) {
             return Ok(());
@@ -1027,7 +1064,9 @@ fn persist_registry_v1(
         });
     }
     store.trigger_failpoint(RegistryFailpointV1::AfterRenameBeforeParentSync)?;
-    sync_parent_v1(parent)
+    sync_parent_v1(parent)?;
+    store.emit(EventCategoryV1::MoveOrRepair, SeverityV1::Info);
+    Ok(())
 }
 
 fn encode_registry_v1(registry: &WorkspaceRegistryV1) -> Result<Vec<u8>, RegistryErrorV1> {

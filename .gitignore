@@ -23,6 +23,9 @@
 /artifacts/phase0/verification-logs/
 /artifacts/phase0/verification-report.json
 /artifacts/phase0/verification-report.pointer.json
+/fuzz/artifacts/
+/fuzz/corpus/
+/release/migration-evidence-v1.json
 *.log
 *.swp
 *.tmp

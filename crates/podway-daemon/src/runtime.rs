@@ -4,7 +4,13 @@
 //! existing endpoint, workspace runtime manager, production dispatcher, and bounded Unix transport
 //! into one daemon process boundary.
 
-use std::{error::Error, fmt, num::NonZeroUsize, path::Path, sync::Arc};
+use std::{
+    error::Error,
+    fmt,
+    num::NonZeroUsize,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use podway_core::WorkspaceId;
 use podway_git::{
@@ -17,6 +23,7 @@ use crate::{
     dispatch::DispatchResponseMetadataV1,
     endpoint::{EndpointErrorV1, SingletonEndpointGuardV1, SingletonEndpointV1},
     execution::ExecutionClockV1,
+    observability::{EventCategoryV1, ObservabilityV1, SeverityV1},
     peer::{NativePeerCredentialSourceV1, PeerUidVerifierV1},
     production::{
         NativeProductionClockV1, ProductionMutationWorkerV1, ProductionRequestDispatcherV1,
@@ -317,6 +324,7 @@ pub struct ProductionDaemonRuntimeV1 {
     accept_loop: ProductionAcceptLoopV1,
     shutdown: ProductionDaemonShutdownHandleV1,
     recovery_report: ProductionDaemonRecoveryReportV1,
+    observability: Option<Arc<Mutex<ObservabilityV1>>>,
 }
 
 impl ProductionDaemonRuntimeV1 {
@@ -327,12 +335,30 @@ impl ProductionDaemonRuntimeV1 {
         inspection_options: SqliteStoreOptionsV1,
         configuration: ProductionDaemonRuntimeConfigV1,
     ) -> Result<Self, ProductionDaemonStartupErrorV1> {
+        Self::bind_with_observability(paths, inspection_options, configuration, None)
+    }
+
+    /// Binds a daemon with an optional non-authoritative categorical event producer.
+    pub fn bind_with_observability(
+        paths: &ServiceRuntimePathsV1,
+        inspection_options: SqliteStoreOptionsV1,
+        configuration: ProductionDaemonRuntimeConfigV1,
+        observability: Option<Arc<Mutex<ObservabilityV1>>>,
+    ) -> Result<Self, ProductionDaemonStartupErrorV1> {
         let endpoint = SingletonEndpointV1::acquire(paths)
             .map_err(ProductionDaemonStartupErrorV1::EndpointAcquire)?;
+        emit_observation(&observability, EventCategoryV1::Lifecycle, SeverityV1::Info);
         let manager = Arc::new(WorkspaceRuntimeManagerV1::new(paths, inspection_options));
         let registry = match manager.registry().load() {
             Ok(registry) => registry,
-            Err(registry) => return Err(shutdown_after_registry_load_failure(endpoint, registry)),
+            Err(registry) => {
+                emit_observation(
+                    &observability,
+                    EventCategoryV1::MigrationOrIntegrity,
+                    SeverityV1::Warn,
+                );
+                return Err(shutdown_after_registry_load_failure(endpoint, registry));
+            }
         };
 
         let composition = compose_dispatcher_with_worker_v1(
@@ -359,6 +385,7 @@ impl ProductionDaemonRuntimeV1 {
             accept_loop,
             shutdown: ProductionDaemonShutdownHandleV1 { admission },
             recovery_report,
+            observability,
         })
     }
 
@@ -387,9 +414,11 @@ impl ProductionDaemonRuntimeV1 {
             accept_loop,
             shutdown: _,
             recovery_report,
+            observability,
         } = self;
         let accept_result = accept_loop.run(endpoint.listener());
         let shutdown_result = endpoint.shutdown();
+        emit_observation(&observability, EventCategoryV1::Lifecycle, SeverityV1::Info);
 
         match (accept_result, shutdown_result) {
             (Ok(()), Ok(())) => Ok(ProductionDaemonShutdownReportV1::from_recovery(
@@ -411,6 +440,18 @@ impl ProductionDaemonRuntimeV1 {
     }
 }
 
+fn emit_observation(
+    observability: &Option<Arc<Mutex<ObservabilityV1>>>,
+    category: EventCategoryV1,
+    severity: SeverityV1,
+) {
+    let observer = observability
+        .as_ref()
+        .and_then(|observability| observability.try_lock().ok());
+    if let Some(observability) = observer {
+        observability.emit(category, severity);
+    }
+}
 fn shutdown_after_registry_load_failure(
     endpoint: SingletonEndpointGuardV1,
     registry: RegistryErrorV1,

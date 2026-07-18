@@ -1,0 +1,45 @@
+[package]
+name = "podway-fuzz"
+version = "0.1.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+podway-protocol = { path = "../crates/podway-protocol" }
+serde_json = "1.0.140"
+podway-config = { path = "../crates/podway-config" }
+podway-core = { path = "../crates/podway-core" }
+podway-git = { path = "../crates/podway-git" }
+
+[[bin]]
+name = "frame_decoder"
+path = "fuzz_targets/frame_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request_envelope"
+path = "fuzz_targets/request_envelope.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "canonical_json"
+path = "fuzz_targets/canonical_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "selector"
+path = "fuzz_targets/selector.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
