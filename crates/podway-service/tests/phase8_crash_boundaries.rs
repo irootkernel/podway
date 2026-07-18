@@ -75,6 +75,46 @@ impl LaunchctlRunnerV1 for SuccessfulLaunchctl {
         Ok(LaunchctlOutputV1::success())
     }
 }
+#[test]
+fn already_loaded_bootstrap_requires_exact_documented_bytes() {
+    let exact = LaunchctlOutputV1 {
+        exit_status: 5,
+        stdout: String::new(),
+        stderr: "Bootstrap failed: 5: Input/output error".to_owned(),
+    };
+    assert!(exact.already_loaded_bootstrap());
+    for mut near_match in [
+        LaunchctlOutputV1 {
+            exit_status: 5,
+            stdout: String::new(),
+            stderr: "Bootstrap failed: 5: Input/output error\n".to_owned(),
+        },
+        LaunchctlOutputV1 {
+            exit_status: 5,
+            stdout: String::new(),
+            stderr: " Bootstrap failed: 5: Input/output error".to_owned(),
+        },
+        LaunchctlOutputV1 {
+            exit_status: 5,
+            stdout: "unexpected".to_owned(),
+            stderr: "Bootstrap failed: 5: Input/output error".to_owned(),
+        },
+        LaunchctlOutputV1 {
+            exit_status: 5,
+            stdout: String::new(),
+            stderr: "bootstrap failed: 5: Input/output error".to_owned(),
+        },
+        LaunchctlOutputV1 {
+            exit_status: 0,
+            stdout: String::new(),
+            stderr: "Bootstrap failed: 5: Input/output error".to_owned(),
+        },
+    ] {
+        assert!(!near_match.already_loaded_bootstrap());
+        near_match.stderr.push(' ');
+        assert!(!near_match.already_loaded_bootstrap());
+    }
+}
 
 struct CrashAfterBootstrapLaunchctl {
     marker: PathBuf,
@@ -278,27 +318,45 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
         let paths = paths(&root);
         let old_binary = root.join("bin/podwayd-old");
         let new_binary = root.join("bin/podwayd-new");
-        let old_plist =
-            podway_service::launch_agent_plist_v1(&old_binary, paths.log_path().as_path());
-        let new_plist =
-            podway_service::launch_agent_plist_v1(&new_binary, paths.log_path().as_path());
         let plist = paths.launch_agent_path().as_path();
         let metadata = paths.metadata_index_path().as_path();
         let observed_plist = fs::read(plist).expect("complete old or new plist");
+        let observed_metadata = fs::read(metadata).expect("complete old or new metadata");
+        let plist_is_old = observed_plist
+            .windows(old_binary.as_os_str().as_encoded_bytes().len())
+            .any(|value| value == old_binary.as_os_str().as_encoded_bytes());
+        let plist_is_new = observed_plist
+            .windows(new_binary.as_os_str().as_encoded_bytes().len())
+            .any(|value| value == new_binary.as_os_str().as_encoded_bytes());
+        let metadata_is_old = observed_metadata
+            .windows(old_binary.as_os_str().as_encoded_bytes().len())
+            .any(|value| value == old_binary.as_os_str().as_encoded_bytes());
+        let metadata_is_new = observed_metadata
+            .windows(new_binary.as_os_str().as_encoded_bytes().len())
+            .any(|value| value == new_binary.as_os_str().as_encoded_bytes());
         assert!(
-            observed_plist == old_plist || observed_plist == new_plist,
-            "{point} may expose only the complete old or complete new plist"
-        );
-        assert!(
-            fs::read(metadata)
-                .expect("complete old metadata")
-                .windows(old_binary.as_os_str().as_encoded_bytes().len())
-                .any(|value| value == old_binary.as_os_str().as_encoded_bytes()),
-            "{point} must preserve complete old metadata until replacement can commit"
+            (plist_is_old && metadata_is_old)
+                || (plist_is_new && metadata_is_new)
+                || (plist_is_new && metadata_is_old),
+            "{point} may expose only old/old, new/new, or a detected mixed generation"
         );
         assert_mode_0600(plist, "replacement plist mode");
         assert_mode_0600(metadata, "replacement metadata mode");
         assert_no_service_temporary_is_accepted(&paths);
+        if plist_is_new && metadata_is_old {
+            let clock = FixedServiceClockV1::new(UnixMillis::new(3));
+            let runner = MacosServiceCommandRunnerV1::new(
+                StdServiceFilesystemV1,
+                SuccessfulLaunchctl,
+                clock,
+                501,
+            )
+            .expect("mixed-state observer");
+            let error = ServiceManagerV1::new(runner, clock, paths.clone())
+                .status()
+                .expect_err("mixed publication must be rejected");
+            assert!(matches!(error, ServiceErrorV1::InvalidMetadataV1 { .. }));
+        }
 
         let clock = FixedServiceClockV1::new(UnixMillis::new(3));
         let runner = MacosServiceCommandRunnerV1::new(
@@ -312,9 +370,11 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
         manager
             .install(install_spec(&new_binary, &paths))
             .expect("retry convergence");
-        assert_eq!(
-            fs::read(plist).expect("converged plist"),
-            new_plist,
+        assert!(
+            fs::read(plist)
+                .expect("converged plist")
+                .windows(new_binary.as_os_str().as_encoded_bytes().len())
+                .any(|value| value == new_binary.as_os_str().as_encoded_bytes()),
             "{point} retry must converge to the complete new plist"
         );
         assert!(
@@ -326,6 +386,9 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
         );
         assert_mode_0600(plist, "converged plist mode");
         assert_mode_0600(metadata, "converged metadata mode");
+        manager
+            .status()
+            .expect("retry must restore a coherent publication");
         fs::remove_dir_all(root).expect("remove fixture");
     }
 }
@@ -507,9 +570,10 @@ fn bootstrap_side_effect_crash_child_reconciles_to_one_installed_state() {
             .kind(),
         ServiceOutcomeKindV1::ChangedV1
     );
-    assert_eq!(
+    assert_ne!(
         fs::read(paths.launch_agent_path().as_path()).expect("plist after retry"),
-        plist_before_retry
+        plist_before_retry,
+        "retry must republish the plist with the metadata-bound generation"
     );
     assert!(paths.metadata_index_path().as_path().exists());
     assert_eq!(

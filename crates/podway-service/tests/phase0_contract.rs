@@ -710,6 +710,10 @@ fn phase6_restart_boots_out_removes_stale_socket_then_bootstraps() {
         b"plist".to_vec(),
     );
     filesystem.files.lock().expect("test lock").insert(
+        service_paths().metadata_index_path().as_path().to_path_buf(),
+        br#"{"version":1,"label":"dev.podway.podwayd","daemon_binary":"/Applications/Podway/podwayd","installed_at":1,"updated_at":1}"#.to_vec(),
+    );
+    filesystem.files.lock().expect("test lock").insert(
         service_paths().socket_path().as_path().to_path_buf(),
         Vec::new(),
     );
@@ -979,6 +983,10 @@ fn phase6_status_rejects_incompatible_metadata_and_reports_running_when_loaded()
         501,
     )
     .expect("non-root service runner");
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().launch_agent_path().as_path().to_path_buf(),
+        b"legacy plist without a generation marker".to_vec(),
+    );
     filesystem.files.lock().expect("test lock").insert(
         service_paths().metadata_index_path().as_path().to_path_buf(),
         br#"{"version":2,"label":"dev.podway.podwayd","daemon_binary":"/Applications/Podway/podwayd","installed_at":1,"updated_at":1}"#.to_vec(),

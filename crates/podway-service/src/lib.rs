@@ -347,6 +347,7 @@ pub struct ServiceInstallMetadataV1 {
     daemon_binary: PathBuf,
     installed_at: UnixMillis,
     updated_at: UnixMillis,
+    generation: Option<String>,
 }
 
 impl ServiceInstallMetadataV1 {
@@ -370,6 +371,7 @@ impl ServiceInstallMetadataV1 {
             daemon_binary,
             installed_at,
             updated_at,
+            generation: None,
         })
     }
 
@@ -391,6 +393,10 @@ impl ServiceInstallMetadataV1 {
 
     pub const fn updated_at(&self) -> UnixMillis {
         self.updated_at
+    }
+    fn with_generation(mut self) -> Self {
+        self.generation = Some(publication_generation_v1(&self));
+        self
     }
 }
 
@@ -1500,7 +1506,7 @@ impl LaunchctlOutputV1 {
     pub fn already_loaded_bootstrap(&self) -> bool {
         self.exit_status == 5
             && self.stdout.is_empty()
-            && self.stderr.trim_end() == "Bootstrap failed: 5: Input/output error"
+            && self.stderr == "Bootstrap failed: 5: Input/output error"
     }
 }
 /// The process-backed `launchctl` adapter used by CLI composition on macOS.
@@ -1666,6 +1672,37 @@ where
         parse_metadata_v1(&bytes).map(Some)
     }
 
+    fn coherent_metadata(
+        &self,
+        op: ServiceOperationV1,
+        paths: &ServiceRuntimePathsV1,
+    ) -> Result<Option<ServiceInstallMetadataV1>, ServiceErrorV1> {
+        let metadata = self.metadata(paths)?;
+        let plist_path = paths.launch_agent_path().as_path();
+        let plist_exists = self
+            .filesystem
+            .exists(plist_path)
+            .map_err(|e| self.fs_error(op, plist_path, e))?;
+        match (metadata, plist_exists) {
+            (None, false) => Ok(None),
+            (Some(_), false) | (None, true) => Err(ServiceErrorV1::InvalidMetadataV1 {
+                message: "service publication is incomplete".to_owned(),
+            }),
+            (Some(metadata), true) => {
+                let plist = self
+                    .filesystem
+                    .read_file(plist_path)
+                    .map_err(|e| self.fs_error(op, plist_path, e))?;
+                if plist_generation_v1(&plist)? != metadata.generation.as_deref() {
+                    return Err(ServiceErrorV1::InvalidMetadataV1 {
+                        message: "service plist and metadata generations do not match".to_owned(),
+                    });
+                }
+                Ok(Some(metadata))
+            }
+        }
+    }
+
     fn ensure_directories(
         &self,
         op: ServiceOperationV1,
@@ -1771,15 +1808,29 @@ where
                 ServiceOutcomeV1::NotInstalledV1(ServiceNotInstalledV1::new(self.clock.now())),
             ));
         }
-        let plist = launch_agent_plist_v1(binary, paths.log_path().as_path());
+        let now = self.clock.now();
+        let metadata = ServiceInstallMetadataV1::new(
+            binary,
+            existing
+                .as_ref()
+                .map_or(now, ServiceInstallMetadataV1::installed_at),
+            now,
+        )
+        .map_err(|e| ServiceErrorV1::InvalidMetadataV1 {
+            message: e.to_string(),
+        })?
+        .with_generation();
+        let plist = launch_agent_plist_with_generation_v1(
+            binary,
+            paths.log_path().as_path(),
+            metadata.generation.as_deref(),
+        );
         let plist_path = paths.launch_agent_path().as_path();
         let exists = self
             .filesystem
             .exists(plist_path)
             .map_err(|e| self.fs_error(op, plist_path, e))?;
-        let unchanged = existing
-            .as_ref()
-            .is_some_and(|m| m.daemon_binary() == binary)
+        let unchanged = existing.as_ref() == Some(&metadata)
             && exists
             && self
                 .filesystem
@@ -1790,7 +1841,7 @@ where
             return Ok(ServiceCommandResultV1::Outcome(
                 ServiceOutcomeV1::AlreadyInDesiredStateV1(ServiceAlreadyV1::new(
                     self.clock.now(),
-                    existing.expect("metadata checked"),
+                    metadata,
                 )),
             ));
         }
@@ -1805,17 +1856,6 @@ where
         self.observe(ServiceObservationV1::AtomicPlistPublished);
         self.rotate_log(op, paths)?;
         self.bootstrap(op, paths)?;
-        let now = self.clock.now();
-        let metadata = ServiceInstallMetadataV1::new(
-            binary,
-            existing
-                .as_ref()
-                .map_or(now, ServiceInstallMetadataV1::installed_at),
-            now,
-        )
-        .map_err(|e| ServiceErrorV1::InvalidMetadataV1 {
-            message: e.to_string(),
-        })?;
         let metadata_path = paths.metadata_index_path().as_path();
         self.filesystem
             .write_atomically(metadata_path, metadata_json_v1(&metadata).as_bytes(), 0o600)
@@ -1927,13 +1967,11 @@ where
                         )),
                     ));
                 }
+                let metadata = self.coherent_metadata(ServiceOperationV1::Start, &paths)?;
                 self.rotate_log(ServiceOperationV1::Start, &paths)?;
                 self.bootstrap(ServiceOperationV1::Start, &paths)?;
                 Ok(ServiceCommandResultV1::Outcome(
-                    ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(
-                        self.clock.now(),
-                        self.metadata(&paths)?,
-                    )),
+                    ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(self.clock.now(), metadata)),
                 ))
             }
             ServiceCommandV1::Stop { paths, .. } => {
@@ -1970,19 +2008,17 @@ where
                         )),
                     ));
                 }
+                let metadata = self.coherent_metadata(ServiceOperationV1::Restart, &paths)?;
                 self.bootout(ServiceOperationV1::Restart)?;
                 self.remove_stale_socket(ServiceOperationV1::Restart, &paths)?;
                 self.rotate_log(ServiceOperationV1::Restart, &paths)?;
                 self.bootstrap(ServiceOperationV1::Restart, &paths)?;
                 Ok(ServiceCommandResultV1::Outcome(
-                    ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(
-                        self.clock.now(),
-                        self.metadata(&paths)?,
-                    )),
+                    ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(self.clock.now(), metadata)),
                 ))
             }
             ServiceCommandV1::Status { paths, .. } => {
-                let metadata = self.metadata(&paths)?;
+                let metadata = self.coherent_metadata(ServiceOperationV1::Status, &paths)?;
                 if metadata.is_none() {
                     return Ok(ServiceCommandResultV1::Status(
                         ServiceStatusV1::NotInstalledV1(ServiceNotInstalledV1::new(
@@ -2042,7 +2078,18 @@ where
 
 /// Generates the exact v1 LaunchAgent template with XML-sensitive values escaped.
 pub fn launch_agent_plist_v1(binary: &Path, log_path: &Path) -> Vec<u8> {
-    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{SERVICE_LABEL_V1}</string>\n\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>--service</string>\n  </array>\n\n  <key>RunAtLoad</key>\n  <true/>\n\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\n  <key>ThrottleInterval</key>\n  <integer>5</integer>\n\n  <key>ProcessType</key>\n  <string>Background</string>\n\n  <key>StandardOutPath</key>\n  <string>{}</string>\n\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n", xml_escape(&binary.display().to_string()), xml_escape(&log_path.display().to_string()), xml_escape(&log_path.display().to_string())).into_bytes()
+    launch_agent_plist_with_generation_v1(binary, log_path, None)
+}
+
+fn launch_agent_plist_with_generation_v1(
+    binary: &Path,
+    log_path: &Path,
+    generation: Option<&str>,
+) -> Vec<u8> {
+    let generation = generation.map_or_else(String::new, |value| {
+        format!("\n  <key>PodwayGeneration</key>\n  <string>{value}</string>\n")
+    });
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{SERVICE_LABEL_V1}</string>{generation}\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>--service</string>\n  </array>\n\n  <key>RunAtLoad</key>\n  <true/>\n\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\n  <key>ThrottleInterval</key>\n  <integer>5</integer>\n\n  <key>ProcessType</key>\n  <string>Background</string>\n\n  <key>StandardOutPath</key>\n  <string>{}</string>\n\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n", xml_escape(&binary.display().to_string()), xml_escape(&log_path.display().to_string()), xml_escape(&log_path.display().to_string())).into_bytes()
 }
 
 fn xml_escape(value: &str) -> String {
@@ -2061,14 +2108,58 @@ fn unescape_json(value: &str) -> String {
 }
 
 fn metadata_json_v1(metadata: &ServiceInstallMetadataV1) -> String {
+    let generation = metadata
+        .generation
+        .as_ref()
+        .map_or_else(String::new, |value| format!(",\"generation\":\"{value}\""));
     format!(
-        "{{\"version\":{},\"label\":\"{}\",\"daemon_binary\":\"{}\",\"installed_at\":{},\"updated_at\":{}}}\n",
+        "{{\"version\":{},\"label\":\"{}\",\"daemon_binary\":\"{}\",\"installed_at\":{},\"updated_at\":{}{generation}}}\n",
         metadata.version(),
         SERVICE_LABEL_V1,
         json_escape(&metadata.daemon_binary().display().to_string()),
         metadata.installed_at().get(),
         metadata.updated_at().get()
     )
+}
+
+fn publication_generation_v1(metadata: &ServiceInstallMetadataV1) -> String {
+    let mut generation = format!(
+        "{:016x}-{:016x}-",
+        metadata.installed_at().get(),
+        metadata.updated_at().get()
+    );
+    for byte in metadata.daemon_binary().as_os_str().as_encoded_bytes() {
+        generation.push_str(&format!("{byte:02x}"));
+    }
+    generation
+}
+
+fn plist_generation_v1(plist: &[u8]) -> Result<Option<&str>, ServiceErrorV1> {
+    let plist = std::str::from_utf8(plist).map_err(|_| ServiceErrorV1::InvalidMetadataV1 {
+        message: "plist is not UTF-8".to_owned(),
+    })?;
+    let marker = "<key>PodwayGeneration</key>\n  <string>";
+    match plist.split_once(marker) {
+        None => Ok(None),
+        Some((_, tail)) => {
+            let generation = tail
+                .split_once("</string>")
+                .map(|(value, _)| value)
+                .ok_or_else(|| ServiceErrorV1::InvalidMetadataV1 {
+                    message: "plist generation is malformed".to_owned(),
+                })?;
+            if generation.is_empty()
+                || !generation
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+            {
+                return Err(ServiceErrorV1::InvalidMetadataV1 {
+                    message: "plist generation is invalid".to_owned(),
+                });
+            }
+            Ok(Some(generation))
+        }
+    }
 }
 
 fn parse_metadata_v1(bytes: &[u8]) -> Result<ServiceInstallMetadataV1, ServiceErrorV1> {
@@ -2102,14 +2193,23 @@ fn parse_metadata_v1(bytes: &[u8]) -> Result<ServiceInstallMetadataV1, ServiceEr
         .map_err(|_| ServiceErrorV1::InvalidMetadataV1 {
             message: "metadata updated_at is invalid".to_owned(),
         })?;
-    ServiceInstallMetadataV1::new(
+    let mut metadata = ServiceInstallMetadataV1::new(
         unescape_json(field("daemon_binary")?),
         UnixMillis::new(installed),
         UnixMillis::new(updated),
     )
     .map_err(|e| ServiceErrorV1::InvalidMetadataV1 {
         message: e.to_string(),
-    })
+    })?;
+    if let Some(generation) = json_field(text, "generation") {
+        if generation != publication_generation_v1(&metadata) {
+            return Err(ServiceErrorV1::InvalidMetadataV1 {
+                message: "metadata generation is invalid".to_owned(),
+            });
+        }
+        metadata.generation = Some(generation.to_owned());
+    }
+    Ok(metadata)
 }
 
 fn json_field<'a>(text: &'a str, name: &str) -> Option<&'a str> {

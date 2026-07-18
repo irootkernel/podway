@@ -6,6 +6,7 @@ and unseen holdout remain separate irreversible checkpoints.
 """
 from __future__ import annotations
 import argparse
+import base64
 import os
 import platform
 import resource
@@ -495,7 +496,59 @@ def holdout(args: argparse.Namespace) -> None:
     out, digest = evidence("performance/holdout", measured); print(f"{out} {digest}")
 
 
-def _run_fuzz_gate(profile_data: dict[str, Any]) -> list[dict[str, Any]]:
+FUZZ_OUTPUT_MAX_BYTES = 1024 * 1024
+
+def _fuzz_output_provenance(stream: str, output: bytes) -> dict[str, Any]:
+    if not isinstance(output, bytes) or len(output) > FUZZ_OUTPUT_MAX_BYTES:
+        fail(f"fuzz {stream} output cannot be captured within the evidence bound")
+    return {
+        "bytes": len(output),
+        "sha256": sha256_bytes(output),
+        "base64": base64.b64encode(output).decode("ascii"),
+    }
+
+def _fuzz_provenance(profile_data: dict[str, Any], fuzz_env: dict[str, str]) -> dict[str, Any]:
+    toolchain = profile_data["fuzz"]["toolchain"]
+    rustup = shutil.which("rustup")
+    if rustup is None:
+        fail("rustup is required for fuzz provenance")
+    tools: list[dict[str, str]] = []
+    for name in ("rustc", "cargo"):
+        located = subprocess.run(
+            (rustup, "which", "--toolchain", toolchain["channel"], name),
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            env={"PATH": os.environ.get("PATH", "")},
+        )
+        if located.returncode != 0:
+            fail(f"cannot locate fuzz {name}")
+        path = Path(located.stdout.decode("utf-8", "strict").strip()).resolve()
+        if not path.is_file():
+            fail(f"fuzz {name} path is missing")
+        tools.append({"id": name, "path": str(path), "sha256": sha256_file(path)})
+    cargo_fuzz = shutil.which("cargo-fuzz", path=fuzz_env["PATH"])
+    if cargo_fuzz is None:
+        fail("cargo-fuzz is required for fuzz provenance")
+    cargo_fuzz_path = Path(cargo_fuzz).resolve()
+    if not cargo_fuzz_path.is_file():
+        fail("cargo-fuzz path is missing")
+    tools.append({"id": "cargo-fuzz", "path": str(cargo_fuzz_path), "sha256": sha256_file(cargo_fuzz_path)})
+    sources = [ROOT / "Cargo.lock", ROOT / "fuzz" / "Cargo.toml", Path(__file__).resolve()]
+    sources.extend(ROOT / "fuzz" / "fuzz_targets" / f"{target}.rs" for target in FUZZ_TARGETS)
+    if any(not source.is_file() for source in sources):
+        fail("fuzz source binding is absent")
+    return {
+        "source": identity_manifest(),
+        "profile_sha256": sha256_bytes(canonical_json(profile_data)),
+        "toolchain": {"channel": toolchain["channel"], "rustc": toolchain["rustc"], "tools": tools},
+        "sources": [
+            {"path": str(source.relative_to(ROOT)), "sha256": sha256_file(source)}
+            for source in sources
+        ],
+    }
+
+def _run_fuzz_gate(profile_data: dict[str, Any]) -> dict[str, Any]:
     policy = profile_data["fuzz"]["rc"]
     toolchain = profile_data["fuzz"]["toolchain"]
     rustup = shutil.which("rustup")
@@ -510,6 +563,7 @@ def _run_fuzz_gate(profile_data: dict[str, Any]) -> list[dict[str, Any]]:
     rustc = run_allowed(("rustc", "--version"), env=fuzz_env)
     if rustc.returncode != 0 or rustc.stdout.decode("utf-8", "strict").strip() != f"rustc {toolchain['rustc']}":
         fail("installed fuzz toolchain differs from the frozen profile")
+    provenance = _fuzz_provenance(profile_data, fuzz_env)
     root = ROOT / profile_data["fuzz"]["corpus_root"]
     root.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
@@ -523,17 +577,28 @@ def _run_fuzz_gate(profile_data: dict[str, Any]) -> list[dict[str, Any]]:
             result = run_allowed(argv, cwd=ROOT / "fuzz", env=fuzz_env, timeout=policy["seconds_per_target"] + policy["timeout_seconds"])
         except subprocess.TimeoutExpired:
             fail(f"fuzz target exceeded profile timeout: {target}")
-        results.append({"target": target, "corpus": str(corpus.relative_to(ROOT)), "argv": list(argv),
-                        "exit_code": result.returncode, "stdout_sha256": sha256_bytes(result.stdout),
-                        "stderr_sha256": sha256_bytes(result.stderr), "status": "pass" if result.returncode == 0 else "fail"})
-    return results
+        results.append({
+            "target": target,
+            "corpus": str(corpus.relative_to(ROOT)),
+            "argv": list(argv),
+            "exit_code": result.returncode,
+            "stdout": _fuzz_output_provenance("stdout", result.stdout),
+            "stderr": _fuzz_output_provenance("stderr", result.stderr),
+            "status": "pass" if result.returncode == 0 else "fail",
+        })
+    return {"provenance": provenance, "commands": results}
 
 def run_gate(gate_id: str, profile_data: dict[str, Any]) -> dict[str, Any]:
     commands = GATES.get(gate_id)
     if commands is None: fail(f"gate is not allowlisted: {gate_id}")
     if gate_id == "G009-GATE-FUZZ":
-        results = _run_fuzz_gate(profile_data)
-        return {"gate_id": gate_id, "commands": results, "status": "pass" if all(item["status"] == "pass" for item in results) else "fail"}
+        fuzz = _run_fuzz_gate(profile_data)
+        return {
+            "gate_id": gate_id,
+            "provenance": fuzz["provenance"],
+            "commands": fuzz["commands"],
+            "status": "pass" if all(item["status"] == "pass" for item in fuzz["commands"]) else "fail",
+        }
     results = []
     for argv in commands:
         result = run_allowed(argv)
