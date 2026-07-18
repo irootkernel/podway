@@ -58,7 +58,7 @@ A reference model independent of the production transition implementation SHOULD
 - duplicate YAML keys are rejected;
 - aliases, depth, size, and collection limits are enforced;
 - invalid constraints produce stable diagnostics;
-- canonical bytes are identical on both macOS architectures.
+- canonical bytes are deterministic on the Apple Silicon (`aarch64-apple-darwin`) release target.
 
 ## SQLite tests
 
@@ -229,8 +229,7 @@ Required CI lanes:
 - schema/example validation;
 - SQLite and migration tests;
 - protocol fuzz smoke corpus;
-- macOS Apple Silicon integration;
-- macOS Intel build and tests where infrastructure permits;
+- native macOS Apple Silicon (`aarch64-apple-darwin`) build and integration;
 - release packaging dry run;
 - dependency and license checks.
 

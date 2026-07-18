@@ -78,7 +78,7 @@ Podway is ready for public macOS release only when every mandatory criterion bel
 
 ## macOS operation
 
-- Both binaries install and run on the supported macOS release matrix.
+- Both binaries install and run natively on the supported macOS Apple Silicon (`aarch64-apple-darwin`) release matrix.
 - LaunchAgent install is idempotent.
 - Daemon starts at user login.
 - Explicit stop, start, restart, status, logs, and uninstall work.
@@ -106,7 +106,7 @@ Podway is ready for public macOS release only when every mandatory criterion bel
 ## Distribution
 
 - Rust lockfile is committed.
-- Apple Silicon and Intel artifacts are built and checksummed.
+- Apple Silicon (`aarch64-apple-darwin`) artifacts are built, validated natively on arm64, and checksummed.
 - Release archive contains both binaries, completions, schemas, presets, README, and MIT License.
 - Public artifacts have documented signing and notarization status.
 - Upgrade from the previous supported database schema is tested.

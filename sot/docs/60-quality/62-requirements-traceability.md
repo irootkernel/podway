@@ -90,7 +90,7 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 
 | ID | Requirement | Design source | Primary conformance |
 |---|---|---|---|
-| `REL-001` | Apple Silicon and Intel artifacts | Release | Build matrix |
+| `REL-001` | Apple Silicon (`aarch64-apple-darwin`) release artifact | Release | Apple Silicon build matrix |
 | `REL-002` | Archive contains binaries, completions, schemas, presets, license | Release | Artifact inspection |
 | `REL-003` | Checksums and provenance are published | Release | Release pipeline |
 | `REL-004` | Upgrade migration is tested | Release/storage | Upgrade E2E |

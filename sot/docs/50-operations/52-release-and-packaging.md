@@ -35,12 +35,9 @@ A product minor release may add backward-compatible fields or commands. Breaking
 
 ## Target architectures
 
-Release CI builds and tests:
+Release CI builds and tests the sole supported release target:
 
-- Apple Silicon (`aarch64-apple-darwin`);
-- Intel (`x86_64-apple-darwin`).
-
-The project may additionally publish a universal binary bundle, but separate architecture artifacts remain acceptable and independently checksummed.
+- Apple Silicon (`aarch64-apple-darwin`), with native arm64 validation.
 
 ## Release archive contents
 
@@ -139,7 +136,7 @@ Users may delete `.podway/runtime/` or the whole worktree when task state is no 
 A release candidate must pass:
 
 - all unit, property, integration, crash, and fuzz tests;
-- both architecture builds;
+- Apple Silicon target build and native arm64 validation;
 - LaunchAgent install/start/stop/restart/uninstall tests;
 - clean install and upgrade tests;
 - schema and preset validation;
