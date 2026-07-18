@@ -70,6 +70,15 @@ def run_allowed(
     )
 
 WORKLOAD_ADAPTER_IDS = frozenset({"G009-W01", "G009-W02", "G009-W03", "G009-W04", "G009-W05", "G009-W06", "G009-W07"})
+WORKLOAD_COMMANDS = {
+    "G009-W01": [["podwayd", "--service"]],
+    "G009-W02": [["podway", "status"], ["podway", "next"]],
+    "G009-W03": [["podway", "start", "--procedure", ".g009-procedure.yaml", "--task", "G009-linked"]],
+    "G009-W04": [["podway", "set", "target-audience", "updated"]],
+    "G009-W05": [["podway", "attach", "draft-reference", ".g009-artifact.bin"]],
+    "G009-W06": [["podway", "status"]],
+    "G009-W07": [["podway", "set", "target-audience", "<65536-byte-string>"]],
+}
 
 
 def profile(path: Path) -> dict[str, Any]:
@@ -86,8 +95,13 @@ def profile(path: Path) -> dict[str, Any]:
     workloads = value["workloads"]
     if not isinstance(workloads, list) or len(workloads) != 7 or len({item.get("id") for item in workloads if isinstance(item, dict)}) != 7: fail("profile must define exactly seven unique workloads")
     for item in workloads:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not isinstance(item.get("command_vector"), list) or not item["command_vector"] or not all(isinstance(part, str) for part in item["command_vector"]): fail("malformed workload declaration")
-        if item.get("id") not in WORKLOAD_ADAPTER_IDS: fail("workload has no native adapter")
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            fail("malformed workload declaration")
+        workload_id = item.get("id")
+        if workload_id not in WORKLOAD_ADAPTER_IDS or item.get("adapter_id") != workload_id:
+            fail("workload has no matching native adapter")
+        if item.get("measured_commands") != WORKLOAD_COMMANDS[workload_id]:
+            fail("workload command contract differs from its native adapter")
         if not isinstance(item.get("hard_bounds"), dict) or not all(isinstance(item["hard_bounds"].get(key), int) and item["hard_bounds"][key] > 0 for key in ("max_completion_ms", "max_rss_mib")): fail("malformed workload hard bounds")
     return value
 
@@ -139,13 +153,6 @@ def _input_from_rc(rc: dict[str, Any], role: str) -> Path:
     return path
 
 
-def _command_for_workload(item: dict[str, Any], bin_dir: Path) -> tuple[str, ...]:
-    vector = item["command_vector"]
-    program = vector[0]
-    if program not in ("podway", "podwayd"): fail("profile attempts unallowlisted workload executable")
-    binary = (bin_dir / program).resolve()
-    if not binary.is_file() or not os.access(binary, os.X_OK): fail(f"missing executable for workload: {binary}")
-    return (str(binary), *vector[1:])
 
 
 def _native_worktree() -> tuple[tempfile.TemporaryDirectory[str], Path]:
@@ -326,7 +333,8 @@ def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[st
         measured = [one(item) for _ in range(SAMPLES)]
         workloads[item["id"]] = {"kind": "latency", "warmups": [entry["value"] for entry in warm],
             "samples": [entry["value"] for entry in measured], "resource": {"hard_bounds": item["hard_bounds"], "warmups": warm, "samples": measured},
-            "workload_name": item["name"], "command_vector": list(item["command_vector"])}
+            "workload_name": item["name"], "adapter_id": item["adapter_id"],
+            "measured_commands": item["measured_commands"]}
     return {"schema": "podway.g009.characterization/v1", "phase": phase, "target": TARGET,
             "warmups": WARMUPS, "samples": SAMPLES, "fixture_sha256": fixture_digest, "workloads": workloads}
 

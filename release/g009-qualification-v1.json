@@ -32,8 +32,8 @@
     "pre_rc": {"seconds_per_target": 600},
     "rc": {"rss_limit_mb": 512, "seconds_per_target": 3600, "timeout_seconds": 5},
     "surfaces": [
-      "protocol_frames",
-      "request_versions",
+      "frame_decoder",
+      "request_envelope",
       "response_additive",
       "config_procedure",
       "canonical_json",
@@ -108,12 +108,12 @@
   "target": {"arch": "arm64", "host_arch": "arm64", "native_required": true, "triple": "aarch64-apple-darwin", "universal_forbidden": true, "x86_64_forbidden": true},
   "version": 1,
   "workloads": [
-    {"command_vector": ["podwayd", "--foreground"], "fixture": "g009/daemon-cold-start-v1", "hard_bounds": {"max_completion_ms": 5000, "max_rss_mib": 256}, "id": "G009-W01", "name": "daemon-cold-start"},
-    {"command_vector": ["podway", "status", "--json"], "fixture": "g009/status-next-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W02", "name": "status-next"},
-    {"command_vector": ["podway", "session", "start", "--json"], "fixture": "g009/multi-worktree-admission-v1", "hard_bounds": {"max_completion_ms": 5000, "max_rss_mib": 256}, "id": "G009-W03", "name": "multi-worktree-admission"},
-    {"command_vector": ["podway", "item", "set", "--json"], "fixture": "g009/item-update-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W04", "name": "item-update"},
-    {"command_vector": ["podway", "item", "attach", "--json"], "fixture": "g009/artifact-hashing-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W05", "name": "artifact-hashing"},
-    {"command_vector": ["podway", "status", "--json"], "fixture": "g009/db-growth-pruning-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W06", "name": "db-growth-pruning"},
-    {"command_vector": ["podway", "item", "set", "--json"], "fixture": "g009/maximum-input-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 512}, "id": "G009-W07", "name": "maximum-input-rss-completion-or-rejection", "required_outcome": "complete-or-explicit-rejection"}
+    {"adapter_id": "G009-W01", "fixture": "g009/daemon-cold-start-v1", "hard_bounds": {"max_completion_ms": 5000, "max_rss_mib": 256}, "id": "G009-W01", "measured_commands": [["podwayd", "--service"]], "name": "daemon-cold-start"},
+    {"adapter_id": "G009-W02", "fixture": "g009/status-next-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W02", "measured_commands": [["podway", "status"], ["podway", "next"]], "name": "status-next"},
+    {"adapter_id": "G009-W03", "fixture": "g009/multi-worktree-admission-v1", "hard_bounds": {"max_completion_ms": 5000, "max_rss_mib": 256}, "id": "G009-W03", "measured_commands": [["podway", "start", "--procedure", ".g009-procedure.yaml", "--task", "G009-linked"]], "name": "multi-worktree-admission"},
+    {"adapter_id": "G009-W04", "fixture": "g009/item-update-v1", "hard_bounds": {"max_completion_ms": 2000, "max_rss_mib": 128}, "id": "G009-W04", "measured_commands": [["podway", "set", "target-audience", "updated"]], "name": "item-update"},
+    {"adapter_id": "G009-W05", "fixture": "g009/artifact-hashing-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W05", "measured_commands": [["podway", "attach", "draft-reference", ".g009-artifact.bin"]], "name": "artifact-hashing"},
+    {"adapter_id": "G009-W06", "fixture": "g009/db-growth-pruning-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 256}, "id": "G009-W06", "measured_commands": [["podway", "status"]], "name": "status-after-database-growth"},
+    {"adapter_id": "G009-W07", "fixture": "g009/maximum-input-v1", "hard_bounds": {"max_completion_ms": 10000, "max_rss_mib": 512}, "id": "G009-W07", "measured_commands": [["podway", "set", "target-audience", "<65536-byte-string>"]], "name": "maximum-input-rss-completion-or-rejection", "required_outcome": "complete-or-explicit-rejection"}
   ]
 }
