@@ -1277,7 +1277,33 @@ impl ServiceFilesystemErrorV1 {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StdServiceFilesystemV1;
 
+#[cfg(any(test, debug_assertions))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurabilityFailpointV1 {
+    AfterTemporaryWrite,
+    AfterFileSyncAndMode,
+    BeforeRename,
+    AfterRename,
+    AfterParentDirectorySync,
+}
+
+#[cfg(any(test, debug_assertions))]
+static DURABILITY_FAILPOINT_V1: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
 impl StdServiceFilesystemV1 {
+    #[cfg(any(test, debug_assertions))]
+    pub fn inject_durability_failpoint_for_testing(failpoint: DurabilityFailpointV1) {
+        DURABILITY_FAILPOINT_V1.store(failpoint as u8 + 1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn fail_at_durability_boundary(failpoint: DurabilityFailpointV1) {
+        if DURABILITY_FAILPOINT_V1.load(std::sync::atomic::Ordering::SeqCst) == failpoint as u8 + 1
+        {
+            std::process::exit(86);
+        }
+    }
+
     fn error(error: std::io::Error) -> ServiceFilesystemErrorV1 {
         ServiceFilesystemErrorV1 {
             permission_denied: error.kind() == std::io::ErrorKind::PermissionDenied,
@@ -1340,9 +1366,29 @@ impl ServiceFilesystemV1 for StdServiceFilesystemV1 {
                 Ok(mut file) => {
                     let result = (|| {
                         file.write_all(contents).map_err(Self::error)?;
+                        #[cfg(any(test, debug_assertions))]
+                        Self::fail_at_durability_boundary(
+                            DurabilityFailpointV1::AfterTemporaryWrite,
+                        );
                         file.sync_all().map_err(Self::error)?;
                         Self::set_mode(&temporary, mode)?;
-                        fs::rename(&temporary, path).map_err(Self::error)
+                        #[cfg(any(test, debug_assertions))]
+                        Self::fail_at_durability_boundary(
+                            DurabilityFailpointV1::AfterFileSyncAndMode,
+                        );
+                        #[cfg(any(test, debug_assertions))]
+                        Self::fail_at_durability_boundary(DurabilityFailpointV1::BeforeRename);
+                        fs::rename(&temporary, path).map_err(Self::error)?;
+                        #[cfg(any(test, debug_assertions))]
+                        Self::fail_at_durability_boundary(DurabilityFailpointV1::AfterRename);
+                        fs::File::open(parent)
+                            .and_then(|directory| directory.sync_all())
+                            .map_err(Self::error)?;
+                        #[cfg(any(test, debug_assertions))]
+                        Self::fail_at_durability_boundary(
+                            DurabilityFailpointV1::AfterParentDirectorySync,
+                        );
+                        Ok(())
                     })();
                     if result.is_err() {
                         let _ = fs::remove_file(&temporary);
