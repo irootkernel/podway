@@ -14,7 +14,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -69,15 +68,7 @@ def run_allowed(
         timeout=timeout,
     )
 
-WORKLOAD_VECTORS = {
-    "G009-W01": ("podwayd", "--foreground"),
-    "G009-W02": ("podway", "status", "--json"),
-    "G009-W03": ("podway", "session", "start", "--json"),
-    "G009-W04": ("podway", "item", "set", "--json"),
-    "G009-W05": ("podway", "item", "attach", "--json"),
-    "G009-W06": ("podway", "status", "--json"),
-    "G009-W07": ("podway", "item", "set", "--json"),
-}
+WORKLOAD_ADAPTER_IDS = frozenset({"G009-W01", "G009-W02", "G009-W03", "G009-W04", "G009-W05", "G009-W06", "G009-W07"})
 
 
 def profile(path: Path) -> dict[str, Any]:
@@ -94,8 +85,8 @@ def profile(path: Path) -> dict[str, Any]:
     workloads = value["workloads"]
     if not isinstance(workloads, list) or len(workloads) != 7 or len({item.get("id") for item in workloads if isinstance(item, dict)}) != 7: fail("profile must define exactly seven unique workloads")
     for item in workloads:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not isinstance(item.get("command_vector"), list) or not item["command_vector"] or not all(isinstance(part, str) for part in item["command_vector"]): fail("malformed workload vector")
-        if tuple(item["command_vector"]) != WORKLOAD_VECTORS.get(item.get("id")): fail("workload vector is not allowlisted")
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not isinstance(item.get("command_vector"), list) or not item["command_vector"] or not all(isinstance(part, str) for part in item["command_vector"]): fail("malformed workload declaration")
+        if item.get("id") not in WORKLOAD_ADAPTER_IDS: fail("workload has no native adapter")
         if not isinstance(item.get("hard_bounds"), dict) or not all(isinstance(item["hard_bounds"].get(key), int) and item["hard_bounds"][key] > 0 for key in ("max_completion_ms", "max_rss_mib")): fail("malformed workload hard bounds")
     return value
 
@@ -170,43 +161,139 @@ def _remove_worktree(path: Path, holder: tempfile.TemporaryDirectory[str]) -> No
     holder.cleanup()
 
 
+def _run(argv: tuple[str, ...], cwd: Path, env: dict[str, str], timeout: float = 15) -> subprocess.CompletedProcess[bytes]:
+    try: result = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired: fail(f"native workload command timed out: {argv[0]}")
+    if result.returncode != 0: fail(f"native workload command failed ({result.returncode}): {' '.join(argv[:3])}")
+    return result
+
+def _socket_path(env: dict[str, str]) -> Path:
+    return Path(env["TMPDIR"]) / f"podway-{os.getuid()}" / "podwayd.sock"
+
+def _start_daemon(podwayd: Path, cwd: Path, env: dict[str, str]) -> tuple[subprocess.Popen[bytes], Path]:
+    socket = _socket_path(env)
+    process = subprocess.Popen((str(podwayd), "--service"), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            _, stderr = process.communicate()
+            fail(f"podwayd exited before socket readiness: {sha256_bytes(stderr)}")
+        if socket.exists(): return process, socket
+        time.sleep(0.01)
+    process.terminate(); process.wait(timeout=5); fail("podwayd did not create its socket")
+
+def _stop_daemon(process: subprocess.Popen[bytes], socket: Path) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try: process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill(); process.wait(timeout=5); fail("podwayd ignored SIGTERM")
+    if socket.exists(): fail("podwayd left socket after termination")
+
+def _prepare_task(podway: Path, workspace: Path, env: dict[str, str], fixture: Path) -> None:
+    procedure = fixture / "procedure.yaml"
+    procedure.write_text(
+        """schema: podway.procedure/v1
+id: g009-benchmark
+version: "1"
+name: G009 benchmark
+description: Deterministic release qualification fixture.
+stages:
+  - id: benchmark
+    title: Benchmark
+    items:
+      - id: target-audience
+        type: text
+        prompt: Target audience.
+        required: true
+        min_length: 1
+      - id: draft-reference
+        type: artifact
+        prompt: Draft reference.
+        required: false
+""",
+        encoding="utf-8",
+    )
+    _run((str(podway), "init"), workspace, env)
+    _run(
+        (str(podway), "start", "--procedure", str(procedure), "--task", "G009"),
+        workspace,
+        env,
+    )
+
+def _adapter_commands(workload_id: str, podway: Path, workspace: Path, fixture: Path) -> tuple[tuple[str, ...], ...]:
+    artifact = fixture / "artifact.bin"; artifact.write_bytes(b"g009-artifact-v1\n" * 4096)
+    if workload_id == "G009-W02": return ((str(podway), "status"), (str(podway), "next"))
+    if workload_id == "G009-W03": return ((str(podway), "start", "--procedure", str(fixture / "procedure.yaml"), "--task", "G009-linked"),)
+    if workload_id == "G009-W04": return ((str(podway), "set", "target-audience", "updated"),)
+    if workload_id == "G009-W05": return ((str(podway), "attach", "draft-reference", str(artifact)),)
+    if workload_id == "G009-W06": return ((str(podway), "reset", "--all", "--force", "--yes"), (str(podway), "status"))
+    if workload_id == "G009-W07": return ((str(podway), "set", "target-audience", "x" * 65536),)
+    fail(f"unknown workload adapter: {workload_id}")
+
+def _measure(argvs: tuple[tuple[str, ...], ...], cwd: Path, env: dict[str, str], bound: dict[str, int], allow_rejection: bool = False) -> dict[str, Any]:
+    started = time.monotonic_ns(); stdout = bytearray(); stderr = bytearray(); exit_code = 0
+    for argv in argvs:
+        try: result = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, timeout=bound["max_completion_ms"] / 1000, env=env)
+        except subprocess.TimeoutExpired: fail("workload command timed out")
+        if result.returncode != 0 and not allow_rejection: fail(f"native workload command failed ({result.returncode})")
+        if result.returncode != 0 and (not result.stderr or result.returncode < 1): fail("maximum-input command did not explicitly reject")
+        exit_code = result.returncode
+        stdout.extend(result.stdout); stderr.extend(result.stderr)
+    elapsed = time.monotonic_ns() - started
+    maximum = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+    rss_kib = maximum // 1024 if platform.system() == "Darwin" else maximum
+    if elapsed > bound["max_completion_ms"] * 1_000_000 or rss_kib > bound["max_rss_mib"] * 1024: fail("workload exceeded frozen resource bound")
+    return {"elapsed_ns": elapsed, "rss_kib": rss_kib, "exit_code": exit_code, "stdout_sha256": sha256_bytes(bytes(stdout)), "stderr_sha256": sha256_bytes(bytes(stderr)), "value": {"numerator": elapsed, "denominator": 1}}
 def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[str, Any]:
-    holder, workspace = _native_worktree()
-    try:
-        fixture = workspace / ".g009-fixture"
-        fixture.mkdir(mode=0o700)
-        (fixture / "input.txt").write_bytes(b"g009-safe-synthetic-fixture-v1\n")
-        home = fixture / "home"; home.mkdir(mode=0o700)
-        workloads: dict[str, Any] = {}
-        for item in profile_data["workloads"]:
-            argv = _command_for_workload(item, bin_dir)
-            bound = item["hard_bounds"]
-            def once() -> dict[str, Any]:
+    podway, podwayd = (bin_dir / "podway").resolve(), (bin_dir / "podwayd").resolve()
+    if not all(path.is_file() and os.access(path, os.X_OK) for path in (podway, podwayd)): fail("prebuilt podway binaries are missing or not executable")
+    fixture_digest = sha256_bytes(b"g009-safe-synthetic-fixture-v1\n")
+    def one(item: dict[str, Any]) -> dict[str, Any]:
+        holder, workspace = _native_worktree()
+        daemon: subprocess.Popen[bytes] | None = None
+        socket: Path | None = None
+        try:
+            fixture = Path(holder.name) / "fixture"; fixture.mkdir(mode=0o700)
+            home, temporary = fixture / "home", fixture / "tmp"
+            home.mkdir(mode=0o700); temporary.mkdir(mode=0o700)
+            env = {"HOME": str(home), "TMPDIR": str(temporary), "PATH": os.environ.get("PATH", "")}
+            if item["id"] == "G009-W01":
                 started = time.monotonic_ns()
-                try:
-                    result = subprocess.run(argv, cwd=workspace, capture_output=True, check=False,
-                                            timeout=bound["max_completion_ms"] / 1000,
-                                            env={"HOME": str(home), "PATH": os.environ.get("PATH", ""), "G009_FIXTURE": str(fixture)})
-                except subprocess.TimeoutExpired: fail(f"workload {item['id']} exceeded completion bound")
+                daemon, socket = _start_daemon(podwayd, workspace, env)
                 elapsed = time.monotonic_ns() - started
                 maximum = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
                 rss_kib = maximum // 1024 if platform.system() == "Darwin" else maximum
-                if result.returncode != 0: fail(f"workload {item['id']} returned {result.returncode}")
-                if elapsed > bound["max_completion_ms"] * 1_000_000: fail(f"workload {item['id']} exceeded completion bound")
-                if rss_kib > bound["max_rss_mib"] * 1024: fail(f"workload {item['id']} exceeded RSS bound")
-                return {"elapsed_ns": elapsed, "rss_kib": rss_kib, "exit_code": result.returncode,
-                        "stdout_sha256": sha256_bytes(result.stdout), "stderr_sha256": sha256_bytes(result.stderr),
-                        "value": {"numerator": elapsed, "denominator": 1}}
-            warm = [once() for _ in range(WARMUPS)]
-            measured = [once() for _ in range(SAMPLES)]
-            workloads[item["id"]] = {"kind": "latency", "warmups": [entry["value"] for entry in warm],
-                "samples": [entry["value"] for entry in measured], "resource": {"hard_bounds": bound, "warmups": warm, "samples": measured},
-                "workload_name": item["name"], "command_vector": list(item["command_vector"])}
-        return {"schema": "podway.g009.characterization/v1", "phase": phase, "target": TARGET,
-                "warmups": WARMUPS, "samples": SAMPLES, "fixture_sha256": sha256_file(fixture / "input.txt"),
-                "workloads": workloads}
-    finally:
-        _remove_worktree(workspace, holder)
+                if elapsed > item["hard_bounds"]["max_completion_ms"] * 1_000_000 or rss_kib > item["hard_bounds"]["max_rss_mib"] * 1024: fail("cold start exceeded frozen resource bound")
+                return {"elapsed_ns": elapsed, "rss_kib": rss_kib, "exit_code": 0, "stdout_sha256": sha256_bytes(b""), "stderr_sha256": sha256_bytes(b""), "value": {"numerator": elapsed, "denominator": 1}}
+            daemon, socket = _start_daemon(podwayd, workspace, env)
+            _prepare_task(podway, workspace, env, fixture)
+            if item["id"] == "G009-W06":
+                for index in range(32):
+                    _run((str(podway), "set", "target-audience", f"growth-{index}"), workspace, env)
+            linked = Path(holder.name) / "linked"
+            if item["id"] == "G009-W03":
+                _run(("git", "worktree", "add", "--detach", str(linked), "HEAD"), workspace, env)
+                _run((str(podway), "init"), linked, env)
+            return _measure(_adapter_commands(item["id"], podway, workspace, fixture), linked if item["id"] == "G009-W03" else workspace, env, item["hard_bounds"], item["id"] == "G009-W07")
+        finally:
+            try:
+                if daemon is not None and socket is not None: _stop_daemon(daemon, socket)
+            finally:
+                linked_path = Path(holder.name) / "linked"
+                if linked_path.exists():
+                    removal = subprocess.run(("git", "worktree", "remove", "--force", str(linked_path)), cwd=workspace, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+                    if removal.returncode != 0: fail("unable to remove linked workload worktree")
+                _remove_worktree(workspace, holder)
+    workloads: dict[str, Any] = {}
+    for item in profile_data["workloads"]:
+        warm = [one(item) for _ in range(WARMUPS)]
+        measured = [one(item) for _ in range(SAMPLES)]
+        workloads[item["id"]] = {"kind": "latency", "warmups": [entry["value"] for entry in warm],
+            "samples": [entry["value"] for entry in measured], "resource": {"hard_bounds": item["hard_bounds"], "warmups": warm, "samples": measured},
+            "workload_name": item["name"], "command_vector": list(item["command_vector"])}
+    return {"schema": "podway.g009.characterization/v1", "phase": phase, "target": TARGET,
+            "warmups": WARMUPS, "samples": SAMPLES, "fixture_sha256": fixture_digest, "workloads": workloads}
 
 
 def preflight(args: argparse.Namespace) -> None:
