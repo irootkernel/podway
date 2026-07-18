@@ -201,8 +201,8 @@ def _stop_daemon(process: subprocess.Popen[bytes], socket: Path) -> None:
             process.kill(); process.wait(timeout=5); fail("podwayd ignored SIGTERM")
     if socket.exists(): fail("podwayd left socket after termination")
 
-def _prepare_task(podway: Path, workspace: Path, env: dict[str, str], fixture: Path) -> None:
-    procedure = fixture / "procedure.yaml"
+def _prepare_task(podway: Path, workspace: Path, env: dict[str, str]) -> Path:
+    procedure = workspace / ".g009-procedure.yaml"
     procedure.write_text(
         """schema: podway.procedure/v1
 id: g009-benchmark
@@ -233,11 +233,12 @@ rework:
         workspace,
         env,
     )
+    return procedure
 
-def _adapter_commands(workload_id: str, podway: Path, workspace: Path, fixture: Path) -> tuple[tuple[str, ...], ...]:
-    artifact = fixture / "artifact.bin"; artifact.write_bytes(b"g009-artifact-v1\n" * 4096)
+def _adapter_commands(workload_id: str, podway: Path, workspace: Path) -> tuple[tuple[str, ...], ...]:
+    artifact = workspace / ".g009-artifact.bin"; artifact.write_bytes(b"g009-artifact-v1\n" * 4096)
     if workload_id == "G009-W02": return ((str(podway), "status"), (str(podway), "next"))
-    if workload_id == "G009-W03": return ((str(podway), "start", "--procedure", str(fixture / "procedure.yaml"), "--task", "G009-linked"),)
+    if workload_id == "G009-W03": return ((str(podway), "start", "--procedure", str(workspace / ".g009-procedure.yaml"), "--task", "G009-linked"),)
     if workload_id == "G009-W04": return ((str(podway), "set", "target-audience", "updated"),)
     if workload_id == "G009-W05": return ((str(podway), "attach", "draft-reference", str(artifact)),)
     if workload_id == "G009-W06": return ((str(podway), "reset", "--all", "--force", "--yes"), (str(podway), "status"))
@@ -289,15 +290,25 @@ def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[st
                 if elapsed > item["hard_bounds"]["max_completion_ms"] * 1_000_000 or rss_kib > item["hard_bounds"]["max_rss_mib"] * 1024: fail("cold start exceeded frozen resource bound")
                 return {"elapsed_ns": elapsed, "rss_kib": rss_kib, "exit_code": 0, "stdout_sha256": sha256_bytes(b""), "stderr_sha256": sha256_bytes(b""), "value": {"numerator": elapsed, "denominator": 1}}
             daemon, socket = _start_daemon(podwayd, workspace, env)
-            _prepare_task(podway, workspace, env, fixture)
+            procedure = _prepare_task(podway, workspace, env)
             if item["id"] == "G009-W06":
                 for index in range(32):
                     _run((str(podway), "set", "target-audience", f"growth-{index}"), workspace, env)
             linked = Path(holder.name) / "linked"
+            measured_workspace = workspace
             if item["id"] == "G009-W03":
                 _run(("git", "worktree", "add", "--detach", str(linked), "HEAD"), workspace, env)
                 _run((str(podway), "init"), linked, env)
-            return _measure(_adapter_commands(item["id"], podway, workspace, fixture), linked if item["id"] == "G009-W03" else workspace, env, item["hard_bounds"], item["id"] == "G009-W07")
+                linked_procedure = linked / procedure.name
+                linked_procedure.write_bytes(procedure.read_bytes())
+                measured_workspace = linked
+            return _measure(
+                _adapter_commands(item["id"], podway, measured_workspace),
+                measured_workspace,
+                env,
+                item["hard_bounds"],
+                item["id"] == "G009-W07",
+            )
         finally:
             try:
                 if daemon is not None and socket is not None: _stop_daemon(daemon, socket)
