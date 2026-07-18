@@ -222,6 +222,8 @@ stages:
         type: artifact
         prompt: Draft reference.
         required: false
+rework:
+  allow_return_to: any_previous
 """,
         encoding="utf-8",
     )
