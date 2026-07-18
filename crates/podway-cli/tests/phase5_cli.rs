@@ -2,7 +2,10 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::Shutdown,
-    os::unix::{fs::symlink, net::UnixListener},
+    os::unix::{
+        fs::{PermissionsExt, symlink},
+        net::UnixListener,
+    },
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
@@ -19,7 +22,7 @@ use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
 
 fn run(arguments: &[&str]) -> Output {
-    let isolated = format!("/tmp/podway-cli-phase5-no-daemon-{}", std::process::id());
+    let isolated = unique_fixture_path("podway-cli-phase5-no-daemon");
     Command::new(env!("CARGO_BIN_EXE_podway"))
         .args(arguments)
         .env("HOME", &isolated)
@@ -1897,12 +1900,26 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
                 assert_eq!(response["retryable"], false);
                 assert_eq!(response["exit_code"], 1);
             }
-            route if route.starts_with("daemon.") => {
-                assert_eq!(output.status.code(), Some(3));
+            "daemon.install" => {
+                assert_eq!(output.status.code(), Some(3), "{route}: {output:?}");
+                assert_eq!(response["schema"], "podway.error/v1");
+                assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
+                assert_eq!(response["retryable"], true);
+                assert_eq!(response["exit_code"], 3);
+            }
+            "daemon.logs" => {
+                assert_eq!(output.status.code(), Some(3), "{route}: {output:?}");
                 assert_eq!(response["schema"], "podway.error/v1");
                 assert_eq!(response["code"], "DAEMON_NOT_INSTALLED");
                 assert_eq!(response["retryable"], false);
                 assert_eq!(response["exit_code"], 3);
+            }
+            route if route.starts_with("daemon.") => {
+                assert!(
+                    output.status.success(),
+                    "{route} must complete locally when the service is absent: {output:?}"
+                );
+                assert_eq!(response["schema"], "podway.output/v1");
             }
             _ => {
                 assert_eq!(output.status.code(), Some(3), "{route}: {output:?}");
@@ -2494,22 +2511,37 @@ fn dynamic_completion_rejects_untyped_top_level_candidate_arrays_silently() {
 }
 
 #[test]
-fn service_routes_are_structured_not_installed_outcomes_until_g007() {
-    for arguments in [
-        &["--json", "daemon", "install"][..],
-        &["--json", "daemon", "uninstall", "--yes"][..],
-        &["--json", "daemon", "start"][..],
-        &["--json", "daemon", "stop"][..],
-        &["--json", "daemon", "restart"][..],
-        &["--json", "daemon", "status"][..],
-        &["--json", "daemon", "logs"][..],
-    ] {
-        let output = run(arguments);
-        assert_eq!(output.status.code(), Some(3));
-        let error = one_json(&output);
-        assert_eq!(error["schema"], "podway.error/v1");
-        assert_eq!(error["code"], "DAEMON_NOT_INSTALLED");
-    }
+fn daemon_status_routes_locally_without_daemon_ipc() {
+    let root = std::env::temp_dir().join(format!(
+        "pws-{}-{}",
+        std::process::id(),
+        FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let home = root.join("home");
+    let temporary = root.join("temporary");
+    fs::create_dir_all(&home).expect("service-route home must be created");
+    fs::create_dir_all(&temporary).expect("service-route temporary directory must be created");
+    let paths = ServiceRuntimePathsV1::for_user(&home, &temporary, geteuid().as_raw())
+        .expect("service-route paths must be valid");
+    fs::create_dir_all(paths.runtime_directory().as_path())
+        .expect("service-route runtime directory must be created");
+    let _listener = UnixListener::bind(paths.socket_path().as_path())
+        .expect("service-route daemon socket must be bindable");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+        .args(["--json", "daemon", "status"])
+        .env("HOME", &home)
+        .env("TMPDIR", &temporary)
+        .output()
+        .expect("podway binary must run");
+    let response = one_json(&output);
+
+    assert!(output.status.success(), "daemon status failed: {output:?}");
+    assert_eq!(response["schema"], "podway.output/v1");
+    assert_eq!(response["command"], "daemon.status");
+    assert_eq!(response["result"]["status"], "not_installed");
+
+    fs::remove_dir_all(root).expect("service-route fixture must be removed");
 }
 
 #[test]
@@ -2527,4 +2559,31 @@ fn hidden_dynamic_completion_silently_degrades_without_a_daemon() {
         "unavailable dynamic completion must not emit diagnostics"
     );
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn daemon_install_rejects_an_incompatible_binary_before_launchctl() {
+    let root = unique_fixture_path("podway-incompatible-daemon");
+    fs::create_dir_all(&root).expect("incompatible daemon fixture directory");
+    let binary = root.join("podwayd");
+    fs::write(&binary, b"#!/bin/sh\nprintf 'podwayd 9.0.0\\n'\n")
+        .expect("incompatible daemon fixture");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+        .expect("incompatible daemon fixture mode");
+
+    let binary_argument = binary.to_string_lossy().into_owned();
+    let output = run(&[
+        "--json",
+        "daemon",
+        "install",
+        "--daemon-path",
+        &binary_argument,
+    ]);
+    let response = one_json(&output);
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(response["code"], "DAEMON_VERSION_INCOMPATIBLE");
+    assert_eq!(response["retryable"], false);
+    assert!(!root.join("Library/LaunchAgents").exists());
+
+    fs::remove_dir_all(root).expect("remove incompatible daemon fixture");
 }

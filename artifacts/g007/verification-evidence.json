@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "kind": "g007-verification-attestation",
+  "goalId": "G007",
+  "contract": "Podway v0.1.0 Phase 6 direct offline macOS user LaunchAgent lifecycle",
+  "attestationStatus": "passed",
+  "verifiedAtUtc": "2026-07-17T16:05:44Z",
+  "verificationReport": {
+    "path": "artifacts/phase0/verification-logs/fb1320fec61b4c9d878cd5049209170d/verification-report.json",
+    "sha256": "c974ac111571c69759617757fa49e2fa2977c4a6c17b508ef71451fa3d333c0e",
+    "selfDigest": "51bc8acf0ef55c8b08d426c922e54541947c17d30837fb6f7cc95a9bfdaad53a",
+    "runId": "fb1320fec61b4c9d878cd5049209170d",
+    "status": "passed"
+  },
+  "targetedVerification": {
+    "status": "passed",
+    "commands": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "cargo test --workspace --all-targets --all-features",
+      "cargo test -p podway-service --test phase6_native_service",
+      "python3 tools/import_sot.py --check",
+      "python3 tools/verify_contracts.py --all",
+      "python3 tools/verify_verification_runner.py --all",
+      "python3 tools/run_verification.py --check",
+      "python3 tools/phase0_receipts.py --check",
+      "python3 tools/run_g005_vertical.py"
+    ]
+  },
+  "coverage": [
+    "direct offline CLI-to-service routing for install, uninstall, start, stop, restart, status, and logs",
+    "exact user LaunchAgent paths, label, plist, private permissions, and no root/system daemon",
+    "atomic install and metadata, idempotent replay, changed-binary update, and exact daemon version compatibility",
+    "socket reachability wait, explicit service mode, stale socket recovery, and bounded status fields",
+    "bounded recent logs, follow mode, 10 MiB rotation with five retained files, preservation and explicit purge",
+    "state-preserving uninstall and real filesystem plus fake-process native adapter harness"
+  ],
+  "aiSlopCleaner": {
+    "status": "passed",
+    "blockingFindings": [],
+    "advisoryFindings": [
+      "The additive ServiceManagerContractV1 uninstall_with_options default preserves backward compatibility by delegating to legacy uninstall; production ServiceManagerV1 overrides it and native tests cover purge semantics."
+    ],
+    "evidence": "Read-only cleanup sweep covered every G007 changed source and test file across fallback, duplication, dead code, abstraction, boundaries, UI/design, and missing-test categories; no blocking findings remained after bounded log reads, daemon version checks, socket reachability, rotation, and native regression coverage were added."
+  },
+  "validationBatch": {
+    "batchId": "VB001",
+    "role": "deferred-member",
+    "finalGoalId": "G009",
+    "deferredLanes": ["architectReview", "executorQa"]
+  }
+}

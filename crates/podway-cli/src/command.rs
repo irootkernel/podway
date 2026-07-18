@@ -5,11 +5,12 @@ mod completion;
 use std::{
     env,
     ffi::{OsStr, OsString},
-    fs,
-    io::{self, IsTerminal, Read, Write},
-    os::unix::ffi::OsStrExt,
+    fs::{self, File},
+    io::{self, IsTerminal, Read, Seek, SeekFrom, Write},
+    os::unix::{ffi::OsStrExt, net::UnixStream},
     path::{Component, Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use clap::{ArgAction, Args, Parser, Subcommand};
@@ -27,7 +28,7 @@ use podway_config::{
     ConfigError, MAX_PROCEDURE_DOCUMENT_BYTES_V1, ProcedureFormatV1, ProcedureWarningPolicyV1,
     ProcedureWarningV1, parse_procedure_v1,
 };
-use podway_core::{AttemptId, Revision, SessionId, Sha256Digest, WorkspaceId};
+use podway_core::{AttemptId, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId};
 use podway_presets::{PresetError, catalog_v1};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1,
@@ -36,7 +37,12 @@ use podway_protocol::{
     ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
     WorktreeSelectorWireV1,
 };
-use podway_service::ServiceRuntimePathsV1;
+use podway_service::{
+    InstallSpecV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1, ServiceClockV1,
+    ServiceErrorV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1,
+    ServiceOutcomeV1, ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1,
+    SystemLaunchctlRunnerV1, UninstallOptionsV1,
+};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -46,6 +52,8 @@ const DEFAULT_WAIT_TIMEOUT_MS: u64 = 30_000;
 const LOCAL_USAGE_EXIT: i32 = 2;
 const LOCAL_DAEMON_EXIT: i32 = 3;
 const LOCAL_CLIENT_EXIT: i32 = 6;
+const MAX_SERVICE_LOG_READ_BYTES: u64 = 10 * 1024 * 1024;
+const SERVICE_HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Parser)]
 #[command(
@@ -129,7 +137,7 @@ enum Command {
         #[command(subcommand)]
         command: PresetCommand,
     },
-    /// Service lifecycle grammar. Effects are intentionally deferred to G007.
+    /// Per-user LaunchAgent lifecycle commands executed directly through the service manager.
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
@@ -354,7 +362,7 @@ enum DaemonCommand {
         #[arg(long, action = ArgAction::SetTrue)]
         follow: bool,
         #[arg(long, value_name = "N")]
-        lines: Option<u32>,
+        lines: Option<u16>,
     },
 }
 
@@ -737,7 +745,7 @@ impl LocalFailure {
             "REQUEST_INVALID" | "REQUEST_TOO_LARGE" | "CONFIRMATION_REQUIRED" => {
                 (LOCAL_USAGE_EXIT, false)
             }
-            "DAEMON_NOT_INSTALLED" => (LOCAL_DAEMON_EXIT, false),
+            "DAEMON_NOT_INSTALLED" | "DAEMON_VERSION_INCOMPATIBLE" => (LOCAL_DAEMON_EXIT, false),
             "DAEMON_UNAVAILABLE" => (LOCAL_DAEMON_EXIT, true),
             "PRESET_NOT_FOUND"
             | "PROCEDURE_NOT_FOUND"
@@ -777,14 +785,6 @@ impl LocalFailure {
         )
     }
 
-    fn service_unavailable(command: &str) -> Self {
-        Self::catalog(
-            "DAEMON_NOT_INSTALLED",
-            "daemon lifecycle management is unavailable until the service adapter is installed",
-            command,
-        )
-    }
-
     fn response_invalid(message: impl Into<String>) -> Self {
         Self::catalog("INTERNAL_ERROR", message, "cli")
     }
@@ -819,6 +819,10 @@ enum RunResult {
         command: String,
         result: Map<String, Value>,
         text: String,
+    },
+    LogFollow {
+        path: PathBuf,
+        initial: String,
     },
 }
 
@@ -1233,11 +1237,355 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             if matches!(command, DaemonCommand::Uninstall { .. }) {
                 confirm_daemon_uninstall(cli)?;
             }
-            Err(LocalFailure::service_unavailable(daemon_command_name(
-                command,
-            )))
+            if matches!(command, DaemonCommand::Logs { follow: true, .. }) && cli.json {
+                return Err(LocalFailure::request_invalid(
+                    "--follow cannot be combined with --json",
+                ));
+            }
+            Ok(Some(execute_service_lifecycle(command)?))
         }
         _ => Ok(None),
+    }
+}
+
+fn execute_service_lifecycle(command: &DaemonCommand) -> Result<RunResult, LocalFailure> {
+    let command_name = daemon_command_name(command);
+    let paths = service_runtime_paths(command_name)?;
+    let clock = SystemServiceClock;
+    let runner = MacosServiceCommandRunnerV1::new(
+        StdServiceFilesystemV1,
+        SystemLaunchctlRunnerV1::default(),
+        clock,
+        geteuid().as_raw(),
+    )
+    .map_err(|_| LocalFailure::daemon_unavailable(command_name))?;
+    let manager = ServiceManagerV1::new(runner, clock, paths.clone());
+    execute_service_lifecycle_with_manager(command, &manager, &paths)
+}
+
+fn execute_service_lifecycle_with_manager(
+    command: &DaemonCommand,
+    manager: &impl ServiceManagerContractV1,
+    paths: &ServiceRuntimePathsV1,
+) -> Result<RunResult, LocalFailure> {
+    let command_name = daemon_command_name(command);
+    let result = match command {
+        DaemonCommand::Install { daemon_path } => {
+            let binary = resolve_daemon_executable(daemon_path.as_deref(), command_name)?;
+            verify_daemon_compatibility(binary.as_path(), command_name)?;
+            let spec = InstallSpecV1::new(binary, ServiceLabelV1::podwayd(), paths.clone());
+            let outcome = manager
+                .install(spec)
+                .map_err(|error| map_service_error(error, command_name))?;
+            if matches!(
+                outcome,
+                ServiceOutcomeV1::ChangedV1(_) | ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
+            ) {
+                wait_for_service_socket(paths.socket_path().as_path(), command_name)?;
+            }
+            service_outcome_result(command_name, outcome)
+        }
+        DaemonCommand::Uninstall { purge_logs } => service_outcome_result(
+            command_name,
+            manager
+                .uninstall_with_options(UninstallOptionsV1::new(*purge_logs))
+                .map_err(|error| map_service_error(error, command_name))?,
+        ),
+        DaemonCommand::Start => service_outcome_result(
+            command_name,
+            manager
+                .start()
+                .map_err(|error| map_service_error(error, command_name))?,
+        ),
+        DaemonCommand::Stop => service_outcome_result(
+            command_name,
+            manager
+                .stop()
+                .map_err(|error| map_service_error(error, command_name))?,
+        ),
+        DaemonCommand::Restart => service_outcome_result(
+            command_name,
+            manager
+                .restart()
+                .map_err(|error| map_service_error(error, command_name))?,
+        ),
+        DaemonCommand::Status => service_status_result(
+            command_name,
+            manager
+                .status()
+                .map_err(|error| map_service_error(error, command_name))?,
+            paths,
+        ),
+        DaemonCommand::Logs { follow, lines } => {
+            let query = LogQueryV1::new(ServiceLogStreamV1::DaemonV1)
+                .with_follow(*follow)
+                .with_lines(*lines);
+            let location = manager
+                .logs(query)
+                .map_err(|error| map_service_error(error, command_name))?;
+            service_logs_result(command_name, location, *follow, *lines)?
+        }
+    };
+    Ok(result)
+}
+
+fn service_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| LocalFailure::daemon_unavailable(command))?;
+    let temporary = env::var_os("TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
+        .map_err(|_| LocalFailure::daemon_unavailable(command))
+}
+
+fn resolve_daemon_executable(
+    daemon_path: Option<&Path>,
+    command: &str,
+) -> Result<LocalPlatformPathV1, LocalFailure> {
+    let path = match daemon_path {
+        Some(path) => path.to_path_buf(),
+        None => env::current_exe()
+            .map_err(|_| LocalFailure::daemon_unavailable(command))?
+            .with_file_name("podwayd"),
+    };
+    LocalPlatformPathV1::new(path).map_err(|_| {
+        LocalFailure::request_invalid("daemon executable path must be absolute and normalized")
+            .with_command(command)
+    })
+}
+fn verify_daemon_compatibility(binary: &Path, command: &str) -> Result<(), LocalFailure> {
+    let output = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    if !output.status.success() {
+        return Err(LocalFailure::daemon_unavailable(command));
+    }
+    let observed = std::str::from_utf8(&output.stdout)
+        .map_err(|_| LocalFailure::daemon_unavailable(command))?
+        .trim();
+    let expected = format!("podwayd {}", env!("CARGO_PKG_VERSION"));
+    if observed != expected {
+        return Err(LocalFailure::catalog(
+            "DAEMON_VERSION_INCOMPATIBLE",
+            format!(
+                "CLI {} is incompatible with {observed}",
+                env!("CARGO_PKG_VERSION")
+            ),
+            command,
+        ));
+    }
+    Ok(())
+}
+
+fn wait_for_service_socket(socket: &Path, command: &str) -> Result<(), LocalFailure> {
+    let deadline = Instant::now() + SERVICE_HEALTH_TIMEOUT;
+    while Instant::now() < deadline {
+        if UnixStream::connect(socket).is_ok() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(LocalFailure::daemon_unavailable(command))
+}
+
+fn service_outcome_result(command: &str, outcome: ServiceOutcomeV1) -> RunResult {
+    let outcome = outcome.kind().as_str();
+    local_result(
+        command,
+        json!({ "outcome": outcome }),
+        outcome.replace('_', " "),
+    )
+}
+
+fn service_status_result(
+    command: &str,
+    status: ServiceStatusV1,
+    paths: &ServiceRuntimePathsV1,
+) -> RunResult {
+    let (status, installed, loaded, process_id, socket_path, daemon_version) = match status {
+        ServiceStatusV1::NotInstalledV1(_) => ("not_installed", false, false, None, None, None),
+        ServiceStatusV1::RunningV1(running) => {
+            let daemon_version = running
+                .metadata()
+                .and_then(|metadata| daemon_binary_version(metadata.daemon_binary()));
+            (
+                "running",
+                true,
+                true,
+                running.process_id(),
+                Some(paths.socket_path().as_path().display().to_string()),
+                daemon_version,
+            )
+        }
+        ServiceStatusV1::StoppedV1(stopped) => {
+            let daemon_version = stopped
+                .metadata()
+                .and_then(|metadata| daemon_binary_version(metadata.daemon_binary()));
+            (
+                "stopped",
+                true,
+                false,
+                None,
+                Some(paths.socket_path().as_path().display().to_string()),
+                daemon_version,
+            )
+        }
+    };
+    let reachable = loaded
+        && socket_path
+            .as_deref()
+            .is_some_and(|path| UnixStream::connect(path).is_ok());
+    let protocol_versions =
+        if reachable && daemon_version.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
+            vec!["podway.ipc/v1"]
+        } else {
+            Vec::new()
+        };
+    local_result(
+        command,
+        json!({
+            "status": status,
+            "installed": installed,
+            "loaded": loaded,
+            "reachable": reachable,
+            "daemon_version": daemon_version,
+            "protocol_versions": protocol_versions,
+            "pid": process_id,
+            "process_id": process_id,
+            "started_at": Value::Null,
+            "uptime_ms": Value::Null,
+            "socket_path": socket_path,
+            "registered_worktree_count": Value::Null,
+            "active_scheduler_count": Value::Null,
+            "queued_job_count": Value::Null,
+            "running_job_count": Value::Null,
+        }),
+        status.replace('_', " "),
+    )
+}
+fn daemon_binary_version(binary: &Path) -> Option<String> {
+    let output = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    std::str::from_utf8(&output.stdout)
+        .ok()?
+        .trim()
+        .strip_prefix("podwayd ")
+        .map(str::to_owned)
+}
+
+fn service_logs_result(
+    command: &str,
+    location: podway_service::LogLocationV1,
+    follow: bool,
+    lines: Option<u16>,
+) -> Result<RunResult, LocalFailure> {
+    let path = location.path().as_path().to_path_buf();
+    let content = read_recent_log(&path, lines)?;
+    if follow {
+        Ok(RunResult::LogFollow {
+            path,
+            initial: content,
+        })
+    } else {
+        let path = path.display().to_string();
+        Ok(local_result(
+            command,
+            json!({ "path": path, "content": content }),
+            format!("{path}\n{content}"),
+        ))
+    }
+}
+
+fn read_recent_log(path: &Path, lines: Option<u16>) -> Result<String, LocalFailure> {
+    let mut file = File::open(path).map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
+    let mut content = String::new();
+    Read::by_ref(&mut file)
+        .take(MAX_SERVICE_LOG_READ_BYTES + 1)
+        .read_to_string(&mut content)
+        .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
+    if content.len() as u64 > MAX_SERVICE_LOG_READ_BYTES {
+        return Err(LocalFailure::daemon_unavailable("daemon.logs"));
+    }
+    Ok(match lines {
+        Some(lines) => content
+            .lines()
+            .rev()
+            .take(usize::from(lines))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => content,
+    })
+}
+
+fn stream_log_follow(
+    path: &Path,
+    initial: &str,
+    stdout: &mut dyn Write,
+) -> Result<(), LocalFailure> {
+    if !initial.is_empty() {
+        stdout
+            .write_all(initial.as_bytes())
+            .and_then(|_| stdout.write_all(b"\n"))
+            .and_then(|_| stdout.flush())
+            .map_err(|_| render_write_failure())?;
+    }
+    let mut file = File::open(path).map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
+    let mut offset = file
+        .seek(SeekFrom::End(0))
+        .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        thread::sleep(Duration::from_millis(250));
+        let length = file
+            .metadata()
+            .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?
+            .len();
+        if length < offset {
+            offset = file
+                .seek(SeekFrom::Start(0))
+                .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
+        }
+        while offset < length {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
+            if read == 0 {
+                break;
+            }
+            stdout
+                .write_all(&buffer[..read])
+                .and_then(|_| stdout.flush())
+                .map_err(|_| render_write_failure())?;
+            offset += read as u64;
+        }
+    }
+}
+
+fn map_service_error(error: ServiceErrorV1, command: &str) -> LocalFailure {
+    match error {
+        ServiceErrorV1::InvalidMetadataV1 { .. }
+        | ServiceErrorV1::PathSafetyV1(_)
+        | ServiceErrorV1::LogUnavailableV1 { .. } => LocalFailure::catalog(
+            "DAEMON_NOT_INSTALLED",
+            "the daemon service is not installed",
+            command,
+        ),
+        ServiceErrorV1::IoV1 { .. }
+        | ServiceErrorV1::LaunchctlFailureV1 { .. }
+        | ServiceErrorV1::PermissionDeniedV1 { .. }
+        | ServiceErrorV1::StaleOrUnexpectedProcessV1 { .. }
+        | ServiceErrorV1::TimeoutV1 { .. } => LocalFailure::daemon_unavailable(command),
     }
 }
 
@@ -1988,6 +2336,18 @@ trait LocalEnvelopeClock {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+struct SystemServiceClock;
+
+impl ServiceClockV1 for SystemServiceClock {
+    fn now(&self) -> UnixMillis {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        UnixMillis::new(millis.min(u128::from(u64::MAX)) as u64)
+    }
+}
+#[derive(Clone, Copy, Debug, Default)]
 struct SystemLocalEnvelopeClock;
 
 impl LocalEnvelopeClock for SystemLocalEnvelopeClock {
@@ -2098,6 +2458,23 @@ fn render_result_with_clock_and_writers(
                 return LOCAL_CLIENT_EXIT;
             }
             0
+        }
+        RunResult::LogFollow { path, initial } => {
+            if json_output {
+                return render_local_failure_with_clock_and_writers(
+                    LocalFailure::request_invalid("--follow cannot be combined with --json"),
+                    true,
+                    clock,
+                    stdout,
+                    stderr,
+                );
+            }
+            match stream_log_follow(path, initial, stdout) {
+                Ok(()) => 0,
+                Err(failure) => render_local_failure_with_clock_and_writers(
+                    failure, false, clock, stdout, stderr,
+                ),
+            }
         }
     }
 }
@@ -2611,7 +2988,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Procedures:\n  podway procedure validate .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --task 'perform work'"
         }
         "daemon" => {
-            "Daemon lifecycle grammar:\n  podway daemon status\n  podway daemon install --daemon-path /absolute/podwayd\nLifecycle effects are unavailable until G007."
+            "Daemon lifecycle grammar:\n  podway daemon status\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
         }
         "artifacts" => {
             "Artifacts:\n  podway attach report report.md --media-type text/markdown\n  podway attach report --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
@@ -2740,8 +3117,9 @@ mod tests {
 
     use super::{
         Cli, Command, LocalEnvelopeClock, LocalFailure, local_generated_at, local_result,
-        parse_timeout_millis, render_local_failure_with_clock_and_writers,
-        render_result_with_clock_and_writers,
+        map_service_error, parse_timeout_millis, render_local_failure_with_clock_and_writers,
+        render_result_with_clock_and_writers, resolve_daemon_executable, service_outcome_result,
+        service_status_result,
     };
     use clap::Parser;
     use serde_json::json;
@@ -2863,5 +3241,136 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn daemon_service_results_and_errors_use_local_contracts() {
+        use podway_core::UnixMillis;
+        use podway_service::{
+            ServiceChangedV1, ServiceErrorV1, ServiceNotInstalledV1, ServiceOutcomeV1,
+            ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1,
+        };
+        let paths = ServiceRuntimePathsV1::from_directories(
+            "/tmp/podway-cli-tests/LaunchAgents",
+            "/tmp/podway-cli-tests/ApplicationSupport",
+            "/tmp/podway-cli-tests/Logs",
+            "/tmp/podway-cli-tests/runtime",
+        )
+        .expect("service status fixture paths");
+
+        let changed = service_outcome_result(
+            "daemon.start",
+            ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(UnixMillis::new(1), None)),
+        );
+        let status = service_status_result(
+            "daemon.status",
+            ServiceStatusV1::RunningV1(ServiceRunningV1::new(UnixMillis::new(1), Some(42), None)),
+            &paths,
+        );
+
+        match changed {
+            super::RunResult::Local {
+                command, result, ..
+            } => {
+                assert_eq!(command, "daemon.start");
+                assert_eq!(result["outcome"], "changed");
+            }
+            _ => panic!("service outcomes must remain local results"),
+        }
+        match status {
+            super::RunResult::Local {
+                command, result, ..
+            } => {
+                assert_eq!(command, "daemon.status");
+                assert_eq!(result["status"], "running");
+                assert_eq!(result["process_id"], 42);
+            }
+            _ => panic!("service status must remain local results"),
+        }
+
+        let not_installed = map_service_error(
+            ServiceErrorV1::LogUnavailableV1 {
+                message: "missing".to_owned(),
+            },
+            "daemon.logs",
+        );
+        assert_eq!(not_installed.code, "DAEMON_NOT_INSTALLED");
+        let unavailable = map_service_error(
+            ServiceErrorV1::IoV1 {
+                operation: None,
+                message: "launchctl missing".to_owned(),
+            },
+            "daemon.start",
+        );
+        assert_eq!(unavailable.code, "DAEMON_UNAVAILABLE");
+
+        let stopped = service_status_result(
+            "daemon.status",
+            ServiceStatusV1::NotInstalledV1(ServiceNotInstalledV1::new(UnixMillis::new(1))),
+            &paths,
+        );
+        match stopped {
+            super::RunResult::Local { result, .. } => {
+                assert_eq!(result["status"], "not_installed");
+            }
+            _ => panic!("service status must remain local results"),
+        }
+    }
+    #[test]
+    fn daemon_install_path_resolution_rejects_non_platform_paths() {
+        let binary =
+            resolve_daemon_executable(Some(std::path::Path::new("/opt/podwayd")), "daemon.install")
+                .expect("absolute daemon path must be accepted");
+        assert_eq!(binary.as_path(), std::path::Path::new("/opt/podwayd"));
+
+        let failure =
+            resolve_daemon_executable(Some(std::path::Path::new("podwayd")), "daemon.install")
+                .expect_err("relative daemon path must be rejected");
+        assert_eq!(failure.code, "REQUEST_INVALID");
+        assert_eq!(failure.command, "daemon.install");
+    }
+}
+
+#[cfg(test)]
+mod phase6_health_tests {
+    use std::{fs, os::unix::net::UnixListener};
+
+    use podway_core::UnixMillis;
+    use podway_service::{ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1};
+
+    use super::{service_status_result, wait_for_service_socket};
+
+    #[test]
+    fn socket_health_wait_and_status_reachability_use_a_real_local_socket() {
+        let runtime =
+            std::env::temp_dir().join(format!("podway-cli-health-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&runtime);
+        fs::create_dir_all(&runtime).expect("health fixture runtime");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            runtime.join("LaunchAgents"),
+            runtime.join("ApplicationSupport"),
+            runtime.join("Logs"),
+            &runtime,
+        )
+        .expect("health fixture service paths");
+        let listener =
+            UnixListener::bind(paths.socket_path().as_path()).expect("health fixture socket");
+
+        wait_for_service_socket(paths.socket_path().as_path(), "daemon.install")
+            .expect("bound socket is reachable");
+        let result = service_status_result(
+            "daemon.status",
+            ServiceStatusV1::RunningV1(ServiceRunningV1::new(UnixMillis::new(1), Some(42), None)),
+            &paths,
+        );
+        match result {
+            super::RunResult::Local { result, .. } => {
+                assert_eq!(result["reachable"], true);
+                assert_eq!(result["loaded"], true);
+            }
+            _ => panic!("service status must remain local"),
+        }
+
+        drop(listener);
+        fs::remove_dir_all(runtime).expect("remove health fixture");
     }
 }

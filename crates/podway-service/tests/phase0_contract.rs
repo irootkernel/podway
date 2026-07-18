@@ -2,13 +2,21 @@
 //!
 //! Requirements: ARC-008, SEC-002, OPS-001, OPS-002.
 
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
 use podway_core::UnixMillis;
 use podway_service::{
-    FixedServiceClockV1, InstallSpecV1, LocalPlatformPathV1, LogLocationV1, LogQueryV1,
-    RecordingServiceCommandRunnerV1, RecordingServiceManagerV1, ServiceClockV1,
-    ServiceCommandResultV1, ServiceCommandV1, ServiceErrorV1, ServiceLogStreamV1,
-    ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1,
-    ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1,
+    FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1, LaunchctlRunnerV1, LocalPlatformPathV1,
+    LogLocationV1, LogQueryV1, MacosServiceCommandRunnerV1, RecordingServiceCommandRunnerV1,
+    RecordingServiceManagerV1, ServiceClockV1, ServiceCommandResultV1, ServiceCommandRunnerV1,
+    ServiceCommandV1, ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1,
+    ServiceLogStreamV1, ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1,
+    ServicePathErrorV1, ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1,
+    UninstallOptionsV1, launch_agent_plist_v1,
 };
 
 fn service_paths() -> ServiceRuntimePathsV1 {
@@ -460,4 +468,539 @@ fn arc_008_service_v1_recording_runner_exhaustion_fails_explicitly() {
         Err(_) => panic!("recording runner state must be readable"),
     };
     assert_eq!(commands.len(), 1);
+}
+#[derive(Clone, Default)]
+struct Phase6Filesystem {
+    files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+impl Phase6Filesystem {
+    fn record(&self, event: impl Into<String>) {
+        self.events.lock().expect("test lock").push(event.into());
+    }
+}
+
+impl ServiceFilesystemV1 for Phase6Filesystem {
+    fn exists(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
+        Ok(self.files.lock().expect("test lock").contains_key(path))
+    }
+
+    fn is_executable(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
+        Ok(path.starts_with("/Applications/Podway/"))
+    }
+
+    fn create_directory(&self, path: &Path, _: u32) -> Result<(), ServiceFilesystemErrorV1> {
+        self.record(format!("mkdir:{}", path.display()));
+        Ok(())
+    }
+
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>, ServiceFilesystemErrorV1> {
+        self.files
+            .lock()
+            .expect("test lock")
+            .get(path)
+            .cloned()
+            .ok_or_else(|| ServiceFilesystemErrorV1::other("not found"))
+    }
+
+    fn write_atomically(
+        &self,
+        path: &Path,
+        contents: &[u8],
+        _: u32,
+    ) -> Result<(), ServiceFilesystemErrorV1> {
+        self.record(format!("write:{}", path.display()));
+        self.files
+            .lock()
+            .expect("test lock")
+            .insert(path.to_path_buf(), contents.to_vec());
+        Ok(())
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), ServiceFilesystemErrorV1> {
+        self.record(format!("remove:{}", path.display()));
+        self.files.lock().expect("test lock").remove(path);
+        Ok(())
+    }
+
+    fn remove_directory_contents(&self, path: &Path) -> Result<(), ServiceFilesystemErrorV1> {
+        self.record(format!("purge:{}", path.display()));
+        Ok(())
+    }
+
+    fn rotate_file(&self, path: &Path, _: u64, _: u8) -> Result<(), ServiceFilesystemErrorV1> {
+        self.record(format!("rotate:{}", path.display()));
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct Phase6Launchctl {
+    events: Arc<Mutex<Vec<String>>>,
+    bootstrap_status: i32,
+    print_status: i32,
+}
+
+impl LaunchctlRunnerV1 for Phase6Launchctl {
+    fn run(&self, arguments: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
+        self.events
+            .lock()
+            .expect("test lock")
+            .push(format!("launchctl:{}", arguments.join(" ")));
+        Ok(LaunchctlOutputV1 {
+            exit_status: if arguments
+                .first()
+                .is_some_and(|argument| argument == "bootstrap")
+            {
+                self.bootstrap_status
+            } else if arguments
+                .first()
+                .is_some_and(|argument| argument == "print")
+            {
+                self.print_status
+            } else {
+                0
+            },
+            stdout: String::new(),
+            stderr: "scripted launchctl failure".to_owned(),
+        })
+    }
+}
+
+fn phase6_spec() -> InstallSpecV1 {
+    InstallSpecV1::new(
+        LocalPlatformPathV1::new("/Applications/Podway/podwayd").expect("fixture binary path"),
+        podway_service::ServiceLabelV1::podwayd(),
+        service_paths(),
+    )
+}
+
+#[test]
+fn phase6_install_orders_atomic_plist_bootstrap_and_metadata() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_000)),
+        501,
+    )
+    .expect("non-root service runner");
+
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_000),
+            spec: phase6_spec(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+    let events = filesystem.events.lock().expect("test lock").clone();
+    let plist = service_paths()
+        .launch_agent_path()
+        .as_path()
+        .display()
+        .to_string();
+    let metadata = service_paths()
+        .metadata_index_path()
+        .as_path()
+        .display()
+        .to_string();
+    let plist_write = events
+        .iter()
+        .position(|event| event == &format!("write:{plist}"))
+        .expect("plist write");
+    let bootstrap = events
+        .iter()
+        .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
+        .expect("bootstrap");
+    let metadata_write = events
+        .iter()
+        .position(|event| event == &format!("write:{metadata}"))
+        .expect("metadata write");
+    assert!(plist_write < bootstrap && bootstrap < metadata_write);
+}
+
+#[test]
+fn phase6_install_launchctl_failure_does_not_record_metadata() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 1,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_001)),
+        501,
+    )
+    .expect("non-root service runner");
+
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_001),
+            spec: phase6_spec(),
+        }),
+        Err(ServiceErrorV1::LaunchctlFailureV1 {
+            operation: ServiceOperationV1::Install,
+            ..
+        })
+    ));
+    assert!(
+        !filesystem
+            .files
+            .lock()
+            .expect("test lock")
+            .contains_key(service_paths().metadata_index_path().as_path())
+    );
+}
+
+#[test]
+fn phase6_install_is_idempotent_and_plist_is_canonical() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_002)),
+        501,
+    )
+    .expect("non-root service runner");
+    let command = ServiceCommandV1::Install {
+        requested_at: UnixMillis::new(3_002),
+        spec: phase6_spec(),
+    };
+
+    runner.run(command.clone()).expect("first install succeeds");
+    let event_count = filesystem.events.lock().expect("test lock").len();
+    assert!(matches!(
+        runner.run(command),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
+        ))
+    ));
+    assert_eq!(
+        filesystem.events.lock().expect("test lock").len(),
+        event_count
+    );
+
+    let plist = String::from_utf8(launch_agent_plist_v1(
+        Path::new("/Applications/Podway/podwayd"),
+        service_paths().log_path().as_path(),
+    ))
+    .expect("plist UTF-8");
+    assert!(plist.contains("<string>/Applications/Podway/podwayd</string>"));
+    assert!(plist.contains("<string>--service</string>"));
+    assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
+    assert!(plist.contains("<key>SuccessfulExit</key>\n    <false/>"));
+}
+#[test]
+fn phase6_restart_boots_out_removes_stale_socket_then_bootstraps() {
+    let filesystem = Phase6Filesystem::default();
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().launch_agent_path().as_path().to_path_buf(),
+        b"plist".to_vec(),
+    );
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().socket_path().as_path().to_path_buf(),
+        Vec::new(),
+    );
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_003)),
+        501,
+    )
+    .expect("non-root service runner");
+
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Restart {
+            requested_at: UnixMillis::new(3_003),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+    let events = filesystem.events.lock().expect("test lock").clone();
+    let bootout = events
+        .iter()
+        .position(|event| event.starts_with("launchctl:bootout gui/501/"))
+        .expect("bootout");
+    let remove = events
+        .iter()
+        .position(|event| {
+            event
+                == &format!(
+                    "remove:{}",
+                    service_paths().socket_path().as_path().display()
+                )
+        })
+        .expect("socket cleanup");
+    let bootstrap = events
+        .iter()
+        .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
+        .expect("bootstrap");
+    assert!(bootout < remove && remove < bootstrap);
+}
+
+#[test]
+fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cleanup() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_004)),
+        501,
+    )
+    .expect("non-root service runner");
+    runner
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_004),
+            spec: phase6_spec(),
+        })
+        .expect("initial install");
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().socket_path().as_path().to_path_buf(),
+        Vec::new(),
+    );
+    let changed = InstallSpecV1::new(
+        LocalPlatformPathV1::new("/Applications/Podway/podwayd-next").expect("fixture binary"),
+        podway_service::ServiceLabelV1::podwayd(),
+        service_paths(),
+    );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Update {
+            requested_at: UnixMillis::new(3_004),
+            spec: changed,
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+    let events = filesystem.events.lock().expect("test lock").clone();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.starts_with("launchctl:bootout gui/501/"))
+    );
+    assert!(events.iter().any(|event| event
+        == &format!(
+            "remove:{}",
+            service_paths().socket_path().as_path().display()
+        )));
+    let plist = filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .get(service_paths().launch_agent_path().as_path())
+        .cloned()
+        .expect("updated plist");
+    assert!(
+        String::from_utf8(plist)
+            .expect("plist UTF-8")
+            .contains("/Applications/Podway/podwayd-next")
+    );
+}
+
+#[test]
+fn phase6_start_stop_status_and_logs_cover_installed_lifecycle_states() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 1,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_005)),
+        501,
+    )
+    .expect("non-root service runner");
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Start {
+            requested_at: UnixMillis::new(3_005),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::NotInstalledV1(_)
+        ))
+    ));
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().launch_agent_path().as_path().to_path_buf(),
+        b"plist".to_vec(),
+    );
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().metadata_index_path().as_path().to_path_buf(),
+        br#"{"version":1,"label":"dev.podway.podwayd","daemon_binary":"/Applications/Podway/podwayd","installed_at":1,"updated_at":1}"#.to_vec(),
+    );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Start {
+            requested_at: UnixMillis::new(3_005),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Stop {
+            requested_at: UnixMillis::new(3_005),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::StoppedV1(_)
+        ))
+    ));
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_005),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Status(ServiceStatusV1::StoppedV1(
+            _
+        )))
+    ));
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().log_path().as_path().to_path_buf(),
+        b"structured log".to_vec(),
+    );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Logs {
+            requested_at: UnixMillis::new(3_005),
+            paths: service_paths(),
+            query: LogQueryV1::new(ServiceLogStreamV1::DaemonV1)
+                .with_lines(Some(50))
+                .with_follow(true),
+        }),
+        Ok(ServiceCommandResultV1::LogLocation(_))
+    ));
+}
+
+#[test]
+fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_006)),
+        501,
+    )
+    .expect("non-root service runner");
+    for path in [
+        service_paths().launch_agent_path().as_path(),
+        service_paths().metadata_index_path().as_path(),
+        service_paths().socket_path().as_path(),
+        service_paths().global_lock_path().as_path(),
+        service_paths().workspace_registry_path().as_path(),
+        service_paths().log_path().as_path(),
+    ] {
+        filesystem
+            .files
+            .lock()
+            .expect("test lock")
+            .insert(path.to_path_buf(), Vec::new());
+    }
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Uninstall {
+            requested_at: UnixMillis::new(3_006),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+    let files = filesystem.files.lock().expect("test lock");
+    assert!(files.contains_key(service_paths().workspace_registry_path().as_path()));
+    assert!(files.contains_key(service_paths().log_path().as_path()));
+    drop(files);
+    assert!(matches!(
+        runner.run(ServiceCommandV1::UninstallWithOptions {
+            requested_at: UnixMillis::new(3_006),
+            paths: service_paths(),
+            options: UninstallOptionsV1::new(true),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+    assert!(
+        filesystem
+            .events
+            .lock()
+            .expect("test lock")
+            .iter()
+            .any(|event| event.starts_with("purge:"))
+    );
+}
+
+#[test]
+fn phase6_runtime_socket_path_falls_back_when_tmpdir_exceeds_unix_socket_limit() {
+    let temporary_directory = format!("/{}", "a".repeat(120));
+    let paths = ServiceRuntimePathsV1::for_user("/Users/podway", temporary_directory, 501)
+        .expect("fallback runtime path");
+    assert_eq!(
+        paths.socket_path().as_path(),
+        Path::new("/tmp/podway-501/podwayd.sock")
+    );
+}
+
+#[test]
+fn phase6_status_rejects_incompatible_metadata_and_reports_running_when_loaded() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_007)),
+        501,
+    )
+    .expect("non-root service runner");
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().metadata_index_path().as_path().to_path_buf(),
+        br#"{"version":2,"label":"dev.podway.podwayd","daemon_binary":"/Applications/Podway/podwayd","installed_at":1,"updated_at":1}"#.to_vec(),
+    );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_007),
+            paths: service_paths(),
+        }),
+        Err(ServiceErrorV1::InvalidMetadataV1 { .. })
+    ));
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().metadata_index_path().as_path().to_path_buf(),
+        br#"{"version":1,"label":"dev.podway.podwayd","daemon_binary":"/Applications/Podway/podwayd","installed_at":1,"updated_at":1}"#.to_vec(),
+    );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_007),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Status(ServiceStatusV1::RunningV1(
+            _
+        )))
+    ));
 }

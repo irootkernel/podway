@@ -109,3 +109,23 @@ fn podwayd_sigterm_drains_and_removes_its_owned_socket() {
         "graceful shutdown must remove only the socket owned by this process"
     );
 }
+
+#[test]
+fn podwayd_service_and_version_modes_are_explicit() {
+    let version = Command::new(env!("CARGO_BIN_EXE_podwayd"))
+        .arg("--version")
+        .output()
+        .expect("podwayd version process must run");
+    assert!(version.status.success());
+    assert_eq!(
+        String::from_utf8(version.stdout).expect("version output is UTF-8"),
+        format!("podwayd {}\n", env!("CARGO_PKG_VERSION"))
+    );
+
+    let invalid = Command::new(env!("CARGO_BIN_EXE_podwayd"))
+        .arg("--unknown")
+        .output()
+        .expect("podwayd invalid-argument process must run");
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("usage: podwayd"));
+}

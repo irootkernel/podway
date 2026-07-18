@@ -24,6 +24,20 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let mut arguments = env::args_os().skip(1);
+    match (arguments.next(), arguments.next()) {
+        (Some(argument), None) if argument == "--version" => {
+            println!("podwayd {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        (None, None) => {}
+        (Some(argument), None) if argument == "--service" => {}
+        _ => return Err("usage: podwayd [--service|--version]".into()),
+    }
+    run_service()
+}
+
+fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("HOME is not set")?;
