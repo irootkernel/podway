@@ -250,7 +250,8 @@ def _measure(argvs: tuple[tuple[str, ...], ...], cwd: Path, env: dict[str, str],
     for argv in argvs:
         try: result = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, timeout=bound["max_completion_ms"] / 1000, env=env)
         except subprocess.TimeoutExpired: fail("workload command timed out")
-        if result.returncode != 0 and not allow_rejection: fail(f"native workload command failed ({result.returncode})")
+        if result.returncode != 0 and not allow_rejection:
+            fail(f"native workload command failed ({result.returncode}): {' '.join(argv[1:3])}")
         if result.returncode != 0 and (not result.stderr or result.returncode < 1): fail("maximum-input command did not explicitly reject")
         exit_code = result.returncode
         stdout.extend(result.stdout); stderr.extend(result.stderr)
