@@ -76,10 +76,16 @@ def validate_traceability(path: Path) -> None:
 
 def validate_crash_registry(path: Path) -> None:
     value = load_json(path)
-    if not isinstance(value, dict): raise QualificationError("invalid crash registry")
-    coverage = value.get("coverage")
-    if isinstance(coverage, dict) and coverage.get("percent") not in (100, "100"):
+    if not isinstance(value, dict) or not isinstance(value.get("coverage"), dict):
+        raise QualificationError("crash registry has no machine-verifiable coverage")
+    coverage = value["coverage"]
+    required, covered = coverage.get("required"), coverage.get("covered")
+    if not isinstance(required, list) or not isinstance(covered, list) or not required or any(not isinstance(item, str) or not item for item in required + covered):
         raise QualificationError("crash coverage is incomplete")
+    if len(required) != len(set(required)) or len(covered) != len(set(covered)) or set(required) != set(covered):
+        raise QualificationError("crash coverage does not exactly cover required surfaces")
+    if coverage.get("percent") != 100 or set(coverage) != {"required", "covered", "percent"}:
+        raise QualificationError("crash coverage is not exact")
 
 def validate_final(rc_path: Path, index_path: Path, review_path: Path, evidence_root: Path) -> None:
     rc = load_rc(rc_path)
@@ -95,11 +101,16 @@ def validate_final(rc_path: Path, index_path: Path, review_path: Path, evidence_
     if not isinstance(rows, list) or not rows: raise QualificationError("final index has no evidence")
     resolved_root = evidence_root.resolve()
     for row in rows:
-        if not isinstance(row, dict) or not isinstance(row.get("path"), str) or not isinstance(row.get("sha256"), str):
+        if not isinstance(row, dict) or set(row) != {"gate_id", "path", "sha256", "rc_sha256", "target", "source", "blockers"}:
             raise QualificationError("malformed indexed evidence")
+        if row["rc_sha256"] != digest or row["target"] != TARGET or row["source"] != source or row["blockers"] != []:
+            raise QualificationError("indexed evidence is not bound to current RC")
         artifact = (resolved_root / row["path"]).resolve()
-        if not artifact.is_relative_to(resolved_root) or not artifact.is_file() or sha256_file(artifact) != row["sha256"]:
+        if not artifact.is_relative_to(resolved_root) or not artifact.is_file() or artifact.is_symlink() or sha256_file(artifact) != row["sha256"]:
             raise QualificationError("indexed evidence drift")
+        payload = load_json(artifact)
+        if not isinstance(payload, dict) or payload.get("rc_sha256") != digest or payload.get("target") != TARGET or payload.get("source") != source or payload.get("blockers") != []:
+            raise QualificationError("indexed gate artifact is semantically unbound")
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)

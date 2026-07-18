@@ -108,12 +108,30 @@ def safe_extract_member(name: str) -> PurePosixPath:
     return candidate
 
 def atomic_immutable_json(path: Path, value: Any) -> str:
-    if not path.is_relative_to(EVIDENCE_ROOT): fail(f"evidence path outside {EVIDENCE_ROOT}: {path}")
+    root = EVIDENCE_ROOT.resolve()
+    try:
+        relative = path.relative_to(EVIDENCE_ROOT)
+    except ValueError:
+        fail(f"evidence path outside {EVIDENCE_ROOT}: {path}")
+    if any(part in ("", ".", "..") for part in relative.parts):
+        fail("unsafe evidence path")
+    current = EVIDENCE_ROOT
+    if current.is_symlink():
+        fail("evidence root may not be a symlink")
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.exists() and (current.is_symlink() or not current.is_dir()):
+            fail(f"unsafe evidence directory: {current}")
+        if not current.exists():
+            current.mkdir(mode=0o755)
+    if path.exists() and path.is_symlink():
+        fail(f"evidence target may not be a symlink: {path}")
+    if path.parent.resolve() != (root / relative.parent).resolve() or not path.parent.resolve().is_relative_to(root):
+        fail("evidence path traversal")
     payload = canonical_json(value)
     digest = sha256_bytes(payload)
-    path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        if bounded_bytes(path) != payload: fail(f"immutable evidence already differs: {path}")
+        if not path.is_file() or bounded_bytes(path) != payload: fail(f"immutable evidence already differs: {path}")
         return digest
     fd, temp_name = tempfile.mkstemp(prefix=".g009-", dir=path.parent)
     try:
@@ -122,7 +140,7 @@ def atomic_immutable_json(path: Path, value: Any) -> str:
         os.chmod(temp_name, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
         try: os.link(temp_name, path)
         except FileExistsError:
-            if bounded_bytes(path) != payload: fail(f"immutable evidence race differs: {path}")
+            if path.is_symlink() or not path.is_file() or bounded_bytes(path) != payload: fail(f"immutable evidence race differs: {path}")
         finally: os.unlink(temp_name)
     finally:
         if os.path.exists(temp_name): os.unlink(temp_name)

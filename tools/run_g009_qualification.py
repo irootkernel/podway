@@ -23,7 +23,7 @@ from g009_common import (EVIDENCE_ROOT, ROOT, TARGET, ARCHIVE_ROOT, Qualificatio
     bounded_bytes, canonical_json, content_addressed_json, fail, host_manifest, load_json,
     require_arm64_host, safe_relative, sha256_bytes, sha256_file)
 from g009_performance import SAMPLES, WARMUPS, characterize as calculate_baseline, evaluate_holdout, thresholds
-from g009_release import inspect_archive, load_rc
+from g009_release import inspect_archive, load_rc, require_bound_file
 
 # User input never supplies executable vectors. These logical gate identifiers are the
 # complete subprocess allowlist; profile declarations are checked against this map.
@@ -209,7 +209,8 @@ def _native_worktree() -> tuple[tempfile.TemporaryDirectory[str], Path]:
 
 
 def _remove_worktree(path: Path, holder: tempfile.TemporaryDirectory[str]) -> None:
-    subprocess.run(("git", "worktree", "remove", "--force", str(path)), cwd=ROOT, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+    result = subprocess.run(("git", "worktree", "remove", "--force", str(path)), cwd=ROOT, capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+    if result.returncode != 0 or path.exists(): fail("unable to remove isolated workload worktree")
     holder.cleanup()
 
 
@@ -297,25 +298,29 @@ def _adapter_commands(workload_id: str, podway: Path, workspace: Path) -> tuple[
     if workload_id == "G009-W07": return ((str(podway), "set", "target-audience", "x" * 65536),)
     fail(f"unknown workload adapter: {workload_id}")
 
-def _measure(argvs: tuple[tuple[str, ...], ...], cwd: Path, env: dict[str, str], bound: dict[str, int], allow_rejection: bool = False) -> dict[str, Any]:
-    started = time.monotonic_ns(); stdout = bytearray(); stderr = bytearray(); exit_code = 0
+def _measure(argvs: tuple[tuple[str, ...], ...], cwd: Path, env: dict[str, str], bound: dict[str, int], allow_rejection: bool = False, daemon: subprocess.Popen[bytes] | None = None) -> dict[str, Any]:
+    started = time.monotonic_ns(); stdout = bytearray(); stderr = bytearray(); exit_code = 0; rss_kib = 0
     for argv in argvs:
+        if daemon is not None and daemon.poll() is not None: fail("podwayd exited unexpectedly during workload")
         try: result = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, timeout=bound["max_completion_ms"] / 1000, env=env)
         except subprocess.TimeoutExpired: fail("workload command timed out")
         if result.returncode != 0 and not allow_rejection:
             fail(f"native workload command failed ({result.returncode}): {' '.join(argv[1:3])}")
-        if result.returncode != 0 and (not result.stderr or result.returncode < 1): fail("maximum-input command did not explicitly reject")
+        if allow_rejection and result.returncode != 0 and (result.returncode != 2 or b"validation" not in result.stderr.lower()):
+            fail("maximum-input command did not return the exact validation rejection")
+        if daemon is not None:
+            sample = subprocess.run(("ps", "-o", "rss=", "-p", str(daemon.pid)), capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+            if sample.returncode != 0 or not sample.stdout.strip().isdigit(): fail("cannot measure live daemon RSS")
+            rss_kib = max(rss_kib, int(sample.stdout.strip()))
         exit_code = result.returncode
         stdout.extend(result.stdout); stderr.extend(result.stderr)
     elapsed = time.monotonic_ns() - started
-    maximum = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
-    rss_kib = maximum // 1024 if platform.system() == "Darwin" else maximum
     if elapsed > bound["max_completion_ms"] * 1_000_000 or rss_kib > bound["max_rss_mib"] * 1024: fail("workload exceeded frozen resource bound")
     return {"elapsed_ns": elapsed, "rss_kib": rss_kib, "exit_code": exit_code, "stdout_sha256": sha256_bytes(bytes(stdout)), "stderr_sha256": sha256_bytes(bytes(stderr)), "value": {"numerator": elapsed, "denominator": 1}}
 def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[str, Any]:
     podway, podwayd = (bin_dir / "podway").resolve(), (bin_dir / "podwayd").resolve()
     if not all(path.is_file() and os.access(path, os.X_OK) for path in (podway, podwayd)): fail("prebuilt podway binaries are missing or not executable")
-    fixture_digest = sha256_bytes(b"g009-safe-synthetic-fixture-v1\n")
+    fixture_digest = sha256_bytes(canonical_json({"schema": "podway.g009.fixture-manifest/v1", "fixture": "g009-safe-synthetic-fixture-v1", "adapters": sorted(WORKLOAD_ADAPTER_IDS)}))
     def one(item: dict[str, Any]) -> dict[str, Any]:
         holder, workspace = _native_worktree()
         daemon: subprocess.Popen[bytes] | None = None
@@ -361,6 +366,7 @@ def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[st
                 env,
                 item["hard_bounds"],
                 item["id"] == "G009-W07",
+                daemon,
             )
         finally:
             try:
@@ -377,6 +383,7 @@ def _collect(profile_data: dict[str, Any], bin_dir: Path, phase: str) -> dict[st
         measured = [one(item) for _ in range(SAMPLES)]
         workloads[item["id"]] = {"kind": "latency", "warmups": [entry["value"] for entry in warm],
             "samples": [entry["value"] for entry in measured], "resource": {"hard_bounds": item["hard_bounds"], "warmups": warm, "samples": measured},
+            "fixture_manifest_sha256": sha256_bytes(canonical_json({"schema": "podway.g009.fixture-manifest/v1", "adapter": item["id"], "commands": item["measured_commands"]})),
             "workload_name": item["name"], "adapter_id": item["adapter_id"],
             "measured_commands": item["measured_commands"]}
     return {"schema": "podway.g009.characterization/v1", "phase": phase, "target": TARGET,
@@ -407,42 +414,71 @@ def characterize(args: argparse.Namespace) -> None:
     print(f"{out} {digest}")
 
 
+def _verified_approvals(approvals_path: Path, signer_contract_path: Path, characterization: Path, baseline: dict[str, Any], threshold: dict[str, Any]) -> list[dict[str, Any]]:
+    contract, bundle = load_json(signer_contract_path), load_json(approvals_path)
+    if not isinstance(contract, dict) or contract.get("schema") != "podway.g009.approval-signers/v1" or set(contract) != {"schema", "keyring", "signers"}:
+        fail("approval signer contract is not exact")
+    keyring = Path(contract["keyring"])
+    signers = contract["signers"]
+    if not keyring.is_file() or not isinstance(signers, list) or len(signers) != 3:
+        fail("approval trust root is unavailable")
+    by_role = {item.get("role"): item for item in signers if isinstance(item, dict)}
+    if set(by_role) != {"owner", "E", "F"} or any(set(item) != {"role", "signer", "fingerprint"} or not all(isinstance(item[key], str) and item[key] for key in ("signer", "fingerprint")) for item in by_role.values()):
+        fail("approval signer roles are incomplete")
+    if not isinstance(bundle, dict) or bundle.get("schema") != "podway.g009.approvals/v1" or bundle.get("characterization_sha256") != sha256_file(characterization) or not isinstance(bundle.get("approvals"), list) or len(bundle["approvals"]) != 3:
+        fail("approval bundle is stale or incomplete")
+    baseline_digest, threshold_digest = sha256_bytes(canonical_json(baseline)), sha256_bytes(canonical_json(threshold))
+    seen_roles: set[str] = set(); seen_signers: set[str] = set()
+    for approval in bundle["approvals"]:
+        if not isinstance(approval, dict) or set(approval) != {"role", "signer", "fingerprint", "characterization_sha256", "baseline_sha256", "thresholds_sha256", "payload", "signature"}:
+            fail("approval has mutable or missing fields")
+        role = approval["role"]; expected = by_role.get(role)
+        if expected is None or approval["signer"] != expected["signer"] or approval["fingerprint"] != expected["fingerprint"] or approval["characterization_sha256"] != sha256_file(characterization) or approval["baseline_sha256"] != baseline_digest or approval["thresholds_sha256"] != threshold_digest:
+            fail("approval binding or signer contract mismatch")
+        if role in seen_roles or approval["signer"] in seen_signers: fail("approval roles/signers must be distinct")
+        payload, signature = Path(approval["payload"]), Path(approval["signature"])
+        if not payload.is_file() or not signature.is_file() or payload.is_symlink() or signature.is_symlink():
+            fail("approval detached signature inputs are unsafe")
+        expected_payload = canonical_json({"role": role, "signer": approval["signer"], "fingerprint": approval["fingerprint"], "characterization_sha256": approval["characterization_sha256"], "baseline_sha256": baseline_digest, "thresholds_sha256": threshold_digest})
+        if bounded_bytes(payload) != expected_payload:
+            fail("approval payload is not the exact bound statement")
+        check = subprocess.run(("gpgv", "--keyring", str(keyring), "--status-fd", "1", str(signature), str(payload)), capture_output=True, check=False, env={"PATH": os.environ.get("PATH", "")})
+        if check.returncode != 0 or expected["fingerprint"] not in check.stdout.decode("utf-8", "replace"):
+            fail("detached approval signature did not verify against trust root")
+        seen_roles.add(role); seen_signers.add(approval["signer"])
+    if seen_roles != {"owner", "E", "F"}: fail("missing explicit owner/E/F approvals")
+    return bundle["approvals"]
+
 def approve_baseline(args: argparse.Namespace) -> None:
     data = _require_characterization(load_json(Path(args.characterization)))
-    roles = args.roles.split(",")
-    if roles != ["owner", "E", "F"] or len(set(roles)) != 3 or not args.approval: fail("exactly owner,E,F detached approvals are required")
-    baseline = data["baseline"]; threshold = thresholds(baseline)
-    baseline_digest = sha256_bytes(canonical_json(baseline)); threshold_digest = sha256_bytes(canonical_json(threshold))
-    approvals: list[dict[str, Any]] = []; seen: set[str] = set()
-    for raw in args.approval:
-        item = load_json(Path(raw))
-        if not isinstance(item, dict) or item.get("role") not in roles or item["role"] in seen or item.get("baseline_sha256") != baseline_digest or item.get("thresholds_sha256") != threshold_digest or not isinstance(item.get("detached_signature"), str) or not item["detached_signature"]: fail("invalid, stale, or duplicate detached approval")
-        seen.add(item["role"]); approvals.append(item)
-    if seen != set(roles): fail("missing approval role")
+    if args.roles != "owner,E,F" or not args.approval or not args.signer_contract: fail("exact owner,E,F approvals and signer contract are required")
+    approvals_path = Path(args.approval[0])
+    if len(args.approval) != 1: fail("approvals must be supplied as one immutable bundle")
+    baseline, threshold = data["baseline"], thresholds(data["baseline"])
+    approvals = _verified_approvals(approvals_path, Path(args.signer_contract), Path(args.characterization), baseline, threshold)
     for category, value in (("performance/baseline", baseline), ("performance/thresholds", threshold), ("performance/approvals", {"schema": "podway.g009.approvals/v1", "characterization_sha256": sha256_file(Path(args.characterization)), "approvals": approvals})):
         out, digest = evidence(category, value); print(f"{out} {digest}")
-
 
 def freeze_rc(args: argparse.Namespace) -> None:
     p = profile(Path(args.profile)); require_arm64_host(TARGET); source = identity_manifest()
     baseline, approved = load_json(Path(args.baseline)), load_json(Path(args.thresholds))
     if thresholds(baseline) != approved: fail("thresholds are not mechanically derived")
-    approval_path = Path(args.approvals) if args.approvals else Path(args.baseline).parent / "approvals.json"
-    approvals = load_json(approval_path)
-    if not isinstance(approvals, dict) or len(approvals.get("approvals", [])) != 3: fail("missing approvals")
+    approval_path, signer_contract = Path(args.approvals), Path(args.signer_contract)
+    _verified_approvals(approval_path, signer_contract, Path(args.characterization), baseline, approved)
     posture = args.signing_posture
     if posture not in p["signing_postures"]: fail("unapproved signing posture")
-    if posture == "signed-public" and (not args.developer_id or not args.notary_profile): fail("signed-public requires credentials")
-    signing = {"posture": posture, "codesign": "not_attempted_missing_credentials", "notarization": "not_attempted_missing_credentials", "stapling": "not_applicable_zip", "gatekeeper": "not_claimed"} if posture == "unsigned-internal" else {"posture": posture, "codesign": "intended", "notarization": "intended", "stapling": "not_applicable_zip", "gatekeeper": "pending"}
-    inputs = [_bound("profile", Path(args.profile)), _bound("baseline", Path(args.baseline)), _bound("thresholds", Path(args.thresholds)), _bound("approvals", approval_path), _bound("lockfile", ROOT / "Cargo.lock")]
+    if posture == "signed-public": fail("signed-public requires external credentialed signing/notarization")
+    signing = {"posture": "unsigned-internal", "codesign": "not_attempted_missing_credentials", "notarization": "not_attempted_missing_credentials", "stapling": "not_applicable_zip", "gatekeeper": "not_claimed"}
+    inputs = [_bound("profile", Path(args.profile)), _bound("baseline", Path(args.baseline)), _bound("thresholds", Path(args.thresholds)), _bound("approvals", approval_path), _bound("signer-contract", signer_contract), _bound("lockfile", ROOT / "Cargo.lock")]
     for raw in args.input:
         try: role, supplied = raw.split("=", 1)
         except ValueError: fail("--input must be ROLE=PATH")
         if not role or any(entry["role"] == role for entry in inputs): fail("duplicate RC input role")
         inputs.append(_bound(role, Path(supplied)))
-    required = {"profile", "baseline", "thresholds", "approvals", "lockfile", "interfaces", "handoffs", "crash-registry", "fuzz-policy", "observability-policy"}
-    if {entry["role"] for entry in inputs} != required: fail("RC does not bind all invalidation inputs")
-    intent = {"schema": "podway.g009.rc-intent/v1", "target": TARGET, "minimum_macos": p["minimum_macos"], "rust": "1.85.0", "source": source, "host": host_manifest(), "inputs": inputs, "signing": signing, "archive_root": ARCHIVE_ROOT}
+    required = {"profile", "baseline", "thresholds", "approvals", "signer-contract", "lockfile", "interfaces", "handoffs", "crash-registry", "fuzz-policy", "observability-policy", "podway", "podwayd"}
+    if {entry["role"] for entry in inputs} != required: fail("RC does not bind all invalidation inputs and binaries")
+    binaries = {name: {"sha256": next(item["sha256"] for item in inputs if item["role"] == name), "provenance": {"source": source, "target": TARGET, "rust": "1.85.0"}} for name in ("podway", "podwayd")}
+    intent = {"schema": "podway.g009.rc-intent/v1", "target": TARGET, "minimum_macos": p["minimum_macos"], "rust": "1.85.0", "source": source, "host": host_manifest(), "inputs": inputs, "signing": signing, "archive_root": ARCHIVE_ROOT, "binaries": binaries}
     out, digest = evidence("rc", intent); print(f"{out} {digest}")
 
 
@@ -519,11 +555,20 @@ def full_gates(args: argparse.Namespace) -> None:
 
 
 def _verify_release_binary(path: Path, name: str) -> None:
-    raw = bounded_bytes(path, 4096)
-    if len(raw) < 8 or raw[:4] != b"\xcf\xfa\xed\xfe":
+    raw = bounded_bytes(path, 1024 * 1024)
+    if len(raw) < 32 or raw[:4] != b"\xcf\xfa\xed\xfe":
         fail(f"{name} is not a thin 64-bit Mach-O")
     if struct.unpack_from("<I", raw, 4)[0] != 0x0100000C:
         fail(f"{name} is not arm64 Mach-O")
+    commands, offset = struct.unpack_from("<I", raw, 16)[0], 32
+    has_macos_target = False
+    for _ in range(commands):
+        if offset + 8 > len(raw): fail(f"{name} has truncated Mach-O load commands")
+        command, size = struct.unpack_from("<II", raw, offset)
+        if size < 8 or offset + size > len(raw): fail(f"{name} has invalid Mach-O load command")
+        has_macos_target |= command in (0x24, 0x32)
+        offset += size
+    if not has_macos_target: fail(f"{name} lacks a macOS deployment load command")
     result = _run((str(path), "--version"), ROOT, {"PATH": os.environ.get("PATH", "")})
     if result.stdout.decode("utf-8", "strict").strip() != f"{name} 0.1.0":
         fail(f"{name} version is not 0.1.0")
@@ -596,15 +641,25 @@ def package(args: argparse.Namespace) -> None:
     rc = load_rc(Path(args.rc)); require_arm64_host(rc["target"])
     if rc["signing"]["posture"] == "signed-public": fail("package never signs or claims notarization")
     profile_data = profile(_input_from_rc(rc, "profile"))
-    archive = Path(args.archive).resolve()
-    members = _archive_member_bytes(Path(args.bin_dir).resolve())
+    archive, bin_dir = Path(args.archive).resolve(), Path(args.bin_dir).resolve()
+    for name in ("podway", "podwayd"):
+        binary = (bin_dir / name).resolve()
+        require_bound_file(rc, name, binary)
+        if rc["binaries"][name]["sha256"] != sha256_file(binary): fail(f"package binary differs from RC: {name}")
+        _verify_release_binary(binary, name)
+    members = _archive_member_bytes(bin_dir)
     required = profile_data["archive"].get("members")
-    if not isinstance(required, list): fail("profile archive member declaration is invalid")
-    required_files = {"bin/podway", "bin/podwayd", "share/completions/podway.zsh", "share/completions/podway.bash", "share/completions/podway.fish", "LICENSE", "README.md", "RELEASE_NOTES.md", "payload-digests-v1.json"}
-    if not required_files.issubset(set(required)): fail("profile lacks required archive members")
+    if not isinstance(required, list) or any(not isinstance(item, str) for item in required): fail("profile archive member declaration is invalid")
+    declared_roots = {f"{ARCHIVE_ROOT}/{item}" for item in required}
+    actual = set(members) | {f"{ARCHIVE_ROOT}/payload-digests-v1.json"}
+    if any(name not in declared_roots and not any(name.startswith(root + "/") for root in declared_roots) for name in actual):
+        fail("archive contains an undeclared member")
+    if any(root not in actual and not any(name.startswith(root + "/") for name in actual) for root in declared_roots):
+        fail("archive omits a declared member or descendant")
+    declared = actual
     _deterministic_zip(archive, members)
     _write_checksum(archive)
-    report = inspect_archive(archive)
+    report = inspect_archive(archive, declared)
     out, digest = evidence("release/package", {"checkpoint_id": "Q6", "rc_sha256": sha256_file(Path(args.rc)), "source": identity_manifest(), "archive": report, "signing": rc["signing"], "blockers": []})
     print(f"{out} {digest}")
 
@@ -627,6 +682,9 @@ def _safe_extract_archive(archive: Path, destination: Path) -> Path:
             if not target.is_relative_to(destination.resolve()): fail("unsafe extraction destination")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(bundle.read(info))
+            mode = (info.external_attr >> 16) & 0o777
+            os.chmod(target, mode)
+            if (target.stat().st_mode & 0o777) != mode: fail("archive mode was not preserved on extraction")
     return destination / ARCHIVE_ROOT
 
 
@@ -715,8 +773,8 @@ def parser() -> argparse.ArgumentParser:
     def command(name: str) -> argparse.ArgumentParser: return sub.add_parser(name)
     x=command("preflight"); x.add_argument("--profile", required=True); x.add_argument("--target", required=True); x.set_defaults(fn=preflight)
     x=command("characterize"); x.add_argument("--profile", required=True); x.add_argument("--target", required=True); x.add_argument("--warmups", type=int, required=True); x.add_argument("--samples", type=int, required=True); x.add_argument("--bin-dir", required=True); x.set_defaults(fn=characterize)
-    x=command("approve-baseline"); x.add_argument("--characterization", required=True); x.add_argument("--roles", required=True); x.add_argument("--approval", action="append"); x.set_defaults(fn=approve_baseline)
-    x=command("freeze-rc"); x.add_argument("--profile", required=True); x.add_argument("--baseline", required=True); x.add_argument("--thresholds", required=True); x.add_argument("--approvals"); x.add_argument("--input", action="append", default=[], metavar="ROLE=PATH"); x.add_argument("--signing-posture", required=True, choices=("unsigned-internal", "signed-public")); x.add_argument("--developer-id"); x.add_argument("--notary-profile"); x.set_defaults(fn=freeze_rc)
+    x=command("approve-baseline"); x.add_argument("--characterization", required=True); x.add_argument("--roles", required=True); x.add_argument("--approval", action="append"); x.add_argument("--signer-contract", required=True); x.set_defaults(fn=approve_baseline)
+    x=command("freeze-rc"); x.add_argument("--profile", required=True); x.add_argument("--baseline", required=True); x.add_argument("--thresholds", required=True); x.add_argument("--characterization", required=True); x.add_argument("--approvals", required=True); x.add_argument("--signer-contract", required=True); x.add_argument("--input", action="append", default=[], metavar="ROLE=PATH"); x.add_argument("--signing-posture", required=True, choices=("unsigned-internal", "signed-public")); x.set_defaults(fn=freeze_rc)
     x=command("holdout"); x.add_argument("--rc", required=True); x.add_argument("--warmups", type=int, required=True); x.add_argument("--samples", type=int, required=True); x.add_argument("--bin-dir", required=True); x.set_defaults(fn=holdout)
     x=command("full-gates"); x.add_argument("--rc", required=True); x.add_argument("--only"); x.set_defaults(fn=full_gates)
     x=command("package"); x.add_argument("--rc", required=True); x.add_argument("--archive", required=True); x.add_argument("--bin-dir", required=True); x.set_defaults(fn=package)
