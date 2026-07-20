@@ -530,14 +530,22 @@ impl ObservabilityEmitterV1 {
         };
         match queue_lock {
             Ok(mut queue) => {
-                if self.shared.admission.load(Ordering::Acquire) == ADMISSION_FROZEN_V1 {
-                    // Frozen admission drops the event without counting.
-                } else if queue.stopping
+                if queue.stopping
                     || self.shared.admission.load(Ordering::Acquire) == ADMISSION_STOPPING_V1
                 {
+                    // An emitter that was admitted before its initial state
+                    // check is linearized by the freeze (which waits for the
+                    // in-flight emitting count), so its stop-window drop is
+                    // counted even when admission has already advanced to
+                    // frozen: the shutdown snapshot is taken only after this
+                    // emitter finishes. Checking the stop marker first keeps
+                    // that accounting; the frozen branch below is reached only
+                    // by a freeze that never went through a stop request.
                     self.shared
                         .counters
                         .add(&self.shared.counters.stopped_dropped, 1);
+                } else if self.shared.admission.load(Ordering::Acquire) == ADMISSION_FROZEN_V1 {
+                    // Frozen admission drops the event without counting.
                 } else if queue.primary.len() < PRIMARY_CAPACITY_V1 {
                     queue.primary.push_back(event);
                     self.shared.counters.record_enqueue();
@@ -1027,7 +1035,10 @@ mod tests {
             .recv()
             .expect("shutdown thread must start before release");
         let deadline = Instant::now() + Duration::from_secs(5);
-        while emitter.shared.admission.load(Ordering::Acquire) != ADMISSION_STOPPING_V1 {
+        // Shutdown may have advanced past stopping to frozen admission before
+        // this thread observes it (the freeze then waits on the in-flight
+        // emitter); closed admission means any non-running state.
+        while emitter.shared.admission.load(Ordering::Acquire) == ADMISSION_RUNNING_V1 {
             assert!(
                 Instant::now() < deadline,
                 "shutdown must close admission before the emitter is released"
