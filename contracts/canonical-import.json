@@ -87,7 +87,7 @@
     {
       "source": "sot/spec/command-catalog.yaml",
       "destination": "spec/command-catalog.yaml",
-      "source_sha256": "cc0a008100e8555c2377e785a83c3cf80d73a2f0cc0f0b8a2857b39b343595fe",
+      "source_sha256": "04b31da0ee6fd745bae22af274e8d7873b8b67a2a38dca3db7914baf1ba6831f",
       "copy_mode": "exact",
       "owner": "sot",
       "generator_version": "phase-0a-v1"
@@ -135,7 +135,7 @@
     {
       "source": "sot/presets/analysis.yaml",
       "destination": "presets/analysis.yaml",
-      "source_sha256": "da287731e4009d5325d4ac9eb3a5a981a1d659c62f9d14048ae3b3131fcace27",
+      "source_sha256": "deeb75f5ebd7d80d0cd95f3ad189d72510a1fdbffc585d14af4f6b198eccd6ff",
       "copy_mode": "exact",
       "owner": "sot",
       "generator_version": "phase-0a-v1"
@@ -143,7 +143,7 @@
     {
       "source": "sot/presets/bug-fix.yaml",
       "destination": "presets/bug-fix.yaml",
-      "source_sha256": "20f5f3861dc7ae6e43b3bf6870af86972cb1a5b674ed6e4053c81945c8c1c4fb",
+      "source_sha256": "e65572fc7bd928ca5d3d11c5676aef0019181ab9fddc5b18475425d3c613af89",
       "copy_mode": "exact",
       "owner": "sot",
       "generator_version": "phase-0a-v1"
@@ -151,7 +151,7 @@
     {
       "source": "sot/presets/docs-only.yaml",
       "destination": "presets/docs-only.yaml",
-      "source_sha256": "c355796c64b81d65e656e2ec4ebbcd31548077e9f464548ff896c179e7888e43",
+      "source_sha256": "111ebac9cb1d5243314bfa33c71dc8ae4795bb73ef4a237d7cd706e8743b29e2",
       "copy_mode": "exact",
       "owner": "sot",
       "generator_version": "phase-0a-v1"

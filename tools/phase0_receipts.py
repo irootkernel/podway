@@ -729,9 +729,9 @@ def validate_reference_model(root: Path) -> dict[str, Any]:
         },
     )
     if (
-        migration["predecessor_identity"] != "uninitialized-database"
+        migration["predecessor_identity"] != "schema-0-uninitialized"
         or migration["predecessor_schema"] != "schema-0"
-        or migration["predecessor_storage"] != "non-file"
+        or migration["predecessor_storage"] != "on-disk-sqlite-empty"
         or migration["target_schema"] != "schema-v1"
         or migration["target_user_version"] != 1
     ):
@@ -772,10 +772,13 @@ def validate_schema_zero_fixture(root: Path, reference: dict[str, Any]) -> None:
         "schema-0 uninitialized fixture",
         {"fixture_version", "fixture_kind", "scope", "predecessor", "expected_schema_v1", "expected_assertions", "requirement_ids"},
     )
-    if fixture["fixture_version"] != "podway.phase0.schema-0-uninitialized/v1" or fixture["fixture_kind"] != "compatibility-contract":
+    if fixture["fixture_version"] != "podway.phase0.schema-0-uninitialized/v1" or fixture["fixture_kind"] != "empty-predecessor-contract":
         fail("schema_zero_fixture_drift", "schema-0 fixture identity drift")
     scope = require_object(fixture["scope"], "schema-0 fixture scope", {"proves", "does_not_prove"})
-    if scope["proves"] != ["schema-0/uninitialized identity", "frozen initial-migration contract shape"] or scope["does_not_prove"] != NON_PRODUCTION_CLAIMS:
+    if scope["proves"] != [
+        "schema-0/uninitialized identity",
+        "empty predecessor has no user-schema objects or rows",
+    ] or scope["does_not_prove"] != ["an on-disk SQLite database", *NON_PRODUCTION_CLAIMS]:
         fail("schema_zero_fixture_drift", "schema-0 fixture scope must remain compatibility-only")
     predecessor = require_object(
         fixture["predecessor"],
@@ -787,11 +790,11 @@ def validate_schema_zero_fixture(root: Path, reference: dict[str, Any]) -> None:
         predecessor["identity"] != migration["predecessor_identity"]
         or predecessor["schema"] != migration["predecessor_schema"]
         or predecessor["storage"] != migration["predecessor_storage"]
-        or predecessor["is_database_file"] is not False
+        or predecessor["is_database_file"] is not True
         or predecessor["tables"] != []
         or predecessor["rows"] != []
     ):
-        fail("schema_zero_fixture_drift", "schema-0 fixture must be a non-file uninitialized identity, not a predecessor database")
+        fail("schema_zero_fixture_drift", "schema-0 fixture must be an empty on-disk schema-0 database with no user rows")
     expected_schema = require_object(
         fixture["expected_schema_v1"],
         "schema-0 fixture expected schema-v1",

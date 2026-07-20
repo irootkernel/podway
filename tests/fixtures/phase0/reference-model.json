@@ -220,9 +220,9 @@
     ]
   },
   "schema_zero_migration": {
-    "predecessor_identity": "uninitialized-database",
+    "predecessor_identity": "schema-0-uninitialized",
     "predecessor_schema": "schema-0",
-    "predecessor_storage": "non-file",
+    "predecessor_storage": "on-disk-sqlite-empty",
     "target_schema": "schema-v1",
     "target_user_version": 1,
     "ddl_path": "spec/sqlite-v1.sql",

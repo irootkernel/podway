@@ -4,7 +4,7 @@
   "scope": {
     "proves": [
       "schema-0/uninitialized identity",
-      "empty predecessor has no user-schema objects or rows",
+      "empty predecessor has no user-schema objects or rows"
     ],
     "does_not_prove": [
       "an on-disk SQLite database",
@@ -37,15 +37,15 @@
   "expected_assertions": [
     {
       "id": "initial-migration-atomicity",
-      "SchemaBeforeCommit rollback leaves user_version=0 and no user-schema objects; initialization uses an IMMEDIATE SQLite transaction, not file publication"
+      "assertion": "SchemaBeforeCommit rollback leaves user_version=0 and no user-schema objects; initialization uses an IMMEDIATE SQLite transaction, not file publication"
     },
     {
       "id": "initial-migration-no-loss",
-      "the empty predecessor has no task or other application rows; schema-v1 creates its own required singleton workspace_state row"
+      "assertion": "the empty predecessor has no task or other application rows; schema-v1 creates its own required singleton workspace_state row"
     },
     {
       "id": "initial-migration-no-duplicate",
-      "reopening schema-v1 does not re-run initialization; schema_migrations remains a single version-1 row"
+      "assertion": "reopening schema-v1 does not re-run initialization; schema_migrations remains a single version-1 row"
     }
   ],
   "requirement_ids": ["STO-011", "REL-006"]
