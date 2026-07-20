@@ -2048,12 +2048,17 @@ def _validate_g036_thin_arm64_mach_o(path: Path, label: str) -> None:
     if path.is_symlink() or not path.is_file():
         raise QualificationError(f"G036 {label} executable is absent or unsafe")
     with path.open("rb") as executable:
-        header = executable.read(8)
-    if header not in {
-        b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01",
-        b"\xfe\xed\xfa\xcf\x01\x00\x00\x0c",
-    }:
+        header = executable.read(16)
+    if len(header) != 16:
         raise QualificationError(f"G036 {label} executable is not a thin arm64 Mach-O")
+    if header[:8] == b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01":
+        file_type = int.from_bytes(header[12:16], "little")
+    elif header[:8] == b"\xfe\xed\xfa\xcf\x01\x00\x00\x0c":
+        file_type = int.from_bytes(header[12:16], "big")
+    else:
+        raise QualificationError(f"G036 {label} executable is not a thin arm64 Mach-O")
+    if file_type != 0x2:
+        raise QualificationError(f"G036 {label} executable is not an MH_EXECUTE Mach-O")
 
 
 def _validate_cargo_receipt_output(output: bytes, descriptor: dict[str, Any]) -> tuple[int, int]:

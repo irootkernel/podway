@@ -2325,6 +2325,8 @@ def _verify_release_binary_bytes(raw: bytes, name: str, target: str) -> None:
     expected_cpu_type = 0x0100000C
     if struct.unpack_from("<I", raw, 4)[0] != expected_cpu_type:
         fail(f"{name} Mach-O architecture differs from native target tuple")
+    if struct.unpack_from("<I", raw, 12)[0] != 0x2:
+        fail(f"{name} is not an MH_EXECUTE Mach-O executable")
     commands, offset = struct.unpack_from("<I", raw, 16)[0], 32
     has_macos_target = False
     for _ in range(commands):
