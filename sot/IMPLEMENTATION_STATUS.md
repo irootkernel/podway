@@ -16,6 +16,42 @@ This document is an informational implementation-progress index. It does not cha
 | `G008` | Phase 7: preset dogfooding and UX correction | **implementation complete / batch validation pending** | 2026-07-17 | `tools/run_g008_dogfood.py`; `crates/podway-cli/tests/phase4_production_vertical.rs` |
 | `G009` | Phase 8: hardening, release artifacts, and final acceptance | **pending final Apple Silicon release acceptance / incomplete** | not complete | `docs/70-delivery/70-implementation-plan.md`, Phase 8 |
 
+## Phase 8 sub-checkpoints (informal, G009-internal)
+
+The IDs `G010`–`G043` are **not** part of the normative design — `docs/70-delivery/70-implementation-plan.md` defines only Phase 0–8 (`G001`–`G009`). They are informal implementation checkpoints minted ad hoc while executing Phase 8/`G009`, recorded only under `artifacts/g0NN/`, which is gitignored and untracked: this evidence trail exists on the implementing machine only and is not reproducible from a fresh clone. None of these rows supersede or amend the `G009` row above; `G009` remains pending final Apple Silicon release acceptance.
+
+| Goal | Scope summary | Evidence artifact | Status |
+|---|---|---|---|
+| `G010` | — | none | number never allocated |
+| `G011` | Daemon/service typed-observability test pass | `artifacts/g011/observability-test-report.json` | stale checkpoint (predates post-checkpoint fix commits) |
+| `G012` | Service crash-boundary tests and fuzz corpus | `artifacts/g012/crash-fuzz-test-report.json` | stale checkpoint |
+| `G013` | Release-policy contract coverage | `artifacts/g013/release-policy-report.json`, `release-policy-test-report.json` | stale checkpoint |
+| `G014` | Daemon observability contract re-verification | `artifacts/g014/observability-test-report.json` | stale checkpoint |
+| `G015` | Service publication crash-boundary tests | `artifacts/g015/service-publication-test-report.json` | stale checkpoint |
+| `G016` | Release trust-chain self-test, protocol, traceability, crash-registry run | `artifacts/g016/release-trust-chain-test-report.json` | stale checkpoint |
+| `G017` | Production observability daemon suite | `artifacts/g017/production-observability-test-report.json` | stale checkpoint |
+| `G018` | Service fuzz/crash-boundary report | `artifacts/g018/service-fuzz-test-report.json` | stale checkpoint |
+| `G019` | Release-trust closure; remote publication self-declared `not_applicable` locally (needs protected GitHub Environment credentials and an immutable RC run) | `artifacts/g019/g019-quality-gate.json`, `release-trust-test-report.json` | stale checkpoint, self-declared partial |
+| `G020` | Daemon observability hardening gate | `artifacts/g020/g020-quality-gate.json`, `observability-test-report.json` | stale checkpoint |
+| `G021` | Full-workspace and rustup 1.85.0 rerun, fuzz gate | `artifacts/g021/g021-test-report.json` | stale checkpoint, self-flagged "final confirmation pending" |
+| `G022` | — | none | number never allocated |
+| `G023` | Apple-Silicon-only support-boundary claim | `artifacts/g023/apple-silicon-completion-report.json` | stale checkpoint |
+| `G024` | Reset crash-window contracts C14–C16, RC target-tuple exactness | `artifacts/g024/g024-test-report.json` | stale checkpoint |
+| `G025`–`G027` | — | none | numbers never allocated |
+| `G028` | Publication-controller self-test | `artifacts/g028/g028-test-report.json` | stale checkpoint, self-flagged deferred verification manifest |
+| `G029`–`G032` | — | none | numbers never allocated |
+| `G033` | macOS lifecycle qualification controller | `artifacts/g033/g033-test-report.json` | stale checkpoint |
+| `G034` | Release-publication controller binding proof | `artifacts/g034/g034-quality-gate.json`, `g034-test-report.json` | stale checkpoint |
+| `G035` | Native-service and store schema/integrity/reset-lifecycle pass | `artifacts/g035/g035-quality-gate.json`, `g035-test-report.json` | stale checkpoint (reset-lifecycle evidence predates the store race fixes) |
+| `G036` | Direct-evidence report backing the product-acceptance matrix (71 criteria, 50 exact commands) | `artifacts/g036/g036-test-report.json`; generator `tools/generate_g036_report.py` | regenerated from the current tree, 2026-07-21 |
+| `G037` | Quality-gate re-validation over the G036 report | `artifacts/g037/g037-quality-gate.json` | stale gate (validated a superseded G036 report; no independent test report) |
+| `G038` | Lifecycle proof semantics and verifier independence | `artifacts/g038/g038-test-report.json` | stale checkpoint |
+| `G039` | — | none | number never allocated |
+| `G040` | Semantic proof-membership attribution inside the verifier | `G040_*` constants in `tools/verify_g009_qualification.py` only | naming artifact, no checkpoint directory |
+| `G041` | — | none | number never allocated |
+| `G042` | Terminal gate: verifier self-test, matrix, G036 report, workspace test/clippy/fmt, diff check | `artifacts/g042/g042-test-report.json`; generator `tools/generate_g042_report.py` | regenerated from the current tree, 2026-07-21 |
+| `G043` | Lifecycle and qualification security closure | none (`PROBLEM.md` open items) | incomplete; the thin-arm64 `MH_EXECUTE` executable check is now enforced by `tools/verify_g009_qualification.py` and `tools/run_g009_qualification.py`, remaining items need the release pipeline |
+
 ## Current release boundary
 
 Completion of `G001` through `G008` does not mean the complete product is released. `G007` and `G008` still require the final validation-batch close, and `G009` native Apple Silicon release acceptance remains incomplete.
