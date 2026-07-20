@@ -1114,6 +1114,109 @@ fn reset_cleanup_failpoint_leaves_real_residual_artifacts_and_combines_errors() 
 }
 #[cfg(unix)]
 #[test]
+fn next_open_reaps_unlocked_orphaned_ownership_marker_without_temporary() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("target.sqlite3");
+    let workspace = identity();
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            workspace.clone(),
+            options(None),
+            UnixMillis::new(20),
+        )
+        .expect("initial open must publish the workspace"),
+    );
+
+    // Simulate a crash between the published temporary unlink and the
+    // ownership-marker unlink: the marker and sidecars survive without their
+    // temporary database and without a live owner lock.
+    let orphaned_temporary = temporary
+        .path()
+        .join(format!(".target.sqlite3.{}.77.0.tmp", std::process::id()));
+    let orphaned_marker = sidecar(&orphaned_temporary, ".owner");
+    let orphaned_wal = sidecar(&orphaned_temporary, "-wal");
+    let orphaned_shm = sidecar(&orphaned_temporary, "-shm");
+    for residual in [&orphaned_marker, &orphaned_wal, &orphaned_shm] {
+        fs::write(residual, b"orphaned-residual").unwrap();
+        fs::set_permissions(residual, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let sentinel_marker = temporary.path().join(".unrelated-sentinel.owner");
+    fs::write(&sentinel_marker, b"marker-sentinel").unwrap();
+
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            workspace,
+            options(None),
+            UnixMillis::new(21),
+        )
+        .expect("next open must reap the unlocked orphaned ownership marker"),
+    );
+
+    for residual in [&orphaned_marker, &orphaned_wal, &orphaned_shm] {
+        assert!(
+            !residual.exists(),
+            "next open must remove orphaned publication residual {residual:?}"
+        );
+    }
+    assert_eq!(fs::read(&sentinel_marker).unwrap(), b"marker-sentinel");
+}
+#[cfg(unix)]
+#[test]
+fn next_open_leaves_live_locked_ownership_marker_without_temporary() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("target.sqlite3");
+    let workspace = identity();
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            workspace.clone(),
+            options(None),
+            UnixMillis::new(20),
+        )
+        .expect("initial open must publish the workspace"),
+    );
+
+    // A locked ownership marker without its temporary database is a live
+    // publisher between its temporary unlink and marker unlink; recovery must
+    // leave it for its owner instead of reaping or failing.
+    let live_temporary = temporary
+        .path()
+        .join(format!(".target.sqlite3.{}.78.0.tmp", std::process::id()));
+    let live_marker = sidecar(&live_temporary, ".owner");
+    fs::write(&live_marker, b"live-owner").unwrap();
+    fs::set_permissions(&live_marker, fs::Permissions::from_mode(0o600)).unwrap();
+    let owner_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&live_marker)
+        .unwrap();
+    owner_lock.lock().unwrap();
+
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            workspace,
+            options(None),
+            UnixMillis::new(21),
+        )
+        .expect("open must skip a live locked ownership marker"),
+    );
+
+    assert!(
+        live_marker.exists(),
+        "a live locked ownership marker must be left for its owner"
+    );
+    assert_eq!(fs::read(&live_marker).unwrap(), b"live-owner");
+    drop(owner_lock);
+}
+#[cfg(unix)]
+#[test]
 fn interrupted_publication_link_recovers_one_destination_without_temporary_link() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("target.sqlite3");

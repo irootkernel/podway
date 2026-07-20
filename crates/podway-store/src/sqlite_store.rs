@@ -1923,7 +1923,12 @@ fn publish_temporary_database_no_clobber(
                     StoreFailpointV1::ResetAfterPublicationBeforeResponseAndTemporaryCleanup,
                 )?;
             }
-            remove_temporary_after_publication(temporary, temporary_file)?;
+            if let Err(error) = remove_temporary_after_publication(temporary, temporary_file) {
+                if publication_was_finalized_v1(temporary, temporary_file, destination)? {
+                    return Ok(PublicationOutcomeV1::Published);
+                }
+                return Err(error);
+            }
             validate_existing_regular_private_file_v1(destination)?;
             File::open(parent)
                 .map_err(storage_io)?

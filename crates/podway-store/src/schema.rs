@@ -1709,7 +1709,7 @@ fn recover_orphaned_ownership_markers_v1(destination: &Path) -> Result<(), Store
         if is_store_temporary_database_name_v1(&temporary, destination) {
             match fs::symlink_metadata(&temporary) {
                 Err(error) if error.kind() == ErrorKind::NotFound => {
-                    return Err(unsafe_database_path_error());
+                    reap_orphaned_ownership_marker_v1(&marker, &temporary)?;
                 }
                 Ok(_) => {}
                 Err(error) => return Err(storage_io_error(error)),
@@ -1720,6 +1720,35 @@ fn recover_orphaned_ownership_markers_v1(destination: &Path) -> Result<(), Store
         .map_err(storage_io_error)?
         .sync_all()
         .map_err(storage_io_error)
+}
+
+#[cfg(unix)]
+fn reap_orphaned_ownership_marker_v1(marker: &Path, temporary: &Path) -> Result<(), StoreErrorV1> {
+    let marker_file = match open_recovery_file_after_marker_v1(marker, false) {
+        Ok(Some(marker_file)) => marker_file,
+        Ok(None) => return Ok(()),
+        Err(error) => match fs::symlink_metadata(marker) {
+            Err(missing) if missing.kind() == ErrorKind::NotFound => return Ok(()),
+            _ => return Err(error),
+        },
+    };
+    match marker_file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(()),
+        Err(TryLockError::Error(error)) => return Err(storage_io_error(error)),
+    }
+    match fs::symlink_metadata(temporary) {
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Ok(_) => return Ok(()),
+        Err(error) => return Err(storage_io_error(error)),
+    }
+    let sidecars = ["-wal", "-shm"].map(|suffix| sqlite_sidecar_path_v1(temporary, suffix));
+    for sidecar in &sidecars {
+        if let Some(file) = open_recovery_file_after_marker_v1(sidecar, false)? {
+            unlink_revalidated_recovery_file_v1(sidecar, &file)?;
+        }
+    }
+    unlink_revalidated_recovery_file_v1(marker, &marker_file)
 }
 
 #[cfg(unix)]
@@ -1739,10 +1768,18 @@ fn open_unowned_store_temporary_for_recovery_v1(
         return Ok(None);
     }
     let marker_path = temporary_ownership_marker_path_v1(path);
-    match fs::symlink_metadata(&marker_path) {
-        Ok(_) => open_ownership_marker_for_recovery_v1(&marker_path, true),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(storage_io_error(error)),
+    let marker = match open_recovery_file_after_marker_v1(&marker_path, false) {
+        Ok(Some(marker)) => marker,
+        Ok(None) => return Ok(None),
+        Err(error) => match fs::symlink_metadata(&marker_path) {
+            Err(missing) if missing.kind() == ErrorKind::NotFound => return Ok(None),
+            _ => return Err(error),
+        },
+    };
+    match marker.try_lock() {
+        Ok(()) => Ok(Some(marker)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(error)) => Err(storage_io_error(error)),
     }
 }
 

@@ -531,7 +531,7 @@ impl ObservabilityEmitterV1 {
         match queue_lock {
             Ok(mut queue) => {
                 if self.shared.admission.load(Ordering::Acquire) == ADMISSION_FROZEN_V1 {
-                    return;
+                    // Frozen admission drops the event without counting.
                 } else if queue.stopping
                     || self.shared.admission.load(Ordering::Acquire) == ADMISSION_STOPPING_V1
                 {
