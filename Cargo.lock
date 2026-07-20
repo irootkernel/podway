@@ -505,6 +505,7 @@ dependencies = [
 name = "podway-git"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "podway-core",
  "rustix",
  "sha2",

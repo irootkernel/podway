@@ -1140,7 +1140,7 @@ G040_PROOF_MEMBERSHIP = {'PAC-005': ({'criterion_id': 'PAC-005', 'path': 'crates
 G036_CRITERION_COUNT = 71
 G036_EXACT_COMMAND_COUNT = 50
 G036_MATRIX_PATH = ROOT / "release/product-acceptance-matrix-v1.json"
-G036_MATRIX_SHA256 = "986f60cc5f11e3e686fce70a81852d7ed343e276c6883e9aadbf9c3c9b3f7e95"
+G036_MATRIX_SHA256 = "1cd1afe77cddfdf2f0c1dbb842d3398acc50b2f8847f683105f00b3cd7b4a156"
 G036_REPORT_PATH = ROOT / "artifacts/g036/g036-test-report.json"
 G036_PRODUCT_SOURCE_TREE_GLOBS = (
     "Cargo.lock",
@@ -1680,6 +1680,17 @@ def _g036_external_read_roots(
     return tuple(root.resolve(strict=True) for root in roots)
 
 
+G036_PLATFORM_UTILITIES = (
+    Path("/bin/sh"),
+    Path("/bin/bash"),
+    Path("/bin/rm"),
+    Path("/bin/chmod"),
+    Path("/bin/kill"),
+    Path("/usr/bin/touch"),
+)
+G036_LIFECYCLE_LOCK_DIRECTORY = Path("/private/var/tmp")
+
+
 def _g036_sandbox_filter_any(filters: list[str]) -> str:
     if not filters:
         raise QualificationError("G036 sandbox filter set is empty")
@@ -1789,6 +1800,42 @@ def _g036_sandbox_profile(
         )
     ]
     executable_filters.append(f'(subpath "{rendered_writes[2]}")')
+    # Lifecycle-qualification tests execute invocation-scoped fixture scripts
+    # (a fake launchctl) from the scratch root; tests already execute arbitrary
+    # code from the target root, so this does not widen the trust boundary.
+    executable_filters.append(f'(subpath "{rendered_writes[3]}")')
+    # Those fixture scripts and test helpers rely on a fixed set of immutable,
+    # root-owned platform utilities executed in place (copies of arm64e
+    # platform binaries are killed by the platform loader, so they cannot be
+    # provisioned into the invocation root like the Developer tools above).
+    for utility in G036_PLATFORM_UTILITIES:
+        if utility.is_symlink() or not utility.is_file():
+            raise QualificationError("G036 platform utility is absent or unsafe")
+        metadata = utility.stat()
+        if metadata.st_uid != 0 or metadata.st_mode & 0o022:
+            raise QualificationError("G036 platform utility is mutable")
+        executable_filters.append(f'(literal "{utility}")')
+        literal_reads.append(f'(literal "{utility}")')
+        literal_maps.append(f'(literal "{utility}")')
+    # The production service runner serializes lifecycle transactions by
+    # flocking the root-owned sticky /private/var/tmp directory itself; the
+    # lifecycle-qualification tests exercise that real runner, so the sandbox
+    # permits read and lock (never write) of exactly that verified directory.
+    lock_directory = G036_LIFECYCLE_LOCK_DIRECTORY
+    lock_metadata = lock_directory.stat()
+    if (
+        lock_directory.is_symlink()
+        or not lock_directory.is_dir()
+        or lock_metadata.st_uid != 0
+        or lock_metadata.st_mode & 0o1000 == 0
+    ):
+        raise QualificationError(
+            "G036 lifecycle lock directory is not a root-owned sticky directory"
+        )
+    literal_reads.append(f'(literal "{lock_directory}")')
+    literal_reads.extend(
+        f'(literal "{parent}")' for parent in lock_directory.parents
+    )
     for path in rendered_external_read_roots:
         literal_reads.append(f'(literal "{path}")')
         literal_reads.extend(
@@ -1811,6 +1858,16 @@ def _g036_sandbox_profile(
         f'(subpath "{path}")'
         for path in rendered_writes
     ]
+    # Lifecycle and IPC tests pin short `/tmp/pw*-…` fixture roots so their
+    # Unix-domain socket paths stay inside the kernel sun_path bound; permit
+    # exactly that reserved prefix (the `/tmp` symlink resolves to
+    # `/private/tmp` before sandbox evaluation).
+    fixture_prefix_filter = '(regex #"^/private/tmp/pw[0-9a-z]+-")'
+    write_filters.append(fixture_prefix_filter)
+    read_filters.append(fixture_prefix_filter)
+    map_filters.append(fixture_prefix_filter)
+    executable_filters.append(fixture_prefix_filter)
+    lock_filters = write_filters + [f'(literal "{lock_directory}")']
     return (
         "(version 1)(deny default)"
         "(allow file-read-metadata)"
@@ -1824,7 +1881,7 @@ def _g036_sandbox_profile(
         f"(allow file-map-executable {_g036_sandbox_filter_any(map_filters)})"
         f"(allow file-write* {_g036_sandbox_filter_any(write_filters)})"
         f"(allow file-link {_g036_sandbox_filter_any(write_filters)})"
-        f"(allow file-lock {_g036_sandbox_filter_any(write_filters)})"
+        f"(allow file-lock {_g036_sandbox_filter_any(lock_filters)})"
     )
 
 
@@ -2172,7 +2229,10 @@ def _trusted_replay_g036_command(receipt: dict[str, Any], descriptor: dict[str, 
     )
     combined = completed.stdout + completed.stderr
     if completed.returncode != 0:
-        raise QualificationError("G036 exact command failed under the hermetic sandbox")
+        tail = combined[-800:].decode("utf-8", "replace")
+        raise QualificationError(
+            f"G036 exact command failed under the hermetic sandbox: {tail}"
+        )
     test_count, ignored_count = _validate_cargo_receipt_output(combined, descriptor)
     observed = {
         "exitCode": completed.returncode,

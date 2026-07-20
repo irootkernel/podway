@@ -6,7 +6,6 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
@@ -29,11 +28,16 @@ fn lossless(path: &Path) -> LosslessPathV1 {
 }
 
 fn create_fifo(path: &Path) {
-    let status = Command::new("mkfifo")
-        .arg(path)
-        .status()
-        .expect("mkfifo must be available on Unix");
-    assert!(status.success(), "mkfifo must create the fixture");
+    // In-process mkfifo(3): the hermetic qualification sandbox permits FIFO
+    // node creation under its writable roots but not spawning system tools.
+    let raw = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .expect("fifo fixture path must not contain interior NUL bytes");
+    let created = unsafe { libc::mkfifo(raw.as_ptr(), 0o600) };
+    assert!(
+        created == 0,
+        "mkfifo must create the fixture: {}",
+        std::io::Error::last_os_error()
+    );
 }
 fn digest(byte: char) -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", byte.to_string().repeat(64)))
