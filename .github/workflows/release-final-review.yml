@@ -1,33 +1,36 @@
-name: Native Apple Silicon release final review
+name: Native macOS Apple Silicon release final review
 
 on:
   workflow_dispatch:
     inputs:
-      qualification_run_id:
-        required: true
-        type: string
-      qualification_artifact_id:
-        required: true
-        type: string
-      qualification_bundle_sha256:
-        required: true
-        type: string
-      post_index_review_run_id:
-        required: true
-        type: string
-      post_index_review_artifact_id:
-        required: true
-        type: string
+      arm64_qualification_run_id: { required: true, type: string }
+      arm64_qualification_artifact_id: { required: true, type: string }
+      arm64_qualification_bundle_sha256: { required: true, type: string }
+      arm64_post_index_review_run_id: { required: true, type: string }
+      arm64_post_index_review_artifact_id: { required: true, type: string }
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 jobs:
   final-review:
+    outputs:
+      publication_handoff_artifact_id: ${{ steps.upload-handoff.outputs.artifact-id }}
+      publication_handoff_sha256: ${{ steps.upload-handoff.outputs.artifact-digest }}
     runs-on: [self-hosted, macOS, ARM64, podway-release]
     environment: release-final-review
     timeout-minutes: 120
+    env:
+      G009_TARGET: arm64
+      G009_TRIPLE: aarch64-apple-darwin
+      G009_ARCH: arm64
+      G009_RUNNER_ARCH: ARM64
+      QUALIFICATION_RUN_ID: ${{ inputs.arm64_qualification_run_id }}
+      QUALIFICATION_ARTIFACT_ID: ${{ inputs.arm64_qualification_artifact_id }}
+      EXPECTED_BUNDLE_SHA256: ${{ inputs.arm64_qualification_bundle_sha256 }}
+      POST_INDEX_REVIEW_RUN_ID: ${{ inputs.arm64_post_index_review_run_id }}
+      POST_INDEX_REVIEW_ARTIFACT_ID: ${{ inputs.arm64_post_index_review_artifact_id }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -35,63 +38,43 @@ jobs:
           clean: true
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.qualification_run_id }}
-          artifact-ids: ${{ inputs.qualification_artifact_id }}
-          github-token: ${{ github.token }}
-          path: ${{ github.workspace }}/qualification-input
-          merge-multiple: true
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.post_index_review_run_id }}
-          artifact-ids: ${{ inputs.post_index_review_artifact_id }}
-          github-token: ${{ github.token }}
-          path: ${{ github.workspace }}/post-index-review
-          merge-multiple: true
-      - name: Verify controller and stage-1 artifact binding
+      - name: Authenticate immutable qualification producer
         shell: bash
         env:
-          EXPECTED_BUNDLE_SHA256: ${{ inputs.qualification_bundle_sha256 }}
+          ACTIONS_READ_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$RUNNER_OS" = macOS
-          test "$RUNNER_ARCH" = ARM64
-          test "$(uname -m)" = arm64
-          test "$(sysctl -in sysctl.proc_translated || true)" = 0
-          test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
-          test -f tools/run_g009_qualification.py
-          test ! -L tools/run_g009_qualification.py
-          test -f tools/verify_g009_qualification.py
-          test ! -L tools/verify_g009_qualification.py
           python3 - <<'PY'
-          import hashlib, os, re
-          from pathlib import Path
-          root = Path(os.environ["GITHUB_WORKSPACE"])
-          qualification_root = root / "qualification-input"
-          review_root = root / "post-index-review"
-          for supplied, label in ((qualification_root, "qualification input"), (review_root, "post-index review")):
-              if supplied.is_symlink():
-                  raise SystemExit(f"{label} symlink")
-              directory = supplied.resolve(strict=True)
-              if not directory.is_relative_to(root.resolve()):
-                  raise SystemExit(f"{label} escaped workspace")
-              for path in directory.rglob("*"):
-                  if path.is_symlink() or not path.resolve().is_relative_to(directory):
-                      raise SystemExit(f"unsafe {label} member")
-          qualification_root = qualification_root.resolve(strict=True)
-          descriptor = qualification_root / "qualification-bundle.json"
-          if not descriptor.is_file() or descriptor.is_symlink():
-              raise SystemExit("missing descriptor")
-          digest = hashlib.sha256(descriptor.read_bytes()).hexdigest()
-          if not re.fullmatch(r"[0-9a-f]{64}", os.environ["EXPECTED_BUNDLE_SHA256"]) or digest != os.environ["EXPECTED_BUNDLE_SHA256"]:
-              raise SystemExit("descriptor digest mismatch")
-          with Path(os.environ["GITHUB_ENV"]).open("a") as env:
-              env.write(f"QUALIFICATION_BUNDLE_PATH={descriptor}\nACCEPTANCE_INDEX_PATH={qualification_root / 'acceptance-index.json'}\n")
+          import hashlib, json, os, re
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+          run_id=os.environ['QUALIFICATION_RUN_ID']; repo=os.environ['GITHUB_REPOSITORY']
+          if not re.fullmatch(r'[1-9][0-9]*', run_id): raise SystemExit('invalid qualification run ID')
+          request=Request(f"{os.environ['GITHUB_API_URL']}/repos/{quote(repo, safe='/')}/actions/runs/{run_id}",headers={'Accept':'application/vnd.github+json','Authorization':f"Bearer {os.environ['ACTIONS_READ_TOKEN']}",'X-GitHub-Api-Version':'2022-11-28'})
+          try:
+              with urlopen(request,timeout=30) as response: metadata=json.load(response)
+          except (OSError, ValueError, json.JSONDecodeError) as exc: raise SystemExit('qualification run metadata request failed') from exc
+          if not isinstance(metadata,dict) or metadata.get('repository',{}).get('id') != int(os.environ['GITHUB_REPOSITORY_ID']) or metadata.get('id') != int(run_id) or metadata.get('path') != '.github/workflows/release.yml' or metadata.get('event') != 'workflow_dispatch' or metadata.get('status') != 'completed' or metadata.get('conclusion') != 'success' or metadata.get('head_sha') != os.environ['GITHUB_WORKFLOW_SHA']: raise SystemExit('qualification producer identity is not trusted')
+          nonce=hashlib.sha256(b'podway-g009-qualification-v2\0'+os.environ['GITHUB_REPOSITORY_ID'].encode('ascii')+b'\0'+run_id.encode('ascii')+b'\0.github/workflows/release.yml\0'+os.environ['GITHUB_WORKFLOW_SHA'].encode('ascii')).hexdigest()
+          open(os.environ['GITHUB_ENV'],'a').write(f'QUALIFICATION_AUTHENTICATED_RUN_ID={run_id}\nQUALIFICATION_PRODUCING_WORKFLOW_SHA={metadata["head_sha"]}\nQUALIFICATION_INVOCATION_NONCE={nonce}\n')
           PY
-      - name: Materialize protected reviewer keyring
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: ${{ github.repository }}
+          run-id: ${{ env.QUALIFICATION_AUTHENTICATED_RUN_ID }}
+          artifact-ids: ${{ env.QUALIFICATION_ARTIFACT_ID }}
+          github-token: ${{ github.token }}
+          path: qualification-input
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: ${{ github.repository }}
+          run-id: ${{ env.POST_INDEX_REVIEW_RUN_ID }}
+          artifact-ids: ${{ env.POST_INDEX_REVIEW_ARTIFACT_ID }}
+          github-token: ${{ github.token }}
+          path: post-index-review
+          merge-multiple: true
+      - name: Verify exact native candidate and materialize review keyring
         shell: bash
         env:
           G009_REVIEWER_KEYRING_B64: ${{ secrets.G009_REVIEWER_KEYRING_B64 }}
@@ -100,289 +83,62 @@ jobs:
           F_FINGERPRINT: ${{ secrets.G009_F_FINGERPRINT }}
         run: |
           set -euo pipefail
-          test -n "$G009_REVIEWER_KEYRING_B64"
-          for fingerprint in "$OWNER_FINGERPRINT" "$E_FINGERPRINT" "$F_FINGERPRINT"; do [[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]]; done
-          test "$OWNER_FINGERPRINT" != "$E_FINGERPRINT"; test "$OWNER_FINGERPRINT" != "$F_FINGERPRINT"; test "$E_FINGERPRINT" != "$F_FINGERPRINT"
-          keyring="$RUNNER_TEMP/g009-reviewer-keyring.gpg"
-          KEYRING_PATH="$keyring" python3 - <<'PY'
-          import base64, hashlib, os
-          from pathlib import Path
-          data = base64.b64decode(os.environ["G009_REVIEWER_KEYRING_B64"], validate=True)
-          if not data:
-              raise SystemExit("empty reviewer keyring")
-          path = Path(os.environ["KEYRING_PATH"])
-          descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
-          with os.fdopen(descriptor, "wb") as handle:
-              handle.write(data)
-              handle.flush()
-              os.fsync(handle.fileno())
-          with Path(os.environ["GITHUB_ENV"]).open("a") as env:
-              env.write(
-                  f"REVIEWER_KEYRING_PATH={path}\n"
-                  f"REVIEWER_KEYRING_SHA256={hashlib.sha256(data).hexdigest()}\n"
-                  f"OWNER_FINGERPRINT={os.environ['OWNER_FINGERPRINT']}\n"
-                  f"E_FINGERPRINT={os.environ['E_FINGERPRINT']}\n"
-                  f"F_FINGERPRINT={os.environ['F_FINGERPRINT']}\n"
-              )
-          PY
-          chmod 600 "$keyring"
-      - name: Produce canonical final review
-        shell: bash
-        run: |
-          set -euo pipefail
-          read -r FINAL_REVIEW_PATH FINAL_REVIEW_SHA256 < <(python3 tools/run_g009_qualification.py final-review --qualification-bundle "$QUALIFICATION_BUNDLE_PATH" --reviewer-keyring "$REVIEWER_KEYRING_PATH" --reviewer-keyring-sha256 "$REVIEWER_KEYRING_SHA256" --reviewer-fingerprint "owner=$OWNER_FINGERPRINT" --reviewer-fingerprint "E=$E_FINGERPRINT" --reviewer-fingerprint "F=$F_FINGERPRINT" --attestation "owner=$GITHUB_WORKSPACE/post-index-review/owner-attestation.json=$GITHUB_WORKSPACE/post-index-review/owner-attestation.asc" --attestation "E=$GITHUB_WORKSPACE/post-index-review/E-attestation.json=$GITHUB_WORKSPACE/post-index-review/E-attestation.asc" --attestation "F=$GITHUB_WORKSPACE/post-index-review/F-attestation.json=$GITHUB_WORKSPACE/post-index-review/F-attestation.asc")
-          printf 'FINAL_REVIEW_PATH=%s\nFINAL_REVIEW_SHA256=%s\n' "$FINAL_REVIEW_PATH" "$FINAL_REVIEW_SHA256" >> "$GITHUB_ENV"
-      - name: Strictly verify final review
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts/g009/final
-          receipt="artifacts/g009/final/strict-verifier-${FINAL_REVIEW_SHA256}.json"
-          read -r STRICT_VERIFIER_RECEIPT STRICT_VERIFIER_RECEIPT_SHA256 < <(python3 tools/verify_g009_qualification.py --qualification-bundle "$QUALIFICATION_BUNDLE_PATH" --final-review "$FINAL_REVIEW_PATH" --reviewer-keyring "$REVIEWER_KEYRING_PATH" --reviewer-keyring-sha256 "$REVIEWER_KEYRING_SHA256" --reviewer-fingerprint "owner=$OWNER_FINGERPRINT" --reviewer-fingerprint "E=$E_FINGERPRINT" --reviewer-fingerprint "F=$F_FINGERPRINT" --attestation "owner=$GITHUB_WORKSPACE/post-index-review/owner-attestation.json=$GITHUB_WORKSPACE/post-index-review/owner-attestation.asc" --attestation "E=$GITHUB_WORKSPACE/post-index-review/E-attestation.json=$GITHUB_WORKSPACE/post-index-review/E-attestation.asc" --attestation "F=$GITHUB_WORKSPACE/post-index-review/F-attestation.json=$GITHUB_WORKSPACE/post-index-review/F-attestation.asc" --evidence-root artifacts/g009 --receipt-out "$receipt")
-          test "$STRICT_VERIFIER_RECEIPT" = "$GITHUB_WORKSPACE/$receipt"
-          printf 'STRICT_VERIFIER_RECEIPT=%s\nSTRICT_VERIFIER_RECEIPT_SHA256=%s\n' "$STRICT_VERIFIER_RECEIPT" "$STRICT_VERIFIER_RECEIPT_SHA256" >> "$GITHUB_ENV"
-      - name: Create content-addressed final bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          read -r FINAL_BUNDLE_PATH FINAL_BUNDLE_SHA256 < <(python3 tools/run_g009_qualification.py final-bundle --qualification-bundle "$QUALIFICATION_BUNDLE_PATH" --index "$ACCEPTANCE_INDEX_PATH" --review "$FINAL_REVIEW_PATH" --traceability release/g009-traceability-v1.json --attestation "owner=$GITHUB_WORKSPACE/post-index-review/owner-attestation.json=$GITHUB_WORKSPACE/post-index-review/owner-attestation.asc" --attestation "E=$GITHUB_WORKSPACE/post-index-review/E-attestation.json=$GITHUB_WORKSPACE/post-index-review/E-attestation.asc" --attestation "F=$GITHUB_WORKSPACE/post-index-review/F-attestation.json=$GITHUB_WORKSPACE/post-index-review/F-attestation.asc" --strict-verifier-receipt "$STRICT_VERIFIER_RECEIPT" --output artifacts/g009/final/podway-g009-final-bundle.zip)
-          export FINAL_BUNDLE_PATH FINAL_BUNDLE_SHA256
-          mkdir -p final-bundle
+          test "$RUNNER_OS" = macOS; test "$RUNNER_ARCH" = "$G009_RUNNER_ARCH"; test "$(uname -m)" = "$G009_ARCH"
+          test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
           python3 - <<'PY'
-          import hashlib, os, stat
+          import base64, hashlib, json, os, re, sys
           from pathlib import Path
-
-          def read_regular(path):
-              descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-              try:
-                  before = os.fstat(descriptor)
-                  if not stat.S_ISREG(before.st_mode):
-                      raise SystemExit(f"non-regular final bundle source: {path}")
-                  chunks = []
-                  while chunk := os.read(descriptor, 1024 * 1024):
-                      chunks.append(chunk)
-                  after = os.fstat(descriptor)
-                  if (before.st_dev, before.st_ino, before.st_size, before.st_mode) != (
-                      after.st_dev, after.st_ino, after.st_size, after.st_mode
-                  ):
-                      raise SystemExit(f"final bundle source changed while read: {path}")
-                  return b"".join(chunks)
-              finally:
-                  os.close(descriptor)
-
-          def write_new(path, data):
-              descriptor = os.open(
-                  path,
-                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                  0o444,
-              )
-              try:
-                  offset = 0
-                  while offset < len(data):
-                      offset += os.write(descriptor, data[offset:])
-                  os.fsync(descriptor)
-              finally:
-                  os.close(descriptor)
-
-          source = Path(os.environ["FINAL_BUNDLE_PATH"])
-          digest = os.environ["FINAL_BUNDLE_SHA256"]
-          destination = Path("final-bundle") / f"podway-g009-final-{digest}.zip"
-          sums = Path("final-bundle/SHA256SUMS")
-          if source.is_symlink() or destination.is_symlink() or sums.is_symlink():
-              raise SystemExit("unsafe final bundle publication path")
-          data = read_regular(source)
-          if hashlib.sha256(data).hexdigest() != digest:
-              raise SystemExit("final bundle digest differs before publication")
-          write_new(destination, data)
-          write_new(sums, f"{digest}  {destination.name}\n".encode())
+          sys.path.insert(0,'tools'); from g009_common import require_native_host, target_tuple
+          require_native_host(os.environ['G009_TRIPLE'])
+          root=Path(os.environ['GITHUB_WORKSPACE']).resolve(); bundle=root/'qualification-input'/'qualification-bundle.json'
+          if not bundle.is_file() or bundle.is_symlink() or not re.fullmatch(r'[0-9a-f]{64}',os.environ['EXPECTED_BUNDLE_SHA256']) or hashlib.sha256(bundle.read_bytes()).hexdigest()!=os.environ['EXPECTED_BUNDLE_SHA256']: raise SystemExit('qualification descriptor digest mismatch')
+          value=json.loads(bundle.read_text()); expected=target_tuple(os.environ['G009_TRIPLE'])
+          if value.get('schema')!='podway.g009.qualification-bundle/v1' or value.get('target')!=expected['triple'] or value.get('target_tuple')!=expected: raise SystemExit('missing, relabeled, translated, or universal target qualification')
+          data=base64.b64decode(os.environ['G009_REVIEWER_KEYRING_B64'],validate=True)
+          if not data: raise SystemExit('empty reviewer keyring')
+          keyring=Path(os.environ['RUNNER_TEMP'])/'g009-reviewer-keyring.gpg'; keyring.write_bytes(data); keyring.chmod(0o400)
+          Path(os.environ['GITHUB_ENV']).open('a').write(f'QUALIFICATION_BUNDLE_PATH={bundle}\nACCEPTANCE_INDEX_PATH={root / "qualification-input" / "acceptance-index.json"}\nREVIEWER_KEYRING_PATH={keyring}\nREVIEWER_KEYRING_SHA256={hashlib.sha256(data).hexdigest()}\n')
           PY
-          printf 'FINAL_BUNDLE_SHA256=%s\n' "$FINAL_BUNDLE_SHA256" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+      - name: Produce and strictly verify final review
+        shell: bash
+        env:
+          OWNER_FINGERPRINT: ${{ secrets.G009_OWNER_FINGERPRINT }}
+          E_FINGERPRINT: ${{ secrets.G009_E_FINGERPRINT }}
+          F_FINGERPRINT: ${{ secrets.G009_F_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          attestations=(--attestation "owner=$GITHUB_WORKSPACE/post-index-review/owner-attestation.json=$GITHUB_WORKSPACE/post-index-review/owner-attestation.asc" --attestation "E=$GITHUB_WORKSPACE/post-index-review/E-attestation.json=$GITHUB_WORKSPACE/post-index-review/E-attestation.asc" --attestation "F=$GITHUB_WORKSPACE/post-index-review/F-attestation.json=$GITHUB_WORKSPACE/post-index-review/F-attestation.asc")
+          reviewers=(--reviewer-fingerprint "owner=$OWNER_FINGERPRINT" --reviewer-fingerprint "E=$E_FINGERPRINT" --reviewer-fingerprint "F=$F_FINGERPRINT")
+          read -r FINAL_REVIEW_PATH FINAL_REVIEW_SHA256 < <(python3 tools/run_g009_qualification.py final-review --qualification-bundle "$QUALIFICATION_BUNDLE_PATH" --reviewer-keyring "$REVIEWER_KEYRING_PATH" --reviewer-keyring-sha256 "$REVIEWER_KEYRING_SHA256" "${reviewers[@]}" "${attestations[@]}")
+          read -r STRICT_VERIFIER_RECEIPT _ < <(python3 tools/verify_g009_qualification.py --qualification-bundle "$QUALIFICATION_BUNDLE_PATH" --final-review "$FINAL_REVIEW_PATH" --reviewer-keyring "$REVIEWER_KEYRING_PATH" --reviewer-keyring-sha256 "$REVIEWER_KEYRING_SHA256" --invocation-nonce "$QUALIFICATION_INVOCATION_NONCE" "${reviewers[@]}" "${attestations[@]}" --evidence-root artifacts/g009 --receipt-out artifacts/g009/strict-verifier.json)
+          read -r FINAL_BUNDLE_PATH FINAL_BUNDLE_SHA256 < <(python3 tools/run_g009_qualification.py final-bundle --qualification-bundle "$QUALIFICATION_BUNDLE_PATH" --index "$ACCEPTANCE_INDEX_PATH" --review "$FINAL_REVIEW_PATH" --traceability release/g009-traceability-v1.json "${attestations[@]}" --strict-verifier-receipt "$STRICT_VERIFIER_RECEIPT" --output artifacts/g009/final-bundle/podway-g009-final-bundle.zip)
+          export FINAL_BUNDLE_PATH FINAL_BUNDLE_SHA256
+          python3 - <<'PY'
+          import hashlib,json,os,re,zipfile
+          from pathlib import Path
+          final=Path(os.environ['FINAL_BUNDLE_PATH']); out=Path('publication-handoff'); out.mkdir()
+          with zipfile.ZipFile(final) as outer:
+              required={'qualification-bundle.json','qualification-bundle.zip','acceptance-index.json','final-review.json','traceability.json','release-policy.json','tool-manifest.json','strict-verifier-receipt.json','receipt.json','manifest.json','attestations/owner.payload','attestations/owner.signature','attestations/E.payload','attestations/E.signature','attestations/F.payload','attestations/F.signature'}
+              names=outer.namelist()
+              if len(names) != len(set(names)) or set(names) != required: raise SystemExit('final bundle member set drift')
+              for name,dest in [('qualification-bundle.json','provenance-arm64.json'),('acceptance-index.json','acceptance-index-arm64.json'),('final-review.json','final-review-arm64.json'),('release-policy.json','release-policy.json'),('tool-manifest.json','controller-manifest.json'),('manifest.json','final-bundle-manifest.json')]: (out/dest).write_bytes(outer.read(name))
+              qualification=outer.read('qualification-bundle.zip')
+          provenance=json.loads((out/'provenance-arm64.json').read_text()); review=json.loads((out/'final-review-arm64.json').read_text())
+          with zipfile.ZipFile(__import__('io').BytesIO(qualification)) as bundle:
+              names=bundle.namelist()
+              if names.count('archive.zip') != 1 or len(names) != len(set(names)): raise SystemExit('qualification archive member set drift')
+              product=bundle.read('archive.zip')
+          digest=hashlib.sha256(product).hexdigest(); archive=f'podway-{provenance["source"]["commit"]}-arm64-{digest}.zip'; (out/archive).write_bytes(product)
+          sidecars=['provenance-arm64.json','acceptance-index-arm64.json','final-review-arm64.json','release-policy.json','controller-manifest.json','final-bundle-manifest.json','SHA256SUMS']
+          sums=''.join(f'{hashlib.sha256((out/name).read_bytes()).hexdigest()}  {name}\n' for name in [archive,*sidecars[:-1]]); (out/'SHA256SUMS').write_text(sums)
+          handoff={'schema':'podway.g009.publication-handoff/v1','controller_sha':os.environ['GITHUB_WORKFLOW_SHA'],'producing_workflow_sha':os.environ['QUALIFICATION_PRODUCING_WORKFLOW_SHA'],'checked_out_workflow_sha':os.environ['GITHUB_WORKFLOW_SHA'],'source':provenance['source'],'target':'aarch64-apple-darwin','target_tuple':provenance['target_tuple'],'product_archive':archive,'product_archive_sha256':digest,'final_bundle_sha256':os.environ['FINAL_BUNDLE_SHA256'],'final_bundle_manifest_sha256':hashlib.sha256((out/'final-bundle-manifest.json').read_bytes()).hexdigest(),'final_review_sha256':hashlib.sha256((out/'final-review-arm64.json').read_bytes()).hexdigest(),'release_policy_sha256':hashlib.sha256((out/'release-policy.json').read_bytes()).hexdigest(),'controller_manifest_sha256':hashlib.sha256((out/'controller-manifest.json').read_bytes()).hexdigest(),'reviewers':review['reviewers'],'attestations':review['attestations'],'sidecars':sidecars}
+          (out/'publication-handoff.json').write_text(json.dumps(handoff,sort_keys=True,separators=(',',':'))+'\n')
+          PY
+      - id: upload-handoff
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
-          name: g019-final-${{ env.FINAL_BUNDLE_SHA256 }}
-          path: final-bundle
+          name: g019-publication-handoff-arm64
+          path: publication-handoff
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
-
-      - name: Publish immutable digest-named GitHub release assets
-        shell: bash
-        env:
-          RELEASE_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json, os, stat, urllib.error, urllib.parse, urllib.request
-          from pathlib import Path
-
-          digest = os.environ["FINAL_BUNDLE_SHA256"]
-          repository = os.environ["GITHUB_REPOSITORY"]
-          api = os.environ["GITHUB_API_URL"]
-          tag = f"g009-{digest}"
-          headers = {
-              "Accept": "application/vnd.github+json",
-              "Authorization": f"Bearer {os.environ['RELEASE_TOKEN']}",
-              "X-GitHub-Api-Version": "2022-11-28",
-          }
-          bundle_name = f"podway-g009-final-{digest}.zip"
-          expected_sums = f"{digest}  {bundle_name}\n".encode()
-          expected_asset_names = {bundle_name, "SHA256SUMS"}
-          release_url_prefix = f"{api}/repos/{repository}/releases/"
-          asset_url_prefix = f"{api}/repos/{repository}/releases/assets/"
-
-          def read_regular_asset(path, expected_digest=None, expected_content=None):
-              descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-              try:
-                  before = os.fstat(descriptor)
-                  if not stat.S_ISREG(before.st_mode):
-                      raise SystemExit(f"local release asset is not a regular file: {path}")
-                  chunks = []
-                  while chunk := os.read(descriptor, 1024 * 1024):
-                      chunks.append(chunk)
-                  after = os.fstat(descriptor)
-                  if (before.st_dev, before.st_ino, before.st_size, before.st_mode) != (
-                      after.st_dev, after.st_ino, after.st_size, after.st_mode
-                  ):
-                      raise SystemExit(f"local release asset changed while read: {path}")
-                  data = b"".join(chunks)
-              finally:
-                  os.close(descriptor)
-              if expected_digest is not None and hashlib.sha256(data).hexdigest() != expected_digest:
-                  raise SystemExit(f"local release asset digest differs: {path.name}")
-              if expected_content is not None and data != expected_content:
-                  raise SystemExit(f"local release asset content differs: {path.name}")
-              return data
-
-          local_assets = {
-              bundle_name: (
-                  read_regular_asset(
-                      Path("final-bundle") / bundle_name,
-                      expected_digest=digest,
-                  ),
-                  "application/zip",
-              ),
-              "SHA256SUMS": (
-                  read_regular_asset(
-                      Path("final-bundle/SHA256SUMS"),
-                      expected_content=expected_sums,
-                  ),
-                  "text/plain",
-              ),
-          }
-
-          def validate_release_identity(candidate):
-              if (
-                  candidate.get("tag_name") != tag
-                  or candidate.get("target_commitish") != os.environ["GITHUB_WORKFLOW_SHA"]
-                  or not isinstance(candidate.get("url"), str)
-                  or not candidate["url"].startswith(release_url_prefix)
-              ):
-                  raise SystemExit("existing digest release identity differs")
-
-          def asset_map(candidate, *, require_exact):
-              assets = candidate.get("assets")
-              if not isinstance(assets, list):
-                  raise SystemExit("release asset listing is malformed")
-              by_name = {}
-              for asset in assets:
-                  if not isinstance(asset, dict):
-                      raise SystemExit("release contains malformed asset")
-                  name = asset.get("name")
-                  url = asset.get("url")
-                  if (
-                      not isinstance(name, str)
-                      or not isinstance(url, str)
-                      or not url.startswith(asset_url_prefix)
-                      or name in by_name
-                  ):
-                      raise SystemExit("release contains duplicate or malformed assets")
-                  if name not in expected_asset_names:
-                      raise SystemExit(f"release contains unexpected asset: {name}")
-                  by_name[name] = asset
-              if require_exact and set(by_name) != expected_asset_names:
-                  raise SystemExit("release does not contain exactly the required assets")
-              return by_name
-          
-          def verify_remote_assets(candidate):
-              remote_assets = asset_map(candidate, require_exact=True)
-              for name, (expected, _) in local_assets.items():
-                  download = urllib.request.Request(
-                      remote_assets[name]["url"],
-                      headers={**headers, "Accept": "application/octet-stream"},
-                  )
-                  with urllib.request.urlopen(download, timeout=120) as response:
-                      if response.read() != expected:
-                          raise SystemExit(f"remote release asset differs: {name}")
-              return remote_assets
-          
-
-          lookup = urllib.request.Request(f"{api}/repos/{repository}/releases/tags/{tag}", headers=headers)
-          try:
-              with urllib.request.urlopen(lookup, timeout=30) as response:
-                  release = json.load(response)
-          except urllib.error.HTTPError as error:
-              if error.code != 404:
-                  raise
-              body = json.dumps({
-                  "tag_name": tag,
-                  "target_commitish": os.environ["GITHUB_WORKFLOW_SHA"],
-                  "name": f"Podway G009 {digest}",
-                  "body": f"Strictly verified Apple Silicon release bundle SHA-256: {digest}",
-                  "draft": True,
-                  "prerelease": False,
-                  "make_latest": "false",
-              }, separators=(",", ":")).encode()
-              create = urllib.request.Request(
-                  f"{api}/repos/{repository}/releases",
-                  data=body,
-                  headers={**headers, "Content-Type": "application/json"},
-                  method="POST",
-              )
-              with urllib.request.urlopen(create, timeout=30) as response:
-                  release = json.load(response)
-
-          validate_release_identity(release)
-          if not isinstance(release.get("draft"), bool):
-              raise SystemExit("release draft state is malformed")
-          if release["draft"] is False:
-              verify_remote_assets(release)
-              raise SystemExit(0)
-          
-          existing_assets = asset_map(release, require_exact=False)
-          upload_url = release.get("upload_url")
-          if not isinstance(upload_url, str) or not upload_url.startswith(release_url_prefix):
-              raise SystemExit("release upload URL is malformed")
-          upload_root = upload_url.split("{", 1)[0]
-          for name, (data, content_type) in local_assets.items():
-              if name in existing_assets:
-                  continue
-              upload = urllib.request.Request(
-                  f"{upload_root}?{urllib.parse.urlencode({'name': name})}",
-                  data=data,
-                  headers={**headers, "Content-Type": content_type},
-                  method="POST",
-              )
-              with urllib.request.urlopen(upload, timeout=120) as response:
-                  if response.status != 201:
-                      raise SystemExit(f"release asset upload failed: {name}")
-          
-          refresh = urllib.request.Request(release["url"], headers=headers)
-          with urllib.request.urlopen(refresh, timeout=30) as response:
-              release = json.load(response)
-          validate_release_identity(release)
-          if release.get("draft") is not True:
-              raise SystemExit("draft release state changed before publication")
-          verify_remote_assets(release)
-
-          if release.get("draft") is True:
-              publish = urllib.request.Request(
-                  release["url"],
-                  data=b'{"draft":false,"make_latest":"false"}',
-                  headers={**headers, "Content-Type": "application/json"},
-                  method="PATCH",
-              )
-              with urllib.request.urlopen(publish, timeout=30) as response:
-                  published = json.load(response)
-              if published.get("draft") is not False:
-                  raise SystemExit("digest release publication did not become visible")
-          PY

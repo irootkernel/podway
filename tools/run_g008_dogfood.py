@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from run_g005_vertical import produce_daemon_build_receipt
 
 def verification_root() -> Path:
     controller_root = Path(__file__).resolve().parents[1]
@@ -56,11 +57,11 @@ def run(argv: list[str], *, env: dict[str, str] | None = None) -> subprocess.Com
 def main() -> int:
     run(["cargo", "build", "-p", "podway-daemon", "--bin", "podwayd"])
     daemon = cargo_target_directory() / "debug" / "podwayd"
-    if not daemon.is_file():
-        raise SystemExit(f"current podwayd artifact is missing: {daemon}")
+    receipt = produce_daemon_build_receipt(ROOT, daemon)
 
     environment = os.environ.copy()
-    environment["PODWAYD_TEST_BINARY"] = str(daemon)
+    environment["PODWAYD_TEST_BINARY"] = str(daemon.resolve())
+    environment["PODWAYD_BUILD_RECEIPT"] = str(receipt.resolve())
     completed = run(
         [
             "cargo",
@@ -94,13 +95,18 @@ def main() -> int:
             raise SystemExit(f"{preset} did not cover retry and return")
         if result.get("next_checks", 0) < 1 or result.get("commands", 0) < 1:
             raise SystemExit(f"{preset} did not record command and next evidence")
+        if not isinstance(result.get("stage_topology"), list) or not result["stage_topology"]:
+            raise SystemExit(f"{preset} did not emit ordered stage topology evidence")
+        if not isinstance(result.get("readiness_millis"), int) or result["readiness_millis"] > 10_000:
+            raise SystemExit(f"{preset} did not emit bounded readiness measurement")
 
     print(
         json.dumps(
             {
-                "binary": str(daemon),
+                "binary": str(daemon.resolve()),
                 "goal": "G008",
                 "ok": True,
+                "receipt": str(receipt.resolve()),
                 "test": TEST_NAME,
                 "conformanceCells": 12,
                 "scenarios": scenarios,

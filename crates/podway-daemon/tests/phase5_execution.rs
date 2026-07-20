@@ -1,9 +1,53 @@
 include!("phase4_execution.rs");
-use podway_core::DomainResult;
-use podway_daemon::execution::ResetAllPreparationOutcomeV1;
-use podway_protocol::canonical_reset_all_identity_v1;
-use sha2::{Digest as _, Sha256};
+#[allow(dead_code)]
+#[path = "support_phase4_workspace.rs"]
+mod support_phase4_workspace;
 
+use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+
+use podway_core::{DomainCommandKind, DomainResult};
+use podway_daemon::{
+    execution::ResetAllPreparationOutcomeV1,
+    native_execution::NativeArtifactVerifierV1,
+    workspace::{SqliteWorkspaceBindingInspectorV1, WorkspaceResolverV1},
+};
+use podway_git::NativeGitResolverV1;
+use podway_protocol::{SliceErrorV1, canonical_reset_all_identity_v1};
+use podway_store::{JobListQueryV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreReadContractV1};
+use sha2::{Digest as _, Sha256};
+use support_phase4_workspace::{git_worktrees, selector as git_selector};
+
+fn assert_sentinel_absent_from_sqlite_files(database_path: &std::path::Path, sentinel: &[u8]) {
+    for suffix in ["", "-wal", "-shm"] {
+        let path = std::path::PathBuf::from(format!("{}{}", database_path.display(), suffix));
+        match std::fs::metadata(&path) {
+            Ok(metadata) => {
+                assert!(
+                    metadata.is_file(),
+                    "SQLite storage path must be a regular file"
+                );
+                let bytes = std::fs::read(&path).unwrap_or_else(|error| {
+                    panic!(
+                        "SQLite storage path {} must be readable: {error}",
+                        path.display()
+                    )
+                });
+                assert!(
+                    !bytes
+                        .windows(sentinel.len())
+                        .any(|window| window == sentinel),
+                    "SQLite storage path {} must not retain local artifact bytes",
+                    path.display()
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!(
+                "SQLite storage path {} must be inspectable: {error}",
+                path.display()
+            ),
+        }
+    }
+}
 #[test]
 fn g006_start_replace_skip_cancel_and_reset_are_durable_transitions() {
     let mut harness = Harness::new();
@@ -156,7 +200,10 @@ fn g006_start_replace_requires_confirmation_without_replacing_the_session() {
     })
     .unwrap();
 
-    assert!(SliceRequestV1::from_envelope(&envelope).is_err());
+    assert_eq!(
+        SliceRequestV1::from_envelope(&envelope),
+        Err(SliceErrorV1::InvalidValue { field: "confirmed" })
+    );
     assert_eq!(harness.store.current_session().unwrap(), before);
     assert_eq!(harness.store.request_count(), 1);
 }
@@ -238,6 +285,248 @@ fn g006_item_uncheck_remove_clear_and_opaque_attachment_use_typed_mutations() {
         attached.result(),
         TerminalResultV1::Success(DomainResult::ItemChanged { .. })
     ));
+}
+#[test]
+fn pac064_local_artifact_content_never_enters_durable_request_session_or_event_data() {
+    let sentinel = b"PAC064-ARTIFACT-BYTES-MUST-NEVER-PERSIST-9d1b";
+    let fixture = git_worktrees();
+    let runtime = fixture.main().join(".podway/runtime");
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700))
+        .expect("PAC-064 runtime directory must be private");
+    std::fs::write(fixture.main().join("proof.txt"), sentinel)
+        .expect("PAC-064 artifact must be written in the real Git worktree");
+
+    let options = SqliteStoreOptionsV1::new(8).expect("SQLite options must be valid");
+    let bootstrap = WorkspaceResolverV1::new(
+        NativeGitResolverV1::new(),
+        SqliteWorkspaceBindingInspectorV1::new(options.clone()),
+    )
+    .resolve_bootstrap(git_selector(fixture.main()))
+    .expect("real Git worktree must resolve for Store bootstrap");
+    let identity = bootstrap.store_identity().clone();
+    let canonical_root =
+        std::fs::canonicalize(fixture.main()).expect("PAC-064 worktree must canonicalize");
+    let selector = serde_json::to_value(
+        WorktreeSelectorWireV1::new(
+            canonical_root.as_os_str().as_bytes(),
+            canonical_root.display().to_string(),
+            Some(identity.workspace_uuid().clone()),
+        )
+        .expect("PAC-064 selector must bind the real workspace identity"),
+    )
+    .expect("PAC-064 selector must serialize");
+    let binding = WorkspaceBindingV1::new(identity.clone(), bootstrap.workspace_root().clone());
+    let database_path = bootstrap.database_path().to_path_buf();
+    let store = SqliteStoreV1::open(
+        &database_path,
+        bootstrap.workspace_root(),
+        identity.clone(),
+        options.clone(),
+        UnixMillis::new(64),
+    )
+    .expect("main SQLite database must open");
+    let engine = DaemonExecutionEngineV1::new(
+        store,
+        FixtureIds::new(),
+        FixtureClock::new(),
+        FixtureProcedures,
+        NativeArtifactVerifierV1::new(SqliteWorkspaceBindingInspectorV1::new(options.clone())),
+        FixtureWorkspaces::stable(binding.clone()),
+    );
+
+    let start = slice_request(
+        "session.start",
+        json!({"selector": selector.clone(), "preset": "sw-dev", "task_title": "PAC-064"}),
+        PreconditionsV1::default(),
+        64_001,
+    );
+    assert!(matches!(
+        engine
+            .admit(
+                &start,
+                IdempotencyKeyV1::new("pac064-start").expect("valid key")
+            )
+            .expect("session start must admit"),
+        AdmitOutcomeV1::New(_)
+    ));
+    assert_success(
+        &engine
+            .execute_next(
+                &binding,
+                WorkerIdV1::new("pac064-worker").expect("valid worker"),
+            )
+            .expect("session start must execute")
+            .expect("session start must produce a receipt"),
+    );
+
+    let session = engine
+        .store()
+        .read_session_aggregate(&identity)
+        .expect("main database session aggregate must be readable")
+        .expect("session must be durable");
+    let attempt_id = session
+        .active_attempt_id()
+        .expect("session must have an attempt")
+        .clone();
+    let proof_revision = session
+        .attempts()
+        .iter()
+        .find(|attempt| attempt.attempt_id() == &attempt_id)
+        .expect("active attempt must exist")
+        .item_slots()
+        .iter()
+        .find(|slot| slot.item_id().as_str() == "proof")
+        .expect("proof item must exist")
+        .revision();
+    let attach = slice_request(
+        "item.attach",
+        json!({
+            "selector": selector.clone(),
+            "item_id": "proof",
+            "path": "proof.txt",
+            "media_type": "text/plain",
+        }),
+        PreconditionsV1::new(
+            None,
+            None,
+            Some(attempt_id),
+            Some(proof_revision),
+            None,
+            None,
+        )
+        .expect("attachment preconditions must be valid"),
+        64_002,
+    );
+    assert!(matches!(
+        engine
+            .admit(
+                &attach,
+                IdempotencyKeyV1::new("pac064-attach").expect("valid key")
+            )
+            .expect("local artifact attachment must admit"),
+        AdmitOutcomeV1::New(_)
+    ));
+    let attach_receipt = engine
+        .execute_next(
+            &binding,
+            WorkerIdV1::new("pac064-worker").expect("valid worker"),
+        )
+        .expect("local artifact attachment must complete")
+        .expect("local artifact attachment must produce a receipt");
+    assert_success(&attach_receipt);
+
+    let durable_session = engine
+        .store()
+        .read_session_aggregate(&identity)
+        .expect("main database must reread the durable session")
+        .expect("durable session must exist");
+    let active_attempt = durable_session
+        .active_attempt_id()
+        .expect("durable session must retain its active attempt");
+    let artifact = durable_session
+        .attempts()
+        .iter()
+        .find(|attempt| attempt.attempt_id() == active_attempt)
+        .expect("durable active attempt must exist")
+        .item_slots()
+        .iter()
+        .find(|slot| slot.item_id().as_str() == "proof")
+        .and_then(|slot| slot.value())
+        .and_then(podway_core::ItemValueV1::as_artifact)
+        .expect("durable proof field must contain a typed artifact");
+    assert_eq!(artifact.location(), "proof.txt");
+    assert_eq!(
+        artifact.digest().as_str(),
+        format!("sha256:{:x}", Sha256::digest(sentinel))
+    );
+    assert_eq!(artifact.size_bytes(), sentinel.len() as u64);
+    assert_eq!(artifact.media_type(), "text/plain");
+    let durable_job = engine
+        .store()
+        .read_job(&identity, attach_receipt.job().job_id())
+        .expect("main database attachment job must be readable")
+        .expect("main database attachment job must be durable");
+    assert_eq!(durable_job.job(), attach_receipt.job());
+    assert_eq!(
+        durable_job.execution().command().kind(),
+        DomainCommandKind::ItemAttach
+    );
+    assert!(
+        durable_job.execution().has_complete_execution_document(),
+        "the request table must retain the complete typed execution document"
+    );
+    let durable_request: serde_json::Value =
+        serde_json::from_str(durable_job.execution().canonical_execution().as_str())
+            .expect("durable request document must remain valid canonical JSON");
+    assert_eq!(durable_request["command"], "item.attach");
+    assert_eq!(durable_request["payload"]["item_id"], "proof");
+    assert_eq!(durable_request["payload"]["source"]["path"], "proof.txt");
+    assert_eq!(
+        durable_request["payload"]["source"]["media_type"],
+        "text/plain"
+    );
+    let terminal = durable_job
+        .terminal_receipt()
+        .expect("main database attachment job must retain a terminal event");
+    assert_eq!(terminal.job(), durable_job.job());
+    let idempotent_attach = engine
+        .store()
+        .read_idempotent_outcome(
+            &identity,
+            &IdempotencyKeyV1::new("pac064-attach").expect("valid key"),
+            attach_receipt.job().request_digest(),
+        )
+        .expect("idempotency record must be readable");
+    assert_eq!(
+        idempotent_attach,
+        Some(AdmitOutcomeV1::Existing(
+            podway_store::JobReceiptOrTerminalV1::TerminalReceipt(terminal.clone())
+        ))
+    );
+    let journal = engine
+        .store()
+        .list_jobs(
+            &identity,
+            JobListQueryV1::new(100).expect("journal query limit must be valid"),
+        )
+        .expect("every durable journal job must be readable");
+    assert!(
+        journal.iter().all(|job| {
+            !job.execution()
+                .canonical_execution()
+                .as_str()
+                .as_bytes()
+                .windows(sentinel.len())
+                .any(|window| window == sentinel)
+        }),
+        "every durable journal execution field must exclude local artifact bytes"
+    );
+    assert_sentinel_absent_from_sqlite_files(&database_path, sentinel);
+    drop(engine);
+
+    let reopened = SqliteStoreV1::open(
+        &database_path,
+        bootstrap.workspace_root(),
+        identity.clone(),
+        options,
+        UnixMillis::new(65),
+    )
+    .expect("main database must reopen");
+    let reread = reopened
+        .read_session_aggregate(&identity)
+        .expect("reopened main database must read session")
+        .expect("reopened main database must retain session");
+    assert_eq!(reread, durable_session);
+    let reread_job = reopened
+        .read_job(&identity, attach_receipt.job().job_id())
+        .expect("reopened main database must read the attachment job")
+        .expect("reopened main database must retain the attachment job");
+    assert_eq!(reread_job, durable_job);
+    assert_sentinel_absent_from_sqlite_files(&database_path, sentinel);
+    reopened
+        .close_for_maintenance()
+        .expect("independent SQLite reopen must checkpoint before close");
+    assert_sentinel_absent_from_sqlite_files(&database_path, sentinel);
 }
 
 #[test]
@@ -378,7 +667,10 @@ fn g006_destructive_commands_require_protocol_validated_confirmation() {
             .clone(),
     })
     .unwrap();
-    assert!(SliceRequestV1::from_envelope(&envelope).is_err());
+    assert_eq!(
+        SliceRequestV1::from_envelope(&envelope),
+        Err(SliceErrorV1::InvalidValue { field: "confirmed" })
+    );
     let requests_before_reset_preparation = harness.store.request_count();
     let reset_all = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new("00000000-0000-4000-8000-000000009802").unwrap(),
@@ -398,7 +690,10 @@ fn g006_destructive_commands_require_protocol_validated_confirmation() {
             .clone(),
     })
     .unwrap();
-    assert!(SliceRequestV1::from_envelope(&reset_all).is_err());
+    assert_eq!(
+        SliceRequestV1::from_envelope(&reset_all),
+        Err(SliceErrorV1::InvalidValue { field: "confirmed" })
+    );
     assert_eq!(
         harness.store.request_count(),
         requests_before_reset_preparation,

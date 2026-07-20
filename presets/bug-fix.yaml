@@ -108,6 +108,8 @@ stages:
         required: true
   - id: finish
     title: Finish the bug fix
+    instructions:
+      - Confirm the corrected behavior is ready to report and summarize any remaining limitations.
     items:
       - id: task-result-ready
         type: confirm

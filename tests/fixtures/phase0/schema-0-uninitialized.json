@@ -1,12 +1,13 @@
 {
   "fixture_version": "podway.phase0.schema-0-uninitialized/v1",
-  "fixture_kind": "compatibility-contract",
+  "fixture_kind": "empty-predecessor-contract",
   "scope": {
     "proves": [
       "schema-0/uninitialized identity",
-      "frozen initial-migration contract shape"
+      "empty predecessor has no user-schema objects or rows",
     ],
     "does_not_prove": [
+      "an on-disk SQLite database",
       "production Store behavior",
       "production Git behavior",
       "production daemon behavior",
@@ -14,10 +15,10 @@
     ]
   },
   "predecessor": {
-    "identity": "uninitialized-database",
+    "identity": "schema-0-uninitialized",
     "schema": "schema-0",
-    "storage": "non-file",
-    "is_database_file": false,
+    "storage": "on-disk-sqlite-empty",
+    "is_database_file": true,
     "tables": [],
     "rows": []
   },
@@ -36,15 +37,15 @@
   "expected_assertions": [
     {
       "id": "initial-migration-atomicity",
-      "assertion": "schema-v1 initialization commits atomically or leaves the uninitialized identity unchanged"
+      "SchemaBeforeCommit rollback leaves user_version=0 and no user-schema objects; initialization uses an IMMEDIATE SQLite transaction, not file publication"
     },
     {
       "id": "initial-migration-no-loss",
-      "assertion": "initialization preserves all state present at commit; the uninitialized identity supplies no predecessor rows"
+      "the empty predecessor has no task or other application rows; schema-v1 creates its own required singleton workspace_state row"
     },
     {
       "id": "initial-migration-no-duplicate",
-      "assertion": "replay does not duplicate schema_migrations or create a second schema-v1 state"
+      "reopening schema-v1 does not re-run initialization; schema_migrations remains a single version-1 row"
     }
   ],
   "requirement_ids": ["STO-011", "REL-006"]

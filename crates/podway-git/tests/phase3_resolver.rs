@@ -391,10 +391,17 @@ fn durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replace
         .resolve(selector(&moved, Some(durable.clone())))
         .expect("rename preserves descriptor identities");
     assert!(repaired.move_metadata().relocated_from_prior_root());
-    assert!(matches!(
-        repaired.repair_metadata().registry_action(),
-        RegistryRepairActionV1::UpdateValidatedRoot { .. }
-    ));
+    let RegistryRepairActionV1::UpdateValidatedRoot { previous_root } =
+        repaired.repair_metadata().registry_action()
+    else {
+        panic!("moved worktree must request registry repair");
+    };
+    assert_eq!(
+        previous_root
+            .decode_path_bytes()
+            .expect("previous root bytes"),
+        original.as_os_str().as_bytes()
+    );
 
     let copied = temporary.path().join("copied");
     create_main(&copied);
@@ -469,6 +476,42 @@ fn durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replace
     ));
 }
 
+#[test]
+fn bound_live_workspace_uuid_requires_registry_conflict_verification_on_every_resolution() {
+    let temporary = temp();
+    let worktree = temporary.path().join("live-worktree");
+    create_main(&worktree);
+    let worktree = fs::canonicalize(&worktree).expect("canonical live worktree");
+    let resolver = NativeGitResolverV1::new();
+    let durable = store_bound(
+        resolver
+            .resolve(selector(&worktree, None))
+            .expect("initial live workspace discovery")
+            .identity(),
+    );
+
+    let first = resolver
+        .resolve(selector(&worktree, Some(durable.clone())))
+        .expect("first bound resolution");
+    let second = resolver
+        .resolve(selector(&worktree, Some(durable)))
+        .expect("second independently live bound resolution");
+
+    assert_eq!(
+        first.identity().workspace_id(),
+        second.identity().workspace_id(),
+        "the resolver preserves the durable workspace UUID across live resolutions"
+    );
+    assert_eq!(
+        first.repair_metadata().workspace_uuid_verification(),
+        &WorkspaceUuidVerificationV1::RegistryCheckRequired
+    );
+    assert_eq!(
+        second.repair_metadata().workspace_uuid_verification(),
+        &WorkspaceUuidVerificationV1::RegistryCheckRequired,
+        "Git identity validation must delegate duplicate-UUID rejection to the registry boundary"
+    );
+}
 #[test]
 fn durable_directory_fingerprints_ignore_permission_bit_changes() {
     let temporary = temp();

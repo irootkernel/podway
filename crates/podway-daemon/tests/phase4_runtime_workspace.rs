@@ -2,11 +2,19 @@
 
 mod support_phase4_workspace;
 
-use std::{fs, path::Path, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::SystemTime,
+};
 
 #[cfg(unix)]
 use std::{
-    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{MetadataExt, PermissionsExt},
+    },
     process::Command,
 };
 
@@ -25,9 +33,134 @@ use podway_store::{
     StoreUnavailableReasonV1, WorkerIdV1,
 };
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 use support_phase4_workspace::{
     copy_tree, git_worktrees, non_utf8_child_path, read_file, selector,
 };
+
+fn fixture_runtime_directory(root: &Path) -> PathBuf {
+    let root = fs::canonicalize(root).expect("fixture root must canonicalize");
+    #[cfg(unix)]
+    let digest = Sha256::digest(root.as_os_str().as_bytes());
+    #[cfg(not(unix))]
+    let digest = Sha256::digest(root.to_string_lossy().as_bytes());
+    let digest = format!("{digest:x}");
+    std::env::temp_dir().join(format!("pdr-{}", &digest[..16]))
+}
+#[derive(Debug, Eq, PartialEq)]
+struct SnapshotMetadataV1 {
+    is_directory: bool,
+    is_regular_file: bool,
+    is_symlink: bool,
+    byte_length: u64,
+    mode: u32,
+    modified_at: SystemTime,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum RuntimeTreePayloadV1 {
+    Directory,
+    File(Vec<u8>),
+    Symlink(PathBuf),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RuntimeTreeEntryV1 {
+    relative_path: PathBuf,
+    metadata: SnapshotMetadataV1,
+    payload: RuntimeTreePayloadV1,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct FileSnapshotV1 {
+    metadata: SnapshotMetadataV1,
+    bytes: Vec<u8>,
+}
+
+#[cfg(unix)]
+fn snapshot_mode(metadata: &fs::Metadata) -> u32 {
+    metadata.mode()
+}
+
+#[cfg(not(unix))]
+fn snapshot_mode(metadata: &fs::Metadata) -> u32 {
+    if metadata.permissions().readonly() {
+        1
+    } else {
+        0
+    }
+}
+
+fn snapshot_metadata(path: &Path) -> SnapshotMetadataV1 {
+    let metadata = fs::symlink_metadata(path).expect("snapshot path metadata must be readable");
+    let file_type = metadata.file_type();
+    SnapshotMetadataV1 {
+        is_directory: file_type.is_dir(),
+        is_regular_file: file_type.is_file(),
+        is_symlink: file_type.is_symlink(),
+        byte_length: metadata.len(),
+        mode: snapshot_mode(&metadata),
+        modified_at: metadata
+            .modified()
+            .expect("snapshot path modification time must be readable"),
+    }
+}
+
+fn snapshot_runtime_tree(root: &Path) -> Vec<RuntimeTreeEntryV1> {
+    let mut entries = Vec::new();
+    snapshot_runtime_tree_entry(root, Path::new(""), &mut entries);
+    entries
+}
+
+fn snapshot_runtime_tree_entry(
+    path: &Path,
+    relative_path: &Path,
+    entries: &mut Vec<RuntimeTreeEntryV1>,
+) {
+    let metadata = snapshot_metadata(path);
+    let payload = if metadata.is_directory {
+        RuntimeTreePayloadV1::Directory
+    } else if metadata.is_regular_file {
+        RuntimeTreePayloadV1::File(read_file(path))
+    } else if metadata.is_symlink {
+        RuntimeTreePayloadV1::Symlink(
+            fs::read_link(path).expect("runtime tree symlink must be readable"),
+        )
+    } else {
+        panic!("runtime tree contains an unsupported filesystem entry: {path:?}");
+    };
+    let is_directory = metadata.is_directory;
+    entries.push(RuntimeTreeEntryV1 {
+        relative_path: relative_path.to_path_buf(),
+        metadata,
+        payload,
+    });
+    if is_directory {
+        let mut children = fs::read_dir(path)
+            .expect("runtime tree directory must be readable")
+            .map(|entry| entry.expect("runtime tree entry must be readable").path())
+            .collect::<Vec<_>>();
+        children.sort();
+        for child in children {
+            let child_name = child
+                .file_name()
+                .expect("runtime tree child must have a file name");
+            snapshot_runtime_tree_entry(&child, &relative_path.join(child_name), entries);
+        }
+    }
+}
+
+fn snapshot_file(path: &Path) -> FileSnapshotV1 {
+    let metadata = snapshot_metadata(path);
+    assert!(
+        metadata.is_regular_file,
+        "snapshot path must be a regular file"
+    );
+    FileSnapshotV1 {
+        metadata,
+        bytes: read_file(path),
+    }
+}
 
 fn observation() -> WorkspaceRuntimeObservationV1 {
     WorkspaceRuntimeObservationV1::new(
@@ -48,7 +181,7 @@ fn manager(root: &Path) -> WorkspaceRuntimeManagerV1 {
         root.join("LaunchAgents"),
         application_support.join("Podway"),
         root.join("Logs/Podway"),
-        root.join("runtime"),
+        fixture_runtime_directory(root),
     )
     .expect("fixture service paths must be valid");
     WorkspaceRuntimeManagerV1::new(
@@ -246,10 +379,13 @@ fn copied_workspace_uuid_conflict_never_adopts_or_mutates_the_copy() {
         .identity()
         .workspace_uuid()
         .clone();
+    let original_root = fs::canonicalize(fixture.main()).expect("original root must canonicalize");
     let copied = fixture.temporary_path().join("copied-live-worktree");
     copy_tree(fixture.main(), &copied);
-    let copied_database = copied.join(".podway/runtime/state.sqlite3");
-    let before = read_file(&copied_database);
+    let copied_runtime = copied.join(".podway/runtime");
+    let copied_runtime_before = snapshot_runtime_tree(&copied_runtime);
+    let registry_path = manager.registry().registry_path().to_path_buf();
+    let registry_before = snapshot_file(&registry_path);
 
     let error =
         match manager.resolve_existing(selector(&copied), Some(&workspace_id), observation()) {
@@ -257,22 +393,64 @@ fn copied_workspace_uuid_conflict_never_adopts_or_mutates_the_copy() {
             Err(error) => error,
         };
 
-    assert!(matches!(
-        error,
+    match error {
         WorkspaceRuntimeErrorV1::Resolution(
-            WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }
-        )
-    ));
-    assert_eq!(read_file(&copied_database), before);
+            WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch {
+                stored,
+                observed_common_directory_fingerprint,
+                observed_worktree_administration_fingerprint,
+            },
+        ) => {
+            assert_eq!(
+                stored.workspace_uuid(),
+                &workspace_id,
+                "the rejected copy must retain the original durable workspace UUID"
+            );
+            assert_ne!(
+                stored.common_dir_identity(),
+                &observed_common_directory_fingerprint,
+                "the copied common Git directory must fail the durable identity check"
+            );
+            assert_ne!(
+                stored.worktree_admin_identity(),
+                &observed_worktree_administration_fingerprint,
+                "the copied worktree administration must fail the durable identity check"
+            );
+        }
+        other => {
+            panic!("a copied workspace must fail with Git/Store fingerprint conflict: {other:?}")
+        }
+    }
     assert_eq!(
-        manager
-            .registry()
-            .load()
-            .expect("registry must remain readable")
-            .workspaces()
-            .len(),
-        1,
-        "copy rejection must not add registry metadata"
+        snapshot_runtime_tree(&copied_runtime),
+        copied_runtime_before,
+        "copy rejection must not mutate any copied runtime path, bytes, or metadata"
+    );
+    assert_eq!(
+        snapshot_file(&registry_path),
+        registry_before,
+        "copy rejection must not mutate registry bytes or metadata"
+    );
+
+    let registered = manager
+        .registry()
+        .lookup(&workspace_id)
+        .expect("metadata registry must remain readable")
+        .expect("original workspace must remain registered");
+    assert_eq!(
+        scheduler.context_snapshot().workspace_root().to_path_buf(),
+        original_root.clone(),
+        "the original scheduler context must remain authoritative"
+    );
+    assert_eq!(
+        registered.last_known_root().to_path_buf(),
+        original_root,
+        "the original workspace must remain the UUID authority"
+    );
+    assert_ne!(
+        registered.last_known_root().to_path_buf(),
+        fs::canonicalize(&copied).expect("copied root must canonicalize"),
+        "the copied workspace must not be adopted as UUID authority"
     );
 }
 

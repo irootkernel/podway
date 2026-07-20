@@ -189,7 +189,7 @@ Deliverables:
 - full crash, concurrency, migration, Git, service, and fuzz runs;
 - performance baseline and regression thresholds;
 - dependency/license/security review;
-- Apple Silicon (`aarch64-apple-darwin`) release artifact;
+- native Apple Silicon (`aarch64-apple-darwin`, `arm64`) release artifacts;
 - signing/notarization where available;
 - checksums, release notes, and install guide;
 - final acceptance and traceability report;

@@ -9,7 +9,7 @@ Podway needs a reliable local daemon, Unix-domain IPC, SQLite transactions, Git 
 
 ## Decision
 
-Podway is implemented in Rust. The first complete release targets macOS Apple Silicon only (`aarch64-apple-darwin`) and uses a user LaunchAgent. Linux and Windows support may later add service backends while preserving all public semantics.
+Podway is implemented in Rust. The first complete release targets only the Apple Silicon tuple `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}` and uses a user LaunchAgent. Linux and Windows support may later add service backends while preserving all public semantics.
 
 ## Consequences
 

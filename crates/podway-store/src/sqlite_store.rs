@@ -5,7 +5,7 @@ use std::fs::{self, File, OpenOptions};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::io::ErrorKind;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -23,8 +23,9 @@ use crate::schema::{
     inspect_database_snapshot_unbound_v1, inspect_database_snapshot_v1, open_or_initialize_v1,
     open_or_initialize_with_temporary_cleanup_arm_v1, recover_interrupted_publication_v1,
     validate_database_parent_path_v1, validate_existing_database_path_v1,
-    validate_existing_regular_private_file_v1, validate_publication_link_pair_v1,
-    verify_inspection_integrity_connection_v1, verify_schema_v1,
+    validate_existing_regular_private_file_metadata_v1, validate_existing_regular_private_file_v1,
+    validate_publication_link_pair_v1, verify_inspection_integrity_connection_v1, verify_schema_v1,
+    write_temporary_ownership_marker_v1,
 };
 use crate::state_rows::{load_current_session, load_workspace_state, replace_current_session};
 use crate::{
@@ -200,25 +201,15 @@ impl SqliteStoreV1 {
         }
 
         let temporary = create_temporary_database(&path, now)?;
-        let mut cleanup_armed = false;
-        let seeded =
-            match seed_reset_target(&temporary.database, &path, &context, &mut cleanup_armed) {
-                Ok(PublicationOutcomeV1::Published) => {
-                    if options.failpoint()
-                    == Some(
-                        StoreFailpointV1::ResetAfterPublicationBeforeResponseAndTemporaryCleanup,
-                    )
-                {
-                    cleanup_armed = true;
-                }
-                    options
-                    .trigger_failpoint(
-                        StoreFailpointV1::ResetAfterPublicationBeforeResponseAndTemporaryCleanup,
-                    )
-                    .map(|()| PublicationOutcomeV1::Published)
-                }
-                seeded => seeded,
-            };
+        let mut cleanup_armed = options.failpoint()
+            == Some(StoreFailpointV1::ResetAfterPublicationBeforeResponseAndTemporaryCleanup);
+        let seeded = seed_reset_target(
+            &temporary.database,
+            &temporary._database_file,
+            &path,
+            &context,
+            &mut cleanup_armed,
+        );
         let cleanup = cleanup_temporary_database(&temporary, cleanup_armed);
         let seeded = combine_operation_and_cleanup(seeded, cleanup)?;
         match seeded {
@@ -246,7 +237,7 @@ impl SqliteStoreV1 {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
-        let report = prune_terminal_history_transaction(&transaction, now, &self.options)?;
+        let report = prune_terminal_history_transaction(&transaction, now, &self.options, false)?;
         transaction.commit().map_err(storage)?;
         Ok(report)
     }
@@ -636,7 +627,8 @@ impl StoreContractV1 for SqliteStoreV1 {
                 [sqlite_u64(now.get())?],
             )
             .map_err(storage)?;
-        let prune_report = prune_terminal_history_transaction(&transaction, now, &self.options)?;
+        let prune_report =
+            prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
         record_prune_report(
             &transaction,
             &prune_report,
@@ -876,7 +868,7 @@ impl StoreContractV1 for SqliteStoreV1 {
         }
         if !failed_session_barrier {
             let prune_report =
-                prune_terminal_history_transaction(&transaction, now, &self.options)?;
+                prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
             record_prune_report(
                 &transaction,
                 &prune_report,
@@ -1123,7 +1115,7 @@ fn recover_running_connection(
             [recorded_at],
         )
         .map_err(storage)?;
-    let prune_report = prune_terminal_history_transaction(&transaction, now, options)?;
+    let prune_report = prune_terminal_history_transaction(&transaction, now, options, true)?;
     record_prune_report(&transaction, &prune_report, None, None)?;
     options.trigger_failpoint(StoreFailpointV1::RecoveryBeforeCommit)?;
     transaction.commit().map_err(storage)?;
@@ -1135,9 +1127,11 @@ fn prune_terminal_history_transaction(
     transaction: &Transaction<'_>,
     now: EpochMillisV1,
     options: &SqliteStoreOptionsV1,
+    journal_report_follows: bool,
 ) -> Result<PruneReportV1, StoreErrorV1> {
     let deleted_terminal_jobs = prune_terminal_jobs(transaction, now)?;
-    let deleted_journal_entries = prune_operational_journal(transaction, now)?;
+    let deleted_journal_entries =
+        prune_operational_journal(transaction, now, journal_report_follows)?;
     let deleted_orphan_receipts = prune_orphan_workspace_receipts(transaction, now)?;
     if deleted_terminal_jobs != 0 || deleted_journal_entries != 0 || deleted_orphan_receipts != 0 {
         options.trigger_failpoint(StoreFailpointV1::PruneAfterDeleteStagingBeforeCommit)?;
@@ -1280,6 +1274,7 @@ fn prune_terminal_jobs(
 fn prune_operational_journal(
     transaction: &Transaction<'_>,
     now: EpochMillisV1,
+    reserve_report_slot: bool,
 ) -> Result<u32, StoreErrorV1> {
     let cutoff = sqlite_u64(now.get().saturating_sub(TERMINAL_HISTORY_MAX_AGE_MS_V1))?;
     let candidates: Vec<i64> = {
@@ -1304,7 +1299,11 @@ fn prune_operational_journal(
                 params![
                     JOURNAL_PROTECTED_COUNT_V1,
                     cutoff,
-                    JOURNAL_ABSOLUTE_COUNT_V1,
+                    if reserve_report_slot {
+                        JOURNAL_ABSOLUTE_COUNT_V1 - 1
+                    } else {
+                        JOURNAL_ABSOLUTE_COUNT_V1
+                    },
                 ],
                 |row| row.get(0),
             )
@@ -1559,14 +1558,25 @@ fn initialize_new_database_atomically(
         )?;
         checkpoint_close_and_sync(connection, &temporary.database)?;
         options.trigger_failpoint(StoreFailpointV1::SchemaAfterInitializationBeforePublication)?;
-        match publish_temporary_database_no_clobber(&temporary.database, path, options)? {
-            PublicationOutcomeV1::Published | PublicationOutcomeV1::Existing => {
-                open_or_initialize_v1(path, root, identity, options, now)
+        match publish_temporary_database_no_clobber(
+            &temporary.database,
+            &temporary._database_file,
+            path,
+            options,
+            false,
+        ) {
+            Ok(outcome) => Ok(outcome),
+            Err(StoreErrorV1::StorageUnavailableV1 { .. })
+                if inspect_publication_destination(path)? == DatabasePathStateV1::Existing =>
+            {
+                Ok(PublicationOutcomeV1::Existing)
             }
+            Err(error) => Err(error),
         }
     })();
     let cleanup = cleanup_temporary_database(&temporary, cleanup_armed);
-    combine_operation_and_cleanup(result, cleanup)
+    combine_operation_and_cleanup(result, cleanup)?;
+    open_or_initialize_v1(path, root, identity, options, now)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1577,9 +1587,13 @@ enum PublicationOutcomeV1 {
 
 struct TemporaryDatabaseV1 {
     database: PathBuf,
-    destination: PathBuf,
     wal: PathBuf,
     shm: PathBuf,
+    marker: PathBuf,
+    _database_file: File,
+    _wal_file: File,
+    _shm_file: File,
+    _marker_lock: File,
 }
 
 fn combine_operation_and_cleanup<T>(
@@ -1588,8 +1602,8 @@ fn combine_operation_and_cleanup<T>(
 ) -> Result<T, StoreErrorV1> {
     match (operation, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
-        (Err(primary), Ok(())) => Err(primary),
         (Ok(_), Err(cleanup)) => Err(cleanup),
+        (Err(primary), Ok(())) => Err(primary),
         (Err(primary), Err(cleanup)) => Err(StoreErrorV1::PrimaryOperationAndCleanupFailureV1 {
             primary: Box::new(primary),
             cleanup: Box::new(cleanup),
@@ -1606,8 +1620,21 @@ fn operation_error_with_cleanup(
     }
 }
 
-fn cleanup_temporary_creation_files(database: &Path, wal: &Path) -> Result<(), StoreErrorV1> {
-    combine_operation_and_cleanup(remove_temporary_file(wal), remove_temporary_file(database))
+fn cleanup_temporary_creation_files(
+    marker: &Path,
+    marker_lock: &File,
+    database: &Path,
+    database_file: &File,
+    wal: &Path,
+    wal_file: &File,
+) -> Result<(), StoreErrorV1> {
+    combine_operation_and_cleanup(
+        remove_owned_temporary_file(wal, wal_file, false),
+        combine_operation_and_cleanup(
+            remove_owned_temporary_file(database, database_file, false),
+            remove_owned_temporary_file(marker, marker_lock, false),
+        ),
+    )
 }
 
 struct ResetSeedContextV1<'a> {
@@ -1660,50 +1687,98 @@ fn create_temporary_database(
         .file_name()
         .ok_or_else(|| invariant(StoreInvariantV1::Publication))?;
     for attempt in 0..128u32 {
-        let temporary_name = temporary_database_name(file_name, now, attempt);
-        let temporary = parent.join(temporary_name);
-        if !create_new_private_temporary_file(&temporary)? {
+        let temporary = parent.join(temporary_database_name(file_name, now, attempt));
+        let marker = temporary_ownership_marker_path(&temporary);
+        let Some(mut marker_lock) = create_new_ownership_marker(&marker)? else {
             continue;
-        }
-
-        let temporary_wal = sqlite_sidecar_path(&temporary, "-wal");
-        let temporary_shm = sqlite_sidecar_path(&temporary, "-shm");
-        let created_wal = match create_new_private_temporary_file(&temporary_wal) {
-            Ok(created) => created,
+        };
+        let database_file = match create_new_private_temporary_file(&temporary, false) {
+            Ok(Some(file)) => file,
+            Ok(None) => {
+                remove_owned_temporary_file(&marker, &marker_lock, false)?;
+                continue;
+            }
             Err(error) => {
                 return Err(operation_error_with_cleanup(
                     error,
-                    remove_temporary_file(&temporary),
+                    remove_owned_temporary_file(&marker, &marker_lock, false),
                 ));
             }
         };
-        if !created_wal {
-            remove_temporary_file(&temporary)?;
-            continue;
+        if let Err(error) = write_temporary_ownership_marker_v1(&mut marker_lock, &database_file) {
+            return Err(operation_error_with_cleanup(
+                error,
+                combine_operation_and_cleanup(
+                    remove_owned_temporary_file(&temporary, &database_file, false),
+                    remove_owned_temporary_file(&marker, &marker_lock, false),
+                ),
+            ));
         }
-        let created_shm = match create_new_private_temporary_file(&temporary_shm) {
-            Ok(created) => created,
+        let wal = sqlite_sidecar_path(&temporary, "-wal");
+        let wal_file = match create_new_private_temporary_file(&wal, false) {
+            Ok(Some(file)) => file,
+            Ok(None) => {
+                combine_operation_and_cleanup(
+                    remove_owned_temporary_file(&temporary, &database_file, false),
+                    remove_owned_temporary_file(&marker, &marker_lock, false),
+                )?;
+                continue;
+            }
             Err(error) => {
                 return Err(operation_error_with_cleanup(
                     error,
-                    cleanup_temporary_creation_files(&temporary, &temporary_wal),
+                    combine_operation_and_cleanup(
+                        remove_owned_temporary_file(&temporary, &database_file, false),
+                        remove_owned_temporary_file(&marker, &marker_lock, false),
+                    ),
                 ));
             }
         };
-        if !created_shm {
-            cleanup_temporary_creation_files(&temporary, &temporary_wal)?;
-            continue;
-        }
+        let shm = sqlite_sidecar_path(&temporary, "-shm");
+        let shm_file = match create_new_private_temporary_file(&shm, false) {
+            Ok(Some(file)) => file,
+            Ok(None) => {
+                cleanup_temporary_creation_files(
+                    &marker,
+                    &marker_lock,
+                    &temporary,
+                    &database_file,
+                    &wal,
+                    &wal_file,
+                )?;
+                continue;
+            }
+            Err(error) => {
+                return Err(operation_error_with_cleanup(
+                    error,
+                    cleanup_temporary_creation_files(
+                        &marker,
+                        &marker_lock,
+                        &temporary,
+                        &database_file,
+                        &wal,
+                        &wal_file,
+                    ),
+                ));
+            }
+        };
         return Ok(TemporaryDatabaseV1 {
             database: temporary,
-            destination: path.to_path_buf(),
-            wal: temporary_wal,
-            shm: temporary_shm,
+            wal,
+            shm,
+            marker,
+            _database_file: database_file,
+            _wal_file: wal_file,
+            _shm_file: shm_file,
+            _marker_lock: marker_lock,
         });
     }
     Err(StoreErrorV1::StorageUnavailableV1 {
         reason: StoreUnavailableReasonV1::StorageIo,
     })
+}
+fn create_new_ownership_marker(path: &Path) -> Result<Option<File>, StoreErrorV1> {
+    create_new_private_temporary_file(path, true)
 }
 
 fn temporary_database_name(
@@ -1723,21 +1798,30 @@ fn temporary_database_name(
     temporary_name
 }
 
-fn create_new_private_temporary_file(path: &Path) -> Result<bool, StoreErrorV1> {
+fn create_new_private_temporary_file(
+    path: &Path,
+    lock: bool,
+) -> Result<Option<File>, StoreErrorV1> {
     let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
+    options.read(true).write(true).create_new(true);
     #[cfg(unix)]
     options.mode(0o600);
-
+    #[cfg(target_os = "macos")]
+    if lock {
+        options.custom_flags(0x20);
+    }
     match options.open(path) {
         Ok(file) => {
-            drop(file);
             validate_existing_regular_private_file_v1(path)?;
-            Ok(true)
+            #[cfg(all(unix, not(target_os = "macos")))]
+            if lock {
+                file.lock().map_err(storage_io)?;
+            }
+            Ok(Some(file))
         }
         Err(error) if error.kind() == ErrorKind::AlreadyExists => {
             validate_existing_regular_private_file_v1(path)?;
-            Ok(false)
+            Ok(None)
         }
         Err(error) => Err(storage_io(error)),
     }
@@ -1787,16 +1871,29 @@ fn checkpoint_close_and_sync(connection: Connection, path: &Path) -> Result<(), 
 fn inspect_publication_destination(
     destination: &Path,
 ) -> Result<DatabasePathStateV1, StoreErrorV1> {
-    recover_interrupted_publication_v1(destination)?;
-    inspect_database_path_v1(destination)
+    const MAX_ACTIVE_PUBLICATION_RETRIES_V1: u16 = 1_000;
+    for _ in 0..MAX_ACTIVE_PUBLICATION_RETRIES_V1 {
+        match recover_interrupted_publication_v1(destination) {
+            Ok(()) => return inspect_database_path_v1(destination),
+            Err(StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::Busy,
+            }) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(StoreErrorV1::StorageUnavailableV1 {
+        reason: StoreUnavailableReasonV1::Busy,
+    })
 }
 
 fn publish_temporary_database_no_clobber(
     temporary: &Path,
+    temporary_file: &File,
     destination: &Path,
     options: &SqliteStoreOptionsV1,
+    reset_cleanup_fault: bool,
 ) -> Result<PublicationOutcomeV1, StoreErrorV1> {
-    validate_existing_database_path_v1(temporary)?;
+    validate_owned_temporary_file(temporary, temporary_file, false)?;
     match inspect_publication_destination(destination)? {
         DatabasePathStateV1::Existing => return Ok(PublicationOutcomeV1::Existing),
         DatabasePathStateV1::Missing => {}
@@ -1809,7 +1906,7 @@ fn publish_temporary_database_no_clobber(
     match fs::hard_link(temporary, destination) {
         Ok(()) => {
             if let Err(error) = validate_publication_link_pair_v1(temporary, destination) {
-                if publication_was_finalized_v1(temporary, destination)? {
+                if publication_was_finalized_v1(temporary, temporary_file, destination)? {
                     return Ok(PublicationOutcomeV1::Published);
                 }
                 return Err(error);
@@ -1821,11 +1918,12 @@ fn publish_temporary_database_no_clobber(
             options.trigger_failpoint(
                 StoreFailpointV1::PublicationAfterDestinationLinkBeforeTemporaryUnlink,
             )?;
-            match fs::remove_file(temporary) {
-                Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => return Err(storage_io(error)),
+            if reset_cleanup_fault {
+                options.trigger_failpoint(
+                    StoreFailpointV1::ResetAfterPublicationBeforeResponseAndTemporaryCleanup,
+                )?;
             }
+            remove_temporary_after_publication(temporary, temporary_file)?;
             validate_existing_regular_private_file_v1(destination)?;
             File::open(parent)
                 .map_err(storage_io)?
@@ -1842,13 +1940,29 @@ fn publish_temporary_database_no_clobber(
         Err(error) => Err(storage_io(error)),
     }
 }
+
+fn remove_temporary_after_publication(path: &Path, file: &File) -> Result<(), StoreErrorV1> {
+    validate_owned_temporary_file(path, file, true)?;
+    fs::remove_file(path).map_err(storage_io)
+}
+
 fn publication_was_finalized_v1(
     temporary: &Path,
+    temporary_file: &File,
     destination: &Path,
 ) -> Result<bool, StoreErrorV1> {
     match fs::symlink_metadata(temporary) {
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            validate_existing_regular_private_file_v1(destination)?;
+            let destination_metadata =
+                validate_existing_regular_private_file_metadata_v1(destination)?;
+            let temporary_metadata = temporary_file.metadata().map_err(storage_io)?;
+            #[cfg(unix)]
+            if destination_metadata.nlink() != 1
+                || destination_metadata.dev() != temporary_metadata.dev()
+                || destination_metadata.ino() != temporary_metadata.ino()
+            {
+                return Ok(false);
+            }
             Ok(true)
         }
         Ok(_) => Ok(false),
@@ -1858,6 +1972,7 @@ fn publication_was_finalized_v1(
 
 fn seed_reset_target(
     temporary: &Path,
+    temporary_file: &File,
     destination: &Path,
     context: &ResetSeedContextV1<'_>,
     cleanup_armed: &mut bool,
@@ -1952,7 +2067,21 @@ fn seed_reset_target(
         .options
         .trigger_failpoint(StoreFailpointV1::ResetAfterSeedCommitBeforePublication)?;
     checkpoint_close_and_sync(connection, temporary)?;
-    publish_temporary_database_no_clobber(temporary, destination, context.options)
+    match publish_temporary_database_no_clobber(
+        temporary,
+        temporary_file,
+        destination,
+        context.options,
+        true,
+    ) {
+        Ok(outcome) => Ok(outcome),
+        Err(StoreErrorV1::StorageUnavailableV1 { .. })
+            if inspect_publication_destination(destination)? == DatabasePathStateV1::Existing =>
+        {
+            Ok(PublicationOutcomeV1::Existing)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn validate_reset_seed_input(
@@ -2221,19 +2350,22 @@ fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
     sidecar.push(suffix);
     PathBuf::from(sidecar)
 }
+fn temporary_ownership_marker_path(temporary: &Path) -> PathBuf {
+    sqlite_sidecar_path(temporary, ".owner")
+}
 
 fn cleanup_temporary_database(
     temporary: &TemporaryDatabaseV1,
-    fail_after_cleanup: bool,
+    fail_before_database_unlink: bool,
 ) -> Result<(), StoreErrorV1> {
     validate_database_parent_path_v1(&temporary.database)?;
-    recover_interrupted_publication_v1(&temporary.destination)?;
-    remove_temporary_file(&temporary.database)?;
-    remove_temporary_file(&temporary.wal)?;
-    remove_temporary_file(&temporary.shm)?;
-    if fail_after_cleanup {
+    if fail_before_database_unlink {
         return Err(failpoint_unavailable());
     }
+    remove_owned_temporary_file(&temporary.database, &temporary._database_file, true)?;
+    remove_owned_temporary_file(&temporary.wal, &temporary._wal_file, false)?;
+    remove_owned_temporary_file(&temporary.shm, &temporary._shm_file, false)?;
+    remove_owned_temporary_file(&temporary.marker, &temporary._marker_lock, false)?;
     let parent = temporary
         .database
         .parent()
@@ -2245,15 +2377,47 @@ fn cleanup_temporary_database(
         .map_err(storage_io)
 }
 
-fn remove_temporary_file(path: &Path) -> Result<(), StoreErrorV1> {
+fn remove_owned_temporary_file(
+    path: &Path,
+    file: &File,
+    allow_publication_link: bool,
+) -> Result<(), StoreErrorV1> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
-            validate_existing_regular_private_file_v1(path)?;
+            validate_owned_temporary_file(path, file, allow_publication_link)?;
             fs::remove_file(path).map_err(storage_io)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(storage_io(error)),
     }
+}
+
+fn validate_owned_temporary_file(
+    path: &Path,
+    file: &File,
+    allow_publication_link: bool,
+) -> Result<(), StoreErrorV1> {
+    let path_metadata = fs::symlink_metadata(path).map_err(storage_io)?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::StorageIo,
+        });
+    }
+    #[cfg(unix)]
+    {
+        let descriptor_metadata = file.metadata().map_err(storage_io)?;
+        if path_metadata.mode() & 0o777 != 0o600
+            || (path_metadata.nlink() != 1
+                && (!allow_publication_link || path_metadata.nlink() != 2))
+            || descriptor_metadata.dev() != path_metadata.dev()
+            || descriptor_metadata.ino() != path_metadata.ino()
+        {
+            return Err(StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::StorageIo,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn workspace_sequence_upper_bound(transaction: &Transaction<'_>) -> Result<u64, StoreErrorV1> {
@@ -2567,14 +2731,17 @@ fn validate_preconditions(
             actual: actual_session,
         });
     }
-    if let Some(expected_attempt) = preconditions.expected_attempt_id()
-        && current.and_then(podway_core::SessionAggregateV1::active_attempt_id)
-            != Some(expected_attempt)
-    {
-        return Err(StoreErrorV1::PreconditionConflictV1 {
-            expected: preconditions.expected_session_revision(),
-            actual: actual_session,
-        });
+    match preconditions.expected_attempt_id() {
+        Some(expected_attempt)
+            if current.and_then(podway_core::SessionAggregateV1::active_attempt_id)
+                != Some(expected_attempt) =>
+        {
+            return Err(StoreErrorV1::PreconditionConflictV1 {
+                expected: preconditions.expected_session_revision(),
+                actual: actual_session,
+            });
+        }
+        _ => {}
     }
     if let Some(item_id) = preconditions.expected_item_id() {
         let actual = current

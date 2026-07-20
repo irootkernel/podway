@@ -8,7 +8,9 @@ use podway_protocol::{
     RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1,
     Rfc3339MillisV1, SUPPORTED_ERROR_SCHEMAS_V1, SUPPORTED_OUTPUT_SCHEMAS_V1,
     SUPPORTED_PROTOCOLS_V1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
-    negotiate_protocol, require_compatible_protocol, validate_frame_payload_length,
+    decode_request_payload_v1, decode_response_payload_v1, encode_request_payload_v1,
+    encode_response_payload_v1, error_code_catalog_v1, negotiate_protocol,
+    require_compatible_protocol, validate_frame_payload_length,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -224,10 +226,10 @@ fn valid_error_envelope() -> ErrorEnvelopeV1 {
         request_id: RequestIdV1::new(REQUEST_ID).expect("request id fixture must be valid"),
         command: CommandNameV1::new("session.status").expect("command fixture must be valid"),
         generated_at: timestamp(),
-        code: ErrorCodeV1::new("PRECONDITION_FAILED").expect("error code fixture must be valid"),
+        code: ErrorCodeV1::new("ITEM_REVISION_CONFLICT").expect("error code fixture must be valid"),
         message: "Session revision changed.".to_owned(),
         retryable: true,
-        exit_code: ExitCodeV1::new(3).expect("exit code fixture must be valid"),
+        exit_code: ExitCodeV1::new(4).expect("exit code fixture must be valid"),
         workspace: Some(workspace),
         details,
     })
@@ -240,6 +242,127 @@ fn valid_output_envelope_json() -> Value {
 
 fn valid_error_envelope_json() -> Value {
     serde_json::to_value(valid_error_envelope()).expect("error fixture must serialize")
+}
+const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
+    ("DAEMON_NOT_INSTALLED", 3, false),
+    ("DAEMON_UNAVAILABLE", 3, true),
+    ("DAEMON_SHUTTING_DOWN", 3, true),
+    ("DAEMON_VERSION_INCOMPATIBLE", 3, false),
+    ("PROTOCOL_VERSION_UNSUPPORTED", 3, false),
+    ("REQUEST_TOO_LARGE", 2, false),
+    ("REQUEST_INVALID", 2, false),
+    ("NOT_A_GIT_WORKTREE", 5, false),
+    ("BARE_GIT_REPOSITORY", 5, false),
+    ("WORKTREE_GONE", 5, false),
+    ("WORKSPACE_NOT_INITIALIZED", 5, false),
+    ("WORKSPACE_ALREADY_INITIALIZED", 1, false),
+    ("WORKSPACE_INIT_CONFLICT", 5, false),
+    ("WORKSPACE_ID_CONFLICT", 5, false),
+    ("WORKSPACE_CONFIG_INVALID", 5, false),
+    ("WORKSPACE_STATE_UNREADABLE", 5, false),
+    ("WORKSPACE_SCHEMA_UNSUPPORTED", 5, false),
+    ("WORKSPACE_QUEUE_FULL", 4, true),
+    ("WORKSPACE_MAINTENANCE", 4, true),
+    ("WORKSPACE_PATH_UNSAFE", 5, false),
+    ("PATH_OUTSIDE_WORKTREE", 5, false),
+    ("MIGRATION_FAILED", 5, false),
+    ("PROCEDURE_NOT_FOUND", 1, false),
+    ("PROCEDURE_INVALID", 1, false),
+    ("PROCEDURE_SCHEMA_UNSUPPORTED", 1, false),
+    ("PRESET_NOT_FOUND", 1, false),
+    ("SESSION_NOT_FOUND", 1, false),
+    ("SESSION_ALREADY_EXISTS", 1, false),
+    ("SESSION_NOT_RUNNING", 1, false),
+    ("SESSION_NOT_COMPLETED", 1, false),
+    ("SESSION_CANCELLED", 1, false),
+    ("SESSION_REVISION_CONFLICT", 4, true),
+    ("ATTEMPT_NOT_CURRENT", 4, true),
+    ("STAGE_NOT_FOUND", 1, false),
+    ("STAGE_NOT_SKIPPABLE", 1, false),
+    ("RETURN_NOT_ALLOWED", 1, false),
+    ("REOPEN_NOT_ALLOWED", 1, false),
+    ("REQUIRED_ITEMS_MISSING", 1, false),
+    ("BLOCKERS_PRESENT", 1, false),
+    ("ITEM_NOT_FOUND", 1, false),
+    ("ITEM_TYPE_MISMATCH", 1, false),
+    ("ITEM_CONSTRAINT_FAILED", 1, false),
+    ("ITEM_REVISION_CONFLICT", 4, true),
+    ("ITEM_ALREADY_SET", 4, true),
+    ("LIST_VALUE_NOT_FOUND", 1, false),
+    ("LIST_VALUE_DUPLICATE", 1, false),
+    ("ARTIFACT_NOT_FOUND", 1, false),
+    ("ARTIFACT_UNREADABLE", 5, false),
+    ("ARTIFACT_CHANGED", 1, true),
+    ("ARTIFACT_MEDIA_TYPE_NOT_ALLOWED", 1, false),
+    ("BLOCKER_NOT_FOUND", 1, false),
+    ("BLOCKER_NOT_CURRENT", 4, true),
+    ("IDEMPOTENCY_KEY_REUSED", 2, false),
+    ("JOB_NOT_FOUND", 1, false),
+    ("JOB_NOT_CANCELLABLE", 1, false),
+    ("JOB_WAIT_TIMEOUT", 4, true),
+    ("CONFIRMATION_REQUIRED", 2, false),
+    ("INTERNAL_ERROR", 6, false),
+];
+
+#[test]
+fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
+    assert_eq!(
+        error_code_catalog_v1().collect::<Vec<_>>(),
+        FROZEN_ERROR_CATALOG,
+        "the runtime catalog must contain exactly the frozen public entries"
+    );
+    for &(code, exit_code, retryable) in FROZEN_ERROR_CATALOG {
+        let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+            request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+            command: CommandNameV1::new("status").unwrap(),
+            generated_at: timestamp(),
+            code: ErrorCodeV1::new(code).unwrap(),
+            message: "catalog test".to_owned(),
+            retryable,
+            exit_code: ExitCodeV1::new(exit_code).unwrap(),
+            workspace: None,
+            details: Map::new(),
+        })
+        .unwrap();
+        assert_eq!(envelope.code().as_str(), code);
+        assert_eq!(envelope.exit_code().get(), exit_code);
+        assert_eq!(envelope.retryable(), retryable);
+        assert_round_trip(envelope);
+    }
+
+    assert_eq!(
+        ErrorCodeV1::new("PRECONDITION_FAILED"),
+        Err(ProtocolError::InvalidErrorCode)
+    );
+    assert!(serde_json::from_value::<ErrorCodeV1>(json!("PRECONDITION_FAILED")).is_err());
+
+    let mut unknown_code = valid_error_envelope_json();
+    unknown_code["code"] = json!("PRECONDITION_FAILED");
+    assert_error_rejected(unknown_code);
+
+    let mut mismatched_exit = valid_error_envelope_json();
+    mismatched_exit["exit_code"] = json!(1);
+    assert_error_rejected(mismatched_exit);
+
+    let mut mismatched_retryable = valid_error_envelope_json();
+    mismatched_retryable["retryable"] = json!(false);
+    assert_error_rejected(mismatched_retryable);
+    for (exit_code, retryable) in [(1, true), (4, false)] {
+        assert!(
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+                command: CommandNameV1::new("status").unwrap(),
+                generated_at: timestamp(),
+                code: ErrorCodeV1::new("ITEM_REVISION_CONFLICT").unwrap(),
+                message: "catalog mismatch".to_owned(),
+                retryable,
+                exit_code: ExitCodeV1::new(exit_code).unwrap(),
+                workspace: None,
+                details: Map::new(),
+            })
+            .is_err()
+        );
+    }
 }
 
 fn assert_wire_type<T>()
@@ -295,9 +418,9 @@ fn api_004_response_wire_surface_is_executable_and_round_trips() {
     assert_round_trip(ResponseEnvelopeV1::Error(error));
 }
 
-// API-004: Validated response DTOs reject invariant-bypassing wire payloads at every level.
+// API-004: Validated response DTOs reject invariant-bypassing known and nested wire payloads.
 #[test]
-fn api_004_response_deserialization_rejects_invalid_nested_values_and_unknown_fields() {
+fn api_004_response_deserialization_rejects_invalid_known_and_nested_values() {
     let mut wrong_output_schema = valid_output_envelope_json();
     wrong_output_schema["schema"] = json!("podway.output/v2");
     assert_output_rejected(wrong_output_schema);
@@ -334,6 +457,17 @@ fn api_004_response_deserialization_rejects_invalid_nested_values_and_unknown_fi
         .remove("finished_at");
     assert!(serde_json::from_value::<JobOutputV1>(missing_finished_at["job"].clone()).is_err());
     assert_output_rejected(missing_finished_at);
+    let mut terminal_null_finished_at = valid_output_envelope_json();
+    terminal_null_finished_at["job"]["finished_at"] = Value::Null;
+    assert!(
+        serde_json::from_value::<JobOutputV1>(terminal_null_finished_at["job"].clone()).is_err()
+    );
+    assert_output_rejected(terminal_null_finished_at);
+
+    let mut nonterminal_finished_at = valid_output_envelope_json();
+    nonterminal_finished_at["job"]["state"] = json!("queued");
+    assert!(serde_json::from_value::<JobOutputV1>(nonterminal_finished_at["job"].clone()).is_err());
+    assert_output_rejected(nonterminal_finished_at);
 
     let mut oversized_session_title = valid_output_envelope_json();
     oversized_session_title["session"]["title"] = json!("x".repeat(501));
@@ -343,17 +477,25 @@ fn api_004_response_deserialization_rejects_invalid_nested_values_and_unknown_fi
     null_output_workspace["workspace"] = Value::Null;
     assert_output_rejected(null_output_workspace);
 
-    let mut unknown_nested_output_field = valid_output_envelope_json();
-    unknown_nested_output_field["session"]["unknown"] = json!(true);
-    assert!(
-        serde_json::from_value::<SessionOutputV1>(unknown_nested_output_field["session"].clone())
-            .is_err()
-    );
-    assert_output_rejected(unknown_nested_output_field);
+    for field in ["workspace", "job", "session"] {
+        let mut additive_nested_output = valid_output_envelope_json();
+        additive_nested_output[field]["future_extension"] = json!({"enabled": true});
+        assert!(
+            serde_json::from_value::<ResponseEnvelopeV1>(additive_nested_output).is_ok(),
+            "additive {field} DTO field must decode"
+        );
+    }
 
-    let mut unknown_output_field = valid_output_envelope_json();
-    unknown_output_field["unknown"] = json!(true);
-    assert_output_rejected(unknown_output_field);
+    let output = valid_output_envelope();
+    let mut additive_output = serde_json::to_value(&output).expect("output fixture must serialize");
+    additive_output["unknown"] = json!({"extension": ["supported", true]});
+    assert_eq!(
+        decode_response_payload_v1(
+            &serde_json::to_vec(&additive_output).expect("additive output must serialize")
+        )
+        .expect("additive output must decode"),
+        ResponseEnvelopeV1::Output(output)
+    );
 
     let mut deeply_nested_warning = Value::Null;
     for _ in 0..=MAX_JSON_DEPTH_V1 {
@@ -390,7 +532,256 @@ fn api_004_response_deserialization_rejects_invalid_nested_values_and_unknown_fi
     invalid_error_code["code"] = json!("precondition_failed");
     assert_error_rejected(invalid_error_code);
 
-    let mut unknown_error_field = valid_error_envelope_json();
-    unknown_error_field["unknown"] = json!(true);
-    assert_error_rejected(unknown_error_field);
+    let error = valid_error_envelope();
+    let mut additive_error = serde_json::to_value(&error).expect("error fixture must serialize");
+    additive_error["unknown"] = json!({"extension": ["supported", true]});
+    assert_eq!(
+        decode_response_payload_v1(
+            &serde_json::to_vec(&additive_error).expect("additive error must serialize")
+        )
+        .expect("additive error must decode"),
+        ResponseEnvelopeV1::Error(error)
+    );
+}
+#[test]
+fn api_004_job_finished_at_state_invariant_is_typed_and_compatible() {
+    let job_id = JobId::new(JOB_ID).expect("job id fixture must be valid");
+
+    for state in [
+        JobStateV1::Succeeded,
+        JobStateV1::Failed,
+        JobStateV1::Cancelled,
+    ] {
+        assert_eq!(
+            JobOutputV1::new(job_id.clone(), 1, state, timestamp(), None, None),
+            Err(ProtocolError::TerminalJobMissingFinishedAt)
+        );
+        assert!(
+            JobOutputV1::new(
+                job_id.clone(),
+                1,
+                state,
+                timestamp(),
+                Some(timestamp()),
+                Some(timestamp()),
+            )
+            .is_ok()
+        );
+    }
+
+    for state in [JobStateV1::Queued, JobStateV1::Running] {
+        assert_eq!(
+            JobOutputV1::new(
+                job_id.clone(),
+                1,
+                state,
+                timestamp(),
+                Some(timestamp()),
+                Some(timestamp()),
+            ),
+            Err(ProtocolError::NonterminalJobHasFinishedAt)
+        );
+        assert!(JobOutputV1::new(job_id.clone(), 1, state, timestamp(), None, None).is_ok());
+    }
+}
+
+#[test]
+fn api_004_timestamp_calendar_and_clock_ranges_are_exact() {
+    for value in [
+        "2024-02-29T00:00:00.000Z",
+        "2000-02-29T23:59:59.999Z",
+        "0000-02-29T12:34:56.789Z",
+    ] {
+        assert!(Rfc3339MillisV1::new(value).is_ok(), "{value} must be valid");
+    }
+    for value in [
+        "2023-02-29T00:00:00.000Z",
+        "1900-02-29T00:00:00.000Z",
+        "2026-04-31T00:00:00.000Z",
+        "2026-00-01T00:00:00.000Z",
+        "2026-01-00T00:00:00.000Z",
+        "2026-01-01T24:00:00.000Z",
+        "2026-01-01T23:60:00.000Z",
+        "2026-01-01T23:59:60.000Z",
+    ] {
+        assert!(
+            Rfc3339MillisV1::new(value).is_err(),
+            "{value} must be invalid"
+        );
+    }
+}
+
+fn nested_arrays(count: usize) -> Value {
+    let mut value = Value::Null;
+    for _ in 0..count {
+        value = Value::Array(vec![value]);
+    }
+    value
+}
+fn response_with_additive_depth(mut response: Value, path: &[&str], array_count: usize) -> Value {
+    let mut target = response
+        .as_object_mut()
+        .expect("response fixture must be an object");
+    for field in path {
+        target = target
+            .get_mut(*field)
+            .and_then(Value::as_object_mut)
+            .expect("response nested DTO must be an object");
+    }
+    target.insert("future_extension".to_owned(), nested_arrays(array_count));
+    response
+}
+fn assert_response_decodes(value: Value) {
+    match value["schema"].as_str() {
+        Some(OUTPUT_SCHEMA_V1) => {
+            assert!(serde_json::from_value::<OutputEnvelopeV1>(value.clone()).is_ok());
+        }
+        Some(ERROR_SCHEMA_V1) => {
+            assert!(serde_json::from_value::<ErrorEnvelopeV1>(value.clone()).is_ok());
+        }
+        _ => panic!("response depth fixture must have a supported schema"),
+    }
+    assert!(serde_json::from_value::<ResponseEnvelopeV1>(value.clone()).is_ok());
+    assert!(
+        decode_response_payload_v1(
+            &serde_json::to_vec(&value).expect("response depth fixture must serialize")
+        )
+        .is_ok()
+    );
+}
+
+fn assert_response_depth_rejected(value: Value) {
+    match value["schema"].as_str() {
+        Some(OUTPUT_SCHEMA_V1) => {
+            assert!(serde_json::from_value::<OutputEnvelopeV1>(value.clone()).is_err());
+        }
+        Some(ERROR_SCHEMA_V1) => {
+            assert!(serde_json::from_value::<ErrorEnvelopeV1>(value.clone()).is_err());
+        }
+        _ => panic!("response depth fixture must have a supported schema"),
+    }
+    assert!(serde_json::from_value::<ResponseEnvelopeV1>(value.clone()).is_err());
+    assert!(
+        decode_response_payload_v1(
+            &serde_json::to_vec(&value).expect("response depth fixture must serialize")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn api_004_response_additive_fields_enforce_full_document_depth() {
+    for (_, response) in [
+        ("output", valid_output_envelope_json()),
+        ("error", valid_error_envelope_json()),
+    ] {
+        let at_limit = response_with_additive_depth(response.clone(), &[], MAX_JSON_DEPTH_V1 - 1);
+        assert_response_decodes(at_limit);
+
+        let over_limit = response_with_additive_depth(response, &[], MAX_JSON_DEPTH_V1);
+        assert_response_depth_rejected(over_limit);
+    }
+
+    for field in ["workspace", "job", "session"] {
+        let at_limit = response_with_additive_depth(
+            valid_output_envelope_json(),
+            &[field],
+            MAX_JSON_DEPTH_V1 - 2,
+        );
+        assert_response_decodes(at_limit);
+
+        let over_limit = response_with_additive_depth(
+            valid_output_envelope_json(),
+            &[field],
+            MAX_JSON_DEPTH_V1 - 1,
+        );
+        assert_response_depth_rejected(over_limit);
+    }
+    let at_limit = response_with_additive_depth(
+        valid_error_envelope_json(),
+        &["workspace"],
+        MAX_JSON_DEPTH_V1 - 2,
+    );
+    assert_response_decodes(at_limit);
+
+    let over_limit = response_with_additive_depth(
+        valid_error_envelope_json(),
+        &["workspace"],
+        MAX_JSON_DEPTH_V1 - 1,
+    );
+    assert_response_depth_rejected(over_limit);
+}
+
+#[test]
+fn api_004_component_depth_matches_the_full_envelope_boundary() {
+    let mut result = Map::new();
+    result.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 2));
+    let mut warning = Map::new();
+    warning.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 3));
+    let output = OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        command: CommandNameV1::new("session.status").unwrap(),
+        generated_at: timestamp(),
+        workspace: None,
+        job: None,
+        session: None,
+        result,
+        warnings: vec![warning],
+    })
+    .expect("maximum output component depth must encode");
+    let encoded_output = encode_response_payload_v1(&ResponseEnvelopeV1::Output(output))
+        .expect("maximum output depth must encode");
+    assert!(decode_response_payload_v1(&encoded_output).is_ok());
+
+    let mut details = Map::new();
+    details.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 2));
+    let error = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        command: CommandNameV1::new("session.status").unwrap(),
+        generated_at: timestamp(),
+        code: ErrorCodeV1::new("ITEM_REVISION_CONFLICT").unwrap(),
+        message: "failed".to_owned(),
+        retryable: true,
+        exit_code: ExitCodeV1::new(4).unwrap(),
+        workspace: None,
+        details,
+    })
+    .expect("maximum error component depth must encode");
+    let encoded_error = encode_response_payload_v1(&ResponseEnvelopeV1::Error(error))
+        .expect("maximum error depth must encode");
+    assert!(decode_response_payload_v1(&encoded_error).is_ok());
+
+    let mut payload = Map::new();
+    payload.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 2));
+    let request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        client: ClientInfoV1::new("podway-cli", "0.1.0", 1).unwrap(),
+        operation: OperationV1::Query,
+        command: CommandNameV1::new("status").unwrap(),
+        workspace: None,
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, 0).unwrap(),
+        payload,
+    })
+    .expect("maximum request component depth must encode");
+    let encoded_request =
+        encode_request_payload_v1(&request).expect("maximum request depth must encode");
+    assert!(decode_request_payload_v1(&encoded_request).is_ok());
+
+    let mut too_deep_result = Map::new();
+    too_deep_result.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 1));
+    assert!(
+        OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+            request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+            command: CommandNameV1::new("session.status").unwrap(),
+            generated_at: timestamp(),
+            workspace: None,
+            job: None,
+            session: None,
+            result: too_deep_result,
+            warnings: Vec::new(),
+        })
+        .is_err()
+    );
 }

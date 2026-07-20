@@ -456,6 +456,7 @@ dependencies = [
  "podway-protocol",
  "podway-service",
  "serde_json",
+ "sha2",
  "uuid",
 ]
 
@@ -533,7 +534,11 @@ dependencies = [
 name = "podway-service"
 version = "0.1.0"
 dependencies = [
+ "nix",
  "podway-core",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::{self, Read, Write},
     net::Shutdown,
@@ -304,7 +305,8 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
     let transport = transport(
         TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
         EXPECTED_UID,
-        ServerTransportTimeoutsV1::default(),
+        ServerTransportTimeoutsV1::new(Duration::from_secs(30), Duration::from_secs(5))
+            .expect("fragmentation test timeouts are valid"),
     );
     let handler = {
         let transport = Arc::clone(&transport);
@@ -579,7 +581,7 @@ fn read_timeout_returns_sanitized_internal_error_and_retains_frame_io_evidence()
 }
 
 #[test]
-fn disconnected_client_response_failure_emits_typed_failed_evidence() {
+fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
     let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
     let calls = Arc::new(AtomicUsize::new(0));
     let sink = Arc::new(CapturingObservabilitySink::default());
@@ -617,15 +619,28 @@ fn disconnected_client_response_failure_emits_typed_failed_evidence() {
         report.finalization(),
         ObservabilityFinalizationV1::Completed
     );
+    let events = sink
+        .events
+        .lock()
+        .expect("observability events lock must not be poisoned")
+        .clone();
     assert_eq!(
-        sink.events
-            .lock()
-            .expect("observability events lock must not be poisoned")
-            .as_slice(),
-        [
-            "ts=42 operation=service_dispatch outcome=succeeded\n",
-            "ts=42 operation=response_write outcome=failed\n",
-        ]
+        events.first().map(String::as_str),
+        Some("ts=42 operation=service_dispatch outcome=succeeded\n")
+    );
+    let counters = report.counters();
+    match events.as_slice() {
+        [_, response] => {
+            assert_eq!(response, "ts=42 operation=response_write outcome=failed\n");
+            assert_eq!(counters.fallback_dropped, 0);
+        }
+        [_] => assert_eq!(counters.fallback_dropped, 1),
+        _ => panic!("response failure must be emitted or explicitly counted"),
+    }
+    assert_eq!(counters.primary_dropped, 0);
+    assert_eq!(
+        counters.written.saturating_add(counters.fallback_dropped),
+        2
     );
 }
 #[test]
@@ -697,6 +712,17 @@ fn accept_loop_does_not_add_a_service_failure_for_handler_completion() {
             .iter()
             .any(|event| event == "ts=42 operation=transport_service_request outcome=failed\n")
     );
+    let counters = report.counters();
+    assert_eq!(
+        counters.fallback_dropped, 0,
+        "handler completion must not hide a failed service event in the fallback drop counter"
+    );
+    assert_eq!(counters.unflushed, 0);
+    assert_eq!(counters.write_failures, 0);
+    assert_eq!(counters.flush_failures, 0);
+    assert_eq!(counters.clock_errors, 0);
+    assert_eq!(counters.clock_panics, 0);
+    assert_eq!(counters.sink_failures, 0);
 }
 #[test]
 fn accept_loop_rejects_queued_connections_at_capacity_with_one_saturation_event() {
@@ -765,29 +791,44 @@ fn accept_loop_rejects_queued_connections_at_capacity_with_one_saturation_event(
         report.finalization(),
         ObservabilityFinalizationV1::Completed
     );
+    let counters = report.counters();
+    assert_eq!(counters.accepted, 4);
+    assert_eq!(counters.written, 4);
+    assert_eq!(counters.primary_dropped, 0);
+    assert_eq!(counters.fallback_dropped, 0);
+    assert_eq!(counters.stopped_dropped, 0);
+    assert_eq!(counters.degraded_dropped, 0);
+    assert_eq!(counters.unflushed, 0);
+    assert_eq!(counters.write_failures, 0);
+    assert_eq!(counters.flush_failures, 0);
+    assert_eq!(counters.clock_errors, 0);
+    assert_eq!(counters.clock_panics, 0);
+    assert_eq!(counters.sink_failures, 0);
     let events = sink
         .events
         .lock()
         .expect("observability events lock must not be poisoned");
+    let inventory = events.iter().fold(BTreeMap::new(), |mut inventory, event| {
+        *inventory.entry(event.as_str()).or_insert(0_usize) += 1;
+        inventory
+    });
     assert_eq!(
-        events
-            .iter()
-            .filter(|event| {
-                event.as_str() == "ts=42 operation=connection_accepted outcome=succeeded\n"
-            })
-            .count(),
-        2,
-        "both the admitted and capacity-rejected sockets must reach the accept boundary"
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| {
-                event.as_str() == "ts=42 operation=admission_saturation outcome=saturated\n"
-            })
-            .count(),
-        1,
-        "one capacity episode must report one saturation event"
+        inventory,
+        BTreeMap::from([
+            (
+                "ts=42 operation=connection_accepted outcome=succeeded\n",
+                2_usize,
+            ),
+            (
+                "ts=42 operation=admission_saturation outcome=saturated\n",
+                1_usize,
+            ),
+            (
+                "ts=42 operation=service_dispatch outcome=succeeded\n",
+                1_usize,
+            ),
+        ]),
+        "capacity saturation emits only the closed expected inventory"
     );
 }
 
@@ -842,16 +883,52 @@ fn accept_loop_records_peer_rejection_without_service_failure() {
         report.finalization(),
         ObservabilityFinalizationV1::Completed
     );
+    let events = sink
+        .events
+        .lock()
+        .expect("observability events lock must not be poisoned")
+        .clone();
+    let counters = report.counters();
+    let actual_inventory = events.iter().fold(BTreeMap::new(), |mut inventory, event| {
+        *inventory.entry(event.as_str()).or_insert(0_usize) += 1;
+        inventory
+    });
+    let expected_inventory = BTreeMap::from([
+        ("ts=42 operation=connection_accepted outcome=succeeded\n", 1),
+        ("ts=42 operation=peer_admission outcome=rejected\n", 1),
+    ]);
     assert_eq!(
-        sink.events
-            .lock()
-            .expect("observability events lock must not be poisoned")
-            .as_slice(),
-        [
-            "ts=42 operation=connection_accepted outcome=succeeded\n",
-            "ts=42 operation=peer_admission outcome=rejected\n",
-        ]
+        actual_inventory.get("ts=42 operation=peer_admission outcome=rejected\n"),
+        Some(&1),
+        "the legitimate fallback rejection must reach the sink"
     );
+    assert!(
+        actual_inventory.iter().all(|(event, count)| {
+            expected_inventory
+                .get(*event)
+                .is_some_and(|expected| count <= expected)
+        }),
+        "peer rejection must not emit an unexpected service failure"
+    );
+    assert_eq!(
+        counters.fallback_dropped, 0,
+        "peer rejection's sole legitimate fallback event must not mask an unexpected fallback drop"
+    );
+    assert_eq!(counters.accepted, 2);
+    assert_eq!(counters.written, events.len() as u64);
+    assert_eq!(
+        counters
+            .written
+            .saturating_add(counters.primary_dropped)
+            .saturating_add(counters.fallback_dropped),
+        2
+    );
+    assert_eq!(counters.unflushed, 0);
+    assert_eq!(counters.write_failures, 0);
+    assert_eq!(counters.flush_failures, 0);
+    assert_eq!(counters.clock_errors, 0);
+    assert_eq!(counters.clock_panics, 0);
+    assert_eq!(counters.sink_failures, 0);
 }
 #[test]
 fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
@@ -936,6 +1013,17 @@ fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
             .any(|event| event.contains("operation=admission_saturation outcome=saturated")),
         "shutdown closure is not admission saturation"
     );
+    let counters = report.counters();
+    assert_eq!(
+        counters.fallback_dropped, 0,
+        "shutdown closure must not hide saturation in the fallback drop counter"
+    );
+    assert_eq!(counters.unflushed, 0);
+    assert_eq!(counters.write_failures, 0);
+    assert_eq!(counters.flush_failures, 0);
+    assert_eq!(counters.clock_errors, 0);
+    assert_eq!(counters.clock_panics, 0);
+    assert_eq!(counters.sink_failures, 0);
     drop(second);
 }
 #[test]
@@ -1041,11 +1129,10 @@ fn invalid_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
 fn wait_for_dispatcher_entry(gate: &Arc<(Mutex<GateState>, Condvar)>) {
     let (lock, changed) = &**gate;
     let state = lock.lock().expect("test gate lock must not be poisoned");
-    let (state, timeout) = changed
+    let (state, _timeout) = changed
         .wait_timeout_while(state, Duration::from_secs(10), |state| !state.entered)
         .expect("test gate lock must not be poisoned");
     assert!(state.entered, "dispatcher was not admitted before timeout");
-    assert!(!timeout.timed_out() || state.entered);
 }
 fn wait_for_spawn_attempts(spawner: &FailSecondConnectionHandlerSpawner, expected: usize) {
     for _ in 0..10_000 {

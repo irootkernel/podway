@@ -1,6 +1,11 @@
-# Implementation Handoff
+# Original Implementation Handoff
 
-## Immediate kickoff
+This document preserves the design-to-implementation kickoff that was executed for
+Phases 0–7. It is historical guidance, not the current release-status authority.
+For current implementation and acceptance state, use `IMPLEMENTATION_STATUS.md`
+and `docs/60-quality/61-product-acceptance.md`.
+
+## Historical immediate kickoff
 
 1. Read the root `README.md` in its recommended order.
 2. Import the files in `schemas/`, `presets/`, and `spec/` into the initial repository unchanged.
@@ -8,7 +13,7 @@
 4. Create requirement-tagged test skeletons from `docs/60-quality/62-requirements-traceability.md`.
 5. Freeze public type names, schema IDs, error codes, and transition command names before parallel implementation.
 
-## First vertical slice
+## Historical first vertical slice
 
 The first integrated path should be:
 
@@ -25,7 +30,7 @@ Launch podwayd manually
 
 This slice must use the real frame codec, real SQLite schema, real worktree resolver, and pure domain transition. Do not build a throwaway alternate path.
 
-## First correctness milestone
+## Historical first correctness milestone
 
 Before broad CLI work, demonstrate:
 
@@ -53,4 +58,4 @@ Do not:
 
 ## Handoff completion
 
-The project is complete only when `docs/60-quality/61-product-acceptance.md` passes and the native Apple Silicon macOS release artifacts in `docs/50-operations/52-release-and-packaging.md` are produced.
+The project is complete only when `docs/60-quality/61-product-acceptance.md` passes and the release artifacts in `docs/50-operations/52-release-and-packaging.md` are produced for native Apple Silicon macOS.

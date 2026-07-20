@@ -64,8 +64,8 @@ use crate::{
     },
     runtime_workspace::{
         ResetSourceAuthorityV1, WorkspaceRuntimeErrorV1, WorkspaceRuntimeManagerV1,
-        WorkspaceRuntimeObservationV1, WorkspaceSchedulerContextV1, WorkspaceStoreReadFacadeV1,
-        WorkspaceStoreSlotV1,
+        WorkspaceRuntimeObservationV1, WorkspaceSchedulerContextV1,
+        WorkspaceSchedulerRevalidationV1, WorkspaceStoreReadFacadeV1, WorkspaceStoreSlotV1,
     },
     scheduler::WorkspaceSchedulerV1,
     server::{ResponseMetadataSourceV1, SystemResponseMetadataSourceV1},
@@ -239,13 +239,81 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
         deep: bool,
     ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
         let workspace = self.readonly_workspace(selector)?;
+        let mut result = Map::from_iter([
+            ("deep".to_owned(), Value::Bool(deep)),
+            ("workspace_state_readable".to_owned(), Value::Bool(true)),
+        ]);
+        let warnings = if deep {
+            match self.manager.revalidate_scheduler(workspace.scheduler()) {
+                Ok(WorkspaceSchedulerRevalidationV1::Current) => {
+                    result.insert("healthy".to_owned(), Value::Bool(true));
+                    result.insert(
+                        "git_store_binding_revalidated".to_owned(),
+                        Value::Object(Map::from_iter([(
+                            "outcome".to_owned(),
+                            Value::String("current".to_owned()),
+                        )])),
+                    );
+                    Vec::new()
+                }
+                Ok(WorkspaceSchedulerRevalidationV1::RetireRequired { .. }) => {
+                    result.insert("healthy".to_owned(), Value::Bool(false));
+                    result.insert(
+                        "git_store_binding_revalidated".to_owned(),
+                        Value::Object(Map::from_iter([(
+                            "outcome".to_owned(),
+                            Value::String("retire_required".to_owned()),
+                        )])),
+                    );
+                    result.insert(
+                        "findings".to_owned(),
+                        Value::Array(vec![Value::Object(Map::from_iter([
+                            (
+                                "code".to_owned(),
+                                Value::String("workspace_identity_changed".to_owned()),
+                            ),
+                            ("severity".to_owned(), Value::String("error".to_owned())),
+                        ]))]),
+                    );
+                    Vec::new()
+                }
+                Err(_) => {
+                    result.insert("healthy".to_owned(), Value::Bool(false));
+                    result.insert(
+                        "git_store_binding_revalidated".to_owned(),
+                        Value::Object(Map::from_iter([(
+                            "outcome".to_owned(),
+                            Value::String("error".to_owned()),
+                        )])),
+                    );
+                    result.insert(
+                        "findings".to_owned(),
+                        Value::Array(vec![Value::Object(Map::from_iter([
+                            (
+                                "code".to_owned(),
+                                Value::String("git_store_binding_revalidation_failed".to_owned()),
+                            ),
+                            ("severity".to_owned(), Value::String("error".to_owned())),
+                        ]))]),
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            result.insert("healthy".to_owned(), Value::Bool(true));
+            result.insert(
+                "git_store_binding_revalidated".to_owned(),
+                Value::Object(Map::from_iter([(
+                    "outcome".to_owned(),
+                    Value::String("not_requested".to_owned()),
+                )])),
+            );
+            Vec::new()
+        };
         Ok(DispatcherWorkspaceOutputV1::new(
             workspace.output,
-            Map::from_iter([
-                ("healthy".to_owned(), Value::Bool(true)),
-                ("deep".to_owned(), Value::Bool(deep)),
-            ]),
-            Vec::new(),
+            result,
+            warnings,
         ))
     }
 
@@ -265,10 +333,60 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
         &self,
         selector: &WorktreeSelectorWireV1,
     ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
-        let workspace = self.resolve_existing(selector)?;
+        let expected_workspace_id = selector.expected_uuid();
+        let selector = selector_from_wire(selector)?;
+        let resolved = self
+            .manager
+            .resolver()
+            .resolve_existing(selector.clone(), expected_workspace_id)
+            .map_err(map_resolution_error)?;
+        let workspace_uuid = resolved.store_identity().workspace_uuid().clone();
+        let registry_before = self
+            .manager
+            .registry()
+            .lookup(&workspace_uuid)
+            .map_err(|error| map_runtime_error(WorkspaceRuntimeErrorV1::Registry(error)))?
+            .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+        let moved = resolved.move_metadata().relocated_from_prior_root();
+
+        // A repair is admitted only after the resolver has bound durable SQLite identity to two
+        // fresh Git observations. Supplying that resolved UUID back to activation prevents a
+        // concurrent copied database from being adopted between the proof and the metadata CAS.
+        let scheduler = self
+            .manager
+            .resolve_existing(selector, Some(&workspace_uuid), self.observation())
+            .map_err(map_runtime_error)?;
+        let registry_after = self
+            .manager
+            .registry()
+            .lookup(&workspace_uuid)
+            .map_err(|error| map_runtime_error(WorkspaceRuntimeErrorV1::Registry(error)))?
+            .ok_or_else(|| {
+                DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
+            })?;
+        let registry_reconciled =
+            registry_before.last_known_root() != registry_after.last_known_root();
+        let mut changes = Vec::new();
+        if moved {
+            changes.push(Value::String(
+                "workspace_binding.last_validated_root".to_owned(),
+            ));
+        }
+        if registry_reconciled {
+            changes.push(Value::String("registry.last_known_root".to_owned()));
+        }
+        let changed = !changes.is_empty();
+        let workspace = self.workspace_from_scheduler(scheduler)?;
         Ok(DispatcherWorkspaceOutputV1::new(
             workspace.output,
-            Map::from_iter([("repaired".to_owned(), Value::Bool(true))]),
+            Map::from_iter([
+                ("changed".to_owned(), Value::Bool(changed)),
+                ("changes".to_owned(), Value::Array(changes)),
+                (
+                    "moved_identity_proven".to_owned(),
+                    Value::Bool(moved || !registry_reconciled),
+                ),
+            ]),
             Vec::new(),
         ))
     }
@@ -636,38 +754,52 @@ impl DispatcherControlServiceV1<ProductionWorkspaceV1> for ProductionControlServ
                 DispatchFailureKindV1::JobNotCancellable,
             ));
         }
+        let now = self.clock.now();
+        let committed_job = JobOutputV1::new(
+            view.job().job_id().clone(),
+            view.job().identity_sequence(),
+            JobStateV1::Cancelled,
+            rfc3339_millis(view.submitted_at())?,
+            None,
+            Some(rfc3339_millis(now)?),
+        )
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
         let cancellation = context
             .with_claim_permission(|binding| {
                 context.store_for_mutation().cancel_before_claim(
                     binding.identity(),
                     job_id.clone(),
                     Revision::new(view.job().identity_sequence()),
-                    self.clock.now(),
+                    now,
                 )
             })
             .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceMaintenance))?;
-        match cancellation.map_err(map_cancel_error)? {
+        let warnings = match cancellation.map_err(map_cancel_error)? {
             CancelOutcomeV1::Cancelled(_) => {
-                workspace.scheduler.notify_progress().map_err(|_| {
-                    DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
-                })?;
+                // The transaction has committed. Scheduler wake-ups are advisory and are reported
+                // as such rather than retroactively changing the committed control result.
+                let warnings = workspace.scheduler.notify_progress().err().map(|_| {
+                    Map::from_iter([
+                        (
+                            "code".to_owned(),
+                            Value::String("scheduler_notification_failed".to_owned()),
+                        ),
+                        ("severity".to_owned(), Value::String("warning".to_owned())),
+                    ])
+                });
                 context.notify_after_authoritative_change();
+                warnings.into_iter().collect()
             }
             CancelOutcomeV1::AlreadyTerminal(_) => {
                 return Err(DispatchFailureV1::new(
                     DispatchFailureKindV1::JobNotCancellable,
                 ));
             }
-        }
-        let view = context
-            .store()
-            .read_job(context.binding().identity(), job_id)
-            .map_err(map_store_error)?
-            .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::JobNotFound))?;
+        };
         Ok(DispatcherJobOutputV1::new(
-            job_output(&view)?,
+            committed_job,
             Map::from_iter([("cancelled".to_owned(), Value::Bool(true))]),
-            Vec::new(),
+            warnings,
         ))
     }
 }
@@ -1384,20 +1516,21 @@ fn reread_reset_terminal(
 ) -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
     let idempotency_key = StoreIdempotencyKeyV1::new(idempotency_key)
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
-    let context = scheduler.context_snapshot();
-    let outcome = context
-        .store()
-        .read_idempotent_outcome(
-            context.binding().identity(),
-            &idempotency_key,
-            request_digest,
-        )
-        .map_err(map_store_error)?
-        .ok_or_else(terminal_replay_integrity_failure)?;
-    let receipt = terminal_replay(&outcome).ok_or_else(terminal_replay_integrity_failure)?;
-    Ok(MutationDispatchOutcomeV1::Terminal {
-        job: job_output_from_terminal_receipt(receipt)?,
-        result: terminal_result(receipt, command)?,
+    scheduler.with_serialized(|context| {
+        let outcome = context
+            .store()
+            .read_idempotent_outcome(
+                context.binding().identity(),
+                &idempotency_key,
+                request_digest,
+            )
+            .map_err(map_store_error)?
+            .ok_or_else(terminal_replay_integrity_failure)?;
+        let receipt = terminal_replay(&outcome).ok_or_else(terminal_replay_integrity_failure)?;
+        Ok(MutationDispatchOutcomeV1::Terminal {
+            job: job_output_from_terminal_receipt(receipt)?,
+            result: terminal_result(receipt, command)?,
+        })
     })
 }
 
@@ -1564,50 +1697,63 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
 #[derive(Clone, Copy)]
 enum TerminalCommandKindV1 {
     ItemMutation,
+    SessionReset,
     Skip,
     Return,
     Reopen,
     Other,
 }
-
 fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> TerminalCommandKindV1 {
     match durable_command_name(command) {
         "item.check" | "item.uncheck" | "item.set" | "item.add" | "item.remove" | "item.attach"
         | "item.clear" => TerminalCommandKindV1::ItemMutation,
+        "session.reset" => TerminalCommandKindV1::SessionReset,
         "session.skip" => TerminalCommandKindV1::Skip,
         "session.return" => TerminalCommandKindV1::Return,
         "session.reopen" => TerminalCommandKindV1::Reopen,
         _ => TerminalCommandKindV1::Other,
     }
 }
+fn validate_terminal_receipt_projection(
+    receipt: &PersistedTerminalReceiptV1,
+    command: TerminalCommandKindV1,
+) -> Result<(), DispatchFailureV1> {
+    match receipt.result() {
+        PersistedTerminalResultV1::Success(result) => {
+            let _ = terminal_session_projection(result, receipt.session_projection(), command)?;
+        }
+        PersistedTerminalResultV1::Failure(_) | PersistedTerminalResultV1::Cancelled
+            if receipt.session_projection().is_some() =>
+        {
+            return Err(terminal_replay_integrity_failure());
+        }
+        PersistedTerminalResultV1::Failure(_) | PersistedTerminalResultV1::Cancelled => {}
+    }
+    Ok(())
+}
 
 fn terminal_job_response(
     receipt: &PersistedTerminalReceiptV1,
     command: TerminalCommandKindV1,
 ) -> Result<TerminalJobResponseV1, DispatchFailureV1> {
+    validate_terminal_receipt_projection(receipt, command)?;
     match receipt.result() {
         PersistedTerminalResultV1::Success(result) => Ok(TerminalJobResponseV1::Success(
             TerminalJobSuccessProjectionV1 {
                 result: terminal_job_success_result(result),
-                session: terminal_session_projection(result, receipt.session_projection())?,
+                session: terminal_session_projection(
+                    result,
+                    receipt.session_projection(),
+                    command,
+                )?,
             },
         )),
-        PersistedTerminalResultV1::Failure(error) => {
-            if receipt.session_projection().is_some() {
-                return Err(terminal_replay_integrity_failure());
-            }
-            Ok(TerminalJobResponseV1::Error(terminal_job_error_projection(
-                error, command,
-            )?))
-        }
-        PersistedTerminalResultV1::Cancelled => {
-            if receipt.session_projection().is_some() {
-                return Err(terminal_replay_integrity_failure());
-            }
-            Ok(TerminalJobResponseV1::Cancelled(
-                TerminalJobCancellationProjectionV1 { cancelled: true },
-            ))
-        }
+        PersistedTerminalResultV1::Failure(error) => Ok(TerminalJobResponseV1::Error(
+            terminal_job_error_projection(error, command)?,
+        )),
+        PersistedTerminalResultV1::Cancelled => Ok(TerminalJobResponseV1::Cancelled(
+            TerminalJobCancellationProjectionV1 { cancelled: true },
+        )),
     }
 }
 
@@ -1773,9 +1919,14 @@ fn terminal_result(
     receipt: &PersistedTerminalReceiptV1,
     command: &SliceCommandV1,
 ) -> Result<DispatcherTerminalResultV1, DispatchFailureV1> {
+    validate_terminal_receipt_projection(receipt, terminal_command_kind(command))?;
     match receipt.result() {
         PersistedTerminalResultV1::Success(result) => {
-            let session = terminal_session_projection(result, receipt.session_projection())?;
+            let session = terminal_session_projection(
+                result,
+                receipt.session_projection(),
+                terminal_command_kind(command),
+            )?;
             let result = terminal_success_result_map(&terminal_job_success_result(result));
             Ok(DispatcherTerminalResultV1::Output(
                 DispatcherTerminalOutputV1::new(session, result, Vec::new()),
@@ -1840,31 +1991,51 @@ fn terminal_success_result_map(result: &TerminalJobSuccessResultV1) -> Map<Strin
 fn terminal_session_projection(
     result: &PersistedDomainResultV1,
     persisted: Option<&PersistedTerminalSessionProjectionV1>,
+    command: TerminalCommandKindV1,
 ) -> Result<Option<SessionOutputV1>, DispatchFailureV1> {
-    let requires_session_projection = matches!(
-        result,
-        PersistedDomainResultV1::SessionChanged { .. }
-            | PersistedDomainResultV1::ItemChanged { .. }
-    );
-    let persisted = match (requires_session_projection, persisted) {
-        (true, Some(persisted)) => persisted,
-        (true, None) | (false, Some(_)) => return Err(terminal_replay_integrity_failure()),
-        (false, None) => return Ok(None),
-    };
-    let lifecycle = match persisted.lifecycle() {
-        PersistedSessionLifecycleV1::Running => SessionLifecycleV1::Running,
-        PersistedSessionLifecycleV1::Completed => SessionLifecycleV1::Completed,
-        PersistedSessionLifecycleV1::Cancelled => SessionLifecycleV1::Cancelled,
-    };
-    SessionOutputV1::new(
-        persisted.session_id().clone(),
-        persisted.task_title(),
-        lifecycle,
-        persisted.revision_before(),
-        persisted.revision_after(),
-    )
-    .map(Some)
-    .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+    match (result, persisted) {
+        (
+            PersistedDomainResultV1::SessionChanged {
+                changed: true,
+                revision_before,
+                revision_after,
+                ..
+            },
+            None,
+        ) if matches!(command, TerminalCommandKindV1::SessionReset)
+            && revision_before.get() > 0
+            && revision_after.get() == 0 =>
+        {
+            Ok(None)
+        }
+        (
+            PersistedDomainResultV1::SessionChanged { .. }
+            | PersistedDomainResultV1::ItemChanged { .. },
+            Some(persisted),
+        ) => {
+            let lifecycle = match persisted.lifecycle() {
+                PersistedSessionLifecycleV1::Running => SessionLifecycleV1::Running,
+                PersistedSessionLifecycleV1::Completed => SessionLifecycleV1::Completed,
+                PersistedSessionLifecycleV1::Cancelled => SessionLifecycleV1::Cancelled,
+            };
+            SessionOutputV1::new(
+                persisted.session_id().clone(),
+                persisted.task_title(),
+                lifecycle,
+                persisted.revision_before(),
+                persisted.revision_after(),
+            )
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+        }
+        (
+            PersistedDomainResultV1::SessionChanged { .. }
+            | PersistedDomainResultV1::ItemChanged { .. },
+            None,
+        )
+        | (_, Some(_)) => Err(terminal_replay_integrity_failure()),
+        (_, None) => Ok(None),
+    }
 }
 
 fn terminal_command_kind(command: &SliceCommandV1) -> TerminalCommandKindV1 {
@@ -1876,6 +2047,7 @@ fn terminal_command_kind(command: &SliceCommandV1) -> TerminalCommandKindV1 {
         | SliceCommandV1::ItemRemove(_)
         | SliceCommandV1::ItemAttach(_)
         | SliceCommandV1::ItemClear(_) => TerminalCommandKindV1::ItemMutation,
+        SliceCommandV1::SessionReset(_) => TerminalCommandKindV1::SessionReset,
         SliceCommandV1::SessionSkip(_) => TerminalCommandKindV1::Skip,
         SliceCommandV1::SessionReturn(_) => TerminalCommandKindV1::Return,
         SliceCommandV1::SessionReopen(_) => TerminalCommandKindV1::Reopen,
@@ -1891,7 +2063,8 @@ fn map_terminal_domain_error(
         PersistedDomainErrorV1::PreconditionFailed { expected, actual } => {
             let kind = match command {
                 TerminalCommandKindV1::ItemMutation => DispatchFailureKindV1::ItemRevisionConflict,
-                TerminalCommandKindV1::Skip
+                TerminalCommandKindV1::SessionReset
+                | TerminalCommandKindV1::Skip
                 | TerminalCommandKindV1::Return
                 | TerminalCommandKindV1::Reopen
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionRevisionConflict,
@@ -1914,9 +2087,9 @@ fn map_terminal_domain_error(
                 TerminalCommandKindV1::Skip => DispatchFailureKindV1::StageNotSkippable,
                 TerminalCommandKindV1::Return => DispatchFailureKindV1::ReturnNotAllowed,
                 TerminalCommandKindV1::Reopen => DispatchFailureKindV1::ReopenNotAllowed,
-                TerminalCommandKindV1::ItemMutation | TerminalCommandKindV1::Other => {
-                    DispatchFailureKindV1::SessionNotRunning
-                }
+                TerminalCommandKindV1::ItemMutation
+                | TerminalCommandKindV1::SessionReset
+                | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionNotRunning,
             };
             DispatchFailureV1::new(kind)
         }
@@ -2266,6 +2439,14 @@ mod tests {
             changed: true,
         }
     }
+    fn terminal_session_clear_result(session_id: SessionId) -> PersistedDomainResultV1 {
+        PersistedDomainResultV1::SessionChanged {
+            session_id,
+            revision_before: Revision::new(4),
+            revision_after: Revision::ZERO,
+            changed: true,
+        }
+    }
 
     fn fixture_terminal_session_projection(
         session_id: SessionId,
@@ -2503,9 +2684,10 @@ mod tests {
         )
         .unwrap();
 
-        let output = terminal_session_projection(&result, Some(&projection))
-            .unwrap()
-            .expect("persisted session projection must produce output");
+        let output =
+            terminal_session_projection(&result, Some(&projection), TerminalCommandKindV1::Other)
+                .unwrap()
+                .expect("persisted session projection must produce output");
 
         assert_eq!(output.id(), &session_id);
         assert_eq!(output.title(), "Immutable terminal session");
@@ -2550,6 +2732,75 @@ mod tests {
             .kind(),
             DispatchFailureKindV1::WorkspaceStateUnreadable
         );
+    }
+    #[test]
+    fn session_reset_terminal_without_projection_renders_immediate_replay_and_job_read() {
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000011").unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(11),
+            PersistedTerminalResultV1::Success(terminal_session_clear_result(session_id.clone())),
+            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+            None,
+        )
+        .unwrap();
+        let reset = SliceCommandV1::SessionReset(podway_protocol::SessionResetV1 {
+            confirmed: true,
+            dry_run: false,
+            preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
+                expected_session_id: session_id,
+                expected_session_revision: Revision::new(4),
+            },
+        });
+
+        let PersistedTerminalResultV1::Success(result) = receipt.result() else {
+            panic!("fixture terminal receipt must succeed");
+        };
+        assert_eq!(
+            terminal_result(&receipt, &reset),
+            Ok(DispatcherTerminalResultV1::Output(
+                DispatcherTerminalOutputV1::new(
+                    None,
+                    terminal_success_result_map(&terminal_job_success_result(result)),
+                    Vec::new(),
+                ),
+            )),
+        );
+        assert_eq!(
+            terminal_result(
+                &receipt,
+                &SliceCommandV1::WorkspaceInit(podway_protocol::WorkspaceInitV1 { repair: false }),
+            )
+            .unwrap_err()
+            .kind(),
+            DispatchFailureKindV1::WorkspaceStateUnreadable
+        );
+        let invalid_view = terminal_view(
+            podway_store::CommandV1::WorkspaceInitialize,
+            StoreJobStateV1::Succeeded,
+            PersistedTerminalReceiptV1::new_with_projections(
+                fixture_job(12),
+                PersistedTerminalResultV1::Success(terminal_session_clear_result(
+                    SessionId::new("00000000-0000-4000-8000-000000000011").unwrap(),
+                )),
+                terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+                None,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            job_read_projection(&invalid_view).unwrap_err().kind(),
+            DispatchFailureKindV1::WorkspaceStateUnreadable
+        );
+
+        let view = terminal_view(
+            podway_store::CommandV1::SessionReset,
+            StoreJobStateV1::Succeeded,
+            receipt,
+        );
+        let (_, terminal) = job_read_projection(&view).unwrap();
+        assert_eq!(terminal["kind"], "success");
+        assert_eq!(terminal["payload"]["result"]["kind"], "session_changed");
+        assert_eq!(terminal["payload"]["session"], Value::Null);
     }
     #[test]
     fn job_reads_project_complete_terminal_success_receipts() {

@@ -4,6 +4,8 @@
 
 use std::{
     collections::HashMap,
+    ffi::OsString,
+    os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -11,13 +13,14 @@ use std::{
 use podway_core::UnixMillis;
 use podway_service::{
     FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1, LaunchctlRunnerV1, LocalPlatformPathV1,
-    LogLocationV1, LogQueryV1, MacosServiceCommandRunnerV1, RecordingServiceCommandRunnerV1,
-    RecordingServiceManagerV1, ServiceClockV1, ServiceCommandResultV1, ServiceCommandRunnerV1,
-    ServiceCommandV1, ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1,
-    ServiceLogStreamV1, ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1,
-    ServicePathErrorV1, ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1,
-    UninstallOptionsV1, launch_agent_plist_v1,
+    LogLocationV1, LogQueryV1, MacosServiceCommandRunnerV1, QualificationWrapperBindingV1,
+    RecordingServiceCommandRunnerV1, RecordingServiceManagerV1, SERVICE_METADATA_MAX_BYTES_V1,
+    ServiceClockV1, ServiceCommandResultV1, ServiceCommandRunnerV1, ServiceCommandV1,
+    ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1,
+    ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1,
+    ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
 };
+use sha2::{Digest, Sha256};
 
 fn service_paths() -> ServiceRuntimePathsV1 {
     match ServiceRuntimePathsV1::from_directories(
@@ -67,6 +70,52 @@ fn arc_008_service_v1_exposes_exact_global_runtime_paths() {
         std::path::Path::new("/var/folders/podway/podway-501/podwayd.lock")
     );
     assert_ne!(paths.metadata_index_path(), paths.workspace_registry_path());
+}
+#[test]
+fn install_and_update_reject_runtime_paths_outside_manager_configuration() {
+    let configured_paths = service_paths();
+    let mismatched_paths = ServiceRuntimePathsV1::from_directories(
+        "/Users/podway/Library/LaunchAgents",
+        "/Users/podway/Library/Application Support/Podway",
+        "/Users/podway/Library/Logs/Podway",
+        "/var/folders/podway/other-runtime",
+    )
+    .expect("mismatched fixture paths");
+    let manager = RecordingServiceManagerV1::new(
+        RecordingServiceCommandRunnerV1::new([]),
+        FixedServiceClockV1::new(UnixMillis::new(1)),
+        configured_paths,
+    );
+    let spec = InstallSpecV1::new(
+        LocalPlatformPathV1::new("/Applications/Podway/podwayd").expect("binary path"),
+        podway_service::ServiceLabelV1::podwayd(),
+        mismatched_paths,
+    );
+
+    for result in [manager.install(spec.clone()), manager.update(spec)] {
+        assert!(matches!(
+            result,
+            Err(ServiceErrorV1::OperationFailureV1 {
+                operation,
+                source,
+            }) if (operation == ServiceOperationV1::Install || operation == ServiceOperationV1::Update)
+                && matches!(
+                    source.as_ref(),
+                    ServiceErrorV1::IoV1 {
+                        operation: Some(source_operation),
+                        message,
+                    } if *source_operation == operation
+                        && message == "install specification runtime paths differ from manager configuration"
+                )
+        ));
+    }
+    assert!(
+        manager
+            .command_runner()
+            .recorded_commands()
+            .expect("recorded commands")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -137,6 +186,33 @@ fn arc_008_sec_002_service_v1_rejects_root_and_path_bound_inputs() {
             ..
         })
     ));
+    let invalid_utf8 = PathBuf::from(OsString::from_vec(
+        b"/Applications/Podway/\xff/podwayd".to_vec(),
+    ));
+    assert!(matches!(
+        LocalPlatformPathV1::new(&invalid_utf8),
+        Err(ServicePathErrorV1::Unnormalized {
+            field: "local_platform_path",
+            ..
+        })
+    ));
+    assert!(
+        LocalPlatformPathV1::new("/Applications/Podway/\u{fffd}/podwayd").is_ok(),
+        "a real replacement character remains a distinct valid UTF-8 path"
+    );
+}
+#[test]
+fn service_paths_reject_c0_and_delete_characters() {
+    for character in ['\0', '\u{001f}', '\u{007f}'] {
+        let path = format!("/Applications/Podway/daemon{character}");
+        assert!(matches!(
+            LocalPlatformPathV1::new(path),
+            Err(ServicePathErrorV1::Unnormalized {
+                field: "local_platform_path",
+                ..
+            })
+        ));
+    }
 }
 
 fn assert_service_manager_contract_signatures<T: ServiceManagerContractV1>() {
@@ -168,6 +244,9 @@ fn arc_008_service_v1_exposes_exactly_the_manifest_error_surface() {
         ServiceErrorV1::InvalidMetadataV1 {
             message: "invalid metadata".to_owned(),
         },
+        ServiceErrorV1::InvalidExecutableV1 {
+            message: "invalid executable".to_owned(),
+        },
         ServiceErrorV1::IoV1 {
             operation: Some(ServiceOperationV1::Status),
             message: "I/O failure".to_owned(),
@@ -196,10 +275,23 @@ fn arc_008_service_v1_exposes_exactly_the_manifest_error_surface() {
             operation: ServiceOperationV1::Restart,
             timeout_ms: 5_000,
         },
+        ServiceErrorV1::OutputLimitExceededV1 {
+            limit_bytes: 65_536,
+        },
+        ServiceErrorV1::LaunchctlTimeoutV1 { timeout_ms: 30_000 },
+        ServiceErrorV1::OperationFailureV1 {
+            operation: ServiceOperationV1::Status,
+            source: Box::new(ServiceErrorV1::InvalidMetadataV1 {
+                message: "typed metadata failure".to_owned(),
+            }),
+        },
     ] {
         match error {
             ServiceErrorV1::InvalidMetadataV1 { message } => {
                 assert_eq!(message, "invalid metadata");
+            }
+            ServiceErrorV1::InvalidExecutableV1 { message } => {
+                assert_eq!(message, "invalid executable");
             }
             ServiceErrorV1::IoV1 { operation, message } => {
                 assert_eq!(operation, Some(ServiceOperationV1::Status));
@@ -247,6 +339,20 @@ fn arc_008_service_v1_exposes_exactly_the_manifest_error_surface() {
             } => {
                 assert_eq!(operation, ServiceOperationV1::Restart);
                 assert_eq!(timeout_ms, 5_000);
+            }
+            ServiceErrorV1::OutputLimitExceededV1 { limit_bytes } => {
+                assert_eq!(limit_bytes, 65_536);
+            }
+            ServiceErrorV1::LaunchctlTimeoutV1 { timeout_ms } => {
+                assert_eq!(timeout_ms, 30_000);
+            }
+            ServiceErrorV1::OperationFailureV1 { operation, source } => {
+                assert_eq!(operation, ServiceOperationV1::Status);
+                assert!(matches!(
+                    *source,
+                    ServiceErrorV1::InvalidMetadataV1 { ref message }
+                        if message == "typed metadata failure"
+                ));
             }
         }
     }
@@ -366,7 +472,10 @@ fn arc_008_service_v1_returns_only_a_bounded_log_location() {
             &outside_manager,
             LogQueryV1::new(ServiceLogStreamV1::DaemonV1),
         ),
-        Err(ServiceErrorV1::LogUnavailableV1 { .. })
+        Err(ServiceErrorV1::OperationFailureV1 {
+            operation: ServiceOperationV1::Logs,
+            source,
+        }) if matches!(source.as_ref(), ServiceErrorV1::LogUnavailableV1 { .. })
     ));
 }
 
@@ -422,10 +531,16 @@ fn arc_008_ops_002_service_v1_maps_runner_contract_violations_to_io() {
     );
     assert!(matches!(
         ServiceManagerContractV1::start(&outcome_manager),
-        Err(ServiceErrorV1::IoV1 {
-            operation: Some(ServiceOperationV1::Start),
-            message,
-        }) if message == "runner returned unexpected stopped outcome"
+        Err(ServiceErrorV1::OperationFailureV1 {
+            operation: ServiceOperationV1::Start,
+            source,
+        }) if matches!(
+            source.as_ref(),
+            ServiceErrorV1::IoV1 {
+                operation: Some(ServiceOperationV1::Start),
+                message,
+            } if message == "runner returned unexpected stopped outcome"
+        )
     ));
 
     let result_manager = RecordingServiceManagerV1::new(
@@ -440,10 +555,16 @@ fn arc_008_ops_002_service_v1_maps_runner_contract_violations_to_io() {
             &result_manager,
             LogQueryV1::new(ServiceLogStreamV1::DaemonV1),
         ),
-        Err(ServiceErrorV1::IoV1 {
-            operation: Some(ServiceOperationV1::Logs),
-            message,
-        }) if message == "runner returned status result; expected log_location"
+        Err(ServiceErrorV1::OperationFailureV1 {
+            operation: ServiceOperationV1::Logs,
+            source,
+        }) if matches!(
+            source.as_ref(),
+            ServiceErrorV1::IoV1 {
+                operation: Some(ServiceOperationV1::Logs),
+                message,
+            } if message == "runner returned status result; expected log_location"
+        )
     ));
 }
 
@@ -457,10 +578,16 @@ fn arc_008_service_v1_recording_runner_exhaustion_fails_explicitly() {
 
     assert!(matches!(
         ServiceManagerContractV1::start(&manager),
-        Err(ServiceErrorV1::IoV1 {
-            operation: Some(ServiceOperationV1::Start),
-            message,
-        }) if message == "recording service command runner has no recorded result"
+        Err(ServiceErrorV1::OperationFailureV1 {
+            operation: ServiceOperationV1::Start,
+            source,
+        }) if matches!(
+            source.as_ref(),
+            ServiceErrorV1::IoV1 {
+                operation: Some(ServiceOperationV1::Start),
+                message,
+            } if message == "recording service command runner has no recorded result"
+        )
     ));
 
     let commands = match manager.command_runner().recorded_commands() {
@@ -469,10 +596,22 @@ fn arc_008_service_v1_recording_runner_exhaustion_fails_explicitly() {
     };
     assert_eq!(commands.len(), 1);
 }
+fn phase6_native_daemon_bytes() -> Vec<u8> {
+    let mut bytes = vec![0_u8; 40];
+    bytes[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+    bytes[4..8].copy_from_slice(&0x0100_000c_u32.to_le_bytes());
+    bytes[16..20].copy_from_slice(&1_u32.to_le_bytes());
+    bytes[20..24].copy_from_slice(&8_u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&0x32_u32.to_le_bytes());
+    bytes[36..40].copy_from_slice(&8_u32.to_le_bytes());
+    bytes
+}
+
 #[derive(Clone, Default)]
 struct Phase6Filesystem {
     files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
     events: Arc<Mutex<Vec<String>>>,
+    fail_writes: Arc<Mutex<bool>>,
 }
 
 impl Phase6Filesystem {
@@ -483,11 +622,14 @@ impl Phase6Filesystem {
 
 impl ServiceFilesystemV1 for Phase6Filesystem {
     fn exists(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
-        Ok(self.files.lock().expect("test lock").contains_key(path))
+        let files = self.files.lock().expect("test lock");
+        Ok(files.contains_key(path) || files.keys().any(|entry| entry.parent() == Some(path)))
     }
 
     fn is_executable(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
-        Ok(path.starts_with("/Applications/Podway/"))
+        Ok(path.starts_with("/Applications/Podway/")
+            || path.to_string_lossy().contains(".podway-daemons-v1/")
+            || path.to_string_lossy().contains(".podway-qualification-v1/"))
     }
 
     fn create_directory(&self, path: &Path, _: u32) -> Result<(), ServiceFilesystemErrorV1> {
@@ -495,13 +637,32 @@ impl ServiceFilesystemV1 for Phase6Filesystem {
         Ok(())
     }
 
-    fn read_file(&self, path: &Path) -> Result<Vec<u8>, ServiceFilesystemErrorV1> {
-        self.files
-            .lock()
-            .expect("test lock")
-            .get(path)
-            .cloned()
-            .ok_or_else(|| ServiceFilesystemErrorV1::other("not found"))
+    fn read_file_bounded(
+        &self,
+        path: &Path,
+        maximum_bytes: usize,
+    ) -> Result<Vec<u8>, ServiceFilesystemErrorV1> {
+        let bytes = if path.starts_with("/Applications/Podway/") {
+            self.files
+                .lock()
+                .expect("test lock")
+                .get(path)
+                .cloned()
+                .unwrap_or_else(phase6_native_daemon_bytes)
+        } else {
+            self.files
+                .lock()
+                .expect("test lock")
+                .get(path)
+                .cloned()
+                .ok_or_else(|| ServiceFilesystemErrorV1::other("not found"))?
+        };
+        if bytes.len() > maximum_bytes {
+            return Err(ServiceFilesystemErrorV1::limit_exceeded(
+                "file exceeds read bound",
+            ));
+        }
+        Ok(bytes)
     }
 
     fn write_atomically(
@@ -510,7 +671,17 @@ impl ServiceFilesystemV1 for Phase6Filesystem {
         contents: &[u8],
         _: u32,
     ) -> Result<(), ServiceFilesystemErrorV1> {
-        self.record(format!("write:{}", path.display()));
+        let publication_state = serde_json::from_slice::<serde_json::Value>(contents)
+            .ok()
+            .and_then(|metadata| metadata["publication_state"].as_str().map(str::to_owned))
+            .map(|state| format!(":{state}"))
+            .unwrap_or_default();
+        if *self.fail_writes.lock().expect("test lock") {
+            return Err(ServiceFilesystemErrorV1::other(
+                "injected atomic write failure",
+            ));
+        }
+        self.record(format!("write:{}{publication_state}", path.display()));
         self.files
             .lock()
             .expect("test lock")
@@ -519,13 +690,46 @@ impl ServiceFilesystemV1 for Phase6Filesystem {
     }
 
     fn remove_file(&self, path: &Path) -> Result<(), ServiceFilesystemErrorV1> {
-        self.record(format!("remove:{}", path.display()));
-        self.files.lock().expect("test lock").remove(path);
+        if self.files.lock().expect("test lock").remove(path).is_some() {
+            self.record(format!("remove:{}", path.display()));
+        }
         Ok(())
     }
+    fn list_directory_bounded(
+        &self,
+        path: &Path,
+        maximum_entries: usize,
+    ) -> Result<Vec<PathBuf>, ServiceFilesystemErrorV1> {
+        let mut entries = self
+            .files
+            .lock()
+            .expect("test lock")
+            .keys()
+            .filter(|entry| entry.parent() == Some(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        entries.sort();
+        if entries.len() > maximum_entries {
+            return Err(ServiceFilesystemErrorV1::limit_exceeded(
+                "test directory exceeds entry limit",
+            ));
+        }
+        Ok(entries)
+    }
 
-    fn remove_directory_contents(&self, path: &Path) -> Result<(), ServiceFilesystemErrorV1> {
-        self.record(format!("purge:{}", path.display()));
+    fn remove_directory(&self, path: &Path) -> Result<(), ServiceFilesystemErrorV1> {
+        if self
+            .files
+            .lock()
+            .expect("test lock")
+            .keys()
+            .any(|entry| entry.parent() == Some(path))
+        {
+            return Err(ServiceFilesystemErrorV1::other(
+                "test directory is not empty",
+            ));
+        }
+        self.record(format!("rmdir:{}", path.display()));
         Ok(())
     }
 
@@ -548,23 +752,53 @@ impl LaunchctlRunnerV1 for Phase6Launchctl {
             .lock()
             .expect("test lock")
             .push(format!("launchctl:{}", arguments.join(" ")));
+        let is_bootstrap = arguments
+            .first()
+            .is_some_and(|argument| argument == "bootstrap");
+        let is_print = arguments
+            .first()
+            .is_some_and(|argument| argument == "print");
+        let exit_status = if is_bootstrap {
+            self.bootstrap_status
+        } else if is_print {
+            self.print_status
+        } else {
+            0
+        };
+        let (stdout, stderr) = if is_print && exit_status == 0 {
+            (
+                format!(
+                    "{} = {{\n\tpid = 4242\n}}\n",
+                    arguments.get(1).expect("print target")
+                ),
+                String::new(),
+            )
+        } else if is_print && exit_status == 113 {
+            (
+                String::new(),
+                "Bad request.\nCould not find service \"dev.podway.podwayd\" in domain for user gui: 501\n"
+                    .to_owned(),
+            )
+        } else if exit_status == 0 {
+            (String::new(), String::new())
+        } else {
+            (String::new(), "scripted launchctl failure".to_owned())
+        };
         Ok(LaunchctlOutputV1 {
-            exit_status: if arguments
-                .first()
-                .is_some_and(|argument| argument == "bootstrap")
-            {
-                self.bootstrap_status
-            } else if arguments
-                .first()
-                .is_some_and(|argument| argument == "print")
-            {
-                self.print_status
-            } else {
-                0
-            },
-            stdout: String::new(),
-            stderr: "scripted launchctl failure".to_owned(),
+            exit_status,
+            stdout,
+            stderr,
         })
+    }
+}
+#[derive(Clone)]
+struct ExactPrintLaunchctl {
+    output: LaunchctlOutputV1,
+}
+
+impl LaunchctlRunnerV1 for ExactPrintLaunchctl {
+    fn run(&self, _: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
+        Ok(self.output.clone())
     }
 }
 
@@ -574,6 +808,122 @@ fn phase6_spec() -> InstallSpecV1 {
         podway_service::ServiceLabelV1::podwayd(),
         service_paths(),
     )
+}
+#[test]
+fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
+    let filesystem = Phase6Filesystem::default();
+    let binary = PathBuf::from(r#"/Applications/Podway/daemon&<>'".bin"#);
+    let paths = ServiceRuntimePathsV1::from_directories(
+        r#"/Users/podway/Library/LaunchAgents&<>'""#,
+        r#"/Users/podway/Library/Application Support/Podway&<>'""#,
+        r#"/Users/podway/Library/Logs/Podway&<>'""#,
+        r#"/var/folders/podway/runtime&<>'""#,
+    )
+    .expect("XML-sensitive fixture paths remain valid");
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 113,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_000)),
+        501,
+    )
+    .expect("non-root service runner");
+
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_000),
+            spec: InstallSpecV1::new(
+                LocalPlatformPathV1::new(&binary).expect("XML-sensitive binary path"),
+                podway_service::ServiceLabelV1::podwayd(),
+                paths.clone(),
+            ),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+
+    let plist = String::from_utf8(
+        filesystem
+            .files
+            .lock()
+            .expect("test lock")
+            .get(paths.launch_agent_path().as_path())
+            .cloned()
+            .expect("installed plist"),
+    )
+    .expect("plist UTF-8");
+    let xml_escape = |value: &Path| {
+        value
+            .display()
+            .to_string()
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+    };
+    let escaped_log = xml_escape(paths.log_path().as_path());
+    assert!(plist.contains(&format!("<string>{escaped_log}</string>")));
+    assert!(plist.contains("<key>Label</key>\n  <string>dev.podway.podwayd</string>"));
+    assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
+    assert!(
+        plist.contains(
+            "<key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>"
+        )
+    );
+    assert!(plist.contains("<key>ThrottleInterval</key>\n  <integer>5</integer>"));
+    assert!(plist.contains("<key>ProcessType</key>\n  <string>Background</string>"));
+    assert_eq!(
+        plist
+            .match_indices(&format!("<string>{escaped_log}</string>"))
+            .count(),
+        2,
+        "both standard output and error paths must use the escaped log path"
+    );
+
+    let receipt: serde_json::Value = serde_json::from_slice(
+        filesystem
+            .files
+            .lock()
+            .expect("test lock")
+            .get(paths.metadata_index_path().as_path())
+            .expect("receipt metadata"),
+    )
+    .expect("receipt metadata JSON");
+    for (key, plist_key) in [
+        ("generation", "PodwayGeneration"),
+        ("daemon_identity", "PodwayDaemonSha256"),
+    ] {
+        let value = receipt[key].as_str().expect("authenticated receipt value");
+        assert!(plist.contains(&format!(
+            "<key>{plist_key}</key>\n  <string>{value}</string>"
+        )));
+    }
+    let staged_binary = PathBuf::from(
+        receipt["daemon_binary"]
+            .as_str()
+            .expect("receipt staged daemon path"),
+    );
+    let daemon_identity = receipt["daemon_identity"]
+        .as_str()
+        .expect("receipt daemon identity");
+    assert_eq!(
+        staged_binary.file_name().and_then(|name| name.to_str()),
+        Some(daemon_identity),
+        "the immutable staged filename must be the authenticated daemon identity"
+    );
+    let escaped_staged_binary = xml_escape(&staged_binary);
+    assert!(plist.contains(&format!(
+        "<key>ProgramArguments</key>\n  <array>\n    <string>{escaped_staged_binary}</string>\n    <string>--service</string>\n  </array>"
+    )));
+    assert!(
+        !plist.contains(&xml_escape(&binary)),
+        "the mutable source executable must not be rendered into the plist"
+    );
 }
 
 #[test]
@@ -611,23 +961,68 @@ fn phase6_install_orders_atomic_plist_bootstrap_and_metadata() {
         .as_path()
         .display()
         .to_string();
-    let plist_write = events
+    let staged = format!(
+        "write:{}",
+        serde_json::from_slice::<serde_json::Value>(
+            filesystem.files.lock().expect("test lock")
+                [service_paths().metadata_index_path().as_path()]
+            .as_slice(),
+        )
+        .expect("receipt metadata")["daemon_binary"]
+            .as_str()
+            .expect("receipt staged daemon path")
+    );
+    let relevant_events = events
         .iter()
-        .position(|event| event == &format!("write:{plist}"))
-        .expect("plist write");
-    let bootstrap = events
-        .iter()
-        .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
-        .expect("bootstrap");
-    let metadata_write = events
-        .iter()
-        .position(|event| event == &format!("write:{metadata}"))
-        .expect("metadata write");
-    assert!(plist_write < bootstrap && bootstrap < metadata_write);
+        .filter(|event| {
+            event.as_str() == staged.as_str()
+                || event.as_str() == format!("write:{plist}")
+                || event.as_str() == format!("write:{metadata}:prepared")
+                || event.as_str() == format!("write:{metadata}:receipt_durable")
+                || event.starts_with("launchctl:bootstrap gui/501")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        relevant_events,
+        [
+            staged,
+            format!("write:{metadata}:prepared"),
+            format!("write:{plist}"),
+            format!(
+                "launchctl:bootstrap gui/501 {}",
+                service_paths().launch_agent_path().as_path().display()
+            ),
+            format!("write:{metadata}:receipt_durable"),
+        ]
+    );
+    let receipt = filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .get(service_paths().metadata_index_path().as_path())
+        .cloned()
+        .expect("receipt metadata");
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&receipt).expect("receipt metadata must be parseable JSON");
+    assert_eq!(receipt["publication_state"], "receipt_durable");
+    assert_eq!(receipt["label"], "dev.podway.podwayd");
+    assert!(
+        receipt["daemon_binary"]
+            .as_str()
+            .is_some_and(|path| path.contains(".podway-daemons-v1/"))
+    );
+    assert_eq!(receipt["installed_at"], 3_000);
+    assert_eq!(receipt["updated_at"], 3_000);
+    assert!(
+        receipt["generation"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 }
 
 #[test]
-fn phase6_install_launchctl_failure_does_not_record_metadata() {
+fn phase6_install_launchctl_failure_preserves_prepared_metadata() {
     let filesystem = Phase6Filesystem::default();
     let runner = MacosServiceCommandRunnerV1::new(
         filesystem.clone(),
@@ -651,12 +1046,66 @@ fn phase6_install_launchctl_failure_does_not_record_metadata() {
             ..
         })
     ));
+    let metadata = filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .get(service_paths().metadata_index_path().as_path())
+        .cloned()
+        .expect("prepared metadata must remain for explicit repair");
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&metadata).expect("prepared metadata must be parseable JSON");
+    assert_eq!(metadata["version"], 1);
+    assert_eq!(metadata["label"], "dev.podway.podwayd");
     assert!(
-        !filesystem
-            .files
-            .lock()
-            .expect("test lock")
-            .contains_key(service_paths().metadata_index_path().as_path())
+        metadata["daemon_binary"]
+            .as_str()
+            .is_some_and(|path| path.contains(".podway-daemons-v1/"))
+    );
+    assert_eq!(metadata["installed_at"], 3_001);
+    assert_eq!(metadata["updated_at"], 3_001);
+    assert_eq!(metadata["publication_state"], "prepared");
+    assert!(
+        metadata["daemon_identity"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64)
+    );
+    assert!(
+        metadata["generation"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64)
+    );
+    let staged = format!(
+        "write:{}",
+        metadata["daemon_binary"]
+            .as_str()
+            .expect("prepared staged daemon path")
+    );
+    let events = filesystem.events.lock().expect("test lock").clone();
+    let relevant_events = events
+        .iter()
+        .filter(|event| {
+            event.starts_with("write:") || event.starts_with("launchctl:bootstrap gui/501")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        relevant_events,
+        [
+            staged,
+            format!(
+                "write:{}:prepared",
+                service_paths().metadata_index_path().as_path().display()
+            ),
+            format!(
+                "write:{}",
+                service_paths().launch_agent_path().as_path().display()
+            ),
+            format!(
+                "launchctl:bootstrap gui/501 {}",
+                service_paths().launch_agent_path().as_path().display()
+            ),
+        ]
     );
 }
 
@@ -703,12 +1152,21 @@ fn phase6_install_is_idempotent_and_plist_is_canonical() {
         event_count
     );
 
-    let plist = String::from_utf8(launch_agent_plist_v1(
-        Path::new("/Applications/Podway/podwayd"),
-        service_paths().log_path().as_path(),
-    ))
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &filesystem.files.lock().expect("test lock")
+            [service_paths().metadata_index_path().as_path()],
+    )
+    .expect("receipt metadata");
+    let staged_binary = receipt["daemon_binary"]
+        .as_str()
+        .expect("receipt staged daemon path");
+    let plist = String::from_utf8(
+        filesystem.files.lock().expect("test lock")[service_paths().launch_agent_path().as_path()]
+            .clone(),
+    )
     .expect("plist UTF-8");
-    assert!(plist.contains("<string>/Applications/Podway/podwayd</string>"));
+    assert!(plist.contains(&format!("<string>{staged_binary}</string>")));
+    assert!(!plist.contains("<string>/Applications/Podway/podwayd</string>"));
     assert!(plist.contains("<string>--service</string>"));
     assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
     assert!(plist.contains("<key>SuccessfulExit</key>\n    <false/>"));
@@ -768,6 +1226,144 @@ fn phase6_restart_boots_out_removes_stale_socket_then_bootstraps() {
         .expect("bootstrap");
     assert!(bootout < remove && remove < bootstrap);
 }
+#[test]
+fn phase6_prepared_retry_removes_stale_socket_before_bootstrap_and_publishes_receipt() {
+    let filesystem = Phase6Filesystem::default();
+    let failing_runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 1,
+            print_status: 113,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_004)),
+        501,
+    )
+    .expect("non-root service runner");
+    assert!(matches!(
+        failing_runner.run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_004),
+            spec: phase6_spec(),
+        }),
+        Err(ServiceErrorV1::LaunchctlFailureV1 { .. })
+    ));
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().socket_path().as_path().to_path_buf(),
+        Vec::new(),
+    );
+    filesystem.events.lock().expect("test lock").clear();
+
+    let retry_runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 113,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_004)),
+        501,
+    )
+    .expect("non-root service runner");
+    assert!(matches!(
+        retry_runner.run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_004),
+            spec: phase6_spec(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+
+    let events = filesystem.events.lock().expect("test lock").clone();
+    let remove = events
+        .iter()
+        .position(|event| {
+            event
+                == &format!(
+                    "remove:{}",
+                    service_paths().socket_path().as_path().display()
+                )
+        })
+        .expect("socket cleanup");
+    let bootstrap = events
+        .iter()
+        .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
+        .expect("bootstrap");
+    let receipt = events
+        .iter()
+        .position(|event| {
+            event
+                == &format!(
+                    "write:{}:receipt_durable",
+                    service_paths().metadata_index_path().as_path().display()
+                )
+        })
+        .expect("receipt publication");
+    assert!(remove < bootstrap && bootstrap < receipt);
+}
+
+#[test]
+fn phase6_start_removes_stale_socket_after_unloaded_confirmation_before_bootstrap() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 113,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_005)),
+        501,
+    )
+    .expect("non-root service runner");
+    runner
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_005),
+            spec: phase6_spec(),
+        })
+        .expect("initial install");
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().socket_path().as_path().to_path_buf(),
+        Vec::new(),
+    );
+    filesystem.events.lock().expect("test lock").clear();
+
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Start {
+            requested_at: UnixMillis::new(3_005),
+            paths: service_paths(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+    let events = filesystem.events.lock().expect("test lock").clone();
+    let remove = events
+        .iter()
+        .position(|event| {
+            event
+                == &format!(
+                    "remove:{}",
+                    service_paths().socket_path().as_path().display()
+                )
+        })
+        .expect("socket cleanup");
+    let bootstrap = events
+        .iter()
+        .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
+        .expect("bootstrap");
+    assert!(remove < bootstrap);
+    let receipt: serde_json::Value = serde_json::from_slice(
+        filesystem
+            .files
+            .lock()
+            .expect("test lock")
+            .get(service_paths().metadata_index_path().as_path())
+            .expect("receipt metadata"),
+    )
+    .expect("receipt JSON");
+    assert_eq!(receipt["publication_state"], "receipt_durable");
+}
 
 #[test]
 fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cleanup() {
@@ -789,15 +1385,26 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
             spec: phase6_spec(),
         })
         .expect("initial install");
+    let old_staged = serde_json::from_slice::<serde_json::Value>(
+        &filesystem.files.lock().expect("test lock")
+            [service_paths().metadata_index_path().as_path()],
+    )
+    .expect("initial receipt")["daemon_binary"]
+        .as_str()
+        .expect("initial staged daemon path")
+        .to_owned();
     filesystem.files.lock().expect("test lock").insert(
         service_paths().socket_path().as_path().to_path_buf(),
         Vec::new(),
     );
-    let changed = InstallSpecV1::new(
-        LocalPlatformPathV1::new("/Applications/Podway/podwayd-next").expect("fixture binary"),
-        podway_service::ServiceLabelV1::podwayd(),
-        service_paths(),
+    filesystem.events.lock().expect("test lock").clear();
+    let mut changed_daemon = phase6_native_daemon_bytes();
+    changed_daemon.push(1);
+    filesystem.files.lock().expect("test lock").insert(
+        PathBuf::from("/Applications/Podway/podwayd"),
+        changed_daemon,
     );
+    let changed = phase6_spec();
     assert!(matches!(
         runner.run(ServiceCommandV1::Update {
             requested_at: UnixMillis::new(3_004),
@@ -808,16 +1415,44 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
         ))
     ));
     let events = filesystem.events.lock().expect("test lock").clone();
-    assert!(
-        events
-            .iter()
-            .any(|event| event.starts_with("launchctl:bootout gui/501/"))
-    );
-    assert!(events.iter().any(|event| event
-        == &format!(
-            "remove:{}",
-            service_paths().socket_path().as_path().display()
-        )));
+    let staged = events
+        .iter()
+        .position(|event| event.starts_with("write:") && event.contains(".podway-daemons-v1/"))
+        .expect("new daemon stage");
+    let bootout = events
+        .iter()
+        .position(|event| event.starts_with("launchctl:bootout gui/501/"))
+        .expect("bootout");
+    let socket_cleanup = events
+        .iter()
+        .position(|event| {
+            event
+                == &format!(
+                    "remove:{}",
+                    service_paths().socket_path().as_path().display()
+                )
+        })
+        .expect("socket cleanup");
+    let bootstrap = events
+        .iter()
+        .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
+        .expect("bootstrap");
+    let receipt = events
+        .iter()
+        .position(|event| {
+            event
+                == &format!(
+                    "write:{}:receipt_durable",
+                    service_paths().metadata_index_path().as_path().display()
+                )
+        })
+        .expect("receipt publication");
+    let superseded = events
+        .iter()
+        .position(|event| event == &format!("remove:{old_staged}"))
+        .expect("superseded staged daemon cleanup");
+    assert!(staged < bootout && bootout < socket_cleanup);
+    assert!(socket_cleanup < bootstrap && bootstrap < receipt && receipt < superseded);
     let plist = filesystem
         .files
         .lock()
@@ -828,8 +1463,49 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
     assert!(
         String::from_utf8(plist)
             .expect("plist UTF-8")
-            .contains("/Applications/Podway/podwayd-next")
+            .contains(".podway-daemons-v1/")
     );
+    assert!(
+        !filesystem
+            .files
+            .lock()
+            .expect("test lock")
+            .contains_key(Path::new(&old_staged)),
+        "the receipt-durable update must remove only the superseded staged daemon"
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &filesystem.files.lock().expect("test lock")
+            [service_paths().metadata_index_path().as_path()],
+    )
+    .expect("current receipt");
+    let current_staged = PathBuf::from(
+        receipt["daemon_binary"]
+            .as_str()
+            .expect("current staged daemon path"),
+    );
+    let staged_parent = current_staged.parent().expect("staged daemon parent");
+    let orphans = (0_u16..257)
+        .map(|index| staged_parent.join(format!("{index:064x}")))
+        .filter(|path| path != &current_staged)
+        .collect::<Vec<_>>();
+    {
+        let mut files = filesystem.files.lock().expect("test lock");
+        for orphan in &orphans {
+            files.insert(orphan.clone(), b"orphaned-crash-generation".to_vec());
+        }
+    }
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Update {
+            requested_at: UnixMillis::new(3_004),
+            spec: phase6_spec(),
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
+        ))
+    ));
+    let files = filesystem.files.lock().expect("test lock");
+    assert!(files.contains_key(&current_staged));
+    assert!(orphans.iter().all(|orphan| !files.contains_key(orphan)));
 }
 
 #[test]
@@ -840,7 +1516,7 @@ fn phase6_start_stop_status_and_logs_cover_installed_lifecycle_states() {
         Phase6Launchctl {
             events: filesystem.events.clone(),
             bootstrap_status: 0,
-            print_status: 1,
+            print_status: 113,
         },
         FixedServiceClockV1::new(UnixMillis::new(3_005)),
         501,
@@ -879,15 +1555,31 @@ fn phase6_start_stop_status_and_logs_cover_installed_lifecycle_states() {
             ServiceOutcomeV1::StoppedV1(_)
         ))
     ));
-    assert!(matches!(
-        runner.run(ServiceCommandV1::Status {
+    match runner
+        .run(ServiceCommandV1::Status {
             requested_at: UnixMillis::new(3_005),
             paths: service_paths(),
-        }),
-        Ok(ServiceCommandResultV1::Status(ServiceStatusV1::StoppedV1(
-            _
-        )))
-    ));
+        })
+        .expect("documented not-loaded launchctl output must classify as stopped")
+    {
+        ServiceCommandResultV1::Status(ServiceStatusV1::StoppedV1(stopped)) => {
+            assert_eq!(stopped.observed_at(), UnixMillis::new(3_005));
+            let metadata = stopped
+                .metadata()
+                .expect("stopped state retains receipt metadata");
+            assert_eq!(metadata.version(), 1);
+            assert_eq!(metadata.label(), "dev.podway.podwayd");
+            assert!(
+                metadata
+                    .daemon_binary()
+                    .to_string_lossy()
+                    .contains(".podway-daemons-v1/")
+            );
+            assert_eq!(metadata.installed_at(), UnixMillis::new(3_005));
+            assert_eq!(metadata.updated_at(), UnixMillis::new(3_005));
+        }
+        other => panic!("exact not-loaded fixture must produce stopped status, got {other:?}"),
+    }
     filesystem.files.lock().expect("test lock").insert(
         service_paths().log_path().as_path().to_path_buf(),
         b"structured log".to_vec(),
@@ -903,11 +1595,10 @@ fn phase6_start_stop_status_and_logs_cover_installed_lifecycle_states() {
         Ok(ServiceCommandResultV1::LogLocation(_))
     ));
 }
-
 #[test]
-fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
+fn phase6_not_loaded_accepts_only_documented_current_and_legacy_bytes() {
     let filesystem = Phase6Filesystem::default();
-    let runner = MacosServiceCommandRunnerV1::new(
+    let setup = MacosServiceCommandRunnerV1::new(
         filesystem.clone(),
         Phase6Launchctl {
             events: filesystem.events.clone(),
@@ -917,10 +1608,107 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
         FixedServiceClockV1::new(UnixMillis::new(3_006)),
         501,
     )
+    .expect("setup runner");
+    setup
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_006),
+            spec: phase6_spec(),
+        })
+        .expect("install status fixture");
+
+    let current =
+        "Bad request.\nCould not find service \"dev.podway.podwayd\" in domain for user gui: 501";
+    let legacy = "Could not find service \"dev.podway.podwayd\" in domain for gui/501";
+    for (exit_status, documented) in [(113, current), (3, legacy)] {
+        for newline in ["", "\n"] {
+            let runner = MacosServiceCommandRunnerV1::new(
+                filesystem.clone(),
+                ExactPrintLaunchctl {
+                    output: LaunchctlOutputV1 {
+                        exit_status,
+                        stdout: String::new(),
+                        stderr: format!("{documented}{newline}"),
+                    },
+                },
+                FixedServiceClockV1::new(UnixMillis::new(3_006)),
+                501,
+            )
+            .expect("exact-print runner");
+            assert!(matches!(
+                runner.run(ServiceCommandV1::Status {
+                    requested_at: UnixMillis::new(3_006),
+                    paths: service_paths(),
+                }),
+                Ok(ServiceCommandResultV1::Status(ServiceStatusV1::StoppedV1(
+                    _
+                )))
+            ));
+        }
+    }
+
+    for output in [
+        LaunchctlOutputV1 {
+            exit_status: 113,
+            stdout: String::new(),
+            stderr: format!("{current}\n\n"),
+        },
+        LaunchctlOutputV1 {
+            exit_status: 113,
+            stdout: "unexpected".to_owned(),
+            stderr: current.to_owned(),
+        },
+        LaunchctlOutputV1 {
+            exit_status: 3,
+            stdout: String::new(),
+            stderr: format!(" {legacy}"),
+        },
+        LaunchctlOutputV1 {
+            exit_status: 3,
+            stdout: String::new(),
+            stderr: format!("{legacy}\n "),
+        },
+    ] {
+        let runner = MacosServiceCommandRunnerV1::new(
+            filesystem.clone(),
+            ExactPrintLaunchctl { output },
+            FixedServiceClockV1::new(UnixMillis::new(3_006)),
+            501,
+        )
+        .expect("near-match runner");
+        assert!(matches!(
+            runner.run(ServiceCommandV1::Status {
+                requested_at: UnixMillis::new(3_006),
+                paths: service_paths(),
+            }),
+            Err(ServiceErrorV1::LaunchctlFailureV1 {
+                operation: ServiceOperationV1::Status,
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
+    let filesystem = Phase6Filesystem::default();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 113,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_006)),
+        501,
+    )
     .expect("non-root service runner");
+    runner
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_006),
+            spec: phase6_spec(),
+        })
+        .expect("fixture service must install before uninstall");
     for path in [
-        service_paths().launch_agent_path().as_path(),
-        service_paths().metadata_index_path().as_path(),
         service_paths().socket_path().as_path(),
         service_paths().global_lock_path().as_path(),
         service_paths().workspace_registry_path().as_path(),
@@ -931,6 +1719,15 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
             .lock()
             .expect("test lock")
             .insert(path.to_path_buf(), Vec::new());
+    }
+    for index in 1..=5 {
+        filesystem.files.lock().expect("test lock").insert(
+            PathBuf::from(format!(
+                "{}.{index}",
+                service_paths().log_path().as_path().display()
+            )),
+            Vec::new(),
+        );
     }
     assert!(matches!(
         runner.run(ServiceCommandV1::Uninstall {
@@ -955,25 +1752,43 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
             ServiceOutcomeV1::ChangedV1(_)
         ))
     ));
-    assert!(
-        filesystem
-            .events
-            .lock()
-            .expect("test lock")
-            .iter()
-            .any(|event| event.starts_with("purge:"))
-    );
+    let events = filesystem.events.lock().expect("test lock");
+    assert!(events.iter().any(|event| {
+        event == &format!("remove:{}", service_paths().log_path().as_path().display())
+    }));
+    for index in 1..=5 {
+        assert!(events.iter().any(|event| {
+            event
+                == &format!(
+                    "remove:{}.{}",
+                    service_paths().log_path().as_path().display(),
+                    index
+                )
+        }));
+    }
+    assert!(!events.iter().any(|event| event.starts_with("purge:")));
 }
 
 #[test]
-fn phase6_runtime_socket_path_falls_back_when_tmpdir_exceeds_unix_socket_limit() {
+fn phase6_runtime_socket_path_rejects_overlong_tmpdir_without_shared_fallback() {
     let temporary_directory = format!("/{}", "a".repeat(120));
-    let paths = ServiceRuntimePathsV1::for_user("/Users/podway", temporary_directory, 501)
-        .expect("fallback runtime path");
-    assert_eq!(
-        paths.socket_path().as_path(),
-        Path::new("/tmp/podway-501/podwayd.sock")
-    );
+    assert!(matches!(
+        ServiceRuntimePathsV1::for_user("/Users/podway", temporary_directory, 501),
+        Err(ServicePathErrorV1::SocketPathTooLong { .. })
+    ));
+}
+#[test]
+fn phase6_direct_runtime_socket_path_rejects_unbindable_path() {
+    let runtime_directory = format!("/{}", "a".repeat(120));
+    assert!(matches!(
+        ServiceRuntimePathsV1::from_directories(
+            "/Users/podway/Library/LaunchAgents",
+            "/Users/podway/Library/Application Support/Podway",
+            "/Users/podway/Library/Logs/Podway",
+            runtime_directory,
+        ),
+        Err(ServicePathErrorV1::SocketPathTooLong { .. })
+    ));
 }
 
 #[test]
@@ -990,6 +1805,41 @@ fn phase6_status_rejects_incompatible_metadata_and_reports_running_when_loaded()
         501,
     )
     .expect("non-root service runner");
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_007),
+            paths: service_paths(),
+        }),
+        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { message }
+                if message == "service is loaded without a coherent publication")
+    ));
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().launch_agent_path().as_path().to_path_buf(),
+        b"legacy plist without a generation marker".to_vec(),
+    );
+    filesystem.files.lock().expect("test lock").insert(
+        service_paths().metadata_index_path().as_path().to_path_buf(),
+        br#"{"version":1,"version":1,"label":"dev.podway.podwayd","daemon_binary":"/Applications/Podway/podwayd","installed_at":1,"updated_at":1,"publication_state":"receipt_durable","generation":"0000000000000000000000000000000000000000000000000000000000000000","daemon_identity":"0000000000000000000000000000000000000000000000000000000000000000"}"#.to_vec(),
+    );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_007),
+            paths: service_paths(),
+        }),
+        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
+    ));
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .remove(service_paths().launch_agent_path().as_path());
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .remove(service_paths().metadata_index_path().as_path());
     filesystem.files.lock().expect("test lock").insert(
         service_paths().launch_agent_path().as_path().to_path_buf(),
         b"legacy plist without a generation marker".to_vec(),
@@ -1003,7 +1853,8 @@ fn phase6_status_rejects_incompatible_metadata_and_reports_running_when_loaded()
             requested_at: UnixMillis::new(3_007),
             paths: service_paths(),
         }),
-        Err(ServiceErrorV1::InvalidMetadataV1 { .. })
+        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
     ));
     filesystem.files.lock().expect("test lock").insert(
         service_paths().metadata_index_path().as_path().to_path_buf(),
@@ -1014,7 +1865,8 @@ fn phase6_status_rejects_incompatible_metadata_and_reports_running_when_loaded()
             requested_at: UnixMillis::new(3_007),
             paths: service_paths(),
         }),
-        Err(ServiceErrorV1::InvalidMetadataV1 { .. })
+        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
     ));
 }
 #[test]
@@ -1066,20 +1918,369 @@ fn phase6_authenticated_generation_rejects_plist_semantic_tampering_and_install_
     ] {
         assert!(matches!(
             runner.run(command),
-            Err(ServiceErrorV1::InvalidMetadataV1 { .. })
+            Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+                if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
         ));
     }
+    match runner
+        .run(install.clone())
+        .expect("authenticated install must repair the tampered publication")
+    {
+        ServiceCommandResultV1::Outcome(ServiceOutcomeV1::ChangedV1(changed)) => {
+            assert_eq!(changed.completed_at(), UnixMillis::new(3_008));
+            let metadata = changed
+                .metadata()
+                .expect("repair must publish receipt metadata");
+            assert_eq!(metadata.version(), 1);
+            assert_eq!(metadata.label(), "dev.podway.podwayd");
+            assert!(
+                metadata
+                    .daemon_binary()
+                    .to_string_lossy()
+                    .contains(".podway-daemons-v1/")
+            );
+            assert_eq!(metadata.installed_at(), UnixMillis::new(3_008));
+            assert_eq!(metadata.updated_at(), UnixMillis::new(3_008));
+        }
+        other => panic!("tampered publication must be repaired, got {other:?}"),
+    }
+    match runner
+        .run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_008),
+            paths: service_paths(),
+        })
+        .expect("structured loaded launchctl output must classify repaired service as running")
+    {
+        ServiceCommandResultV1::Status(ServiceStatusV1::RunningV1(running)) => {
+            assert_eq!(running.observed_at(), UnixMillis::new(3_008));
+            assert_eq!(running.process_id(), Some(4242));
+            let metadata = running
+                .metadata()
+                .expect("running state retains receipt metadata");
+            assert_eq!(metadata.version(), 1);
+            assert_eq!(metadata.label(), "dev.podway.podwayd");
+            assert!(
+                metadata
+                    .daemon_binary()
+                    .to_string_lossy()
+                    .contains(".podway-daemons-v1/")
+            );
+            assert_eq!(metadata.installed_at(), UnixMillis::new(3_008));
+            assert_eq!(metadata.updated_at(), UnixMillis::new(3_008));
+        }
+        other => panic!("structured loaded fixture must produce running status, got {other:?}"),
+    }
+    match runner
+        .run(install)
+        .expect("repaired publication must converge")
+    {
+        ServiceCommandResultV1::Outcome(ServiceOutcomeV1::AlreadyInDesiredStateV1(already)) => {
+            assert_eq!(already.observed_at(), UnixMillis::new(3_008));
+            assert_eq!(already.metadata().version(), 1);
+            assert_eq!(already.metadata().label(), "dev.podway.podwayd");
+            assert!(
+                already
+                    .metadata()
+                    .daemon_binary()
+                    .to_string_lossy()
+                    .contains(".podway-daemons-v1/")
+            );
+        }
+        other => panic!("repaired publication must converge, got {other:?}"),
+    }
+    let receipt = filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .get(service_paths().metadata_index_path().as_path())
+        .cloned()
+        .expect("repaired receipt metadata");
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&receipt).expect("repaired receipt metadata must be parseable JSON");
+    assert_eq!(receipt["publication_state"], "receipt_durable");
+    assert!(
+        receipt["generation"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64)
+    );
+}
+#[test]
+fn phase6_install_repairs_oversized_metadata_but_preserves_unsafe_corruption() {
+    let filesystem = Phase6Filesystem::default();
+    let metadata_path = service_paths()
+        .metadata_index_path()
+        .as_path()
+        .to_path_buf();
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_010)),
+        501,
+    )
+    .expect("non-root service runner");
+    let install = ServiceCommandV1::Install {
+        requested_at: UnixMillis::new(3_010),
+        spec: phase6_spec(),
+    };
+    runner
+        .run(install.clone())
+        .expect("initial install provides an immutable staged daemon");
+
+    let unsafe_corrupt = br#"{"version":1,"label":"dev.podway.podwayd""#.to_vec();
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .insert(metadata_path.clone(), unsafe_corrupt.clone());
+    for command in [
+        ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_010),
+            paths: service_paths(),
+        },
+        ServiceCommandV1::Update {
+            requested_at: UnixMillis::new(3_010),
+            spec: phase6_spec(),
+        },
+        install.clone(),
+    ] {
+        assert!(matches!(
+            runner.run(command),
+            Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+                if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
+        ));
+    }
+    assert_eq!(
+        filesystem.files.lock().expect("test lock")[&metadata_path],
+        unsafe_corrupt,
+        "non-limit metadata corruption must remain fail-closed"
+    );
+
+    let oversized = vec![b'x'; SERVICE_METADATA_MAX_BYTES_V1 + 1];
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .insert(metadata_path.clone(), oversized.clone());
+    *filesystem.fail_writes.lock().expect("test lock") = true;
+    assert!(matches!(
+        runner.run(install.clone()),
+        Err(ServiceErrorV1::IoV1 {
+            operation: Some(ServiceOperationV1::Install),
+            ..
+        })
+    ));
+    assert_eq!(
+        filesystem.files.lock().expect("test lock")[&metadata_path],
+        oversized,
+        "a failed bounded-size repair must not replace oversized metadata"
+    );
+
+    *filesystem.fail_writes.lock().expect("test lock") = false;
     assert!(matches!(
         runner.run(install),
         Ok(ServiceCommandResultV1::Outcome(
             ServiceOutcomeV1::ChangedV1(_)
         ))
     ));
+    let repaired = filesystem.files.lock().expect("test lock")[&metadata_path].clone();
+    assert!(serde_json::from_slice::<serde_json::Value>(&repaired).is_ok());
+}
+#[test]
+fn phase6_authenticated_generation_rejects_state_and_timestamp_tampering() {
+    let filesystem = Phase6Filesystem::default();
+    let clock = FixedServiceClockV1::new(UnixMillis::new(3_009));
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 0,
+        },
+        clock,
+        501,
+    )
+    .expect("non-root service runner");
+    runner
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_009),
+            spec: phase6_spec(),
+        })
+        .expect("initial install");
+    let metadata_path = service_paths()
+        .metadata_index_path()
+        .as_path()
+        .to_path_buf();
+    let original = filesystem.files.lock().expect("test lock")[&metadata_path].clone();
+    for (field, value) in [
+        (
+            "publication_state",
+            serde_json::Value::String("prepared".to_owned()),
+        ),
+        ("updated_at", serde_json::Value::from(3_010_u64)),
+    ] {
+        let mut tampered: serde_json::Value =
+            serde_json::from_slice(&original).expect("receipt metadata JSON");
+        tampered[field] = value;
+        filesystem.files.lock().expect("test lock").insert(
+            metadata_path.clone(),
+            serde_json::to_vec(&tampered).expect("tampered metadata JSON"),
+        );
+        assert!(matches!(
+            runner.run(ServiceCommandV1::Status {
+                requested_at: UnixMillis::new(3_009),
+                paths: service_paths(),
+            }),
+            Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+                if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
+        ));
+    }
+}
+#[test]
+fn qualification_publication_stages_bound_dependencies_and_rejects_drift_or_role_confusion() {
+    let filesystem = Phase6Filesystem::default();
+    let paths = service_paths();
+    let wrapper = PathBuf::from("/Applications/Podway/qualification-wrapper");
+    let profile = PathBuf::from("/Applications/Podway/qualification.sb");
+    let archived = PathBuf::from("/Applications/Podway/archived-podwayd");
+    let profile_bytes = b"(version 1)".to_vec();
+    let archived_bytes = phase6_native_daemon_bytes();
+    let wrapper_bytes = format!(
+        "#!/bin/sh\nexec /usr/bin/sandbox-exec -f {} {} \"$@\"\n",
+        profile.display(),
+        archived.display()
+    )
+    .into_bytes();
+    let digest = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+    filesystem.files.lock().expect("test lock").extend([
+        (wrapper.clone(), wrapper_bytes.clone()),
+        (profile.clone(), profile_bytes.clone()),
+        (archived.clone(), archived_bytes.clone()),
+    ]);
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 113,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_010)),
+        501,
+    )
+    .expect("non-root service runner");
+    let binding = QualificationWrapperBindingV1::new(
+        digest(&wrapper_bytes),
+        LocalPlatformPathV1::new(&profile).expect("profile path"),
+        digest(&profile_bytes),
+        LocalPlatformPathV1::new(&archived).expect("archive path"),
+        digest(&archived_bytes),
+    );
+    runner
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_010),
+            spec: InstallSpecV1::qualification_wrapper(
+                LocalPlatformPathV1::new(&wrapper).expect("wrapper path"),
+                podway_service::ServiceLabelV1::podwayd(),
+                paths.clone(),
+                binding,
+            ),
+        })
+        .expect("qualification install");
+
+    let metadata_path = paths.metadata_index_path().as_path().to_path_buf();
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&filesystem.files.lock().expect("test lock")[&metadata_path])
+            .expect("qualification receipt");
+    assert_eq!(receipt["artifact_role"], "qualification_wrapper");
+    for dependency in ["sandbox_profile", "archived_daemon"] {
+        let staged = receipt["qualification_binding"][dependency]
+            .as_str()
+            .expect("staged dependency path");
+        assert!(
+            staged.contains(".podway-qualification-v1/"),
+            "{dependency} must be controller-owned"
+        );
+    }
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .insert(profile, b"source replacement".to_vec());
+    assert!(
+        runner
+            .run(ServiceCommandV1::Status {
+                requested_at: UnixMillis::new(3_010),
+                paths: paths.clone(),
+            })
+            .is_ok(),
+        "lifecycle reads only the published qualification snapshots"
+    );
+
+    let staged_profile = PathBuf::from(
+        receipt["qualification_binding"]["sandbox_profile"]
+            .as_str()
+            .expect("staged profile"),
+    );
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .insert(staged_profile, b"drift".to_vec());
     assert!(matches!(
         runner.run(ServiceCommandV1::Status {
-            requested_at: UnixMillis::new(3_008),
-            paths: service_paths(),
+            requested_at: UnixMillis::new(3_010),
+            paths: paths.clone(),
         }),
-        Ok(ServiceCommandResultV1::Status(_))
+        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
+    ));
+    filesystem.files.lock().expect("test lock").insert(
+        PathBuf::from(
+            receipt["qualification_binding"]["sandbox_profile"]
+                .as_str()
+                .expect("staged profile"),
+        ),
+        profile_bytes,
+    );
+    let staged_archived = PathBuf::from(
+        receipt["qualification_binding"]["archived_daemon"]
+            .as_str()
+            .expect("staged archived daemon"),
+    );
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .insert(staged_archived.clone(), b"drift".to_vec());
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_010),
+            paths: paths.clone(),
+        }),
+        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
+    ));
+    filesystem
+        .files
+        .lock()
+        .expect("test lock")
+        .insert(staged_archived, archived_bytes);
+
+    let mut confused = receipt;
+    confused["artifact_role"] = serde_json::Value::String("production_daemon".to_owned());
+    filesystem.files.lock().expect("test lock").insert(
+        metadata_path,
+        serde_json::to_vec(&confused).expect("confused receipt"),
+    );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_010),
+            paths,
+        }),
+        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
+            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
     ));
 }

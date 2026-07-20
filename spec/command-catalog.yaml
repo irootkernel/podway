@@ -16,6 +16,59 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+- name: completions
+  cli:
+  - completions
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: procedure.validate
+  cli:
+  - procedure
+  - validate
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: procedure.show
+  cli:
+  - procedure
+  - show
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: preset.list
+  cli:
+  - preset
+  - list
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: preset.show
+  cli:
+  - preset
+  - show
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+- name: preset.explain
+  cli:
+  - preset
+  - explain
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
 - name: daemon.install
   cli:
   - daemon
@@ -111,51 +164,6 @@ commands:
   - repair
   operation: control
   workspace_required: true
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: procedure.validate
-  cli:
-  - procedure
-  - validate
-  operation: static
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: procedure.show
-  cli:
-  - procedure
-  - show
-  operation: static
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: preset.list
-  cli:
-  - preset
-  - list
-  operation: static
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: preset.show
-  cli:
-  - preset
-  - show
-  operation: static
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: preset.explain
-  cli:
-  - preset
-  - explain
-  operation: static
-  workspace_required: false
   durable_job: false
   session_mutation: false
   destructive_confirmation: false

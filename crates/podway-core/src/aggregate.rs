@@ -1533,14 +1533,18 @@ fn validate_attempt_record_times(
     blockers: &[BlockerV1],
 ) -> Result<(), DomainError> {
     for slot in slots {
-        if let (Some(created_at), Some(updated_at)) = (slot.created_at(), slot.updated_at())
-            && (created_at < started_at
-                || updated_at < started_at
-                || ended_at.is_some_and(|ended_at| created_at > ended_at || updated_at > ended_at))
-        {
-            return Err(invalid(
-                "item timestamps must fall within the attempt lifetime",
-            ));
+        match (slot.created_at(), slot.updated_at()) {
+            (Some(created_at), Some(updated_at))
+                if created_at < started_at
+                    || updated_at < started_at
+                    || ended_at
+                        .is_some_and(|ended_at| created_at > ended_at || updated_at > ended_at) =>
+            {
+                return Err(invalid(
+                    "item timestamps must fall within the attempt lifetime",
+                ));
+            }
+            _ => {}
         }
     }
     for blocker in blockers {

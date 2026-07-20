@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     io::{self, Read, Write},
     net::Shutdown,
@@ -23,25 +24,38 @@ use serde_json::Value;
 
 fn run(arguments: &[&str]) -> Output {
     let isolated = unique_fixture_path("podway-cli-phase5-no-daemon");
+    let temporary = unique_short_fixture_path();
     let output = Command::new(env!("CARGO_BIN_EXE_podway"))
         .args(arguments)
         .env("HOME", &isolated)
-        .env("TMPDIR", &isolated)
+        .env("TMPDIR", &temporary)
         .output()
         .expect("podway binary must run");
-    if arguments
-        .windows(2)
-        .any(|window| window == ["daemon", "install"])
-    {
-        let _ = Command::new("launchctl")
-            .args([
-                "bootout",
-                &format!("gui/{}/dev.podway.podwayd", geteuid().as_raw()),
-            ])
-            .output();
-    }
     let _ = fs::remove_dir_all(isolated);
+    let _ = fs::remove_dir_all(temporary);
     output
+}
+fn frozen_command_catalog_routes() -> Vec<String> {
+    let catalog = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/command-catalog.yaml"),
+    )
+    .expect("the frozen production command catalog must be readable");
+    let routes = catalog
+        .lines()
+        .filter_map(|line| line.strip_prefix("- name: "))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        routes.len(),
+        44,
+        "the frozen command catalog must contain exactly 44 routes"
+    );
+    assert_eq!(
+        routes.iter().collect::<BTreeSet<_>>().len(),
+        routes.len(),
+        "the frozen command catalog must not repeat routes"
+    );
+    routes
 }
 
 fn one_json(output: &Output) -> Value {
@@ -57,6 +71,11 @@ static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 fn unique_fixture_path(label: &str) -> PathBuf {
     let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("{label}-{}-{sequence}", std::process::id()))
+}
+
+fn unique_short_fixture_path() -> PathBuf {
+    let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("pw5-{}-{sequence}", std::process::id()))
 }
 
 struct CompletionScript {
@@ -266,7 +285,7 @@ struct DynamicCompletionFixture {
 impl DynamicCompletionFixture {
     fn new() -> Self {
         let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let root = PathBuf::from("/tmp").join(format!("pdc-{}-{sequence}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("pdc-{}-{sequence}", std::process::id()));
         let home = root.join("home");
         let temporary = root.join("temporary");
         fs::create_dir_all(&home).expect("fixture home must be created");
@@ -520,10 +539,10 @@ fn recording_response(request: &RequestEnvelopeV1, reply: RecordingReply) -> Val
             "request_id": request.request_id().as_str(),
             "command": request.command().as_str(),
             "generated_at": "2026-07-16T12:34:56.789Z",
-            "code": "TEST_ERROR",
+            "code": "WORKSPACE_NOT_INITIALIZED",
             "message": "recording daemon rejection",
             "retryable": false,
-            "exit_code": 1,
+            "exit_code": 5,
             "details": {}
         }),
     }
@@ -542,7 +561,35 @@ fn recording_success_result(command: &str) -> Value {
         }])),
         "session.next" => authoritative_next_result(),
         "job.list" => authoritative_job_list_result(),
-        _ => serde_json::json!({ "accepted": true }),
+        "workspace.init" => serde_json::json!({"initialized": true}),
+        "workspace.doctor" => serde_json::json!({"deep": true, "healthy": true}),
+        "workspace.show" => serde_json::json!({"workspace": "recorded"}),
+        "workspace.repair" => serde_json::json!({"repaired": true}),
+        "session.start"
+        | "session.start_replace"
+        | "session.complete"
+        | "session.skip"
+        | "session.retry"
+        | "session.return"
+        | "session.block"
+        | "session.unblock"
+        | "session.cancel"
+        | "session.reopen"
+        | "session.reset"
+        | "workspace.reset_all"
+        | "item.check"
+        | "item.uncheck"
+        | "item.set"
+        | "item.add"
+        | "item.remove"
+        | "item.attach"
+        | "item.clear"
+        | "job.cancel" => {
+            serde_json::json!({"accepted_route": command})
+        }
+        "job.status" => serde_json::json!({"job": RECORDING_JOB_ID}),
+        "job.wait" => serde_json::json!({"job": RECORDING_JOB_ID, "waited": true}),
+        unknown => panic!("no recorded success envelope exists for daemon route {unknown}"),
     }
 }
 fn dynamic_completion_result(kind: &str) -> Value {
@@ -1697,12 +1744,195 @@ fn assert_recorded_contract(
 
     request_projection(request)
 }
+fn status_json_semantic_projection(response: &Value) -> Value {
+    let result = &response["result"];
+    serde_json::json!({
+        "task": result["task"]["title"],
+        "session": {
+            "id": result["session"]["id"],
+            "lifecycle": result["session"]["lifecycle"],
+            "revision": result["session"]["revision"],
+        },
+        "current": {
+            "stage_id": result["current"]["stage_id"],
+            "title": result["current"]["title"],
+            "attempt_id": result["current"]["attempt_id"],
+            "attempt_number": result["current"]["attempt_number"],
+            "blocked": result["current"]["blocked"],
+            "ready_to_complete": result["current"]["ready_to_complete"],
+        },
+        "item": {
+            "id": result["items"][0]["id"],
+            "type": result["items"][0]["type"],
+            "required": result["items"][0]["required"],
+            "satisfied": result["items"][0]["satisfied"],
+            "revision": result["items"][0]["revision"],
+            "prompt": result["items"][0]["prompt"],
+            "value": result["items"][0]["value"],
+        },
+        "blocker": {
+            "id": result["blockers"][0]["id"],
+            "attempt_id": result["blockers"][0]["attempt_id"],
+            "reason": result["blockers"][0]["reason"],
+        },
+        "queue": result["queue"],
+    })
+}
+
+fn status_text_semantic_projection(stdout: &[u8]) -> Value {
+    let text = std::str::from_utf8(stdout).expect("text status output must be UTF-8");
+    let line = |prefix| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .unwrap_or_else(|| panic!("text status must render {prefix:?}"))
+    };
+
+    let task = line("task: ").to_owned();
+
+    let session = line("session: ");
+    let mut session_parts = session.split_whitespace();
+    let session_id = session_parts.next().expect("session ID");
+    let lifecycle = session_parts
+        .next()
+        .expect("session lifecycle")
+        .to_ascii_lowercase();
+    let session_revision = session_parts
+        .next()
+        .and_then(|part| part.strip_prefix("revision="))
+        .expect("session revision")
+        .parse::<u64>()
+        .expect("numeric session revision");
+
+    let current = line("current: ");
+    let (current_head, current_rest) = current.split_once(" attempt=").expect("current attempt");
+    let (stage_id, title) = current_head.split_once(' ').expect("current stage title");
+    let (attempt_number, current_rest) = current_rest.split_once(" id=").expect("attempt ID");
+    let (attempt_id, current_rest) = current_rest.split_once(" blocked=").expect("blocked state");
+    let (blocked, ready_to_complete) = current_rest
+        .split_once(" ready_to_complete=")
+        .expect("completion state");
+
+    let item = line("item: ");
+    let (item_head, item_rest) = item.split_once(" required=").expect("item required state");
+    let (item_id, item_type) = item_head.split_once(' ').expect("item type");
+    let (required, item_rest) = item_rest
+        .split_once(" satisfied=")
+        .expect("item satisfied state");
+    let (satisfied, item_rest) = item_rest.split_once(" revision=").expect("item revision");
+    let (item_revision, item_rest) = item_rest.split_once(" prompt=").expect("item prompt");
+    let (prompt, value) = item_rest.split_once(" value=").expect("item value");
+    let blocker = line("blocker: ");
+    let (blocker_id, blocker_rest) = blocker.split_once(" attempt=").expect("blocker attempt");
+    let (blocker_attempt_id, blocker_reason) =
+        blocker_rest.split_once(" reason=").expect("blocker reason");
+
+    let queue = line("queue: ");
+    let mut queue_values = serde_json::Map::new();
+    for field in queue.split_whitespace() {
+        let (key, value) = field.split_once('=').expect("queue key=value");
+        queue_values.insert(
+            key.to_owned(),
+            match key {
+                "pending_mutations" => Value::Bool(value.parse().expect("boolean pending state")),
+                "queued_count" | "latest_workspace_sequence" => {
+                    Value::from(value.parse::<u64>().expect("numeric queue state"))
+                }
+                "running_job_id" if value == "-" => Value::Null,
+                "running_job_id" => Value::String(value.to_owned()),
+                _ => panic!("unexpected queue field {key}"),
+            },
+        );
+    }
+
+    serde_json::json!({
+        "task": task,
+        "session": {
+            "id": session_id,
+            "lifecycle": lifecycle,
+            "revision": session_revision,
+        },
+        "current": {
+            "stage_id": stage_id,
+            "title": title,
+            "attempt_id": attempt_id,
+            "attempt_number": attempt_number.parse::<u64>().expect("numeric attempt number"),
+            "blocked": blocked.parse::<bool>().expect("boolean blocked state"),
+            "ready_to_complete": ready_to_complete.parse::<bool>().expect("boolean completion state"),
+        },
+        "item": {
+            "id": item_id,
+            "type": item_type.to_ascii_lowercase(),
+            "required": required.parse::<bool>().expect("boolean required state"),
+            "satisfied": satisfied.parse::<bool>().expect("boolean satisfied state"),
+            "revision": item_revision.parse::<u64>().expect("numeric item revision"),
+            "prompt": prompt,
+            "value": serde_json::from_str::<Value>(value).expect("JSON item value"),
+        },
+        "blocker": {
+            "id": blocker_id,
+            "attempt_id": blocker_attempt_id,
+            "reason": blocker_reason,
+        },
+        "queue": queue_values,
+    })
+}
 
 #[test]
-fn recording_daemon_contract_table_covers_every_phase5_daemon_route() {
+fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_output_for_every_route()
+ {
+    let public_routes = frozen_command_catalog_routes();
+    assert_eq!(ROUTE_SURFACES.len(), public_routes.len());
+    assert_eq!(
+        ROUTE_SURFACES
+            .iter()
+            .map(|surface| surface.route)
+            .collect::<Vec<_>>(),
+        public_routes.iter().map(String::as_str).collect::<Vec<_>>(),
+        "the CLI surface must exactly match the frozen, production command catalog",
+    );
     assert_eq!(DAEMON_CONTRACTS.len(), 29);
-    let fixture = DynamicCompletionFixture::new();
+    for contract in DAEMON_CONTRACTS {
+        assert!(
+            public_routes.iter().any(|route| route == contract.route),
+            "{} must be a frozen public command rather than an untracked daemon entry point",
+            contract.route,
+        );
+    }
+    const NORMAL_PUBLIC_WRITERS: &[&str] = &[
+        "workspace.init",
+        "workspace.repair",
+        "session.start",
+        "session.start_replace",
+        "session.complete",
+        "session.skip",
+        "session.retry",
+        "session.return",
+        "session.block",
+        "session.unblock",
+        "session.cancel",
+        "session.reopen",
+        "session.reset",
+        "workspace.reset_all",
+        "item.check",
+        "item.uncheck",
+        "item.set",
+        "item.add",
+        "item.remove",
+        "item.attach",
+        "item.clear",
+        "job.cancel",
+    ];
+    assert_eq!(
+        DAEMON_CONTRACTS
+            .iter()
+            .filter(|contract| contract.operation != OperationV1::Query)
+            .map(|contract| contract.route)
+            .collect::<Vec<_>>(),
+        NORMAL_PUBLIC_WRITERS,
+        "the CLI-to-daemon recording boundary must derive every normal public writer exactly once",
+    );
 
+    let fixture = DynamicCompletionFixture::new();
     for contract in DAEMON_CONTRACTS {
         let (json_success, json_requests) =
             execute_recorded_contract(&fixture, *contract, true, false, false);
@@ -1712,9 +1942,18 @@ fn recording_daemon_contract_table_covers_every_phase5_daemon_route() {
             contract.route
         );
         assert!(json_success.stderr.is_empty());
-        let json_response: ResponseEnvelopeV1 =
-            serde_json::from_slice(&json_success.stdout).expect("JSON success must be typed");
-        assert!(matches!(json_response, ResponseEnvelopeV1::Output(_)));
+        let json_response = one_json(&json_success);
+        assert_eq!(json_response["schema"], "podway.output/v1");
+        assert_eq!(json_response["command"], contract.route);
+        assert_eq!(
+            json_response["result"],
+            recording_success_result(contract.route),
+            "{} must render the recorded typed result in its versioned JSON output",
+            contract.route
+        );
+        let typed_json_response: ResponseEnvelopeV1 =
+            serde_json::from_value(json_response.clone()).expect("JSON success must be typed");
+        assert!(matches!(typed_json_response, ResponseEnvelopeV1::Output(_)));
         let json_projection =
             assert_recorded_contract(&json_requests, *contract, &fixture.root, false);
 
@@ -1725,62 +1964,237 @@ fn recording_daemon_contract_table_covers_every_phase5_daemon_route() {
             "{} text success failed: {text_success:?}",
             contract.route
         );
-        assert!(
-            !text_success.stdout.is_empty(),
-            "{} text success must render a human result",
-            contract.route
-        );
-        assert!(
-            text_success.stderr.is_empty(),
-            "{} text success must not emit diagnostics",
-            contract.route
-        );
+        assert!(!text_success.stdout.is_empty());
+        assert!(text_success.stderr.is_empty());
         let text_projection =
             assert_recorded_contract(&text_requests, *contract, &fixture.root, false);
-        assert_eq!(
-            json_projection, text_projection,
-            "{} text and JSON modes must send the identical daemon contract",
-            contract.route
-        );
+        assert_eq!(json_projection, text_projection);
 
         let (json_error, json_error_requests) =
             execute_recorded_contract(&fixture, *contract, true, false, true);
-        assert_eq!(json_error.status.code(), Some(1));
+        assert_eq!(json_error.status.code(), Some(5));
         assert!(json_error.stderr.is_empty());
         let json_error_response: ResponseEnvelopeV1 =
             serde_json::from_slice(&json_error.stdout).expect("JSON error must be typed");
         let ResponseEnvelopeV1::Error(json_error_response) = json_error_response else {
             panic!("recording daemon error must remain an error envelope");
         };
-        assert_eq!(json_error_response.code().as_str(), "TEST_ERROR");
+        assert_eq!(
+            json_error_response.code().as_str(),
+            "WORKSPACE_NOT_INITIALIZED"
+        );
         assert_recorded_contract(&json_error_requests, *contract, &fixture.root, false);
 
         let (text_error, text_error_requests) =
             execute_recorded_contract(&fixture, *contract, false, false, true);
-        assert_eq!(text_error.status.code(), Some(1));
-        assert!(
-            text_error.stdout.is_empty(),
-            "{} text errors must reserve stdout for successful results",
-            contract.route
-        );
-        assert!(
-            String::from_utf8_lossy(&text_error.stderr).contains("TEST_ERROR"),
-            "{} text error must render the typed daemon error on stderr",
-            contract.route
+        assert_eq!(text_error.status.code(), Some(5));
+        assert!(text_error.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(text_error.stderr).expect("text error must be UTF-8"),
+            "error: WORKSPACE_NOT_INITIALIZED: recording daemon rejection\n",
         );
         assert_recorded_contract(&text_error_requests, *contract, &fixture.root, false);
 
         if contract.detachable {
             let (detached_success, detached_requests) =
                 execute_recorded_contract(&fixture, *contract, true, true, false);
-            assert!(
-                detached_success.status.success(),
-                "{} detached request failed: {detached_success:?}",
-                contract.route
-            );
+            assert!(detached_success.status.success());
             assert_recorded_contract(&detached_requests, *contract, &fixture.root, true);
         }
     }
+    let procedure_path = fixture.root.join("causal-procedure.yaml");
+    fs::write(
+        &procedure_path,
+        r#"schema: podway.procedure/v1
+id: causal-fixture
+version: "1"
+name: Causal fixture
+stages:
+  - id: implement
+    title: Implement
+    instructions: []
+    items: []
+rework:
+  allow_return_to: any_previous
+"#,
+    )
+    .expect("offline procedure fixture must be writable");
+    let local_successes = [
+        ("help", vec!["--json".to_owned(), "help".to_owned()]),
+        ("version", vec!["--json".to_owned(), "version".to_owned()]),
+        (
+            "completions",
+            vec![
+                "--json".to_owned(),
+                "completions".to_owned(),
+                "bash".to_owned(),
+            ],
+        ),
+        (
+            "procedure.validate",
+            vec![
+                "--json".to_owned(),
+                "procedure".to_owned(),
+                "validate".to_owned(),
+                procedure_path.display().to_string(),
+            ],
+        ),
+        (
+            "procedure.show",
+            vec![
+                "--json".to_owned(),
+                "procedure".to_owned(),
+                "show".to_owned(),
+                procedure_path.display().to_string(),
+            ],
+        ),
+        (
+            "preset.list",
+            vec!["--json".to_owned(), "preset".to_owned(), "list".to_owned()],
+        ),
+        (
+            "preset.show",
+            vec![
+                "--json".to_owned(),
+                "preset".to_owned(),
+                "show".to_owned(),
+                "sw-dev".to_owned(),
+            ],
+        ),
+        (
+            "preset.explain",
+            vec![
+                "--json".to_owned(),
+                "preset".to_owned(),
+                "explain".to_owned(),
+                "sw-dev".to_owned(),
+            ],
+        ),
+    ];
+    for (route, arguments) in &local_successes {
+        let output = fixture.run_in(&fixture.root, arguments);
+        assert!(
+            output.status.success(),
+            "{route} must execute its concrete fixture successfully: {output:?}"
+        );
+        let response: ResponseEnvelopeV1 =
+            serde_json::from_slice(&output.stdout).expect("local success must be typed JSON");
+        let ResponseEnvelopeV1::Output(response) = response else {
+            panic!("{route} must emit an output envelope");
+        };
+        assert_eq!(response.command().as_str(), *route);
+    }
+
+    let service_routes = [
+        ("daemon.install", vec!["--json", "daemon", "install"]),
+        (
+            "daemon.uninstall",
+            vec!["--json", "daemon", "uninstall", "--yes"],
+        ),
+        ("daemon.start", vec!["--json", "daemon", "start"]),
+        ("daemon.stop", vec!["--json", "daemon", "stop"]),
+        ("daemon.restart", vec!["--json", "daemon", "restart"]),
+        ("daemon.status", vec!["--json", "daemon", "status"]),
+        (
+            "daemon.logs",
+            vec!["--json", "daemon", "logs", "--lines", "1"],
+        ),
+    ];
+    for (route, arguments) in &service_routes {
+        let output = fixture.run(arguments);
+        let response: ResponseEnvelopeV1 =
+            serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+                panic!("{route} must produce a typed JSON service proof: {error}; {output:?}")
+            });
+        match response {
+            ResponseEnvelopeV1::Output(response) => {
+                assert!(
+                    output.status.success(),
+                    "{route} output must exit successfully"
+                );
+                assert_eq!(response.command().as_str(), *route);
+            }
+            ResponseEnvelopeV1::Error(response) => {
+                assert!(
+                    !output.status.success(),
+                    "{route} error must fail the process"
+                );
+                assert_eq!(response.command().as_str(), *route);
+                assert!(
+                    !response.code().as_str().is_empty(),
+                    "{route} typed service failure must retain a public error code"
+                );
+            }
+        }
+    }
+
+    let executed_routes = DAEMON_CONTRACTS
+        .iter()
+        .map(|contract| contract.route)
+        .chain(local_successes.iter().map(|(route, _)| *route))
+        .chain(service_routes.iter().map(|(route, _)| *route))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        executed_routes,
+        public_routes
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 44 public routes"
+    );
+}
+
+#[test]
+fn pac_050_status_text_and_json_render_the_same_typed_state_semantics() {
+    let fixture = DynamicCompletionFixture::new();
+    let contract = DAEMON_CONTRACTS
+        .iter()
+        .copied()
+        .find(|contract| contract.route == "session.status")
+        .expect("status route must be recorded");
+    let mut status = recording_success_result("session.status");
+    status["blockers"] = serde_json::json!([{
+        "id": RECORDING_BLOCKER_ID,
+        "attempt_id": RECORDING_ATTEMPT_ID,
+        "reason": "waiting for a durable dependency"
+    }]);
+    status["queue"] = serde_json::json!({
+        "pending_mutations": true,
+        "queued_count": 2,
+        "running_job_id": RECORDING_JOB_ID,
+        "latest_workspace_sequence": 9
+    });
+
+    let json_server =
+        RecordingDaemon::start(&fixture, vec![RecordingReply::Output(status.clone())]);
+    let json_arguments = contract_arguments(contract, &fixture.root, true, false);
+    let json_output = fixture.run_in(&fixture.root, &json_arguments);
+    let json_requests = json_server.finish();
+    assert!(
+        json_output.status.success(),
+        "JSON status failed: {json_output:?}"
+    );
+    let json_response = one_json(&json_output);
+    assert_eq!(json_response["schema"], "podway.output/v1");
+    let json_projection = status_json_semantic_projection(&json_response);
+    assert_recorded_contract(&json_requests, contract, &fixture.root, false);
+
+    let text_server = RecordingDaemon::start(&fixture, vec![RecordingReply::Output(status)]);
+    let text_arguments = contract_arguments(contract, &fixture.root, false, false);
+    let text_output = fixture.run_in(&fixture.root, &text_arguments);
+    let text_requests = text_server.finish();
+    assert!(
+        text_output.status.success(),
+        "text status failed: {text_output:?}"
+    );
+    assert!(text_output.stderr.is_empty());
+    let text_projection = status_text_semantic_projection(&text_output.stdout);
+    assert_recorded_contract(&text_requests, contract, &fixture.root, false);
+
+    assert_eq!(
+        text_projection, json_projection,
+        "text and JSON must preserve non-empty blockers and pending/running queue semantics",
+    );
 }
 
 #[test]
@@ -1797,13 +2211,52 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
         ("preset.list", &["preset", "list"]),
         ("preset.show", &["preset", "show", "sw-dev"]),
         ("preset.explain", &["preset", "explain", "sw-dev"]),
-        ("daemon.install", &["daemon", "install"]),
-        ("daemon.uninstall", &["daemon", "uninstall", "--yes"]),
-        ("daemon.start", &["daemon", "start"]),
-        ("daemon.stop", &["daemon", "stop"]),
-        ("daemon.restart", &["daemon", "restart"]),
-        ("daemon.status", &["daemon", "status"]),
-        ("daemon.logs", &["daemon", "logs", "--lines", "10"]),
+        (
+            "daemon.install",
+            &[
+                "daemon",
+                "install",
+                "--daemon-path",
+                "/definitely/missing/podwayd",
+            ],
+        ),
+        (
+            "daemon.uninstall",
+            &[
+                "daemon",
+                "uninstall",
+                "--yes",
+                "--worktree",
+                "/tmp/podway-grammar",
+            ],
+        ),
+        (
+            "daemon.start",
+            &["daemon", "start", "--worktree", "/tmp/podway-grammar"],
+        ),
+        (
+            "daemon.stop",
+            &["daemon", "stop", "--worktree", "/tmp/podway-grammar"],
+        ),
+        (
+            "daemon.restart",
+            &["daemon", "restart", "--worktree", "/tmp/podway-grammar"],
+        ),
+        (
+            "daemon.status",
+            &["daemon", "status", "--worktree", "/tmp/podway-grammar"],
+        ),
+        (
+            "daemon.logs",
+            &[
+                "daemon",
+                "logs",
+                "--lines",
+                "10",
+                "--worktree",
+                "/tmp/podway-grammar",
+            ],
+        ),
         ("workspace.init", &["init"]),
         ("workspace.doctor", &["doctor", "--deep"]),
         ("workspace.show", &["workspace", "show"]),
@@ -1913,17 +2366,18 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
                 assert_eq!(response["retryable"], false);
                 assert_eq!(response["exit_code"], 1);
             }
+            "daemon.uninstall" | "daemon.start" | "daemon.stop" | "daemon.restart"
+            | "daemon.status" | "daemon.logs" => {
+                assert_eq!(output.status.code(), Some(2), "{route}: {output:?}");
+                assert_eq!(response["schema"], "podway.error/v1");
+                assert_eq!(response["code"], "REQUEST_INVALID");
+                assert_eq!(response["retryable"], false);
+                assert_eq!(response["exit_code"], 2);
+            }
             "daemon.install" => {
                 assert_eq!(output.status.code(), Some(3), "{route}: {output:?}");
                 assert_eq!(response["schema"], "podway.error/v1");
-                assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
-                assert_eq!(response["retryable"], true);
-                assert_eq!(response["exit_code"], 3);
-            }
-            "daemon.logs" => {
-                assert_eq!(output.status.code(), Some(3), "{route}: {output:?}");
-                assert_eq!(response["schema"], "podway.error/v1");
-                assert_eq!(response["code"], "DAEMON_NOT_INSTALLED");
+                assert_eq!(response["code"], "DAEMON_VERSION_INCOMPATIBLE");
                 assert_eq!(response["retryable"], false);
                 assert_eq!(response["exit_code"], 3);
             }
@@ -1998,19 +2452,15 @@ fn public_route_surface_table_keeps_parser_help_and_completion_in_lockstep() {
     let fish = String::from_utf8(fish.stdout).expect("fish completion must be UTF-8");
 
     for surface in ROUTE_SURFACES {
-        let mut parser_arguments = vec!["--json"];
-        parser_arguments.extend_from_slice(surface.parser);
+        // The public contract disables Clap's `--help` flag. The parser must reject it before
+        // normal lifecycle execution reaches command dispatch.
+        let mut parser_arguments = surface.parser.to_vec();
+        parser_arguments.push("--help");
         let parser_output = run(&parser_arguments);
-        assert_ne!(
+        assert_eq!(
             parser_output.status.code(),
             Some(2),
-            "{} parser form must remain accepted: {parser_output:?}",
-            surface.route
-        );
-        assert_eq!(
-            one_json(&parser_output)["command"],
-            surface.route,
-            "{} parser form must retain its canonical route",
+            "{} clap parser help must short-circuit dispatch: {parser_output:?}",
             surface.route
         );
 
@@ -2269,36 +2719,37 @@ fn static_commands_and_all_completion_targets_do_not_need_a_daemon() {
     }
 }
 #[test]
-fn generated_shell_grammars_execute_with_nested_route_context_when_available() {
-    if shell_available("bash") {
-        let script = CompletionScript::generated("bash");
-        let procedure = bash_candidates(&script, &["podway", "procedure", ""]);
-        assert_eq!(procedure, ["validate".to_owned(), "show".to_owned()]);
-        let install = bash_candidates(&script, &["podway", "daemon", "install", "--"]);
-        assert!(install.contains(&"--daemon-path".to_owned()));
-        assert!(!install.contains(&"--preset".to_owned()));
-        assert!(!install.contains(&"--follow".to_owned()));
+fn generated_shell_grammars_execute_with_nested_route_context() {
+    for shell in ["bash", "zsh", "fish"] {
+        assert!(
+            shell_available(shell),
+            "{shell} is a required completion-test prerequisite"
+        );
     }
 
-    if shell_available("zsh") {
-        let script = CompletionScript::generated("zsh");
-        let install = zsh_candidates(&script, &["podway", "daemon", "install", ""]);
-        assert!(install.contains(&"--daemon-path".to_owned()));
-        assert!(!install.contains(&"--preset".to_owned()));
-        assert!(!install.contains(&"--follow".to_owned()));
-    }
+    let script = CompletionScript::generated("bash");
+    let procedure = bash_candidates(&script, &["podway", "procedure", ""]);
+    assert_eq!(procedure, ["validate".to_owned(), "show".to_owned()]);
+    let install = bash_candidates(&script, &["podway", "daemon", "install", "--"]);
+    assert!(install.contains(&"--daemon-path".to_owned()));
+    assert!(!install.contains(&"--preset".to_owned()));
+    assert!(!install.contains(&"--follow".to_owned()));
 
-    if shell_available("fish") {
-        let script = CompletionScript::generated("fish");
-        let procedure = fish_candidates(&script, "podway procedure ");
-        assert!(procedure.contains(&"validate".to_owned()));
-        assert!(procedure.contains(&"show".to_owned()));
-        assert!(!procedure.contains(&"--canonical".to_owned()));
-        let install = fish_candidates(&script, "podway daemon install --");
-        assert!(install.contains(&"--daemon-path".to_owned()));
-        assert!(!install.contains(&"--preset".to_owned()));
-        assert!(!install.contains(&"--follow".to_owned()));
-    }
+    let script = CompletionScript::generated("zsh");
+    let install = zsh_candidates(&script, &["podway", "daemon", "install", ""]);
+    assert!(install.contains(&"--daemon-path".to_owned()));
+    assert!(!install.contains(&"--preset".to_owned()));
+    assert!(!install.contains(&"--follow".to_owned()));
+
+    let script = CompletionScript::generated("fish");
+    let procedure = fish_candidates(&script, "podway procedure ");
+    assert!(procedure.contains(&"validate".to_owned()));
+    assert!(procedure.contains(&"show".to_owned()));
+    assert!(!procedure.contains(&"--canonical".to_owned()));
+    let install = fish_candidates(&script, "podway daemon install --");
+    assert!(install.contains(&"--daemon-path".to_owned()));
+    assert!(!install.contains(&"--preset".to_owned()));
+    assert!(!install.contains(&"--follow".to_owned()));
 }
 #[test]
 fn generated_dynamic_completion_forwards_the_selected_worktree_in_every_shell() {
@@ -2320,9 +2771,10 @@ fn generated_dynamic_completion_forwards_the_selected_worktree_in_every_shell() 
     ];
 
     for shell in ["bash", "zsh", "fish"] {
-        if !shell_available(shell) {
-            continue;
-        }
+        assert!(
+            shell_available(shell),
+            "{shell} is a required completion-test prerequisite"
+        );
         let script = CompletionScript::generated(shell);
         for (kind, route_words, expected_candidate) in dynamic_routes {
             for form in 0..3 {
@@ -2358,7 +2810,8 @@ fn generated_dynamic_completion_forwards_the_selected_worktree_in_every_shell() 
                 );
                 assert!(
                     stderr.is_empty(),
-                    "{shell} {kind} completion must not write diagnostics"
+                    "{shell} {kind} completion must not write diagnostics: {}",
+                    String::from_utf8_lossy(&stderr)
                 );
                 assert!(
                     candidates.contains(&(*expected_candidate).to_owned()),
@@ -2422,6 +2875,68 @@ fn generated_dynamic_completion_forwards_the_selected_worktree_in_every_shell() 
             "{shell} malformed dynamic completion must silently omit candidates"
         );
         assert_eq!(malformed.finish().len(), 1);
+    }
+}
+#[test]
+fn generated_route_scanners_skip_worktree_values_in_every_shell() {
+    let fixture = DynamicCompletionFixture::new();
+    let command_named_worktree = fixture.root.join("check");
+    let spaced_worktree = fixture.root.join("worktree with spaces");
+    fs::create_dir(&command_named_worktree)
+        .expect("command-named completion worktree must be created");
+    fs::create_dir(&spaced_worktree).expect("spaced completion worktree must be created");
+    let bin = fixture.install_cli_on_path();
+
+    for shell in ["bash", "zsh", "fish"] {
+        assert!(
+            shell_available(shell),
+            "{shell} is a required completion-test prerequisite"
+        );
+        let script = CompletionScript::generated(shell);
+        for (worktree_arguments, expected_worktree) in [
+            (
+                vec!["--worktree".to_owned(), "check".to_owned()],
+                &command_named_worktree,
+            ),
+            (vec!["--worktree=check".to_owned()], &command_named_worktree),
+            (
+                vec!["--worktree".to_owned(), "worktree with spaces".to_owned()],
+                &spaced_worktree,
+            ),
+            (
+                vec!["--worktree=worktree with spaces".to_owned()],
+                &spaced_worktree,
+            ),
+        ] {
+            let mut words = vec!["podway".to_owned()];
+            words.extend(worktree_arguments);
+            words.extend(["job".to_owned(), "status".to_owned(), String::new()]);
+
+            let server = RecordingDaemon::start(
+                &fixture,
+                vec![RecordingReply::Output(dynamic_completion_result("jobs"))],
+            );
+            let (candidates, stderr) =
+                generated_dynamic_candidates(shell, &script, &fixture, &bin, &fixture.root, &words);
+            assert!(
+                stderr.is_empty(),
+                "{shell} completion must not write diagnostics: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+            assert!(
+                candidates.contains(&"123e4567-e89b-42d3-a456-426614174005".to_owned()),
+                "{shell} must retain the nested job status completion route"
+            );
+
+            let requests = server.finish();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0]["command"], "job.list");
+            assert_eq!(
+                requests[0]["workspace"]["root"],
+                canonical_fixture_path(expected_worktree),
+                "{shell} forwarded the wrong worktree"
+            );
+        }
     }
 }
 
@@ -2524,42 +3039,9 @@ fn dynamic_completion_rejects_untyped_top_level_candidate_arrays_silently() {
 }
 
 #[test]
-fn daemon_status_routes_locally_without_daemon_ipc() {
-    let root = std::env::temp_dir().join(format!(
-        "pws-{}-{}",
-        std::process::id(),
-        FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let home = root.join("home");
-    let temporary = root.join("temporary");
-    fs::create_dir_all(&home).expect("service-route home must be created");
-    fs::create_dir_all(&temporary).expect("service-route temporary directory must be created");
-    let paths = ServiceRuntimePathsV1::for_user(&home, &temporary, geteuid().as_raw())
-        .expect("service-route paths must be valid");
-    fs::create_dir_all(paths.runtime_directory().as_path())
-        .expect("service-route runtime directory must be created");
-    let _listener = UnixListener::bind(paths.socket_path().as_path())
-        .expect("service-route daemon socket must be bindable");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
-        .args(["--json", "daemon", "status"])
-        .env("HOME", &home)
-        .env("TMPDIR", &temporary)
-        .output()
-        .expect("podway binary must run");
-    let response = one_json(&output);
-
-    assert!(output.status.success(), "daemon status failed: {output:?}");
-    assert_eq!(response["schema"], "podway.output/v1");
-    assert_eq!(response["command"], "daemon.status");
-    assert_eq!(response["result"]["status"], "not_installed");
-
-    fs::remove_dir_all(root).expect("service-route fixture must be removed");
-}
-
-#[test]
 fn hidden_dynamic_completion_silently_degrades_without_a_daemon() {
-    let unique = format!("/tmp/podway-completion-missing-{}", std::process::id());
+    let unique =
+        std::env::temp_dir().join(format!("podway-completion-missing-{}", std::process::id()));
     let output = Command::new(env!("CARGO_BIN_EXE_podway"))
         .args(["__complete", "items"])
         .env("HOME", &unique)
@@ -2575,28 +3057,210 @@ fn hidden_dynamic_completion_silently_degrades_without_a_daemon() {
 }
 
 #[test]
-fn daemon_install_rejects_an_incompatible_binary_before_launchctl() {
-    let root = unique_fixture_path("podway-incompatible-daemon");
-    fs::create_dir_all(&root).expect("incompatible daemon fixture directory");
-    let binary = root.join("podwayd");
-    fs::write(&binary, b"#!/bin/sh\nprintf 'podwayd 9.0.0\\n'\n")
-        .expect("incompatible daemon fixture");
-    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-        .expect("incompatible daemon fixture mode");
+fn daemon_install_rejects_non_native_executables_before_launchctl() {
+    let root = unique_fixture_path("podway-invalid-daemon");
+    fs::create_dir_all(&root).expect("invalid daemon fixture directory");
+    let temporary = unique_short_fixture_path();
 
-    let binary_argument = binary.to_string_lossy().into_owned();
+    let matching_version_script = format!(
+        "#!/bin/sh\nprintf 'podwayd {}\\n'\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    for (name, bytes) in [
+        ("matching-version-script", matching_version_script.as_bytes()),
+        ("truncated-macho", b"\xcf\xfa\xed\xfe".as_slice()),
+        (
+            "x86_64-macho",
+            b"\xcf\xfa\xed\xfe\x07\x00\x00\x01\x03\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".as_slice(),
+        ),
+        ("fat-macho", b"\xca\xfe\xba\xbe\x00\x00\x00\x00".as_slice()),
+    ] {
+        let binary = root.join(name);
+        fs::write(&binary, bytes).expect("invalid daemon fixture");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("invalid daemon fixture mode");
+
+        let binary_argument = binary.to_string_lossy().into_owned();
+        let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+            .args([
+                "--json",
+                "daemon",
+                "install",
+                "--daemon-path",
+                &binary_argument,
+            ])
+            .env("HOME", &root)
+            .env("TMPDIR", &temporary)
+            .output()
+            .expect("podway binary must run");
+        let response = one_json(&output);
+        assert_eq!(output.status.code(), Some(3), "{name}: {output:?}");
+        assert_eq!(
+            response["code"],
+            "DAEMON_VERSION_INCOMPATIBLE",
+            "{name}: {response}"
+        );
+        assert_eq!(response["retryable"], false, "{name}: {response}");
+        assert!(
+            !root.join("Library/LaunchAgents").exists(),
+            "{name} must not publish a service"
+        );
+    }
+
+    let _ = fs::remove_dir_all(temporary);
+    fs::remove_dir_all(root).expect("remove invalid daemon fixture");
+}
+#[test]
+fn qualification_wrapper_route_is_hidden_from_public_surfaces_and_requires_its_exact_arguments() {
+    let hidden = "install-qualification-wrapper";
+    let overview = one_json(&run(&["--json", "help"]));
+    assert!(
+        !overview["result"]["text"]
+            .as_str()
+            .expect("overview help text")
+            .contains(hidden)
+    );
+    let daemon_help = one_json(&run(&["--json", "help", "daemon"]));
+    assert!(
+        !daemon_help["result"]["text"]
+            .as_str()
+            .expect("daemon help text")
+            .contains(hidden)
+    );
+    for shell in ["bash", "zsh", "fish"] {
+        let output = run(&["completions", shell]);
+        assert!(
+            output.status.success(),
+            "{shell} completion generation failed"
+        );
+        assert!(
+            !String::from_utf8(output.stdout)
+                .expect("completion must be UTF-8")
+                .contains(hidden),
+            "{shell} completion exposes hidden route"
+        );
+    }
+
+    let digest = "0".repeat(64);
     let output = run(&[
         "--json",
         "daemon",
-        "install",
-        "--daemon-path",
-        &binary_argument,
+        hidden,
+        "--wrapper-path",
+        "/tmp/wrapper",
+        "--wrapper-sha256",
+        &digest,
+        "--sandbox-profile-path",
+        "/tmp/profile",
+        "--archived-daemon-path",
+        "/tmp/archived",
+        "--archived-daemon-sha256",
+        &digest,
     ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(one_json(&output)["code"], "REQUEST_INVALID");
+    let confused = run(&[
+        "--json",
+        "daemon",
+        "install",
+        "--wrapper-path",
+        "/tmp/wrapper",
+    ]);
+    assert_eq!(confused.status.code(), Some(2));
+    assert_eq!(one_json(&confused)["code"], "REQUEST_INVALID");
+}
+#[test]
+fn pac_003_help_states_the_same_user_local_socket_trust_boundary() {
+    let output = run(&["--json", "help"]);
+    assert!(output.status.success(), "overview help failed: {output:?}");
     let response = one_json(&output);
-    assert_eq!(output.status.code(), Some(3));
-    assert_eq!(response["code"], "DAEMON_VERSION_INCOMPATIBLE");
-    assert_eq!(response["retryable"], false);
-    assert!(!root.join("Library/LaunchAgents").exists());
+    let text = response["result"]["text"]
+        .as_str()
+        .expect("overview help must include text");
+    for required_text in [
+        "Podway trusts same-user processes connecting through its local socket.",
+        "It provides no authentication or workspace access key.",
+        "It does not protect against malicious same-user processes.",
+    ] {
+        assert!(
+            text.contains(required_text),
+            "overview help must state the required trust-boundary text: {required_text}"
+        );
+    }
+    let release_notes = include_str!("../../../RELEASE_NOTES.md");
+    assert!(release_notes.contains("Podway is a same-user local tool."));
+    assert!(release_notes.contains("does not provide a multi-user access-control boundary"));
+}
+#[test]
+fn pac_067_public_surface_has_no_authentication_or_workspace_access_key() {
+    const FORBIDDEN_FIELDS: &[&str] = &[
+        "authentication",
+        "authorization",
+        "access_key",
+        "workspace_access_key",
+        "token",
+        "password",
+    ];
 
-    fs::remove_dir_all(root).expect("remove incompatible daemon fixture");
+    fn assert_no_forbidden_fields(value: &Value) {
+        match value {
+            Value::Object(fields) => {
+                for (field, nested) in fields {
+                    assert!(
+                        !FORBIDDEN_FIELDS.contains(&field.as_str()),
+                        "public request unexpectedly exposes credential field {field}"
+                    );
+                    assert_no_forbidden_fields(nested);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    assert_no_forbidden_fields(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let overview = one_json(&run(&["--json", "help"]));
+    let help_text = overview["result"]["text"]
+        .as_str()
+        .expect("overview help must include text");
+    assert!(help_text.contains("It provides no authentication or workspace access key."));
+
+    for shell in ["bash", "zsh", "fish"] {
+        let completions = run(&["completions", shell]);
+        assert!(
+            completions.status.success(),
+            "{shell} completion generation failed"
+        );
+        let text = String::from_utf8(completions.stdout).expect("completion output must be UTF-8");
+        for forbidden in [
+            "--auth",
+            "--authentication",
+            "--authorization",
+            "--access-key",
+            "--workspace-access-key",
+            "--token",
+            "--password",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "{shell} completions unexpectedly expose {forbidden}"
+            );
+        }
+    }
+
+    let fixture = DynamicCompletionFixture::new();
+    for contract in DAEMON_CONTRACTS {
+        let (output, requests) = execute_recorded_contract(&fixture, *contract, true, false, false);
+        assert!(
+            output.status.success(),
+            "{} request capture failed: {output:?}",
+            contract.route
+        );
+        for request in requests {
+            assert_no_forbidden_fields(&request);
+        }
+    }
 }

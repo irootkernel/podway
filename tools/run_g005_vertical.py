@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+
 
 def verification_root() -> Path:
     controller_root = Path(__file__).resolve().parents[1]
@@ -40,41 +42,74 @@ def cargo_target_directory() -> Path:
         target = ROOT / target
     return target.resolve()
 
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def daemon_source_inputs(root: Path) -> dict[str, str]:
+    inputs: dict[str, str] = {}
+    roots = [root / "Cargo.toml", root / "Cargo.lock", root / "presets", root / "spec"]
+    roots.extend(
+        path
+        for crate in (
+            "podway-core", "podway-protocol", "podway-config", "podway-presets",
+            "podway-store", "podway-git", "podway-service", "podway-daemon",
+        )
+        for path in (root / "crates" / crate / "Cargo.toml", root / "crates" / crate / "src")
+    )
+    for source_root in roots:
+        if source_root.is_symlink() or not source_root.exists():
+            raise SystemExit(f"daemon receipt input must be a present non-symlink path: {source_root}")
+        candidates = [source_root] if source_root.is_file() else sorted(source_root.rglob("*"))
+        for path in candidates:
+            if path.is_symlink():
+                raise SystemExit(f"daemon receipt input must not be a symlink: {path}")
+            if not path.is_file() or (path.suffix not in {".rs", ".toml", ".yaml", ".yml", ".sql"} and path.name != "Cargo.lock"):
+                continue
+            relative = path.relative_to(root).as_posix()
+            if relative in inputs:
+                raise SystemExit(f"daemon receipt input is duplicated: {relative}")
+            inputs[relative] = sha256_file(path)
+    return dict(sorted(inputs.items()))
+
+
+def produce_daemon_build_receipt(root: Path, daemon: Path) -> Path:
+    daemon = daemon.resolve()
+    if not daemon.is_file():
+        raise SystemExit(f"current podwayd artifact is missing: {daemon}")
+    receipt = daemon.with_name("podwayd.build-receipt.json")
+    payload = {
+        "binary": str(daemon),
+        "binary_sha256": sha256_file(daemon),
+        "inputs": daemon_source_inputs(root),
+        "schema": "podway.daemon-build-receipt/v1",
+    }
+    receipt.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
+    return receipt
+
+
 def main() -> int:
     run(["cargo", "build", "-p", "podway-daemon", "--bin", "podwayd"])
     daemon = cargo_target_directory() / "debug" / "podwayd"
-    if not daemon.is_file():
-        raise SystemExit(f"current podwayd artifact is missing: {daemon}")
+    receipt = produce_daemon_build_receipt(ROOT, daemon)
 
     environment = os.environ.copy()
-    environment["PODWAYD_TEST_BINARY"] = str(daemon)
+    environment["PODWAYD_TEST_BINARY"] = str(daemon.resolve())
+    environment["PODWAYD_BUILD_RECEIPT"] = str(receipt.resolve())
     run(
         [
-            "cargo",
-            "test",
-            "-p",
-            "podway-cli",
-            "--test",
-            "phase4_production_vertical",
-            TEST_NAME,
-            "--",
-            "--ignored",
-            "--nocapture",
+            "cargo", "test", "-p", "podway-cli", "--test", "phase4_production_vertical",
+            TEST_NAME, "--", "--ignored", "--nocapture",
         ],
         env=environment,
     )
-    print(
-        json.dumps(
-            {
-                "binary": str(daemon),
-                "goal": "G005",
-                "ok": True,
-                "test": TEST_NAME,
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    )
+    print(json.dumps({"binary": str(daemon.resolve()), "goal": "G005", "ok": True,
+                      "receipt": str(receipt.resolve()), "test": TEST_NAME}, separators=(",", ":"), sort_keys=True))
     return 0
 
 

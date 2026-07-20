@@ -1,0 +1,140 @@
+name: Publish verified Apple Silicon release
+
+on:
+  workflow_dispatch:
+    inputs:
+      handoff_run_id: { required: true, type: string }
+      handoff_artifact_id: { required: true, type: string }
+      handoff_sha256: { required: true, type: string }
+  workflow_call:
+    inputs:
+      handoff_run_id: { required: true, type: string }
+      handoff_artifact_id: { required: true, type: string }
+      handoff_sha256: { required: true, type: string }
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: [self-hosted, macOS, ARM64, podway-release]
+    environment: release-publish
+    concurrency:
+      group: release-publish-${{ github.repository }}-${{ inputs.handoff_sha256 }}
+      cancel-in-progress: false
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.workflow_sha }}
+          clean: true
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Require native Apple Silicon publication host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(sysctl -in sysctl.proc_translated)" = 0
+      - name: Authenticate final-review producer
+        shell: bash
+        env:
+          HANDOFF_RUN_ID: ${{ inputs.handoff_run_id }}
+          HANDOFF_ARTIFACT_ID: ${{ inputs.handoff_artifact_id }}
+          HANDOFF_SHA256: ${{ inputs.handoff_sha256 }}
+          ACTIONS_READ_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,re
+          from urllib.parse import quote
+          from urllib.request import Request,urlopen
+          repo=os.environ['GITHUB_REPOSITORY']; headers={'Accept':'application/vnd.github+json','Authorization':f"Bearer {os.environ['ACTIONS_READ_TOKEN']}",'X-GitHub-Api-Version':'2022-11-28'}
+          def get(url):
+            with urlopen(Request(url,headers=headers),timeout=30) as response:return json.load(response)
+          def authenticate_final_review():
+            run=os.environ['HANDOFF_RUN_ID']; artifact_id=os.environ['HANDOFF_ARTIFACT_ID']; digest=os.environ['HANDOFF_SHA256']
+            if not re.fullmatch(r'[1-9][0-9]*',run) or not re.fullmatch(r'[1-9][0-9]*',artifact_id) or not re.fullmatch(r'sha256:[0-9a-f]{64}',digest): raise SystemExit('invalid immutable artifact locator')
+            metadata=get(f"{os.environ['GITHUB_API_URL']}/repos/{quote(repo,safe='/')}/actions/runs/{run}"); artifact=get(f"{os.environ['GITHUB_API_URL']}/repos/{quote(repo,safe='/')}/actions/artifacts/{artifact_id}")
+            if not isinstance(metadata,dict) or metadata.get('repository',{}).get('id') != int(os.environ['GITHUB_REPOSITORY_ID']) or metadata.get('id') != int(run) or metadata.get('path') != '.github/workflows/release-final-review.yml' or metadata.get('event') != 'workflow_dispatch' or metadata.get('status') != 'completed' or metadata.get('conclusion') != 'success' or not re.fullmatch(r'[0-9a-f]{40}',metadata.get('head_sha','')) or not isinstance(artifact,dict) or artifact.get('name') != 'g019-publication-handoff-arm64' or artifact.get('expired') is not False or artifact.get('digest') != digest or artifact.get('workflow_run',{}).get('id') != int(run): raise SystemExit('artifact producer identity is not trusted')
+            return run,metadata['head_sha']
+          final_run,final_sha=authenticate_final_review()
+          open(os.environ['GITHUB_ENV'],'a').write(f'FINAL_RUN={final_run}\nFINAL_WORKFLOW_SHA={final_sha}\n')
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FINAL_RUN }}
+          artifact-ids: ${{ inputs.handoff_artifact_id }}
+          github-token: ${{ github.token }}
+          path: final-review-handoff
+          merge-multiple: true
+      - name: Validate exact authenticated final-review handoff and prepare unsigned publication assets
+        shell: bash
+        env:
+          FINAL_REVIEW_SHA256: ${{ inputs.handoff_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+          python3 - <<'PY'
+          import hashlib,json,os,re
+          from pathlib import Path
+          def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+          def load(path): return json.loads(path.read_text())
+          final=Path('final-review-handoff')
+          final_files={p.name:p for p in final.iterdir()}
+          required_final={'publication-handoff.json','provenance-arm64.json','acceptance-index-arm64.json','final-review-arm64.json','release-policy.json','controller-manifest.json','final-bundle-manifest.json','SHA256SUMS'}
+          if any(p.is_symlink() or not p.is_file() for p in final_files.values()) or set(final_files) - required_final == set() or set(final_files) & {'developer-id-signature.json','notarization-result.json','release-notes-status.json','signing-handoff.json'}: raise SystemExit('handoff member set is not exact')
+          handoff=load(final_files['publication-handoff.json']); archive=handoff.get('product_archive')
+          if not isinstance(archive,str) or not re.fullmatch(r'podway-[0-9a-f]{40}-arm64-[0-9a-f]{64}\.zip',archive) or set(final_files) != required_final | {archive}: raise SystemExit('handoff member set is not exact')
+          sums={}
+          for line in final_files['SHA256SUMS'].read_text().splitlines():
+            match=re.fullmatch(r'([0-9a-f]{64})  ([A-Za-z0-9_.-]+)',line)
+            if not match or match.group(2) in sums: raise SystemExit('handoff checksum exact-set failed')
+            sums[match.group(2)]=match.group(1)
+          expected_sums={name:sha(final_files[name]) for name in set(final_files)-{'publication-handoff.json','SHA256SUMS'}}
+          if sums != expected_sums: raise SystemExit('handoff checksum exact-set failed')
+          source=handoff.get('source'); target_tuple={'triple':'aarch64-apple-darwin','arch':'arm64','host_arch':'arm64','mach_o_arch':'arm64'}
+          required_handoff={'schema','controller_sha','producing_workflow_sha','checked_out_workflow_sha','source','target','target_tuple','product_archive','product_archive_sha256','final_bundle_sha256','final_bundle_manifest_sha256','final_review_sha256','release_policy_sha256','controller_manifest_sha256','reviewers','attestations','sidecars'}
+          if not isinstance(handoff,dict) or set(handoff)!=required_handoff or handoff.get('schema')!='podway.g009.publication-handoff/v1' or handoff.get('controller_sha')!=os.environ['FINAL_WORKFLOW_SHA'] or handoff.get('checked_out_workflow_sha')!=os.environ['FINAL_WORKFLOW_SHA'] or not re.fullmatch(r'[0-9a-f]{40}',str(handoff.get('producing_workflow_sha'))) or handoff.get('target')!='aarch64-apple-darwin' or handoff.get('target_tuple')!=target_tuple or not isinstance(source,dict) or set(source)!={'commit','tree','tools'} or not re.fullmatch(r'[0-9a-f]{40}',str(source.get('commit'))) or not re.fullmatch(r'[0-9a-f]{40}',str(source.get('tree'))) or not isinstance(source.get('tools'),dict) or handoff.get('product_archive_sha256')!=sha(final_files[archive]) or handoff.get('release_policy_sha256')!=sha(final_files['release-policy.json']) or handoff.get('controller_manifest_sha256')!=sha(final_files['controller-manifest.json']) or handoff.get('final_bundle_manifest_sha256')!=sha(final_files['final-bundle-manifest.json']) or handoff.get('final_review_sha256')!=sha(final_files['final-review-arm64.json']) or not re.fullmatch(r'[0-9a-f]{64}',str(handoff.get('final_bundle_sha256'))) or handoff.get('sidecars')!=['provenance-arm64.json','acceptance-index-arm64.json','final-review-arm64.json','release-policy.json','controller-manifest.json','final-bundle-manifest.json','SHA256SUMS']: raise SystemExit('handoff workflow SHA binding failed')
+          HANDOFF_PRODUCING_WORKFLOW_SHA=handoff['producing_workflow_sha']
+          provenance=load(final_files['provenance-arm64.json']); acceptance=load(final_files['acceptance-index-arm64.json']); review=load(final_files['final-review-arm64.json']); policy=load(final_files['release-policy.json']); controller=load(final_files['controller-manifest.json']); final_manifest=load(final_files['final-bundle-manifest.json'])
+          descriptor_fields={'schema','qualification_archive_sha256','acceptance_index_sha256','rc_sha256','traceability_sha256','release_policy_sha256','tool_manifest_sha256','source','target','target_tuple'}
+          if not isinstance(provenance,dict) or set(provenance)!=descriptor_fields or provenance.get('schema')!='podway.g009.qualification-bundle/v1' or provenance.get('source')!=source or provenance.get('target')!='aarch64-apple-darwin' or provenance.get('target_tuple')!=target_tuple or provenance.get('acceptance_index_sha256')!=sha(final_files['acceptance-index-arm64.json']) or provenance.get('release_policy_sha256')!=sha(final_files['release-policy.json']) or provenance.get('tool_manifest_sha256')!=sha(final_files['controller-manifest.json']): raise SystemExit('handoff provenance binding differs')
+          review_fields={'schema','status','qualification_bundle_sha256','qualification_archive_sha256','acceptance_index_sha256','rc_sha256','traceability_sha256','release_policy_sha256','tool_manifest_sha256','source','target','target_tuple','reviewers','reviewer_keyring_sha256','attestations','blockers'}
+          if not isinstance(review,dict) or set(review)!=review_fields or review.get('schema')!='podway.g009.final-review/v2' or review.get('status')!='passed' or review.get('blockers')!=[] or review.get('reviewers')!=['owner','E','F'] or review.get('attestations')!=handoff['attestations'] or handoff.get('reviewers')!=review['reviewers'] or any(review.get(key)!=provenance.get(key) for key in ('qualification_archive_sha256','acceptance_index_sha256','rc_sha256','traceability_sha256','release_policy_sha256','tool_manifest_sha256','source','target','target_tuple')) or not re.fullmatch(r'[0-9a-f]{64}',str(review.get('qualification_bundle_sha256'))) or not re.fullmatch(r'[0-9a-f]{64}',str(review.get('reviewer_keyring_sha256'))): raise SystemExit('reviewer attestation binding differs')
+          expected_roles=['owner','E','F']
+          if not isinstance(review['attestations'],list) or [row.get('role') if isinstance(row,dict) else None for row in review['attestations']]!=expected_roles or any(not isinstance(row,dict) or set(row)!={'role','fingerprint','payload_sha256','signature_sha256'} or not re.fullmatch(r'[A-F0-9]{40}',str(row['fingerprint'])) or not re.fullmatch(r'[0-9a-f]{64}',str(row['payload_sha256'])) or not re.fullmatch(r'[0-9a-f]{64}',str(row['signature_sha256'])) for row in review['attestations']): raise SystemExit('reviewer attestations are not exact')
+          if policy != json.loads(Path('release/g009-release-policy-v1.json').read_text()): raise SystemExit('handoff policy or controller manifest digest differs')
+          controller_ids=['.github/workflows/release.yml','.github/workflows/release-final-review.yml','.github/workflows/release-publish.yml','tools/g009_common.py','tools/g009_performance.py','tools/g009_release.py','tools/run_g009_qualification.py','tools/run_verification.py','tools/run_g005_vertical.py','tools/run_g008_dogfood.py','tools/verify_g009_qualification.py','tools/g009_publication.py']
+          expected_sources=[{'id':name,'path_sha256':sha(Path(name))} for name in controller_ids]
+          if not isinstance(controller,dict) or set(controller)!={'schema','source','tools','controller_sources'} or controller.get('schema')!='podway.g009.release-tool-manifest/v1' or controller.get('source')!=source or not isinstance(controller.get('tools'),list) or controller.get('controller_sources')!=expected_sources: raise SystemExit('controller manifest does not bind checked-out controller')
+          final_members={'qualification-bundle.json','qualification-bundle.zip','acceptance-index.json','final-review.json','traceability.json','release-policy.json','tool-manifest.json','strict-verifier-receipt.json','receipt.json','attestations/owner.payload','attestations/owner.signature','attestations/E.payload','attestations/E.signature','attestations/F.payload','attestations/F.signature'}
+          manifest_members=final_manifest.get('members') if isinstance(final_manifest,dict) else None
+          if not isinstance(final_manifest,dict) or set(final_manifest)!={'schema','members'} or final_manifest.get('schema')!='podway.g009.bundle-manifest/v1' or not isinstance(manifest_members,list) or [row.get('path') if isinstance(row,dict) else None for row in manifest_members]!=sorted(final_members) or any(not isinstance(row,dict) or set(row)!={'path','size','sha256'} or not isinstance(row['size'],int) or row['size']<0 or not re.fullmatch(r'[0-9a-f]{64}',str(row['sha256'])) for row in manifest_members): raise SystemExit('final bundle manifest is not exact')
+          manifest_by_name={row['path']:row for row in manifest_members}
+          for outer,inner in [('provenance-arm64.json','qualification-bundle.json'),('acceptance-index-arm64.json','acceptance-index.json'),('final-review-arm64.json','final-review.json'),('release-policy.json','release-policy.json'),('controller-manifest.json','tool-manifest.json')]:
+            if manifest_by_name[inner] != {'path':inner,'size':final_files[outer].stat().st_size,'sha256':sha(final_files[outer])}: raise SystemExit('final bundle manifest is not exact')
+          release_notes=Path('RELEASE_NOTES.md')
+          if release_notes.is_symlink() or not release_notes.is_file(): raise SystemExit('checked-out release notes are unsafe')
+          Path('release-assets').mkdir()
+          declared_assets=[*final_files,'RELEASE_NOTES.md']
+          if len(declared_assets)!=len(set(declared_assets)): raise SystemExit('unexpected artifact overlap')
+          for name in final_files: (Path('release-assets')/name).write_bytes(final_files[name].read_bytes())
+          (Path('release-assets')/'RELEASE_NOTES.md').write_bytes(release_notes.read_bytes())
+          Path(os.environ['GITHUB_ENV']).open('a').write(f'CANDIDATE_COMMIT={source["commit"]}\nRELEASE_TAG=g009-{os.environ["HANDOFF_SHA256"].removeprefix("sha256:")}\nRELEASE_ASSETS={",".join(declared_assets)}\n')
+          PY
+      - name: Publish verified release through the fail-closed controller
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ github.token }}
+        run: python3 tools/g009_publication.py
+      - name: Persist controller-generated post-publication receipt
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: g009-publication-receipt-arm64-${{ env.RELEASE_TAG }}
+          path: publication-receipt.json
+          if-no-files-found: error
+          retention-days: 90

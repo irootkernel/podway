@@ -674,10 +674,9 @@ fn children(parent: &str) -> Vec<&'static str> {
 fn parents() -> Vec<&'static str> {
     let mut parents = Vec::new();
     for route in ROUTES {
-        if let Some((parent, _)) = route.words.split_once(' ')
-            && !parents.contains(&parent)
-        {
-            parents.push(parent);
+        match route.words.split_once(' ') {
+            Some((parent, _)) if !parents.contains(&parent) => parents.push(parent),
+            _ => {}
         }
     }
     parents
@@ -704,9 +703,10 @@ fn static_candidates(route: &Route) -> Vec<String> {
 fn bash_script() -> String {
     let mut script = String::from("# podway bash completion (generated from ROUTES)\n");
     script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n    esac\n  done\n  if [[ -n \"$worktree\" ]]; then\n    command podway --worktree \"$worktree\" __complete \"$kind\" 2>/dev/null\n  else\n    command podway __complete \"$kind\" 2>/dev/null\n  fi\n}\n");
-    script.push_str("_podway_route() {\n  local word root=\"\" index\n");
+    script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 1; index < COMP_CWORD; ++index)); do\n");
     script.push_str("    word=${COMP_WORDS[index]}\n");
+    script.push_str("    if [[ $expecting_worktree -eq 1 ]]; then\n      expecting_worktree=0\n      continue\n    fi\n    case \"$word\" in\n      --worktree) expecting_worktree=1; continue ;;\n      --worktree=*) continue ;;\n    esac\n");
     script.push_str("    if [[ -z \"$root\" ]]; then\n      case \"$word\" in\n");
     for root in roots() {
         let _ = writeln!(script, "        {root}) root={root} ;;");
@@ -776,9 +776,10 @@ fn write_bash_candidates(
 fn zsh_script() -> String {
     let mut script = String::from("#compdef podway\n# Generated from ROUTES.\n");
     script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n    esac\n  done\n  if [[ -n \"$worktree\" ]]; then\n    command podway --worktree \"$worktree\" __complete \"$kind\" 2>/dev/null\n  else\n    command podway __complete \"$kind\" 2>/dev/null\n  fi\n}\n");
-    script.push_str("_podway_route() {\n  local word root=\"\" index\n");
+    script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 2; index < CURRENT; ++index)); do\n");
     script.push_str("    word=$words[index]\n");
+    script.push_str("    if [[ $expecting_worktree -eq 1 ]]; then\n      expecting_worktree=0\n      continue\n    fi\n    case \"$word\" in\n      --worktree) expecting_worktree=1; continue ;;\n      --worktree=*) continue ;;\n    esac\n");
     script.push_str("    if [[ -z \"$root\" ]]; then\n      case \"$word\" in\n");
     for root in roots() {
         let _ = writeln!(script, "        {root}) root={root} ;;");
@@ -845,9 +846,9 @@ fn write_zsh_candidates(
 
 fn fish_script() -> String {
     let mut script = String::from("# podway fish completion (generated from ROUTES)\n");
-    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l expecting_worktree 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n      case --worktree=*\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n    end\n  end\n  if test -n \"$worktree\"\n    command podway --worktree \"$worktree\" __complete $argv 2>/dev/null\n  else\n    command podway __complete $argv 2>/dev/null\n  end\nend\n");
-    script.push_str("function __podway_route\n  set -l root\n");
-    script.push_str("  for word in (commandline -opc)\n    if test \"$word\" = podway\n      continue\n    end\n");
+    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l expecting_worktree 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n    end\n  end\n  if test -n \"$worktree\"\n    command podway --worktree \"$worktree\" __complete $argv 2>/dev/null\n  else\n    command podway __complete $argv 2>/dev/null\n  end\nend\n");
+    script.push_str("function __podway_route\n  set -l root\n  set -l expecting_worktree 0\n");
+    script.push_str("  for word in (commandline -opc)\n    if test \"$word\" = podway\n      continue\n    end\n    if test $expecting_worktree -eq 1\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n        continue\n      case '--worktree=*'\n        continue\n    end\n");
     script.push_str("    if test -z \"$root\"\n      switch \"$word\"\n");
     for root in roots() {
         let _ = writeln!(script, "        case {root}; set root {root}");

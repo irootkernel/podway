@@ -6,6 +6,8 @@ description: Bounded research or technical analysis with explicit challenge and 
 stages:
   - id: define-question
     title: Define the question
+    instructions:
+      - Define a focused question, decision context, and boundaries for the analysis.
     items:
       - id: analysis-question
         type: text
@@ -24,6 +26,8 @@ stages:
         min_length: 1
   - id: collect-sources
     title: Collect sources
+    instructions:
+      - Gather sufficient relevant sources and record material gaps that affect the analysis.
     items:
       - id: sources
         type: list
@@ -38,6 +42,8 @@ stages:
         min_length: 1
   - id: analyze
     title: Analyze the evidence
+    instructions:
+      - Evaluate the collected evidence to produce findings grounded in stated assumptions.
     items:
       - id: analysis-complete
         type: confirm
@@ -57,6 +63,8 @@ stages:
         max_items: 100
   - id: challenge
     title: Challenge the analysis
+    instructions:
+      - Test the analysis against counterarguments, alternatives, and material uncertainty.
     items:
       - id: challenge-complete
         type: confirm
@@ -75,6 +83,8 @@ stages:
         min_length: 1
   - id: synthesize
     title: Synthesize the result
+    instructions:
+      - Combine the evidence into a supported conclusion and recommended next decision.
     items:
       - id: conclusion
         type: text
@@ -93,6 +103,8 @@ stages:
         choices: [low, medium, high]
   - id: finish
     title: Finish the analysis
+    instructions:
+      - Confirm the analysis is complete and summarize its result, recommendation, and uncertainty.
     items:
       - id: result-ready
         type: confirm

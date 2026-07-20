@@ -4,12 +4,16 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use nix::{
@@ -22,6 +26,7 @@ use podway_protocol::{
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -96,37 +101,135 @@ fn daemon_binary_for_test() -> PathBuf {
         "podwayd test binary must be an executable file: {}",
         binary.display()
     );
-    assert_daemon_binary_is_current(&binary);
+    assert_daemon_binary_matches_build_receipt(&binary);
     binary
 }
 
-fn assert_daemon_binary_is_current(binary: &Path) {
-    let modified = fs::metadata(binary)
-        .and_then(|metadata| metadata.modified())
-        .unwrap_or_else(|error| {
-            panic!("podwayd test binary modification time must be readable: {error}")
-        });
-    let newest_source = newest_daemon_source_modification();
-    assert!(
-        modified >= newest_source,
-        "podwayd test binary is older than a current daemon input; rebuild it and pass its path via PODWAYD_TEST_BINARY (binary: {}, modified: {modified:?}, source: {newest_source:?})",
-        binary.display()
+fn assert_daemon_binary_matches_build_receipt(binary: &Path) {
+    let receipt_path = std::env::var_os("PODWAYD_BUILD_RECEIPT")
+        .map(PathBuf::from)
+        .expect("the production vertical requires PODWAYD_BUILD_RECEIPT naming its canonical build receipt");
+    let receipt_path = fs::canonicalize(&receipt_path).unwrap_or_else(|error| {
+        panic!(
+            "PODWAYD_BUILD_RECEIPT must name a readable canonical receipt at {}: {error}",
+            receipt_path.display()
+        )
+    });
+    let receipt: Value = serde_json::from_slice(
+        &fs::read(&receipt_path).expect("daemon build receipt must be readable"),
+    )
+    .unwrap_or_else(|error| panic!("daemon build receipt must be JSON: {error}"));
+    let object = receipt
+        .as_object()
+        .expect("daemon build receipt must be a JSON object");
+    assert_eq!(
+        object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from(["binary", "binary_sha256", "inputs", "schema", "toolchain"]),
+        "daemon build receipt must have exactly the canonical fields"
     );
+    assert_eq!(
+        object.get("schema").and_then(Value::as_str),
+        Some("podway.daemon-build-receipt/v1"),
+        "daemon build receipt schema must be canonical"
+    );
+    let binary_path = binary.display().to_string();
+    assert_eq!(
+        object.get("binary").and_then(Value::as_str),
+        Some(binary_path.as_str()),
+        "daemon build receipt must bind the exact canonical daemon binary path"
+    );
+    let binary_digest = sha256_file(binary);
+    assert_eq!(
+        object.get("binary_sha256").and_then(Value::as_str),
+        Some(binary_digest.as_str()),
+        "daemon build receipt must bind the exact daemon binary bytes"
+    );
+    let recorded_inputs = object
+        .get("inputs")
+        .and_then(Value::as_object)
+        .expect("daemon build receipt must include source input hashes");
+    let recorded_inputs = recorded_inputs
+        .iter()
+        .map(|(path, digest)| {
+            (
+                path.clone(),
+                digest
+                    .as_str()
+                    .unwrap_or_else(|| panic!("receipt input digest for {path} must be a string"))
+                    .to_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (path, digest) in daemon_source_input_hashes() {
+        assert_eq!(
+            recorded_inputs.get(&path),
+            Some(&digest),
+            "daemon build receipt must bind current daemon source input {path}"
+        );
+    }
+    let toolchain = object
+        .get("toolchain")
+        .and_then(Value::as_object)
+        .expect("daemon build receipt must include the exact build toolchain");
+    assert_eq!(
+        toolchain
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["cargo", "rustc"]),
+        "daemon build receipt must bind exactly cargo and rustc"
+    );
+    for tool_id in ["cargo", "rustc"] {
+        let tool = toolchain[tool_id]
+            .as_object()
+            .unwrap_or_else(|| panic!("{tool_id} receipt must be an object"));
+        assert_eq!(
+            tool.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["path", "sha256", "version"]),
+            "{tool_id} receipt fields must be canonical"
+        );
+        let path = Path::new(
+            tool["path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{tool_id} path must be a string")),
+        );
+        assert!(
+            path.is_absolute() && path.is_file() && !path.is_symlink(),
+            "{tool_id} path must name an absolute regular non-symlink file"
+        );
+        let expected_digest = sha256_file(path);
+        assert_eq!(
+            tool["sha256"].as_str(),
+            Some(expected_digest.as_str()),
+            "{tool_id} receipt must bind the executable bytes"
+        );
+        assert!(
+            tool["version"]
+                .as_str()
+                .is_some_and(|version| !version.trim().is_empty()),
+            "{tool_id} version must be non-empty"
+        );
+    }
 }
 
-fn newest_daemon_source_modification() -> SystemTime {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
-        .expect("podway-cli manifest must be nested under the workspace root");
-    let mut newest = UNIX_EPOCH;
+        .expect("podway-cli manifest must be nested under the workspace root")
+        .to_path_buf()
+}
+
+fn daemon_source_input_hashes() -> BTreeMap<String, String> {
+    let workspace = workspace_root();
+    let mut inputs = BTreeMap::new();
     for path in [
         workspace.join("Cargo.toml"),
         workspace.join("Cargo.lock"),
         workspace.join("presets"),
         workspace.join("spec"),
     ] {
-        record_newest_modification(&path, &mut newest);
+        collect_daemon_source_input_hashes(&workspace, &path, &mut inputs);
     }
     for crate_name in [
         "podway-core",
@@ -139,19 +242,29 @@ fn newest_daemon_source_modification() -> SystemTime {
         "podway-daemon",
     ] {
         let crate_root = workspace.join("crates").join(crate_name);
-        record_newest_modification(&crate_root.join("Cargo.toml"), &mut newest);
-        record_newest_modification(&crate_root.join("src"), &mut newest);
+        collect_daemon_source_input_hashes(&workspace, &crate_root.join("Cargo.toml"), &mut inputs);
+        collect_daemon_source_input_hashes(&workspace, &crate_root.join("src"), &mut inputs);
     }
-    newest
+    inputs
 }
 
-fn record_newest_modification(path: &Path, newest: &mut SystemTime) {
-    let metadata = fs::metadata(path).unwrap_or_else(|error| {
+fn collect_daemon_source_input_hashes(
+    workspace: &Path,
+    path: &Path,
+    inputs: &mut BTreeMap<String, String>,
+) {
+    let metadata = fs::symlink_metadata(path).unwrap_or_else(|error| {
         panic!(
             "daemon source input {} must be readable: {error}",
             path.display()
         )
     });
+    if metadata.file_type().is_symlink() {
+        panic!(
+            "daemon source input must not be a symlink: {}",
+            path.display()
+        );
+    }
     if metadata.is_dir() {
         for entry in fs::read_dir(path).unwrap_or_else(|error| {
             panic!(
@@ -159,41 +272,75 @@ fn record_newest_modification(path: &Path, newest: &mut SystemTime) {
                 path.display()
             )
         }) {
-            let entry = entry.unwrap_or_else(|error| {
-                panic!(
-                    "daemon source directory entry {} must be readable: {error}",
-                    path.display()
-                )
-            });
-            record_newest_modification(&entry.path(), newest);
+            collect_daemon_source_input_hashes(
+                workspace,
+                &entry.expect("daemon source directory entry").path(),
+                inputs,
+            );
         }
     } else if metadata.is_file() && is_daemon_source_input(path) {
-        let modified = metadata.modified().unwrap_or_else(|error| {
-            panic!(
-                "daemon source input modification time must be readable for {}: {error}",
-                path.display()
-            )
-        });
-        if modified > *newest {
-            *newest = modified;
-        }
+        let relative = path
+            .strip_prefix(workspace)
+            .expect("daemon source input must remain below the workspace")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            inputs.insert(relative.clone(), sha256_file(path)).is_none(),
+            "daemon source input list must not contain duplicates: {relative}"
+        );
     }
 }
+
 fn is_daemon_source_input(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
         Some("rs" | "toml" | "yaml" | "yml" | "sql")
     ) || path.file_name().and_then(|name| name.to_str()) == Some("Cargo.lock")
 }
+
+fn sha256_file(path: &Path) -> String {
+    let mut source = fs::File::open(path)
+        .unwrap_or_else(|error| panic!("open {} for SHA-256: {error}", path.display()));
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .unwrap_or_else(|error| panic!("read {} for SHA-256: {error}", path.display()));
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+fn same_size_mutation(bytes: &[u8]) -> Vec<u8> {
+    let mut mutated = bytes.to_vec();
+    let first = mutated
+        .first_mut()
+        .expect("artifact mutation coverage requires nonempty bytes");
+    *first ^= 1;
+    mutated
+}
+struct DaemonLogsV1 {
+    stdout: Arc<Mutex<Vec<u8>>>,
+    stderr: Arc<Mutex<Vec<u8>>>,
+}
+
 struct RunningDaemonV1 {
     child: Option<Child>,
     socket_path: PathBuf,
+    logs: DaemonLogsV1,
+    stdout_reader: Option<thread::JoinHandle<()>>,
+    stderr_reader: Option<thread::JoinHandle<()>>,
+    readiness: Duration,
 }
 
 impl RunningDaemonV1 {
     fn start(fixture: &FixtureV1) -> Self {
         let daemon_binary = daemon_binary_for_test();
         let socket_path = fixture.paths.socket_path().as_path().to_path_buf();
+        let readiness_started = Instant::now();
         let mut child = Command::new(&daemon_binary)
             .current_dir(&fixture.root)
             .env("HOME", &fixture.home)
@@ -203,6 +350,18 @@ impl RunningDaemonV1 {
             .stderr(Stdio::piped())
             .spawn()
             .expect("the real podwayd binary must start");
+        let logs = DaemonLogsV1 {
+            stdout: Arc::new(Mutex::new(Vec::new())),
+            stderr: Arc::new(Mutex::new(Vec::new())),
+        };
+        let stdout_reader = drain_daemon_stream(
+            child.stdout.take().expect("podwayd stdout must be piped"),
+            Arc::clone(&logs.stdout),
+        );
+        let stderr_reader = drain_daemon_stream(
+            child.stderr.take().expect("podwayd stderr must be piped"),
+            Arc::clone(&logs.stderr),
+        );
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if socket_path.exists() {
@@ -212,48 +371,69 @@ impl RunningDaemonV1 {
                 .try_wait()
                 .expect("podwayd process state must be observable")
             {
-                let output = child
-                    .wait_with_output()
-                    .expect("terminated podwayd output must be readable");
+                let _ = child.wait();
+                join_daemon_reader(stdout_reader);
+                join_daemon_reader(stderr_reader);
                 panic!(
                     "podwayd exited before binding ({status}): {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    daemon_stderr(&logs)
                 );
             }
             if Instant::now() >= deadline {
                 let _ = child.kill();
-                let output = child
-                    .wait_with_output()
-                    .expect("timed-out podwayd output must be readable");
+                let _ = child.wait();
+                join_daemon_reader(stdout_reader);
+                join_daemon_reader(stderr_reader);
                 panic!(
                     "podwayd did not bind within ten seconds: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    daemon_stderr(&logs)
                 );
             }
             thread::sleep(Duration::from_millis(10));
         }
-        Self {
+        let mut daemon = Self {
             child: Some(child),
             socket_path,
-        }
+            logs,
+            stdout_reader: Some(stdout_reader),
+            stderr_reader: Some(stderr_reader),
+            readiness: Duration::ZERO,
+        };
+        probe_daemon_readiness(fixture);
+        daemon.readiness = readiness_started.elapsed();
+        daemon
     }
 
     fn stop(mut self) {
-        let child = self.child.take().expect("podwayd process must exist");
+        let mut child = self.child.take().expect("podwayd process must exist");
         kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM)
             .expect("SIGTERM must be delivered to podwayd");
-        let output = child
-            .wait_with_output()
-            .expect("podwayd shutdown output must be readable");
+        let status = child
+            .wait()
+            .expect("podwayd shutdown state must be readable");
+        self.join_log_readers();
         assert!(
-            output.status.success(),
-            "podwayd must exit successfully after SIGTERM: {}",
-            String::from_utf8_lossy(&output.stderr)
+            status.success(),
+            "podwayd must exit successfully after SIGTERM; stdout={} stderr={}",
+            daemon_stdout(&self.logs),
+            daemon_stderr(&self.logs)
         );
         assert!(
             !self.socket_path.exists(),
             "normal runtime shutdown must remove its owned socket"
         );
+    }
+
+    fn join_log_readers(&mut self) {
+        if let Some(reader) = self.stdout_reader.take() {
+            join_daemon_reader(reader);
+        }
+        if let Some(reader) = self.stderr_reader.take() {
+            join_daemon_reader(reader);
+        }
+    }
+    fn readiness_millis(&self) -> u128 {
+        self.readiness.as_millis()
     }
 }
 
@@ -263,14 +443,82 @@ impl Drop for RunningDaemonV1 {
             let _ = child.kill();
             let _ = child.wait();
         }
+        self.join_log_readers();
+    }
+}
+
+fn drain_daemon_stream(
+    mut stream: impl Read + Send + 'static,
+    retained: Arc<Mutex<Vec<u8>>>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(count) => retained
+                    .lock()
+                    .expect("daemon log retention must not be poisoned")
+                    .extend_from_slice(&buffer[..count]),
+                Err(error) => panic!("daemon log stream must remain readable: {error}"),
+            }
+        }
+    })
+}
+
+fn join_daemon_reader(reader: thread::JoinHandle<()>) {
+    reader
+        .join()
+        .expect("daemon log reader must terminate cleanly");
+}
+
+fn daemon_stdout(logs: &DaemonLogsV1) -> String {
+    String::from_utf8_lossy(
+        &logs
+            .stdout
+            .lock()
+            .expect("daemon stdout retention must not be poisoned"),
+    )
+    .into_owned()
+}
+
+fn daemon_stderr(logs: &DaemonLogsV1) -> String {
+    String::from_utf8_lossy(
+        &logs
+            .stderr
+            .lock()
+            .expect("daemon stderr retention must not be poisoned"),
+    )
+    .into_owned()
+}
+
+fn probe_daemon_readiness(fixture: &FixtureV1) {
+    let output = fixture.run(&fixture.worktree, "status", &[]);
+    assert!(
+        output.stderr.is_empty(),
+        "the successful CLI transport readiness probe must not write stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response =
+        serde_json::from_slice::<ResponseEnvelopeV1>(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "CLI readiness probe must receive a daemon protocol response: {error}; stdout={}",
+                String::from_utf8_lossy(&output.stdout)
+            )
+        });
+    if let ResponseEnvelopeV1::Error(error) = response {
+        assert_ne!(
+            error.code().as_str(),
+            "DAEMON_UNAVAILABLE",
+            "readiness requires a daemon response, not a client-side transport failure"
+        );
     }
 }
 
 fn unique_private_directory(prefix: &str) -> PathBuf {
     for _ in 0..1024 {
         let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path =
-            PathBuf::from("/tmp").join(format!("{prefix}-{}-{sequence}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("{prefix}-{}-{sequence}", std::process::id()));
         match fs::create_dir(&path) {
             Ok(()) => {
                 make_private(&path);
@@ -462,6 +710,11 @@ fn cli_output(
 ) -> OutputEnvelopeV1 {
     let expected_wire_command = wire_command(command);
     let output = fixture.run(workspace, command, arguments);
+    assert!(
+        output.stderr.is_empty(),
+        "successful CLI {command} must not write stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let raw: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "CLI {command} must emit exactly one JSON response: {error}; stdout={} stderr={}",
@@ -654,24 +907,24 @@ fn complete_remaining_sw_dev(
         artifact.get("size_bytes").and_then(Value::as_u64),
         Some(verification_content.len() as u64)
     );
-    let digest = artifact
-        .get("sha256_digest")
-        .and_then(Value::as_str)
-        .expect("public status must expose the stored artifact digest");
-    assert!(
-        digest.len() == "sha256:".len() + 64
-            && digest
-                .strip_prefix("sha256:")
-                .is_some_and(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit())),
-        "public status must expose the stored SHA-256 artifact digest"
+    let artifact_path = workspace.join(verification_artifact);
+    let expected_digest = format!("sha256:{}", sha256_file(&artifact_path));
+    assert_eq!(
+        artifact.get("sha256_digest").and_then(Value::as_str),
+        Some(expected_digest.as_str()),
+        "public status must expose the exact SHA-256 digest of the attached artifact bytes"
     );
 
-    let artifact_path = workspace.join(verification_artifact);
-    fs::write(
-        &artifact_path,
-        "the artifact changed after public attachment\n",
-    )
-    .expect("attached artifact must be changed for revalidation coverage");
+    let mutated = same_size_mutation(verification_content.as_bytes());
+    fs::write(&artifact_path, &mutated)
+        .expect("attached artifact must be changed for revalidation coverage");
+    assert_eq!(
+        fs::metadata(&artifact_path)
+            .expect("mutated artifact metadata")
+            .len(),
+        verification_content.len() as u64,
+        "artifact mutation coverage must preserve the original byte length"
+    );
     cli_error(
         fixture,
         workspace,
@@ -708,6 +961,124 @@ fn complete_remaining_sw_dev(
     cli_output(fixture, workspace, "complete", &[]);
 }
 
+#[test]
+#[ignore = "run with tools/run_g005_vertical.py so Cargo supplies a freshly built podwayd artifact"]
+fn pac_001_public_init_on_a_valid_git_worktree_creates_no_task_session() {
+    let fixture = FixtureV1::new();
+    let daemon = RunningDaemonV1::start(&fixture);
+
+    let initialized = cli_output(&fixture, &fixture.worktree, "init", &[]);
+    assert!(
+        initialized.session().is_none(),
+        "PAC-001 init must succeed in a valid Git worktree without creating a task session"
+    );
+    assert!(
+        initialized
+            .workspace()
+            .is_some_and(|workspace| workspace.root()
+                == fs::canonicalize(&fixture.worktree)
+                    .expect("fixture worktree must canonicalize")
+                    .display()
+                    .to_string()),
+        "PAC-001 init must identify the initialized Git worktree"
+    );
+
+    daemon.stop();
+}
+#[test]
+#[ignore = "run with tools/run_g005_vertical.py so Cargo supplies a freshly built podwayd artifact"]
+fn pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history() {
+    let fixture = FixtureV1::new();
+    let daemon = RunningDaemonV1::start(&fixture);
+    let workspace = fixture.worktree.clone();
+
+    cli_output(&fixture, &workspace, "init", &[]);
+    cli_output(
+        &fixture,
+        &workspace,
+        "start",
+        &[
+            "--preset",
+            "sw-dev",
+            "--task",
+            "production status and next response boundary",
+        ],
+    );
+    let (_, first_status) = public_status(&fixture, &workspace);
+    let first_attempt_id = current(&first_status).attempt_id.clone();
+    cli_output(
+        &fixture,
+        &workspace,
+        "set",
+        &["goal", "preserve the actionable state after retry"],
+    );
+    cli_output(
+        &fixture,
+        &workspace,
+        "retry",
+        &["--reason", "create a prior attempt that remains internal"],
+    );
+
+    let verbose_status_output = cli_output(&fixture, &workspace, "status", &["--verbose"]);
+    let verbose_status = StatusResultV1::from_result_map(verbose_status_output.result())
+        .expect("verbose status must satisfy the documented status result schema");
+    let previous_attempts = verbose_status
+        .previous_attempts
+        .as_ref()
+        .expect("verbose status must expose the retry-created prior attempt");
+    assert_eq!(previous_attempts.len(), 1);
+    assert_eq!(previous_attempts[0].attempt_id, first_attempt_id);
+    assert_eq!(previous_attempts[0].attempt_number, 1);
+    let (status_output, status) = public_status(&fixture, &workspace);
+    let current_attempt = current(&status);
+    assert_eq!(current_attempt.stage_id.as_str(), "understand");
+    assert_eq!(current_attempt.attempt_number, 2);
+    assert_ne!(current_attempt.attempt_id, first_attempt_id);
+    assert_eq!(status.session.lifecycle, SessionLifecycleV1::Running);
+    assert_eq!(item(&status, "goal").value, Value::Null);
+    assert!(!item(&status, "goal").satisfied);
+    assert!(status.blockers.is_empty());
+    assert!(!status.queue.pending_mutations);
+    assert_eq!(status.queue.queued_count, 0);
+    assert!(
+        status_output.result().get("previous_attempts").is_none(),
+        "ordinary status must omit internal attempt history even after retry created one"
+    );
+    assert!(
+        status.previous_attempts.is_none(),
+        "the typed status boundary must preserve the intentional absence of history"
+    );
+
+    let next = public_next(&fixture, &workspace);
+    let next_stage = next
+        .stage
+        .as_ref()
+        .expect("next must identify the active stage");
+    assert_eq!(next_stage.id.as_str(), "understand");
+    assert_eq!(next_stage.attempt_id, current_attempt.attempt_id);
+    assert_eq!(next_stage.attempt_number, 2);
+    assert_eq!(
+        next.missing_required_items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        ["goal", "acceptance-criteria"]
+    );
+    assert!(next.blockers.is_empty());
+    assert!(!next.allowed_actions.complete);
+    assert!(next.allowed_actions.retry);
+    for (missing_id, command) in [("goal", "item.set"), ("acceptance-criteria", "item.add")] {
+        assert!(next.suggestions.iter().any(|suggestion| {
+            suggestion
+                .item_id
+                .as_ref()
+                .is_some_and(|id| id.as_str() == missing_id)
+                && suggestion.command == command
+        }));
+    }
+
+    daemon.stop();
+}
 #[test]
 #[ignore = "run with tools/run_g005_vertical.py so Cargo supplies a freshly built podwayd artifact"]
 fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict() {
@@ -1154,6 +1525,8 @@ struct DogfoodMetricsV1 {
     retry_count: u64,
     return_count: u64,
     next_checks: u64,
+    stage_visits: Vec<String>,
+    readiness_millis: u128,
 }
 
 fn dogfood_output(
@@ -1258,11 +1631,19 @@ fn dogfood_transition(
     }
 }
 
-fn run_dogfood_scenario(preset: &str, task: &str) -> DogfoodMetricsV1 {
+fn run_dogfood_scenario(
+    preset: &str,
+    task: &str,
+    expected_stages: &[&str],
+    expected_topology: &[&str],
+) -> DogfoodMetricsV1 {
     let fixture = FixtureV1::new();
-    let _daemon = RunningDaemonV1::start(&fixture);
+    let daemon = RunningDaemonV1::start(&fixture);
     let workspace = fixture.worktree.clone();
-    let mut metrics = DogfoodMetricsV1::default();
+    let mut metrics = DogfoodMetricsV1 {
+        readiness_millis: daemon.readiness_millis(),
+        ..Default::default()
+    };
     dogfood_output(&mut metrics, &fixture, &workspace, "init", &[]);
     dogfood_output(
         &mut metrics,
@@ -1280,9 +1661,23 @@ fn run_dogfood_scenario(preset: &str, task: &str) -> DogfoodMetricsV1 {
             let completed_next = dogfood_next(&mut metrics, &fixture, &workspace);
             assert!(completed_next.stage.is_none());
             assert!(completed_next.missing_required_items.is_empty());
+            assert_eq!(
+                visits.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                expected_stages.iter().copied().collect::<BTreeSet<_>>(),
+                "{preset} must visit exactly its declared preset stages"
+            );
+            assert_eq!(
+                metrics
+                    .stage_visits
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                expected_topology,
+                "{preset} must preserve the declared ordered stage topology and revisits"
+            );
             assert!(
-                visits.values().all(|count| *count > 0),
-                "every reached stage must retain visit evidence"
+                metrics.readiness_millis <= 10_000,
+                "{preset} readiness must remain bounded"
             );
             assert!(metrics.retry_count >= 1, "{preset} must exercise retry");
             assert!(metrics.return_count >= 1, "{preset} must exercise return");
@@ -1290,6 +1685,7 @@ fn run_dogfood_scenario(preset: &str, task: &str) -> DogfoodMetricsV1 {
         }
 
         let stage = current(&status).stage_id.as_str().to_owned();
+        metrics.stage_visits.push(stage.clone());
         let visit = visits.entry(stage.clone()).or_insert(0);
         *visit += 1;
         let visit = *visit;
@@ -1387,38 +1783,121 @@ fn run_dogfood_scenario(preset: &str, task: &str) -> DogfoodMetricsV1 {
 #[test]
 #[ignore = "run with tools/run_g008_dogfood.py so Cargo supplies a freshly built podwayd artifact"]
 fn public_cli_dogfoods_all_four_presets_with_retry_return_and_next_evidence() {
-    let scenarios = [
+    let scenarios: [(&str, &str, &[&str], &[&str]); 4] = [
         (
             "sw-dev",
             "Implement and verify the Phase 7 four-preset production dogfood harness",
+            &[
+                "understand",
+                "inspect",
+                "plan",
+                "implement",
+                "verify",
+                "review",
+                "finish",
+            ],
+            &[
+                "understand",
+                "inspect",
+                "plan",
+                "implement",
+                "verify",
+                "verify",
+                "review",
+                "implement",
+                "verify",
+                "review",
+                "finish",
+            ],
         ),
         (
             "bug-fix",
             "Correct deterministic service-log rotation after a stale restart",
+            &[
+                "reproduce",
+                "diagnose",
+                "regression",
+                "fix",
+                "verify",
+                "review",
+                "finish",
+            ],
+            &[
+                "reproduce",
+                "diagnose",
+                "regression",
+                "fix",
+                "verify",
+                "verify",
+                "review",
+                "fix",
+                "verify",
+                "review",
+                "finish",
+            ],
         ),
         (
             "docs-only",
             "Document the direct offline macOS LaunchAgent lifecycle for operators",
+            &[
+                "ground-sources",
+                "define-audience",
+                "outline",
+                "draft",
+                "validate",
+                "review",
+                "finish",
+            ],
+            &[
+                "ground-sources",
+                "define-audience",
+                "outline",
+                "draft",
+                "validate",
+                "validate",
+                "draft",
+                "validate",
+                "review",
+                "finish",
+            ],
         ),
         (
             "analysis",
             "Assess whether socket reachability is sufficient for service health reporting",
+            &[
+                "define-question",
+                "collect-sources",
+                "analyze",
+                "challenge",
+                "synthesize",
+                "finish",
+            ],
+            &[
+                "define-question",
+                "collect-sources",
+                "analyze",
+                "challenge",
+                "challenge",
+                "collect-sources",
+                "analyze",
+                "challenge",
+                "synthesize",
+                "finish",
+            ],
         ),
     ];
     let mut evidence = serde_json::Map::new();
-    for (preset, task) in scenarios {
-        let metrics = run_dogfood_scenario(preset, task);
+    for (preset, task, expected_stages, expected_topology) in scenarios {
+        let metrics = run_dogfood_scenario(preset, task, expected_stages, expected_topology);
         evidence.insert(
             preset.to_owned(),
             serde_json::json!({
                 "commands": metrics.command_count,
                 "next_checks": metrics.next_checks,
+                "readiness_millis": metrics.readiness_millis,
                 "retry": metrics.retry_count,
                 "return": metrics.return_count,
-                "unclear_prompts": [],
-                "unnecessary_required_items": [],
-                "next_omissions": [],
-                "queue_revision_friction": []
+                "stage_topology": metrics.stage_visits,
             }),
         );
     }

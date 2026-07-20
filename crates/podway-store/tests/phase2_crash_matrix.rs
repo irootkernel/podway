@@ -1,6 +1,7 @@
 //! Phase-2 Store-owned crash boundaries: abrupt child death before recovery assertions.
 
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     process::{Command, ExitStatus},
 };
@@ -26,8 +27,9 @@ use podway_store::{
     JobReceiptOrTerminalV1, JobReceiptV1, PHASE2_CRASH_BOUNDARY_REGISTRY_V1,
     PersistedSessionMutationV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StateTransitionV1,
-    StoreContractV1, StoreCrashBoundaryDurabilityV1, StoreErrorV1, StoreFailpointActionV1,
-    StoreFailpointV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    StoreContractV1, StoreCrashBoundaryDurabilityV1, StoreCrashBoundaryV1, StoreErrorV1,
+    StoreFailpointActionV1, StoreFailpointV1, TerminalReceiptV1, TerminalResultV1,
+    ValidatedWorkspaceRootV1, WorkerIdV1,
     codec::{
         PersistedDomainErrorV1, PersistedDomainResultV1, PersistedSessionLifecycleV1,
         PersistedTerminalResultV1,
@@ -46,7 +48,7 @@ enum CrashScenario {
     Claim,
     TerminalPreCommit,
     TerminalRelationalPreCommit,
-    TerminalPostCommit,
+    TerminalRelationalPostCommit,
     RecoveryPostCommit,
     Prune,
     Schema,
@@ -58,6 +60,190 @@ struct CrashCase {
     id: &'static str,
     failpoint: StoreFailpointV1,
     scenario: CrashScenario,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExpectedStoreCrashBoundary {
+    id: &'static str,
+    failpoints: &'static [StoreFailpointV1],
+    durability: StoreCrashBoundaryDurabilityV1,
+    recovery_invariant: &'static str,
+    requirements: &'static [&'static str],
+}
+
+const EXPECTED_STORE_CRASH_BOUNDARIES: &[ExpectedStoreCrashBoundary] = &[
+    ExpectedStoreCrashBoundary {
+        id: "C01",
+        failpoints: &[StoreFailpointV1::AdmissionBeforeTransaction],
+        durability: StoreCrashBoundaryDurabilityV1::PreCommitRollback,
+        recovery_invariant: "no admission rows exist",
+        requirements: &["STO-001", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C02",
+        failpoints: &[StoreFailpointV1::AdmissionAfterDurableRowsBeforeCommit],
+        durability: StoreCrashBoundaryDurabilityV1::PreCommitRollback,
+        recovery_invariant: "no job or idempotency record exists",
+        requirements: &["STO-001", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C03",
+        failpoints: &[StoreFailpointV1::AdmissionAfterCommit],
+        durability: StoreCrashBoundaryDurabilityV1::PostCommitReplay,
+        recovery_invariant: "one queued job replays by idempotency",
+        requirements: &["STO-001", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C04",
+        failpoints: &[StoreFailpointV1::ClaimAfterCommit],
+        durability: StoreCrashBoundaryDurabilityV1::PostCommitReplay,
+        recovery_invariant: "one running job is requeued once on restart",
+        requirements: &["STO-002", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C07",
+        failpoints: &[StoreFailpointV1::TerminalAfterTransactionBegin],
+        durability: StoreCrashBoundaryDurabilityV1::PreCommitRollback,
+        recovery_invariant: "claimed job remains recoverable",
+        requirements: &["STO-002", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C08",
+        failpoints: &[StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate],
+        durability: StoreCrashBoundaryDurabilityV1::PreCommitRollback,
+        recovery_invariant: "relational state and job terminal receipt roll back together",
+        requirements: &["STO-002", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C09",
+        failpoints: &[StoreFailpointV1::TerminalAfterJobTerminalUpdateBeforeCommit],
+        durability: StoreCrashBoundaryDurabilityV1::PreCommitRollback,
+        recovery_invariant: "job and idempotency terminal updates roll back together",
+        requirements: &["STO-002", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C10",
+        failpoints: &[
+            StoreFailpointV1::TerminalAfterCommitBeforeResponse,
+            StoreFailpointV1::RecoveryAfterCommitBeforeReturn,
+        ],
+        durability: StoreCrashBoundaryDurabilityV1::PostCommitReplay,
+        recovery_invariant: "one committed outcome is replayable after a lost response",
+        requirements: &["STO-002", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C11",
+        failpoints: &[StoreFailpointV1::TerminalFailureBeforeCommit],
+        durability: StoreCrashBoundaryDurabilityV1::PreCommitRollback,
+        recovery_invariant: "failed receipt commits once on retry without domain mutation",
+        requirements: &["STO-002", "STO-003"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C12",
+        failpoints: &[StoreFailpointV1::PruneAfterDeleteStagingBeforeCommit],
+        durability: StoreCrashBoundaryDurabilityV1::PreCommitRollback,
+        recovery_invariant: "prune deletes roll back with the caller transaction",
+        requirements: &["STO-003", "STO-009"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "C13",
+        failpoints: &[StoreFailpointV1::SchemaBeforeCommit],
+        durability: StoreCrashBoundaryDurabilityV1::PreCommitRollback,
+        recovery_invariant: "migration either commits once or leaves no partial schema",
+        requirements: &["STO-007"],
+    },
+    ExpectedStoreCrashBoundary {
+        id: "P01",
+        failpoints: &[StoreFailpointV1::PublicationAfterDestinationLinkBeforeTemporaryUnlink],
+        durability: StoreCrashBoundaryDurabilityV1::PostCommitReplay,
+        recovery_invariant: "durable destination wins and the matching Store temporary hard link is removed",
+        requirements: &["STO-007", "STO-008"],
+    },
+];
+const EXCLUDED_DAEMON_PREPARATION_IDS: &[&str] = &["C05", "C06"];
+
+type CrashRegistryTuple = (
+    &'static str,
+    Vec<StoreFailpointV1>,
+    StoreCrashBoundaryDurabilityV1,
+    &'static str,
+    Vec<&'static str>,
+);
+
+fn crash_registry_tuple(boundary: &StoreCrashBoundaryV1) -> CrashRegistryTuple {
+    (
+        boundary.id(),
+        boundary.failpoints().to_vec(),
+        boundary.durability(),
+        boundary.recovery_invariant(),
+        boundary.requirements().to_vec(),
+    )
+}
+
+fn expected_phase2_crash_registry() -> Vec<ExpectedStoreCrashBoundary> {
+    let mut expected = EXPECTED_STORE_CRASH_BOUNDARIES.to_vec();
+    expected.insert(
+        4,
+        ExpectedStoreCrashBoundary {
+            id: "C05",
+            failpoints: &[],
+            durability: StoreCrashBoundaryDurabilityV1::DaemonPreparation,
+            recovery_invariant: "procedure preparation is daemon-owned",
+            requirements: &[],
+        },
+    );
+    expected.insert(
+        5,
+        ExpectedStoreCrashBoundary {
+            id: "C06",
+            failpoints: &[],
+            durability: StoreCrashBoundaryDurabilityV1::DaemonPreparation,
+            recovery_invariant: "artifact hashing is daemon-owned",
+            requirements: &[],
+        },
+    );
+    expected
+}
+
+fn expected_phase2_crash_registry_tuples() -> Vec<CrashRegistryTuple> {
+    expected_phase2_crash_registry()
+        .into_iter()
+        .map(|boundary| {
+            (
+                boundary.id,
+                boundary.failpoints.to_vec(),
+                boundary.durability,
+                boundary.recovery_invariant,
+                boundary.requirements.to_vec(),
+            )
+        })
+        .collect()
+}
+
+fn registered_store_crash_boundaries() -> Vec<ExpectedStoreCrashBoundary> {
+    PHASE2_CRASH_BOUNDARY_REGISTRY_V1
+        .iter()
+        .filter(|boundary| !EXCLUDED_DAEMON_PREPARATION_IDS.contains(&boundary.id()))
+        .map(|boundary| ExpectedStoreCrashBoundary {
+            id: boundary.id(),
+            failpoints: boundary.failpoints(),
+            durability: boundary.durability(),
+            recovery_invariant: boundary.recovery_invariant(),
+            requirements: boundary.requirements(),
+        })
+        .collect()
+}
+
+fn expected_store_failpoint_coverage() -> Vec<(&'static str, StoreFailpointV1)> {
+    EXPECTED_STORE_CRASH_BOUNDARIES
+        .iter()
+        .flat_map(|boundary| {
+            boundary
+                .failpoints
+                .iter()
+                .copied()
+                .map(move |failpoint| (boundary.id, failpoint))
+        })
+        .collect()
 }
 
 const STORE_CRASH_CASES: &[CrashCase] = &[
@@ -99,7 +285,7 @@ const STORE_CRASH_CASES: &[CrashCase] = &[
     CrashCase {
         id: "C10",
         failpoint: StoreFailpointV1::TerminalAfterCommitBeforeResponse,
-        scenario: CrashScenario::TerminalPostCommit,
+        scenario: CrashScenario::TerminalRelationalPostCommit,
     },
     CrashCase {
         id: "C10",
@@ -122,7 +308,7 @@ const STORE_CRASH_CASES: &[CrashCase] = &[
         scenario: CrashScenario::Schema,
     },
     CrashCase {
-        id: "C14",
+        id: "P01",
         failpoint: StoreFailpointV1::PublicationAfterDestinationLinkBeforeTemporaryUnlink,
         scenario: CrashScenario::Publication,
     },
@@ -181,14 +367,19 @@ fn case_request(case: CrashCase, number: u8) -> AdmitRequestV1 {
     let digest_nibble = match case.scenario {
         CrashScenario::Admission => 'c',
         CrashScenario::Claim | CrashScenario::RecoveryPostCommit => 'd',
-        CrashScenario::TerminalPreCommit | CrashScenario::TerminalRelationalPreCommit => 'e',
-        CrashScenario::TerminalPostCommit => 'f',
+        CrashScenario::TerminalPreCommit
+        | CrashScenario::TerminalRelationalPreCommit
+        | CrashScenario::TerminalRelationalPostCommit => 'e',
         CrashScenario::Prune | CrashScenario::Schema | CrashScenario::Publication => {
             unreachable!("case has no request")
         }
     };
     request_for_command(
-        if case.scenario == CrashScenario::TerminalRelationalPreCommit {
+        if matches!(
+            case.scenario,
+            CrashScenario::TerminalRelationalPreCommit
+                | CrashScenario::TerminalRelationalPostCommit
+        ) {
             DomainCommand::SessionStart
         } else {
             DomainCommand::WorkspaceInitialize
@@ -891,7 +1082,7 @@ fn run_child(
     if let Some(publication_caller) = publication_caller {
         command.env(PUBLICATION_CALLER_ENV, publication_caller);
     }
-    assert_aborted(command.status().unwrap(), CHILD_TEST_NAME);
+    assert_aborted(command.output().unwrap().status, CHILD_TEST_NAME);
 }
 
 fn prepare_crash_case(path: &Path, case: CrashCase, number: u8) {
@@ -899,15 +1090,14 @@ fn prepare_crash_case(path: &Path, case: CrashCase, number: u8) {
         CrashScenario::Claim
         | CrashScenario::TerminalPreCommit
         | CrashScenario::TerminalRelationalPreCommit
-        | CrashScenario::TerminalPostCommit => {
+        | CrashScenario::TerminalRelationalPostCommit => {
             let initial = open(path, None, 1).unwrap();
             let request = case_request(case, number);
             let digest_nibble = match case.scenario {
                 CrashScenario::Claim => 'd',
-                CrashScenario::TerminalPreCommit | CrashScenario::TerminalRelationalPreCommit => {
-                    'e'
-                }
-                CrashScenario::TerminalPostCommit => 'f',
+                CrashScenario::TerminalPreCommit
+                | CrashScenario::TerminalRelationalPreCommit
+                | CrashScenario::TerminalRelationalPostCommit => 'e',
                 _ => unreachable!("prepared case has an unexpected scenario"),
             };
             assert_new_admission(&initial, request, number, digest_nibble);
@@ -1062,7 +1252,7 @@ fn assert_case_recovery(path: &Path, case: CrashCase, number: u8) {
             drop(reopened);
             assert_eq!(durable_counts(path), (1, 1, 1));
         }
-        CrashScenario::TerminalPostCommit => {
+        CrashScenario::TerminalRelationalPostCommit => {
             let reopened = open(path, None, 5).unwrap();
             assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 0);
             assert_eq!(
@@ -1072,10 +1262,11 @@ fn assert_case_recovery(path: &Path, case: CrashCase, number: u8) {
                     .queued_job_count(),
                 0
             );
-            assert_failure_terminal_replay(
+            assert_relational_state(&reopened);
+            assert_relational_terminal_replay(
                 &terminal_replay(&reopened, case_request(case, number)),
                 number,
-                'f',
+                'e',
             );
             drop(reopened);
             assert_eq!(durable_counts(path), (1, 1, 0));
@@ -1172,7 +1363,9 @@ fn child_crash_case(case: CrashCase, path: &Path, number: u8) -> ! {
                 UnixMillis::new(3),
             );
         }
-        CrashScenario::TerminalPreCommit | CrashScenario::TerminalRelationalPreCommit => {
+        CrashScenario::TerminalPreCommit
+        | CrashScenario::TerminalRelationalPreCommit
+        | CrashScenario::TerminalRelationalPostCommit => {
             let failing = open_for_abort(path, case.failpoint, 3).unwrap();
             let claimed = failing
                 .claim_next(
@@ -1186,13 +1379,21 @@ fn child_crash_case(case: CrashCase, path: &Path, number: u8) -> ! {
                 &claimed,
                 number,
                 'e',
-                if case.scenario == CrashScenario::TerminalRelationalPreCommit {
+                if matches!(
+                    case.scenario,
+                    CrashScenario::TerminalRelationalPreCommit
+                        | CrashScenario::TerminalRelationalPostCommit
+                ) {
                     &DomainCommand::SessionStart
                 } else {
                     &DomainCommand::WorkspaceInitialize
                 },
             );
-            if case.scenario == CrashScenario::TerminalRelationalPreCommit {
+            if matches!(
+                case.scenario,
+                CrashScenario::TerminalRelationalPreCommit
+                    | CrashScenario::TerminalRelationalPostCommit
+            ) {
                 let (transition, result) = relational_terminal_for_commit();
                 let _ = failing.commit_terminal(
                     claimed.claim().clone(),
@@ -1210,25 +1411,6 @@ fn child_crash_case(case: CrashCase, path: &Path, number: u8) -> ! {
                     UnixMillis::new(4),
                 );
             }
-        }
-        CrashScenario::TerminalPostCommit => {
-            let failing = open_for_abort(path, case.failpoint, 3).unwrap();
-            let claimed = failing
-                .claim_next(
-                    &identity(),
-                    WorkerIdV1::new("terminal-post-commit").unwrap(),
-                    UnixMillis::new(3),
-                )
-                .unwrap()
-                .expect("prepared terminal job must be claimable");
-            assert_claimed_job(&claimed, number, 'f');
-            let _ = failing.commit_terminal(
-                claimed.claim().clone(),
-                Revision::ZERO,
-                None,
-                failure_result_for_crash(),
-                UnixMillis::new(4),
-            );
         }
         CrashScenario::RecoveryPostCommit => {
             let _ = open_for_abort(path, case.failpoint, 4);
@@ -1272,95 +1454,59 @@ fn phase2_crash_child_aborts_at_configured_failpoint() {
 
 #[test]
 fn crash_registry_has_exact_unique_store_owned_failpoint_coverage() {
-    let all_ids: Vec<_> = PHASE2_CRASH_BOUNDARY_REGISTRY_V1
+    let registered_ids: Vec<_> = PHASE2_CRASH_BOUNDARY_REGISTRY_V1
         .iter()
         .map(|boundary| boundary.id())
         .collect();
+    let unique_ids: BTreeSet<_> = registered_ids.iter().copied().collect();
     assert_eq!(
-        all_ids,
-        vec![
-            "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08", "C09", "C10", "C11", "C12",
-            "C13", "C14",
-        ]
+        unique_ids.len(),
+        registered_ids.len(),
+        "Phase-2 crash registry IDs must be unique"
+    );
+    assert_eq!(
+        registered_ids,
+        expected_phase2_crash_registry()
+            .iter()
+            .map(|boundary| boundary.id)
+            .collect::<Vec<_>>(),
+        "Phase-2 crash registry IDs must exactly match the independent contract"
     );
 
-    let registered_pairs: Vec<_> = PHASE2_CRASH_BOUNDARY_REGISTRY_V1
+    let daemon_preparation_ids: Vec<_> = PHASE2_CRASH_BOUNDARY_REGISTRY_V1
         .iter()
         .filter(|boundary| {
-            boundary.durability() != StoreCrashBoundaryDurabilityV1::DaemonPreparation
+            boundary.durability() == StoreCrashBoundaryDurabilityV1::DaemonPreparation
         })
-        .flat_map(|boundary| {
-            boundary
-                .failpoints()
-                .iter()
-                .copied()
-                .map(move |failpoint| (boundary.id(), failpoint))
-        })
+        .map(|boundary| boundary.id())
         .collect();
+    assert_eq!(
+        daemon_preparation_ids, EXCLUDED_DAEMON_PREPARATION_IDS,
+        "only C05 and C06 may be excluded as daemon preparation boundaries"
+    );
+    assert_eq!(
+        PHASE2_CRASH_BOUNDARY_REGISTRY_V1
+            .iter()
+            .map(crash_registry_tuple)
+            .collect::<Vec<_>>(),
+        expected_phase2_crash_registry_tuples(),
+        "Phase-2 crash registry tuples must exactly match the independent contract"
+    );
+    assert_eq!(
+        registered_store_crash_boundaries(),
+        EXPECTED_STORE_CRASH_BOUNDARIES,
+        "Store crash registry must exactly match the independently defined boundary contract"
+    );
+
     let case_pairs: Vec<_> = STORE_CRASH_CASES
         .iter()
         .map(|case| (case.id, case.failpoint))
         .collect();
     assert_eq!(
-        case_pairs, registered_pairs,
-        "every Store crash case must map to exactly one registered Store-owned failpoint"
+        case_pairs,
+        expected_store_failpoint_coverage(),
+        "every defined Store failpoint must be exercised exactly once, with no extras"
     );
-    for (index, pair) in registered_pairs.iter().enumerate() {
-        assert!(
-            !registered_pairs[..index].contains(pair),
-            "registry duplicates Store failpoint mapping {pair:?}"
-        );
-    }
-    for (index, pair) in case_pairs.iter().enumerate() {
-        assert!(
-            !case_pairs[..index].contains(pair),
-            "crash matrix duplicates Store failpoint mapping {pair:?}"
-        );
-    }
-    let registered_failpoints: Vec<_> = registered_pairs
-        .iter()
-        .map(|(_, failpoint)| *failpoint)
-        .collect();
-    let case_failpoints: Vec<_> = case_pairs.iter().map(|(_, failpoint)| *failpoint).collect();
-    assert_eq!(case_failpoints, registered_failpoints);
-    for (index, failpoint) in registered_failpoints.iter().enumerate() {
-        assert!(
-            !registered_failpoints[..index].contains(failpoint),
-            "registry duplicates Store failpoint {failpoint:?}"
-        );
-    }
-    for (index, failpoint) in case_failpoints.iter().enumerate() {
-        assert!(
-            !case_failpoints[..index].contains(failpoint),
-            "crash matrix duplicates Store failpoint {failpoint:?}"
-        );
-    }
-
-    for boundary in PHASE2_CRASH_BOUNDARY_REGISTRY_V1.iter().filter(|boundary| {
-        boundary.durability() != StoreCrashBoundaryDurabilityV1::DaemonPreparation
-    }) {
-        assert!(!boundary.failpoints().is_empty());
-        assert!(!boundary.recovery_invariant().is_empty());
-        assert!(!boundary.requirements().is_empty());
-    }
-    for id in ["C05", "C06"] {
-        let boundary = PHASE2_CRASH_BOUNDARY_REGISTRY_V1
-            .iter()
-            .find(|boundary| boundary.id() == id)
-            .unwrap();
-        assert_eq!(
-            boundary.durability(),
-            StoreCrashBoundaryDurabilityV1::DaemonPreparation
-        );
-        assert!(boundary.failpoints().is_empty());
-    }
-    for requirement in ["STO-001", "STO-002", "STO-003", "STO-007", "STO-009"] {
-        assert!(
-            PHASE2_CRASH_BOUNDARY_REGISTRY_V1
-                .iter()
-                .any(|boundary| boundary.requirements().contains(&requirement))
-        );
-    }
 }
 
 #[test]

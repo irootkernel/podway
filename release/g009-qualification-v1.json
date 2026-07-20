@@ -41,20 +41,20 @@
       "fail",
       "blocked"
     ],
-    "untrusted_mutable_pointers_forbidden": true
+    "untrusted_mutable_pointers_forbidden": true,
+    "fresh_run_identity_required": true,
+    "exact_command_result_schema_required": true
   },
   "fuzz": {
-    "toolchain": {
-      "channel": "nightly-2026-07-17",
-      "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"
-    },
-    "sanitizer_env": {
-      "ASAN_OPTIONS": "quarantine_size_mb=16:thread_local_quarantine_size_kb=64:detect_odr_violation=0"
-    },
     "change_budget": {
       "seconds_per_target": 60
     },
     "corpus_root": "artifacts/g009/fuzz/corpus",
+    "local_smoke": {
+      "rss_limit_mb": 512,
+      "seconds_per_target": 5,
+      "timeout_seconds": 5
+    },
     "pre_rc": {
       "seconds_per_target": 600
     },
@@ -63,6 +63,61 @@
       "seconds_per_target": 3600,
       "timeout_seconds": 5
     },
+    "runner": {
+      "aggregate_bytes": 2097152,
+      "archive_materialization_bytes": 67108864,
+      "corpus_aggregate_bytes": 8388608,
+      "corpus_member_bytes": 1048576,
+      "corpus_member_count": 4096,
+      "corpus_path_depth": 8,
+      "corpus_path_length": 256,
+      "fuzz_dependency_materialization_bytes": 16777216,
+      "manifest_bytes": 524288,
+      "post_kill_drain_seconds": 2,
+      "schema": "podway.g009.fuzz-runner/v1",
+      "stream_bytes": 1048576
+    },
+    "sanitizer_env": {
+      "ASAN_OPTIONS": "quarantine_size_mb=16:thread_local_quarantine_size_kb=64:detect_odr_violation=0"
+    },
+    "seeds": [
+      {
+        "base64": "AAAB8nsicHJvdG9jb2wiOiJwb2R3YXkuaXBjL3YxIiwicmVxdWVzdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImNsaWVudCI6eyJuYW1lIjoicG9kd2F5IiwidmVyc2lvbiI6IjAuMS4wIiwicGlkIjoxfSwib3BlcmF0aW9uIjoicXVlcnkiLCJjb21tYW5kIjoic2Vzc2lvbi5zdGF0dXMiLCJ3b3Jrc3BhY2UiOnsicm9vdCI6Ii9maXh0dXJlL3dvcmt0cmVlIiwiZXhwZWN0ZWRfdXVpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiJ9LCJvcHRpb25zIjp7ImRldGFjaCI6ZmFsc2UsIndhaXRfdGltZW91dF9tcyI6MzAwMDB9LCJwYXlsb2FkIjp7InNlbGVjdG9yIjp7InZlcnNpb24iOjEsInBhdGhfYnl0ZXNfYmFzZTY0dXJsIjoiTDJacGVIUjFjbVV2ZDI5eWEzUnlaV1UiLCJkaXNwbGF5IjoiL2ZpeHR1cmUvd29ya3RyZWUiLCJleHBlY3RlZF91dWlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIn19fQ==",
+        "name": "frame_decoder-valid-v1",
+        "sha256": "976665bdbad97ab7857e23d6be70a97eaf794c30f9b1416074b40d981afd79b5",
+        "target": "frame_decoder"
+      },
+      {
+        "base64": "eyJwcm90b2NvbCI6InBvZHdheS5pcGMvdjEiLCJyZXF1ZXN0X2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiY2xpZW50Ijp7Im5hbWUiOiJwb2R3YXkiLCJ2ZXJzaW9uIjoiMC4xLjAiLCJwaWQiOjF9LCJvcGVyYXRpb24iOiJxdWVyeSIsImNvbW1hbmQiOiJzZXNzaW9uLnN0YXR1cyIsIndvcmtzcGFjZSI6eyJyb290IjoiL2ZpeHR1cmUvd29ya3RyZWUiLCJleHBlY3RlZF91dWlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIn0sIm9wdGlvbnMiOnsiZGV0YWNoIjpmYWxzZSwid2FpdF90aW1lb3V0X21zIjozMDAwMH0sInBheWxvYWQiOnsic2VsZWN0b3IiOnsidmVyc2lvbiI6MSwicGF0aF9ieXRlc19iYXNlNjR1cmwiOiJMMlpwZUhSMWNtVXZkMjl5YTNSeVpXVSIsImRpc3BsYXkiOiIvZml4dHVyZS93b3JrdHJlZSIsImV4cGVjdGVkX3V1aWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIifX19",
+        "name": "request_envelope-valid-v1",
+        "sha256": "9331d072ea2447bdf785cae97b4aac926b96ae5369790f5eef24927f2c82b3cc",
+        "target": "request_envelope"
+      },
+      {
+        "base64": "eyJzY2hlbWEiOiJwb2R3YXkub3V0cHV0L3YxIiwicmVxdWVzdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImNvbW1hbmQiOiJzZXNzaW9uLnN0YXR1cyIsImdlbmVyYXRlZF9hdCI6IjIwMjYtMDctMTVUMTI6MzQ6NTYuNzg5WiIsInJlc3VsdCI6e30sIndhcm5pbmdzIjpbXX0=",
+        "name": "response_additive-valid-v1",
+        "sha256": "295494f94c6d828910ec58658429b5faf1b6aa6a7e17e264646e4da97837a9e5",
+        "target": "response_additive"
+      },
+      {
+        "base64": "eyJpZCI6InJlbGVhc2UiLCJuYW1lIjoiUmVsZWFzZSIsInJld29yayI6eyJhbGxvd19yZXR1cm5fdG8iOlsicHJlcGFyZSJdfSwic2NoZW1hIjoicG9kd2F5LnByb2NlZHVyZS92MSIsInN0YWdlcyI6W3siaWQiOiJwcmVwYXJlIiwiaW5zdHJ1Y3Rpb25zIjpbXSwiaXRlbXMiOlt7ImlkIjoiYXBwcm92YWwiLCJwcm9tcHQiOiJBcHByb3ZlZCIsInJlcXVpcmVkIjp0cnVlLCJ0eXBlIjoiY29uZmlybSJ9XSwidGl0bGUiOiJQcmVwYXJlIn1dLCJ2ZXJzaW9uIjoiMSJ9",
+        "name": "config_procedure-valid-v1",
+        "sha256": "2d2e9f9453b36610949989fadbae5b3665778701aae59727fe4fa1330b5e0c5a",
+        "target": "config_procedure"
+      },
+      {
+        "base64": "eyJhbHBoYSI6W3RydWUsbnVsbCx7Im5lc3RlZCI6InZhbHVlIn1dLCJ6ZXRhIjo0Mn0=",
+        "name": "canonical_json-valid-v1",
+        "sha256": "007f6b1efdb21f54b0c29007d4c7166e1a16cab70adc72ee34497121245e43be",
+        "target": "canonical_json"
+      },
+      {
+        "base64": "L2ZpeHR1cmUvd29ya3RyZWU=",
+        "name": "selector-valid-v1",
+        "sha256": "295c246528d70d978a1687532b367341426cfa2753ea21e54bafccd7d1289e9f",
+        "target": "selector"
+      }
+    ],
     "surfaces": [
       "frame_decoder",
       "request_envelope",
@@ -70,7 +125,11 @@
       "config_procedure",
       "canonical_json",
       "selector"
-    ]
+    ],
+    "toolchain": {
+      "channel": "nightly-2026-07-17",
+      "rustc": "1.99.0-nightly (3d50c25bc 2026-07-16)"
+    }
   },
   "gates": [
     {
@@ -329,9 +388,14 @@
   ],
   "external_prerequisites": [
     {
+      "approval_keyring_sha256_required": true,
+      "environment": "release-qualification",
       "id": "G009-APPROVALS-OWNER-E-F",
       "kind": "protected-environment-detached-human-approvals",
-      "environment": "release-qualification",
+      "rc_input_roles": [
+        "approvals",
+        "signer-contract"
+      ],
       "required_roles": [
         "owner",
         "E",
@@ -343,16 +407,12 @@
         "G009_QUALIFICATION_E_FINGERPRINT",
         "G009_QUALIFICATION_F_FINGERPRINT"
       ],
-      "rc_input_roles": [
-        "approvals",
-        "signer-contract"
-      ],
       "workflow_behavior": "verify-against-protected-identities"
     },
     {
+      "environment": "release-final-review",
       "id": "G009-FINAL-REVIEW-OWNER-E-F",
       "kind": "protected-environment-detached-attestations",
-      "environment": "release-final-review",
       "required_roles": [
         "owner",
         "E",
@@ -394,7 +454,6 @@
       "dirty-source",
       "wrong-target",
       "non-arm64-host",
-      "Rosetta",
       "universal-binary",
       "rounded-performance-metric",
       "post-hoc-threshold",
@@ -464,10 +523,10 @@
   "target": {
     "arch": "arm64",
     "host_arch": "arm64",
+    "mach_o_arch": "arm64",
     "native_required": true,
     "triple": "aarch64-apple-darwin",
-    "universal_forbidden": true,
-    "x86_64_forbidden": true
+    "universal_forbidden": true
   },
   "version": 1,
   "workloads": [
@@ -609,5 +668,22 @@
       "name": "maximum-input-rss-completion-or-rejection",
       "required_outcome": "complete-or-explicit-rejection"
     }
-  ]
+  ],
+  "release_evidence": {
+    "current_public_package": {
+      "posture": "unsigned-not-notarized",
+      "codesign": "not_attempted_missing_credentials",
+      "notarization": "not_attempted_missing_credentials",
+      "stapling": "not_applicable_zip",
+      "gatekeeper": "not_claimed",
+      "release_notes_asset": "RELEASE_NOTES.md",
+      "release_notes_must_document_status": true,
+      "status_frozen_for_current_release": true
+    },
+    "developer_id_and_notarization": {
+      "policy_ref": "release/g009-release-policy-v1.json#/signing_evidence/developer_id_and_notarization",
+      "qualification_requirement": false,
+      "detached_human_release_step": true
+    }
+  }
 }

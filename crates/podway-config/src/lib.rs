@@ -238,11 +238,11 @@ impl ProcedureDefinitionV1 {
 
     pub(crate) fn apply_documented_defaults(&mut self) {
         for stage in &mut self.stages {
-            if let Some(skip) = &mut stage.skip
-                && skip.allowed
-                && skip.reason_required.is_none()
-            {
-                skip.reason_required = Some(true);
+            match &mut stage.skip {
+                Some(skip) if skip.allowed && skip.reason_required.is_none() => {
+                    skip.reason_required = Some(true);
+                }
+                _ => {}
             }
         }
     }
@@ -255,13 +255,14 @@ impl ProcedureDefinitionV1 {
                 stage.skip = None;
             }
             for item in &mut stage.items {
-                if let ItemDefinitionV1::Artifact {
-                    allowed_media_types,
-                    ..
-                } = item
-                    && allowed_media_types.as_ref().is_some_and(Vec::is_empty)
-                {
-                    *allowed_media_types = None;
+                match item {
+                    ItemDefinitionV1::Artifact {
+                        allowed_media_types,
+                        ..
+                    } if allowed_media_types.as_ref().is_some_and(Vec::is_empty) => {
+                        *allowed_media_types = None;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -583,13 +584,14 @@ impl ItemDefinitionV1 {
             Self::Integer {
                 minimum, maximum, ..
             } => {
-                if let (Some(minimum), Some(maximum)) = (minimum, maximum)
-                    && minimum > maximum
-                {
-                    return Err(ConfigError::InvalidValue {
-                        field: "item.integer.bounds",
-                        reason: "minimum cannot exceed maximum",
-                    });
+                match (minimum, maximum) {
+                    (Some(minimum), Some(maximum)) if minimum > maximum => {
+                        return Err(ConfigError::InvalidValue {
+                            field: "item.integer.bounds",
+                            reason: "minimum cannot exceed maximum",
+                        });
+                    }
+                    _ => {}
                 }
                 Ok(())
             }

@@ -90,8 +90,8 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 
 | ID | Requirement | Design source | Primary conformance |
 |---|---|---|---|
-| `REL-001` | Apple Silicon (`aarch64-apple-darwin`) release artifact | Release | Apple Silicon build matrix |
-| `REL-002` | Archive contains binaries, completions, schemas, presets, license | Release | Artifact inspection |
+| `REL-001` | Sole release tuple is `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}` | Release | Native arm64-host thin-Mach-O build matrix |
+| `REL-002` | Archive contains `podway` and `podwayd`, completions, schemas, presets, license | Release | Artifact inspection |
 | `REL-003` | Checksums and provenance are published | Release | Release pipeline |
 | `REL-004` | Upgrade migration is tested | Release/storage | Upgrade E2E |
 | `REL-005` | All product acceptance criteria pass | Product acceptance | Release checklist |

@@ -48,6 +48,25 @@ use crate::{
     },
 };
 
+/// Reset-all crash boundaries available only through an explicitly injected test seam.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResetAllCrashBoundaryV1 {
+    MarkerCreated,
+    OldDatabaseDeleted,
+    NewTargetDatabaseCreated,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ResetAllCrashInjectionV1(Option<ResetAllCrashBoundaryV1>);
+
+impl ResetAllCrashInjectionV1 {
+    fn abort_at(self, boundary: ResetAllCrashBoundaryV1) {
+        if self.0 == Some(boundary) {
+            std::process::abort();
+        }
+    }
+}
+
 /// The caller-supplied clock values used by the Store and metadata-only registry update.
 ///
 /// Keeping the values explicit makes the daemon's durable writes deterministic and avoids making a
@@ -432,7 +451,7 @@ pub struct WorkspaceSchedulerContextV1 {
     queue_limit: u16,
     git_evidence: podway_git::ValidatedWorktreeV1,
     coordination: Arc<WorkspaceSchedulerCoordinationV1>,
-    retirement: Arc<Mutex<Option<WorkspaceSchedulerRetirementBindingV1>>>,
+    retirement: Arc<Mutex<Option<WorkspaceSchedulerRetirementGuardV1>>>,
 }
 
 #[derive(Debug)]
@@ -449,6 +468,17 @@ struct WorkspaceSchedulerRetirementBindingV1 {
     source: podway_store::DurableWorktreeIdentityV1,
     store_slot: WorkspaceStoreSlotTokenV1,
 }
+struct WorkspaceSchedulerRetirementGuardV1 {
+    coordinator: Arc<WorkspaceMaintenanceCoordinatorV1>,
+    binding: WorkspaceSchedulerRetirementBindingV1,
+}
+impl Drop for WorkspaceSchedulerRetirementGuardV1 {
+    fn drop(&mut self) {
+        self.coordinator
+            .unregister_scheduler_generation(&self.binding);
+    }
+}
+
 #[derive(Debug)]
 struct WorkspaceSchedulerCoordinationStateV1 {
     accepting_claims: bool,
@@ -569,15 +599,21 @@ impl WorkspaceSchedulerContextV1 {
             source: self.binding.identity().clone(),
             store_slot: self.store.token,
         };
-        *current = Some(retirement.clone());
+        *current = Some(WorkspaceSchedulerRetirementGuardV1 {
+            coordinator: Arc::clone(&self.coordination.maintenance),
+            binding: retirement.clone(),
+        });
         drop(current);
         self.coordination
             .maintenance
             .register_scheduler_generation(retirement);
     }
     fn retirement_binding(&self) -> Option<WorkspaceSchedulerRetirementBindingV1> {
-        mutex_lock(&self.retirement).clone()
+        mutex_lock(&self.retirement)
+            .as_ref()
+            .map(|retirement| retirement.binding.clone())
     }
+
     pub(crate) fn worker_read_job(
         &self,
         job: &podway_store::JobIdV1,
@@ -985,37 +1021,60 @@ impl WorkspaceMaintenanceCoordinatorV1 {
             },
         );
     }
+    fn unregister_scheduler_generation(&self, binding: &WorkspaceSchedulerRetirementBindingV1) {
+        let mut state = mutex_lock(&self.state);
+        if state
+            .generations
+            .get(&binding.store_slot)
+            .is_some_and(|record| {
+                record.binding.key == binding.key
+                    && record.binding.generation == binding.generation
+                    && record.binding.source == binding.source
+            })
+        {
+            state.generations.remove(&binding.store_slot);
+        }
+    }
     fn record_claims_stopped(&self, binding: &WorkspaceSchedulerRetirementBindingV1) {
         let mut state = mutex_lock(&self.state);
-        if let Some(record) = state.generations.get_mut(&binding.store_slot)
-            && record.binding.key == binding.key
-            && record.binding.generation == binding.generation
-            && record.binding.source == binding.source
-        {
-            record.claims_stopped = true;
+        match state.generations.get_mut(&binding.store_slot) {
+            Some(record)
+                if record.binding.key == binding.key
+                    && record.binding.generation == binding.generation
+                    && record.binding.source == binding.source =>
+            {
+                record.claims_stopped = true;
+            }
+            _ => {}
         }
     }
     fn record_work_drained(&self, binding: &WorkspaceSchedulerRetirementBindingV1) {
         let mut state = mutex_lock(&self.state);
-        if let Some(record) = state.generations.get_mut(&binding.store_slot)
-            && record.binding.key == binding.key
-            && record.binding.generation == binding.generation
-            && record.binding.source == binding.source
-            && record.claims_stopped
-        {
-            record.work_drained = true;
+        match state.generations.get_mut(&binding.store_slot) {
+            Some(record)
+                if record.binding.key == binding.key
+                    && record.binding.generation == binding.generation
+                    && record.binding.source == binding.source
+                    && record.claims_stopped =>
+            {
+                record.work_drained = true;
+            }
+            _ => {}
         }
     }
     fn record_store_closed(&self, binding: &WorkspaceSchedulerRetirementBindingV1) {
         let mut state = mutex_lock(&self.state);
-        if let Some(record) = state.generations.get_mut(&binding.store_slot)
-            && record.binding.key == binding.key
-            && record.binding.generation == binding.generation
-            && record.binding.source == binding.source
-            && record.claims_stopped
-            && record.work_drained
-        {
-            record.store_closed = true;
+        match state.generations.get_mut(&binding.store_slot) {
+            Some(record)
+                if record.binding.key == binding.key
+                    && record.binding.generation == binding.generation
+                    && record.binding.source == binding.source
+                    && record.claims_stopped
+                    && record.work_drained =>
+            {
+                record.store_closed = true;
+            }
+            _ => {}
         }
     }
     fn record_store_close_result(
@@ -1390,6 +1449,7 @@ pub struct WorkspaceRuntimeManagerV1 {
     registry: RegistryStoreV1,
     schedulers: WorkspaceSchedulerRegistryV1<WorkspaceSchedulerContextV1>,
     maintenance: Arc<WorkspaceMaintenanceCoordinatorV1>,
+    reset_crash_injection: ResetAllCrashInjectionV1,
 }
 
 impl WorkspaceRuntimeManagerV1 {
@@ -1423,7 +1483,21 @@ impl WorkspaceRuntimeManagerV1 {
             registry,
             schedulers,
             maintenance: process_maintenance_coordinator_v1(),
+            reset_crash_injection: ResetAllCrashInjectionV1::default(),
         }
+    }
+    /// Constructs an isolated test manager with one deliberately injected crash boundary.
+    ///
+    /// Production composition uses [`Self::new`] or [`Self::with_observability`], neither of which
+    /// accepts ambient failpoint configuration.
+    pub fn with_reset_crash_boundary_for_tests(
+        paths: &ServiceRuntimePathsV1,
+        inspection_options: SqliteStoreOptionsV1,
+        boundary: ResetAllCrashBoundaryV1,
+    ) -> Self {
+        let mut manager = Self::new(paths, inspection_options);
+        manager.reset_crash_injection = ResetAllCrashInjectionV1(Some(boundary));
+        manager
     }
 
     pub fn resolver(
@@ -1645,13 +1719,17 @@ impl WorkspaceRuntimeManagerV1 {
         {
             return Err(WorkspaceRuntimeErrorV1::MaintenanceInProgress);
         }
-        if let Some(prepared) = prepared.as_ref()
-            && (prepared.previous_workspace_uuid() != authority.registry_previous_workspace_uuid()
-                || prepared.marker().previous_workspace_uuid()
+        match prepared.as_ref() {
+            Some(prepared)
+                if prepared.previous_workspace_uuid()
                     != authority.registry_previous_workspace_uuid()
-                || !prepared.matches_source(&authority.routing_identity()))
-        {
-            return Err(WorkspaceRuntimeErrorV1::ResetMarkerConflict);
+                    || prepared.marker().previous_workspace_uuid()
+                        != authority.registry_previous_workspace_uuid()
+                    || !prepared.matches_source(&authority.routing_identity()) =>
+            {
+                return Err(WorkspaceRuntimeErrorV1::ResetMarkerConflict);
+            }
+            _ => {}
         }
 
         // Every source and predecessor observation used to prepare the operation is renewed under
@@ -1709,6 +1787,8 @@ impl WorkspaceRuntimeManagerV1 {
                 runtime_directory
                     .publish_reset_marker(filesystem_authority, prepared.marker())
                     .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
+                self.reset_crash_injection
+                    .abort_at(ResetAllCrashBoundaryV1::MarkerCreated);
                 prepared.marker().clone()
             }
             (None, None, _) => return Err(WorkspaceRuntimeErrorV1::ResetMarkerConflict),
@@ -1731,8 +1811,14 @@ impl WorkspaceRuntimeManagerV1 {
             runtime_directory
                 .remove_reset_database_files(filesystem_authority, &marker)
                 .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
-            self.seed_reset_target(reset, &marker, observation.store_now())
-                .map_err(WorkspaceRuntimeErrorV1::Store)?
+            self.reset_crash_injection
+                .abort_at(ResetAllCrashBoundaryV1::OldDatabaseDeleted);
+            let receipt = self
+                .seed_reset_target(reset, &marker, observation.store_now())
+                .map_err(WorkspaceRuntimeErrorV1::Store)?;
+            self.reset_crash_injection
+                .abort_at(ResetAllCrashBoundaryV1::NewTargetDatabaseCreated);
+            receipt
         } else {
             // A resumed marker verifies its exact target first. It is never recreated merely from
             // marker-derived receipt data, and a predecessor-bound target remains fail-closed.
@@ -1744,8 +1830,14 @@ impl WorkspaceRuntimeManagerV1 {
                     runtime_directory
                         .remove_reset_database_files(filesystem_authority, &marker)
                         .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
-                    self.seed_reset_target(reset, &marker, observation.store_now())
-                        .map_err(WorkspaceRuntimeErrorV1::Store)?
+                    self.reset_crash_injection
+                        .abort_at(ResetAllCrashBoundaryV1::OldDatabaseDeleted);
+                    let receipt = self
+                        .seed_reset_target(reset, &marker, observation.store_now())
+                        .map_err(WorkspaceRuntimeErrorV1::Store)?;
+                    self.reset_crash_injection
+                        .abort_at(ResetAllCrashBoundaryV1::NewTargetDatabaseCreated);
+                    receipt
                 }
                 Err(error) => return Err(WorkspaceRuntimeErrorV1::Store(error)),
             }
@@ -1963,15 +2055,18 @@ impl WorkspaceRuntimeManagerV1 {
         if self.maintenance.has_unclosed_generation(&maintenance_key) {
             return Err(WorkspaceRuntimeErrorV1::ResetSchedulerRetirement);
         }
-        if let Some(persisted_identity) = persisted_identity
-            && self
-                .schedulers
-                .get_active(&WorkspaceSchedulerKeyV1::from_durable_identity(
-                    persisted_identity,
-                ))
-                .is_some()
-        {
-            return Err(WorkspaceRuntimeErrorV1::ResetSchedulerRetirement);
+        match persisted_identity {
+            Some(persisted_identity)
+                if self
+                    .schedulers
+                    .get_active(&WorkspaceSchedulerKeyV1::from_durable_identity(
+                        persisted_identity,
+                    ))
+                    .is_some() =>
+            {
+                return Err(WorkspaceRuntimeErrorV1::ResetSchedulerRetirement);
+            }
+            _ => {}
         }
         if self
             .maintenance

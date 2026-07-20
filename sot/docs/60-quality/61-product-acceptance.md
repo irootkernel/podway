@@ -78,7 +78,7 @@ Podway is ready for public macOS release only when every mandatory criterion bel
 
 ## macOS operation
 
-- Both binaries install and run natively on the supported macOS Apple Silicon (`aarch64-apple-darwin`) release matrix.
+- Both `podway` and `podwayd` install and run natively on the sole supported tuple `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}`.
 - LaunchAgent install is idempotent.
 - Daemon starts at user login.
 - Explicit stop, start, restart, status, logs, and uninstall work.
@@ -106,7 +106,7 @@ Podway is ready for public macOS release only when every mandatory criterion bel
 ## Distribution
 
 - Rust lockfile is committed.
-- Apple Silicon (`aarch64-apple-darwin`) artifacts are built, validated natively on arm64, and checksummed.
+- Apple Silicon (`aarch64-apple-darwin`) artifacts are built, validated on an arm64 host as thin arm64 Mach-O binaries, and checksummed.
 - Release archive contains both binaries, completions, schemas, presets, README, and MIT License.
 - Public artifacts have documented signing and notarization status.
 - Upgrade from the previous supported database schema is tested.

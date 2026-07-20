@@ -10,8 +10,15 @@ use std::{
 };
 
 use nix::unistd::geteuid;
-use podway_config::MAX_PROCEDURE_DOCUMENT_BYTES_V1;
-use podway_core::{AttemptId, JobId, Revision, WorkspaceId};
+use podway_config::{
+    MAX_PROCEDURE_DOCUMENT_BYTES_V1, ProcedureFormatV1, ProcedureWarningPolicyV1,
+    parse_procedure_v1,
+};
+use podway_core::{
+    AttemptId, CommandContextV1, CompleteSessionV1, DomainError, JobId, ProcedureSnapshotId,
+    ProcedureSourceLabelV1, Revision, SessionAggregateV1, SessionCommandV1, SessionId, UnixMillis,
+    WorkspaceId, apply_transition_v1,
+};
 use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ExitCodeV1, JobOutputV1, JobStateV1,
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WORKTREE_SELECTOR_COMPONENT_BYTES_V1, OperationV1,
@@ -39,7 +46,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let root = PathBuf::from("/tmp").join(format!("pwc-{}-{sequence}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("pwc-{}-{sequence}", std::process::id()));
         let home = root.join("home");
         let temporary = root.join("temporary");
         fs::create_dir_all(&home).expect("fixture home must be created");
@@ -326,6 +333,243 @@ fn status_result() -> Map<String, Value> {
     }))
     .expect("fixture status result must be an object")
 }
+fn seeded_session_with_advanced_cursor() -> (SessionAggregateV1, SessionAggregateV1) {
+    let snapshot = parse_procedure_v1(
+        r#"{
+            "schema": "podway.procedure/v1",
+            "id": "causal-drift",
+            "version": "1",
+            "name": "Causal drift fixture",
+            "stages": [
+                {"id": "implement", "title": "Implement", "instructions": [], "items": []},
+                {"id": "verify", "title": "Verify", "instructions": [], "items": []}
+            ],
+            "rework": {"allow_return_to": "any_previous"}
+        }"#,
+        ProcedureFormatV1::Json,
+    )
+    .expect("stateful evaluator procedure must parse")
+    .into_snapshot_v1(
+        ProcedureSnapshotId::new("123e4567-e89b-42d3-a456-426614174097")
+            .expect("fixture snapshot ID must be valid"),
+        ProcedureSourceLabelV1::file("causal-drift").expect("fixture source label must be valid"),
+        UnixMillis::new(1),
+        ProcedureWarningPolicyV1::Accept,
+    )
+    .expect("stateful evaluator snapshot must build");
+    let seeded = SessionAggregateV1::start(
+        SessionId::new(SESSION_ID).expect("fixture session ID must be valid"),
+        "Causal drift fixture",
+        snapshot,
+        AttemptId::new(ATTEMPT_ID).expect("fixture attempt ID must be valid"),
+        UnixMillis::new(2),
+    )
+    .expect("stateful evaluator must seed a running session");
+    let advanced = apply_transition_v1(
+        Some(&seeded),
+        &SessionCommandV1::Complete(CompleteSessionV1 {
+            expected_attempt_id: seeded
+                .active_attempt_id()
+                .expect("seeded session must expose an active attempt")
+                .clone(),
+            next_attempt_id: Some(
+                AttemptId::new("123e4567-e89b-42d3-a456-426614174099")
+                    .expect("advanced attempt ID must be valid"),
+            ),
+            local_artifact_verifications: Vec::new(),
+        }),
+        CommandContextV1 {
+            expected_revision: seeded.revision(),
+            now: UnixMillis::new(3),
+        },
+    )
+    .expect("stateful evaluator must advance the active stage")
+    .next_aggregate()
+    .expect("advancing a non-final stage must retain an aggregate")
+    .clone();
+    (seeded, advanced)
+}
+
+fn status_result_for_authoritative_cursor(aggregate: &SessionAggregateV1) -> Map<String, Value> {
+    let mut result = status_result();
+    let active_stage_id = aggregate
+        .active_stage_id()
+        .expect("running aggregate must expose an active stage");
+    let active_attempt_id = aggregate
+        .active_attempt_id()
+        .expect("running aggregate must expose an active attempt");
+    let stage_index = aggregate
+        .snapshot()
+        .stages()
+        .iter()
+        .position(|stage| stage.id() == active_stage_id)
+        .expect("active stage must belong to the snapshot");
+    let attempt = aggregate
+        .attempts()
+        .iter()
+        .find(|attempt| attempt.attempt_id() == active_attempt_id)
+        .expect("active attempt must be durable");
+
+    result["session"]
+        .as_object_mut()
+        .expect("fixture status must have a session")
+        .insert(
+            "revision".to_owned(),
+            Value::from(aggregate.revision().get()),
+        );
+    let current = result["current"]
+        .as_object_mut()
+        .expect("fixture status must have a current cursor");
+    current.insert(
+        "stage_id".to_owned(),
+        Value::String(active_stage_id.as_str().to_owned()),
+    );
+    current.insert("stage_index".to_owned(), Value::from(stage_index));
+    current.insert(
+        "title".to_owned(),
+        Value::String(
+            aggregate.snapshot().stages()[stage_index]
+                .title()
+                .to_owned(),
+        ),
+    );
+    current.insert(
+        "attempt_id".to_owned(),
+        Value::String(active_attempt_id.as_str().to_owned()),
+    );
+    current.insert("attempt_number".to_owned(), Value::from(attempt.number()));
+    result.insert(
+        "stages".to_owned(),
+        Value::Array(
+            aggregate
+                .snapshot()
+                .stages()
+                .iter()
+                .enumerate()
+                .map(|(index, stage)| {
+                    json!({
+                        "id": stage.id().as_str(),
+                        "index": index,
+                        "title": stage.title(),
+                        "status": if stage.id() == active_stage_id { "current" } else { "done" },
+                        "latest_attempt_number": aggregate.stage_progress()[index].latest_attempt_number(),
+                    })
+                })
+                .collect(),
+        ),
+    );
+    result
+}
+
+struct StatefulCursorEvaluator {
+    aggregate_before: SessionAggregateV1,
+    durable: SessionAggregateV1,
+    revision_before: Revision,
+}
+
+impl StatefulCursorEvaluator {
+    fn new(durable: SessionAggregateV1) -> Self {
+        let revision_before = durable.revision();
+        Self {
+            aggregate_before: durable.clone(),
+            durable,
+            revision_before,
+        }
+    }
+
+    fn reject_stale_complete(&self, stale_attempt_id: AttemptId) {
+        let outcome = apply_transition_v1(
+            Some(&self.durable),
+            &SessionCommandV1::Complete(CompleteSessionV1 {
+                expected_attempt_id: stale_attempt_id,
+                next_attempt_id: None,
+                local_artifact_verifications: Vec::new(),
+            }),
+            CommandContextV1 {
+                expected_revision: self.durable.revision(),
+                now: UnixMillis::new(4),
+            },
+        );
+        assert!(
+            matches!(
+                outcome,
+                Err(DomainError::InvalidState {
+                    reason: "the expected attempt is not current"
+                })
+            ),
+            "the production transition evaluator must reject the stale active attempt: {outcome:?}"
+        );
+    }
+}
+
+struct StatefulCursorDaemon {
+    handle: JoinHandle<io::Result<StatefulCursorEvaluator>>,
+}
+
+impl StatefulCursorDaemon {
+    fn start(fixture: &Fixture, seeded: SessionAggregateV1, advanced: SessionAggregateV1) -> Self {
+        let listener = UnixListener::bind(&fixture.socket_path)
+            .expect("stateful evaluator must bind the service-owned socket path");
+        let handle = thread::spawn(move || {
+            let evaluator = StatefulCursorEvaluator::new(advanced);
+            for request_index in 0..2 {
+                let (mut connection, _) = listener.accept()?;
+                let mut wire = Vec::new();
+                connection.read_to_end(&mut wire)?;
+                let request = decode_request(&wire);
+                let response = match request_index {
+                    0 => {
+                        assert_eq!(request.command().as_str(), "session.status");
+                        output_response(
+                            &request,
+                            status_result_for_authoritative_cursor(&evaluator.durable),
+                            None,
+                        )?
+                    }
+                    1 => {
+                        assert_eq!(request.command().as_str(), "session.complete");
+                        let stale_attempt_id = request
+                            .preconditions()
+                            .attempt_id()
+                            .expect("stale CLI mutation must carry its captured attempt")
+                            .clone();
+                        assert_eq!(
+                            stale_attempt_id,
+                            *seeded
+                                .active_attempt_id()
+                                .expect("seeded session must expose its captured attempt")
+                        );
+                        evaluator.reject_stale_complete(stale_attempt_id);
+                        error_response_with(
+                            &request,
+                            "ATTEMPT_NOT_CURRENT",
+                            "The target attempt is no longer active.",
+                            4,
+                            true,
+                        )?
+                    }
+                    _ => unreachable!(),
+                };
+                let payload = encode_response_payload_v1(&response)
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+                connection.write_all(
+                    &encode_frame_v1(&payload)
+                        .map_err(|error| io::Error::other(error.to_string()))?,
+                )?;
+                connection.shutdown(Shutdown::Write)?;
+            }
+            Ok(evaluator)
+        });
+        Self { handle }
+    }
+
+    fn finish(self) -> StatefulCursorEvaluator {
+        self.handle
+            .join()
+            .expect("stateful evaluator thread must not panic")
+            .expect("stateful evaluator I/O must succeed")
+    }
+}
 
 fn decode_request(wire: &[u8]) -> RequestEnvelopeV1 {
     let payload = decode_single_frame_v1(wire).expect("wire must contain one frame");
@@ -423,7 +667,7 @@ fn init_repair_uses_the_durable_bootstrap_authority() {
 }
 
 #[test]
-fn item_mutation_preflights_status_and_replays_exact_wire() {
+fn pac_053_item_mutation_preflights_status_and_replays_exact_wire() {
     let fixture = Fixture::new();
     let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);
 
@@ -493,6 +737,162 @@ fn item_mutation_preflights_status_and_replays_exact_wire() {
     assert_eq!(
         wires[1], replay_wire,
         "client must send one exact protocol frame"
+    );
+}
+
+#[test]
+fn pac_022_cursor_mutation_is_rejected_after_authoritative_active_stage_drift() {
+    const DRIFTED_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174099";
+
+    let fixture = Fixture::new();
+    let (seeded, advanced) = seeded_session_with_advanced_cursor();
+    let captured_attempt = seeded
+        .active_attempt_id()
+        .expect("seeded session must expose a cursor")
+        .clone();
+    assert_eq!(captured_attempt.as_str(), ATTEMPT_ID);
+    assert_eq!(
+        advanced
+            .active_attempt_id()
+            .expect("advanced session must expose a cursor")
+            .as_str(),
+        DRIFTED_ATTEMPT_ID
+    );
+    assert_ne!(seeded.active_stage_id(), advanced.active_stage_id());
+    let daemon = StatefulCursorDaemon::start(&fixture, seeded, advanced);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--if-attempt",
+        ATTEMPT_ID,
+        "complete",
+    ]);
+
+    assert_eq!(output.status.code(), Some(4));
+    let error: Value =
+        serde_json::from_slice(&output.stdout).expect("rejected cursor mutation must be JSON");
+    assert_eq!(
+        error,
+        json!({
+            "schema": "podway.error/v1",
+            "request_id": error["request_id"],
+            "command": "session.complete",
+            "generated_at": "2026-07-15T12:34:56.789Z",
+            "code": "ATTEMPT_NOT_CURRENT",
+            "message": "The target attempt is no longer active.",
+            "retryable": true,
+            "exit_code": 4,
+            "workspace": { "uuid": WORKSPACE_ID, "root": "/fixture" },
+            "details": { "job_id": JOB_ID, "job_sequence": 7 }
+        }),
+        "the stale cursor must retain the daemon's exact typed rejection",
+    );
+
+    let evaluator = daemon.finish();
+    assert_eq!(
+        evaluator.durable.revision(),
+        evaluator.revision_before,
+        "a stale mutation must not change the durable aggregate revision"
+    );
+    assert_eq!(
+        evaluator.durable, evaluator.aggregate_before,
+        "a stale mutation must leave the durable aggregate unchanged"
+    );
+    assert_eq!(
+        evaluator.durable.active_attempt_id().map(AttemptId::as_str),
+        Some(DRIFTED_ATTEMPT_ID),
+        "a stale mutation must not replace the authoritative active cursor"
+    );
+}
+
+#[test]
+fn pac_053_explicit_revision_attempt_item_revision_and_idempotency_reach_exact_wire_fields() {
+    const EXPLICIT_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174098";
+
+    let cursor_fixture = Fixture::new();
+    let cursor_daemon = FakeDaemon::start(&cursor_fixture, vec![Reply::Status, Reply::Output]);
+    let cursor_output = cursor_fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--idempotency-key",
+        "cursor-explicit-key",
+        "--if-session-revision",
+        "41",
+        "--if-attempt",
+        EXPLICIT_ATTEMPT_ID,
+        "complete",
+    ]);
+    assert!(
+        cursor_output.status.success(),
+        "explicit cursor mutation failed"
+    );
+    let cursor_wires = cursor_daemon.finish();
+    let cursor_mutation = decode_request(&cursor_wires[1]);
+    assert_eq!(
+        cursor_mutation
+            .preconditions()
+            .session_revision()
+            .map(Revision::get),
+        Some(41)
+    );
+    assert_eq!(
+        cursor_mutation
+            .preconditions()
+            .attempt_id()
+            .map(AttemptId::as_str),
+        Some(EXPLICIT_ATTEMPT_ID)
+    );
+    assert_eq!(
+        cursor_mutation.idempotency_key().map(|key| key.as_str()),
+        Some("cursor-explicit-key")
+    );
+
+    let item_fixture = Fixture::new();
+    let item_daemon = FakeDaemon::start(&item_fixture, vec![Reply::Status, Reply::Output]);
+    let item_output = item_fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--idempotency-key",
+        "item-explicit-key",
+        "--if-attempt",
+        EXPLICIT_ATTEMPT_ID,
+        "--if-item-revision",
+        "73",
+        "set",
+        "goal",
+        "explicit value",
+    ]);
+    assert!(
+        item_output.status.success(),
+        "explicit item mutation failed"
+    );
+    let item_wires = item_daemon.finish();
+    let item_mutation = decode_request(&item_wires[1]);
+    assert_eq!(
+        item_mutation
+            .preconditions()
+            .attempt_id()
+            .map(AttemptId::as_str),
+        Some(EXPLICIT_ATTEMPT_ID)
+    );
+    assert_eq!(
+        item_mutation
+            .preconditions()
+            .item_revision()
+            .map(Revision::get),
+        Some(73)
+    );
+    assert!(
+        item_mutation.preconditions().session_revision().is_none(),
+        "item mutations must not infer a session revision",
+    );
+    assert_eq!(
+        item_mutation.idempotency_key().map(|key| key.as_str()),
+        Some("item-explicit-key")
     );
 }
 #[test]

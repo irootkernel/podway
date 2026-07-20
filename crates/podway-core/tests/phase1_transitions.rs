@@ -1,14 +1,14 @@
 use podway_core::{
     AddItemV1, ArtifactValueV1, AttachItemV1, AttemptId, AttemptInputV1, AttemptV1, BlockSessionV1,
     BlockerId, BlockerState, CheckItemV1, ClearItemV1, CommandContextV1, CompleteSessionV1,
-    DomainError, ItemCommonV1, ItemId, ItemMutationPreconditionsV1, ItemSpecV1, ItemValueV1,
-    LocalArtifactVerificationV1, ProcedureSnapshotAssemblyInputV1, ProcedureSnapshotId,
-    ProcedureSnapshotV1, ProcedureSourceLabelV1, ProcedureWarningCodeV1, ReopenSessionV1,
-    ResetAllWorkspaceV1, ResetSessionV1, ReturnPolicyV1, ReturnSessionV1, Revision,
-    SessionAggregateInputV1, SessionAggregateV1, SessionCommandV1, SessionId, SessionLifecycle,
-    SetItemV1, Sha256Digest, SkipPolicyV1, SkipSessionV1, StageId, StageProgressState, StageSpecV1,
-    StartReplaceSessionV1, StartSessionV1, TransitionEffectV1, UnblockSessionV1, UnixMillis,
-    WorkspaceId, apply_transition_v1, preview_transition_v1,
+    DomainCommandKind, DomainError, ItemCommonV1, ItemId, ItemMutationPreconditionsV1, ItemSpecV1,
+    ItemValueV1, LocalArtifactVerificationV1, ProcedureSnapshotAssemblyInputV1,
+    ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1, ProcedureWarningCodeV1,
+    ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1, ReturnPolicyV1, ReturnSessionV1,
+    Revision, SessionAggregateInputV1, SessionAggregateV1, SessionCommandV1, SessionId,
+    SessionLifecycle, SetItemV1, Sha256Digest, SkipPolicyV1, SkipSessionV1, StageId,
+    StageProgressState, StageSpecV1, StartReplaceSessionV1, StartSessionV1, TransitionEffectV1,
+    UnblockSessionV1, UnixMillis, WorkspaceId, apply_transition_v1, preview_transition_v1,
 };
 
 const UUID_A: &str = "123e4567-e89b-12d3-a456-426614174000";
@@ -128,6 +128,7 @@ fn assert_complete_rejected_without_mutation(
     assert_eq!(preview, applied);
     assert_eq!(applied.unwrap_err(), expected);
     assert_eq!(*session, original);
+    assert_eq!(session.revision(), original.revision());
 }
 fn assert_attempt_boundary_rejected_without_mutation(
     session: &SessionAggregateV1,
@@ -632,10 +633,23 @@ fn text_storage_accepts_unsatisfied_values_while_completion_requires_trimmed_bou
 
 #[test]
 fn complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history() {
+    let assert_skip_rejected =
+        |session: &SessionAggregateV1, command: SkipSessionV1, now: u64, expected: DomainError| {
+            let original = session.clone();
+            let revision = session.revision();
+            let command = SessionCommandV1::Skip(command);
+            let command_context = context(session, now);
+            let preview = preview_transition_v1(Some(session), &command, command_context);
+            let applied = apply_transition_v1(Some(session), &command, command_context);
+            assert_eq!(preview, applied);
+            assert_eq!(applied.unwrap_err(), expected);
+            assert_eq!(*session, original);
+            assert_eq!(session.revision(), revision);
+        };
     let procedure = snapshot(
         vec![
-            stage("first", Vec::new(), SkipPolicyV1::allowed(true)),
-            stage("second", Vec::new(), SkipPolicyV1::allowed(false)),
+            stage("first", Vec::new(), SkipPolicyV1::allowed(false)),
+            stage("second", Vec::new(), SkipPolicyV1::allowed(true)),
             stage("third", Vec::new(), SkipPolicyV1::not_allowed()),
         ],
         vec![
@@ -649,7 +663,7 @@ fn complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history(
         &session,
         SessionCommandV1::Skip(SkipSessionV1 {
             expected_attempt_id: first_attempt,
-            reason: Some("not needed".to_owned()),
+            reason: None,
             next_attempt_id: Some(AttemptId::new(UUID_D).unwrap()),
         }),
         11,
@@ -658,71 +672,124 @@ fn complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history(
         session.stage_progress()[0].state(),
         StageProgressState::Skipped
     );
+    assert_eq!(session.attempts().len(), 2);
+
     let second_attempt = session.active_attempt_id().unwrap().clone();
+    assert_skip_rejected(
+        &session,
+        SkipSessionV1 {
+            expected_attempt_id: second_attempt.clone(),
+            reason: None,
+            next_attempt_id: Some(AttemptId::new(UUID_E).unwrap()),
+        },
+        12,
+        DomainError::InvalidState {
+            reason: "a non-empty reason is required",
+        },
+    );
+    assert_skip_rejected(
+        &session,
+        SkipSessionV1 {
+            expected_attempt_id: second_attempt.clone(),
+            reason: Some(" \t".to_owned()),
+            next_attempt_id: Some(AttemptId::new(UUID_E).unwrap()),
+        },
+        12,
+        DomainError::InvalidState {
+            reason: "reason must contain at most 4000 non-blank scalars",
+        },
+    );
     let session = apply(
         &session,
-        SessionCommandV1::Block(BlockSessionV1 {
-            expected_attempt_id: second_attempt.clone(),
-            blocker_id: BlockerId::new(UUID_E).unwrap(),
-            reason: "waiting".to_owned(),
+        SessionCommandV1::Skip(SkipSessionV1 {
+            expected_attempt_id: second_attempt,
+            reason: Some("explicitly allowed".to_owned()),
+            next_attempt_id: Some(AttemptId::new(UUID_E).unwrap()),
         }),
         12,
     );
-    assert!(
-        apply_transition_v1(
-            Some(&session),
-            &SessionCommandV1::Complete(CompleteSessionV1 {
-                expected_attempt_id: second_attempt.clone(),
-                next_attempt_id: Some(AttemptId::new(UUID_F).unwrap()),
-                local_artifact_verifications: Vec::new(),
-            }),
-            context(&session, 13),
-        )
-        .is_err()
+    assert_eq!(
+        session.stage_progress()[1].state(),
+        StageProgressState::Skipped
+    );
+    assert_eq!(session.attempts().len(), 3);
+
+    let third_attempt = session.active_attempt_id().unwrap().clone();
+    assert_skip_rejected(
+        &session,
+        SkipSessionV1 {
+            expected_attempt_id: third_attempt.clone(),
+            reason: Some("policy cannot override prohibition".to_owned()),
+            next_attempt_id: None,
+        },
+        13,
+        DomainError::InvalidState {
+            reason: "the active stage may not be skipped",
+        },
+    );
+    let session = apply(
+        &session,
+        SessionCommandV1::Block(BlockSessionV1 {
+            expected_attempt_id: third_attempt.clone(),
+            blocker_id: BlockerId::new(UUID_F).unwrap(),
+            reason: "waiting".to_owned(),
+        }),
+        13,
+    );
+    assert_eq!(session.attempts().len(), 3);
+    assert_complete_rejected_without_mutation(
+        &session,
+        CompleteSessionV1 {
+            expected_attempt_id: third_attempt.clone(),
+            next_attempt_id: None,
+            local_artifact_verifications: Vec::new(),
+        },
+        14,
+        DomainError::BlockersPresent,
     );
     let session = apply(
         &session,
         SessionCommandV1::Unblock(UnblockSessionV1 {
-            expected_attempt_id: second_attempt.clone(),
+            expected_attempt_id: third_attempt.clone(),
             blocker_id: None,
             unblock_all: true,
-        }),
-        13,
-    );
-    let session = apply(
-        &session,
-        SessionCommandV1::Retry(podway_core::RetrySessionV1 {
-            expected_attempt_id: second_attempt,
-            reason: "retry".to_owned(),
-            next_attempt_id: AttemptId::new(UUID_F).unwrap(),
         }),
         14,
     );
     assert_eq!(session.attempts().len(), 3);
     let session = apply(
         &session,
+        SessionCommandV1::Retry(podway_core::RetrySessionV1 {
+            expected_attempt_id: third_attempt,
+            reason: "retry".to_owned(),
+            next_attempt_id: AttemptId::new(UUID_G).unwrap(),
+        }),
+        15,
+    );
+    assert_eq!(session.attempts().len(), 4);
+    let session = apply(
+        &session,
         SessionCommandV1::Return(ReturnSessionV1 {
             expected_attempt_id: session.active_attempt_id().unwrap().clone(),
             destination_stage_id: stage_id("first"),
             reason: "redo".to_owned(),
-            destination_attempt_id: AttemptId::new(UUID_G).unwrap(),
+            destination_attempt_id: AttemptId::new(UUID_H).unwrap(),
         }),
-        15,
+        16,
     );
+    assert_eq!(session.attempts().len(), 5);
     assert_eq!(session.active_stage_id().unwrap().as_str(), "first");
     assert_eq!(
-        session.stage_progress()[1].state(),
+        session.stage_progress()[2].state(),
         StageProgressState::Redo
     );
     assert_eq!(
-        session.stage_progress()[2].state(),
-        StageProgressState::Pending
-    );
-    assert!(
         session
             .attempts()
             .iter()
-            .any(|attempt| attempt.reason() == Some("retry"))
+            .filter_map(|attempt| attempt.reason())
+            .collect::<Vec<_>>(),
+        vec!["explicitly allowed", "retry", "redo"]
     );
 
     let cancelled = apply(
@@ -731,21 +798,37 @@ fn complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history(
             expected_attempt_id: session.active_attempt_id().unwrap().clone(),
             reason: "stop".to_owned(),
         }),
-        16,
+        17,
     );
     assert_eq!(cancelled.lifecycle(), SessionLifecycle::Cancelled);
-    assert!(
-        apply_transition_v1(
-            Some(&cancelled),
-            &SessionCommandV1::Retry(podway_core::RetrySessionV1 {
-                expected_attempt_id: AttemptId::new(UUID_G).unwrap(),
-                reason: "no".to_owned(),
-                next_attempt_id: AttemptId::new(UUID_H).unwrap(),
-            }),
-            context(&cancelled, 17),
-        )
-        .is_err()
+    assert_eq!(cancelled.attempts().len(), 5);
+    assert_eq!(
+        cancelled
+            .attempts()
+            .iter()
+            .filter_map(|attempt| attempt.reason())
+            .collect::<Vec<_>>(),
+        vec!["stop", "explicitly allowed", "retry", "redo"]
     );
+    let cancelled_original = cancelled.clone();
+    let cancelled_revision = cancelled.revision();
+    let command = SessionCommandV1::Retry(podway_core::RetrySessionV1 {
+        expected_attempt_id: AttemptId::new(UUID_H).unwrap(),
+        reason: "no".to_owned(),
+        next_attempt_id: AttemptId::new("123e4567-e89b-12d3-a456-426614174008").unwrap(),
+    });
+    let preview = preview_transition_v1(Some(&cancelled), &command, context(&cancelled, 18));
+    let applied = apply_transition_v1(Some(&cancelled), &command, context(&cancelled, 18));
+    assert_eq!(preview, applied);
+    assert_eq!(
+        applied.unwrap_err(),
+        DomainError::InvalidTransition {
+            command: DomainCommandKind::SessionRetry,
+            state: SessionLifecycle::Cancelled,
+        }
+    );
+    assert_eq!(cancelled, cancelled_original);
+    assert_eq!(cancelled.revision(), cancelled_revision);
 }
 #[test]
 fn attempt_lifecycle_boundaries_advance_and_rehydrate_without_ambiguous_rework() {
@@ -904,10 +987,17 @@ fn attempt_lifecycle_boundaries_advance_and_rehydrate_without_ambiguous_rework()
 }
 #[test]
 fn completion_rechecks_required_local_artifact_metadata_field_by_field() {
+    let artifact =
+        ArtifactValueV1::local_path("reports/out.txt", digest(), 12, "text/plain").unwrap();
     let procedure = snapshot(
         vec![stage(
             "artifact",
             vec![
+                ItemSpecV1::confirm(common("confirm", true)),
+                ItemSpecV1::text(common("text", true), 1, 10, true).unwrap(),
+                ItemSpecV1::choice(common("choice", true), vec!["yes".to_owned()]).unwrap(),
+                ItemSpecV1::integer(common("integer", true), Some(1), Some(1)).unwrap(),
+                ItemSpecV1::list(common("list", true), 1, 1, 10, true).unwrap(),
                 ItemSpecV1::artifact(common("report", true), vec!["text/plain".to_owned()])
                     .unwrap(),
             ],
@@ -915,18 +1005,90 @@ fn completion_rechecks_required_local_artifact_metadata_field_by_field() {
         )],
         vec![ProcedureWarningCodeV1::AnyPreviousReturnPolicy],
     );
-    let session = start(procedure);
-    let artifact =
-        ArtifactValueV1::local_path("reports/out.txt", digest(), 12, "text/plain").unwrap();
-    let session = apply(
-        &session,
-        SessionCommandV1::Attach(AttachItemV1 {
-            item_id: item_id("report"),
-            value: artifact.clone(),
-            preconditions: item_precondition(&session, "report"),
-        }),
-        11,
-    );
+    let complete_except = |missing: &str| {
+        let mut candidate = start(procedure.clone());
+        if missing != "confirm" {
+            candidate = apply(
+                &candidate,
+                SessionCommandV1::Check(CheckItemV1 {
+                    item_id: item_id("confirm"),
+                    preconditions: item_precondition(&candidate, "confirm"),
+                }),
+                11,
+            );
+        }
+        if missing != "text" {
+            candidate = apply(
+                &candidate,
+                SessionCommandV1::Set(SetItemV1 {
+                    item_id: item_id("text"),
+                    value: ItemValueV1::text("done"),
+                    preconditions: item_precondition(&candidate, "text"),
+                }),
+                12,
+            );
+        }
+        if missing != "choice" {
+            candidate = apply(
+                &candidate,
+                SessionCommandV1::Set(SetItemV1 {
+                    item_id: item_id("choice"),
+                    value: ItemValueV1::choice("yes").unwrap(),
+                    preconditions: item_precondition(&candidate, "choice"),
+                }),
+                13,
+            );
+        }
+        if missing != "integer" {
+            candidate = apply(
+                &candidate,
+                SessionCommandV1::Set(SetItemV1 {
+                    item_id: item_id("integer"),
+                    value: ItemValueV1::integer(1),
+                    preconditions: item_precondition(&candidate, "integer"),
+                }),
+                14,
+            );
+        }
+        if missing != "list" {
+            candidate = apply(
+                &candidate,
+                SessionCommandV1::Add(AddItemV1 {
+                    item_id: item_id("list"),
+                    value: "entry".to_owned(),
+                    preconditions: item_precondition(&candidate, "list"),
+                }),
+                15,
+            );
+        }
+        candidate = apply(
+            &candidate,
+            SessionCommandV1::Attach(AttachItemV1 {
+                item_id: item_id("report"),
+                value: artifact.clone(),
+                preconditions: item_precondition(&candidate, "report"),
+            }),
+            16,
+        );
+        candidate
+    };
+    for missing in ["confirm", "text", "choice", "integer", "list"] {
+        let candidate = complete_except(missing);
+        let revision = candidate.revision();
+        assert_complete_rejected_without_mutation(
+            &candidate,
+            CompleteSessionV1 {
+                expected_attempt_id: candidate.active_attempt_id().unwrap().clone(),
+                next_attempt_id: None,
+                local_artifact_verifications: Vec::new(),
+            },
+            17,
+            DomainError::RequiredItemsMissing,
+        );
+        assert_eq!(candidate.revision(), revision);
+    }
+
+    let session = complete_except("none");
     let attempt_id = session.active_attempt_id().unwrap().clone();
     let verification = LocalArtifactVerificationV1 {
         item_id: item_id("report"),
@@ -934,7 +1096,6 @@ fn completion_rechecks_required_local_artifact_metadata_field_by_field() {
         digest: artifact.digest().clone(),
         size_bytes: artifact.size_bytes(),
     };
-
     assert_complete_rejected_without_mutation(
         &session,
         CompleteSessionV1 {
@@ -942,7 +1103,7 @@ fn completion_rechecks_required_local_artifact_metadata_field_by_field() {
             next_attempt_id: None,
             local_artifact_verifications: Vec::new(),
         },
-        12,
+        17,
         DomainError::InvalidState {
             reason: "required local artifact was not verified",
         },
@@ -953,13 +1114,13 @@ fn completion_rechecks_required_local_artifact_metadata_field_by_field() {
             expected_attempt_id: attempt_id.clone(),
             next_attempt_id: None,
             local_artifact_verifications: vec![LocalArtifactVerificationV1 {
-                digest: Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+                item_id: item_id("other"),
                 ..verification.clone()
             }],
         },
-        12,
-        DomainError::InvalidState {
-            reason: "local artifact verification does not match the attached artifact",
+        17,
+        DomainError::ItemNotFound {
+            item_id: item_id("other"),
         },
     );
     assert_complete_rejected_without_mutation(
@@ -972,7 +1133,22 @@ fn completion_rechecks_required_local_artifact_metadata_field_by_field() {
                 ..verification.clone()
             }],
         },
-        12,
+        17,
+        DomainError::InvalidState {
+            reason: "local artifact verification does not match the attached artifact",
+        },
+    );
+    assert_complete_rejected_without_mutation(
+        &session,
+        CompleteSessionV1 {
+            expected_attempt_id: attempt_id.clone(),
+            next_attempt_id: None,
+            local_artifact_verifications: vec![LocalArtifactVerificationV1 {
+                digest: Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+                ..verification.clone()
+            }],
+        },
+        17,
         DomainError::InvalidState {
             reason: "local artifact verification does not match the attached artifact",
         },
@@ -987,84 +1163,51 @@ fn completion_rechecks_required_local_artifact_metadata_field_by_field() {
                 ..verification.clone()
             }],
         },
-        12,
+        17,
         DomainError::InvalidState {
             reason: "local artifact verification does not match the attached artifact",
         },
     );
-    assert_complete_rejected_without_mutation(
-        &session,
-        CompleteSessionV1 {
-            expected_attempt_id: attempt_id.clone(),
-            next_attempt_id: None,
-            local_artifact_verifications: vec![LocalArtifactVerificationV1 {
-                item_id: item_id("other"),
-                ..verification.clone()
-            }],
-        },
-        12,
-        DomainError::ItemNotFound {
-            item_id: item_id("other"),
-        },
-    );
-    assert_complete_rejected_without_mutation(
-        &session,
-        CompleteSessionV1 {
-            expected_attempt_id: attempt_id.clone(),
-            next_attempt_id: None,
-            local_artifact_verifications: vec![verification.clone(), verification.clone()],
-        },
-        12,
-        DomainError::InvalidState {
-            reason: "local artifact verification item identifiers must be unique",
-        },
-    );
 
-    let replacement = ArtifactValueV1::local_path(
-        "reports/revised.txt",
-        Sha256Digest::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
-        13,
-        "text/plain",
-    )
-    .unwrap();
-    let reattached = apply(
+    let blocked = apply(
         &session,
-        SessionCommandV1::Attach(AttachItemV1 {
-            item_id: item_id("report"),
-            value: replacement.clone(),
-            preconditions: item_precondition(&session, "report"),
+        SessionCommandV1::Block(BlockSessionV1 {
+            expected_attempt_id: attempt_id.clone(),
+            blocker_id: BlockerId::new(UUID_E).unwrap(),
+            reason: "verification pending".to_owned(),
         }),
-        13,
+        17,
     );
     assert_complete_rejected_without_mutation(
-        &reattached,
+        &blocked,
         CompleteSessionV1 {
-            expected_attempt_id: reattached.active_attempt_id().unwrap().clone(),
+            expected_attempt_id: attempt_id,
+            next_attempt_id: None,
+            local_artifact_verifications: vec![verification.clone()],
+        },
+        18,
+        DomainError::BlockersPresent,
+    );
+    let unblocked = apply(
+        &blocked,
+        SessionCommandV1::Unblock(UnblockSessionV1 {
+            expected_attempt_id: blocked.active_attempt_id().unwrap().clone(),
+            blocker_id: None,
+            unblock_all: true,
+        }),
+        18,
+    );
+    let completed = apply(
+        &unblocked,
+        SessionCommandV1::Complete(CompleteSessionV1 {
+            expected_attempt_id: unblocked.active_attempt_id().unwrap().clone(),
             next_attempt_id: None,
             local_artifact_verifications: vec![verification],
-        },
-        14,
-        DomainError::InvalidState {
-            reason: "local artifact verification does not match the attached artifact",
-        },
-    );
-
-    let completed = apply(
-        &reattached,
-        SessionCommandV1::Complete(CompleteSessionV1 {
-            expected_attempt_id: reattached.active_attempt_id().unwrap().clone(),
-            next_attempt_id: None,
-            local_artifact_verifications: vec![LocalArtifactVerificationV1 {
-                item_id: item_id("report"),
-                location: replacement.location().to_owned(),
-                digest: replacement.digest().clone(),
-                size_bytes: replacement.size_bytes(),
-            }],
         }),
-        14,
+        19,
     );
     assert_eq!(completed.lifecycle(), SessionLifecycle::Completed);
-    assert_eq!(completed.latest_recorded_at(), UnixMillis::new(14));
+    assert_eq!(completed.latest_recorded_at(), UnixMillis::new(19));
 }
 
 #[test]
@@ -1476,4 +1619,41 @@ fn rejected_terminal_ids_and_backdated_item_writes_leave_sessions_unchanged() {
         )
         .is_err()
     );
+}
+#[test]
+fn custom_ordered_procedure_advances_in_declared_order_with_immutable_snapshot() {
+    let procedure = snapshot(
+        vec![
+            stage("intake", Vec::new(), SkipPolicyV1::not_allowed()),
+            stage("implement", Vec::new(), SkipPolicyV1::not_allowed()),
+        ],
+        vec![
+            ProcedureWarningCodeV1::StageHasNoRequiredItems,
+            ProcedureWarningCodeV1::AnyPreviousReturnPolicy,
+        ],
+    );
+    let expected_snapshot = procedure.clone();
+    let session = start(procedure);
+
+    let advanced = apply(
+        &session,
+        SessionCommandV1::Complete(CompleteSessionV1 {
+            expected_attempt_id: session.active_attempt_id().unwrap().clone(),
+            next_attempt_id: Some(AttemptId::new(UUID_D).unwrap()),
+            local_artifact_verifications: Vec::new(),
+        }),
+        11,
+    );
+
+    assert_eq!(advanced.active_stage_id().unwrap().as_str(), "implement");
+    assert_eq!(
+        advanced
+            .snapshot()
+            .stages()
+            .iter()
+            .map(|stage| stage.id().as_str())
+            .collect::<Vec<_>>(),
+        ["intake", "implement"]
+    );
+    assert_eq!(advanced.snapshot(), &expected_snapshot);
 }

@@ -5,7 +5,9 @@ use podway_config::{
     parse_procedure_v1_with_limits,
 };
 use podway_core::{
-    ItemTypeV1, ProcedureSnapshotId, ProcedureSourceLabelV1, ProcedureWarningCodeV1, UnixMillis,
+    ArtifactValueV1, AttemptId, ItemTypeV1, ItemValueV1, ProcedureSnapshotId,
+    ProcedureSourceLabelV1, ProcedureWarningCodeV1, SessionAggregateV1, SessionId, Sha256Digest,
+    UnixMillis, item_satisfied,
 };
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -478,7 +480,7 @@ fn object_key_order_and_whitespace_do_not_change_admission() {
 }
 
 #[test]
-fn snapshot_conversion_maps_all_six_item_variants_and_snapshot_metadata() {
+fn pac_011_016_custom_procedure_validates_snapshots_and_starts_with_all_item_constraints() {
     let procedure = parse_json(json!({
         "schema": "podway.procedure/v1",
         "id": "release",
@@ -533,6 +535,154 @@ fn snapshot_conversion_maps_all_six_item_variants_and_snapshot_metadata() {
             ItemTypeV1::List,
             ItemTypeV1::Artifact,
         ]
+    );
+    let session = SessionAggregateV1::start(
+        SessionId::new("123e4567-e89b-42d3-a456-426614174001").unwrap(),
+        "custom procedure boundary",
+        snapshot,
+        AttemptId::new("123e4567-e89b-42d3-a456-426614174002").unwrap(),
+        UnixMillis::new(43),
+    )
+    .expect("a validated custom-procedure snapshot must start a session");
+    let attempt = session
+        .active_attempt_id()
+        .and_then(|id| {
+            session
+                .attempts()
+                .iter()
+                .find(|attempt| attempt.attempt_id() == id)
+        })
+        .expect("started custom procedure must have one active attempt");
+    assert_eq!(
+        attempt.item_slots().len(),
+        6,
+        "start boundary must materialize every validated custom item type"
+    );
+    assert_eq!(
+        attempt
+            .item_slots()
+            .iter()
+            .map(|slot| (slot.item_id().as_str(), slot.item_type()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("confirm", ItemTypeV1::Confirm),
+            ("text", ItemTypeV1::Text),
+            ("choice", ItemTypeV1::Choice),
+            ("integer", ItemTypeV1::Integer),
+            ("list", ItemTypeV1::List),
+            ("artifact", ItemTypeV1::Artifact),
+        ],
+        "start boundary must materialize every custom definition with its declared type"
+    );
+    let started_items = &session.snapshot().stages()[0].items();
+    assert_eq!(
+        started_items
+            .iter()
+            .map(|item| item.id().as_str())
+            .collect::<Vec<_>>(),
+        ["confirm", "text", "choice", "integer", "list", "artifact"],
+        "session creation must retain all custom item identities in their declared order"
+    );
+    assert!(matches!(
+        started_items[0],
+        podway_core::ItemSpecV1::Confirm(_)
+    ));
+    let podway_core::ItemSpecV1::Text(text) = &started_items[1] else {
+        panic!("started text item must retain its type");
+    };
+    assert_eq!(
+        (text.min_length(), text.max_length(), text.multiline()),
+        (1, 2, false)
+    );
+    let podway_core::ItemSpecV1::Choice(choice) = &started_items[2] else {
+        panic!("started choice item must retain its type");
+    };
+    assert_eq!(choice.choices(), &["one".to_owned(), "two".to_owned()]);
+    let podway_core::ItemSpecV1::Integer(integer) = &started_items[3] else {
+        panic!("started integer item must retain its type");
+    };
+    assert_eq!((integer.minimum(), integer.maximum()), (Some(-1), Some(1)));
+    let podway_core::ItemSpecV1::List(list) = &started_items[4] else {
+        panic!("started list item must retain its type");
+    };
+    assert_eq!(
+        (
+            list.min_items(),
+            list.max_items(),
+            list.max_item_length(),
+            list.unique(),
+        ),
+        (1, 2, 3, false)
+    );
+    let podway_core::ItemSpecV1::Artifact(artifact) = &started_items[5] else {
+        panic!("started artifact item must retain its type");
+    };
+    assert_eq!(artifact.allowed_media_types(), &["text/plain".to_owned()]);
+    assert!(
+        item_satisfied(&started_items[0], Some(&ItemValueV1::confirm())),
+        "the started confirm item must retain check behavior"
+    );
+    assert!(
+        item_satisfied(&started_items[1], Some(&ItemValueV1::text("o")))
+            && item_satisfied(&started_items[1], Some(&ItemValueV1::text("ok")))
+            && item_satisfied(&started_items[1], Some(&ItemValueV1::text("o\n")))
+            && !item_satisfied(&started_items[1], Some(&ItemValueV1::text("")))
+            && !item_satisfied(&started_items[1], Some(&ItemValueV1::text("too"))),
+        "the started text item must retain its length constraints while multiline remains presentation metadata"
+    );
+    assert!(
+        item_satisfied(
+            &started_items[2],
+            Some(&ItemValueV1::choice("two").expect("choice value must be well formed"))
+        ) && !item_satisfied(
+            &started_items[2],
+            Some(&ItemValueV1::choice("other").expect("choice value must be well formed"))
+        ),
+        "the started choice item must retain its declared choices"
+    );
+    assert!(
+        item_satisfied(&started_items[3], Some(&ItemValueV1::integer(-1)))
+            && item_satisfied(&started_items[3], Some(&ItemValueV1::integer(1)))
+            && !item_satisfied(&started_items[3], Some(&ItemValueV1::integer(-2)))
+            && !item_satisfied(&started_items[3], Some(&ItemValueV1::integer(2))),
+        "the started integer item must retain both inclusive bounds"
+    );
+    assert!(
+        item_satisfied(
+            &started_items[4],
+            Some(&ItemValueV1::list(vec!["a".to_owned()]).unwrap())
+        ) && item_satisfied(
+            &started_items[4],
+            Some(&ItemValueV1::list(vec!["a".to_owned(), "a".to_owned()]).unwrap())
+        ) && !item_satisfied(
+            &started_items[4],
+            Some(&ItemValueV1::list(Vec::new()).unwrap())
+        ) && !item_satisfied(
+            &started_items[4],
+            Some(&ItemValueV1::list(vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]).unwrap())
+        ) && !item_satisfied(
+            &started_items[4],
+            Some(&ItemValueV1::list(vec!["long".to_owned()]).unwrap())
+        ),
+        "the started list item must retain minimum, maximum, item-length, and uniqueness constraints"
+    );
+    let digest =
+        Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).expect("test digest must be valid");
+    assert!(
+        item_satisfied(
+            &started_items[5],
+            Some(&ItemValueV1::artifact(
+                ArtifactValueV1::local_path("reports/result.txt", digest.clone(), 1, "text/plain")
+                    .expect("test artifact must be valid")
+            ))
+        ) && !item_satisfied(
+            &started_items[5],
+            Some(&ItemValueV1::artifact(
+                ArtifactValueV1::local_path("reports/result.json", digest, 1, "application/json")
+                    .expect("test artifact must be valid")
+            ))
+        ),
+        "the started artifact item must retain its allowed media types"
     );
 }
 

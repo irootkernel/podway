@@ -366,6 +366,103 @@ fn payload_encoding_rejects_compact_documents_larger_than_one_frame() {
 }
 
 #[test]
+fn framing_rejects_malformed_and_catalog_invalid_errors() {
+    assert!(matches!(
+        decode_single_frame_v1(&[0, 0, 0]),
+        Err(FrameErrorV1::UnexpectedEof {
+            phase: FrameIoPhaseV1::LengthPrefix,
+            expected: 4,
+            received: 3,
+        })
+    ));
+    assert!(matches!(
+        decode_single_frame_v1(&[0, 0, 0, 0]),
+        Err(FrameErrorV1::InvalidLength(ProtocolError::ZeroLengthFrame))
+    ));
+    assert!(matches!(
+        decode_single_frame_v1(&[0, 0, 0, 1, 123, 125]),
+        Err(FrameErrorV1::TrailingData)
+    ));
+    let oversized_frame = (u32::try_from(MAX_FRAME_PAYLOAD_BYTES_V1 + 1)
+        .expect("frame maximum must fit the wire prefix"))
+    .to_be_bytes();
+    assert!(matches!(
+        decode_single_frame_v1(&oversized_frame),
+        Err(FrameErrorV1::InvalidLength(ProtocolError::FrameTooLarge {
+            length,
+            maximum: MAX_FRAME_PAYLOAD_BYTES_V1,
+        })) if length == MAX_FRAME_PAYLOAD_BYTES_V1 + 1
+    ));
+    assert!(matches!(
+        decode_response_payload_v1(&vec![b' '; MAX_FRAME_PAYLOAD_BYTES_V1 + 1]),
+        Err(PayloadCodecErrorV1::InvalidLength(ProtocolError::FrameTooLarge {
+            length,
+            maximum: MAX_FRAME_PAYLOAD_BYTES_V1,
+        })) if length == MAX_FRAME_PAYLOAD_BYTES_V1 + 1
+    ));
+
+    let mut unsupported_protocol =
+        serde_json::to_value(valid_request()).expect("request fixture must serialize");
+    unsupported_protocol["protocol"] = json!("podway.ipc/v2");
+    let unsupported_protocol =
+        serde_json::to_vec(&unsupported_protocol).expect("fixture must serialize");
+    assert!(matches!(
+        decode_request_payload_v1(&unsupported_protocol),
+        Err(PayloadCodecErrorV1::JsonContract(ProtocolError::UnsupportedProtocol {
+            received,
+            ..
+        })) if received == "podway.ipc/v2"
+    ));
+
+    let mut unsupported_schema =
+        serde_json::to_value(valid_output()).expect("output fixture must serialize");
+    unsupported_schema["schema"] = json!("podway.output/v2");
+    let unsupported_schema =
+        serde_json::to_vec(&unsupported_schema).expect("fixture must serialize");
+    assert!(matches!(
+        decode_response_payload_v1(&unsupported_schema),
+        Err(PayloadCodecErrorV1::UnsupportedResponseSchema { received, .. })
+            if received == "podway.output/v2"
+    ));
+
+    let valid = serde_json::to_value(valid_error()).expect("error fixture must serialize");
+
+    let mut invalid_catalog_code = valid.clone();
+    invalid_catalog_code["code"] = json!(false);
+    let invalid_catalog_code =
+        serde_json::to_vec(&invalid_catalog_code).expect("invalid fixture must serialize");
+    assert!(matches!(
+        decode_response_payload_v1(&invalid_catalog_code),
+        Err(PayloadCodecErrorV1::InvalidEnvelope(error))
+            if error.to_string().contains("invalid type")
+    ));
+
+    let mut unknown_catalog_code = valid.clone();
+    unknown_catalog_code["code"] = json!("PRECONDITION_FAILED");
+    let unknown_catalog_code =
+        serde_json::to_vec(&unknown_catalog_code).expect("unknown fixture must serialize");
+    assert!(matches!(
+        decode_response_payload_v1(&unknown_catalog_code),
+        Err(PayloadCodecErrorV1::InvalidEnvelope(error))
+            if error
+                .to_string()
+                .contains("error code is not defined in the v1 catalog")
+    ));
+
+    let mut mismatched_catalog_metadata = valid;
+    mismatched_catalog_metadata["exit_code"] = json!(1);
+    let mismatched_catalog_metadata =
+        serde_json::to_vec(&mismatched_catalog_metadata).expect("mismatch fixture must serialize");
+    assert!(matches!(
+        decode_response_payload_v1(&mismatched_catalog_metadata),
+        Err(PayloadCodecErrorV1::InvalidEnvelope(error))
+            if error
+                .to_string()
+                .contains("error code REQUEST_INVALID requires exit code 2 and retryable=false")
+    ));
+}
+
+#[test]
 fn payload_codecs_reject_invalid_json_contracts_in_protocol_order() {
     assert!(matches!(
         decode_request_payload_v1(&[0xff]),

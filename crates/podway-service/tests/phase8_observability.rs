@@ -3,15 +3,14 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use podway_core::UnixMillis;
 use podway_service::{
     FixedServiceClockV1, InstallSpecV1, LocalPlatformPathV1, LogQueryV1,
     MacosServiceCommandRunnerV1, ServiceLabelV1, ServiceManagerContractV1, ServiceManagerV1,
-    ServiceObservationV1, ServiceObserverV1, ServiceRuntimePathsV1, StdServiceFilesystemV1,
-    SystemLaunchctlRunnerV1, UninstallOptionsV1,
+    ServiceObservationV1, ServiceObserverV1, ServiceOperationV1, ServiceRuntimePathsV1,
+    StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
 };
 
 #[derive(Default)]
@@ -24,19 +23,19 @@ impl ServiceObserverV1 for RecordingObserver {
 }
 
 fn unique_root() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock after epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "podway-phase8-observability-{}-{nanos}",
-        std::process::id()
-    ))
+    PathBuf::from(format!("/tmp/pw8o-{}", std::process::id()))
 }
 
 fn write_executable(path: &Path) {
     fs::create_dir_all(path.parent().expect("fixture parent")).expect("create fixture parent");
-    fs::write(path, b"#!/bin/sh\nexit 0\n").expect("write executable fixture");
+    let mut bytes = vec![0_u8; 40];
+    bytes[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+    bytes[4..8].copy_from_slice(&0x0100_000c_u32.to_le_bytes());
+    bytes[16..20].copy_from_slice(&1_u32.to_le_bytes());
+    bytes[20..24].copy_from_slice(&8_u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&0x32_u32.to_le_bytes());
+    bytes[36..40].copy_from_slice(&8_u32.to_le_bytes());
+    fs::write(path, bytes).expect("write executable fixture");
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).expect("chmod fixture");
 }
 
@@ -63,7 +62,13 @@ fn service_observer_emits_only_stable_categories_at_production_boundaries() {
     let binary = root.join("bin/podwayd");
     let launchctl = root.join("bin/launchctl");
     write_executable(&binary);
-    write_executable(&launchctl);
+    fs::write(
+        &launchctl,
+        b"#!/bin/sh\nif [ \"$1\" = print ]; then printf 'gui/501/dev.podway.podwayd = {\\npid = 4242\\n'; fi\nexit 0\n",
+    )
+    .expect("write launchctl fixture");
+    fs::set_permissions(&launchctl, fs::Permissions::from_mode(0o700))
+        .expect("chmod launchctl fixture");
 
     let observer = Arc::new(RecordingObserver::default());
     let clock = FixedServiceClockV1::new(UnixMillis::new(1));
@@ -92,24 +97,33 @@ fn service_observer_emits_only_stable_categories_at_production_boundaries() {
     assert_eq!(
         events,
         vec![
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
+            ServiceObservationV1::AtomicMetadataPublished,
             ServiceObservationV1::AtomicPlistPublished,
             ServiceObservationV1::LogRotationCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::AtomicMetadataPublished,
-            ServiceObservationV1::ServiceOutcome,
+            ServiceObservationV1::ServiceOutcome(ServiceOperationV1::Install),
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::StaleSocketRemoved,
             ServiceObservationV1::LogRotationCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
-            ServiceObservationV1::ServiceOutcome,
+            ServiceObservationV1::ServiceOutcome(ServiceOperationV1::Restart),
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::UninstallLogsPreserved,
-            ServiceObservationV1::ServiceOutcome,
-            ServiceObservationV1::Error,
+            ServiceObservationV1::ServiceOutcome(ServiceOperationV1::Uninstall),
+            ServiceObservationV1::Error(ServiceOperationV1::Logs),
         ]
     );
 

@@ -1,1 +1,299 @@
-{"schema":"podway.g009.crash-boundaries/v1","version":1,"coverage":{"required":["C01","C02","C03","C04","C05","C06","C07","C08","C09","C10","C11","C12","C13","C14","D01","D02","S01","S02","S03"],"covered":["C01","C02","C03","C04","C05","C06","C07","C08","C09","C10","C11","C12","C13","C14","D01","D02","S01","S02","S03"],"percent":100},"windows":[{"id":"C01","proof":{"failpoint":"AdmissionBeforeTransaction","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"no admission rows","invariant":"uncommitted admission is absent","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::admit"}},{"id":"C02","proof":{"failpoint":"AdmissionAfterDurableRowsBeforeCommit","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"rows roll back","invariant":"no job or idempotency record","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::admit"}},{"id":"C03","proof":{"failpoint":"AdmissionAfterCommit","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"idempotency replay","invariant":"one queued job","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::admit"}},{"id":"C04","proof":{"failpoint":"ClaimAfterCommit","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"restart requeues","invariant":"one running claim","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::claim_next"}},{"id":"C05","proof":{"failpoint":"prepare boundary","test":"crates/podway-daemon/tests/phase4_execution.rs::a_claimed_execution_survives_engine_restart_and_decodes_its_immutable_document","termination":"restart observed","recovery":"claimed job survives","invariant":"preparation is daemon-owned","source_locator":"crates/podway-daemon/src/execution.rs::DaemonExecutionEngineV1::execute_claimed"}},{"id":"C06","proof":{"failpoint":"artifact verification boundary","test":"crates/podway-daemon/tests/phase4_execution.rs::a_claimed_execution_survives_engine_restart_and_decodes_its_immutable_document","termination":"restart observed","recovery":"claimed job survives","invariant":"verification is daemon-owned","source_locator":"crates/podway-daemon/src/native_execution.rs::NativeArtifactVerifierV1::hash_verified_local_artifact"}},{"id":"C07","proof":{"failpoint":"TerminalAfterTransactionBegin","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"claim remains","invariant":"no terminal mutation","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"}},{"id":"C08","proof":{"failpoint":"TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"transaction rolls back","invariant":"relational state rolls back","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"}},{"id":"C09","proof":{"failpoint":"TerminalAfterJobTerminalUpdateBeforeCommit","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"transaction rolls back","invariant":"terminal receipt rolls back","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"}},{"id":"C10","proof":{"failpoint":"TerminalAfterCommitBeforeResponse,RecoveryAfterCommitBeforeReturn","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"outcome replayed","invariant":"one committed outcome","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"}},{"id":"C11","proof":{"failpoint":"TerminalFailureBeforeCommit","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"failed receipt retries","invariant":"no domain mutation","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"}},{"id":"C12","proof":{"failpoint":"PruneAfterDeleteStagingBeforeCommit","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"deletes roll back","invariant":"history retained","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::prune_terminal_history"}},{"id":"C13","proof":{"failpoint":"SchemaBeforeCommit","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"schema is all-or-nothing","invariant":"no partial schema","source_locator":"crates/podway-store/src/schema.rs::initialize_empty_schema_v1"}},{"id":"C14","proof":{"failpoint":"PublicationAfterDestinationLinkBeforeTemporaryUnlink","test":"crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint","termination":"child abort observed","recovery":"destination wins","invariant":"temporary link removed","source_locator":"crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::seed_or_verify_reset_target"}},{"id":"D01","proof":{"failpoint":"reset marker publish","test":"crates/podway-daemon/tests/phase5_reset_runtime.rs::crash_after_target_seed_resumes_from_the_marker_without_recreating_the_target","termination":"child abort observed","recovery":"marker resumes","invariant":"one predecessor and target","source_locator":"crates/podway-daemon/src/workspace.rs::ValidatedRuntimeDirectoryV1::publish_reset_marker"}},{"id":"D02","proof":{"failpoint":"registry rename","test":"crates/podway-daemon/tests/phase4_registry.rs::abort_process_failpoints_recover_exact_documents_without_accepting_temporaries","termination":"child abort observed","recovery":"valid predecessor or successor","invariant":"no partial registry","source_locator":"crates/podway-daemon/src/registry.rs::persist_registry_v1"}},{"id":"S01","proof":{"failpoint":"AfterTemporaryWrite,AfterFileSyncAndMode,BeforeRename,AfterRename,AfterParentDirectorySync","test":"crates/podway-service/tests/phase8_crash_boundaries.rs::atomic_service_publication_crash_child_leaves_no_partial_state","termination":"each injected child exits 86","recovery":"retry publishes complete 0600 plist and metadata","invariant":"only old or complete new final state is consumed","source_locator":"crates/podway-service/src/lib.rs::StdServiceFilesystemV1::write_atomically"}},{"id":"S02","proof":{"failpoint":"bootstrap side effect after plist publication","test":"crates/podway-service/tests/phase8_crash_boundaries.rs::bootstrap_side_effect_crash_child_reconciles_to_one_installed_state","termination":"child exits 88","recovery":"already-bootstrapped retry publishes metadata","invariant":"one durable bootstrap marker","source_locator":"crates/podway-service/src/lib.rs::MacosServiceCommandRunnerV1::install_or_update"}},{"id":"S03","proof":{"failpoint":"after first declared remove_file","test":"crates/podway-service/tests/phase8_crash_boundaries.rs::service_removal_crash_child_preserves_complete_prior_state","termination":"child exits 87","recovery":"retry removes remaining service files","invariant":"worktree and logs survive non-purge uninstall","source_locator":"crates/podway-service/src/lib.rs::MacosServiceCommandRunnerV1::uninstall"}}]}
+{
+  "schema": "podway.g009.crash-boundaries/v1",
+  "version": 1,
+  "coverage": {
+    "required": [
+      "C01",
+      "C02",
+      "C03",
+      "C04",
+      "C05",
+      "C06",
+      "C07",
+      "C08",
+      "C09",
+      "C10",
+      "C11",
+      "C12",
+      "C13",
+      "C14",
+      "C15",
+      "C16",
+      "P01",
+      "D01",
+      "D02",
+      "S01",
+      "S02",
+      "S03"
+    ],
+    "covered": [
+      "C01",
+      "C02",
+      "C03",
+      "C04",
+      "C05",
+      "C06",
+      "C07",
+      "C08",
+      "C09",
+      "C10",
+      "C11",
+      "C12",
+      "C13",
+      "C14",
+      "C15",
+      "C16",
+      "P01",
+      "D01",
+      "D02",
+      "S01",
+      "S02",
+      "S03"
+    ],
+    "percent": 100
+  },
+  "windows": [
+    {
+      "id": "C01",
+      "proof": {
+        "failpoint": "AdmissionBeforeTransaction",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "no admission rows",
+        "invariant": "uncommitted admission is absent",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::admit"
+      }
+    },
+    {
+      "id": "C02",
+      "proof": {
+        "failpoint": "AdmissionAfterDurableRowsBeforeCommit",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "rows roll back",
+        "invariant": "no job or idempotency record",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::admit"
+      }
+    },
+    {
+      "id": "C03",
+      "proof": {
+        "failpoint": "AdmissionAfterCommit",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "idempotency replay",
+        "invariant": "one queued job",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::admit"
+      }
+    },
+    {
+      "id": "C04",
+      "proof": {
+        "failpoint": "ClaimAfterCommit",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "restart requeues",
+        "invariant": "one running claim",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::claim_next"
+      }
+    },
+    {
+      "id": "C05",
+      "proof": {
+        "failpoint": "prepare boundary",
+        "test": "crates/podway-daemon/tests/phase4_execution.rs::a_claimed_execution_survives_engine_restart_and_decodes_its_immutable_document",
+        "termination": "restart observed",
+        "recovery": "claimed job survives",
+        "invariant": "preparation is daemon-owned",
+        "source_locator": "crates/podway-daemon/src/execution.rs::DaemonExecutionEngineV1::execute_claimed"
+      }
+    },
+    {
+      "id": "C06",
+      "proof": {
+        "failpoint": "artifact verification boundary",
+        "test": "crates/podway-daemon/tests/phase4_execution.rs::a_claimed_execution_survives_engine_restart_and_decodes_its_immutable_document",
+        "termination": "restart observed",
+        "recovery": "claimed job survives",
+        "invariant": "verification is daemon-owned",
+        "source_locator": "crates/podway-daemon/src/native_execution.rs::NativeArtifactVerifierV1::hash_verified_local_artifact"
+      }
+    },
+    {
+      "id": "C07",
+      "proof": {
+        "failpoint": "TerminalAfterTransactionBegin",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "claim remains",
+        "invariant": "no terminal mutation",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"
+      }
+    },
+    {
+      "id": "C08",
+      "proof": {
+        "failpoint": "TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "transaction rolls back",
+        "invariant": "relational state rolls back",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"
+      }
+    },
+    {
+      "id": "C09",
+      "proof": {
+        "failpoint": "TerminalAfterJobTerminalUpdateBeforeCommit",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "transaction rolls back",
+        "invariant": "terminal receipt rolls back",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"
+      }
+    },
+    {
+      "id": "C10",
+      "proof": {
+        "failpoint": "TerminalAfterCommitBeforeResponse,RecoveryAfterCommitBeforeReturn",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "outcome replayed",
+        "invariant": "one committed outcome",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"
+      }
+    },
+    {
+      "id": "C11",
+      "proof": {
+        "failpoint": "TerminalFailureBeforeCommit",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "failed receipt retries",
+        "invariant": "no domain mutation",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_terminal"
+      }
+    },
+    {
+      "id": "C12",
+      "proof": {
+        "failpoint": "PruneAfterDeleteStagingBeforeCommit",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "deletes roll back",
+        "invariant": "history retained",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::prune_terminal_history"
+      }
+    },
+    {
+      "id": "C13",
+      "proof": {
+        "failpoint": "SchemaBeforeCommit",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "schema is all-or-nothing",
+        "invariant": "no partial schema",
+        "source_locator": "crates/podway-store/src/schema.rs::initialize_empty_schema_v1"
+      }
+    },
+    {
+      "id": "C14",
+      "proof": {
+        "failpoint": "MarkerCreated",
+        "test": "crates/podway-daemon/tests/phase5_reset_runtime.rs::reset_all_crash_boundaries_resume_once_without_duplicate_effects",
+        "termination": "isolated child exits with Unix SIGABRT at MarkerCreated",
+        "recovery": "restart resumes the durable marker",
+        "invariant": "durable marker and predecessor database exist before one target terminal reset effect",
+        "source_locator": "crates/podway-daemon/src/runtime_workspace.rs::WorkspaceRuntimeManagerV1::complete_reset_all_authorized"
+      }
+    },
+    {
+      "id": "C15",
+      "proof": {
+        "failpoint": "OldDatabaseDeleted",
+        "test": "crates/podway-daemon/tests/phase5_reset_runtime.rs::reset_all_crash_boundaries_resume_once_without_duplicate_effects",
+        "termination": "isolated child exits with Unix SIGABRT at OldDatabaseDeleted",
+        "recovery": "restart recreates the marker-bound target",
+        "invariant": "durable marker exists and predecessor database is absent before one target terminal reset effect",
+        "source_locator": "crates/podway-daemon/src/runtime_workspace.rs::WorkspaceRuntimeManagerV1::complete_reset_all_authorized"
+      }
+    },
+    {
+      "id": "C16",
+      "proof": {
+        "failpoint": "NewTargetDatabaseCreated",
+        "test": "crates/podway-daemon/tests/phase5_reset_runtime.rs::reset_all_crash_boundaries_resume_once_without_duplicate_effects",
+        "termination": "isolated child exits with Unix SIGABRT at NewTargetDatabaseCreated",
+        "recovery": "restart verifies the existing marker-bound target",
+        "invariant": "durable marker and replacement database exist before target receipt replay without duplication",
+        "source_locator": "crates/podway-daemon/src/runtime_workspace.rs::WorkspaceRuntimeManagerV1::complete_reset_all_authorized"
+      }
+    },
+    {
+      "id": "P01",
+      "proof": {
+        "failpoint": "PublicationAfterDestinationLinkBeforeTemporaryUnlink",
+        "test": "crates/podway-store/tests/phase2_crash_matrix.rs::phase2_crash_child_aborts_at_configured_failpoint",
+        "termination": "child abort observed",
+        "recovery": "destination wins",
+        "invariant": "temporary link removed",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::seed_or_verify_reset_target"
+      }
+    },
+    {
+      "id": "D01",
+      "proof": {
+        "failpoint": "reset marker publish",
+        "test": "crates/podway-daemon/tests/phase5_reset_runtime.rs::crash_after_target_seed_resumes_from_the_marker_without_recreating_the_target",
+        "termination": "child abort observed",
+        "recovery": "marker resumes",
+        "invariant": "one predecessor and target",
+        "source_locator": "crates/podway-daemon/src/workspace.rs::ValidatedRuntimeDirectoryV1::publish_reset_marker"
+      }
+    },
+    {
+      "id": "D02",
+      "proof": {
+        "failpoint": "registry rename",
+        "test": "crates/podway-daemon/tests/phase4_registry.rs::abort_process_failpoints_recover_exact_documents_without_accepting_temporaries",
+        "termination": "child abort observed",
+        "recovery": "valid predecessor or successor",
+        "invariant": "no partial registry",
+        "source_locator": "crates/podway-daemon/src/registry.rs::persist_registry_v1"
+      }
+    },
+    {
+      "id": "S01",
+      "proof": {
+        "failpoint": "AfterTemporaryWrite,AfterFileSyncAndMode,BeforeRename,AfterRename,AfterParentDirectorySync",
+        "test": "crates/podway-service/tests/phase8_crash_boundaries.rs::atomic_service_publication_crash_child_leaves_no_partial_state",
+        "termination": "each injected child exits 86",
+        "recovery": "retry publishes complete 0600 plist and metadata",
+        "invariant": "only old or complete new final state is consumed",
+        "source_locator": "crates/podway-service/src/lib.rs::StdServiceFilesystemV1::write_atomically"
+      }
+    },
+    {
+      "id": "S02",
+      "proof": {
+        "failpoint": "bootstrap side effect after plist publication",
+        "test": "crates/podway-service/tests/phase8_crash_boundaries.rs::bootstrap_side_effect_crash_child_reconciles_to_one_installed_state",
+        "termination": "child exits 88",
+        "recovery": "already-bootstrapped retry publishes metadata",
+        "invariant": "one durable bootstrap marker",
+        "source_locator": "crates/podway-service/src/lib.rs::MacosServiceCommandRunnerV1::install_or_update"
+      }
+    },
+    {
+      "id": "S03",
+      "proof": {
+        "failpoint": "after first declared remove_file",
+        "test": "crates/podway-service/tests/phase8_crash_boundaries.rs::service_removal_crash_child_preserves_complete_prior_state",
+        "termination": "child exits 87",
+        "recovery": "retry removes remaining service files",
+        "invariant": "worktree and logs survive non-purge uninstall",
+        "source_locator": "crates/podway-service/src/lib.rs::MacosServiceCommandRunnerV1::uninstall"
+      }
+    }
+  ]
+}

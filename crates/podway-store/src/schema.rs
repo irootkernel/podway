@@ -1,7 +1,11 @@
 //! SQLite v1 connection setup and schema initialization.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{ErrorKind, Read, Seek, SeekFrom};
+#[cfg(unix)]
+use std::ffi::OsStr;
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -29,6 +33,34 @@ use crate::{
     StoreIntegrityCheckV1, StoreUnavailableReasonV1, ValidatedWorkspaceRootV1,
     command_is_session_scoped_v1, command_name_v1, map_rusqlite_error_v1,
 };
+const TEMPORARY_OWNERSHIP_MARKER_HEADER_V1: &str = "podway-store temporary ownership v2\n";
+
+pub(crate) fn write_temporary_ownership_marker_v1(
+    marker: &mut File,
+    temporary: &File,
+) -> Result<(), StoreErrorV1> {
+    #[cfg(unix)]
+    {
+        let metadata = temporary.metadata().map_err(storage_io_error)?;
+        let record = format!(
+            "{TEMPORARY_OWNERSHIP_MARKER_HEADER_V1}device={}\ninode={}\n",
+            metadata.dev(),
+            metadata.ino()
+        );
+        marker
+            .write_all(record.as_bytes())
+            .and_then(|()| marker.sync_all())
+            .map_err(storage_io_error)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = temporary;
+        marker
+            .write_all(TEMPORARY_OWNERSHIP_MARKER_HEADER_V1.as_bytes())
+            .and_then(|()| marker.sync_all())
+            .map_err(storage_io_error)
+    }
+}
 
 pub const SQLITE_SCHEMA_VERSION_V1: u32 = 1;
 pub const SQLITE_INITIAL_MIGRATION_NAME_V1: &str = "schema-0-uninitialized";
@@ -1339,22 +1371,102 @@ pub(crate) fn validate_publication_link_pair_v1(
 }
 
 #[cfg(all(test, unix))]
+struct PublicationRecoveryBarrierV1 {
+    destination: PathBuf,
+    reached: std::sync::Arc<std::sync::Barrier>,
+    release: std::sync::Arc<std::sync::Barrier>,
+    claimed: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(all(test, unix))]
 static PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER: std::sync::Mutex<
-    Option<(
-        std::sync::Arc<std::sync::Barrier>,
-        std::sync::Arc<std::sync::Barrier>,
-    )>,
+    Option<std::sync::Arc<PublicationRecoveryBarrierV1>>,
 > = std::sync::Mutex::new(None);
 
 #[cfg(all(test, unix))]
-fn wait_at_publication_recovery_link_count_for_test() {
-    let barriers = PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER
+static PUBLICATION_RECOVERY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(all(test, unix))]
+struct PublicationRecoveryHookGuardV1 {
+    hook: std::sync::Arc<PublicationRecoveryBarrierV1>,
+    release: Option<std::sync::Arc<std::sync::Barrier>>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(all(test, unix))]
+impl PublicationRecoveryHookGuardV1 {
+    fn release(&mut self) {
+        self.release
+            .take()
+            .expect("publication recovery test hook release")
+            .wait();
+    }
+}
+
+#[cfg(all(test, unix))]
+impl Drop for PublicationRecoveryHookGuardV1 {
+    fn drop(&mut self) {
+        PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER
+            .lock()
+            .expect("publication recovery test hook lock")
+            .take();
+        if self.release.is_some() && self.hook.claimed.load(std::sync::atomic::Ordering::Acquire) {
+            self.release
+                .take()
+                .expect("claimed publication recovery hook release")
+                .wait();
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+fn install_publication_recovery_hook_for_test_v1(
+    destination: PathBuf,
+    reached: std::sync::Arc<std::sync::Barrier>,
+    release: std::sync::Arc<std::sync::Barrier>,
+) -> PublicationRecoveryHookGuardV1 {
+    let lock = PUBLICATION_RECOVERY_TEST_LOCK
         .lock()
-        .expect("publication recovery test hook lock")
-        .take();
-    if let Some((reached, release)) = barriers {
-        reached.wait();
-        release.wait();
+        .expect("publication recovery test lifetime lock");
+    let hook = std::sync::Arc::new(PublicationRecoveryBarrierV1 {
+        destination,
+        reached,
+        release: std::sync::Arc::clone(&release),
+        claimed: std::sync::atomic::AtomicBool::new(false),
+    });
+    *PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER
+        .lock()
+        .expect("publication recovery test hook lock") = Some(std::sync::Arc::clone(&hook));
+    PublicationRecoveryHookGuardV1 {
+        hook,
+        release: Some(release),
+        _lock: lock,
+    }
+}
+
+#[cfg(all(test, unix))]
+fn wait_at_publication_recovery_link_count_for_test(destination: &Path) {
+    let hook = {
+        let mut hook = PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER
+            .lock()
+            .expect("publication recovery test hook lock");
+        if hook
+            .as_ref()
+            .is_some_and(|expected| expected.destination == destination)
+        {
+            let hook = hook.take();
+            if let Some(hook) = &hook {
+                hook.claimed
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+            hook
+        } else {
+            None
+        }
+    };
+    if let Some(hook) = hook {
+        hook.reached.wait();
+        hook.release.wait();
     }
 }
 
@@ -1362,19 +1474,31 @@ pub(crate) fn recover_interrupted_publication_v1(destination: &Path) -> Result<(
     validate_database_parent_path_v1(destination)?;
     let destination_metadata = match fs::symlink_metadata(destination) {
         Ok(_) => validate_existing_regular_private_file_metadata_v1(destination)?,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            #[cfg(unix)]
+            {
+                recover_abandoned_publication_temporary_v1(destination)?;
+                return recover_orphaned_ownership_markers_v1(destination);
+            }
+            #[cfg(not(unix))]
+            return Ok(());
+        }
         Err(error) => return Err(storage_io_error(error)),
     };
     #[cfg(unix)]
     {
         match destination_metadata.nlink() {
-            1 => return Ok(()),
+            1 => {
+                recover_abandoned_publication_temporary_v1(destination)?;
+                recover_orphaned_ownership_markers_v1(destination)?;
+                return Ok(());
+            }
             2 => {}
             _ => return Err(unsafe_database_path_error()),
         }
     }
     #[cfg(all(test, unix))]
-    wait_at_publication_recovery_link_count_for_test();
+    wait_at_publication_recovery_link_count_for_test(destination);
     #[cfg(not(unix))]
     {
         let _ = destination_metadata;
@@ -1403,30 +1527,42 @@ pub(crate) fn recover_interrupted_publication_v1(destination: &Path) -> Result<(
         let candidate_metadata = match fs::symlink_metadata(&candidate) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => {
-                if publication_destination_is_finalized_v1(destination)? {
+                if publication_destination_is_finalized_v1(destination, &destination_metadata)? {
                     return Ok(());
                 }
-                return Err(storage_io_error(error));
+                continue;
             }
             Err(error) => return Err(storage_io_error(error)),
         };
         if !is_same_publication_file_v1(&candidate_metadata, &destination_metadata) {
             continue;
         }
+        let candidate_file = match open_publication_link_for_recovery_v1(&candidate) {
+            Ok(candidate_file) => candidate_file,
+            Err(_error)
+                if publication_destination_is_finalized_v1(destination, &destination_metadata)? =>
+            {
+                return Ok(());
+            }
+            Err(error) => match fs::symlink_metadata(&candidate) {
+                Err(missing) if missing.kind() == ErrorKind::NotFound => continue,
+                _ => return Err(error),
+            },
+        };
         if let Err(error) = validate_publication_link_pair_v1(&candidate, destination) {
-            if publication_destination_is_finalized_v1(destination)? {
+            if publication_destination_is_finalized_v1(destination, &destination_metadata)? {
                 return Ok(());
             }
             return Err(error);
         }
-        if temporary.replace(candidate).is_some() {
+        if temporary.replace((candidate, candidate_file)).is_some() {
             return Err(unsafe_database_path_error());
         }
     }
-    let temporary = match temporary {
+    let (temporary, (marker, temporary_file)) = match temporary {
         Some(temporary) => temporary,
         None => {
-            if publication_destination_is_finalized_v1(destination)? {
+            if publication_destination_is_finalized_v1(destination, &destination_metadata)? {
                 File::open(parent)
                     .map_err(storage_io_error)?
                     .sync_all()
@@ -1436,14 +1572,14 @@ pub(crate) fn recover_interrupted_publication_v1(destination: &Path) -> Result<(
             return Err(unsafe_database_path_error());
         }
     };
-    match fs::remove_file(&temporary) {
+    match unlink_publication_link_for_recovery_v1(&temporary, destination, &marker, &temporary_file)
+    {
         Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            if !publication_destination_is_finalized_v1(destination)? {
-                return Err(storage_io_error(error));
-            }
+        Err(error)
+            if matches!(error, StoreErrorV1::StorageUnavailableV1 { .. })
+                && publication_destination_is_finalized_v1(destination, &destination_metadata)? => {
         }
-        Err(error) => return Err(storage_io_error(error)),
+        Err(error) => return Err(error),
     }
     validate_existing_regular_private_file_v1(destination)?;
     File::open(parent)
@@ -1452,17 +1588,289 @@ pub(crate) fn recover_interrupted_publication_v1(destination: &Path) -> Result<(
         .map_err(storage_io_error)
 }
 #[cfg(unix)]
-fn publication_destination_is_finalized_v1(destination: &Path) -> Result<bool, StoreErrorV1> {
+fn open_publication_link_for_recovery_v1(path: &Path) -> Result<(File, File), StoreErrorV1> {
+    let marker =
+        open_ownership_marker_for_recovery_v1(&temporary_ownership_marker_path_v1(path), false)?
+            .ok_or_else(unsafe_database_path_error)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(target_os = "macos")]
+    options.custom_flags(0x0100);
+    #[cfg(target_os = "linux")]
+    options.custom_flags(0x0002_0000);
+    let temporary = options.open(path).map_err(storage_io_error)?;
+    Ok((marker, temporary))
+}
+
+#[cfg(unix)]
+fn unlink_publication_link_for_recovery_v1(
+    temporary: &Path,
+    destination: &Path,
+    marker: &File,
+    temporary_file: &File,
+) -> Result<(), StoreErrorV1> {
+    validate_publication_link_pair_v1(temporary, destination)?;
+    let path_metadata = validate_existing_regular_private_file_metadata_v1(temporary)?;
+    let descriptor_metadata = temporary_file.metadata().map_err(storage_io_error)?;
+    if !is_same_publication_file_v1(&path_metadata, &descriptor_metadata) {
+        return Err(unsafe_database_path_error());
+    }
+    let marker_path = temporary_ownership_marker_path_v1(temporary);
+    validate_ownership_marker_v1(&marker_path, marker, temporary_file)?;
+    let sidecars = ["-wal", "-shm"].map(|suffix| sqlite_sidecar_path_v1(temporary, suffix));
+    let mut sidecar_files = Vec::with_capacity(sidecars.len());
+    for sidecar in &sidecars {
+        if let Some(file) = open_recovery_file_after_marker_v1(sidecar, false)? {
+            sidecar_files.push((sidecar, file));
+        }
+    }
+    for (sidecar, file) in &sidecar_files {
+        unlink_revalidated_recovery_file_v1(sidecar, file)?;
+    }
+    fs::remove_file(temporary).map_err(storage_io_error)?;
+    unlink_revalidated_ownership_marker_v1(&marker_path, marker, temporary_file)
+}
+
+#[cfg(unix)]
+fn recover_abandoned_publication_temporary_v1(destination: &Path) -> Result<(), StoreErrorV1> {
+    validate_database_parent_path_v1(destination)?;
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    const MAX_PUBLICATION_RECOVERY_DIRECTORY_ENTRIES_V1: usize = 1_024;
+
+    let mut temporaries = Vec::new();
+    let mut inspected_entries = 0usize;
+    for entry in fs::read_dir(parent).map_err(storage_io_error)? {
+        inspected_entries = inspected_entries
+            .checked_add(1)
+            .ok_or_else(unsafe_database_path_error)?;
+        if inspected_entries > MAX_PUBLICATION_RECOVERY_DIRECTORY_ENTRIES_V1 {
+            return Err(unsafe_database_path_error());
+        }
+        let candidate = entry.map_err(storage_io_error)?.path();
+        let Some(marker) = open_unowned_store_temporary_for_recovery_v1(&candidate, destination)?
+        else {
+            continue;
+        };
+        temporaries.push((candidate, marker));
+    }
+
+    for (temporary, marker) in temporaries {
+        let temporary_file = open_recovery_file_after_marker_v1(&temporary, true)?
+            .ok_or_else(unsafe_database_path_error)?;
+        validate_ownership_marker_v1(
+            &temporary_ownership_marker_path_v1(&temporary),
+            &marker,
+            &temporary_file,
+        )?;
+        let sidecars = ["-wal", "-shm"].map(|suffix| sqlite_sidecar_path_v1(&temporary, suffix));
+        let mut sidecar_files = Vec::with_capacity(sidecars.len());
+        for sidecar in &sidecars {
+            if let Some(file) = open_recovery_file_after_marker_v1(sidecar, false)? {
+                sidecar_files.push((sidecar, file));
+            }
+        }
+        for (sidecar, file) in &sidecar_files {
+            unlink_revalidated_recovery_file_v1(sidecar, file)?;
+        }
+        unlink_revalidated_recovery_file_v1(&temporary, &temporary_file)?;
+        unlink_revalidated_ownership_marker_v1(
+            &temporary_ownership_marker_path_v1(&temporary),
+            &marker,
+            &temporary_file,
+        )?;
+    }
+    File::open(parent)
+        .map_err(storage_io_error)?
+        .sync_all()
+        .map_err(storage_io_error)
+}
+#[cfg(unix)]
+fn recover_orphaned_ownership_markers_v1(destination: &Path) -> Result<(), StoreErrorV1> {
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    const MAX_PUBLICATION_RECOVERY_DIRECTORY_ENTRIES_V1: usize = 1_024;
+    let mut inspected_entries = 0usize;
+    for entry in fs::read_dir(parent).map_err(storage_io_error)? {
+        inspected_entries = inspected_entries
+            .checked_add(1)
+            .ok_or_else(unsafe_database_path_error)?;
+        if inspected_entries > MAX_PUBLICATION_RECOVERY_DIRECTORY_ENTRIES_V1 {
+            return Err(unsafe_database_path_error());
+        }
+        let marker = entry.map_err(storage_io_error)?.path();
+        let Some(temporary) = temporary_path_from_ownership_marker_v1(&marker) else {
+            continue;
+        };
+        if is_store_temporary_database_name_v1(&temporary, destination) {
+            match fs::symlink_metadata(&temporary) {
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    return Err(unsafe_database_path_error());
+                }
+                Ok(_) => {}
+                Err(error) => return Err(storage_io_error(error)),
+            }
+        }
+    }
+    File::open(parent)
+        .map_err(storage_io_error)?
+        .sync_all()
+        .map_err(storage_io_error)
+}
+
+#[cfg(unix)]
+fn temporary_path_from_ownership_marker_v1(marker: &Path) -> Option<PathBuf> {
+    let marker_name = marker.file_name()?.as_bytes();
+    let temporary_name = marker_name.strip_suffix(b".owner")?;
+    let parent = marker.parent().unwrap_or_else(|| Path::new("."));
+    Some(parent.join(OsStr::from_bytes(temporary_name)))
+}
+
+#[cfg(unix)]
+fn open_unowned_store_temporary_for_recovery_v1(
+    path: &Path,
+    destination: &Path,
+) -> Result<Option<File>, StoreErrorV1> {
+    if !is_store_temporary_database_name_v1(path, destination) {
+        return Ok(None);
+    }
+    let marker_path = temporary_ownership_marker_path_v1(path);
+    match fs::symlink_metadata(&marker_path) {
+        Ok(_) => open_ownership_marker_for_recovery_v1(&marker_path, true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(storage_io_error(error)),
+    }
+}
+
+#[cfg(unix)]
+fn open_ownership_marker_for_recovery_v1(
+    path: &Path,
+    ignore_busy: bool,
+) -> Result<Option<File>, StoreErrorV1> {
+    let Some(file) = open_recovery_file_after_marker_v1(path, true)? else {
+        return Err(unsafe_database_path_error());
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) if ignore_busy => Ok(None),
+        Err(TryLockError::WouldBlock) => Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Busy,
+        }),
+        Err(TryLockError::Error(error)) => Err(storage_io_error(error)),
+    }
+}
+
+#[cfg(unix)]
+fn open_recovery_file_after_marker_v1(
+    path: &Path,
+    required: bool,
+) -> Result<Option<File>, StoreErrorV1> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(target_os = "macos")]
+    options.custom_flags(0x0100);
+    #[cfg(target_os = "linux")]
+    options.custom_flags(0x0002_0000);
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if !required && error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(storage_io_error(error)),
+    };
+    validate_recovery_file_identity_v1(path, &file)?;
+    Ok(Some(file))
+}
+
+#[cfg(unix)]
+fn validate_recovery_file_identity_v1(path: &Path, file: &File) -> Result<(), StoreErrorV1> {
+    let path_metadata = validate_existing_regular_private_file_metadata_v1(path)?;
+    let descriptor_metadata = file.metadata().map_err(storage_io_error)?;
+    if path_metadata.nlink() != 1
+        || !has_exact_private_file_permissions_v1(&path_metadata)
+        || !is_same_publication_file_v1(&path_metadata, &descriptor_metadata)
+    {
+        return Err(unsafe_database_path_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn unlink_revalidated_recovery_file_v1(path: &Path, file: &File) -> Result<(), StoreErrorV1> {
+    validate_recovery_file_identity_v1(path, file)?;
+    fs::remove_file(path).map_err(storage_io_error)
+}
+#[cfg(unix)]
+fn validate_ownership_marker_v1(
+    path: &Path,
+    file: &File,
+    temporary: &File,
+) -> Result<(), StoreErrorV1> {
+    validate_recovery_file_identity_v1(path, file)?;
+    let length = file.metadata().map_err(storage_io_error)?.len();
+    if length == 0 || length > 256 {
+        return Err(unsafe_database_path_error());
+    }
+    let mut marker = file.try_clone().map_err(storage_io_error)?;
+    marker.seek(SeekFrom::Start(0)).map_err(storage_io_error)?;
+    let mut contents = vec![0; length as usize];
+    marker.read_exact(&mut contents).map_err(storage_io_error)?;
+    let contents = std::str::from_utf8(&contents).map_err(|_| unsafe_database_path_error())?;
+    let body = contents
+        .strip_prefix(TEMPORARY_OWNERSHIP_MARKER_HEADER_V1)
+        .filter(|body| body.ends_with('\n'))
+        .ok_or_else(unsafe_database_path_error)?;
+    let mut fields = body.split_terminator('\n');
+    let device = fields
+        .next()
+        .and_then(|field| field.strip_prefix("device="))
+        .filter(|value| canonical_decimal_v1(value.as_bytes(), true))
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(unsafe_database_path_error)?;
+    let inode = fields
+        .next()
+        .and_then(|field| field.strip_prefix("inode="))
+        .filter(|value| canonical_decimal_v1(value.as_bytes(), false))
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(unsafe_database_path_error)?;
+    if fields.next().is_some() {
+        return Err(unsafe_database_path_error());
+    }
+    let descriptor = temporary.metadata().map_err(storage_io_error)?;
+    if device != descriptor.dev() || inode != descriptor.ino() {
+        return Err(unsafe_database_path_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn unlink_revalidated_ownership_marker_v1(
+    path: &Path,
+    file: &File,
+    temporary: &File,
+) -> Result<(), StoreErrorV1> {
+    validate_ownership_marker_v1(path, file, temporary)?;
+    fs::remove_file(path).map_err(storage_io_error)
+}
+#[cfg(unix)]
+fn publication_destination_is_finalized_v1(
+    destination: &Path,
+    expected_metadata: &fs::Metadata,
+) -> Result<bool, StoreErrorV1> {
     let metadata = match fs::symlink_metadata(destination) {
         Ok(_) => validate_existing_regular_private_file_metadata_v1(destination)?,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(storage_io_error(error)),
     };
-    Ok(metadata.nlink() == 1)
+    Ok(metadata.nlink() == 1 && is_same_publication_file_v1(&metadata, expected_metadata))
 }
-
 #[cfg(not(unix))]
-fn publication_destination_is_finalized_v1(_destination: &Path) -> Result<bool, StoreErrorV1> {
+fn publication_destination_is_finalized_v1(
+    _destination: &Path,
+    _expected_metadata: &fs::Metadata,
+) -> Result<bool, StoreErrorV1> {
     Ok(false)
 }
 #[cfg(all(test, unix))]
@@ -1471,6 +1879,45 @@ mod publication_recovery_tests {
     use std::io::Write;
     use std::sync::{Arc, Barrier};
 
+    #[test]
+    fn multiple_abandoned_publications_are_all_recovered() {
+        let directory = TempDir::new().expect("publication recovery directory");
+        let destination = directory.path().join("state.sqlite3");
+        let temporaries = [
+            directory.path().join(".state.sqlite3.101.1.0.tmp"),
+            directory.path().join(".state.sqlite3.102.1.1.tmp"),
+        ];
+
+        for temporary in &temporaries {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(temporary)
+                .expect("private temporary database");
+            file.write_all(b"abandoned").expect("temporary bytes");
+            file.sync_all().expect("temporary sync");
+            let marker_path = temporary_ownership_marker_path_v1(temporary);
+            let mut marker = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&marker_path)
+                .expect("private temporary ownership marker");
+            write_temporary_ownership_marker_v1(&mut marker, &file)
+                .expect("ownership marker bytes");
+        }
+
+        recover_interrupted_publication_v1(&destination)
+            .expect("all authenticated abandoned publications recover");
+        for temporary in &temporaries {
+            assert!(!temporary.exists(), "temporary must be removed");
+            assert!(
+                !temporary_ownership_marker_path_v1(temporary).exists(),
+                "ownership marker must be removed"
+            );
+        }
+    }
     #[test]
     fn concurrent_finalization_without_a_directory_candidate_is_accepted() {
         let directory = TempDir::new().expect("publication recovery directory");
@@ -1484,14 +1931,23 @@ mod publication_recovery_tests {
             .expect("private temporary database");
         file.write_all(b"publication").expect("temporary bytes");
         file.sync_all().expect("temporary sync");
+        let marker_path = temporary_ownership_marker_path_v1(&temporary);
+        let mut marker = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&marker_path)
+            .expect("private temporary ownership marker");
+        write_temporary_ownership_marker_v1(&mut marker, &file).expect("ownership marker bytes");
         fs::hard_link(&temporary, &destination).expect("publication hard link");
 
         let reached = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
-        *PUBLICATION_RECOVERY_AFTER_LINK_COUNT_BARRIER
-            .lock()
-            .expect("publication recovery test hook lock") =
-            Some((Arc::clone(&reached), Arc::clone(&release)));
+        let mut hook = install_publication_recovery_hook_for_test_v1(
+            destination.clone(),
+            Arc::clone(&reached),
+            Arc::clone(&release),
+        );
 
         let destination_for_recovery = destination.clone();
         let recovery = std::thread::spawn(move || {
@@ -1499,7 +1955,8 @@ mod publication_recovery_tests {
         });
         reached.wait();
         fs::remove_file(&temporary).expect("concurrent temporary unlink");
-        release.wait();
+        fs::remove_file(&marker_path).expect("concurrent ownership marker unlink");
+        hook.release();
 
         recovery
             .join()
@@ -1513,47 +1970,105 @@ mod publication_recovery_tests {
             1
         );
     }
+    #[test]
+    fn destination_replacement_during_recovery_is_rejected() {
+        let directory = TempDir::new().expect("publication recovery directory");
+        let destination = directory.path().join("state.sqlite3");
+        let temporary = directory.path().join(".state.sqlite3.1.0.0.tmp");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .expect("private temporary database");
+        file.write_all(b"publication").expect("temporary bytes");
+        file.sync_all().expect("temporary sync");
+        let marker_path = temporary_ownership_marker_path_v1(&temporary);
+        let mut marker = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&marker_path)
+            .expect("private temporary ownership marker");
+        write_temporary_ownership_marker_v1(&mut marker, &file).expect("ownership marker bytes");
+        fs::hard_link(&temporary, &destination).expect("publication hard link");
+
+        let reached = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let mut hook = install_publication_recovery_hook_for_test_v1(
+            destination.clone(),
+            Arc::clone(&reached),
+            Arc::clone(&release),
+        );
+
+        let destination_for_recovery = destination.clone();
+        let recovery = std::thread::spawn(move || {
+            recover_interrupted_publication_v1(&destination_for_recovery)
+        });
+        reached.wait();
+        fs::remove_file(&temporary).expect("temporary unlink");
+        fs::remove_file(&marker_path).expect("ownership marker unlink");
+        fs::remove_file(&destination).expect("published destination unlink");
+        let mut replacement = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&destination)
+            .expect("replacement destination");
+        replacement
+            .write_all(b"replacement")
+            .expect("replacement bytes");
+        replacement.sync_all().expect("replacement sync");
+        hook.release();
+
+        assert!(
+            recovery
+                .join()
+                .expect("publication recovery thread")
+                .is_err(),
+            "recovery must not accept a replacement destination"
+        );
+        assert_eq!(
+            fs::read(&destination).expect("replacement destination bytes"),
+            b"replacement"
+        );
+    }
 }
 
 #[cfg(unix)]
 fn is_store_temporary_database_name_v1(temporary: &Path, destination: &Path) -> bool {
+    store_temporary_database_process_id_v1(temporary, destination).is_some()
+}
+
+#[cfg(unix)]
+fn store_temporary_database_process_id_v1(temporary: &Path, destination: &Path) -> Option<u32> {
     use std::os::unix::ffi::OsStrExt;
 
-    let Some(name) = temporary.file_name() else {
-        return false;
-    };
-    let Some(destination_name) = destination.file_name() else {
-        return false;
-    };
-    let mut prefix = Vec::with_capacity(destination_name.as_bytes().len() + 2);
+    let name = temporary.file_name()?.as_bytes();
+    let destination_name = destination.file_name()?.as_bytes();
+    let mut prefix = Vec::with_capacity(destination_name.len() + 2);
     prefix.push(b'.');
-    prefix.extend_from_slice(destination_name.as_bytes());
+    prefix.extend_from_slice(destination_name);
     prefix.push(b'.');
-    let name = name.as_bytes();
-    let Some(body) = name
-        .strip_prefix(prefix.as_slice())
-        .and_then(|body| body.strip_suffix(b".tmp"))
-    else {
-        return false;
-    };
+    let body = name
+        .strip_prefix(prefix.as_slice())?
+        .strip_suffix(b".tmp")?;
     let mut components = body.split(|byte| *byte == b'.');
-    let Some(process_id) = components.next() else {
-        return false;
-    };
-    let Some(created_at) = components.next() else {
-        return false;
-    };
-    let Some(attempt) = components.next() else {
-        return false;
-    };
-    components.next().is_none()
-        && canonical_decimal_v1(process_id, false)
-        && canonical_decimal_v1(created_at, true)
-        && canonical_decimal_v1(attempt, true)
-        && std::str::from_utf8(attempt)
+    let process_id = components.next()?;
+    let created_at = components.next()?;
+    let attempt = components.next()?;
+    if components.next().is_some()
+        || !canonical_decimal_v1(process_id, false)
+        || !canonical_decimal_v1(created_at, true)
+        || !canonical_decimal_v1(attempt, true)
+        || !std::str::from_utf8(attempt)
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .is_some_and(|value| value < 128)
+    {
+        return None;
+    }
+    std::str::from_utf8(process_id).ok()?.parse().ok()
 }
 
 #[cfg(not(unix))]
@@ -1587,7 +2102,7 @@ fn is_same_publication_file_v1(_left: &fs::Metadata, _right: &fs::Metadata) -> b
     false
 }
 
-fn validate_existing_regular_private_file_metadata_v1(
+pub(crate) fn validate_existing_regular_private_file_metadata_v1(
     path: &Path,
 ) -> Result<fs::Metadata, StoreErrorV1> {
     let metadata = fs::symlink_metadata(path).map_err(storage_io_error)?;
@@ -1632,6 +2147,9 @@ fn sqlite_sidecar_path_v1(path: &Path, suffix: &str) -> std::path::PathBuf {
     let mut sidecar = path.as_os_str().to_os_string();
     sidecar.push(suffix);
     sidecar.into()
+}
+fn temporary_ownership_marker_path_v1(temporary: &Path) -> std::path::PathBuf {
+    sqlite_sidecar_path_v1(temporary, ".owner")
 }
 
 const INSPECTION_SNAPSHOT_MAX_ATTEMPTS_V1: u8 = 3;
@@ -1995,7 +2513,7 @@ mod inspection_snapshot_tests {
         let hook = install_inspection_snapshot_copy_hook_for_test_v1(move |phase| {
             if phase == InspectionSnapshotCopyPhaseV1::Wal {
                 let next = hook_calls.fetch_add(1, Ordering::SeqCst);
-                let contents: &[u8] = if next.is_multiple_of(2) {
+                let contents: &[u8] = if next & 1 == 0 {
                     b"wal-after!"
                 } else {
                     b"wal-before"

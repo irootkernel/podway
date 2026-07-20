@@ -21,6 +21,8 @@ stages:
         required: true
   - id: define-audience
     title: Define audience and outcome
+    instructions:
+      - Define the intended readers, outcome, and applicable terminology before outlining.
     items:
       - id: target-audience
         type: text
@@ -39,6 +41,8 @@ stages:
         max_items: 100
   - id: outline
     title: Create the outline
+    instructions:
+      - Organize the document into an ordered outline with clear scope boundaries.
     items:
       - id: outline-sections
         type: list
@@ -52,6 +56,8 @@ stages:
         required: true
   - id: draft
     title: Draft the document
+    instructions:
+      - Write a complete draft that serves the defined audience and intended outcome.
     items:
       - id: draft-complete
         type: confirm
@@ -63,6 +69,8 @@ stages:
         required: false
   - id: validate
     title: Validate the document
+    instructions:
+      - Check the document's claims, instructions, links, examples, and references against sources.
     items:
       - id: factual-check-complete
         type: confirm
@@ -79,6 +87,8 @@ stages:
         min_length: 1
   - id: review
     title: Review clarity and scope
+    instructions:
+      - Review the document for clarity, structure, audience fit, consistency, and resolved findings.
     items:
       - id: clarity-review-complete
         type: confirm
@@ -95,6 +105,8 @@ stages:
         min_length: 1
   - id: finish
     title: Finish the document
+    instructions:
+      - Confirm the validated document is ready to deliver and summarize remaining limitations.
     items:
       - id: document-ready
         type: confirm

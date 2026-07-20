@@ -397,16 +397,15 @@ fn failed_initialization_removes_only_owned_private_temporary_files() {
     );
 
     let owned_temporary = owned_temporary(&path, 50, 1);
-    for owned_path in [
+    let owned_marker = sidecar(&owned_temporary, ".owner");
+    let owned_paths = [
         owned_temporary.clone(),
         sidecar(&owned_temporary, "-wal"),
         sidecar(&owned_temporary, "-shm"),
-    ] {
-        assert!(matches!(
-            fs::symlink_metadata(owned_path),
-            Err(error) if error.kind() == ErrorKind::NotFound
-        ));
-    }
+        owned_marker.clone(),
+    ];
+    assert_private(&owned_temporary);
+    assert_private(&owned_marker);
     assert_sqlite_artifact_snapshot(&collision, &collision_before);
     for collision_path in &collision_paths {
         assert_private(collision_path);
@@ -443,8 +442,22 @@ fn failed_initialization_removes_only_owned_private_temporary_files() {
         OsString::from("unrelated-regular"),
         OsString::from("unrelated-symlink"),
     ]);
+    expected_entries.extend([
+        owned_temporary.file_name().unwrap().to_os_string(),
+        owned_marker.file_name().unwrap().to_os_string(),
+    ]);
     expected_entries.sort();
     assert_eq!(surviving_entries, expected_entries);
+    drop(
+        SqliteStoreV1::open(&path, &root(), identity(), options(), UnixMillis::new(51))
+            .expect("the next open must recover the authenticated residual temporary"),
+    );
+    for owned_path in owned_paths {
+        assert!(matches!(
+            fs::symlink_metadata(owned_path),
+            Err(error) if error.kind() == ErrorKind::NotFound
+        ));
+    }
 }
 
 #[test]

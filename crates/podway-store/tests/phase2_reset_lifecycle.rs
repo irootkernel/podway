@@ -20,7 +20,7 @@ use podway_store::{
     PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, RevisionAttemptItemPreconditionsV1,
     SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreFailpointActionV1,
     StoreFailpointV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreRecordKindV1,
-    StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
+    TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
     codec::{
         PersistedDomainResultV1, PersistedTerminalResultV1, encode_command_v1,
         encode_persisted_terminal_receipt_v1,
@@ -112,7 +112,8 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
 }
 const RESET_CRASH_CHILD_PATH_ENV: &str = "PODWAY_RESET_CRASH_CHILD_PATH";
 const RESET_CRASH_CASE_ENV: &str = "PODWAY_RESET_CRASH_CASE";
-const RESET_CRASH_CHILD_TEST_NAME: &str = "reset_seed_crash_windows_abort_at_configured_failpoint";
+const RESET_CRASH_CHILD_TEST_NAME: &str =
+    "pac_030_interrupted_reset_all_publication_recovers_and_retries_idempotently";
 const RESET_CRASH_CASES: &[(u8, StoreFailpointV1, bool)] = &[
     (10, StoreFailpointV1::ResetBeforeSeedCommit, false),
     (
@@ -247,6 +248,53 @@ fn linked_publication_temporaries(path: &Path) -> Vec<PathBuf> {
                 && metadata.ino() == destination_metadata.ino()
         })
         .collect()
+}
+
+fn assert_recovered_reset_publication_directory_clean(path: &Path, failpoint: StoreFailpointV1) {
+    let parent = path.parent().unwrap();
+    let valid_destination_set = [
+        path.to_path_buf(),
+        sidecar(path, "-wal"),
+        sidecar(path, "-shm"),
+    ];
+    let entries = fs::read_dir(parent)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    for candidate in &entries {
+        assert!(
+            valid_destination_set.contains(candidate),
+            "{failpoint:?} recovery left Store-owned publication artifact {candidate:?} outside the valid destination set"
+        );
+    }
+    let destination_metadata = fs::symlink_metadata(path).unwrap();
+    assert!(
+        destination_metadata.file_type().is_file(),
+        "{failpoint:?} recovery must leave a regular destination database"
+    );
+
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            destination_metadata.nlink(),
+            1,
+            "{failpoint:?} recovery must leave exactly one destination hard link"
+        );
+        let duplicate_links = entries
+            .iter()
+            .filter(|candidate| candidate.as_path() != path)
+            .filter(|candidate| {
+                let metadata = fs::symlink_metadata(candidate).unwrap();
+                metadata.file_type().is_file()
+                    && metadata.dev() == destination_metadata.dev()
+                    && metadata.ino() == destination_metadata.ino()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            duplicate_links.is_empty(),
+            "{failpoint:?} recovery left a second destination or temporary publication link: {duplicate_links:?}"
+        );
+    }
 }
 
 fn snapshot_reset_target(path: &Path) -> ResetTargetSnapshot {
@@ -805,29 +853,6 @@ fn assert_mismatch_preserves_reset_target(
     );
     assert_reset_target_unchanged(snapshot_reset_target(path), &before);
 }
-fn reset_failpoint_error() -> StoreErrorV1 {
-    StoreErrorV1::StorageUnavailableV1 {
-        reason: StoreUnavailableReasonV1::Recovery,
-    }
-}
-
-fn assert_reset_failpoint_error(
-    result: Result<TerminalReceiptV1, StoreErrorV1>,
-    cleanup_failure: bool,
-) {
-    let error = result.unwrap_err();
-    if cleanup_failure {
-        match error {
-            StoreErrorV1::PrimaryOperationAndCleanupFailureV1 { primary, cleanup } => {
-                assert_eq!(*primary, reset_failpoint_error());
-                assert_eq!(*cleanup, reset_failpoint_error());
-            }
-            other => panic!("expected nested reset and cleanup failures, got {other:?}"),
-        }
-    } else {
-        assert_eq!(error, reset_failpoint_error());
-    }
-}
 
 #[test]
 fn maintenance_close_checkpoints_dirty_wal_before_daemon_removal() {
@@ -898,145 +923,31 @@ fn maintenance_close_checkpoints_dirty_wal_before_daemon_removal() {
 }
 
 #[test]
-fn reset_seed_crash_windows_leave_only_absent_or_exact_target() {
-    for (number, failpoint, published, cleanup_failure) in [
-        (10, StoreFailpointV1::ResetBeforeSeedCommit, false, false),
-        (
-            11,
-            StoreFailpointV1::ResetBeforeSeedCommitAndTemporaryCleanup,
-            false,
-            true,
-        ),
-        (
-            12,
-            StoreFailpointV1::ResetAfterSeedCommitBeforePublication,
-            false,
-            false,
-        ),
-        (
-            13,
-            StoreFailpointV1::ResetAfterPublicationBeforeResponse,
-            true,
-            false,
-        ),
-        (
-            14,
-            StoreFailpointV1::ResetAfterPublicationBeforeResponseAndTemporaryCleanup,
-            true,
-            true,
-        ),
-        (
-            15,
-            StoreFailpointV1::PublicationAfterDestinationLinkBeforeTemporaryUnlink,
-            true,
-            false,
-        ),
-    ] {
-        let temporary = TempDir::new().unwrap();
-        let path = temporary.path().join("target.sqlite3");
-        let workspace = identity();
-        let original_request = request(number, 'c');
-        let original_result = reset_result(&workspace);
-        assert_reset_failpoint_error(
-            seed(
-                &path,
-                workspace.clone(),
-                options(Some(failpoint)),
-                original_request.clone(),
-                original_result.clone(),
-                20,
-            ),
-            cleanup_failure,
-        );
-
-        if !published {
-            assert!(!path.exists());
-            assert!(fs::read_dir(temporary.path()).unwrap().next().is_none());
-        } else {
-            assert!(path.is_file());
-        }
-
-        let expected = reset_receipt(&original_request, original_result.clone());
-        if published {
-            let before = assert_exact_published_reset_target(
-                &path,
-                &workspace,
-                &original_request,
-                &original_result,
-                20,
-            );
-            let replay = seed(
-                &path,
-                workspace.clone(),
-                options(None),
-                original_request.clone(),
-                original_result.clone(),
-                21,
-            )
-            .unwrap();
-            let repeated = seed(
-                &path,
-                workspace.clone(),
-                options(None),
-                original_request.clone(),
-                original_result.clone(),
-                22,
-            )
-            .unwrap();
-            assert_eq!(replay, expected);
-            assert_eq!(repeated, expected);
-            assert_reset_target_unchanged(snapshot_reset_target(&path), &before);
-        } else {
-            let replay = seed(
-                &path,
-                workspace.clone(),
-                options(None),
-                original_request.clone(),
-                original_result.clone(),
-                21,
-            )
-            .unwrap();
-            let repeated = seed(
-                &path,
-                workspace.clone(),
-                options(None),
-                original_request.clone(),
-                original_result.clone(),
-                22,
-            )
-            .unwrap();
-            assert_eq!(replay, expected);
-            assert_eq!(repeated, expected);
-            assert_exact_published_reset_target(
-                &path,
-                &workspace,
-                &original_request,
-                &original_result,
-                21,
-            );
-        }
-    }
-}
-
-#[test]
-fn reset_seed_crash_windows_abort_at_configured_failpoint() {
-    if let (Some(path), Ok(case_index)) = (
+fn pac_030_interrupted_reset_all_publication_recovers_and_retries_idempotently() {
+    match (
         std::env::var_os(RESET_CRASH_CHILD_PATH_ENV).map(PathBuf::from),
-        std::env::var(RESET_CRASH_CASE_ENV).map(|value| value.parse::<usize>().unwrap()),
+        std::env::var(RESET_CRASH_CASE_ENV),
     ) {
-        let (number, failpoint, _) = *RESET_CRASH_CASES
-            .get(case_index)
-            .expect("reset crash case index must identify a configured failpoint");
-        let workspace = identity();
-        let _ = seed(
-            &path,
-            workspace.clone(),
-            abort_options(failpoint),
-            request(number, 'c'),
-            reset_result(&workspace),
-            20,
-        );
-        panic!("configured reset failpoint returned instead of aborting");
+        (Some(path), Ok(case_index)) => {
+            let case_index = case_index
+                .parse::<usize>()
+                .expect("PAC-030 crash child case must be a numeric configured index");
+            let (number, failpoint, _) = *RESET_CRASH_CASES
+                .get(case_index)
+                .expect("PAC-030 crash case index must identify a configured failpoint");
+            let workspace = identity();
+            let _ = seed(
+                &path,
+                workspace.clone(),
+                abort_options(failpoint),
+                request(number, 'c'),
+                reset_result(&workspace),
+                20,
+            );
+            panic!("PAC-030 configured reset failpoint returned instead of aborting");
+        }
+        (None, Err(_)) => {}
+        state => panic!("PAC-030 crash child mode requires both inputs, got {state:?}"),
     }
 
     for (case_index, (number, failpoint, published)) in RESET_CRASH_CASES.iter().enumerate() {
@@ -1080,6 +991,11 @@ fn reset_seed_crash_windows_abort_at_configured_failpoint() {
                 21,
             )
             .unwrap();
+            assert_eq!(
+                replay,
+                reset_receipt(&original_request, original_result.clone())
+            );
+            assert_recovered_reset_publication_directory_clean(&path, *failpoint);
             let repeated = seed(
                 &path,
                 workspace.clone(),
@@ -1089,12 +1005,9 @@ fn reset_seed_crash_windows_abort_at_configured_failpoint() {
                 22,
             )
             .unwrap();
-            assert_eq!(
-                replay,
-                reset_receipt(&original_request, original_result.clone())
-            );
             assert_eq!(repeated, reset_receipt(&original_request, original_result));
             assert_reset_target_unchanged(snapshot_reset_target(&path), &before);
+            assert_recovered_reset_publication_directory_clean(&path, *failpoint);
         } else {
             assert!(!path.exists());
             let replay = seed(
@@ -1106,6 +1019,18 @@ fn reset_seed_crash_windows_abort_at_configured_failpoint() {
                 21,
             )
             .unwrap();
+            assert_eq!(
+                replay,
+                reset_receipt(&original_request, original_result.clone())
+            );
+            assert_exact_published_reset_target(
+                &path,
+                &workspace,
+                &original_request,
+                &original_result,
+                21,
+            );
+            assert_recovered_reset_publication_directory_clean(&path, *failpoint);
             let repeated = seed(
                 &path,
                 workspace.clone(),
@@ -1116,22 +1041,76 @@ fn reset_seed_crash_windows_abort_at_configured_failpoint() {
             )
             .unwrap();
             assert_eq!(
-                replay,
-                reset_receipt(&original_request, original_result.clone())
-            );
-            assert_eq!(
                 repeated,
                 reset_receipt(&original_request, original_result.clone())
             );
-            assert_exact_published_reset_target(
-                &path,
-                &workspace,
-                &original_request,
-                &original_result,
-                21,
-            );
+            assert_recovered_reset_publication_directory_clean(&path, *failpoint);
         }
     }
+}
+#[cfg(unix)]
+#[test]
+fn reset_cleanup_failpoint_leaves_real_residual_artifacts_and_combines_errors() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("target.sqlite3");
+    let workspace = identity();
+    let error = seed(
+        &path,
+        workspace.clone(),
+        options(Some(
+            StoreFailpointV1::ResetAfterPublicationBeforeResponseAndTemporaryCleanup,
+        )),
+        request(31, 'c'),
+        reset_result(&workspace),
+        20,
+    )
+    .expect_err("cleanup fault must be returned with the primary failpoint error");
+
+    assert!(matches!(
+        error,
+        StoreErrorV1::PrimaryOperationAndCleanupFailureV1 { .. }
+    ));
+    assert!(path.exists(), "publication must remain durable");
+    let residuals = fs::read_dir(temporary.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".target.sqlite3."))
+        .collect::<Vec<_>>();
+    let temporary_name = residuals
+        .iter()
+        .find(|name| name.ends_with(".tmp"))
+        .expect("database cleanup failure must retain the temporary database");
+    let owned_temporary = temporary.path().join(temporary_name);
+    let owned_marker = sidecar(&owned_temporary, ".owner");
+    let owned_wal = sidecar(&owned_temporary, "-wal");
+    let owned_shm = sidecar(&owned_temporary, "-shm");
+    assert!(
+        owned_marker.exists(),
+        "database cleanup failure must retain the ownership marker"
+    );
+
+    let sentinel = temporary.path().join("unrelated-sentinel");
+    let marker_sentinel = temporary.path().join(".unrelated-sentinel.owner");
+    fs::write(&sentinel, b"sentinel").unwrap();
+    fs::write(&marker_sentinel, b"marker-sentinel").unwrap();
+
+    SqliteStoreV1::open(
+        &path,
+        &root(),
+        workspace,
+        options(None),
+        UnixMillis::new(21),
+    )
+    .expect("next open must converge interrupted cleanup");
+
+    for residual in [&owned_temporary, &owned_marker, &owned_wal, &owned_shm] {
+        assert!(
+            !residual.exists(),
+            "next open must remove owned cleanup residual {residual:?}"
+        );
+    }
+    assert_eq!(fs::read(&sentinel).unwrap(), b"sentinel");
+    assert_eq!(fs::read(&marker_sentinel).unwrap(), b"marker-sentinel");
 }
 #[cfg(unix)]
 #[test]
@@ -1679,7 +1658,16 @@ fn concurrent_ordinary_initialization_publishes_one_distinguishable_winner() {
             assert_eq!(error, expected_loser_error);
             (&second_identity, second_now, store)
         }
-        _ => panic!("exactly one ordinary initialization contender must publish"),
+        (Ok(first_store), Ok(second_store)) => {
+            first_store.close_for_maintenance().unwrap();
+            second_store.close_for_maintenance().unwrap();
+            panic!("both ordinary initialization contenders published");
+        }
+        (Err(first_error), Err(second_error)) => {
+            panic!(
+                "both ordinary initialization contenders failed: first={first_error:?}, second={second_error:?}"
+            );
+        }
     };
     winner_store.close_for_maintenance().unwrap();
 

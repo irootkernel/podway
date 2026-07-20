@@ -10,8 +10,12 @@ contracts, and compatibility requirements.
 
 ## Platform and safety boundary
 
-Podway supports native Apple Silicon macOS (`aarch64-apple-darwin`) only. Intel,
-Rosetta-translated, universal-binary, and Linux builds are not release targets.
+Podway release artifacts target only untranslated native Apple Silicon macOS
+(`aarch64-apple-darwin`, `arm64`, host architecture `arm64`, Mach-O architecture
+`arm64`). Cross-built, relabeled, translated, and universal/fat binaries cannot
+satisfy native Apple Silicon release acceptance. The current version is
+unreleased: no Apple-Silicon-specific release evidence, signing, notarization, or
+runtime-lifecycle claim is made here.
 
 The product is intentionally local and constrained:
 

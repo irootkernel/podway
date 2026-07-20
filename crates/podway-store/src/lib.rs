@@ -436,8 +436,9 @@ impl StoreCrashBoundaryV1 {
     }
 }
 
-/// Complete C01-C14 crash registry. C05/C06 are daemon preparation boundaries,
-/// deliberately outside Store transactions.
+/// Store-owned crash registry for C01-C13 plus publication boundary P01.
+/// C05/C06 are daemon preparation boundaries deliberately outside Store transactions;
+/// reset-all boundaries C14-C16 are daemon runtime boundaries.
 pub const PHASE2_CRASH_BOUNDARY_REGISTRY_V1: &[StoreCrashBoundaryV1] = &[
     StoreCrashBoundaryV1 {
         id: "C01",
@@ -534,7 +535,7 @@ pub const PHASE2_CRASH_BOUNDARY_REGISTRY_V1: &[StoreCrashBoundaryV1] = &[
         requirements: &["STO-007"],
     },
     StoreCrashBoundaryV1 {
-        id: "C14",
+        id: "P01",
         failpoints: &[StoreFailpointV1::PublicationAfterDestinationLinkBeforeTemporaryUnlink],
         durability: StoreCrashBoundaryDurabilityV1::PostCommitReplay,
         recovery_invariant: "durable destination wins and the matching Store temporary hard link is removed",

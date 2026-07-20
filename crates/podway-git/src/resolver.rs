@@ -77,14 +77,17 @@ impl NativeGitResolverV1 {
         selector: WorktreeSelectorV1,
     ) -> Result<ValidatedWorktreeV1, GitResolverErrorV1> {
         let selected = native::decode_lossless_path(selector.path())?;
-        if let Some(durable_identity) = selector.durable_identity()
-            && native::path_is_missing(&selected, GitReadOperationV1::CanonicalizePath)?
-        {
-            let durable_root =
-                native::decode_lossless_path(durable_identity.last_validated_root())?;
-            if native::path_is_missing(&durable_root, GitReadOperationV1::CanonicalizePath)? {
-                return Err(GitResolverErrorV1::WorktreeDeleted);
+        match selector.durable_identity() {
+            Some(durable_identity)
+                if native::path_is_missing(&selected, GitReadOperationV1::CanonicalizePath)? =>
+            {
+                let durable_root =
+                    native::decode_lossless_path(durable_identity.last_validated_root())?;
+                if native::path_is_missing(&durable_root, GitReadOperationV1::CanonicalizePath)? {
+                    return Err(GitResolverErrorV1::WorktreeDeleted);
+                }
             }
+            _ => {}
         }
         let layout = native::discover_worktree(selected)?;
         let root_fingerprint =

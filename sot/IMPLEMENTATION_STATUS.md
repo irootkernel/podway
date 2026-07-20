@@ -14,11 +14,11 @@ This document is an informational implementation-progress index. It does not cha
 | `G006` | Phase 5: CLI and versioned JSON | **complete / verified** | 2026-07-16 | `crates/podway-cli/tests/phase5_cli.rs`; `crates/podway-protocol/tests/phase5_slice_contract.rs`; `crates/podway-daemon/tests/phase5_dispatch.rs` |
 | `G007` | Phase 6: macOS service integration and packaging | **implementation complete / batch validation pending** | 2026-07-17 | `crates/podway-service/tests/phase6_native_service.rs`; `crates/podway-cli/tests/phase5_cli.rs`; `crates/podway-daemon/tests/phase4_daemon_binary.rs` |
 | `G008` | Phase 7: preset dogfooding and UX correction | **implementation complete / batch validation pending** | 2026-07-17 | `tools/run_g008_dogfood.py`; `crates/podway-cli/tests/phase4_production_vertical.rs` |
-| `G009` | Phase 8: hardening, release artifacts, and final acceptance | **blocked / incomplete** | not complete | `docs/70-delivery/70-implementation-plan.md`, Phase 8 |
+| `G009` | Phase 8: hardening, release artifacts, and final acceptance | **pending final Apple Silicon release acceptance / incomplete** | not complete | `docs/70-delivery/70-implementation-plan.md`, Phase 8 |
 
 ## Current release boundary
 
-Completion of `G001` through `G008` does not mean the complete product is released. `G007` and `G008` still require the final validation-batch close, and `G009` release qualification remains incomplete.
+Completion of `G001` through `G008` does not mean the complete product is released. `G007` and `G008` still require the final validation-batch close, and `G009` native Apple Silicon release acceptance remains incomplete.
 
 ## Evidence rules
 

@@ -58,7 +58,16 @@ pub enum ProtocolError {
         actual: usize,
     },
     InvalidTimestamp,
+    TerminalJobMissingFinishedAt,
+    NonterminalJobHasFinishedAt,
     InvalidErrorCode,
+    ErrorCodeMetadataMismatch {
+        code: String,
+        expected_exit_code: u8,
+        expected_retryable: bool,
+        actual_exit_code: u8,
+        actual_retryable: bool,
+    },
     InvalidExitCode {
         value: u8,
     },
@@ -105,7 +114,25 @@ impl fmt::Display for ProtocolError {
                 formatter,
                 "timestamp must be RFC 3339 UTC with milliseconds"
             ),
-            Self::InvalidErrorCode => write!(formatter, "error code must be uppercase snake case"),
+            Self::TerminalJobMissingFinishedAt => {
+                write!(formatter, "terminal job state requires finished_at")
+            }
+            Self::NonterminalJobHasFinishedAt => {
+                write!(formatter, "queued or running job state forbids finished_at")
+            }
+            Self::InvalidErrorCode => {
+                write!(formatter, "error code is not defined in the v1 catalog")
+            }
+            Self::ErrorCodeMetadataMismatch {
+                code,
+                expected_exit_code,
+                expected_retryable,
+                actual_exit_code,
+                actual_retryable,
+            } => write!(
+                formatter,
+                "error code {code} requires exit code {expected_exit_code} and retryable={expected_retryable}; received exit code {actual_exit_code} and retryable={actual_retryable}"
+            ),
             Self::InvalidExitCode { value } => {
                 write!(
                     formatter,
@@ -749,7 +776,7 @@ impl RequestEnvelopeV1 {
         }
         self.preconditions.validate()?;
         self.options.validate()?;
-        validate_json_map_depth(&self.payload)?;
+        validate_json_map_depth(&self.payload, 1)?;
 
         match self.operation {
             OperationV1::Mutate | OperationV1::Bootstrap => {
@@ -917,7 +944,6 @@ impl<'de> Deserialize<'de> for WorkspaceOutputV1 {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
         struct RawWorkspaceOutputV1 {
             uuid: WorkspaceId,
             root: String,
@@ -1029,7 +1055,17 @@ impl JobOutputV1 {
         if let Some(finished_at) = &self.finished_at {
             finished_at.validate()?;
         }
-        Ok(())
+        match self.state {
+            JobStateV1::Queued | JobStateV1::Running if self.finished_at.is_some() => {
+                Err(ProtocolError::NonterminalJobHasFinishedAt)
+            }
+            JobStateV1::Succeeded | JobStateV1::Failed | JobStateV1::Cancelled
+                if self.finished_at.is_none() =>
+            {
+                Err(ProtocolError::TerminalJobMissingFinishedAt)
+            }
+            _ => Ok(()),
+        }
     }
 }
 impl<'de> Deserialize<'de> for JobOutputV1 {
@@ -1038,7 +1074,6 @@ impl<'de> Deserialize<'de> for JobOutputV1 {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
         struct RawJobOutputV1 {
             id: JobId,
             sequence: u64,
@@ -1130,7 +1165,6 @@ impl<'de> Deserialize<'de> for SessionOutputV1 {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
         struct RawSessionOutputV1 {
             id: SessionId,
             title: String,
@@ -1228,9 +1262,9 @@ impl OutputEnvelopeV1 {
         if let Some(session) = &self.session {
             session.validate()?;
         }
-        validate_json_map_depth(&self.result)?;
+        validate_json_map_depth(&self.result, 1)?;
         for warning in &self.warnings {
-            validate_json_map_depth(warning)?;
+            validate_json_map_depth(warning, 2)?;
         }
         Ok(())
     }
@@ -1273,7 +1307,6 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV1 {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
         struct RawOutputEnvelopeV1 {
             schema: String,
             request_id: RequestIdV1,
@@ -1289,7 +1322,9 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV1 {
             warnings: Vec<Map<String, Value>>,
         }
 
-        let raw = RawOutputEnvelopeV1::deserialize(deserializer)?;
+        let value = Value::deserialize(deserializer)?;
+        validate_json_document_depth(&value).map_err(de::Error::custom)?;
+        let raw = RawOutputEnvelopeV1::deserialize(value).map_err(de::Error::custom)?;
         let output = Self {
             schema: raw.schema,
             request_id: raw.request_id,
@@ -1306,6 +1341,318 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV1 {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ErrorCodeCatalogEntryV1 {
+    code: &'static str,
+    exit_code: u8,
+    retryable: bool,
+}
+
+const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
+    ErrorCodeCatalogEntryV1 {
+        code: "DAEMON_NOT_INSTALLED",
+        exit_code: 3,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DAEMON_UNAVAILABLE",
+        exit_code: 3,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DAEMON_SHUTTING_DOWN",
+        exit_code: 3,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DAEMON_VERSION_INCOMPATIBLE",
+        exit_code: 3,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROTOCOL_VERSION_UNSUPPORTED",
+        exit_code: 3,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "REQUEST_TOO_LARGE",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "REQUEST_INVALID",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "NOT_A_GIT_WORKTREE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "BARE_GIT_REPOSITORY",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKTREE_GONE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_NOT_INITIALIZED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_ALREADY_INITIALIZED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_INIT_CONFLICT",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_ID_CONFLICT",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_CONFIG_INVALID",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_STATE_UNREADABLE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_SCHEMA_UNSUPPORTED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_QUEUE_FULL",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_MAINTENANCE",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_PATH_UNSAFE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PATH_OUTSIDE_WORKTREE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "MIGRATION_FAILED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_INVALID",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_SCHEMA_UNSUPPORTED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PRESET_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ALREADY_EXISTS",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_NOT_RUNNING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_NOT_COMPLETED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_CANCELLED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_REVISION_CONFLICT",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ATTEMPT_NOT_CURRENT",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "STAGE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "STAGE_NOT_SKIPPABLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "RETURN_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "REOPEN_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "REQUIRED_ITEMS_MISSING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "BLOCKERS_PRESENT",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_TYPE_MISMATCH",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_CONSTRAINT_FAILED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_REVISION_CONFLICT",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_ALREADY_SET",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "LIST_VALUE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "LIST_VALUE_DUPLICATE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ARTIFACT_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ARTIFACT_UNREADABLE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ARTIFACT_CHANGED",
+        exit_code: 1,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ARTIFACT_MEDIA_TYPE_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "BLOCKER_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "BLOCKER_NOT_CURRENT",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "IDEMPOTENCY_KEY_REUSED",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "JOB_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "JOB_NOT_CANCELLABLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "JOB_WAIT_TIMEOUT",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "CONFIRMATION_REQUIRED",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "INTERNAL_ERROR",
+        exit_code: 6,
+        retryable: false,
+    },
+];
+/// Returns the complete frozen v1 error catalog in wire order.
+pub fn error_code_catalog_v1() -> impl ExactSizeIterator<Item = (&'static str, u8, bool)> {
+    ERROR_CODE_CATALOG_V1
+        .iter()
+        .map(|entry| (entry.code, entry.exit_code, entry.retryable))
+}
+
+fn error_code_catalog_entry_v1(code: &str) -> Option<ErrorCodeCatalogEntryV1> {
+    ERROR_CODE_CATALOG_V1
+        .iter()
+        .copied()
+        .find(|entry| entry.code == code)
+}
 /// A stable public error code from the catalog.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
@@ -1438,10 +1785,23 @@ impl ErrorEnvelopeV1 {
         self.generated_at.validate()?;
         self.code.validate()?;
         self.exit_code.validate()?;
+        let catalog_entry = error_code_catalog_entry_v1(self.code.as_str())
+            .ok_or(ProtocolError::InvalidErrorCode)?;
+        if self.exit_code.get() != catalog_entry.exit_code
+            || self.retryable != catalog_entry.retryable
+        {
+            return Err(ProtocolError::ErrorCodeMetadataMismatch {
+                code: self.code.as_str().to_owned(),
+                expected_exit_code: catalog_entry.exit_code,
+                expected_retryable: catalog_entry.retryable,
+                actual_exit_code: self.exit_code.get(),
+                actual_retryable: self.retryable,
+            });
+        }
         validate_non_empty_scalar_bounded(&self.message, usize::MAX, "message")?;
-        validate_json_map_depth(&self.details)?;
+        validate_json_map_depth(&self.details, 1)?;
         if let Some(workspace) = &self.workspace {
-            validate_json_map_depth(workspace)?;
+            validate_json_map_depth(workspace, 1)?;
         }
         Ok(())
     }
@@ -1480,7 +1840,6 @@ impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
         struct RawErrorEnvelopeV1 {
             schema: String,
             request_id: RequestIdV1,
@@ -1495,7 +1854,9 @@ impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {
             details: Map<String, Value>,
         }
 
-        let raw = RawErrorEnvelopeV1::deserialize(deserializer)?;
+        let value = Value::deserialize(deserializer)?;
+        validate_json_document_depth(&value).map_err(de::Error::custom)?;
+        let raw = RawErrorEnvelopeV1::deserialize(value).map_err(de::Error::custom)?;
         let output = Self {
             schema: raw.schema,
             request_id: raw.request_id,
@@ -1534,6 +1895,9 @@ impl<'de> Deserialize<'de> for ResponseEnvelopeV1 {
     where
         D: Deserializer<'de>,
     {
+        let value = Value::deserialize(deserializer)?;
+        validate_json_document_depth(&value).map_err(de::Error::custom)?;
+
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum RawResponseEnvelopeV1 {
@@ -1541,11 +1905,10 @@ impl<'de> Deserialize<'de> for ResponseEnvelopeV1 {
             Error(ErrorEnvelopeV1),
         }
 
-        let response = match RawResponseEnvelopeV1::deserialize(deserializer)? {
+        let response = match RawResponseEnvelopeV1::deserialize(value).map_err(de::Error::custom)? {
             RawResponseEnvelopeV1::Output(output) => Self::Output(output),
             RawResponseEnvelopeV1::Error(error) => Self::Error(error),
         };
-        response.validate().map_err(de::Error::custom)?;
         Ok(response)
     }
 }
@@ -1624,26 +1987,54 @@ fn validate_rfc3339_millis(value: &str) -> Result<(), ProtocolError> {
             return Err(ProtocolError::InvalidTimestamp);
         }
     }
+
+    let year = decimal_component(bytes, 0, 4);
+    let month = decimal_component(bytes, 5, 2);
+    let day = decimal_component(bytes, 8, 2);
+    let hour = decimal_component(bytes, 11, 2);
+    let minute = decimal_component(bytes, 14, 2);
+    let second = decimal_component(bytes, 17, 2);
+
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if divides_evenly(year, 4)
+            && (!divides_evenly(year, 100) || divides_evenly(year, 400)) =>
+        {
+            29
+        }
+        2 => 28,
+        _ => return Err(ProtocolError::InvalidTimestamp),
+    };
+    if day == 0 || day > days_in_month || hour > 23 || minute > 59 || second > 59 {
+        return Err(ProtocolError::InvalidTimestamp);
+    }
     Ok(())
 }
 
+fn decimal_component(bytes: &[u8], start: usize, length: usize) -> u16 {
+    bytes[start..start + length]
+        .iter()
+        .fold(0, |value, byte| value * 10 + u16::from(*byte - b'0'))
+}
+
+fn divides_evenly(value: u16, divisor: u16) -> bool {
+    value.checked_rem(divisor) == Some(0)
+}
+
 fn validate_error_code(value: &str) -> Result<(), ProtocolError> {
-    let bytes = value.as_bytes();
-    if bytes.len() < 2
-        || !bytes[0].is_ascii_uppercase()
-        || bytes
-            .iter()
-            .copied()
-            .any(|byte| !(matches!(byte, b'A'..=b'Z' | b'0'..=b'9' | b'_')))
-    {
+    if error_code_catalog_entry_v1(value).is_none() {
         return Err(ProtocolError::InvalidErrorCode);
     }
     Ok(())
 }
 
-fn validate_json_map_depth(map: &Map<String, Value>) -> Result<(), ProtocolError> {
+fn validate_json_map_depth(
+    map: &Map<String, Value>,
+    map_depth: usize,
+) -> Result<(), ProtocolError> {
     for value in map.values() {
-        validate_json_value_depth(value, 1)?;
+        validate_json_value_depth(value, map_depth + 1)?;
     }
     Ok(())
 }

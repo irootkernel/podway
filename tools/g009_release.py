@@ -3,13 +3,14 @@ from __future__ import annotations
 import tomllib
 from datetime import date
 import io
-import subprocess
 import os
 import re
+import subprocess
 import zipfile
 from pathlib import Path
 from typing import Any
-from g009_common import ARCHIVE_ROOT, CONTROLLER_ROOT, EVIDENCE_ROOT, ROOT, bounded_bytes, canonical_json, fail, load_json, load_json_bytes, require_arm64_host, require_digest, safe_extract_member, sha256_bytes, sha256_file
+
+from g009_common import CONTROLLER_ROOT, EVIDENCE_ROOT, ROOT, archive_root, bounded_bytes, canonical_json, fail, load_json, load_json_bytes, profile_target_tuple, require_digest, require_native_host, safe_extract_member, sha256_bytes, sha256_file, target_tuple
 
 MAX_ARCHIVE_MEMBERS = 256
 MAX_ARCHIVE_UNCOMPRESSED = 512 * 1024 * 1024
@@ -265,7 +266,7 @@ def verify_rc_consumption(path: Path) -> dict[str, Any]:
     if not resolved.is_relative_to(EVIDENCE_ROOT.resolve()) or resolved.name != f"{digest}.json":
         fail("RC must be an immutable digest-addressed evidence artifact")
     rc = load_rc(resolved, raw=raw)
-    require_arm64_host(rc["target"])
+    require_native_host(rc["target"])
     if _current_source() != {"commit": rc["source"]["commit"], "tree": rc["source"]["tree"]}:
         fail("checked-out source commit/tree differs from immutable RC")
     _verify_approvals(rc)
@@ -274,9 +275,25 @@ def verify_rc_consumption(path: Path) -> dict[str, Any]:
 
 def load_rc(path: Path, *, raw: bytes | None = None) -> dict[str, Any]:
     rc = load_json(path) if raw is None else load_json_bytes(raw, str(path))
-    required = {"schema", "target", "minimum_macos", "rust", "source", "host", "inputs", "signing", "archive_root", "binaries"}
-    if not isinstance(rc, dict) or set(rc) != required or rc.get("schema") != "podway.g009.rc-intent/v1": fail("not an exact G009 RC intent")
-    if rc.get("target") != "aarch64-apple-darwin" or rc.get("rust") != "1.85.0" or rc.get("archive_root") != ARCHIVE_ROOT: fail("RC identity drift")
+    required = {"schema", "target", "target_tuple", "minimum_macos", "rust", "source", "host", "inputs", "signing", "archive_root", "binaries"}
+    if not isinstance(rc, dict) or rc.get("schema") != "podway.g009.rc-intent/v1":
+        fail("not an exact G009 RC intent")
+    if "target_tuple" not in rc:
+        fail("RC target tuple is required")
+    if set(rc) != required:
+        fail("not an exact G009 RC intent")
+    target = rc.get("target")
+    require_native_host(target)
+    expected_tuple = target_tuple(target)
+    observed_tuple = rc["target_tuple"]
+    if not isinstance(observed_tuple, dict):
+        fail("RC target tuple is malformed")
+    if set(observed_tuple) != set(expected_tuple):
+        fail("RC target tuple must contain exactly four fields")
+    if observed_tuple != expected_tuple:
+        fail("RC target tuple differs from RC target")
+    if rc.get("rust") != "1.85.0" or rc.get("archive_root") != archive_root(target):
+        fail("RC identity drift")
     source, host = rc.get("source"), rc.get("host")
     if (
         not isinstance(source, dict)
@@ -302,7 +319,15 @@ def load_rc(path: Path, *, raw: bytes | None = None) -> dict[str, Any]:
         executable = Path(tool["path"])
         if executable.is_symlink() or not executable.is_file() or sha256_file(executable) != tool["path_sha256"]:
             fail("RC source tool provenance observation differs")
-    if not isinstance(host, dict) or host.get("system") != "Darwin" or host.get("machine") != "arm64": fail("RC host identity is malformed")
+    if (
+        not isinstance(host, dict)
+        or set(host) != {"system", "machine", "platform"}
+        or host["system"] != "Darwin"
+        or host["machine"] != expected_tuple["host_arch"]
+        or not isinstance(host["platform"], str)
+        or not host["platform"]
+    ):
+        fail("RC host identity is malformed")
     signing = rc.get("signing")
     expected_signing = {"posture": "unsigned-internal", "codesign": "not_attempted_missing_credentials", "notarization": "not_attempted_missing_credentials", "stapling": "not_applicable_zip", "gatekeeper": "not_claimed"}
     if signing != expected_signing:
@@ -314,6 +339,10 @@ def load_rc(path: Path, *, raw: bytes | None = None) -> dict[str, Any]:
     for item in inputs:
         if not isinstance(item, dict) or set(item) != {"role", "path", "sha256"}: fail("RC has malformed input")
         resolve_rc_input(rc, item["role"])
+        if item["role"] == "profile":
+            profile = load_json(resolve_rc_input(rc, "profile"))
+            if not isinstance(profile, dict) or profile_target_tuple(profile.get("target")) != expected_tuple:
+                fail("RC profile target tuple differs from RC target")
     binaries = rc.get("binaries")
     if not isinstance(binaries, dict) or set(binaries) != {"podway", "podwayd"}:
         fail("RC lacks exact binary provenance")
@@ -334,16 +363,20 @@ def load_rc(path: Path, *, raw: bytes | None = None) -> dict[str, Any]:
             env={"PATH": os.environ.get("PATH", "")},
             timeout=30,
         )
-        if arch.returncode != 0 or arch.stdout.decode("ascii", "strict").strip() != "arm64":
-            fail(f"RC binary is not arm64-only: {name}")
+        if arch.returncode != 0 or arch.stdout.decode("ascii", "strict").strip() != expected_tuple["mach_o_arch"]:
+            fail(f"RC binary is not {expected_tuple['mach_o_arch']}-only: {name}")
     return rc
 
-def payload_manifest(members: dict[str, bytes]) -> dict[str, Any]:
+def payload_manifest(members: dict[str, bytes], *, target: str) -> dict[str, Any]:
+    expected_root = archive_root(target)
     return {"schema": "podway.g009.payload-digests/v1", "members": [
         {"path": name, "sha256": sha256_bytes(data), "size": len(data)}
-        for name, data in sorted(members.items()) if name != f"{ARCHIVE_ROOT}/payload-digests-v1.json"]}
+        for name, data in sorted(members.items()) if name != f"{expected_root}/payload-digests-v1.json"]}
 
-def inspect_archive(path: Path, declared_members: set[str] | None = None) -> dict[str, Any]:
+def inspect_archive(
+    path: Path, declared_members: set[str] | None = None, *, target: str,
+) -> dict[str, Any]:
+    expected_root = archive_root(target)
     if path.is_symlink() or not path.is_file():
         fail(f"archive missing or unsafe: {path}")
     sidecar = path.with_name(path.name + ".sha256")
@@ -367,20 +400,20 @@ def inspect_archive(path: Path, declared_members: set[str] | None = None) -> dic
                 mode = info.external_attr >> 16
                 if info.is_dir() or info.filename in names or (mode & 0o170000) != 0o100000:
                     fail("archive has duplicate, directory, or non-regular member")
-                safe_extract_member(info.filename)
+                safe_extract_member(info.filename, target)
                 if info.flag_bits & 0x1 or (mode & 0o777) not in (0o644, 0o755):
                     fail("unsafe archive member metadata")
-                if info.filename.startswith(f"{ARCHIVE_ROOT}/bin/") != ((mode & 0o777) == 0o755):
+                if info.filename.startswith(f"{expected_root}/bin/") != ((mode & 0o777) == 0o755):
                     fail("archive executable mode mismatch")
                 names.add(info.filename)
                 members[info.filename] = archive.read(info)
     except (OSError, zipfile.BadZipFile) as exc:
         fail(f"unsafe archive: {exc}")
-    manifest_name = f"{ARCHIVE_ROOT}/payload-digests-v1.json"
+    manifest_name = f"{expected_root}/payload-digests-v1.json"
     if manifest_name not in members:
         fail("archive missing internal payload manifest")
     manifest = load_json_from_bytes(members[manifest_name])
-    expected = payload_manifest(members)
+    expected = payload_manifest(members, target=target)
     if manifest != expected:
         fail("internal payload manifest mismatch or recursion")
     expected_names = {item["path"] for item in expected["members"]} | {manifest_name}

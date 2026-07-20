@@ -37,7 +37,9 @@ A product minor release may add backward-compatible fields or commands. Breaking
 
 Release CI builds and tests the sole supported release target:
 
-- Apple Silicon (`aarch64-apple-darwin`), with native arm64 validation.
+- Apple Silicon (`aarch64-apple-darwin`) with `arch`, host architecture, and thin Mach-O architecture all `arm64`.
+
+Native validation must run on an arm64 host against thin arm64 Mach-O binaries. Translated execution, universal or fat binaries, cross-built output, and relabeled artifacts do not satisfy this requirement.
 
 ## Release archive contents
 
@@ -60,6 +62,7 @@ podway-<version>-<target>/
   README.md
   RELEASE_NOTES.md
 ```
+Each Apple Silicon archive contains both executables, `podway` and `podwayd`; they are not separate architecture artifacts.
 
 Presets are embedded in the binary for runtime availability. Source copies are shipped for inspection and customization.
 

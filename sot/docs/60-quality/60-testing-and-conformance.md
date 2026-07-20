@@ -170,6 +170,11 @@ Fixtures cover:
 - log creation and rotation;
 - uninstall preserves worktree data;
 - incompatible binary/protocol reporting.
+### Qualification wrapper constraint
+
+Production `podway daemon install` MUST resolve and stage the actual `podwayd` binary; the LaunchAgent production topology remains the documented direct daemon service and does not support a wrapper as an installed daemon path.
+
+The G009 qualification harness MAY interpose a controller-owned, digest-staged wrapper solely to constrain the release binary during isolated qualification. Its receipt MUST prove that the wrapper forwards argv unchanged, executes the exact archived `podwayd` bytes, and is itself digest-bound before staging. This qualification-only containment topology is not a supported production installation topology and MUST NOT weaken the service architecture contract.
 
 ## CLI and JSON tests
 
@@ -229,7 +234,7 @@ Required CI lanes:
 - schema/example validation;
 - SQLite and migration tests;
 - protocol fuzz smoke corpus;
-- native macOS Apple Silicon (`aarch64-apple-darwin`) build and integration;
+- native arm64-host macOS Apple Silicon (`aarch64-apple-darwin`) thin-Mach-O build and integration;
 - release packaging dry run;
 - dependency and license checks.
 

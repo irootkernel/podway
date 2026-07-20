@@ -281,6 +281,250 @@ fn schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum()
 }
 
 #[test]
+
+fn pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation()
+-> Result<(), Box<dyn std::error::Error>> {
+    const APPLICATION_ID: i64 = 0x504f_4457;
+    const PAGE_SIZE: i64 = 8_192;
+    const AUTO_VACUUM_FULL: i64 = 1;
+    const BUSY_TIMEOUT_MS: u32 = 4_321;
+    const TASK_STATE_TABLES: &[&str] = &[
+        "procedure_snapshots",
+        "task_sessions",
+        "stage_progress",
+        "attempts",
+        "item_slots",
+        "blockers",
+        "jobs",
+        "idempotency_records",
+        "operational_journal",
+    ];
+
+    let temporary = TempDir::new()?;
+    let worktree = temporary.path().join("worktree");
+    let runtime = worktree.join(".podway/runtime");
+    let external_global = temporary.path().join("global-state.sqlite3");
+    fs::create_dir_all(&runtime)?;
+    #[cfg(unix)]
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))?;
+
+    let predecessor = Connection::open(runtime.join("state.sqlite3"))?;
+    predecessor.pragma_update(None, "application_id", APPLICATION_ID)?;
+    predecessor.pragma_update(None, "page_size", PAGE_SIZE)?;
+    predecessor.pragma_update(None, "auto_vacuum", "FULL")?;
+    predecessor.execute_batch("VACUUM")?;
+    let seeded_predecessor: (i64, i64, i64, i64) = predecessor.query_row(
+        "SELECT \
+         (SELECT application_id FROM pragma_application_id), \
+         (SELECT page_size FROM pragma_page_size), \
+         (SELECT auto_vacuum FROM pragma_auto_vacuum), \
+         (SELECT user_version FROM pragma_user_version)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(
+        seeded_predecessor,
+        (APPLICATION_ID, PAGE_SIZE, AUTO_VACUUM_FULL, 0),
+        "schema-0 predecessor metadata must be seeded exactly"
+    );
+    let predecessor_rows: i64 = predecessor.query_row(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        predecessor_rows, 0,
+        "schema-0 predecessor must not invent task or application tables"
+    );
+    drop(predecessor);
+    let path = runtime.join("state.sqlite3");
+    #[cfg(unix)]
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+
+    let global = Connection::open(&external_global)?;
+    global.execute_batch(
+        "CREATE TABLE global_metadata (scope TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+         INSERT INTO global_metadata (scope, value) VALUES ('owner', 'external-global');",
+    )?;
+    drop(global);
+    #[cfg(unix)]
+    fs::set_permissions(&external_global, fs::Permissions::from_mode(0o600))?;
+    let seeded_external_bytes = fs::read(&external_global)?;
+
+    let worktree_root = ValidatedWorkspaceRootV1::from_path(&worktree)?;
+    let options = options().with_busy_timeout_ms(BUSY_TIMEOUT_MS)?;
+    let connection = open_or_initialize_v1(
+        &path,
+        &worktree_root,
+        &identity(),
+        &options,
+        UnixMillis::new(1234),
+    )?;
+    verify_connection_pragmas_v1(&connection, BUSY_TIMEOUT_MS)?;
+    let preserved_predecessor: (i64, i64, i64, i64) = connection.query_row(
+        "SELECT \
+         (SELECT application_id FROM pragma_application_id), \
+         (SELECT page_size FROM pragma_page_size), \
+         (SELECT auto_vacuum FROM pragma_auto_vacuum), \
+         (SELECT user_version FROM pragma_user_version)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(
+        preserved_predecessor,
+        (
+            APPLICATION_ID,
+            PAGE_SIZE,
+            AUTO_VACUUM_FULL,
+            i64::from(SQLITE_SCHEMA_VERSION_V1)
+        ),
+        "initialization must preserve schema-0 header metadata while advancing only user_version"
+    );
+    let migration: (i64, String, String) = connection.query_row(
+        "SELECT version, name, checksum FROM schema_migrations",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(
+        migration,
+        (
+            i64::from(SQLITE_SCHEMA_VERSION_V1),
+            SQLITE_INITIAL_MIGRATION_NAME_V1.to_owned(),
+            EXPECTED_SQLITE_V1_MIGRATION_SHA256.to_owned(),
+        )
+    );
+    let migration_rows: i64 =
+        connection.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    assert_eq!(
+        migration_rows, 1,
+        "initialization must record exactly one migration"
+    );
+    for table in TASK_STATE_TABLES {
+        let rows: i64 =
+            connection.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(rows, 0, "schema-0 initialization copied rows into {table}");
+    }
+    let workspace_rows: i64 =
+        connection.query_row("SELECT COUNT(*) FROM workspace_state", [], |row| row.get(0))?;
+    assert_eq!(workspace_rows, 1);
+    drop(connection);
+
+    assert_eq!(
+        fs::read(&external_global)?,
+        seeded_external_bytes,
+        "initialization must not mutate an external global location"
+    );
+    let global = Connection::open(&external_global)?;
+    let global_metadata: (String, String) =
+        global.query_row("SELECT scope, value FROM global_metadata", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+    assert_eq!(
+        global_metadata,
+        ("owner".to_owned(), "external-global".to_owned()),
+        "initialization must not copy task state into or alter the external global database"
+    );
+    let global_task_tables: i64 = global.query_row(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE name IN (
+             'procedure_snapshots', 'task_sessions', 'stage_progress', 'attempts', 'item_slots',
+             'blockers', 'jobs', 'idempotency_records', 'operational_journal'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(global_task_tables, 0);
+    drop(global);
+
+    let worktree_entries = fs::read_dir(&worktree)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(worktree_entries, vec![std::ffi::OsString::from(".podway")]);
+    let mut temporary_entries = fs::read_dir(temporary.path())?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<Vec<_>, _>>()?;
+    temporary_entries.sort();
+    assert_eq!(
+        temporary_entries,
+        vec![
+            std::ffi::OsString::from("global-state.sqlite3"),
+            std::ffi::OsString::from("worktree"),
+        ],
+        "task state must remain under the worktree rather than creating an external durable copy"
+    );
+
+    let reopened = open_or_initialize_v1(
+        &path,
+        &worktree_root,
+        &identity(),
+        &options,
+        UnixMillis::new(1235),
+    )?;
+    verify_connection_pragmas_v1(&reopened, BUSY_TIMEOUT_MS)?;
+    let reopened_migration_rows: i64 =
+        reopened.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    assert_eq!(
+        reopened_migration_rows, 1,
+        "reopen must not append a duplicate schema migration"
+    );
+    let reopened_predecessor: (i64, i64, i64, i64) = reopened.query_row(
+        "SELECT \
+         (SELECT application_id FROM pragma_application_id), \
+         (SELECT page_size FROM pragma_page_size), \
+         (SELECT auto_vacuum FROM pragma_auto_vacuum), \
+         (SELECT user_version FROM pragma_user_version)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(
+        reopened_predecessor, preserved_predecessor,
+        "reopen must preserve initialized predecessor metadata exactly"
+    );
+    for table in TASK_STATE_TABLES {
+        let rows: i64 =
+            reopened.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(rows, 0, "reopen invented task state in {table}");
+    }
+    let rollback = TempDir::new()?;
+    let rollback_raw = Connection::open(rollback.path().join("state.sqlite3"))?;
+    rollback_raw.pragma_update(None, "application_id", APPLICATION_ID)?;
+    drop(rollback_raw);
+    make_database_private(&rollback)?;
+    let failing_options = SqliteStoreOptionsV1::new(8)?
+        .with_busy_timeout_ms(BUSY_TIMEOUT_MS)?
+        .with_failpoint(Some(StoreFailpointV1::SchemaBeforeCommit));
+    assert!(matches!(
+        open_temp_database_with_options(&rollback, &worktree_root, &identity(), &failing_options,),
+        Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Recovery
+        })
+    ));
+    assert_uninitialized_schema0(&rollback, APPLICATION_ID)?;
+    let recovered =
+        open_temp_database_with_options(&rollback, &worktree_root, &identity(), &options)?;
+    let recovered_migration_rows: i64 =
+        recovered.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    assert_eq!(recovered_migration_rows, 1);
+    drop(recovered);
+    drop(reopened);
+    assert_eq!(
+        fs::read(&external_global)?,
+        seeded_external_bytes,
+        "reopen must not mutate an external global location"
+    );
+    Ok(())
+}
+
+#[test]
 fn schema_after_pragmas_failure_leaves_schema0_unchanged_and_retry_initializes()
 -> Result<(), Box<dyn std::error::Error>> {
     assert_schema_initialization_failpoint_recovers(StoreFailpointV1::SchemaAfterPragmas)
@@ -293,7 +537,7 @@ fn schema_before_commit_failure_rolls_back_and_retry_initializes()
 }
 
 #[test]
-fn schema_open_fails_closed_for_partial_newer_checksum_missing_object_migration_and_identity()
+fn pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed()
 -> Result<(), Box<dyn std::error::Error>> {
     let partial = TempDir::new()?;
     Connection::open(partial.path().join("state.sqlite3"))?
@@ -364,6 +608,27 @@ fn schema_open_fails_closed_for_partial_newer_checksum_missing_object_migration_
             check: StoreIntegrityCheckV1::WorkspaceIdentity
         }
     ));
+    let rollback = TempDir::new()?;
+    let raw = Connection::open(rollback.path().join("state.sqlite3"))?;
+    raw.pragma_update(None, "application_id", 0x504f_4457i64)?;
+    drop(raw);
+    make_database_private(&rollback)?;
+    let failing_options = options().with_failpoint(Some(StoreFailpointV1::SchemaBeforeCommit));
+    assert!(matches!(
+        open_temp_database_with_options(&rollback, &root(), &identity(), &failing_options),
+        Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Recovery
+        })
+    ));
+    assert_uninitialized_schema0(&rollback, 0x504f_4457)?;
+    let initialized = open_temp_database(&rollback, &root(), &identity())?;
+    let checksum: String = initialized.query_row(
+        "SELECT checksum FROM schema_migrations WHERE version = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(checksum, EXPECTED_SQLITE_V1_MIGRATION_SHA256);
+    drop(initialized);
     Ok(())
 }
 

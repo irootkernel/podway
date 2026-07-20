@@ -1051,13 +1051,16 @@ impl WorkspaceBindingInspectorV1 for SqliteWorkspaceBindingInspectorV1 {
         &self,
         database_path: &Path,
     ) -> Result<Option<WorkspaceBindingV1>, WorkspaceBindingInspectionErrorV1> {
-        if let Some(parent) = database_path.parent()
-            && matches!(
-                fs::symlink_metadata(parent),
-                Err(error) if error.kind() == io::ErrorKind::NotFound
-            )
-        {
-            return Ok(None);
+        match database_path.parent() {
+            Some(parent)
+                if matches!(
+                    fs::symlink_metadata(parent),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound
+                ) =>
+            {
+                return Ok(None);
+            }
+            _ => {}
         }
         SqliteStoreV1::inspect_workspace_binding(database_path, &self.options)
             .map_err(WorkspaceBindingInspectionErrorV1::Store)
@@ -1392,13 +1395,14 @@ where
             .ok_or(WorkspaceResolutionErrorV1::ExistingBindingMissing)?;
         let stored_identity = binding.identity();
 
-        if let Some(expected) = expected_workspace_id
-            && expected != stored_identity.workspace_uuid()
-        {
-            return Err(WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
-                expected: expected.clone(),
-                actual: stored_identity.workspace_uuid().clone(),
-            });
+        match expected_workspace_id {
+            Some(expected) if expected != stored_identity.workspace_uuid() => {
+                return Err(WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
+                    expected: expected.clone(),
+                    actual: stored_identity.workspace_uuid().clone(),
+                });
+            }
+            _ => {}
         }
 
         require_matching_git_fingerprints(&preliminary, stored_identity)?;

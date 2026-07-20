@@ -218,6 +218,25 @@ fn snapshots_and_frozen_reports_are_coherent() {
     emitter.emit(SERVICE_FAILED);
     assert_eq!(emitter.counters(), frozen);
 }
+#[test]
+fn post_shutdown_emits_are_rejected_without_mutating_frozen_counters() {
+    let observability = ObservabilityV1::start(Arc::new(Sink::default()), Arc::new(FixedClock(1)));
+    let emitter = observability.emitter();
+    let frozen = observability.shutdown().counters();
+
+    emitter.emit(ADMISSION_OK);
+    emitter.emit(SERVICE_FAILED);
+
+    assert_eq!(emitter.counters(), frozen);
+    assert_eq!(
+        (
+            frozen.primary_dropped,
+            frozen.fallback_dropped,
+            frozen.stopped_dropped,
+        ),
+        (0, 0, 0)
+    );
+}
 
 #[test]
 fn failure_only_saturation_storm_reserves_marker_capacity_and_accounts_trigger() {

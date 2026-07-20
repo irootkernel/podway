@@ -43,6 +43,7 @@ const REGISTRY_CRASH_AFTER_RENAME: &str = "after-rename-before-parent-sync";
 
 struct RegistryFixture {
     root: PathBuf,
+    runtime_root: PathBuf,
     paths: ServiceRuntimePathsV1,
 }
 
@@ -63,14 +64,19 @@ impl RegistryFixture {
         }
         set_mode(&application_support, 0o700);
 
+        let runtime_root = short_runtime_directory(&root);
         let paths = ServiceRuntimePathsV1::from_directories(
             launch_agents,
             application_support,
             logs,
-            root.join("Runtime"),
+            runtime_root.clone(),
         )
         .expect("fixture paths must be valid service paths");
-        Self { root, paths }
+        Self {
+            root,
+            runtime_root,
+            paths,
+        }
     }
 
     fn registry_path(&self) -> &Path {
@@ -97,6 +103,7 @@ impl RegistryFixture {
 impl Drop for RegistryFixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.runtime_root);
     }
 }
 
@@ -125,12 +132,21 @@ fn write_private_registry(path: &Path, bytes: &[u8]) {
     set_mode(path, 0o600);
 }
 
+fn short_runtime_directory(root: &Path) -> PathBuf {
+    let mut digest = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in root.as_os_str().as_encoded_bytes() {
+        digest ^= u64::from(*byte);
+        digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    PathBuf::from(format!("/tmp/pw4r-{digest:016x}"))
+}
+
 fn service_runtime_paths_for_root(root: &Path) -> ServiceRuntimePathsV1 {
     ServiceRuntimePathsV1::from_directories(
         root.join("LaunchAgents"),
         root.join("ApplicationSupport"),
         root.join("Logs"),
-        root.join("Runtime"),
+        short_runtime_directory(root),
     )
     .expect("child fixture paths must be valid service paths")
 }

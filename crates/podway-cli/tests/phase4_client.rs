@@ -27,6 +27,7 @@ static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct RuntimeFixture {
     root: PathBuf,
+    runtime_root: PathBuf,
     paths: ServiceRuntimePathsV1,
 }
 
@@ -41,18 +42,22 @@ impl RuntimeFixture {
         let launch_agents = root.join("launch-agents");
         let application_support = root.join("application-support");
         let logs = root.join("logs");
-        let runtime = root.join("runtime");
-        for directory in [&launch_agents, &application_support, &logs, &runtime] {
+        let runtime_root = short_runtime_directory(&root);
+        for directory in [&launch_agents, &application_support, &logs, &runtime_root] {
             fs::create_dir(directory).expect("client fixture directory must be created");
         }
         let paths = ServiceRuntimePathsV1::from_directories(
             launch_agents,
             application_support,
             logs,
-            runtime,
+            runtime_root.clone(),
         )
         .expect("client fixture service paths must be valid");
-        Self { root, paths }
+        Self {
+            root,
+            runtime_root,
+            paths,
+        }
     }
 
     fn socket_path(&self) -> &Path {
@@ -63,9 +68,18 @@ impl RuntimeFixture {
 impl Drop for RuntimeFixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.runtime_root);
     }
 }
 
+fn short_runtime_directory(root: &Path) -> PathBuf {
+    let mut digest = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in root.as_os_str().as_encoded_bytes() {
+        digest ^= u64::from(*byte);
+        digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    PathBuf::from(format!("/tmp/pw4r-{digest:016x}"))
+}
 enum ServerBehavior {
     FragmentedResponse(Vec<u8>),
     DelayedFragmentedResponse { response: Vec<u8>, delay: Duration },
@@ -175,7 +189,7 @@ fn mutation_request() -> podway_protocol::RequestEnvelopeV1 {
 
 fn error_payload() -> Vec<u8> {
     format!(
-        r#"{{"schema":"podway.error/v1","request_id":"{REQUEST_ID}","command":"session.status","generated_at":"2026-07-15T12:34:56.789Z","code":"DAEMON_UNAVAILABLE","message":"daemon is restarting","retryable":true,"exit_code":6,"details":{{}}}}"#
+        r#"{{"schema":"podway.error/v1","request_id":"{REQUEST_ID}","command":"session.status","generated_at":"2026-07-15T12:34:56.789Z","code":"DAEMON_UNAVAILABLE","message":"daemon is restarting","retryable":true,"exit_code":3,"details":{{}}}}"#
     )
     .into_bytes()
 }

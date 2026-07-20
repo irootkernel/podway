@@ -14,7 +14,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub const MAX_EVENT_BYTES_V1: usize = 8 * 1024;
@@ -22,8 +22,12 @@ pub const PRIMARY_CAPACITY_V1: usize = 4096;
 pub const FALLBACK_CAPACITY_V1: usize = 256;
 pub const MAX_WRITER_CYCLE_V1: Duration = Duration::from_millis(50);
 pub const MAX_SHUTDOWN_FLUSH_V1: Duration = Duration::from_secs(2);
+const MAX_EMIT_QUEUE_WAIT_V1: Duration = Duration::from_millis(5);
 pub const ROTATION_BYTES_V1: u64 = 10 * 1024 * 1024;
 pub const RETAINED_ROTATIONS_V1: usize = 5;
+const ADMISSION_RUNNING_V1: u64 = 0;
+const ADMISSION_STOPPING_V1: u64 = 1;
+const ADMISSION_FROZEN_V1: u64 = 2;
 
 /// The concrete daemon operation being observed. This intentionally has no catch-all variant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -279,7 +283,7 @@ impl Counters {
     fn snapshot(&self) -> ObservabilityCountersV1 {
         loop {
             let before = self.sequence.load(Ordering::Acquire);
-            if !before.is_multiple_of(2) {
+            if before & 1 != 0 {
                 thread::yield_now();
                 continue;
             }
@@ -313,17 +317,34 @@ struct Queue {
     fallback: VecDeque<EventRecordV1>,
     stopping: bool,
 }
+struct Lifecycle {
+    frozen_report: Option<ObservabilityShutdownReportV1>,
+}
+#[cfg(test)]
+type EmissionBarrierV1 = Arc<(Mutex<(bool, bool)>, Condvar)>;
+
 struct Shared {
     queue: Mutex<Queue>,
     available: Condvar,
     counters: Counters,
     sink: Option<Arc<dyn LogSinkV1>>,
     clock: Arc<dyn ClockV1>,
-    stopped: AtomicBool,
     in_flight: AtomicU64,
+    emitting: AtomicU64,
     degraded: bool,
     queue_saturated: AtomicBool,
-    frozen_report: Mutex<Option<ObservabilityShutdownReportV1>>,
+    lifecycle: Mutex<Lifecycle>,
+    admission: AtomicU64,
+    #[cfg(test)]
+    emission_barrier: Mutex<Option<EmissionBarrierV1>>,
+}
+struct EmissionGuardV1 {
+    shared: Arc<Shared>,
+}
+impl Drop for EmissionGuardV1 {
+    fn drop(&mut self) {
+        self.shared.emitting.fetch_sub(1, Ordering::Release);
+    }
 }
 #[derive(Clone)]
 pub struct ObservabilityEmitterV1 {
@@ -360,11 +381,16 @@ impl ObservabilityV1 {
             counters: Counters::default(),
             sink,
             clock,
-            stopped: AtomicBool::new(false),
             in_flight: AtomicU64::new(0),
+            emitting: AtomicU64::new(0),
+            admission: AtomicU64::new(ADMISSION_RUNNING_V1),
             queue_saturated: AtomicBool::new(false),
             degraded,
-            frozen_report: Mutex::new(None),
+            lifecycle: Mutex::new(Lifecycle {
+                frozen_report: None,
+            }),
+            #[cfg(test)]
+            emission_barrier: Mutex::new(None),
         });
         let emitter = ObservabilityEmitterV1 {
             shared: Arc::clone(&shared),
@@ -429,7 +455,6 @@ impl ObservabilityV1 {
             },
             None => ObservabilityFinalizationV1::Completed,
         };
-        self.emitter.shared.stopped.store(true, Ordering::Release);
         self.emitter.freeze_report(finalization)
     }
     fn clear_gauges(&self) {
@@ -469,9 +494,22 @@ impl Drop for ObservabilityV1 {
 
 impl ObservabilityEmitterV1 {
     /// Performs one non-blocking queue try-lock. Contention loses this event immediately.
+    /// After the shutdown report is frozen, emits are ignored without mutating its counters.
     pub fn emit(&self, event: EventRecordV1) {
-        if self.frozen_report().is_some() {
-            return;
+        self.shared.emitting.fetch_add(1, Ordering::Acquire);
+        let _emission = EmissionGuardV1 {
+            shared: Arc::clone(&self.shared),
+        };
+        match self.shared.admission.load(Ordering::Acquire) {
+            ADMISSION_FROZEN_V1 => return,
+            ADMISSION_STOPPING_V1 => {
+                self.shared
+                    .counters
+                    .add(&self.shared.counters.stopped_dropped, 1);
+                return;
+            }
+            ADMISSION_RUNNING_V1 => {}
+            _ => unreachable!("admission state is closed"),
         }
         if self.shared.degraded {
             self.shared
@@ -479,15 +517,28 @@ impl ObservabilityEmitterV1 {
                 .add(&self.shared.counters.degraded_dropped, 1);
             return;
         }
-        match self.shared.queue.try_lock() {
+        #[cfg(test)]
+        self.pause_after_state_check();
+        let deadline = Instant::now() + MAX_EMIT_QUEUE_WAIT_V1;
+        let queue_lock = loop {
+            match self.shared.queue.try_lock() {
+                Ok(queue) => break Ok(queue),
+                Err(error @ TryLockError::Poisoned(_)) => break Err(error),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => thread::yield_now(),
+                Err(error @ TryLockError::WouldBlock) => break Err(error),
+            }
+        };
+        match queue_lock {
             Ok(mut queue) => {
-                if queue.stopping || self.shared.stopped.load(Ordering::Acquire) {
+                if self.shared.admission.load(Ordering::Acquire) == ADMISSION_FROZEN_V1 {
+                    return;
+                } else if queue.stopping
+                    || self.shared.admission.load(Ordering::Acquire) == ADMISSION_STOPPING_V1
+                {
                     self.shared
                         .counters
                         .add(&self.shared.counters.stopped_dropped, 1);
-                    return;
-                }
-                if queue.primary.len() < PRIMARY_CAPACITY_V1 {
+                } else if queue.primary.len() < PRIMARY_CAPACITY_V1 {
                     queue.primary.push_back(event);
                     self.shared.counters.record_enqueue();
                     self.shared.available.notify_one();
@@ -508,15 +559,16 @@ impl ObservabilityEmitterV1 {
                         EventOperationV1::QueueSaturation,
                         EventOutcomeV1::Saturated,
                     ));
-                    self.shared.counters.mutate(|counters| {
-                        counters.increment_gauge_in_transaction(&counters.queued);
-                        counters.add_in_transaction(&counters.accepted, 1);
-                        if event.outcome.uses_fallback() {
-                            counters.add_in_transaction(&counters.fallback_dropped, 1);
-                        } else {
-                            counters.add_in_transaction(&counters.primary_dropped, 1);
-                        }
-                    });
+                    self.shared.counters.record_enqueue();
+                    if event.outcome.uses_fallback() {
+                        self.shared
+                            .counters
+                            .add(&self.shared.counters.fallback_dropped, 1);
+                    } else {
+                        self.shared
+                            .counters
+                            .add(&self.shared.counters.primary_dropped, 1);
+                    }
                     self.shared.available.notify_one();
                 } else if event.outcome.uses_fallback() {
                     self.shared
@@ -528,10 +580,14 @@ impl ObservabilityEmitterV1 {
                         .add(&self.shared.counters.primary_dropped, 1);
                 }
             }
-            Err(TryLockError::Poisoned(_)) | Err(TryLockError::WouldBlock) => self
-                .shared
-                .counters
-                .add(&self.shared.counters.primary_dropped, 1),
+            Err(TryLockError::Poisoned(_)) | Err(TryLockError::WouldBlock) => {
+                let counter = if event.outcome.uses_fallback() {
+                    &self.shared.counters.fallback_dropped
+                } else {
+                    &self.shared.counters.primary_dropped
+                };
+                self.shared.counters.add(counter, 1);
+            }
         }
     }
     pub fn counters(&self) -> ObservabilityCountersV1 {
@@ -542,28 +598,38 @@ impl ObservabilityEmitterV1 {
     }
     fn frozen_report(&self) -> Option<ObservabilityShutdownReportV1> {
         self.shared
-            .frozen_report
+            .lifecycle
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .as_ref()
-            .copied()
+            .frozen_report
     }
     fn freeze_report(
         &self,
         finalization: ObservabilityFinalizationV1,
     ) -> ObservabilityShutdownReportV1 {
-        let mut frozen = self
+        let mut lifecycle = self
             .shared
-            .frozen_report
+            .lifecycle
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        *frozen.get_or_insert(ObservabilityShutdownReportV1 {
-            counters: self.shared.counters.snapshot(),
-            finalization,
-        })
+        if lifecycle.frozen_report.is_none() {
+            self.shared
+                .admission
+                .store(ADMISSION_FROZEN_V1, Ordering::Release);
+            while self.shared.emitting.load(Ordering::Acquire) != 0 {
+                thread::yield_now();
+            }
+            lifecycle.frozen_report = Some(ObservabilityShutdownReportV1 {
+                counters: self.shared.counters.snapshot(),
+                finalization,
+            });
+        }
+        lifecycle.frozen_report.expect("frozen report must be set")
     }
     fn request_stop(&self) {
-        self.shared.stopped.store(true, Ordering::Release);
+        self.shared
+            .admission
+            .store(ADMISSION_STOPPING_V1, Ordering::Release);
         let mut queue = self
             .shared
             .queue
@@ -572,11 +638,36 @@ impl ObservabilityEmitterV1 {
         queue.stopping = true;
         self.shared.available.notify_all();
     }
+    #[cfg(test)]
+    fn pause_after_state_check(&self) {
+        let barrier = self
+            .shared
+            .emission_barrier
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        if let Some(barrier) = barrier {
+            let (state, available) = &*barrier;
+            let mut state = state.lock().unwrap_or_else(|poison| poison.into_inner());
+            state.0 = true;
+            available.notify_all();
+            while !state.1 {
+                state = available
+                    .wait(state)
+                    .unwrap_or_else(|poison| poison.into_inner());
+            }
+        }
+    }
+}
+impl Shared {
+    fn account(&self, mutation: impl FnOnce(&Counters)) {
+        mutation(&self.counters);
+    }
 }
 
 fn writer_loop(shared: Arc<Shared>) {
     loop {
-        let event = {
+        let (event, dequeued) = {
             let mut queue = shared
                 .queue
                 .lock()
@@ -598,11 +689,11 @@ fn writer_loop(shared: Arc<Shared>) {
             if primary_relieved {
                 shared.queue_saturated.store(false, Ordering::Release);
             }
-            if event.is_some() {
-                shared.counters.record_dequeue_for_write();
-            }
-            event
+            (event, event.is_some())
         };
+        if dequeued {
+            shared.account(Counters::record_dequeue_for_write);
+        }
         match event {
             Some(event) => {
                 shared.in_flight.store(1, Ordering::Release);
@@ -617,8 +708,8 @@ fn writer_loop(shared: Arc<Shared>) {
                                 .expect("writer sink")
                                 .write_event(&format_event(seconds, event))
                         })) {
-                            Ok(Ok(())) => shared.counters.record_write_success(),
-                            Ok(Err(_)) | Err(_) => shared.counters.mutate(|counters| {
+                            Ok(Ok(())) => shared.account(Counters::record_write_success),
+                            Ok(Err(_)) | Err(_) => shared.account(|counters| {
                                 counters.decrement_gauge_in_transaction(&counters.writing);
                                 counters.add_in_transaction(&counters.write_failures, 1);
                                 counters.add_in_transaction(&counters.sink_failures, 1);
@@ -626,12 +717,12 @@ fn writer_loop(shared: Arc<Shared>) {
                             }),
                         }
                     }
-                    Ok(Err(_)) => shared.counters.mutate(|counters| {
+                    Ok(Err(_)) => shared.account(|counters| {
                         counters.decrement_gauge_in_transaction(&counters.writing);
                         counters.add_in_transaction(&counters.clock_errors, 1);
                         counters.add_in_transaction(&counters.unflushed, 1);
                     }),
-                    Err(_) => shared.counters.mutate(|counters| {
+                    Err(_) => shared.account(|counters| {
                         counters.decrement_gauge_in_transaction(&counters.writing);
                         counters.add_in_transaction(&counters.clock_panics, 1);
                         counters.add_in_transaction(&counters.unflushed, 1);
@@ -640,13 +731,13 @@ fn writer_loop(shared: Arc<Shared>) {
                 shared.in_flight.store(0, Ordering::Release);
             }
             None => {
-                shared.counters.mutate(|counters| {
+                shared.account(|counters| {
                     counters.increment_gauge_in_transaction(&counters.flushing);
                 });
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     shared.sink.as_ref().expect("writer sink").flush()
                 }));
-                shared.counters.mutate(|counters| {
+                shared.account(|counters| {
                     counters.decrement_gauge_in_transaction(&counters.flushing);
                     if !matches!(result, Ok(Ok(()))) {
                         counters.add_in_transaction(&counters.flush_failures, 1);
@@ -807,6 +898,16 @@ impl fmt::Debug for ObservabilityV1 {
 mod tests {
     use super::*;
 
+    struct TestSink;
+    impl LogSinkV1 for TestSink {
+        fn write_event(&self, _: &str) -> io::Result<()> {
+            Ok(())
+        }
+        fn flush(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn cumulative_counters_saturate_without_wrapping_near_u64_max() {
         let counters = Counters::default();
@@ -867,5 +968,84 @@ mod tests {
         assert_eq!(saturated_written.writing, 0);
         assert_eq!(saturated_written.accepted, saturated_written.written);
         assert!(saturated_written.counters_saturated);
+    }
+
+    #[test]
+    fn queue_contention_drops_without_admission_or_lifecycle_locking() {
+        let observability = ObservabilityV1::start(Arc::new(TestSink), Arc::new(SystemClockV1));
+        let emitter = observability.emitter();
+        let queue = emitter
+            .shared
+            .queue
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+
+        emitter.emit(EventRecordV1::new(
+            EventOperationV1::DaemonStart,
+            EventOutcomeV1::Succeeded,
+        ));
+
+        drop(queue);
+        let report = observability.shutdown();
+        let counters = report.counters();
+        assert_eq!(counters.accepted, 0);
+        assert_eq!(counters.primary_dropped, 1);
+        assert_eq!(counters.written, 0);
+    }
+    #[test]
+    fn shutdown_linearizes_an_emitter_after_its_initial_state_check() {
+        let observability = ObservabilityV1::start(Arc::new(TestSink), Arc::new(SystemClockV1));
+        let emitter = observability.emitter();
+        let barrier = Arc::new((Mutex::new((false, false)), Condvar::new()));
+        *emitter
+            .shared
+            .emission_barrier
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(Arc::clone(&barrier));
+        let emitting = thread::spawn({
+            let emitter = emitter.clone();
+            move || {
+                emitter.emit(EventRecordV1::new(
+                    EventOperationV1::DaemonStart,
+                    EventOutcomeV1::Succeeded,
+                ))
+            }
+        });
+        let (state, available) = &*barrier;
+        let mut state = state.lock().unwrap_or_else(|poison| poison.into_inner());
+        while !state.0 {
+            state = available
+                .wait(state)
+                .unwrap_or_else(|poison| poison.into_inner());
+        }
+        let (started, shutdown_started) = mpsc::channel();
+        let shutting_down = thread::spawn(move || {
+            started.send(()).expect("shutdown start receiver");
+            observability.shutdown()
+        });
+        shutdown_started
+            .recv()
+            .expect("shutdown thread must start before release");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while emitter.shared.admission.load(Ordering::Acquire) != ADMISSION_STOPPING_V1 {
+            assert!(
+                Instant::now() < deadline,
+                "shutdown must close admission before the emitter is released"
+            );
+            thread::yield_now();
+        }
+        state.1 = true;
+        available.notify_all();
+        drop(state);
+        emitting.join().expect("emitter must not panic");
+        let report = shutting_down.join().expect("shutdown must not panic");
+        let counters = report.counters();
+        assert_eq!(counters.accepted, 0);
+        assert_eq!(counters.written, 0);
+        assert_eq!(counters.stopped_dropped, 1);
+        assert_eq!(
+            counters.accepted,
+            counters.written + counters.unflushed + counters.queued + counters.writing
+        );
     }
 }

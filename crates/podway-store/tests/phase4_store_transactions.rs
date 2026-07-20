@@ -12,9 +12,10 @@ use std::thread;
 
 use podway_core::{
     AttemptId, CancelSessionV1, CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1,
-    CommandContextV1, DomainCommand, DomainError, DomainResult, ItemId, JobId, ProcedureSnapshotId,
-    ProcedureSnapshotV1, ProcedureSourceLabelV1, Revision, SessionAggregateV1, SessionCommandV1,
-    SessionId, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId, apply_transition_v1,
+    CheckItemV1, CommandContextV1, DomainCommand, DomainError, DomainResult, ItemId,
+    ItemMutationPreconditionsV1, JobId, ProcedureSnapshotId, ProcedureSnapshotV1,
+    ProcedureSourceLabelV1, Revision, SessionAggregateV1, SessionCommandV1, SessionId,
+    SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId, apply_transition_v1,
 };
 use podway_store::codec::{
     PersistedDomainErrorV1, PersistedDomainResultV1, PersistedSessionLifecycleV1,
@@ -47,6 +48,9 @@ fn identity() -> DurableWorktreeIdentityV1 {
 
 fn job(number: u8) -> JobId {
     JobId::new(format!("00000000-0000-4000-8000-{:012x}", number)).unwrap()
+}
+fn retention_job(number: u16) -> JobId {
+    JobId::new(format!("00000000-0000-4000-9000-{:012x}", number)).unwrap()
 }
 
 fn store(temporary: &TempDir) -> SqliteStoreV1 {
@@ -706,14 +710,32 @@ fn mismatched_terminal_projection_is_rejected_as_corrupt_storage() {
 }
 
 #[test]
-fn schema_zero_identity_fifo_and_idempotent_admission_are_durable() {
+fn pac_018_admission_acknowledgement_survives_independent_reopen_with_receipt_and_fifo_state() {
     let temporary = TempDir::new().unwrap();
-    let store = store(&temporary);
     let first = job(3);
     let second = job(4);
-    admit(&store, first.clone(), "first", 'c', 2);
-    admit(&store, second.clone(), "second", 'd', 3);
+    let initial_store = store(&temporary);
+    let acknowledged = match initial_store
+        .admit(
+            &identity(),
+            AdmitRequestV1::new(
+                DomainCommand::WorkspaceInitialize,
+                IdempotencyKeyV1::new("first").unwrap(),
+                first.clone(),
+                RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+                digest('c'),
+                UnixMillis::new(2),
+            ),
+        )
+        .unwrap()
+    {
+        AdmitOutcomeV1::New(receipt) => receipt,
+        outcome => panic!("initial admission must acknowledge a new receipt, got {outcome:?}"),
+    };
+    admit(&initial_store, second.clone(), "second", 'd', 3);
+    drop(initial_store);
 
+    let reopened = store(&temporary);
     let replay = AdmitRequestV1::new(
         DomainCommand::WorkspaceInitialize,
         IdempotencyKeyV1::new("first").unwrap(),
@@ -722,13 +744,17 @@ fn schema_zero_identity_fifo_and_idempotent_admission_are_durable() {
         digest('c'),
         UnixMillis::new(4),
     );
-    assert_job_replay(
-        store.admit(&identity(), replay),
-        JobReceiptV1::new(1, first.clone(), digest('c')),
-    );
+    let replayed = match reopened.admit(&identity(), replay).unwrap() {
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt)) => receipt,
+        outcome => panic!("reopen must replay the acknowledged receipt, got {outcome:?}"),
+    };
+    assert_eq!(replayed, acknowledged);
+    let view = reopened.read_workspace_view(&identity()).unwrap();
+    assert_eq!(view.queued_job_count(), 2);
+    assert_eq!(view.running_job_id(), None);
 
     let worker = WorkerIdV1::new("worker-a").unwrap();
-    let claimed = store
+    let claimed = reopened
         .claim_next(&identity(), worker, UnixMillis::new(5))
         .unwrap()
         .unwrap();
@@ -738,20 +764,18 @@ fn schema_zero_identity_fifo_and_idempotent_admission_are_durable() {
         &DomainCommand::WorkspaceInitialize
     );
     assert!(claimed.current_session().is_none());
-    assert!(
-        store
-            .claim_next(
-                &identity(),
-                WorkerIdV1::new("worker-b").unwrap(),
-                UnixMillis::new(6),
-            )
-            .unwrap()
-            .is_none()
-    );
-
-    let view = store.read_workspace_view(&identity()).unwrap();
+    let view = reopened.read_workspace_view(&identity()).unwrap();
     assert_eq!(view.queued_job_count(), 1);
     assert_eq!(view.running_job_id(), Some(&first));
+    assert_eq!(
+        reopened
+            .list_jobs(&identity(), JobListQueryV1::new(10).unwrap())
+            .unwrap()
+            .iter()
+            .map(|job| job.job().job_id().clone())
+            .collect::<Vec<_>>(),
+        vec![first.clone(), second],
+    );
 
     let conflict = AdmitRequestV1::new(
         DomainCommand::WorkspaceInitialize,
@@ -762,7 +786,7 @@ fn schema_zero_identity_fifo_and_idempotent_admission_are_durable() {
         UnixMillis::new(6),
     );
     assert!(matches!(
-        store.admit(&identity(), conflict),
+        reopened.admit(&identity(), conflict),
         Err(StoreErrorV1::IdempotencyDigestConflictV1 { .. })
     ));
 }
@@ -1032,7 +1056,7 @@ fn ordinary_admission_rejects_workspace_reset_all_before_idempotency_or_queue_wr
     );
 }
 #[test]
-fn reopen_recovers_running_work_and_replays_persisted_execution() {
+fn pac_024_daemon_equivalent_reopen_recovers_running_and_keeps_queued_jobs_discoverable() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("state.sqlite3");
     let root = ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-phase4")).unwrap();
@@ -1046,6 +1070,8 @@ fn reopen_recovers_running_work_and_replays_persisted_execution() {
     )
     .unwrap();
     admit(&store, job(12), "reopen", 'e', 2);
+    let queued_job = job(19);
+    admit(&store, queued_job.clone(), "reopen-queued", 'f', 2);
     let first_claim = store
         .claim_next(
             &identity(),
@@ -1069,6 +1095,12 @@ fn reopen_recovers_running_work_and_replays_persisted_execution() {
     let reopened =
         SqliteStoreV1::open(&path, &root, identity(), options, UnixMillis::new(5)).unwrap();
     assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 0);
+    let recovered_jobs = reopened
+        .list_jobs(&identity(), JobListQueryV1::new(10).unwrap())
+        .unwrap();
+    assert_eq!(recovered_jobs.len(), 2);
+    assert_eq!(recovered_jobs[0].job().job_id(), first_claim.job().job_id());
+    assert_eq!(recovered_jobs[1].job().job_id(), &queued_job);
     let connection = Connection::open(&path).unwrap();
     let recovered_journal_count: i64 = connection
         .query_row(
@@ -1099,6 +1131,25 @@ fn reopen_recovers_running_work_and_replays_persisted_execution() {
         ),
         Err(StoreErrorV1::ClaimStaleV1 { .. })
     ));
+    reopened
+        .commit_terminal(
+            recovered.claim().clone(),
+            Revision::ZERO,
+            None,
+            TerminalResultV1::Failure(DomainError::InvalidState { reason: "fixture" }),
+            UnixMillis::new(6),
+        )
+        .unwrap();
+    let queued = reopened
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("worker-c").unwrap(),
+            UnixMillis::new(7),
+        )
+        .unwrap()
+        .expect("finishing the recovered head must expose the independently queued FIFO job");
+    assert_eq!(queued.job().job_id(), &queued_job);
+    assert_eq!(queued.job().identity_sequence(), 2);
 }
 
 #[test]
@@ -1445,7 +1496,7 @@ fn post_commit_admission_and_claim_failpoints_are_retryable() {
 }
 
 #[test]
-fn pre_commit_terminal_and_recovery_failpoints_roll_back() {
+fn pac_027_terminal_state_and_result_roll_back_or_commit_together() {
     let terminal_temporary = TempDir::new().unwrap();
     let terminal_options = SqliteStoreOptionsV1::new(8)
         .unwrap()
@@ -1486,6 +1537,9 @@ fn pre_commit_terminal_and_recovery_failpoints_roll_back() {
             reason: StoreUnavailableReasonV1::Recovery,
         })
     ));
+    let rollback_view = terminal_store.read_workspace_view(&identity()).unwrap();
+    assert_eq!(rollback_view.running_job_id(), Some(&job(17)));
+    assert_eq!(rollback_view.queued_job_count(), 0);
     let terminal_replay = AdmitRequestV1::new(
         DomainCommand::WorkspaceInitialize,
         IdempotencyKeyV1::new("terminal-rollback").unwrap(),
@@ -1563,6 +1617,36 @@ fn pre_commit_terminal_and_recovery_failpoints_roll_back() {
     assert_ne!(
         recovery_retry_claim.claim().job_revision(),
         recovery_initial_claim.claim().job_revision()
+    );
+    recovery_retry
+        .commit_terminal(
+            recovery_retry_claim.claim().clone(),
+            Revision::ZERO,
+            None,
+            TerminalResultV1::Failure(DomainError::InvalidState { reason: "fixture" }),
+            UnixMillis::new(7),
+        )
+        .unwrap();
+    let committed_replay = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new("recovery-rollback").unwrap(),
+        job(18),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('d'),
+        UnixMillis::new(8),
+    );
+    assert_terminal_replay(
+        recovery_retry.admit(&identity(), committed_replay),
+        terminal_with_job_projection(
+            JobReceiptV1::new(1, job(18), digest('d')),
+            PersistedTerminalResultV1::Failure(PersistedDomainErrorV1::InvalidState {
+                reason: "fixture".to_owned(),
+            }),
+            PersistedTerminalJobStateV1::Failed,
+            2,
+            Some(6),
+            7,
+        ),
     );
 }
 #[test]
@@ -1699,15 +1783,59 @@ fn journal_pruning_honors_the_protected_boundary_age_and_tie_breaker() {
     assert_eq!(oldest_retained_id, 2);
 }
 #[test]
-fn terminal_pruning_keeps_exact_replay_for_the_oldest_tied_receipt() {
+fn pac_045_pruning_bounds_terminal_and_idempotency_retention_with_oldest_replay() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("state.sqlite3");
-    let store = store(&temporary);
+    let retention_store = store(&temporary);
+    let journal_temporary = TempDir::new().unwrap();
+    let journal_path = journal_temporary.path().join("state.sqlite3");
+    let journal_store = store(&journal_temporary);
+    let journal_connection = Connection::open(&journal_path).unwrap();
+    for _ in 0..201 {
+        journal_connection
+            .execute(
+                "INSERT INTO operational_journal
+                 (recorded_at_ms, level, event_name, workspace_sequence, job_id, summary, details_json)
+                 VALUES (0, 'info', 'fixture', NULL, NULL, 'fixture', NULL)",
+                [],
+            )
+            .unwrap();
+    }
+    drop(journal_connection);
+    assert_eq!(
+        journal_store
+            .prune_terminal_history(&identity(), UnixMillis::new(0))
+            .unwrap()
+            .deleted_journal_entries(),
+        0
+    );
+    assert_eq!(
+        journal_store
+            .prune_terminal_history(&identity(), UnixMillis::new(604_800_001))
+            .unwrap()
+            .deleted_journal_entries(),
+        1
+    );
+    let journal_connection = Connection::open(&journal_path).unwrap();
+    let retained_journal_count: i64 = journal_connection
+        .query_row("SELECT COUNT(*) FROM operational_journal", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let oldest_retained_journal_id: i64 = journal_connection
+        .query_row(
+            "SELECT MIN(journal_id) FROM operational_journal",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_journal_count, 200);
+    assert_eq!(oldest_retained_journal_id, 2);
     for number in 1..=101 {
         let job_id = job(number);
         let key = format!("terminal-{number}");
-        admit(&store, job_id, &key, 'a', 0);
-        let claim = store
+        admit(&retention_store, job_id, &key, 'a', 0);
+        let claim = retention_store
             .claim_next(
                 &identity(),
                 WorkerIdV1::new("worker-a").unwrap(),
@@ -1715,7 +1843,7 @@ fn terminal_pruning_keeps_exact_replay_for_the_oldest_tied_receipt() {
             )
             .unwrap()
             .unwrap();
-        store
+        retention_store
             .commit_terminal(
                 claim.claim().clone(),
                 Revision::ZERO,
@@ -1726,28 +1854,33 @@ fn terminal_pruning_keeps_exact_replay_for_the_oldest_tied_receipt() {
             .unwrap();
     }
 
-    let report = store
+    assert_eq!(
+        retention_store
+            .prune_terminal_history(&identity(), UnixMillis::new(604_799_999))
+            .unwrap()
+            .deleted_terminal_jobs(),
+        0,
+        "a terminal receipt younger than the retention age remains durable"
+    );
+    assert_eq!(
+        retention_store
+            .prune_terminal_history(&identity(), UnixMillis::new(604_800_000))
+            .unwrap()
+            .deleted_terminal_jobs(),
+        0,
+        "a terminal receipt exactly at the retention age remains durable"
+    );
+    let report = retention_store
         .prune_terminal_history(&identity(), UnixMillis::new(604_800_001))
         .unwrap();
     assert_eq!(report.deleted_terminal_jobs(), 1);
 
-    let connection = Connection::open(&path).unwrap();
-    let pruned_job_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM jobs WHERE job_id = ?1",
-            [job(1).as_str()],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let retained_terminal_json: String = connection
-        .query_row(
-            "SELECT terminal_response_json FROM idempotency_records WHERE idempotency_key = ?1",
-            ["terminal-1"],
-            |row| row.get(0),
-        )
-        .unwrap();
-    drop(connection);
-    assert_eq!(pruned_job_count, 0);
+    assert!(
+        retention_store
+            .read_job(&identity(), &job(1))
+            .unwrap()
+            .is_none()
+    );
 
     let replay = AdmitRequestV1::new(
         DomainCommand::WorkspaceInitialize,
@@ -1757,7 +1890,7 @@ fn terminal_pruning_keeps_exact_replay_for_the_oldest_tied_receipt() {
         digest('a'),
         UnixMillis::new(604_800_002),
     );
-    let replay = match store.admit(&identity(), replay).unwrap() {
+    let replay = match retention_store.admit(&identity(), replay).unwrap() {
         AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt)) => receipt,
         outcome => panic!("expected terminal replay, got {outcome:?}"),
     };
@@ -1776,19 +1909,15 @@ fn terminal_pruning_keeps_exact_replay_for_the_oldest_tied_receipt() {
     assert_eq!(job_projection.claimed_at(), Some(UnixMillis::new(0)));
     assert_eq!(job_projection.finished_at(), UnixMillis::new(0));
     assert!(replay.session_projection().is_none());
-    assert_eq!(
-        podway_store::codec::decode_terminal_receipt_v1(&retained_terminal_json).unwrap(),
-        replay
-    );
     let automatic_prune_job = job(102);
     admit(
-        &store,
+        &retention_store,
         automatic_prune_job.clone(),
         "terminal-automatic-prune",
         'b',
         604_800_003,
     );
-    let automatic_prune_claim = store
+    let automatic_prune_claim = retention_store
         .claim_next(
             &identity(),
             WorkerIdV1::new("worker-b").unwrap(),
@@ -1797,7 +1926,7 @@ fn terminal_pruning_keeps_exact_replay_for_the_oldest_tied_receipt() {
         .unwrap()
         .unwrap();
     assert_eq!(automatic_prune_claim.job().job_id(), &automatic_prune_job);
-    store
+    retention_store
         .commit_terminal(
             automatic_prune_claim.claim().clone(),
             Revision::ZERO,
@@ -1829,14 +1958,308 @@ fn terminal_pruning_keeps_exact_replay_for_the_oldest_tied_receipt() {
         "terminal_jobs_deleted=1; journal_entries_deleted=0; orphan_workspace_receipts_deleted=0"
     );
     assert_eq!(retention_pruned_details, None);
-    let retained_jobs: i64 = connection
+    drop(connection);
+    assert_eq!(
+        retention_store
+            .list_jobs(&identity(), JobListQueryV1::new(1_000).unwrap())
+            .unwrap()
+            .len(),
+        100
+    );
+
+    let terminal_cap_temporary = TempDir::new().unwrap();
+    let terminal_cap_store = store(&terminal_cap_temporary);
+    for number in 1..=1_001u16 {
+        let job_id = retention_job(number);
+        admit(
+            &terminal_cap_store,
+            job_id,
+            &format!("terminal-cap-{number:04}"),
+            'c',
+            1,
+        );
+        let claim = terminal_cap_store
+            .claim_next(
+                &identity(),
+                WorkerIdV1::new("terminal-cap-worker").unwrap(),
+                UnixMillis::new(1),
+            )
+            .unwrap()
+            .unwrap();
+        terminal_cap_store
+            .commit_terminal(
+                claim.claim().clone(),
+                Revision::ZERO,
+                None,
+                TerminalResultV1::Failure(DomainError::InvalidState { reason: "fixture" }),
+                UnixMillis::new(1),
+            )
+            .unwrap();
+    }
+    let terminal_cap_report = terminal_cap_store
+        .prune_terminal_history(&identity(), UnixMillis::new(1))
+        .unwrap();
+    assert_eq!(terminal_cap_report.deleted_terminal_jobs(), 0);
+    assert_eq!(terminal_cap_report.deleted_journal_entries(), 0);
+    assert_eq!(terminal_cap_report.deleted_orphan_workspace_receipts(), 0);
+    let terminal_cap_connection =
+        Connection::open(terminal_cap_temporary.path().join("state.sqlite3")).unwrap();
+    let terminal_cap_prune_summary: String = terminal_cap_connection
         .query_row(
-            "SELECT COUNT(*) FROM jobs WHERE state IN ('succeeded', 'failed', 'cancelled')",
+            "SELECT summary FROM operational_journal WHERE event_name = 'retention.pruned'",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(retained_jobs, 100);
+    assert_eq!(
+        terminal_cap_prune_summary,
+        "terminal_jobs_deleted=1; journal_entries_deleted=0; orphan_workspace_receipts_deleted=0"
+    );
+    drop(terminal_cap_connection);
+    assert!(
+        terminal_cap_store
+            .read_job(&identity(), &retention_job(1))
+            .unwrap()
+            .is_none()
+    );
+    let retained_young_terminal_jobs = (2..=1_001u16)
+        .filter(|number| {
+            terminal_cap_store
+                .read_job(&identity(), &retention_job(*number))
+                .unwrap()
+                .is_some()
+        })
+        .count();
+    assert_eq!(retained_young_terminal_jobs, 1_000);
+
+    let journal_cap_temporary = TempDir::new().unwrap();
+    let journal_cap_path = journal_cap_temporary.path().join("state.sqlite3");
+    let journal_cap_store = store(&journal_cap_temporary);
+    let mut journal_cap_connection = Connection::open(&journal_cap_path).unwrap();
+    let journal_cap_transaction = journal_cap_connection.transaction().unwrap();
+    for _ in 0..10_000 {
+        journal_cap_transaction
+            .execute(
+                "INSERT INTO operational_journal
+                 (recorded_at_ms, level, event_name, workspace_sequence, job_id, summary, details_json)
+                 VALUES (1, 'info', 'fixture', NULL, NULL, 'fixture', NULL)",
+                [],
+            )
+            .unwrap();
+    }
+    journal_cap_transaction.commit().unwrap();
+    drop(journal_cap_connection);
+    admit(
+        &journal_cap_store,
+        retention_job(1),
+        "journal-cap-automatic-prune",
+        'f',
+        1,
+    );
+    let journal_cap_claim = journal_cap_store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("journal-cap-worker").unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap()
+        .unwrap();
+    journal_cap_store
+        .commit_terminal(
+            journal_cap_claim.claim().clone(),
+            Revision::ZERO,
+            None,
+            TerminalResultV1::Failure(DomainError::InvalidState { reason: "fixture" }),
+            UnixMillis::new(1),
+        )
+        .unwrap();
+    let journal_cap_connection = Connection::open(journal_cap_path).unwrap();
+    let retained_young_journal_rows: i64 = journal_cap_connection
+        .query_row("SELECT COUNT(*) FROM operational_journal", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(retained_young_journal_rows, 10_000);
+    let automatic_prune_reports: i64 = journal_cap_connection
+        .query_row(
+            "SELECT COUNT(*) FROM operational_journal WHERE event_name = 'retention.pruned'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let automatic_prune_summary: String = journal_cap_connection
+        .query_row(
+            "SELECT summary FROM operational_journal WHERE event_name = 'retention.pruned'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(automatic_prune_reports, 1);
+    assert_eq!(
+        automatic_prune_summary,
+        "terminal_jobs_deleted=0; journal_entries_deleted=1; orphan_workspace_receipts_deleted=0"
+    );
+
+    let orphan_temporary = TempDir::new().unwrap();
+    let orphan_store = store(&orphan_temporary);
+    for number in 1..=201u16 {
+        let job_id = retention_job(number);
+        admit(
+            &orphan_store,
+            job_id,
+            &format!("orphan-{number:04}"),
+            'd',
+            0,
+        );
+        let claim = orphan_store
+            .claim_next(
+                &identity(),
+                WorkerIdV1::new("orphan-worker").unwrap(),
+                UnixMillis::new(0),
+            )
+            .unwrap()
+            .unwrap();
+        orphan_store
+            .commit_terminal(
+                claim.claim().clone(),
+                Revision::ZERO,
+                None,
+                TerminalResultV1::Failure(DomainError::InvalidState { reason: "fixture" }),
+                UnixMillis::new(0),
+            )
+            .unwrap();
+    }
+    let orphan_report = orphan_store
+        .prune_terminal_history(&identity(), UnixMillis::new(604_800_001))
+        .unwrap();
+    assert_eq!(orphan_report.deleted_terminal_jobs(), 101);
+    assert_eq!(orphan_report.deleted_journal_entries(), 0);
+    assert_eq!(orphan_report.deleted_orphan_workspace_receipts(), 1);
+    let deleted_orphan_jobs = (1..=101u16)
+        .filter(|number| {
+            orphan_store
+                .read_job(&identity(), &retention_job(*number))
+                .unwrap()
+                .is_none()
+        })
+        .count();
+    assert_eq!(deleted_orphan_jobs, 101);
+    let retained_orphan_jobs = (102..=201u16)
+        .filter(|number| {
+            orphan_store
+                .read_job(&identity(), &retention_job(*number))
+                .unwrap()
+                .is_some()
+        })
+        .count();
+    assert_eq!(retained_orphan_jobs, 100);
+    assert!(
+        orphan_store
+            .read_idempotent_outcome(
+                &identity(),
+                &IdempotencyKeyV1::new("orphan-0001").unwrap(),
+                &digest('d'),
+            )
+            .unwrap()
+            .is_none()
+    );
+    let retained_orphan_receipts = (2..=101u16)
+        .filter(|number| {
+            matches!(
+                orphan_store
+                    .read_idempotent_outcome(
+                        &identity(),
+                        &IdempotencyKeyV1::new(format!("orphan-{number:04}")).unwrap(),
+                        &digest('d'),
+                    )
+                    .unwrap(),
+                Some(AdmitOutcomeV1::Existing(
+                    JobReceiptOrTerminalV1::TerminalReceipt(_)
+                ))
+            )
+        })
+        .count();
+    assert_eq!(retained_orphan_receipts, 100);
+
+    let orphan_boundary_minus_one = 2_591_999_999;
+    admit(
+        &orphan_store,
+        retention_job(202),
+        "orphan-live-scope",
+        'e',
+        orphan_boundary_minus_one,
+    );
+    let orphan_boundary_report = orphan_store
+        .prune_terminal_history(&identity(), UnixMillis::new(orphan_boundary_minus_one))
+        .unwrap();
+    assert_eq!(orphan_boundary_report.deleted_terminal_jobs(), 0);
+    assert_eq!(orphan_boundary_report.deleted_journal_entries(), 0);
+    assert_eq!(
+        orphan_boundary_report.deleted_orphan_workspace_receipts(),
+        0
+    );
+    let orphan_replay = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new("orphan-0002").unwrap(),
+        retention_job(2),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('d'),
+        UnixMillis::new(orphan_boundary_minus_one),
+    );
+    assert!(matches!(
+        orphan_store.admit(&identity(), orphan_replay).unwrap(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(_))
+    ));
+    assert!(matches!(
+        orphan_store
+            .read_idempotent_outcome(
+                &identity(),
+                &IdempotencyKeyV1::new("orphan-live-scope").unwrap(),
+                &digest('e'),
+            )
+            .unwrap(),
+        Some(AdmitOutcomeV1::Existing(
+            JobReceiptOrTerminalV1::JobReceipt(_)
+        ))
+    ));
+    assert!(
+        orphan_store
+            .read_job(&identity(), &retention_job(202))
+            .unwrap()
+            .is_some()
+    );
+    let orphan_exact_boundary_report = orphan_store
+        .prune_terminal_history(&identity(), UnixMillis::new(2_592_000_000))
+        .unwrap();
+    assert_eq!(
+        orphan_exact_boundary_report.deleted_orphan_workspace_receipts(),
+        0,
+        "receipts exactly 30 days old remain durable"
+    );
+    let orphan_just_beyond_boundary_report = orphan_store
+        .prune_terminal_history(&identity(), UnixMillis::new(2_592_000_001))
+        .unwrap();
+    assert_eq!(
+        orphan_just_beyond_boundary_report.deleted_orphan_workspace_receipts(),
+        100,
+        "age eviction applies to every expired receipt, including the newest protected 100"
+    );
+    assert!(
+        orphan_store
+            .read_idempotent_outcome(
+                &identity(),
+                &IdempotencyKeyV1::new("orphan-0101").unwrap(),
+                &digest('d'),
+            )
+            .unwrap()
+            .is_none()
+    );
+    let repeated_orphan_prune = orphan_store
+        .prune_terminal_history(&identity(), UnixMillis::new(2_592_000_001))
+        .unwrap();
+    assert_eq!(repeated_orphan_prune.deleted_terminal_jobs(), 0);
+    assert_eq!(repeated_orphan_prune.deleted_journal_entries(), 0);
+    assert_eq!(repeated_orphan_prune.deleted_orphan_workspace_receipts(), 0);
 }
 #[test]
 fn session_reset_barrier_preserves_failed_state_then_cleans_old_session_rows() {
@@ -2253,6 +2676,204 @@ fn independent_sqlite_handles_claim_the_fifo_head_once() {
     }
 }
 
+#[test]
+fn concurrent_same_item_updates_reject_the_stale_revision_and_preserve_the_winning_durable_state() {
+    let temporary = TempDir::new().unwrap();
+    let seeded = store(&temporary);
+    let initial = aggregate();
+    seed_current_session(&seeded, &initial, job(70), "seed-concurrent-item", 2);
+    drop(seeded);
+
+    let winner_store = store_with_options(
+        &temporary,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(12),
+    );
+    let stale_store = store_with_options(
+        &temporary,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(12),
+    );
+    let winner_observed = winner_store
+        .read_session_aggregate(&identity())
+        .unwrap()
+        .unwrap();
+    let stale_observed = stale_store
+        .read_session_aggregate(&identity())
+        .unwrap()
+        .unwrap();
+    assert_eq!(winner_observed, stale_observed);
+
+    let item_id = ItemId::new("done").unwrap();
+    let item_preconditions = ItemMutationPreconditionsV1 {
+        expected_attempt_id: winner_observed.active_attempt_id().unwrap().clone(),
+        expected_item_revision: Revision::ZERO,
+    };
+    let winning_aggregate = apply_transition_v1(
+        Some(&winner_observed),
+        &SessionCommandV1::Check(CheckItemV1 {
+            item_id: item_id.clone(),
+            preconditions: item_preconditions.clone(),
+        }),
+        CommandContextV1 {
+            expected_revision: winner_observed.revision(),
+            now: UnixMillis::new(12),
+        },
+    )
+    .unwrap()
+    .next_aggregate()
+    .unwrap()
+    .clone();
+    let stale_aggregate = apply_transition_v1(
+        Some(&stale_observed),
+        &SessionCommandV1::Check(CheckItemV1 {
+            item_id: item_id.clone(),
+            preconditions: item_preconditions,
+        }),
+        CommandContextV1 {
+            expected_revision: stale_observed.revision(),
+            now: UnixMillis::new(12),
+        },
+    )
+    .unwrap()
+    .next_aggregate()
+    .unwrap()
+    .clone();
+
+    let admission_preconditions = RevisionAttemptItemPreconditionsV1::new(
+        Some(winner_observed.revision()),
+        winner_observed.active_attempt_id().cloned(),
+        Some(item_id.clone()),
+        Some(Revision::ZERO),
+    )
+    .unwrap();
+    let winner_request = AdmitRequestV1::new(
+        DomainCommand::ItemCheck {
+            item_id: item_id.clone(),
+        },
+        IdempotencyKeyV1::new("concurrent-item-winner").unwrap(),
+        job(71),
+        admission_preconditions.clone(),
+        digest('a'),
+        UnixMillis::new(13),
+    );
+    let stale_request = AdmitRequestV1::new(
+        DomainCommand::ItemCheck {
+            item_id: item_id.clone(),
+        },
+        IdempotencyKeyV1::new("concurrent-item-stale").unwrap(),
+        job(72),
+        admission_preconditions,
+        digest('b'),
+        UnixMillis::new(13),
+    );
+    let admission_start = Arc::new(Barrier::new(3));
+    let winner_start = Arc::clone(&admission_start);
+    let winner_admission = thread::spawn(move || {
+        winner_start.wait();
+        winner_store.admit(&identity(), winner_request)
+    });
+    let stale_start = Arc::clone(&admission_start);
+    let stale_admission = thread::spawn(move || {
+        stale_start.wait();
+        stale_store.admit(&identity(), stale_request)
+    });
+    admission_start.wait();
+    assert!(matches!(
+        winner_admission.join().unwrap(),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    assert!(matches!(
+        stale_admission.join().unwrap(),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+
+    let winner_store = store_with_options(
+        &temporary,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(14),
+    );
+    let stale_store = store_with_options(
+        &temporary,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(14),
+    );
+
+    let winner_claim = winner_store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("concurrent-item-winner").unwrap(),
+            UnixMillis::new(14),
+        )
+        .unwrap()
+        .unwrap();
+    let winning_transition = StateTransitionV1::new_persisted(
+        Some(winning_aggregate.session_id().clone()),
+        winner_observed.revision(),
+        winning_aggregate.revision(),
+        PersistedSessionMutationV1::Replace(winning_aggregate.clone()),
+    )
+    .unwrap();
+    winner_store
+        .commit_terminal(
+            winner_claim.claim().clone(),
+            winner_observed.revision(),
+            Some(winning_transition),
+            TerminalResultV1::Success(DomainResult::ItemChanged {
+                session_id: winning_aggregate.session_id().clone(),
+                item_id: item_id.clone(),
+                revision_before: winner_observed.revision(),
+                revision_after: winning_aggregate.revision(),
+                changed: true,
+            }),
+            UnixMillis::new(15),
+        )
+        .unwrap();
+
+    let stale_claim = stale_store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("concurrent-item-stale").unwrap(),
+            UnixMillis::new(16),
+        )
+        .unwrap()
+        .unwrap();
+    let stale_transition = StateTransitionV1::new_persisted(
+        Some(stale_aggregate.session_id().clone()),
+        stale_observed.revision(),
+        stale_aggregate.revision(),
+        PersistedSessionMutationV1::Replace(stale_aggregate),
+    )
+    .unwrap();
+    assert!(matches!(
+        stale_store.commit_terminal(
+            stale_claim.claim().clone(),
+            stale_observed.revision(),
+            Some(stale_transition),
+            TerminalResultV1::Success(DomainResult::ItemChanged {
+                session_id: winner_observed.session_id().clone(),
+                item_id,
+                revision_before: stale_observed.revision(),
+                revision_after: winning_aggregate.revision(),
+                changed: true,
+            }),
+            UnixMillis::new(17),
+        ),
+        Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(expected),
+            actual: Some(actual),
+        }) if expected == stale_observed.revision() && actual == winning_aggregate.revision()
+    ));
+
+    drop(winner_store);
+    drop(stale_store);
+    let reopened = store(&temporary);
+    assert_eq!(
+        reopened.read_session_aggregate(&identity()).unwrap(),
+        Some(winning_aggregate),
+        "the reopened Store must retain only the winning same-item update"
+    );
+}
 #[test]
 fn session_barrier_cancellation_serializes_later_session_admission() {
     for iteration in 0..CONCURRENCY_RACE_ITERATIONS {
@@ -3221,4 +3842,109 @@ enum FreshReplacementInvalidShape {
     SameSession,
     OtherCommand,
     StaleRevision,
+}
+#[test]
+fn lost_response_retry_replays_one_durable_admission_receipt_after_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    let root = ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-phase4")).unwrap();
+    let options = SqliteStoreOptionsV1::new(8).unwrap();
+    let request = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new("lost-response-retry").unwrap(),
+        job(242),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('a'),
+        UnixMillis::new(2),
+    );
+    let store = SqliteStoreV1::open(
+        &path,
+        &root,
+        identity(),
+        options.clone(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let receipt = match store.admit(&identity(), request.clone()).unwrap() {
+        AdmitOutcomeV1::New(receipt) => receipt,
+        outcome => panic!("first lost-response admission must create one receipt: {outcome:?}"),
+    };
+    assert_eq!(receipt, JobReceiptV1::new(1, job(242), digest('a')));
+    drop(store);
+
+    let reopened =
+        SqliteStoreV1::open(&path, &root, identity(), options, UnixMillis::new(3)).unwrap();
+    assert_job_replay(reopened.admit(&identity(), request), receipt);
+    let view = reopened.read_workspace_view(&identity()).unwrap();
+    assert_eq!(view.queued_job_count(), 1);
+    assert_eq!(view.running_job_id(), None);
+    assert_eq!(
+        reopened
+            .list_jobs(&identity(), JobListQueryV1::new(10).unwrap())
+            .unwrap()
+            .len(),
+        1,
+        "retrying a lost response cannot admit a second mutation"
+    );
+}
+
+#[test]
+fn cancellation_is_terminal_only_before_claim_and_running_job_is_unchanged() {
+    let temporary = TempDir::new().unwrap();
+    let store = store(&temporary);
+    let queued = job(243);
+    admit(&store, queued.clone(), "cancel-before-claim", 'b', 2);
+    let cancelled = store
+        .cancel_before_claim(
+            &identity(),
+            queued.clone(),
+            Revision::new(1),
+            UnixMillis::new(3),
+        )
+        .unwrap();
+    match cancelled {
+        CancelOutcomeV1::Cancelled(receipt) => {
+            assert_eq!(receipt, JobReceiptV1::new(1, queued.clone(), digest('b')));
+        }
+        outcome => panic!("queued job must cancel before claim: {outcome:?}"),
+    }
+    let cancelled_job = store
+        .read_job(&identity(), &queued)
+        .unwrap()
+        .expect("cancelled job remains observable");
+    assert_eq!(cancelled_job.state(), JobStateV1::Cancelled);
+    assert!(matches!(
+        cancelled_job
+            .terminal_receipt()
+            .map(|receipt| receipt.result()),
+        Some(PersistedTerminalResultV1::Cancelled)
+    ));
+
+    let running = job(244);
+    admit(&store, running.clone(), "cancel-after-claim", 'c', 4);
+    let claim = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("cancel-after-claim-worker").unwrap(),
+            UnixMillis::new(5),
+        )
+        .unwrap()
+        .expect("second admitted job must be claimable");
+    assert_eq!(claim.job().job_id(), &running);
+    assert!(matches!(
+        store.cancel_before_claim(&identity(), running.clone(), Revision::new(2), UnixMillis::new(6)),
+        Err(StoreErrorV1::AlreadyClaimedV1 { job_id }) if job_id == running
+    ));
+    let view = store.read_workspace_view(&identity()).unwrap();
+    assert_eq!(view.queued_job_count(), 0);
+    assert_eq!(view.running_job_id(), Some(&running));
+    assert_eq!(
+        store
+            .read_job(&identity(), &running)
+            .unwrap()
+            .unwrap()
+            .state(),
+        JobStateV1::Running,
+        "cancellation cannot alter a claimed job"
+    );
 }

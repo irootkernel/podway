@@ -750,7 +750,20 @@ fn assert_stable_noop(prior: &SessionAggregateV1, outcome: &podway_core::Transit
     assert_eq!(outcome.next_aggregate(), Some(prior));
 }
 
+fn assert_exactly_one_active_attempt(session: &SessionAggregateV1) {
+    assert_eq!(
+        session
+            .attempts()
+            .iter()
+            .filter(|attempt| attempt.lifecycle() == AttemptLifecycle::Active)
+            .count(),
+        1,
+        "a running session must retain exactly one active attempt"
+    );
+}
+
 fn assert_pristine_active_attempt(session: &SessionAggregateV1, expected_reason: Option<&str>) {
+    assert_exactly_one_active_attempt(session);
     let attempt = active_attempt(session);
     assert_eq!(attempt.lifecycle(), AttemptLifecycle::Active);
     assert_eq!(attempt.reason(), expected_reason);
@@ -2346,4 +2359,36 @@ fn every_state_matrix_row_has_exactly_one_explicit_conformance_classification() 
 #[test]
 fn matrix_cross_cutting_preconditions_preserve_the_prior_aggregate() {
     assert_cross_cutting_preconditions();
+}
+#[test]
+fn pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history()
+ {
+    case_retry();
+    case_return();
+    case_reopen();
+    case_reset();
+
+    let session = started();
+    let (_, cancelled) = apply_next(
+        &session,
+        SessionCommandV1::Cancel(podway_core::CancelSessionV1 {
+            expected_attempt_id: active_attempt(&session).attempt_id().clone(),
+            reason: "stop".to_owned(),
+        }),
+        11,
+    );
+    assert_rejected_without_mutation_with_error(
+        &cancelled,
+        SessionCommandV1::Reopen(ReopenSessionV1 {
+            expected_session_id: cancelled.session_id().clone(),
+            destination_stage_id: stage_id("one"),
+            reason: "cannot reopen a cancelled session".to_owned(),
+            destination_attempt_id: attempt_id(4),
+        }),
+        context(&cancelled, 12),
+        DomainError::InvalidTransition {
+            command: podway_core::DomainCommandKind::SessionReopen,
+            state: SessionLifecycle::Cancelled,
+        },
+    );
 }

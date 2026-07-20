@@ -4,7 +4,7 @@ mod support_phase4_workspace;
 
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Barrier},
     thread,
 };
@@ -12,24 +12,41 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
 
+use podway_core::{JobId, Sha256Digest, UnixMillis, canonicalize_json_v1};
 use podway_daemon::{
     dispatch::WorkspaceRuntimeV1,
     production::{ProductionWorkspaceRuntimeV1, compose_dispatcher_v1},
+    runtime_workspace::WorkspaceRuntimeObservationV1,
     server::RequestDispatcherV1,
 };
 use podway_git::{GitResolverContractV1, NativeGitResolverV1};
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, NextResultV1, OperationV1, OutputEnvelopeV1,
-    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV1, SliceRequestV1, StageStatusResultV1, StatusResultV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1,
+    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobStateV1, NextResultV1, OperationV1,
+    OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1,
+    RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1, SliceRequestV1, StageStatusResultV1,
+    StatusResultV1, WorkspaceContextV1, WorktreeSelectorWireV1,
 };
 use podway_service::ServiceRuntimePathsV1;
-use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
+use podway_store::{
+    AdmitOutcomeV1, AdmitRequestV1, CommandV1, IdempotencyKeyV1 as StoreIdempotencyKeyV1,
+    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
+    StoreReadContractV1, WorkerIdV1,
+};
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 #[cfg(unix)]
 use support_phase4_workspace::non_utf8_child_path;
 use support_phase4_workspace::{copy_tree, git_worktrees, read_file, selector as git_selector};
+
+fn fixture_runtime_directory(root: &Path) -> PathBuf {
+    let root = fs::canonicalize(root).expect("fixture root must canonicalize");
+    #[cfg(unix)]
+    let digest = Sha256::digest(root.as_os_str().as_bytes());
+    #[cfg(not(unix))]
+    let digest = Sha256::digest(root.to_string_lossy().as_bytes());
+    let digest = format!("{digest:x}");
+    std::env::temp_dir().join(format!("pdr-{}", &digest[..16]))
+}
 
 fn manager(root: &Path) -> podway_daemon::runtime_workspace::WorkspaceRuntimeManagerV1 {
     let application_support = root.join("Application Support");
@@ -40,7 +57,7 @@ fn manager(root: &Path) -> podway_daemon::runtime_workspace::WorkspaceRuntimeMan
         root.join("LaunchAgents"),
         application_support.join("Podway"),
         root.join("Logs/Podway"),
-        root.join("runtime"),
+        fixture_runtime_directory(root),
     )
     .unwrap();
     podway_daemon::runtime_workspace::WorkspaceRuntimeManagerV1::new(
@@ -66,6 +83,13 @@ fn selector(path: &Path) -> WorktreeSelectorWireV1 {
     let bytes = canonical.to_string_lossy().as_bytes();
     WorktreeSelectorWireV1::new(bytes, canonical.display().to_string(), None).unwrap()
 }
+fn observation() -> WorkspaceRuntimeObservationV1 {
+    WorkspaceRuntimeObservationV1::new(
+        UnixMillis::new(1_700_000_000_123),
+        Rfc3339MillisV1::new("2026-07-15T12:34:56.789Z")
+            .expect("fixture observation timestamp must be valid"),
+    )
+}
 
 fn request(
     request_number: u64,
@@ -78,7 +102,8 @@ fn request(
 ) -> (RequestEnvelopeV1, SliceRequestV1) {
     let operation = match command {
         "workspace.init" => OperationV1::Bootstrap,
-        "session.status" | "session.next" => OperationV1::Query,
+        "workspace.repair" | "job.cancel" => OperationV1::Control,
+        "workspace.doctor" | "session.status" | "session.next" => OperationV1::Query,
         _ => OperationV1::Mutate,
     };
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
@@ -88,7 +113,7 @@ fn request(
         operation,
         command: CommandNameV1::new(command).unwrap(),
         workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
-        idempotency_key: (!matches!(operation, OperationV1::Query))
+        idempotency_key: matches!(operation, OperationV1::Bootstrap | OperationV1::Mutate)
             .then(|| IdempotencyKeyV1::new(idempotency_key).unwrap()),
         preconditions,
         options,
@@ -743,4 +768,270 @@ fn manager_adapter_reuses_moves_rejects_copies_and_distinct_identities_admit_rea
     let copied = fixture.temporary_path().join("copied-live-worktree");
     copy_tree(&relocated, &copied);
     assert!(runtime.resolve_existing(&selector(&copied)).is_err());
+}
+#[test]
+fn workspace_repair_reports_a_real_move_once_and_a_replay_as_unchanged() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let dispatcher = compose_dispatcher_v1(
+        Arc::clone(&manager),
+        WorkerIdV1::new("workspace-repair-production-test").unwrap(),
+    );
+    let initial_selector = selector(fixture.main());
+    let initialize = request(
+        900,
+        "workspace.init",
+        &initial_selector,
+        json!({"selector": serde_json::to_value(&initial_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "workspace-repair-initialize",
+        PreconditionsV1::default(),
+    );
+    dispatch_command(&dispatcher, &initialize, "workspace.init");
+
+    let relocated = fixture.temporary_path().join("relocated-main");
+    fs::rename(fixture.main(), &relocated).expect("move real initialized worktree");
+    let moved_selector = selector(&relocated);
+    let repair = request(
+        901,
+        "workspace.repair",
+        &moved_selector,
+        json!({"selector": serde_json::to_value(&moved_selector).unwrap()}),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-repair-key",
+        PreconditionsV1::default(),
+    );
+    let repaired = dispatch_command(&dispatcher, &repair, "workspace.repair");
+    assert_eq!(repaired.result().get("changed"), Some(&Value::Bool(true)));
+    assert_eq!(
+        repaired.result().get("changes"),
+        Some(&Value::Array(vec![
+            Value::String("workspace_binding.last_validated_root".to_owned()),
+            Value::String("registry.last_known_root".to_owned()),
+        ]))
+    );
+
+    let replay = request(
+        902,
+        "workspace.repair",
+        &moved_selector,
+        json!({"selector": serde_json::to_value(&moved_selector).unwrap()}),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-repair-replay-key",
+        PreconditionsV1::default(),
+    );
+    let replayed = dispatch_command(&dispatcher, &replay, "workspace.repair");
+    assert_eq!(replayed.result().get("changed"), Some(&Value::Bool(false)));
+
+    let copied = fixture.temporary_path().join("copied-repaired-worktree");
+    copy_tree(&relocated, &copied);
+    let copied_selector = selector(&copied);
+    let copied_repair = request(
+        903,
+        "workspace.repair",
+        &copied_selector,
+        json!({"selector": serde_json::to_value(&copied_selector).unwrap()}),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-copied-repair-key",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatcher.dispatch(&copied_repair.0, &copied_repair.1),
+        ResponseEnvelopeV1::Error(_)
+    ));
+}
+#[test]
+fn workspace_repair_reconciles_a_registry_only_stale_root_without_false_failure() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let dispatcher = compose_dispatcher_v1(
+        Arc::clone(&manager),
+        WorkerIdV1::new("workspace-repair-registry-only-production-test").unwrap(),
+    );
+    let main_selector = selector(fixture.main());
+    let linked_selector = selector(fixture.linked());
+    let initialize_main = request(
+        904,
+        "workspace.init",
+        &main_selector,
+        json!({"selector": serde_json::to_value(&main_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "initialize-main",
+        PreconditionsV1::default(),
+    );
+    let main_workspace_uuid = dispatch_command(&dispatcher, &initialize_main, "workspace.init")
+        .workspace()
+        .expect("workspace init must expose its workspace")
+        .uuid()
+        .as_str()
+        .to_owned();
+    let initialize_linked = request(
+        905,
+        "workspace.init",
+        &linked_selector,
+        json!({"selector": serde_json::to_value(&linked_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "initialize-linked",
+        PreconditionsV1::default(),
+    );
+    dispatch_command(&dispatcher, &initialize_linked, "workspace.init");
+
+    let registry_path = manager.registry().registry_path().to_path_buf();
+    let mut registry: Value =
+        serde_json::from_slice(&fs::read(&registry_path).unwrap()).expect("registry JSON");
+    let entries = registry["workspaces"]
+        .as_array_mut()
+        .expect("registry workspace entries");
+    let linked_root = entries
+        .iter()
+        .find(|entry| entry["workspace_uuid"] != main_workspace_uuid)
+        .and_then(|entry| entry["last_known_root"].as_str())
+        .expect("linked registry root")
+        .to_owned();
+    entries
+        .iter_mut()
+        .find(|entry| entry["workspace_uuid"] == main_workspace_uuid)
+        .expect("main registry entry")["last_known_root"] = Value::String(linked_root);
+    fs::write(
+        &registry_path,
+        canonicalize_json_v1(&registry).expect("canonical stale registry"),
+    )
+    .expect("write stale registry");
+
+    let repair = request(
+        907,
+        "workspace.repair",
+        &main_selector,
+        json!({"selector": serde_json::to_value(&main_selector).unwrap()}),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-registry-only-repair-key",
+        PreconditionsV1::default(),
+    );
+    let repaired = dispatch_command(&dispatcher, &repair, "workspace.repair");
+    assert_eq!(repaired.result().get("changed"), Some(&Value::Bool(true)));
+    assert_eq!(
+        repaired.result().get("changes"),
+        Some(&Value::Array(vec![Value::String(
+            "registry.last_known_root".to_owned()
+        )]))
+    );
+
+    let replay = request(
+        908,
+        "workspace.repair",
+        &main_selector,
+        json!({"selector": serde_json::to_value(&main_selector).unwrap()}),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-registry-only-repair-replay-key",
+        PreconditionsV1::default(),
+    );
+    let replayed = dispatch_command(&dispatcher, &replay, "workspace.repair");
+    assert_eq!(replayed.result().get("changed"), Some(&Value::Bool(false)));
+}
+
+#[test]
+fn job_cancel_public_route_projects_committed_cancellation() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let dispatcher = compose_dispatcher_v1(
+        Arc::clone(&runtime_manager),
+        WorkerIdV1::new("job-cancel-production-test").unwrap(),
+    );
+    let workspace_selector = selector(fixture.main());
+    let initialize = request(
+        909,
+        "workspace.init",
+        &workspace_selector,
+        json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "job-cancel-initialize",
+        PreconditionsV1::default(),
+    );
+    dispatch_command(&dispatcher, &initialize, "workspace.init");
+
+    let runtime = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .expect("initialized workspace must resolve through the manager");
+    let context = runtime.context_snapshot();
+    let job_id = JobId::new("00000000-0000-4000-8000-000000000911").unwrap();
+    let direct_store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        context.binding().identity().clone(),
+        context.store_options().clone(),
+        UnixMillis::new(1),
+    )
+    .expect("manager binding must reopen its Store for deterministic queued-job setup");
+    let seeded = direct_store
+        .admit(
+            context.binding().identity(),
+            AdmitRequestV1::new(
+                CommandV1::WorkspaceInitialize,
+                StoreIdempotencyKeyV1::new("job-cancel-seeded").unwrap(),
+                job_id.clone(),
+                RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+                Sha256Digest::new(format!("sha256:{}", "9".repeat(64))).unwrap(),
+                UnixMillis::new(1),
+            ),
+        )
+        .expect("manager-owned Store must accept the queued test job");
+    assert!(matches!(seeded, AdmitOutcomeV1::New(_)));
+    assert_eq!(
+        direct_store
+            .read_job(context.binding().identity(), &job_id)
+            .expect("seeded job must be readable")
+            .expect("seeded job must exist")
+            .state(),
+        podway_store::JobStateV1::Queued
+    );
+    drop(direct_store);
+
+    let cancel = request(
+        911,
+        "job.cancel",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "job_id": job_id,
+        }),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-cancel-key",
+        PreconditionsV1::new(None, None, None, None, None, Some(JobStateV1::Queued)).unwrap(),
+    );
+    let cancelled = dispatch_command(&dispatcher, &cancel, "job.cancel");
+    assert_eq!(
+        cancelled.result().get("cancelled"),
+        Some(&Value::Bool(true)),
+        "a committed cancellation must project success"
+    );
+    assert_eq!(
+        cancelled
+            .job()
+            .expect("cancel response must include job")
+            .state(),
+        JobStateV1::Cancelled
+    );
+    drop(context);
+    drop(runtime);
+    drop(dispatcher);
+    drop(runtime_manager);
+    let reopened = manager(fixture.temporary_path())
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .expect("committed cancellation must survive reopening the manager");
+    let reopened_context = reopened.context_snapshot();
+    assert_eq!(
+        reopened_context
+            .store()
+            .read_job(
+                reopened_context.binding().identity(),
+                &JobId::new("00000000-0000-4000-8000-000000000911").unwrap(),
+            )
+            .expect("reopened Store must be readable")
+            .expect("committed cancellation must be durable")
+            .state(),
+        podway_store::JobStateV1::Cancelled
+    );
 }
