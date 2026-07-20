@@ -1737,6 +1737,15 @@ fn reap_orphaned_ownership_marker_v1(marker: &Path, temporary: &Path) -> Result<
         Err(TryLockError::WouldBlock) => return Ok(()),
         Err(TryLockError::Error(error)) => return Err(storage_io_error(error)),
     }
+    // An ownership marker is written and synced only after its owner's
+    // marker-creating open has returned with the creation lock held. Holding
+    // the lock over an empty marker therefore means the lock was won inside
+    // the owner's still-running create-and-lock open; leaving the marker and
+    // releasing the lock lets that owner resume its interrupted creation.
+    let marker_length = marker_file.metadata().map_err(storage_io_error)?.len();
+    if marker_length == 0 || marker_length > 256 {
+        return Ok(());
+    }
     match fs::symlink_metadata(temporary) {
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Ok(_) => return Ok(()),
