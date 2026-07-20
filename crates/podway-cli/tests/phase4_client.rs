@@ -104,12 +104,19 @@ impl FakeSocketServer {
             request_sender
                 .send(request_wire)
                 .map_err(|_| io::Error::other("test did not receive request wire"))?;
+            // Response delivery tolerates client aborts: clients that reject a
+            // malformed or trailing-data response may drop the connection while
+            // the fake daemon is still writing or shutting down, and the client
+            // side of each test asserts the contract that matters.
             match behavior {
                 ServerBehavior::FragmentedResponse(response) => {
                     for chunk in response.chunks(3) {
-                        connection.write_all(chunk)?;
+                        if connection.write_all(chunk).is_err() {
+                            return Ok(());
+                        }
                     }
-                    connection.shutdown(Shutdown::Write)
+                    let _ = connection.shutdown(Shutdown::Write);
+                    Ok(())
                 }
                 ServerBehavior::DelayedFragmentedResponse { response, delay } => {
                     for chunk in response.chunks(3) {
@@ -118,11 +125,15 @@ impl FakeSocketServer {
                         }
                         thread::sleep(delay);
                     }
-                    connection.shutdown(Shutdown::Write)
+                    let _ = connection.shutdown(Shutdown::Write);
+                    Ok(())
                 }
                 ServerBehavior::Response(response) => {
-                    connection.write_all(&response)?;
-                    connection.shutdown(Shutdown::Write)
+                    if connection.write_all(&response).is_err() {
+                        return Ok(());
+                    }
+                    let _ = connection.shutdown(Shutdown::Write);
+                    Ok(())
                 }
                 ServerBehavior::Stall(duration) => {
                     thread::sleep(duration);
