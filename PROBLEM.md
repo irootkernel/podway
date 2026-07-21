@@ -1,5 +1,25 @@
 # Podway — Incomplete Work and Handoff
 
+## Status: superseded (2026-07-21)
+
+The handoff below is preserved verbatim as a historical record of an interrupted implementation effort. A recovery effort (11 fix commits plus this checkpoint, `b6fbd4e..d50660d`) has since closed most of what it raised. The recovery outcome is summarized first; the original handoff follows unchanged.
+
+## Recovery outcome (2026-07-21)
+
+- **Store concurrent-init race** (the "Known Active Failure" below): root-caused and fixed. `e81fafc` converges orphaned-ownership-marker recovery (distinguishes live from dead owners by the marker flock; fixes a stat-then-open TOCTOU); `253ac6a` guards the orphan-marker reap against an `O_EXLOCK` creation-gap race. The three concurrent publication tests ran 4000/4000 hang-free stress iterations post-fix; two new regression tests pin the fixed behaviors.
+- **Full workspace suite: green.** 683 passed / 0 failed, confirmed on multiple runs, including `cargo test --workspace --locked` as command #4 (exit 0) in `artifacts/g042/g042-test-report.json`.
+- **G042 semantic closure:** matrix/migration-evidence/policy/verifier pins refrozen; hermetic G036 replay completed all 50 sandboxed commands on the Apple-Silicon host (`84713db`, generator `tools/generate_g036_report.py`); the terminal G042 gate regenerated with all 7 commands exit 0 (generator `tools/generate_g042_report.py`, `artifacts/g042/g042-test-report.json`). One G042 sub-item remains open: the original process's cleanup/architecture/executor-QA red-team gate rerun on a frozen snapshot — an independent two-lens review was performed instead, in-session.
+- **G043:** thin-arm64 `MH_EXECUTE` executable validation is now enforced in both qualification tools (`09a09d1`). The remaining items still need the self-hosted release pipeline and human PGP attestations — unchanged, honestly open.
+- **Phase 0 evidence chain:** contracts, locks, and receipts regenerated and green (`verify_contracts --all`, `import_sot --check`, `phase0_receipts --check`, `run_verification --check`).
+- **Daemon observability:** the shutdown-linearization race fixed (`0d6832e`), verified 5000/5000 isolated stress iterations plus 25 clean full-binary runs.
+- **Known monitored item:** one unreproduced PAC-044 flake observation (a fresh `session.start` error after ~31s under parallel load); 210+ subsequent full-binary runs have been clean, including a 150-run instrumented hunt.
+- **Not claimed:** this is not a release-ready or aggregate-acceptance claim. `G009` (Phase 8 final Apple Silicon release acceptance) remains pending per `sot/IMPLEMENTATION_STATUS.md`.
+- Durable details live in `sot/IMPLEMENTATION_STATUS.md` ("Phase 8 sub-checkpoints" table) and `artifacts/g036/`, `artifacts/g042/` (local, gitignored, not reproducible from a fresh clone).
+
+## Original handoff (historical, 2026-07-20)
+
+# Podway — Incomplete Work and Handoff
+
 ## Purpose
 
 This document describes work that remains incomplete after a large, interrupted implementation effort. It is intended as a handoff to another expert AI. Do not assume the current working tree is release-ready, internally consistent, or fully attributable.
