@@ -1166,6 +1166,61 @@ fn next_open_reaps_unlocked_orphaned_ownership_marker_without_temporary() {
 }
 #[cfg(unix)]
 #[test]
+fn next_open_tolerates_empty_create_gap_marker_with_present_temporary() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("target.sqlite3");
+    let workspace = identity();
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            workspace.clone(),
+            options(None),
+            UnixMillis::new(20),
+        )
+        .expect("initial open must publish the workspace"),
+    );
+
+    // Simulate a crash inside create_temporary_database's create-and-lock gap:
+    // the ownership marker and its temporary database were created but the
+    // marker's device/inode record was never written and synced, so both are
+    // empty and the marker holds no live lock. Recovery must neither hard-fail
+    // (which would permanently brick an already-initialized workspace) nor reap
+    // a possibly-live creation; it leaves the empty pair, exactly like the
+    // unlocked-orphan-marker path tolerates the same create-gap emptiness.
+    let gap_temporary = temporary
+        .path()
+        .join(format!(".target.sqlite3.{}.79.0.tmp", std::process::id()));
+    let gap_marker = sidecar(&gap_temporary, ".owner");
+    for empty in [&gap_temporary, &gap_marker] {
+        fs::write(empty, b"").unwrap();
+        fs::set_permissions(empty, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            workspace.clone(),
+            options(None),
+            UnixMillis::new(21),
+        )
+        .expect("next open must tolerate an empty create-gap marker and temporary"),
+    );
+    // Tolerance is idempotent and the destination workspace stays openable.
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            workspace,
+            options(None),
+            UnixMillis::new(22),
+        )
+        .expect("workspace must remain openable after the create-gap residue"),
+    );
+}
+#[cfg(unix)]
+#[test]
 fn next_open_leaves_live_locked_ownership_marker_without_temporary() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("target.sqlite3");

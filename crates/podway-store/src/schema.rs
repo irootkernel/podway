@@ -1658,6 +1658,17 @@ fn recover_abandoned_publication_temporary_v1(destination: &Path) -> Result<(), 
     }
 
     for (temporary, marker) in temporaries {
+        // A marker whose owner won the create-lock but has not yet written and
+        // synced its device/inode record is empty (the macOS O_EXLOCK
+        // create-and-lock gap, or a crash inside it). Leave the pair for its
+        // owner, or as harmless residue if the owner is gone, rather than
+        // hard-failing on the empty marker (which would brick the workspace) or
+        // reaping a possibly-live creation. This mirrors the emptiness guard in
+        // reap_orphaned_ownership_marker_v1; dropping `marker` releases the lock.
+        let marker_length = marker.metadata().map_err(storage_io_error)?.len();
+        if marker_length == 0 || marker_length > 256 {
+            continue;
+        }
         let temporary_file = open_recovery_file_after_marker_v1(&temporary, true)?
             .ok_or_else(unsafe_database_path_error)?;
         validate_ownership_marker_v1(
