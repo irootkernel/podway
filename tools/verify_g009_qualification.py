@@ -1140,7 +1140,7 @@ G040_PROOF_MEMBERSHIP = {'PAC-005': ({'criterion_id': 'PAC-005', 'path': 'crates
 G036_CRITERION_COUNT = 71
 G036_EXACT_COMMAND_COUNT = 50
 G036_MATRIX_PATH = ROOT / "release/product-acceptance-matrix-v1.json"
-G036_MATRIX_SHA256 = "1cd1afe77cddfdf2f0c1dbb842d3398acc50b2f8847f683105f00b3cd7b4a156"
+G036_MATRIX_SHA256 = "fbea960e462011fd192389fb9c47cbe40068b603f38f5241a37bacb85bdb091f"
 G036_REPORT_PATH = ROOT / "artifacts/g036/g036-test-report.json"
 G036_PRODUCT_SOURCE_TREE_GLOBS = (
     "Cargo.lock",
