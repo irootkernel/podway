@@ -3627,6 +3627,7 @@ def _bundle_fuzz_dependencies(
     members: dict[str, bytes], evidence_root: Path, target: str,
 ) -> None:
     """Freeze every fuzz dependency with the aggregate fuzz gate that references it."""
+    candidate = require_candidate_root()
     materialized = 0
     maximum = _frozen_profile_for_target(target)["fuzz"]["runner"]["fuzz_dependency_materialization_bytes"]
 
