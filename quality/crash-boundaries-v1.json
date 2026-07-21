@@ -244,10 +244,10 @@
       "id": "D01",
       "proof": {
         "failpoint": "reset marker publish",
-        "test": "crates/podway-daemon/tests/phase5_reset_runtime.rs::crash_after_target_seed_resumes_from_the_marker_without_recreating_the_target",
-        "termination": "child abort observed",
-        "recovery": "marker resumes",
-        "invariant": "one predecessor and target",
+        "test": "crates/podway-daemon/src/workspace.rs::d01_reset_marker_publication_interrupted_before_link_publishes_no_marker",
+        "termination": "in-process failpoint before the link retains publication and cleanup evidence",
+        "recovery": "no marker is published and a retry converges to one durable marker",
+        "invariant": "reset marker publication is atomic: linked or absent",
         "source_locator": "crates/podway-daemon/src/workspace.rs::ValidatedRuntimeDirectoryV1::publish_reset_marker"
       }
     },

@@ -1690,6 +1690,95 @@ fn database_path_from_unix_bytes(bytes: Vec<u8>) -> Result<PathBuf, WorkspaceRes
 fn database_path_from_unix_bytes(_bytes: Vec<u8>) -> Result<PathBuf, WorkspaceResolutionErrorV1> {
     Err(WorkspaceResolutionErrorV1::RuntimeDirectoryPathUnsupportedPlatform)
 }
+/// D01 reset-marker publication crash boundary (`BeforeLinkAndTemporaryCleanup`).
+///
+/// This lives at module scope rather than inside `mod tests` so the g009 crash
+/// registry locator in `tools/verify_g009_qualification.py` can resolve it: that
+/// parser only recognizes free functions, not `mod`-nested ones. It drives the
+/// same publication failpoint as
+/// `tests::manager_token_retains_marker_publication_cleanup_failure_evidence`
+/// and additionally proves the boundary is atomic — an interruption before the
+/// destination link publishes no reset marker, and a later publication converges
+/// to exactly the interrupted marker.
+#[cfg(all(test, unix))]
+#[test]
+fn d01_reset_marker_publication_interrupted_before_link_publishes_no_marker() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let unique = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("fixture clock must be after the Unix epoch")
+            .as_nanos()
+    );
+    let path = std::env::temp_dir().join(format!("podway-runtime-marker-d01-{unique}"));
+    std::fs::create_dir(&path).expect("fixture runtime directory must be created");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+        .expect("fixture runtime directory must be private");
+    let runtime = ValidatedRuntimeDirectoryV1 {
+        path: path.clone(),
+        directory: std::fs::File::open(&path).expect("fixture runtime directory must open"),
+        current_uid: nix::unistd::getuid().as_raw(),
+    };
+    let authority = ResetMaintenanceFilesystemTokenV1::issue();
+    let marker = ResetMarkerV1::new(
+        JobIdV1::new("00000000-0000-4000-8000-0000000052d1")
+            .expect("fixture operation ID must be valid"),
+        IdempotencyKeyV1::new("workspace-marker-d01")
+            .expect("fixture idempotency key must be valid"),
+        CanonicalRequestDigestV1::new(format!("sha256:{}", "a".repeat(64)))
+            .expect("fixture request digest must be valid"),
+        WorkspaceId::new("00000000-0000-4000-8000-0000000052d0")
+            .expect("fixture predecessor UUID must be valid"),
+        WorkspaceId::new("00000000-0000-4000-8000-0000000052d2")
+            .expect("fixture target UUID must be valid"),
+        UnixMillis::new(1_700_000_000_123),
+    );
+
+    // Interrupt publication at the D01 boundary: the temporary is written and
+    // synced, but the destination link never happens. Both the publication
+    // failure and the surviving temporary are retained as recovery evidence.
+    let error = runtime
+        .publish_reset_marker_with_failpoint(
+            &authority,
+            &marker,
+            ResetMarkerPublicationFailpointV1::BeforeLinkAndTemporaryCleanup,
+        )
+        .expect_err("an interrupted publication must retain its failure evidence");
+    assert!(matches!(
+        error,
+        ValidatedRuntimeDirectoryErrorV1::PublicationAndTemporaryCleanup { .. }
+    ));
+    assert!(
+        !path.join(RESET_MARKER_FILE_NAME_V1).exists(),
+        "an interruption before the link must publish no reset marker"
+    );
+
+    // Recovery: a subsequent publication converges to exactly one durable marker.
+    runtime
+        .publish_reset_marker(&authority, &marker)
+        .expect("a retry after the interrupted publication must publish the marker");
+    let published = ResetMarkerV1::decode_canonical(
+        &std::fs::read(path.join(RESET_MARKER_FILE_NAME_V1))
+            .expect("the recovered reset marker must be readable"),
+    )
+    .expect("the recovered reset marker must decode canonically");
+    assert_eq!(
+        published.previous_workspace_uuid(),
+        marker.previous_workspace_uuid(),
+        "recovery must publish the interrupted marker's predecessor"
+    );
+    assert_eq!(
+        published.target_workspace_uuid(),
+        marker.target_workspace_uuid(),
+        "recovery must publish the interrupted marker's target"
+    );
+
+    std::fs::remove_dir_all(&path).expect("fixture runtime directory must be removed");
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::{
