@@ -2606,7 +2606,8 @@ def reset_crash_boundary_mappings(source_root: Path) -> dict[str, str]:
     if calls != ["MarkerCreated", "OldDatabaseDeleted", "NewTargetDatabaseCreated", "OldDatabaseDeleted", "NewTargetDatabaseCreated"]:
         raise QualificationError("reset crash boundary calls drift from durable reset transitions")
     mappings = dict(re.findall(
-        r'\("(?P<id>C1[456])",\s*ResetAllCrashBoundaryV1::(?P<boundary>[A-Za-z0-9_]+),\s*(?:true|false)\)',
+        r'\(\s*"(?P<id>C1[456])"\s*,\s*ResetAllCrashBoundaryV1::(?P<boundary>[A-Za-z0-9_]+)'
+        r'\s*,\s*(?:true|false)\s*,?\s*\)',
         test,
     ))
     expected_mappings = {
