@@ -6,6 +6,7 @@
 #[allow(dead_code)]
 mod observability;
 #[allow(dead_code)]
+#[path = "support/phase4_workspace.rs"]
 mod support_phase4_workspace;
 
 #[path = "../src/registry.rs"]
@@ -65,9 +66,10 @@ fn fixture_runtime_directory(root: &Path) -> PathBuf {
 }
 #[cfg(unix)]
 fn terminal_receipt_rows(database_path: &Path) -> String {
+    let immutable_database = format!("file:{}?immutable=1", database_path.display());
     let output = Command::new("sqlite3")
-        .args(["-readonly", "-batch", "-noheader", "-separator", "\u{1f}"])
-        .arg(database_path)
+        .args(["-batch", "-noheader", "-separator", "\u{1f}"])
+        .arg(immutable_database)
         .arg(
             "SELECT 'jobs', job_id, workspace_sequence, idempotency_key, request_digest, \
              state, submitted_at_ms, claimed_at_ms, finished_at_ms, hex(terminal_response_json) \
@@ -79,7 +81,7 @@ fn terminal_receipt_rows(database_path: &Path) -> String {
              ORDER BY 1",
         )
         .output()
-        .expect("sqlite3 must inspect the published replacement database");
+        .expect("sqlite3 must inspect the immutable published replacement database");
     assert!(
         output.status.success(),
         "sqlite3 must read terminal receipt rows: {}",

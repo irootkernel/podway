@@ -7,22 +7,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
 
 def verification_root() -> Path:
-    controller_root = Path(__file__).resolve().parents[1]
-    candidate = os.environ.get("G009_CANDIDATE_ROOT")
-    if candidate is None:
-        return controller_root
-    supplied = Path(candidate)
-    if not supplied.is_absolute() or supplied.is_symlink() or not supplied.is_dir():
-        raise SystemExit("G009_CANDIDATE_ROOT must name an absolute, non-symlink candidate directory")
-    root = supplied.resolve()
-    if root == controller_root or root.is_relative_to(controller_root) or controller_root.is_relative_to(root):
-        raise SystemExit("G009_CANDIDATE_ROOT must be separate and non-overlapping with the controller root")
-    return root
+    return Path(__file__).resolve().parents[1]
 
 
 ROOT = verification_root()
@@ -78,6 +69,34 @@ def daemon_source_inputs(root: Path) -> dict[str, str]:
     return dict(sorted(inputs.items()))
 
 
+def tool_identity(tool_id: str) -> dict[str, str]:
+    rustup = shutil.which("rustup")
+    if rustup is None:
+        raise SystemExit("rustup is required to resolve the pinned Rust toolchain")
+    resolved = subprocess.run(
+        [rustup, "which", tool_id],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if resolved.returncode != 0:
+        raise SystemExit(resolved.stderr.strip() or f"rustup could not resolve {tool_id}")
+    path = Path(resolved.stdout.strip()).resolve()
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"{tool_id} must resolve to a regular non-symlink executable")
+    version = subprocess.run(
+        [str(path), "--version"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if version.returncode != 0 or not version.stdout.strip():
+        raise SystemExit(version.stderr.strip() or f"cannot identify {tool_id} version")
+    return {"path": str(path), "sha256": sha256_file(path), "version": version.stdout.strip()}
+
+
 def produce_daemon_build_receipt(root: Path, daemon: Path) -> Path:
     daemon = daemon.resolve()
     if not daemon.is_file():
@@ -88,6 +107,7 @@ def produce_daemon_build_receipt(root: Path, daemon: Path) -> Path:
         "binary_sha256": sha256_file(daemon),
         "inputs": daemon_source_inputs(root),
         "schema": "podway.daemon-build-receipt/v1",
+        "toolchain": {tool_id: tool_identity(tool_id) for tool_id in ("cargo", "rustc")},
     }
     receipt.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
     return receipt
@@ -103,7 +123,7 @@ def main() -> int:
     environment["PODWAYD_BUILD_RECEIPT"] = str(receipt.resolve())
     run(
         [
-            "cargo", "test", "-p", "podway-cli", "--test", "phase4_production_vertical",
+            "cargo", "test", "-p", "podway-cli", "--test", "e2e_phase4_production_vertical",
             TEST_NAME, "--", "--ignored", "--nocapture",
         ],
         env=environment,

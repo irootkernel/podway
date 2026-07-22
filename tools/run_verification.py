@@ -24,17 +24,7 @@ import uuid
 
 
 def verification_root() -> Path:
-    controller_root = Path(__file__).resolve().parent.parent
-    candidate = os.environ.get("G009_CANDIDATE_ROOT")
-    if candidate is None:
-        return controller_root
-    supplied = Path(candidate)
-    if not supplied.is_absolute() or supplied.is_symlink() or not supplied.is_dir():
-        raise SystemExit("G009_CANDIDATE_ROOT must name an absolute, non-symlink candidate directory")
-    root = supplied.resolve()
-    if root == controller_root or root.is_relative_to(controller_root) or controller_root.is_relative_to(root):
-        raise SystemExit("G009_CANDIDATE_ROOT must be separate and non-overlapping with the controller root")
-    return root
+    return Path(__file__).resolve().parent.parent
 
 
 ROOT = verification_root()
@@ -59,17 +49,18 @@ UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 # treated as verification inputs.
 INPUT_DIRECTORIES = (
     ".cargo",
-    ".github",
     "contracts",
     "crates",
     "presets",
+    "quality",
+    "release",
     "schemas",
     "sot",
     "spec",
     "tests",
     "tools",
 )
-REQUIRED_INPUT_FILES = ("Cargo.toml", "Cargo.lock")
+REQUIRED_INPUT_FILES = ("Cargo.toml", "Cargo.lock", "Makefile", "deny.toml")
 OPTIONAL_INPUT_FILES = (
     ".clippy.toml",
     ".rustfmt.toml",
@@ -116,20 +107,50 @@ MAX_PROBE_TOTAL_OUTPUT_BYTES = 2 * MEBIBYTE
 PROBE_TERMINATION_GRACE_SECONDS = 5
 PROBE_TIMEOUT_SECONDS = 30
 GATE_TERMINATION_GRACE_SECONDS = 5
-GATE_TIMEOUT_SECONDS = (15 * 60, 15 * 60, 30 * 60, 30 * 60, 5 * 60, 5 * 60, 5 * 60)
-GATE_EXECUTABLES = ("cargo", "python3", "rustc", "rustfmt", "cargo-clippy", "cargo-fmt")
+GATE_TIMEOUT_SECONDS = (
+    15 * 60,
+    5 * 60,
+    5 * 60,
+    15 * 60,
+    30 * 60,
+    15 * 60,
+    5 * 60,
+    30 * 60,
+    30 * 60,
+    30 * 60,
+    60 * 60,
+    60 * 60,
+    5 * 60,
+    5 * 60,
+)
+GATE_EXECUTABLES = (
+    "cargo",
+    "cargo-deny",
+    "python3",
+    "rustc",
+    "rustfmt",
+    "cargo-clippy",
+    "cargo-fmt",
+)
 RUSTUP_TOOL_EXECUTABLES = ("cargo", "rustc", "rustfmt", "cargo-clippy", "cargo-fmt", "clippy-driver")
 EXECUTABLE_IDENTITY_NAMES = (
     GATE_EXECUTABLES + ("rustup",) + tuple(f"rustup:{name}" for name in RUSTUP_TOOL_EXECUTABLES)
 )
 GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("01-cargo-fmt", ("cargo", "fmt", "--all", "--", "--check")),
-    ("02-cargo-check", ("cargo", "check", "--workspace", "--all-targets")),
-    ("03-cargo-test", ("cargo", "test", "--workspace", "--all-targets")),
-    ("04-cargo-clippy", ("cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings")),
-    ("05-import-sot", ("python3", "tools/import_sot.py", "--check")),
-    ("06-verify-contracts", ("python3", "tools/verify_contracts.py", "--all")),
-    ("07-verify-verification-runner", ("python3", "tools/verify_verification_runner.py")),
+    ("02-import-sot", ("python3", "tools/import_sot.py", "--check")),
+    ("03-test-layout", ("python3", "tools/verify_test_layout.py", "--check")),
+    ("04-cargo-check", ("cargo", "check", "--workspace", "--all-targets", "--locked")),
+    ("05-cargo-clippy", ("cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings")),
+    ("06-cargo-deny", ("cargo", "deny", "check")),
+    ("06-quality-contracts", ("python3", "tools/verify_quality_contracts.py")),
+    ("07-architecture", ("cargo", "test", "--workspace", "--test", "arch_*", "--locked")),
+    ("08-unit", ("cargo", "test", "--workspace", "--lib", "--bins", "--locked")),
+    ("09-doc", ("cargo", "test", "--workspace", "--doc", "--locked")),
+    ("10-integration", ("cargo", "test", "--workspace", "--test", "int_*", "--locked")),
+    ("11-e2e", ("python3", "tools/run_e2e.py")),
+    ("12-verify-contracts", ("python3", "tools/verify_contracts.py", "--all")),
+    ("13-verify-verification-runner", ("python3", "tools/verify_verification_runner.py")),
 )
 
 

@@ -43,7 +43,7 @@ fn arc_007_uuid_newtypes_accept_canonical_values_and_reject_noncanonical_values(
 
 // ARC-007: Core has no infrastructure dependencies. This resolves podway-core's real
 // Cargo dependency graph (mirroring the daemon's closed-world network-surface proof at
-// crates/podway-daemon/tests/phase4_endpoint.rs::pac063_*) and proves, by executing
+// crates/podway-daemon/tests/int_phase4_endpoint.rs::pac063_*) and proves, by executing
 // `cargo metadata` rather than by convention, that both the crate's declared manifest
 // dependencies and its full resolved transitive closure are a frozen, closed pure
 // world. Adding an infrastructure/I/O crate (tokio, rusqlite, mio, hyper, reqwest, ...)
@@ -217,7 +217,7 @@ const ARC_007_FORBIDDEN_INFRASTRUCTURE_CRATES: &[&str] = &[
 ];
 
 /// Resolves podway-core's real Cargo dependency graph via `cargo metadata`, mirroring
-/// `resolved_daemon_packages` in crates/podway-daemon/tests/phase4_endpoint.rs. Returns
+/// `resolved_daemon_packages` in crates/podway-daemon/tests/int_phase4_endpoint.rs. Returns
 /// the crate's manifest-declared dependency names (every kind: normal, build, and dev,
 /// exactly as podway-core's own internal-DAG check treats all three uniformly) and the
 /// full package-name closure of the resolved, activated dependency graph reachable from

@@ -186,6 +186,8 @@ def test_log_tamper() -> list[str]:
 def manifest_root(root: Path, include_race_file: bool) -> dict[str, Any]:
     (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
     (root / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    (root / "Makefile").write_text("test:\n\t@true\n", encoding="utf-8")
+    (root / "deny.toml").write_text("[advisories]\n", encoding="utf-8")
     tools = root / "tools"
     tools.mkdir()
     race_file = tools / "race.py"

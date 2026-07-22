@@ -35,10 +35,11 @@
 31. The complete first public release is `v0.1.0`.
 32. The design package is `1.0.1-design`; public and storage contracts remain v1.
 33. Initial `schema-0`/uninitialized (`uninitialized-database`) state migrates transactionally to `schema-v1`.
-34. Gate S S0 preserves the exact accepted intent identified by payload SHA-256 `022167d808f5f0f85711bfdfa94d1a0165de711a6eda51bb9209e9e873ea342d` and requires exactly one current detached `APPROVE` for each role `A`, `E`, `F`, and `requirements_authority`, all bound to one payload digest; rejects duplicate/mixed roles or any rejection.
-35. Gate S S1 contains only derivative SOT edits that implement accepted S0 intent.
+34. ADR-0011 retires the former `REL-007` detached-approval and quorum requirement. The identifier is not reused, and the recorded S0 digest is historical design provenance rather than a release gate.
+35. Gate S S1 contains only derivative SOT edits that implement the recorded S0 baseline.
 36. Gate S S2 validates before emitting checksums as its final action, and Gate S S3 completes read-only acceptance before any product workspace is created.
-37. Gate S evidence covers Phases 0 through 8; Phase 8 records initial-migration and complete `v0.1.0` release evidence.
+37. Gate S covers Phases 0 through 8; Phase 8 closes through the repository-local release gate.
+38. The repository-root `make test` command is the sole required release-readiness gate and runs preparation, unit, integration, and actual-binary end-to-end targets sequentially.
 
 ## Intentionally deferred capabilities
 
@@ -68,7 +69,7 @@ The following may be selected by the development team as long as public contract
 - internal table access patterns beyond the normative DDL contract;
 - text-output styling;
 - package manager integration;
-- CI provider and release orchestration;
+- distribution automation used after the local release gate;
 - internal error types and module names.
 
 ## Decision-change process

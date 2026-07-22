@@ -147,7 +147,7 @@ Any future network capability requires a new accepted ADR and an explicit user-v
 
 ## Binary and supply-chain security
 
-Release practice SHOULD include:
+Distribution practice SHOULD include:
 
 - reproducible or independently verifiable builds where practical;
 - committed dependency lockfile;
@@ -156,6 +156,9 @@ Release practice SHOULD include:
 - published SHA-256 checksums;
 - no runtime dynamic plugin loading;
 - least-privilege user service installation.
+
+These distribution measures describe published artifacts. They are not additional
+release-readiness gates beyond the repository-root `make test` command.
 
 ## Explicit limitations
 

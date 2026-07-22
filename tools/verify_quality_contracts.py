@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Validate the generic product-acceptance and crash-boundary contracts."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MATRIX_PATH = ROOT / "release/product-acceptance-matrix-v1.json"
+CRASH_PATH = ROOT / "quality/crash-boundaries-v1.json"
+DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+FUNCTION_RE_TEMPLATE = r"\bfn\s+{name}\s*(?:<[^>]*>)?\s*\("
+
+
+class ContractError(RuntimeError):
+    pass
+
+
+def fail(message: str) -> None:
+    raise ContractError(message)
+
+
+def load_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"cannot read {path.relative_to(ROOT)}: {error}")
+    if not isinstance(value, dict):
+        fail(f"{path.relative_to(ROOT)} must contain a JSON object")
+    return value
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def repository_file(relative: Any, label: str) -> Path:
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        fail(f"{label} must be a non-empty repository-relative path")
+    path = (ROOT / relative).resolve()
+    if not path.is_relative_to(ROOT) or path.is_symlink() or not path.is_file():
+        fail(f"{label} does not resolve to a regular repository file: {relative}")
+    return path
+
+
+def require_test_member(member: Any, criterion_id: str, source_files: set[str]) -> set[str]:
+    if not isinstance(member, dict):
+        fail(f"{criterion_id} proof member must be an object")
+    required = {"command", "function", "path"}
+    if not required.issubset(member):
+        fail(f"{criterion_id} proof member is missing command, function, or path")
+    relative = member["path"]
+    function = member["function"]
+    command = member["command"]
+    if not all(isinstance(value, str) and value for value in (relative, function, command)):
+        fail(f"{criterion_id} proof member fields must be non-empty strings")
+    path = repository_file(relative, f"{criterion_id} proof path")
+    source = path.read_text(encoding="utf-8")
+    if re.search(FUNCTION_RE_TEMPLATE.format(name=re.escape(function)), source) is None:
+        fail(f"{criterion_id} proof function is missing from {relative}: {function}")
+    target = path.stem
+    required_tokens = ("cargo test ", f"--test {target} ", function, "--exact")
+    if not all(token in command for token in required_tokens):
+        fail(f"{criterion_id} proof command is not bound to its exact test target and function")
+    source_files.add(relative)
+    obligations = member.get("obligation_ids", [])
+    if not isinstance(obligations, list) or any(not isinstance(item, str) or not item for item in obligations):
+        fail(f"{criterion_id} obligation_ids must be a string list")
+    return set(obligations)
+
+
+def validate_acceptance_matrix() -> tuple[int, int]:
+    matrix = load_object(MATRIX_PATH)
+    if matrix.get("schema") != "podway.product-acceptance-matrix/v1" or matrix.get("version") != 3:
+        fail("product acceptance matrix schema or version is unsupported")
+    criteria = matrix.get("criteria")
+    if not isinstance(criteria, list) or len(criteria) != 71:
+        fail("product acceptance matrix must contain exactly 71 criteria")
+    source = matrix.get("source")
+    if not isinstance(source, dict):
+        fail("product acceptance matrix source binding is missing")
+    source_path = repository_file(source.get("path"), "product acceptance source")
+    source_lines = source_path.read_text(encoding="utf-8").splitlines()
+    expected_ids = [f"PAC-{number:03d}" for number in range(1, 72)]
+    proof_source_files: set[str] = set()
+    semantic_coverage: dict[str, set[str]] = {}
+    seen_lines: set[int] = set()
+    for expected_id, criterion in zip(expected_ids, criteria):
+        if not isinstance(criterion, dict) or criterion.get("id") != expected_id:
+            fail(f"product acceptance criteria must be ordered exactly; expected {expected_id}")
+        if criterion.get("status") != "automated":
+            fail(f"{expected_id} must be automated under the local release gate")
+        line = criterion.get("line")
+        text = criterion.get("text")
+        if not isinstance(line, int) or line < 1 or line > len(source_lines) or line in seen_lines:
+            fail(f"{expected_id} has an invalid or duplicate source line")
+        if not isinstance(text, str) or source_lines[line - 1] != f"- {text}":
+            fail(f"{expected_id} text does not match its bound SOT bullet")
+        seen_lines.add(line)
+        proof = criterion.get("proof")
+        if not isinstance(proof, dict):
+            fail(f"{expected_id} proof must be an object")
+        kind = proof.get("kind")
+        if kind == "cargo-test":
+            obligations = require_test_member(proof, expected_id, proof_source_files)
+            if obligations:
+                fail(f"{expected_id} single-test proof must not declare semantic obligations")
+        elif kind == "cargo-test-set":
+            if proof.get("criterion_id") != expected_id or not isinstance(proof.get("members"), list) or not proof["members"]:
+                fail(f"{expected_id} test-set proof is malformed")
+            obligations: set[str] = set()
+            for member in proof["members"]:
+                if member.get("criterion_id") != expected_id:
+                    fail(f"{expected_id} test-set member has the wrong criterion_id")
+                member_obligations = require_test_member(member, expected_id, proof_source_files)
+                if obligations.intersection(member_obligations):
+                    fail(f"{expected_id} repeats a semantic obligation")
+                obligations.update(member_obligations)
+            semantic_coverage[expected_id] = obligations
+        else:
+            fail(f"{expected_id} has unsupported proof kind: {kind}")
+
+    source_files = matrix.get("source_files")
+    if not isinstance(source_files, dict) or set(source_files) != proof_source_files:
+        fail("product acceptance source_files must equal the exact proof-path set")
+    for relative, expected_digest in source_files.items():
+        if not isinstance(expected_digest, str) or DIGEST_RE.fullmatch(expected_digest) is None:
+            fail(f"product acceptance source digest is malformed: {relative}")
+        if sha256_file(repository_file(relative, "product acceptance source file")) != expected_digest:
+            fail(f"product acceptance source file is stale: {relative}")
+
+    contracts = matrix.get("semantic_contracts")
+    if not isinstance(contracts, list):
+        fail("semantic_contracts must be a list")
+    declared: dict[str, set[str]] = {}
+    for contract in contracts:
+        if not isinstance(contract, dict) or not isinstance(contract.get("criterion_id"), str):
+            fail("semantic contract is malformed")
+        criterion_id = contract["criterion_id"]
+        obligations = contract.get("obligations")
+        if criterion_id in declared or not isinstance(obligations, list) or not obligations:
+            fail(f"semantic contract is duplicate or empty: {criterion_id}")
+        ids = {item.get("id") for item in obligations if isinstance(item, dict)}
+        if len(ids) != len(obligations) or any(not isinstance(item, str) or not item for item in ids):
+            fail(f"semantic contract obligations are invalid: {criterion_id}")
+        declared[criterion_id] = ids
+    if declared != semantic_coverage:
+        fail("semantic contract obligations do not exactly match test-set coverage")
+
+    closure = matrix.get("input_closure")
+    if not isinstance(closure, dict) or closure.get("requireCompleteFileDigests") is not True:
+        fail("product acceptance input closure is malformed")
+    globs = closure.get("globs")
+    if not isinstance(globs, list) or any(not isinstance(item, str) or not item for item in globs):
+        fail("product acceptance input globs must be a non-empty string list")
+    return len(criteria), len(proof_source_files)
+
+
+def locator_parts(locator: Any, label: str) -> tuple[Path, str]:
+    if not isinstance(locator, str) or "::" not in locator:
+        fail(f"{label} must be PATH::SYMBOL")
+    relative, symbol = locator.split("::", 1)
+    if not symbol:
+        fail(f"{label} has an empty symbol")
+    return repository_file(relative, label), symbol
+
+
+def validate_crash_registry() -> int:
+    registry = load_object(CRASH_PATH)
+    if registry.get("schema") != "podway.crash-boundaries/v1" or registry.get("version") != 1:
+        fail("crash registry schema or version is unsupported")
+    expected = [f"C{number:02d}" for number in range(1, 17)] + ["P01", "D01", "D02", "S01", "S02", "S03"]
+    coverage = registry.get("coverage")
+    windows = registry.get("windows")
+    if not isinstance(coverage, dict) or not isinstance(windows, list):
+        fail("crash registry coverage or windows is missing")
+    observed = [window.get("id") for window in windows if isinstance(window, dict)]
+    if coverage.get("required") != expected or coverage.get("covered") != expected or coverage.get("percent") != 100 or observed != expected:
+        fail("crash registry must provide exact ordered 100% coverage")
+    required_proof = {"failpoint", "test", "termination", "recovery", "invariant", "source_locator"}
+    for window in windows:
+        boundary_id = window["id"]
+        proof = window.get("proof")
+        if not isinstance(proof, dict) or set(proof) != required_proof:
+            fail(f"{boundary_id} crash proof has unexpected or missing fields")
+        if any(not isinstance(value, str) or not value for value in proof.values()):
+            fail(f"{boundary_id} crash proof fields must be non-empty strings")
+        test_path, test_function = locator_parts(proof["test"], f"{boundary_id} test")
+        source_path, source_symbol = locator_parts(proof["source_locator"], f"{boundary_id} source locator")
+        test_text = test_path.read_text(encoding="utf-8")
+        source_text = source_path.read_text(encoding="utf-8")
+        if re.search(FUNCTION_RE_TEMPLATE.format(name=re.escape(test_function)), test_text) is None:
+            fail(f"{boundary_id} crash test function is missing")
+        symbol = source_symbol.rsplit("::", 1)[-1]
+        if symbol not in source_text:
+            fail(f"{boundary_id} crash source symbol is missing")
+    return len(windows)
+
+
+def main() -> int:
+    try:
+        criteria, proof_files = validate_acceptance_matrix()
+        crash_windows = validate_crash_registry()
+    except ContractError as error:
+        print(f"quality contract verification failed: {error}")
+        return 1
+    print(
+        f"quality contracts verified: {criteria} acceptance criteria, "
+        f"{proof_files} proof files, {crash_windows} crash windows"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

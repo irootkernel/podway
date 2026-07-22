@@ -1692,9 +1692,7 @@ fn database_path_from_unix_bytes(_bytes: Vec<u8>) -> Result<PathBuf, WorkspaceRe
 }
 /// D01 reset-marker publication crash boundary (`BeforeLinkAndTemporaryCleanup`).
 ///
-/// This lives at module scope rather than inside `mod tests` so the g009 crash
-/// registry locator in `tools/verify_g009_qualification.py` can resolve it: that
-/// parser only recognizes free functions, not `mod`-nested ones. It drives the
+/// This lives at module scope so the crash registry can resolve it. It drives the
 /// same publication failpoint as
 /// `tests::manager_token_retains_marker_publication_cleanup_failure_evidence`
 /// and additionally proves the boundary is atomic — an interruption before the

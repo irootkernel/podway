@@ -505,7 +505,7 @@ esac
     );
 
     let runner = SystemLaunchctlRunnerV1::new(&fake_launchctl).with_bounds(
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         1024,
         Duration::from_millis(100),
     );

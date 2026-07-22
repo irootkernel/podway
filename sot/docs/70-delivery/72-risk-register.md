@@ -14,17 +14,17 @@
 | `R-10` | Artifact hashing blocks queues on large files | medium | medium | long queue latency | hash outside DB transaction, streaming I/O, report duration, keep artifacts focused | Daemon/Store |
 | `R-11` | Required local artifact changes after attach | high | medium | completion uses stale metadata | rehash at complete with slot revision recheck | Domain/Store |
 | `R-12` | YAML parser permits resource exhaustion or code-like behavior | low | high | large alias expansion or custom tags | strict parser limits, duplicate-key rejection, no tags/includes | Config/Security |
-| `R-13` | JSON/IPC contracts drift between CLI and daemon | medium | high | upgrade incompatibility or golden failure | shared protocol crate, schemas in CI, compatibility tests | Protocol/CLI |
-| `R-14` | Full macOS service tests are flaky or unavailable | medium | high | release lane cannot prove login startup | isolated test account/VM, deterministic service abstraction tests | Service/QA |
+| `R-13` | JSON/IPC contracts drift between CLI and daemon | medium | high | upgrade incompatibility or golden failure | shared protocol crate, schemas in `make test`, compatibility tests | Protocol/CLI |
+| `R-14` | Full macOS service tests are flaky or unavailable | medium | high | local gate cannot prove service behavior | isolated fixtures and deterministic service abstraction tests | Service/QA |
 | `R-15` | SQLite schema and domain invariants diverge | medium | high | doctor detects impossible state | migration checks, invariant scan, transaction review | Store/Domain |
 | `R-16` | Global registry accidentally accumulates task data | low | medium | registry fields expand | fixed schema, tests, architecture review | Daemon/Security |
 | `R-17` | Logs leak task or item content | medium | medium | request debug output appears in logs | structured allowlist logging and redaction tests | Daemon/Security |
 | `R-18` | Destructive reset is used accidentally | low | high | session lost without intent | TTY prompt, `--yes`, `--force`, dry run, explicit help | CLI |
-| `R-19` | Native Apple Silicon release evidence is incomplete or non-native | medium | high | required `aarch64-apple-darwin` artifact, host, or Mach-O evidence is missing, translated, universal/fat, cross-built, or relabeled | build, inspect, and run both release executables natively on Apple Silicon; retain artifact, host, and Mach-O evidence for final acceptance | Release |
+| `R-19` | A non-native binary is distributed as Apple Silicon output | medium | high | executable is translated, universal/fat, cross-built, or relabeled | run `make test` on the native Apple Silicon release host and inspect distributed binaries | Release |
 | `R-20` | Same-user threat is misunderstood as strong authentication | medium | medium | users rely on Podway for audit proof | explicit documentation, no “secure evidence” language, no access key | Product/Security |
 | `R-21` | `next` suggestions are incomplete or unsafe to copy | medium | high | users still omit steps | structured argv suggestions, preset E2E assertions, UX dogfooding | CLI/Product |
 | `R-22` | Reset-all crash leaves workspace unusable | low | high | marker or partial DB remains | marker protocol and crash cases C14-C16 | Store/Daemon |
-| `R-23` | Dependency supply-chain or licensing issue blocks release | low | high | audit failure near release | early dependency review, lockfile, limited dependency surface | Release |
+| `R-23` | Dependency supply-chain or licensing issue blocks release | low | high | `cargo deny` fails in the local gate | lockfile, limited dependency surface, `make test-prepare` dependency review | Release |
 | `R-24` | Overengineering delays complete product | medium | high | long work on non-goals or generic frameworks | fixed scope, phased gates, reject speculative adapters/history | Project lead |
 
 ## Risk review cadence
@@ -32,4 +32,4 @@
 - Review critical and high risks at every integration milestone.
 - Add a conformance test when a risk is triggered by a defect.
 - A new critical risk may block integration until an owner and mitigation are assigned.
-- Closing a risk requires evidence in tests, release tooling, or accepted design, not only an implementation claim.
+- Closing a risk requires a passing test, local-gate check, or accepted design change, not only an implementation claim.

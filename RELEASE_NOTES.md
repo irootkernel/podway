@@ -19,4 +19,6 @@ Podway is a same-user local tool. Its local IPC and workspace state are trusted 
 
 The current Apple-Silicon public package is **unsigned and not notarized**. Developer ID signing and notarization were not attempted because the required credentials and infrastructure are unavailable; zip stapling is not applicable, and no Gatekeeper acceptance is claimed. This status is frozen for this release.
 
-Developer ID signing, notarization, and release approval are detached human release steps outside qualification. They are recommended when the necessary infrastructure is available, but no absent signing, notarization, or approval record is required for this release. The publication controller binds the reviewed archive, source, policy, and controller inputs and generates its receipt only after the exact asset set is public.
+Developer ID signing and notarization are recommended when the necessary
+infrastructure is available, but they are not release-readiness requirements. The
+authoritative gate for the source revision is a successful local `make test` run.

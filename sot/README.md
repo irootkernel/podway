@@ -27,7 +27,7 @@ Any contradiction should be fixed in all affected files before implementation pr
 ## Handoff shortcuts
 
 - [Implementation handoff](IMPLEMENTATION_HANDOFF.md): immediate kickoff sequence and prohibited shortcuts.
-- [Implementation status](IMPLEMENTATION_STATUS.md): non-normative G001–G005 implementation and verification checkpoints.
+- [Implementation status](IMPLEMENTATION_STATUS.md): non-normative implementation and local release-gate status.
 - [Manifest](MANIFEST.md): complete archive inventory.
 - [Design version](DESIGN_VERSION): specification version consumed by the team.
 - [Validation report](VALIDATION_REPORT.md): package consistency checks completed before handoff.
@@ -155,6 +155,7 @@ Any contradiction should be fixed in all affected files before implementation pr
 | [ADR-0008](adr/0008-relational-state-not-event-sourcing.md) | Use authoritative SQLite relational state rather than event sourcing |
 | [ADR-0009](adr/0009-artifact-metadata-only.md) | Store artifact metadata, never artifact bytes |
 | [ADR-0010](adr/0010-generic-cli-json-integration.md) | Integrate external tools through generic CLI and JSON only |
+| [ADR-0011](adr/0011-local-make-test-release-gate.md) | Use the local `make test` suite as the sole release-readiness gate |
 
 ## Implementation handoff
 
@@ -163,6 +164,6 @@ The development team should treat this archive as the design baseline. Before me
 1. assign owners using [the team work breakdown](docs/70-delivery/71-team-work-breakdown.md);
 2. freeze the public schemas and error catalog in the first integration milestone;
 3. build the pure domain conformance suite before storage or daemon code;
-4. validate all built-in presets against the shipped schema in CI;
+4. validate all built-in presets against the shipped schema through `make test`;
 5. require every public command to have text help, JSON golden tests, and error-code tests;
 6. reject changes that expand Podway into command execution, Git mutation, remote service, or long-term audit without a new accepted ADR.

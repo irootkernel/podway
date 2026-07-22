@@ -20,8 +20,22 @@ ADJACENCY_PATH = Path("contracts/cargo-adjacency.json")
 ROUTES_PATH = Path("contracts/command-routes.json")
 ADJACENCY_VERSION = "podway.cargo-adjacency/v1"
 ROUTES_VERSION = "podway.command-routes/v1"
-CI_WORKFLOW_PATH = Path(".github/workflows/ci.yml")
-REQUIRED_CI_COMMANDS = (
+MAKEFILE_PATH = Path("Makefile")
+REQUIRED_MAKE_TARGETS = ("test", "test-prepare", "test-unit", "test-int", "test-e2e")
+REQUIRED_TEST_SEQUENCE = (
+    "$(MAKE) test-prepare",
+    "$(MAKE) test-unit",
+    "$(MAKE) test-int",
+    "$(MAKE) test-e2e",
+)
+REQUIRED_PREPARE_COMMANDS = (
+    "python3 tools/import_sot.py --write",
+    "cargo fmt --all",
+    "cargo check --workspace --all-targets --locked",
+    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "cargo deny check",
+    "python3 tools/verify_test_layout.py --check",
+    "python3 tools/verify_quality_contracts.py",
     "python3 tools/verify_contracts.py --all",
     "python3 tools/phase0_receipts.py --check",
 )
@@ -386,23 +400,31 @@ def validate_routes(root: Path) -> int:
     if commands != expected_commands:
         fail(f"command routes do not exactly cover catalog commands; missing={sorted(expected_commands - commands)}")
     return len(commands)
-def validate_ci_commands(root: Path) -> int:
-    path = import_sot.checked_path(root, CI_WORKFLOW_PATH, "CI workflow")
+def validate_makefile_contract(root: Path) -> int:
+    path = import_sot.checked_path(root, MAKEFILE_PATH, "Makefile")
     if not path.is_file():
-        fail("CI workflow is missing", "ci_command_drift")
+        fail("Makefile is missing", "makefile_contract_drift")
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
-        fail(f"cannot read CI workflow: {error}", "ci_command_drift")
+        fail(f"cannot read Makefile: {error}", "makefile_contract_drift")
 
-    commands = {
-        match.group(1)
-        for match in re.finditer(r"^\s*run:\s+(.+?)\s*$", text, flags=re.MULTILINE)
-    }
-    missing = [command for command in REQUIRED_CI_COMMANDS if command not in commands]
-    if missing:
-        fail(f"CI workflow omits required commands: {missing}", "ci_command_drift")
-    return len(REQUIRED_CI_COMMANDS)
+    missing_targets = [
+        target for target in REQUIRED_MAKE_TARGETS
+        if re.search(rf"^{re.escape(target)}\s*:", text, flags=re.MULTILINE) is None
+    ]
+    if missing_targets:
+        fail(f"Makefile omits required targets: {missing_targets}", "makefile_contract_drift")
+    test_recipe = re.search(r"^test\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
+    if test_recipe is None:
+        fail("Makefile test target has no recipe", "makefile_contract_drift")
+    commands = tuple(line.strip() for line in test_recipe.group(1).splitlines())
+    if commands != REQUIRED_TEST_SEQUENCE:
+        fail("Makefile test target does not run prepare, unit, int, and e2e sequentially", "makefile_contract_drift")
+    missing_commands = [command for command in REQUIRED_PREPARE_COMMANDS if command not in text]
+    if missing_commands:
+        fail(f"Makefile omits required prepare commands: {missing_commands}", "makefile_contract_drift")
+    return len(REQUIRED_MAKE_TARGETS) + len(REQUIRED_PREPARE_COMMANDS)
 
 
 
@@ -498,7 +520,7 @@ def production_checks(root: Path) -> dict[str, int]:
         "v1_identifiers": validate_v1_identifiers(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
-        "ci_commands": validate_ci_commands(root),
+        "makefile_contract": validate_makefile_contract(root),
     }
 
 

@@ -13,14 +13,13 @@ use std::{
 use podway_core::UnixMillis;
 use podway_service::{
     FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1, LaunchctlRunnerV1, LocalPlatformPathV1,
-    LogLocationV1, LogQueryV1, MacosServiceCommandRunnerV1, QualificationWrapperBindingV1,
-    RecordingServiceCommandRunnerV1, RecordingServiceManagerV1, SERVICE_METADATA_MAX_BYTES_V1,
-    ServiceClockV1, ServiceCommandResultV1, ServiceCommandRunnerV1, ServiceCommandV1,
-    ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1,
-    ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1,
-    ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
+    LogLocationV1, LogQueryV1, MacosServiceCommandRunnerV1, RecordingServiceCommandRunnerV1,
+    RecordingServiceManagerV1, SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1,
+    ServiceCommandResultV1, ServiceCommandRunnerV1, ServiceCommandV1, ServiceErrorV1,
+    ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1, ServiceManagerContractV1,
+    ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1, ServiceRunningV1,
+    ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
 };
-use sha2::{Digest, Sha256};
 
 fn service_paths() -> ServiceRuntimePathsV1 {
     match ServiceRuntimePathsV1::from_directories(
@@ -628,8 +627,7 @@ impl ServiceFilesystemV1 for Phase6Filesystem {
 
     fn is_executable(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
         Ok(path.starts_with("/Applications/Podway/")
-            || path.to_string_lossy().contains(".podway-daemons-v1/")
-            || path.to_string_lossy().contains(".podway-qualification-v1/"))
+            || path.to_string_lossy().contains(".podway-daemons-v1/"))
     }
 
     fn create_directory(&self, path: &Path, _: u32) -> Result<(), ServiceFilesystemErrorV1> {
@@ -2138,149 +2136,4 @@ fn phase6_authenticated_generation_rejects_state_and_timestamp_tampering() {
                 if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
         ));
     }
-}
-#[test]
-fn qualification_publication_stages_bound_dependencies_and_rejects_drift_or_role_confusion() {
-    let filesystem = Phase6Filesystem::default();
-    let paths = service_paths();
-    let wrapper = PathBuf::from("/Applications/Podway/qualification-wrapper");
-    let profile = PathBuf::from("/Applications/Podway/qualification.sb");
-    let archived = PathBuf::from("/Applications/Podway/archived-podwayd");
-    let profile_bytes = b"(version 1)".to_vec();
-    let archived_bytes = phase6_native_daemon_bytes();
-    let wrapper_bytes = format!(
-        "#!/bin/sh\nexec /usr/bin/sandbox-exec -f {} {} \"$@\"\n",
-        profile.display(),
-        archived.display()
-    )
-    .into_bytes();
-    let digest = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
-    filesystem.files.lock().expect("test lock").extend([
-        (wrapper.clone(), wrapper_bytes.clone()),
-        (profile.clone(), profile_bytes.clone()),
-        (archived.clone(), archived_bytes.clone()),
-    ]);
-    let runner = MacosServiceCommandRunnerV1::new(
-        filesystem.clone(),
-        Phase6Launchctl {
-            events: filesystem.events.clone(),
-            bootstrap_status: 0,
-            print_status: 113,
-        },
-        FixedServiceClockV1::new(UnixMillis::new(3_010)),
-        501,
-    )
-    .expect("non-root service runner");
-    let binding = QualificationWrapperBindingV1::new(
-        digest(&wrapper_bytes),
-        LocalPlatformPathV1::new(&profile).expect("profile path"),
-        digest(&profile_bytes),
-        LocalPlatformPathV1::new(&archived).expect("archive path"),
-        digest(&archived_bytes),
-    );
-    runner
-        .run(ServiceCommandV1::Install {
-            requested_at: UnixMillis::new(3_010),
-            spec: InstallSpecV1::qualification_wrapper(
-                LocalPlatformPathV1::new(&wrapper).expect("wrapper path"),
-                podway_service::ServiceLabelV1::podwayd(),
-                paths.clone(),
-                binding,
-            ),
-        })
-        .expect("qualification install");
-
-    let metadata_path = paths.metadata_index_path().as_path().to_path_buf();
-    let receipt: serde_json::Value =
-        serde_json::from_slice(&filesystem.files.lock().expect("test lock")[&metadata_path])
-            .expect("qualification receipt");
-    assert_eq!(receipt["artifact_role"], "qualification_wrapper");
-    for dependency in ["sandbox_profile", "archived_daemon"] {
-        let staged = receipt["qualification_binding"][dependency]
-            .as_str()
-            .expect("staged dependency path");
-        assert!(
-            staged.contains(".podway-qualification-v1/"),
-            "{dependency} must be controller-owned"
-        );
-    }
-    filesystem
-        .files
-        .lock()
-        .expect("test lock")
-        .insert(profile, b"source replacement".to_vec());
-    assert!(
-        runner
-            .run(ServiceCommandV1::Status {
-                requested_at: UnixMillis::new(3_010),
-                paths: paths.clone(),
-            })
-            .is_ok(),
-        "lifecycle reads only the published qualification snapshots"
-    );
-
-    let staged_profile = PathBuf::from(
-        receipt["qualification_binding"]["sandbox_profile"]
-            .as_str()
-            .expect("staged profile"),
-    );
-    filesystem
-        .files
-        .lock()
-        .expect("test lock")
-        .insert(staged_profile, b"drift".to_vec());
-    assert!(matches!(
-        runner.run(ServiceCommandV1::Status {
-            requested_at: UnixMillis::new(3_010),
-            paths: paths.clone(),
-        }),
-        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
-            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
-    ));
-    filesystem.files.lock().expect("test lock").insert(
-        PathBuf::from(
-            receipt["qualification_binding"]["sandbox_profile"]
-                .as_str()
-                .expect("staged profile"),
-        ),
-        profile_bytes,
-    );
-    let staged_archived = PathBuf::from(
-        receipt["qualification_binding"]["archived_daemon"]
-            .as_str()
-            .expect("staged archived daemon"),
-    );
-    filesystem
-        .files
-        .lock()
-        .expect("test lock")
-        .insert(staged_archived.clone(), b"drift".to_vec());
-    assert!(matches!(
-        runner.run(ServiceCommandV1::Status {
-            requested_at: UnixMillis::new(3_010),
-            paths: paths.clone(),
-        }),
-        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
-            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
-    ));
-    filesystem
-        .files
-        .lock()
-        .expect("test lock")
-        .insert(staged_archived, archived_bytes);
-
-    let mut confused = receipt;
-    confused["artifact_role"] = serde_json::Value::String("production_daemon".to_owned());
-    filesystem.files.lock().expect("test lock").insert(
-        metadata_path,
-        serde_json::to_vec(&confused).expect("confused receipt"),
-    );
-    assert!(matches!(
-        runner.run(ServiceCommandV1::Status {
-            requested_at: UnixMillis::new(3_010),
-            paths,
-        }),
-        Err(ServiceErrorV1::OperationFailureV1 { source, .. })
-            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
-    ));
 }

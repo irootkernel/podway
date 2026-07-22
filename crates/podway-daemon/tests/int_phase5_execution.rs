@@ -1,6 +1,6 @@
-include!("phase4_execution.rs");
+include!("int_phase4_execution.rs");
 #[allow(dead_code)]
-#[path = "support_phase4_workspace.rs"]
+#[path = "support/phase4_workspace.rs"]
 mod support_phase4_workspace;
 
 use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};

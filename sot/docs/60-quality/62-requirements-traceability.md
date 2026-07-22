@@ -27,7 +27,7 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 | `ARC-004` | Different worktrees may execute concurrently | Daemon/queue | Multi-worktree concurrency test |
 | `ARC-005` | State resides in worktree | Git/filesystem | Layout and deletion tests |
 | `ARC-006` | No network listener or client | Security | Static and runtime network test |
-| `ARC-007` | Pure core has no infrastructure dependencies | Rust architecture | Dependency graph CI check |
+| `ARC-007` | Pure core has no infrastructure dependencies | Rust architecture | `make test-prepare` dependency graph check |
 | `ARC-008` | macOS daemon is a user LaunchAgent | macOS service | Service integration suite |
 
 ## Procedure and domain requirements
@@ -90,14 +90,13 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 
 | ID | Requirement | Design source | Primary conformance |
 |---|---|---|---|
-| `REL-001` | Sole release tuple is `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}` | Release | Native arm64-host thin-Mach-O build matrix |
-| `REL-002` | Archive contains `podway` and `podwayd`, completions, schemas, presets, license | Release | Artifact inspection |
-| `REL-003` | Checksums and provenance are published | Release | Release pipeline |
-| `REL-004` | Upgrade migration is tested | Release/storage | Upgrade E2E |
-| `REL-005` | All product acceptance criteria pass | Product acceptance | Release checklist |
-| `REL-006` | Complete public release is `v0.1.0` from design package `1.0.1-design` while public and storage contracts remain v1 | Gate S; release | Package and contract inspection |
-| `REL-007` | Gate S preserves the exact approved S0 intent and requires exactly one current detached `APPROVE` for each role `A`, `E`, `F`, and `requirements_authority`, all bound to one payload digest; rejects duplicate/mixed roles or any rejection; S1 is derivative editing, S2 validates before checksums are emitted last, and S3 is read-only acceptance before a product workspace exists | Gate S | Gate S staging review |
-| `REL-008` | Gate S plans evidence for Phases 0 through 8, with Phase 8 recording initial-migration and `v0.1.0` release evidence | Gate S; implementation plan | Phase evidence review |
+| `REL-001` | Sole release tuple is `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}` | Release | `make test-e2e`; native service validation |
+| `REL-002` | Archive contains `podway` and `podwayd`, completions, schemas, presets, license | Release | Distribution layout documentation |
+| `REL-003` | Published archives include checksums and source/toolchain provenance | Release | Distribution metadata |
+| `REL-004` | Upgrade migration is tested | Release/storage | `make test-int`; `make test-e2e` |
+| `REL-005` | All product acceptance criteria pass | Product acceptance | `make test`; product-acceptance matrix validation |
+| `REL-006` | Complete public release is `v0.1.0` from design package `1.0.1-design` while public and storage contracts remain v1 | Gate S; release | `make test-prepare`; package inspection |
+| `REL-008` | Gate S plans Phases 0 through 8, with Phase 8 completed by the repository-local `make test` release gate | Gate S; implementation plan | `make test` |
 
 ## Change-control rule
 

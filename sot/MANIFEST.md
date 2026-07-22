@@ -10,7 +10,7 @@ This manifest lists every design and implementation-contract file in the Podway 
 |---|---|
 | `README.md` | Master index, source precedence, reading order, and implementation handoff entry point |
 | `IMPLEMENTATION_HANDOFF.md` | Immediate kickoff sequence, first vertical slice, correctness milestone, and prohibited shortcuts |
-| `IMPLEMENTATION_STATUS.md` | Non-normative G001–G005 implementation and verification checkpoint index |
+| `IMPLEMENTATION_STATUS.md` | Non-normative implementation and local release-gate status |
 | `DESIGN_VERSION` | Immutable design-package version identifier |
 | `LICENSE` | MIT license text for Podway |
 | `MANIFEST.md` | Complete package inventory |
@@ -97,6 +97,7 @@ This manifest lists every design and implementation-contract file in the Podway 
 | `adr/0008-relational-state-not-event-sourcing.md` | SQLite relational state is authoritative and the operational journal is bounded |
 | `adr/0009-artifact-metadata-only.md` | Podway stores artifact reference metadata and digests, never artifact bytes |
 | `adr/0010-generic-cli-json-integration.md` | External systems integrate through generic CLI and versioned JSON contracts only |
+| `adr/0011-local-make-test-release-gate.md` | The local `make test` suite is the sole release-readiness gate |
 
 ## JSON Schemas
 
@@ -150,7 +151,7 @@ This manifest lists every design and implementation-contract file in the Podway 
 
 ## Package validation expectations
 
-Before the package is accepted into the implementation repository, CI SHOULD verify:
+Before the package is accepted into the implementation repository, `make test` verifies:
 
 1. every Markdown relative link resolves;
 2. every JSON and YAML file parses;

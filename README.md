@@ -13,9 +13,9 @@ contracts, and compatibility requirements.
 Podway release artifacts target only untranslated native Apple Silicon macOS
 (`aarch64-apple-darwin`, `arm64`, host architecture `arm64`, Mach-O architecture
 `arm64`). Cross-built, relabeled, translated, and universal/fat binaries cannot
-satisfy native Apple Silicon release acceptance. The current version is
-unreleased: no Apple-Silicon-specific release evidence, signing, notarization, or
-runtime-lifecycle claim is made here.
+satisfy the supported platform contract. A revision is release-ready when the
+repository-root `make test` command succeeds locally. Signing and notarization
+status describe a published artifact and do not add another release gate.
 
 The product is intentionally local and constrained:
 
@@ -25,6 +25,24 @@ The product is intentionally local and constrained:
 
 ## Development
 
-Use the pinned stable Rust toolchain in [`rust-toolchain.toml`](rust-toolchain.toml).
-CI checks formatting, builds, Clippy warnings, tests, and contract verification on
-macOS and Linux. `Cargo.lock` is committed because Podway is an application.
+Use the pinned Rust 1.97.1 toolchain in [`rust-toolchain.toml`](rust-toolchain.toml).
+The root Makefile resolves that exact rustup toolchain for Cargo, rustc, and all
+verification subprocesses, even when another Rust installation appears earlier in
+the invoking shell's `PATH`. `Cargo.lock` is committed because Podway is an
+application. The repository's canonical verification entry point is the root
+`Makefile`:
+
+- `make test` runs prepare, unit, integration, and end-to-end verification in order.
+- `make test-prepare` synchronizes generated SOT assets, rewrites Rust formatting,
+  and runs vet, lint, dependency, architecture, and contract guardrails.
+- `make test-unit` runs narrow library, binary, and documentation tests.
+- `make test-int` runs component-integrated scenarios with deterministic fixtures
+  and test doubles, without launching Podway product binaries.
+- `make test-e2e` builds and launches the real `podway` and `podwayd` binaries and
+  includes the ignored production-vertical scenarios.
+
+The prepare target intentionally modifies generated files and formatting. Install
+`cargo-deny` before running the complete suite. Release tags and archives must use
+the resulting formatted tree; later source changes require another complete run.
+
+See [`docs/release-readiness.md`](docs/release-readiness.md) for the release policy.

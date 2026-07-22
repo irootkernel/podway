@@ -310,7 +310,7 @@ def expected_phase_lock_entries(root: Path, phase: str) -> set[str]:
             "Cargo.lock",
             ".gitignore",
             "rust-toolchain.toml",
-            ".github/workflows/ci.yml",
+            "Makefile",
             "README.md",
             CANONICAL_IMPORT_PATH.as_posix(),
             ADJACENCY_PATH.as_posix(),
@@ -880,11 +880,11 @@ def sentinel_definitions() -> list[dict[str, str]]:
             "expected_error": "artifact_proof_mismatch",
         },
         {
-            "id": "ci_command_drift",
-            "target": ".github/workflows/ci.yml#verify-contracts",
+            "id": "makefile_contract_drift",
+            "target": "Makefile#test",
             "mutation": "replace---all-with---check",
-            "validator": "ci_commands",
-            "expected_error": "ci_command_drift",
+            "validator": "makefile_contract",
+            "expected_error": "makefile_contract_drift",
         },
         {
             "id": "extra_handoff_file",
@@ -1161,9 +1161,8 @@ def existing_handoffs(root: Path, reference: dict[str, Any], phase_lock_digests:
 def copy_sentinel_root(source_root: Path, temporary_root: Path) -> None:
     for directory in ("sot", "schemas", "spec", "presets", "contracts"):
         shutil.copytree(source_root / directory, temporary_root / directory)
-    workflow = temporary_root / verify_contracts.CI_WORKFLOW_PATH
-    workflow.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_root / verify_contracts.CI_WORKFLOW_PATH, workflow)
+    makefile = temporary_root / verify_contracts.MAKEFILE_PATH
+    shutil.copy2(source_root / verify_contracts.MAKEFILE_PATH, makefile)
     shutil.copy2(source_root / "Cargo.toml", temporary_root / "Cargo.toml")
     for crate in CRATE_ORDER:
         destination = temporary_root / "crates" / crate
@@ -1295,18 +1294,18 @@ def run_sentinels(
                         "wrong-file artifact proof",
                     ),
                 )
-            elif identifier == "ci_command_drift":
-                workflow = fixture_root / verify_contracts.CI_WORKFLOW_PATH
-                text = workflow.read_text(encoding="utf-8")
+            elif identifier == "makefile_contract_drift":
+                makefile = fixture_root / verify_contracts.MAKEFILE_PATH
+                text = makefile.read_text(encoding="utf-8")
                 updated = text.replace(
                     "python3 tools/verify_contracts.py --all",
                     "python3 tools/verify_contracts.py --check",
                     1,
                 )
                 if updated == text:
-                    fail("sentinel_fixture_drift", "CI command sentinel target is unavailable")
-                workflow.write_text(updated, encoding="utf-8")
-                expect_known_failure(sentinel["expected_error"], lambda: validate_ci_commands(fixture_root))
+                    fail("sentinel_fixture_drift", "Makefile contract sentinel target is unavailable")
+                makefile.write_text(updated, encoding="utf-8")
+                expect_known_failure(sentinel["expected_error"], lambda: validate_makefile_contract(fixture_root))
             elif identifier == "extra_handoff_file":
                 extra = fixture_root / HANDOFF_DIRECTORY / "unexpected.json"
                 extra.write_text("{}\n", encoding="utf-8")
@@ -1334,7 +1333,7 @@ def validate_baseline(
         "v1_identifiers": validate_identifiers(root, reference),
         "interface_digests": validate_interfaces(root, reference),
         "requirement_ids": validate_requirement_groups(root, reference),
-        "ci_commands": validate_ci_commands(root),
+        "makefile_contract": validate_makefile_contract(root),
         "phase_locks": phase_lock_digests,
     }
     validate_schema_zero_fixture(root, reference)
@@ -1353,9 +1352,9 @@ def validate_baseline(
 
 def normalized_proofs(root: Path, value: Any, label: str) -> list[dict[str, str]]:
     return sorted(validate_proof_refs(root, value, label), key=canonical_json)
-def validate_ci_commands(root: Path) -> int:
+def validate_makefile_contract(root: Path) -> int:
     try:
-        return verify_contracts.validate_ci_commands(root)
+        return verify_contracts.validate_makefile_contract(root)
     except verify_contracts.VerificationError as error:
         fail(error.code, str(error))
 

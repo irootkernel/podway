@@ -11,17 +11,7 @@ import sys
 from run_g005_vertical import produce_daemon_build_receipt
 
 def verification_root() -> Path:
-    controller_root = Path(__file__).resolve().parents[1]
-    candidate = os.environ.get("G009_CANDIDATE_ROOT")
-    if candidate is None:
-        return controller_root
-    supplied = Path(candidate)
-    if not supplied.is_absolute() or supplied.is_symlink() or not supplied.is_dir():
-        raise SystemExit("G009_CANDIDATE_ROOT must name an absolute, non-symlink candidate directory")
-    root = supplied.resolve()
-    if root == controller_root or root.is_relative_to(controller_root) or controller_root.is_relative_to(root):
-        raise SystemExit("G009_CANDIDATE_ROOT must be separate and non-overlapping with the controller root")
-    return root
+    return Path(__file__).resolve().parents[1]
 
 
 ROOT = verification_root()
@@ -69,7 +59,7 @@ def main() -> int:
             "-p",
             "podway-cli",
             "--test",
-            "phase4_production_vertical",
+            "e2e_phase4_production_vertical",
             TEST_NAME,
             "--",
             "--ignored",

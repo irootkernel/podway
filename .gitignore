@@ -25,7 +25,6 @@
 /artifacts/phase0/verification-report.pointer.json
 /fuzz/artifacts/
 /fuzz/corpus/
-/release/migration-evidence-v1.json
 *.log
 *.swp
 *.tmp
@@ -34,6 +33,7 @@
 
 # Keep SOT and contract sources versioned; never ignore sot/ or contracts/.
 
-# Python bytecode
+# Python caches and bytecode
+/.ruff_cache/
 __pycache__/
 *.py[cod]

@@ -1,5 +1,6 @@
 //! Phase 4 daemon-authoritative Git/Store workspace resolution contracts.
 
+#[path = "support/phase4_workspace.rs"]
 mod support_phase4_workspace;
 
 use std::{

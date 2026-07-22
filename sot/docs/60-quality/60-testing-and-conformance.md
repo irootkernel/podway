@@ -118,9 +118,13 @@ C16 during reset-all after new database creation
 
 For each point, restart and assert one valid outcome: no admission, one queued retry, one terminal result, or idempotent completion. No state effect may occur twice.
 
-## Phase 8 migration evidence
+## Migration conformance
 
-Phase 8 release conformance MUST produce `release/migration-evidence-v1.json` from the deterministic `uninitialized-database` schema-0 to v1 fixture. The evidence MUST identify predecessor `schema-0-uninitialized` and result `schema-v1`, and record the conformance assertions for required pragmas, transactional initialization, retained user task state, non-duplicated mutation, and atomic installation.
+The local integration suite MUST exercise the deterministic
+`uninitialized-database` schema-0 to v1 fixture. It verifies predecessor
+`schema-0-uninitialized`, result `schema-v1`, required pragmas, transactional
+initialization, retained user task state, non-duplicated mutation, and atomic
+installation. A separate release-evidence file is not required.
 
 ## IPC tests and fuzzing
 
@@ -170,11 +174,10 @@ Fixtures cover:
 - log creation and rotation;
 - uninstall preserves worktree data;
 - incompatible binary/protocol reporting.
-### Qualification wrapper constraint
 
-Production `podway daemon install` MUST resolve and stage the actual `podwayd` binary; the LaunchAgent production topology remains the documented direct daemon service and does not support a wrapper as an installed daemon path.
-
-The G009 qualification harness MAY interpose a controller-owned, digest-staged wrapper solely to constrain the release binary during isolated qualification. Its receipt MUST prove that the wrapper forwards argv unchanged, executes the exact archived `podwayd` bytes, and is itself digest-bound before staging. This qualification-only containment topology is not a supported production installation topology and MUST NOT weaken the service architecture contract.
+Production `podway daemon install` MUST resolve, validate, and stage the actual
+`podwayd` binary. The LaunchAgent topology does not support a wrapper as its
+installed daemon path.
 
 ## CLI and JSON tests
 
@@ -211,9 +214,9 @@ Define question, collect sources, analyze, retry challenge, return to source col
 
 Each scenario asserts `next` suggestions and JSON at every step.
 
-## Performance tests
+## Performance diagnostics
 
-Measure without making network assumptions:
+The project MAY measure the following without making network assumptions:
 
 - daemon cold start;
 - status and next latency on empty and maximum-size procedures;
@@ -223,19 +226,20 @@ Measure without making network assumptions:
 - database growth and pruning;
 - memory behavior under maximum IPC and queue limits.
 
-Performance regression thresholds are set from an accepted baseline and must not weaken correctness pragmas.
+Performance diagnostics must not weaken correctness pragmas. They inform
+optimization work but are not a release-readiness gate.
 
-## Continuous integration
+## Local release gate
 
-Required CI lanes:
+The repository-root `make test` command is the only required gate and runs these
+targets sequentially:
 
-- formatting and lint;
-- unit and property tests;
-- schema/example validation;
-- SQLite and migration tests;
-- protocol fuzz smoke corpus;
-- native arm64-host macOS Apple Silicon (`aarch64-apple-darwin`) thin-Mach-O build and integration;
-- release packaging dry run;
-- dependency and license checks.
+- `test-prepare`: generated-source synchronization, formatting, vet, lint,
+  dependency checks, architecture guardrails, quality mappings, and contracts;
+- `test-unit`: narrow library, binary, and documentation tests;
+- `test-int`: multi-component fixture scenarios without product binaries;
+- `test-e2e`: real `podway` and `podwayd` binary scenarios, including all four presets.
 
-Long-running crash and service suites may run in a dedicated release lane but must pass before public release.
+All required crash, migration, protocol, service, and acceptance scenarios are
+included in those targets. There is no hosted-CI or separate release lane
+requirement.

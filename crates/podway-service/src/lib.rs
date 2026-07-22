@@ -58,7 +58,6 @@ const SERVICE_TEMPORARY_RETAIN_TARGET_V1: usize = 32;
 static SERVICE_TEMPORARY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
 const SERVICE_STAGED_DAEMONS_DIRECTORY_V1: &str = ".podway-daemons-v1";
 const SERVICE_STAGED_DAEMONS_MAX_ENTRIES_V1: usize = 4096;
-const SERVICE_STAGED_QUALIFICATION_DIRECTORY_V1: &str = ".podway-qualification-v1";
 /// A non-authoritative, content-free observation emitted by the service adapter.
 ///
 /// Variants are stable categories only; paths, command arguments, process output, metadata, and
@@ -272,41 +271,7 @@ pub struct InstallSpecV1 {
     daemon_executable_path: LocalPlatformPathV1,
     label: ServiceLabelV1,
     runtime_paths: ServiceRuntimePathsV1,
-    artifact_kind: InstallArtifactKindV1,
     expected_daemon_version: Option<String>,
-}
-
-/// The binding required for the qualification-only shell wrapper exception.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct QualificationWrapperBindingV1 {
-    expected_wrapper_sha256: String,
-    sandbox_profile_path: LocalPlatformPathV1,
-    expected_sandbox_profile_sha256: String,
-    archived_daemon_path: LocalPlatformPathV1,
-    expected_archived_daemon_sha256: String,
-}
-impl QualificationWrapperBindingV1 {
-    pub fn new(
-        expected_wrapper_sha256: String,
-        sandbox_profile_path: LocalPlatformPathV1,
-        expected_sandbox_profile_sha256: String,
-        archived_daemon_path: LocalPlatformPathV1,
-        expected_archived_daemon_sha256: String,
-    ) -> Self {
-        Self {
-            expected_wrapper_sha256,
-            sandbox_profile_path,
-            expected_sandbox_profile_sha256,
-            archived_daemon_path,
-            expected_archived_daemon_sha256,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum InstallArtifactKindV1 {
-    ProductionDaemon,
-    QualificationWrapper(QualificationWrapperBindingV1),
 }
 
 impl InstallSpecV1 {
@@ -319,22 +284,6 @@ impl InstallSpecV1 {
             daemon_executable_path,
             label,
             runtime_paths,
-            artifact_kind: InstallArtifactKindV1::ProductionDaemon,
-            expected_daemon_version: None,
-        }
-    }
-
-    pub fn qualification_wrapper(
-        wrapper_path: LocalPlatformPathV1,
-        label: ServiceLabelV1,
-        runtime_paths: ServiceRuntimePathsV1,
-        binding: QualificationWrapperBindingV1,
-    ) -> Self {
-        Self {
-            daemon_executable_path: wrapper_path,
-            label,
-            runtime_paths,
-            artifact_kind: InstallArtifactKindV1::QualificationWrapper(binding),
             expected_daemon_version: None,
         }
     }
@@ -444,7 +393,6 @@ pub struct ServiceInstallMetadataV1 {
     daemon_binary: PathBuf,
     daemon_identity: String,
     artifact_role: ServiceArtifactRoleV1,
-    qualification_binding: Option<QualificationArtifactBindingV1>,
     installed_at: UnixMillis,
     updated_at: UnixMillis,
     publication_state: ServicePublicationStateV1,
@@ -454,20 +402,6 @@ pub struct ServiceInstallMetadataV1 {
 #[serde(rename_all = "snake_case")]
 enum ServiceArtifactRoleV1 {
     ProductionDaemon,
-    QualificationWrapper,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct QualificationArtifactBindingV1 {
-    wrapper_identity: String,
-    sandbox_profile: PathBuf,
-    sandbox_profile_identity: String,
-    archived_daemon: PathBuf,
-    archived_daemon_identity: String,
-}
-#[derive(Clone, Debug)]
-struct QualificationDependencySnapshotsV1 {
-    sandbox_profile: Vec<u8>,
-    archived_daemon: Vec<u8>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ServicePublicationStateV1 {
@@ -502,7 +436,6 @@ impl ServiceInstallMetadataV1 {
             daemon_binary,
             daemon_identity: String::new(),
             artifact_role: ServiceArtifactRoleV1::ProductionDaemon,
-            qualification_binding: None,
             installed_at,
             updated_at,
             publication_state: ServicePublicationStateV1::Prepared,
@@ -526,35 +459,6 @@ impl ServiceInstallMetadataV1 {
         self.daemon_identity = daemon_identity;
         Ok(self)
     }
-    fn with_qualification_binding(
-        mut self,
-        binding: QualificationArtifactBindingV1,
-    ) -> Result<Self, ServiceMetadataErrorV1> {
-        for (identity, field) in [
-            (&binding.wrapper_identity, "qualification_wrapper_identity"),
-            (
-                &binding.sandbox_profile_identity,
-                "qualification_sandbox_profile_identity",
-            ),
-            (
-                &binding.archived_daemon_identity,
-                "qualification_archived_daemon_identity",
-            ),
-        ] {
-            if !is_sha256_hex_v1(identity) {
-                return Err(ServiceMetadataErrorV1::InvalidDaemonBinary(
-                    ServicePathErrorV1::Unnormalized {
-                        field,
-                        path: self.daemon_binary.clone(),
-                    },
-                ));
-            }
-        }
-        self.artifact_role = ServiceArtifactRoleV1::QualificationWrapper;
-        self.qualification_binding = Some(binding);
-        Ok(self)
-    }
-
     pub const fn version(&self) -> u16 {
         self.version
     }
@@ -3152,57 +3056,6 @@ where
                         message: "persisted daemon binary identity does not match".to_owned(),
                     });
                 }
-                if let Some(binding) = &metadata.qualification_binding {
-                    let qualification_directory = paths
-                        .metadata_index_path()
-                        .as_path()
-                        .parent()
-                        .expect("validated metadata path has a parent")
-                        .join(SERVICE_STAGED_QUALIFICATION_DIRECTORY_V1);
-                    for (path, identity) in [
-                        (&binding.sandbox_profile, &binding.sandbox_profile_identity),
-                        (&binding.archived_daemon, &binding.archived_daemon_identity),
-                    ] {
-                        if path != &qualification_directory.join(identity) {
-                            return Err(ServiceErrorV1::InvalidMetadataV1 {
-                                message: "qualification dependency is not a controlled staged path"
-                                    .to_owned(),
-                            });
-                        }
-                        let bytes = self
-                            .filesystem
-                            .read_file_bounded(path, SERVICE_DAEMON_BINARY_MAX_BYTES_V1)
-                            .map_err(|error| self.fs_error(op, path, error))?;
-                        if sha256_hex_v1(&bytes) != *identity {
-                            return Err(ServiceErrorV1::InvalidMetadataV1 {
-                                message: "qualification dependency identity does not match"
-                                    .to_owned(),
-                            });
-                        }
-                    }
-                    if !self
-                        .filesystem
-                        .is_executable(&binding.archived_daemon)
-                        .map_err(|error| self.fs_error(op, &binding.archived_daemon, error))?
-                    {
-                        return Err(ServiceErrorV1::InvalidMetadataV1 {
-                            message: "staged qualification archived daemon is not executable"
-                                .to_owned(),
-                        });
-                    }
-                    let expected_wrapper = qualification_wrapper_bytes_v1(
-                        &binding.sandbox_profile,
-                        &binding.archived_daemon,
-                    );
-                    if daemon_bytes != expected_wrapper
-                        || sha256_hex_v1(&expected_wrapper) != metadata.daemon_identity()
-                    {
-                        return Err(ServiceErrorV1::InvalidMetadataV1 {
-                            message: "qualification wrapper does not bind staged dependencies"
-                                .to_owned(),
-                        });
-                    }
-                }
                 Ok(Some(metadata))
             }
         }
@@ -3226,56 +3079,6 @@ where
         }
         Ok(())
     }
-    fn stage_qualification_dependency(
-        &self,
-        op: ServiceOperationV1,
-        paths: &ServiceRuntimePathsV1,
-        bytes: &[u8],
-        identity: &str,
-        mode: u32,
-    ) -> Result<PathBuf, ServiceErrorV1> {
-        let parent = paths
-            .metadata_index_path()
-            .as_path()
-            .parent()
-            .expect("validated metadata path has a parent");
-        let directory = parent.join(SERVICE_STAGED_QUALIFICATION_DIRECTORY_V1);
-        let staged = directory.join(identity);
-        if self
-            .filesystem
-            .exists(&staged)
-            .map_err(|error| self.fs_error(op, &staged, error))?
-        {
-            let staged_bytes = self
-                .filesystem
-                .read_file_bounded(&staged, SERVICE_DAEMON_BINARY_MAX_BYTES_V1)
-                .map_err(|error| self.fs_error(op, &staged, error))?;
-            if staged_bytes != bytes || sha256_hex_v1(&staged_bytes) != identity {
-                return Err(ServiceErrorV1::InvalidMetadataV1 {
-                    message: "staged qualification dependency identity does not match".to_owned(),
-                });
-            }
-            return Ok(staged);
-        }
-
-        self.filesystem
-            .create_directory(&directory, 0o700)
-            .map_err(|error| self.fs_error(op, &directory, error))?;
-        self.filesystem
-            .write_atomically(&staged, bytes, mode)
-            .map_err(|error| self.fs_error(op, &staged, error))?;
-        let staged_bytes = self
-            .filesystem
-            .read_file_bounded(&staged, SERVICE_DAEMON_BINARY_MAX_BYTES_V1)
-            .map_err(|error| self.fs_error(op, &staged, error))?;
-        if staged_bytes != bytes || sha256_hex_v1(&staged_bytes) != identity {
-            return Err(ServiceErrorV1::InvalidMetadataV1 {
-                message: "staged qualification dependency identity does not match".to_owned(),
-            });
-        }
-        Ok(staged)
-    }
-
     fn stage_daemon(
         &self,
         op: ServiceOperationV1,
@@ -3511,49 +3314,6 @@ where
         Ok(())
     }
 
-    fn validate_install_artifact(
-        &self,
-        op: ServiceOperationV1,
-        spec: &InstallSpecV1,
-        staged_bytes: &[u8],
-    ) -> Result<Option<QualificationDependencySnapshotsV1>, ServiceErrorV1> {
-        match &spec.artifact_kind {
-            InstallArtifactKindV1::ProductionDaemon => {
-                validate_native_arm64_macos_macho_v1(staged_bytes)?;
-                Ok(None)
-            }
-            InstallArtifactKindV1::QualificationWrapper(binding) => {
-                let sandbox_profile = self
-                    .filesystem
-                    .read_file_bounded(
-                        binding.sandbox_profile_path.as_path(),
-                        SERVICE_DAEMON_BINARY_MAX_BYTES_V1,
-                    )
-                    .map_err(|error| {
-                        self.fs_error(op, binding.sandbox_profile_path.as_path(), error)
-                    })?;
-                let archived_daemon = self
-                    .filesystem
-                    .read_file_bounded(
-                        binding.archived_daemon_path.as_path(),
-                        SERVICE_DAEMON_BINARY_MAX_BYTES_V1,
-                    )
-                    .map_err(|error| {
-                        self.fs_error(op, binding.archived_daemon_path.as_path(), error)
-                    })?;
-                validate_qualification_wrapper_v1(
-                    binding,
-                    staged_bytes,
-                    &sandbox_profile,
-                    &archived_daemon,
-                )?;
-                Ok(Some(QualificationDependencySnapshotsV1 {
-                    sandbox_profile,
-                    archived_daemon,
-                }))
-            }
-        }
-    }
     fn verify_staged_daemon_version(
         &self,
         op: ServiceOperationV1,
@@ -3603,52 +3363,8 @@ where
             .filesystem
             .read_file_bounded(binary, SERVICE_DAEMON_BINARY_MAX_BYTES_V1)
             .map_err(|error| self.fs_error(op, binary, error))?;
-        let qualification_snapshots = self.validate_install_artifact(op, &spec, &daemon_bytes)?;
-        let (published_daemon_bytes, qualification_binding) =
-            if let (InstallArtifactKindV1::QualificationWrapper(binding), Some(snapshots)) =
-                (&spec.artifact_kind, qualification_snapshots)
-            {
-                let sandbox_profile_identity = sha256_hex_v1(&snapshots.sandbox_profile);
-                let archived_daemon_identity = sha256_hex_v1(&snapshots.archived_daemon);
-                let sandbox_profile = self.stage_qualification_dependency(
-                    op,
-                    paths,
-                    &snapshots.sandbox_profile,
-                    &sandbox_profile_identity,
-                    0o600,
-                )?;
-                let archived_daemon = self.stage_qualification_dependency(
-                    op,
-                    paths,
-                    &snapshots.archived_daemon,
-                    &archived_daemon_identity,
-                    0o700,
-                )?;
-                if !self
-                    .filesystem
-                    .is_executable(&archived_daemon)
-                    .map_err(|error| self.fs_error(op, &archived_daemon, error))?
-                {
-                    return Err(ServiceErrorV1::InvalidExecutableV1 {
-                        message: "staged qualification archived daemon is not executable"
-                            .to_owned(),
-                    });
-                }
-                let wrapper = qualification_wrapper_bytes_v1(&sandbox_profile, &archived_daemon);
-                (
-                    wrapper,
-                    Some(QualificationArtifactBindingV1 {
-                        wrapper_identity: binding.expected_wrapper_sha256.clone(),
-                        sandbox_profile,
-                        sandbox_profile_identity,
-                        archived_daemon,
-                        archived_daemon_identity,
-                    }),
-                )
-            } else {
-                (daemon_bytes, None)
-            };
-        let daemon_identity = sha256_hex_v1(&published_daemon_bytes);
+        validate_native_arm64_macos_macho_v1(&daemon_bytes)?;
+        let daemon_identity = sha256_hex_v1(&daemon_bytes);
         let plist_path = paths.launch_agent_path().as_path();
         let exists = self
             .filesystem
@@ -3670,8 +3386,7 @@ where
                 .as_ref()
                 .map(ServiceInstallMetadataV1::daemon_binary),
         )?;
-        let staged_binary =
-            self.stage_daemon(op, paths, &published_daemon_bytes, &daemon_identity)?;
+        let staged_binary = self.stage_daemon(op, paths, &daemon_bytes, &daemon_identity)?;
         if let Some(expected_version) = spec.expected_daemon_version.as_deref() {
             self.verify_staged_daemon_version(op, &staged_binary, expected_version)?;
         }
@@ -3680,7 +3395,7 @@ where
             metadata.daemon_binary() == staged_binary
                 && metadata.daemon_identity() == daemon_identity
         });
-        let mut metadata = ServiceInstallMetadataV1::new(
+        let metadata = ServiceInstallMetadataV1::new(
             &staged_binary,
             existing
                 .as_ref()
@@ -3701,13 +3416,6 @@ where
         .map_err(|error| ServiceErrorV1::InvalidMetadataV1 {
             message: error.to_string(),
         })?;
-        if let Some(binding) = qualification_binding {
-            metadata = metadata
-                .with_qualification_binding(binding)
-                .map_err(|error| ServiceErrorV1::InvalidMetadataV1 {
-                    message: error.to_string(),
-                })?;
-        }
         let plist_without_generation = launch_agent_plist_with_generation_v1(
             &staged_binary,
             paths.log_path().as_path(),
@@ -4123,7 +3831,6 @@ struct ServiceMetadataWireV1 {
     daemon_binary: String,
     daemon_identity: String,
     artifact_role: ServiceArtifactRoleV1,
-    qualification_binding: Option<QualificationArtifactBindingV1>,
     installed_at: u64,
     updated_at: u64,
     publication_state: ServicePublicationStateWireV1,
@@ -4137,7 +3844,6 @@ fn metadata_json_v1(metadata: &ServiceInstallMetadataV1) -> Result<String, Servi
         daemon_binary: metadata.daemon_binary.display().to_string(),
         daemon_identity: metadata.daemon_identity.clone(),
         artifact_role: metadata.artifact_role,
-        qualification_binding: metadata.qualification_binding.clone(),
         installed_at: metadata.installed_at.get(),
         updated_at: metadata.updated_at.get(),
         publication_state: match metadata.publication_state {
@@ -4165,7 +3871,6 @@ struct ServiceGenerationPreimageV1<'a> {
     daemon_binary: String,
     daemon_identity: &'a str,
     artifact_role: ServiceArtifactRoleV1,
-    qualification_binding: Option<&'a QualificationArtifactBindingV1>,
     installed_at: u64,
     updated_at: u64,
 }
@@ -4180,7 +3885,6 @@ fn publication_generation_v1(
         daemon_binary: metadata.daemon_binary().display().to_string(),
         daemon_identity: metadata.daemon_identity(),
         artifact_role: metadata.artifact_role,
-        qualification_binding: metadata.qualification_binding.as_ref(),
         installed_at: metadata.installed_at().get(),
         updated_at: metadata.updated_at().get(),
     })
@@ -4306,81 +4010,6 @@ pub fn validate_native_arm64_macos_macho_v1(bytes: &[u8]) -> Result<(), ServiceE
     Ok(())
 }
 
-fn validate_qualification_wrapper_v1(
-    binding: &QualificationWrapperBindingV1,
-    wrapper_bytes: &[u8],
-    sandbox_profile_bytes: &[u8],
-    archived_bytes: &[u8],
-) -> Result<(), ServiceErrorV1> {
-    if !is_sha256_hex_v1(&binding.expected_wrapper_sha256)
-        || !is_sha256_hex_v1(&binding.expected_sandbox_profile_sha256)
-        || !is_sha256_hex_v1(&binding.expected_archived_daemon_sha256)
-    {
-        return Err(ServiceErrorV1::InvalidExecutableV1 {
-            message: "qualification wrapper binding contains an invalid digest".to_owned(),
-        });
-    }
-    if sha256_hex_v1(wrapper_bytes) != binding.expected_wrapper_sha256 {
-        return Err(ServiceErrorV1::InvalidExecutableV1 {
-            message: "qualification wrapper bytes do not match their expected digest".to_owned(),
-        });
-    }
-    if sha256_hex_v1(sandbox_profile_bytes) != binding.expected_sandbox_profile_sha256 {
-        return Err(ServiceErrorV1::InvalidExecutableV1 {
-            message: "sandbox profile bytes do not match their expected digest".to_owned(),
-        });
-    }
-    if sha256_hex_v1(archived_bytes) != binding.expected_archived_daemon_sha256 {
-        return Err(ServiceErrorV1::InvalidExecutableV1 {
-            message: "archived daemon bytes do not match their expected digest".to_owned(),
-        });
-    }
-    validate_native_arm64_macos_macho_v1(archived_bytes)?;
-    if wrapper_bytes
-        != qualification_wrapper_bytes_v1(
-            binding.sandbox_profile_path.as_path(),
-            binding.archived_daemon_path.as_path(),
-        )
-        .as_slice()
-    {
-        return Err(ServiceErrorV1::InvalidExecutableV1 {
-            message: "qualification wrapper does not invoke the bound archived daemon".to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn qualification_wrapper_bytes_v1(sandbox_profile: &Path, archived_daemon: &Path) -> Vec<u8> {
-    let sandbox_profile = shell_quote_v1(
-        sandbox_profile
-            .to_str()
-            .expect("qualification paths are validated UTF-8"),
-    );
-    let archived_daemon = shell_quote_v1(
-        archived_daemon
-            .to_str()
-            .expect("qualification paths are validated UTF-8"),
-    );
-    format!("#!/bin/sh\nexec /usr/bin/sandbox-exec -f {sandbox_profile} {archived_daemon} \"$@\"\n")
-        .into_bytes()
-}
-
-fn shell_quote_v1(value: &str) -> String {
-    if !value.is_empty()
-        && value.chars().all(|character| {
-            character.is_alphanumeric()
-                || matches!(
-                    character,
-                    '@' | '%' | '+' | '=' | ':' | ',' | '.' | '/' | '-' | '_'
-                )
-        })
-    {
-        value.to_owned()
-    } else {
-        format!("'{}'", value.replace('\'', "'\"'\"'"))
-    }
-}
-
 fn is_sha256_hex_v1(value: &str) -> bool {
     value.len() == SERVICE_BINARY_IDENTITY_HEX_LENGTH_V1
         && value
@@ -4409,18 +4038,6 @@ fn parse_metadata_v1(bytes: &[u8]) -> Result<ServiceInstallMetadataV1, ServiceEr
             message: "metadata digest is invalid".to_owned(),
         });
     }
-    match (&wire.artifact_role, &wire.qualification_binding) {
-        (ServiceArtifactRoleV1::ProductionDaemon, None) => {}
-        (ServiceArtifactRoleV1::QualificationWrapper, Some(binding))
-            if is_sha256_hex_v1(&binding.wrapper_identity)
-                && is_sha256_hex_v1(&binding.sandbox_profile_identity)
-                && is_sha256_hex_v1(&binding.archived_daemon_identity) => {}
-        _ => {
-            return Err(ServiceErrorV1::InvalidMetadataV1 {
-                message: "metadata artifact role binding is invalid".to_owned(),
-            });
-        }
-    }
     let mut metadata = ServiceInstallMetadataV1::new(
         wire.daemon_binary,
         UnixMillis::new(wire.installed_at),
@@ -4434,7 +4051,6 @@ fn parse_metadata_v1(bytes: &[u8]) -> Result<ServiceInstallMetadataV1, ServiceEr
         message: error.to_string(),
     })?;
     metadata.artifact_role = wire.artifact_role;
-    metadata.qualification_binding = wire.qualification_binding;
     metadata.publication_state = match wire.publication_state {
         ServicePublicationStateWireV1::Prepared => ServicePublicationStateV1::Prepared,
         ServicePublicationStateWireV1::ReceiptDurable => ServicePublicationStateV1::ReceiptDurable,
@@ -4557,64 +4173,6 @@ mod tests {
         ] {
             assert!(matches!(
                 validate_native_arm64_macos_macho_v1(bytes),
-                Err(ServiceErrorV1::InvalidExecutableV1 { .. })
-            ));
-        }
-    }
-
-    #[test]
-    fn qualification_wrapper_binding_accepts_exact_wrapper_and_archived_daemon() {
-        let archived = native_arm64_macho();
-        let sandbox_profile = b"(version 1)".to_vec();
-        let binding = QualificationWrapperBindingV1::new(
-            String::new(),
-            path("/private/tmp/podwayd-service.sb"),
-            sha256_hex_v1(&sandbox_profile),
-            path("/private/tmp/podwayd"),
-            sha256_hex_v1(&archived),
-        );
-        let wrapper = qualification_wrapper_bytes_v1(
-            binding.sandbox_profile_path.as_path(),
-            binding.archived_daemon_path.as_path(),
-        );
-        let binding = QualificationWrapperBindingV1::new(
-            sha256_hex_v1(&wrapper),
-            binding.sandbox_profile_path,
-            binding.expected_sandbox_profile_sha256,
-            binding.archived_daemon_path,
-            binding.expected_archived_daemon_sha256,
-        );
-        assert_eq!(
-            validate_qualification_wrapper_v1(&binding, &wrapper, &sandbox_profile, &archived),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn qualification_wrapper_binding_rejects_swapped_or_missing_digests() {
-        let archived = native_arm64_macho();
-        let sandbox_profile = b"(version 1)".to_vec();
-        let wrapper = qualification_wrapper_bytes_v1(
-            Path::new("/private/tmp/podwayd-service.sb"),
-            Path::new("/private/tmp/podwayd"),
-        );
-        let swapped = QualificationWrapperBindingV1::new(
-            sha256_hex_v1(&archived),
-            path("/private/tmp/podwayd-service.sb"),
-            sha256_hex_v1(&sandbox_profile),
-            path("/private/tmp/podwayd"),
-            sha256_hex_v1(&wrapper),
-        );
-        let missing = QualificationWrapperBindingV1::new(
-            String::new(),
-            path("/private/tmp/podwayd-service.sb"),
-            String::new(),
-            path("/private/tmp/podwayd"),
-            sha256_hex_v1(&archived),
-        );
-        for binding in [&swapped, &missing] {
-            assert!(matches!(
-                validate_qualification_wrapper_v1(binding, &wrapper, &sandbox_profile, &archived),
                 Err(ServiceErrorV1::InvalidExecutableV1 { .. })
             ));
         }

@@ -203,7 +203,7 @@ Core transitions receive these as explicit values so tests are deterministic.
 ## Coding standards
 
 - Format with `rustfmt`.
-- Treat linter warnings as errors in CI, with explicit reviewed exceptions.
+- Treat linter warnings as errors in the local `make test` gate, with explicit reviewed exceptions.
 - Avoid panics on user-controlled input.
 - Use bounded collections for protocol and config input.
 - Use explicit newtypes for IDs and revisions.

@@ -3111,65 +3111,6 @@ fn daemon_install_rejects_non_native_executables_before_launchctl() {
     fs::remove_dir_all(root).expect("remove invalid daemon fixture");
 }
 #[test]
-fn qualification_wrapper_route_is_hidden_from_public_surfaces_and_requires_its_exact_arguments() {
-    let hidden = "install-qualification-wrapper";
-    let overview = one_json(&run(&["--json", "help"]));
-    assert!(
-        !overview["result"]["text"]
-            .as_str()
-            .expect("overview help text")
-            .contains(hidden)
-    );
-    let daemon_help = one_json(&run(&["--json", "help", "daemon"]));
-    assert!(
-        !daemon_help["result"]["text"]
-            .as_str()
-            .expect("daemon help text")
-            .contains(hidden)
-    );
-    for shell in ["bash", "zsh", "fish"] {
-        let output = run(&["completions", shell]);
-        assert!(
-            output.status.success(),
-            "{shell} completion generation failed"
-        );
-        assert!(
-            !String::from_utf8(output.stdout)
-                .expect("completion must be UTF-8")
-                .contains(hidden),
-            "{shell} completion exposes hidden route"
-        );
-    }
-
-    let digest = "0".repeat(64);
-    let output = run(&[
-        "--json",
-        "daemon",
-        hidden,
-        "--wrapper-path",
-        "/tmp/wrapper",
-        "--wrapper-sha256",
-        &digest,
-        "--sandbox-profile-path",
-        "/tmp/profile",
-        "--archived-daemon-path",
-        "/tmp/archived",
-        "--archived-daemon-sha256",
-        &digest,
-    ]);
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(one_json(&output)["code"], "REQUEST_INVALID");
-    let confused = run(&[
-        "--json",
-        "daemon",
-        "install",
-        "--wrapper-path",
-        "/tmp/wrapper",
-    ]);
-    assert_eq!(confused.status.code(), Some(2));
-    assert_eq!(one_json(&confused)["code"], "REQUEST_INVALID");
-}
-#[test]
 fn pac_003_help_states_the_same_user_local_socket_trust_boundary() {
     let output = run(&["--json", "help"]);
     assert!(output.status.success(), "overview help failed: {output:?}");

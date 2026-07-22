@@ -35,7 +35,7 @@ A product minor release may add backward-compatible fields or commands. Breaking
 
 ## Target architectures
 
-Release CI builds and tests the sole supported release target:
+The local release gate builds and tests the sole supported release target:
 
 - Apple Silicon (`aarch64-apple-darwin`) with `arch`, host architecture, and thin Mach-O architecture all `arm64`.
 
@@ -85,13 +85,16 @@ Public macOS artifacts SHOULD be:
 - signed with an appropriate Developer ID;
 - submitted for notarization;
 - stapled where packaging permits;
-- verified in release CI or a controlled release pipeline.
+- verified on the local release host.
 
-Unsigned internal builds remain supported for development. The release notes clearly identify signing status.
+Unsigned builds are valid release artifacts. Release notes clearly identify the
+signing and notarization status of distributed files. Signing status does not
+change release readiness.
 
 ## Checksums and provenance
 
-Every downloadable archive has a published SHA-256 checksum. The release process records:
+Every downloadable archive has a published SHA-256 checksum. Published release
+metadata SHOULD record:
 
 - source commit;
 - Rust toolchain identifier;
@@ -99,7 +102,7 @@ Every downloadable archive has a published SHA-256 checksum. The release process
 - target architecture;
 - binary checksums;
 - signing/notarization result;
-- conformance-suite result.
+- the successful `make test` result for the source revision.
 
 ## Upgrade
 
@@ -114,8 +117,6 @@ Upgrade procedure:
 New worktree databases begin in schema-0/uninitialized state; on first access, the daemon transactionally initializes or migrates each database to canonical schema-v1.
 
 The daemon handles one workspace migration failure without disabling other workspaces.
-
-Phase 8 migration evidence is emitted at `release/migration-evidence-v1.json`, rather than required at S3.
 
 ## Downgrade
 
@@ -134,21 +135,22 @@ podway daemon uninstall --yes
 
 Users may delete `.podway/runtime/` or the whole worktree when task state is no longer needed.
 
-## Release gates
+## Release readiness
 
-A release candidate must pass:
+The repository-root `make test` command is the sole required release-readiness
+gate. It runs static preparation, unit tests, integration scenarios, and
+real-binary end-to-end scenarios sequentially. The preparation target includes
+dependency/license review, architecture guardrails, product-acceptance mapping,
+crash-boundary mapping, and contract validation.
 
-- all unit, property, integration, crash, and fuzz tests;
-- Apple Silicon target build and native arm64 validation;
-- LaunchAgent install/start/stop/restart/uninstall tests;
-- clean install and upgrade tests;
-- schema and preset validation;
-- JSON golden tests;
-- CLI help and completion tests;
-- four preset end-to-end scenarios with retry and return;
-- dependency and license review;
-- checksum generation;
-- acceptance criteria in the product acceptance document.
+A revision is release-ready when `make test` exits successfully. Because the gate
+synchronizes generated files and applies formatting, the tag or archive MUST use
+the resulting tree. A later source change requires a new complete run.
+
+No hosted CI run, independent signature, approval quorum, holdout run,
+qualification archive, or attestation bundle is required. Archive construction,
+checksum publication, signing, notarization, and release notes are distribution
+operations performed after the source revision is release-ready.
 
 ## Support policy
 

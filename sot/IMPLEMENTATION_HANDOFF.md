@@ -3,7 +3,7 @@
 This document preserves the design-to-implementation kickoff that was executed for
 Phases 0–7. It is historical guidance, not the current release-status authority.
 For current implementation and acceptance state, use `IMPLEMENTATION_STATUS.md`
-and `docs/60-quality/61-product-acceptance.md`.
+and run the repository-root `make test` gate.
 
 ## Historical immediate kickoff
 
@@ -58,4 +58,6 @@ Do not:
 
 ## Handoff completion
 
-The project is complete only when `docs/60-quality/61-product-acceptance.md` passes and the release artifacts in `docs/50-operations/52-release-and-packaging.md` are produced for native Apple Silicon macOS.
+The project is release-ready when the repository-root `make test` command passes.
+Distribution artifacts are then produced as described in
+`docs/50-operations/52-release-and-packaging.md`.

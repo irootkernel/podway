@@ -8,14 +8,13 @@ The project produces one complete macOS product. The phases below are internal i
 
 Gate S reconciles only the design package before any product workspace is created. It prepares the complete public `v0.1.0` release from design package `1.0.1-design`; all public and storage contracts remain v1.
 
-S0 acceptance:
+S0 baseline:
 
-- preserves the exact approved intent identified by payload SHA-256 `022167d808f5f0f85711bfdfa94d1a0165de711a6eda51bb9209e9e873ea342d`: complete public release `v0.1.0`, design package `1.0.1-design`, unchanged v1 public and storage contracts, and transactional initial migration from `schema-0`/uninitialized (`uninitialized-database`) to `schema-v1`;
-- requires exactly one current detached `APPROVE` for each role `A`, `E`, `F`, and `requirements_authority`, all bound to one payload digest; rejects duplicate/mixed roles or any rejection.
+- records the reconciled intent identified by payload SHA-256 `022167d808f5f0f85711bfdfa94d1a0165de711a6eda51bb9209e9e873ea342d`: complete public release `v0.1.0`, design package `1.0.1-design`, unchanged v1 public and storage contracts, and transactional initial migration from `schema-0`/uninitialized (`uninitialized-database`) to `schema-v1`.
 
 S1 delivery:
 
-- contains only derivative SOT edits that implement the accepted S0 intent.
+- contains only derivative SOT edits that implement the recorded S0 baseline.
 
 S2 validation:
 
@@ -27,7 +26,8 @@ S3 acceptance:
 - performs read-only acceptance of the reconciled package;
 - completes before any product workspace is created.
 
-Gate S evidence plans coverage for Phases 0 through 8. Phase 8 records both initial-migration evidence and complete `v0.1.0` release evidence.
+Gate S plans coverage for Phases 0 through 8. Phase 8 closes through the
+repository-local `make test` release gate.
 
 ## Phase 0: Repository and contract lock
 
@@ -36,7 +36,7 @@ Deliverables:
 - Cargo workspace and dependency-direction checks;
 - committed schemas, DDL, error catalog, command catalog, and presets from this package;
 - public type naming and version constants;
-- CI for formatting, lint, schema validation, and document link checks;
+- a root Makefile for formatting, lint, schema validation, document checks, and tests;
 - test fixture conventions and requirement-ID mapping.
 
 Exit gate:
@@ -186,21 +186,23 @@ Exit gate:
 
 Deliverables:
 
-- full crash, concurrency, migration, Git, service, and fuzz runs;
-- performance baseline and regression thresholds;
-- dependency/license/security review;
-- native Apple Silicon (`aarch64-apple-darwin`, `arm64`) release artifacts;
-- signing/notarization where available;
-- checksums, release notes, and install guide;
-- final acceptance and traceability report;
-- evidence that `schema-0`/uninitialized (`uninitialized-database`) state migrates transactionally to `schema-v1` and that the complete `v0.1.0` release is produced from `1.0.1-design`.
+- `make test-prepare` for generated assets, formatting, vet, lint,
+  dependency review, architecture guardrails, quality mappings, and contracts;
+- `make test-unit` for narrow tests;
+- `make test-int` for multi-component scenarios and deterministic fixtures;
+- `make test-e2e` for actual-binary user scenarios;
+- distribution layout, checksums, release notes, and install guide;
+- automated migration coverage proving that `schema-0`/uninitialized
+  (`uninitialized-database`) migrates transactionally to `schema-v1`.
 
 Exit gate:
 
-- every product acceptance criterion passes;
-- no open severity-critical or severity-high correctness defect;
-- all public schemas and error codes match release binaries;
-- release can be installed, upgraded, operated, and uninstalled on clean macOS test systems.
+- the repository-root `make test` command exits successfully.
+
+This is the sole required release-readiness gate. Hosted CI, independent
+signatures, approval quorums, holdout runs, qualification archives, and
+attestation bundles are not required. Signing and notarization are distribution
+choices documented in release notes.
 
 ## Critical path
 

@@ -64,11 +64,11 @@
       "expected_error": "artifact_proof_mismatch"
     },
     {
-      "id": "ci_command_drift",
-      "target": ".github/workflows/ci.yml#verify-contracts",
+      "id": "makefile_contract_drift",
+      "target": "Makefile#test",
       "mutation": "replace---all-with---check",
-      "validator": "ci_commands",
-      "expected_error": "ci_command_drift"
+      "validator": "makefile_contract",
+      "expected_error": "makefile_contract_drift"
     },
     {
       "id": "extra_handoff_file",

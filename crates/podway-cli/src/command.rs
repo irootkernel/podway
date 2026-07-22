@@ -39,10 +39,9 @@ use podway_protocol::{
 };
 use podway_service::{
     InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1,
-    QualificationWrapperBindingV1, ServiceClockV1, ServiceErrorV1, ServiceLabelV1,
-    ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1, ServiceOutcomeV1,
-    ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1, SystemLaunchctlRunnerV1,
-    UninstallOptionsV1,
+    ServiceClockV1, ServiceErrorV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1,
+    ServiceManagerV1, ServiceOutcomeV1, ServiceRuntimePathsV1, ServiceStatusV1,
+    StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
 };
 #[cfg(test)]
 use podway_service::{SERVICE_DAEMON_BINARY_MAX_BYTES_V1, validate_native_arm64_macos_macho_v1};
@@ -355,21 +354,6 @@ enum DaemonCommand {
     Install {
         #[arg(long, value_name = "PATH")]
         daemon_path: Option<PathBuf>,
-    },
-    #[command(name = "install-qualification-wrapper", hide = true)]
-    InstallQualificationWrapper {
-        #[arg(long, value_name = "PATH")]
-        wrapper_path: PathBuf,
-        #[arg(long, value_name = "SHA256", value_parser = parse_sha256_hex)]
-        wrapper_sha256: String,
-        #[arg(long, value_name = "PATH")]
-        sandbox_profile_path: PathBuf,
-        #[arg(long, value_name = "SHA256", value_parser = parse_sha256_hex)]
-        sandbox_profile_sha256: String,
-        #[arg(long, value_name = "PATH")]
-        archived_daemon_path: PathBuf,
-        #[arg(long, value_name = "SHA256", value_parser = parse_sha256_hex)]
-        archived_daemon_sha256: String,
     },
     Uninstall {
         #[arg(long, action = ArgAction::SetTrue)]
@@ -1306,41 +1290,6 @@ fn execute_service_lifecycle_with_manager(
             }
             service_outcome_result(command_name, outcome)
         }
-        DaemonCommand::InstallQualificationWrapper {
-            wrapper_path,
-            wrapper_sha256,
-            sandbox_profile_path,
-            sandbox_profile_sha256,
-            archived_daemon_path,
-            archived_daemon_sha256,
-        } => {
-            let wrapper = resolve_platform_path(wrapper_path, command_name)?;
-            let sandbox_profile = resolve_platform_path(sandbox_profile_path, command_name)?;
-            let archived_daemon = resolve_platform_path(archived_daemon_path, command_name)?;
-            let binding = QualificationWrapperBindingV1::new(
-                wrapper_sha256.clone(),
-                sandbox_profile,
-                sandbox_profile_sha256.clone(),
-                archived_daemon,
-                archived_daemon_sha256.clone(),
-            );
-            let spec = InstallSpecV1::qualification_wrapper(
-                wrapper,
-                ServiceLabelV1::podwayd(),
-                paths.clone(),
-                binding,
-            );
-            let outcome = manager
-                .install(spec)
-                .map_err(|error| map_service_error(error, command_name))?;
-            if matches!(
-                outcome,
-                ServiceOutcomeV1::ChangedV1(_) | ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
-            ) {
-                wait_for_service_socket(paths.socket_path().as_path(), command_name)?;
-            }
-            service_outcome_result(command_name, outcome)
-        }
         DaemonCommand::Uninstall { purge_logs } => service_outcome_result(
             command_name,
             manager
@@ -1481,18 +1430,6 @@ fn probe_daemon_version(binary: &Path) -> Result<String, ServiceErrorV1> {
             operation: None,
             message: "daemon version probe returned malformed output".to_owned(),
         })
-}
-
-fn parse_sha256_hex(value: &str) -> Result<String, String> {
-    if value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        Ok(value.to_owned())
-    } else {
-        Err("must be a lowercase 64-character SHA-256 hexadecimal digest".to_owned())
-    }
 }
 
 fn wait_for_service_socket(socket: &Path, command: &str) -> Result<(), LocalFailure> {
@@ -1891,7 +1828,6 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
 fn daemon_command_name(command: &DaemonCommand) -> &'static str {
     match command {
         DaemonCommand::Install { .. } => "daemon.install",
-        DaemonCommand::InstallQualificationWrapper { .. } => "daemon.install_qualification_wrapper",
         DaemonCommand::Uninstall { .. } => "daemon.uninstall",
         DaemonCommand::Start => "daemon.start",
         DaemonCommand::Stop => "daemon.stop",
@@ -3459,50 +3395,6 @@ mod tests {
                 "text/plain"
             ])
             .is_ok()
-        );
-    }
-    #[test]
-    fn parser_accepts_only_the_complete_hidden_qualification_argv() {
-        let digest = "0".repeat(64);
-        assert!(matches!(
-            Cli::try_parse_from([
-                "podway",
-                "daemon",
-                "install-qualification-wrapper",
-                "--wrapper-path",
-                "/private/tmp/podway-wrapper",
-                "--wrapper-sha256",
-                digest.as_str(),
-                "--sandbox-profile-path",
-                "/private/tmp/podway.sb",
-                "--sandbox-profile-sha256",
-                digest.as_str(),
-                "--archived-daemon-path",
-                "/private/tmp/podwayd",
-                "--archived-daemon-sha256",
-                digest.as_str(),
-            ])
-            .expect("exact hidden qualification argv must parse")
-            .command,
-            Command::Daemon {
-                command: super::DaemonCommand::InstallQualificationWrapper { .. }
-            }
-        ));
-        assert!(
-            Cli::try_parse_from([
-                "podway",
-                "daemon",
-                "install-qualification-wrapper",
-                "--wrapper-path",
-                "/private/tmp/podway-wrapper",
-                "--wrapper-sha256",
-                digest.as_str(),
-                "--sandbox-profile-path",
-                "/private/tmp/podway.sb",
-                "--archived-daemon-path",
-                "/private/tmp/podwayd",
-            ])
-            .is_err()
         );
     }
     #[test]

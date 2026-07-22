@@ -82,7 +82,7 @@ Owns:
 Dependencies: core types and protocol client.  
 Can begin: command parsing, schemas, presets, help, and static validation immediately.
 
-## Stream E: Git, macOS service, and release
+## Stream E: Git, macOS service, and distribution
 
 Owns:
 
@@ -92,7 +92,7 @@ Owns:
 - initialization layout;
 - LaunchAgent install/lifecycle;
 - socket/runtime/log paths;
-- packaging, signing, checksums, and release automation.
+- packaging, optional signing, checksums, and distribution tooling.
 
 Dependencies: limited; can build fixtures and service abstraction early.  
 Blocks: complete macOS release.
@@ -108,7 +108,7 @@ Owns:
 - Git fixture repository generation;
 - macOS service integration environments;
 - CLI/JSON golden tests;
-- traceability and release acceptance report.
+- product-acceptance and crash-boundary mappings in the local gate.
 
 This stream should not be postponed until feature completion. It defines test interfaces with all other streams from the first milestone.
 
@@ -134,7 +134,7 @@ Within the first engineering milestone, freeze:
 - C: frame codec and daemon skeleton;
 - D: CLI grammar, schemas, presets;
 - E: Git fixtures and LaunchAgent template;
-- F: CI, requirement IDs, test harness skeleton.
+- F: Makefile gate, requirement IDs, test harness skeleton.
 
 ### Integration milestone 2
 
@@ -159,7 +159,7 @@ Within the first engineering milestone, freeze:
 - crash matrix;
 - artifact handling;
 - completion and help;
-- release packaging.
+- distribution packaging.
 
 ## Handoff artifacts between streams
 

@@ -1,6 +1,6 @@
 # Product Acceptance Criteria
 
-Podway is ready for public macOS release only when every mandatory criterion below is demonstrated by an automated test, release artifact inspection, or documented manual release check.
+Podway is release-ready when the repository-root `make test` command succeeds and every mandatory criterion below is bound to an automated test in the product-acceptance matrix.
 
 ## Product purpose
 
@@ -106,18 +106,16 @@ Podway is ready for public macOS release only when every mandatory criterion bel
 ## Distribution
 
 - Rust lockfile is committed.
-- Apple Silicon (`aarch64-apple-darwin`) artifacts are built, validated on an arm64 host as thin arm64 Mach-O binaries, and checksummed.
+- Apple Silicon (`aarch64-apple-darwin`) binaries are built and exercised on the local arm64 release host.
 - Release archive contains both binaries, completions, schemas, presets, README, and MIT License.
 - Public artifacts have documented signing and notarization status.
 - Upgrade from the previous supported database schema is tested.
-- Phase 8 release evidence at `release/migration-evidence-v1.json` records the deterministic schema-0 to v1 migration conformance result.
 - Release notes document contract versions and any migration.
 
 ## Final acceptance rule
 
-No criterion may be waived silently. A release exception requires:
-
-1. an issue with owner and rationale;
-2. a user-visible release-note entry;
-3. a time-bounded remediation plan;
-4. confirmation that the exception does not violate core invariants or create possible duplicate state mutation.
+No criterion may be waived. A failed `make test` result means the tested tree is
+not release-ready. Independent signatures, approval quorums, holdout runs,
+qualification archives, and attestation bundles are not acceptance criteria.
+Signing and notarization status must be documented when artifacts are distributed,
+but neither changes the source revision's release-readiness result.

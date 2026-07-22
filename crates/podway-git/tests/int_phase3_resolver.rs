@@ -28,7 +28,7 @@ fn lossless(path: &Path) -> LosslessPathV1 {
 }
 
 fn create_fifo(path: &Path) {
-    // In-process mkfifo(3): the hermetic qualification sandbox permits FIFO
+    // In-process mkfifo(3): the test environment permits FIFO
     // node creation under its writable roots but not spawning system tools.
     let raw = std::ffi::CString::new(path.as_os_str().as_bytes())
         .expect("fifo fixture path must not contain interior NUL bytes");
