@@ -114,9 +114,9 @@ The machine-readable catalog is [`../../spec/error-codes.json`](../../spec/error
 | Code | Exit | Retryable | Meaning |
 |---|---:|---:|---|
 | `CONFIRMATION_REQUIRED` | 2 | no | Destructive non-interactive command lacks `--yes` |
-| `INTERNAL_ERROR` | 6 | maybe | Unexpected implementation failure |
+| `INTERNAL_ERROR` | 6 | no | Unexpected implementation failure |
 
-For `INTERNAL_ERROR`, `retryable` is true only when the daemon can prove no mutation committed and a retry is safe. Otherwise it is false and details include a diagnostic ID.
+`INTERNAL_ERROR` is never marked retryable, and its details include a diagnostic ID. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation.
 
 ## Conflict remediation
 

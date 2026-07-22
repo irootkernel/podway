@@ -146,7 +146,7 @@ Owns:
 
 - `podway-core` has no infrastructure dependencies.
 - `podway-config` and `podway-protocol` may depend on core value types, not daemon or store.
-- `podway-store`, `podway-git`, and `podway-service` may depend on core and protocol support types.
+- `podway-store`, `podway-git`, and `podway-service` may depend on `podway-core` only.
 - `podway-daemon` composes all infrastructure crates.
 - `podway-cli` depends on protocol and presentation types, not store internals.
 - Cyclic crate dependencies are prohibited.

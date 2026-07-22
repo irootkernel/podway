@@ -114,6 +114,12 @@ C13 during migration
 C14 during reset-all after marker creation
 C15 during reset-all after database deletion
 C16 during reset-all after new database creation
+P01 after the reset target destination link and before temporary-link removal — `phase2_crash_child_aborts_at_configured_failpoint`
+D01 during atomic reset-marker publication — `d01_reset_marker_publication_interrupted_before_link_publishes_no_marker`
+D02 during atomic registry rename — `abort_process_failpoints_recover_exact_documents_without_accepting_temporaries`
+S01 during atomic service plist or metadata publication — `atomic_service_publication_crash_child_leaves_no_partial_state`
+S02 after the bootstrap side effect and before metadata publication — `bootstrap_side_effect_crash_child_reconciles_to_one_installed_state`
+S03 after the first non-purge service-file removal — `service_removal_crash_child_preserves_complete_prior_state`
 ```
 
 For each point, restart and assert one valid outcome: no admission, one queued retry, one terminal result, or idempotent completion. No state effect may occur twice.
@@ -183,7 +189,7 @@ installed daemon path.
 
 Every command requires:
 
-- `--help` snapshot or semantic assertions;
+- built-in `podway help` topic or route semantic assertions, plus an explicit test that the unsupported `--help` flag is rejected;
 - valid text output in normal, empty, and error states;
 - valid success and error JSON against shipped schemas;
 - documented exit-code assertion;

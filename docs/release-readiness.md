@@ -50,6 +50,8 @@ The archive builder rejects non-arm64 Mach-O binaries, incomplete layouts, stale
 binary versions, a non-1.97.1 Rust toolchain, and a dirty tracked or untracked tree.
 The local gate exercises the same builder with real debug binaries in temporary
 directories and proves that repeated construction produces the same archive digest.
+Rebuild the archive whenever history is rewritten after packaging; published
+provenance `source_commit` must equal the exact release-tag commit.
 
 ## Current implementation state
 

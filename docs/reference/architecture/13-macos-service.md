@@ -25,7 +25,7 @@ The label is an implementation constant for v1. Changing it requires migration o
 | Socket | `$TMPDIR/podway-<uid>/podwayd.sock` |
 | Singleton lock | `$TMPDIR/podway-<uid>/podwayd.lock` |
 
-The socket path must stay below the macOS Unix-domain path limit. If the expanded `$TMPDIR` path is too long, the implementation uses `/tmp/podway-<uid>/podwayd.sock` after securely creating a `0700` directory owned by the user.
+The socket path must stay below the macOS Unix-domain path limit; an over-long expanded path is a `SocketPathTooLong` hard error. The runtime base is selected once from `TMPDIR`, or from `/tmp` only when `TMPDIR` is unset.
 
 ## LaunchAgent configuration
 
@@ -88,12 +88,14 @@ The command is idempotent when the same binary and configuration are already ins
 The daemon exposes a local health request over the socket. `podway daemon status --json` reports:
 
 ```text
+status
 installed
 loaded
 reachable
 daemon_version
 protocol_versions
 pid
+process_id
 started_at
 uptime_ms
 socket_path
@@ -128,9 +130,11 @@ Defaults:
 - log file: `podwayd.log`;
 - maximum file size: 10 MiB;
 - retained rotated files: 5;
-- default level: `info`;
+- exact record form: `ts=<seconds> operation=<name> outcome=<name>`;
+- bounded event queues account for dropped records;
+- no log levels or runtime log-level configuration in v0.1.0;
 - no item values, task titles, artifact locations, or full request payloads in normal logs;
-- job, workspace, command, error code, duration, and state transition identifiers may be logged.
+- operation and outcome names come from closed internal categories.
 
 `podway daemon logs` prints the resolved log path and recent content. `--follow` streams appended lines.
 

@@ -150,7 +150,7 @@ Checks include:
 - procedure snapshot digest;
 - queue sequence and running-job recovery state;
 - global registry agreement;
-- local required artifact existence in deep mode.
+- Git-to-Store workspace binding revalidation in deep mode.
 
 Doctor is read-only. It may recommend `init --repair`, `workspace repair`, daemon restart, or destructive reset, but does not perform them automatically.
 

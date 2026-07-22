@@ -46,7 +46,7 @@ The daemon reads the length before allocating the payload buffer and rejects ove
   "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
   "client": {
     "name": "podway",
-    "version": "1.0.0",
+    "version": "0.1.0",
     "pid": 12345
   },
   "operation": "mutate",

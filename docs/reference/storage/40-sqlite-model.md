@@ -209,7 +209,7 @@ Fast startup checks:
 - one active attempt invariant;
 - queued/running job sanity.
 
-`podway doctor --deep` additionally runs SQLite integrity checking and full relational invariant scans.
+`podway doctor --deep` additionally revalidates the Git-to-Store workspace binding. The store layer's deep SQLite integrity mode is currently exercised by tests only and is not wired into the production doctor command in v0.1.0.
 
 ## Database lifecycle
 

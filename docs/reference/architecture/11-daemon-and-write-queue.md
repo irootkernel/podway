@@ -205,7 +205,7 @@ On requested shutdown:
 - allow currently executing short database transactions to finish;
 - flush responses where possible;
 - close database handles;
-- remove the socket only after releasing the singleton lock.
+- close the listener, remove the ownership-token-guarded socket while still holding the singleton lock, then release the lock.
 
 A forced termination remains safe because SQLite transactions and restart recovery define the outcome.
 

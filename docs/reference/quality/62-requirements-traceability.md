@@ -57,7 +57,7 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 | `STO-008` | Corrupt state fails closed | Recovery | Corruption injection |
 | `STO-009` | Retention is bounded | Recovery | Pruning tests |
 | `STO-010` | Global registry contains no task data | Recovery | Registry schema test |
-| `STO-011` | Initial `schema-0`/uninitialized (`uninitialized-database`) state migrates transactionally to `schema-v1` | SQLite model; Gate S | Initial-migration atomicity test |
+| `STO-011` | Initial `schema-0`/uninitialized (`uninitialized-database`) state migrates transactionally to `schema-v1` | SQLite model | Initial-migration atomicity test |
 
 ## Interface requirements
 
@@ -95,8 +95,10 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 | `REL-003` | Published archives include checksums and source/toolchain provenance | Release | `make test-e2e`; distribution metadata inspection |
 | `REL-004` | Upgrade migration is tested | Release/storage | `make test-int`; `make test-e2e` |
 | `REL-005` | All product acceptance criteria pass | Product acceptance | `make test`; product-acceptance matrix validation |
-| `REL-006` | Complete public release is `v0.1.0` from design package `1.0.1-design` while public and storage contracts remain v1 | Gate S; release | `make test-prepare`; package inspection |
-| `REL-008` | Gate S plans Phases 0 through 8, with Phase 8 completed by the repository-local `make test` release gate | Gate S; implementation plan | `make test` |
+| `REL-006` | `v0.1.0` is the first public release, while public and storage contracts remain v1 | Release packaging; release readiness | `make test-prepare`; package inspection |
+| `REL-008` | Release readiness is decided solely by the repository-local `make test` gate | ADR-0011 | `make test` |
+
+The omitted seventh release requirement is retired by [ADR-0011](../../adr/0011-local-make-test-release-gate.md), which explains the intentional ID gap.
 
 ## Change-control rule
 

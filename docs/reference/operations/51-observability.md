@@ -23,32 +23,19 @@ Default macOS directory:
 ~/Library/Logs/Podway/
 ```
 
-Log records are structured and include:
+Each record is one structured line with exactly three fields:
 
 ```text
-timestamp
-level
-component
-event
-workspace_uuid when applicable
-job_id and sequence when applicable
-command name
-error code
-duration_ms
-diagnostic_id when applicable
+ts=<seconds> operation=<name> outcome=<name>
 ```
 
-They exclude task titles, item values, artifact locations, procedure content, and full requests by default.
+Operation and outcome are closed internal categories. The record cannot carry task titles, item values, artifact locations, procedure content, or full requests.
 
-## Log levels
+## Queueing and configuration
 
-- `error`: operation cannot continue or invariant failed;
-- `warn`: recoverable anomaly, invalid client, stale registry, or pruning issue;
-- `info`: daemon lifecycle, workspace scheduler lifecycle, job terminal state, migration;
-- `debug`: bounded protocol and transaction diagnostics without payload values;
-- `trace`: development-only, disabled in public builds unless explicitly enabled.
+The sink uses bounded primary and priority queues. Saturation does not block request processing; dropped records and saturation episodes are counted and included in the frozen shutdown report.
 
-Runtime log level is configured through daemon installation metadata or a documented environment variable set in the LaunchAgent, not worktree config.
+Podway v0.1.0 has no log levels, filtering, or runtime log configuration.
 
 ## Rotation
 
@@ -60,28 +47,28 @@ Default rotation:
 - no compression requirement;
 - oldest file removed first.
 
-A logging failure must not corrupt task state. Persistent inability to write logs is reported by daemon status as a warning.
+A logging failure must not corrupt task state. Sink failures and dropped records are accounted internally; daemon status has no logging-warning field.
 
 ## Daemon status
 
 `podway daemon status --json` reports:
 
 ```text
+status
 installed
 loaded
 reachable
+daemon_version
+protocol_versions
 pid
-version
-supported_protocols
+process_id
 started_at
 uptime_ms
 socket_path
-log_path
-registered_worktrees
-active_schedulers
-queued_jobs
-running_jobs
-last_fatal_diagnostic_id
+registered_worktree_count
+active_scheduler_count
+queued_job_count
+running_job_count
 ```
 
 It contains aggregate counts only, not task titles or item data.
@@ -121,19 +108,11 @@ retention.pruned
 integrity.failed
 ```
 
-Entries contain summaries and IDs, not item values. The journal has no public long-term export command. `doctor --deep` may inspect recent entries for diagnosis.
+Entries contain summaries and IDs, not item values. The journal has no public long-term export command, and doctor does not expose its recent entries.
 
 ## Diagnostic IDs
 
-Unexpected internal errors generate an opaque diagnostic UUID. The public error includes it, and the daemon log includes the same value with internal source-chain details.
-
-Example:
-
-```text
-INTERNAL_ERROR diagnostic_id=0e8a...
-```
-
-This lets developers correlate a report without making internal messages part of the public API.
+Unexpected internal errors generate an opaque diagnostic UUID in the public error details. The three-field event log does not carry diagnostic IDs or internal source-chain text in v0.1.0.
 
 ## Doctor output
 

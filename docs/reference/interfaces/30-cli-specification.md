@@ -119,7 +119,7 @@ Checks:
 - workspace UUID conflicts;
 - queue recovery state.
 
-`--deep` may run a full SQLite integrity check and rehash required local artifacts. It remains read-only.
+`--deep` additionally revalidates the Git-to-Store workspace binding. Doctor remains read-only; the store layer's deep SQLite integrity mode is not wired into this command in v0.1.0.
 
 ### Workspace inspection and repair
 
