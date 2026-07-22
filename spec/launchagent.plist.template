@@ -4,6 +4,11 @@
 <dict>
   <key>Label</key>
   <string>dev.podway.podwayd</string>
+  <key>PodwayGeneration</key>
+  <string>__PODWAY_GENERATION__</string>
+
+  <key>PodwayDaemonSha256</key>
+  <string>__PODWAYD_SHA256__</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -27,9 +32,9 @@
   <string>Background</string>
 
   <key>StandardOutPath</key>
-  <string>__BOOTSTRAP_LOG_PATH__</string>
+  <string>__PODWAYD_LOG_PATH__</string>
 
   <key>StandardErrorPath</key>
-  <string>__BOOTSTRAP_LOG_PATH__</string>
+  <string>__PODWAYD_LOG_PATH__</string>
 </dict>
 </plist>

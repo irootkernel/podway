@@ -918,6 +918,18 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
     assert!(plist.contains(&format!(
         "<key>ProgramArguments</key>\n  <array>\n    <string>{escaped_staged_binary}</string>\n    <string>--service</string>\n  </array>"
     )));
+    let expected_plist = include_str!("../../../docs/spec/launchagent.plist.template")
+        .replace(
+            "__PODWAY_GENERATION__",
+            receipt["generation"].as_str().unwrap(),
+        )
+        .replace("__PODWAYD_SHA256__", daemon_identity)
+        .replace("__PODWAYD_ABSOLUTE_PATH__", &escaped_staged_binary)
+        .replace("__PODWAYD_LOG_PATH__", &escaped_log);
+    assert_eq!(
+        plist, expected_plist,
+        "the reference template keys and static values must exactly match installed output"
+    );
     assert!(
         !plist.contains(&xml_escape(&binary)),
         "the mutable source executable must not be rendered into the plist"

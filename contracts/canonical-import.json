@@ -103,7 +103,7 @@
     {
       "source": "docs/spec/launchagent.plist.template",
       "destination": "spec/launchagent.plist.template",
-      "source_sha256": "44ba7d414649f7e12bfffc53701b7234c53c4046c0966fd9d1073a2a36c7be2a",
+      "source_sha256": "b59e486ed6838c4d22c3c0d133f3927c58415c3337969fe7aa712e4df1b19ae3",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
