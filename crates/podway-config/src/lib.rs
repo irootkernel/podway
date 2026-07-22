@@ -607,7 +607,7 @@ impl ItemDefinitionV1 {
                         reason: "minimum cannot exceed maximum",
                     });
                 }
-                validate_count("item.list.max_items", *max_items as usize, 0, 1_000)?;
+                validate_count("item.list.max_items", *max_items as usize, 1, 1_000)?;
                 validate_count(
                     "item.list.max_item_length",
                     *max_item_length as usize,

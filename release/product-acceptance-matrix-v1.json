@@ -1634,7 +1634,7 @@
     "crates/podway-cli/tests/e2e_phase4_commands.rs": "7a9cf2728bfa1e41659e1e4ed767dbf6300f40632e972f6dc7adfa35a765a16a",
     "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "c99661bb106c5ede22c3a50dabcd3b2f776a097bfd4d7fd6bec76614e855f792",
     "crates/podway-cli/tests/e2e_phase5_cli.rs": "d2bd08e1177ab641c3992eda1d0da9c3fad691e5f55cbaa3c648a8dc020b5231",
-    "crates/podway-config/tests/int_procedure_v1.rs": "5f961e543c3a4b84c5fb28ca8d2261c4db451abb6f9472d7caab5146eac0bdcb",
+    "crates/podway-config/tests/int_procedure_v1.rs": "3d7e2b41ba761fc46a5719bbf433b72d6a2f19275eaa4941f2ac4f8f0847132f",
     "crates/podway-core/tests/int_phase1_state_matrix.rs": "bf61876f3af1872b9a5e219aa335f6d94fdd435f96309056936ea3819a2cb9ba",
     "crates/podway-core/tests/int_phase1_transitions.rs": "c9cdebd6c44b7d39ca1aacdf1b386f71a63c388a4529ec348cd2fddfba9b6a86",
     "crates/podway-daemon/tests/int_phase4_daemon_runtime.rs": "5ad8bda0e7bf2aacec78854a44fab427495329dec6ac80df2837ef9ed2f40911",

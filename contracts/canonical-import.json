@@ -47,7 +47,7 @@
     {
       "source": "docs/schemas/procedure-v1.schema.json",
       "destination": "schemas/procedure-v1.schema.json",
-      "source_sha256": "ef1d1102262f0413d9786afcf876feaddf24ee1dea190ba3148cbb655417efb5",
+      "source_sha256": "cc2aed122f69032d612626248da614aee79bccbaa6a0a151e531119590b13e42",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

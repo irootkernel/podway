@@ -725,18 +725,44 @@ fn status_and_next_results_round_trip_with_active_item_values_and_redo_evidence(
 }
 
 #[test]
-fn status_and_next_records_are_strict_schema_shaped_objects() {
-    let malformed_status = json!({
+fn int_response_additive_fields_tolerated() {
+    let mut status = json!({
+        "task": {"title": "Task", "procedure": {"id": "p", "version": "1", "name": "P", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}},
+        "session": {"id": SESSION_ID, "lifecycle": "running", "revision": 1, "created_at": "2026-07-13T03:00:00.000Z", "completed_at": null, "cancelled_at": null},
+        "current": null,
+        "stages": [],
+        "items": [{"id": "note", "type": "text", "prompt": "Note", "required": true, "satisfied": false, "revision": 0, "value": null}],
+        "blockers": [],
+        "queue": {"pending_mutations": false, "queued_count": 0, "running_job_id": null, "latest_workspace_sequence": 0},
+        "future_root_field": true
+    });
+    status["items"][0]["future_item_field"] = json!({"nested": true});
+
+    let mut expected = status.clone();
+    expected
+        .as_object_mut()
+        .unwrap()
+        .remove("future_root_field");
+    expected["items"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("future_item_field");
+
+    let parsed = StatusResultV1::from_result_map(&payload(status)).unwrap();
+    assert_eq!(parsed.to_result_map(), payload(expected));
+    assert_eq!(parsed.items[0].id.as_str(), "note");
+}
+
+#[test]
+fn status_and_next_records_reject_invalid_known_fields() {
+    let status = json!({
         "task": {"title": "Task", "procedure": {"id": "p", "version": "1", "name": "P", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}},
         "session": {"id": SESSION_ID, "lifecycle": "running", "revision": 1, "created_at": "2026-07-13T03:00:00.000Z", "completed_at": null, "cancelled_at": null},
         "current": null,
         "stages": [], "items": [], "blockers": [],
-        "queue": {"pending_mutations": false, "queued_count": 0, "running_job_id": null, "latest_workspace_sequence": 0},
-        "unknown": true
+        "queue": {"pending_mutations": false, "queued_count": 0, "running_job_id": null, "latest_workspace_sequence": 0}
     });
-    let mut malformed_status = payload(malformed_status);
-    assert!(StatusResultV1::from_result_map(&malformed_status).is_err());
-    malformed_status.remove("unknown");
+    let mut malformed_status = payload(status);
     malformed_status
         .get_mut("session")
         .unwrap()
@@ -749,7 +775,7 @@ fn status_and_next_records_are_strict_schema_shaped_objects() {
         "stage": null,
         "missing_required_items": [],
         "blockers": [],
-        "allowed_actions": {"complete": false, "skip": false, "retry": false, "return_to": [], "cancel": false, "unknown": true},
+        "allowed_actions": {"complete": "no", "skip": false, "retry": false, "return_to": [], "cancel": false},
         "next_stage_after_completion": null,
         "suggestions": []
     });

@@ -170,7 +170,7 @@ Rules:
 
 - default `min_items`: 0;
 - default `max_items`: 100;
-- hard maximum `max_items`: 1000;
+- explicit `max_items` range: 1 through 1000;
 - default `max_item_length`: 500;
 - blank entries are rejected;
 - `unique` defaults to true;

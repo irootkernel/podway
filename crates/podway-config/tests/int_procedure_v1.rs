@@ -1390,3 +1390,25 @@ fn semantic_validation_rejects_boundaries_and_emits_every_warning_category() {
         })
     );
 }
+
+#[test]
+fn list_max_items_zero_is_rejected_before_core_admission() {
+    let document = json!({
+        "schema":"podway.procedure/v1", "id":"release", "version":"1", "name":"Release",
+        "stages":[{"id":"prepare","title":"Prepare","items":[{
+            "id":"components", "type":"list", "prompt":"Components", "required":false,
+            "min_items":0, "max_items":0
+        }]}],
+        "rework":{"allow_return_to":["prepare"]}
+    });
+
+    assert!(matches!(
+        parse_procedure_v1(document.to_string(), ProcedureFormatV1::Json),
+        Err(ConfigError::OutOfBounds {
+            field: "item.list.max_items",
+            min: 1,
+            max: 1_000,
+            actual: 0,
+        })
+    ));
+}

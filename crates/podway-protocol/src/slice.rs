@@ -2302,14 +2302,12 @@ pub enum StageStatusResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StatusTaskV1 {
     pub title: String,
     pub procedure: StatusProcedureV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StatusProcedureV1 {
     pub id: String,
     pub version: String,
@@ -2318,7 +2316,6 @@ pub struct StatusProcedureV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StatusSessionV1 {
     pub id: SessionId,
     pub lifecycle: SessionLifecycleV1,
@@ -2332,7 +2329,6 @@ pub struct StatusSessionV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct CurrentAttemptResultV1 {
     pub stage_id: StageId,
     pub stage_index: u64,
@@ -2345,7 +2341,6 @@ pub struct CurrentAttemptResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StatusStageResultV1 {
     pub id: StageId,
     pub index: u64,
@@ -2355,7 +2350,6 @@ pub struct StatusStageResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StatusItemResultV1 {
     pub id: ItemId,
     #[serde(rename = "type")]
@@ -2368,7 +2362,6 @@ pub struct StatusItemResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BlockerResultV1 {
     pub id: BlockerId,
     pub attempt_id: AttemptId,
@@ -2376,7 +2369,6 @@ pub struct BlockerResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct QueueResultV1 {
     pub pending_mutations: bool,
     pub queued_count: u64,
@@ -2396,7 +2388,6 @@ pub enum AttemptLifecycleResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PreviousAttemptResultV1 {
     pub stage_id: StageId,
     pub attempt_id: AttemptId,
@@ -2410,9 +2401,8 @@ pub struct PreviousAttemptResultV1 {
     pub reason: Option<String>,
 }
 
-/// Strict typed projection of `status` output `result`, matching `status-result-v1.schema.json`.
+/// Typed projection of `status` output `result` that tolerates additive response fields.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StatusResultV1 {
     pub task: StatusTaskV1,
     pub session: StatusSessionV1,
@@ -2455,7 +2445,6 @@ impl From<StatusResultV1> for Map<String, Value> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NextStageResultV1 {
     pub id: StageId,
     pub title: String,
@@ -2466,7 +2455,6 @@ pub struct NextStageResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NextItemResultV1 {
     pub id: ItemId,
     #[serde(rename = "type")]
@@ -2475,7 +2463,6 @@ pub struct NextItemResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AllowedActionsResultV1 {
     pub complete: bool,
     pub skip: bool,
@@ -2485,14 +2472,12 @@ pub struct AllowedActionsResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NextStageAfterCompletionResultV1 {
     pub id: StageId,
     pub title: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct CommandSuggestionResultV1 {
     pub command: String,
     pub argv: Vec<String>,
@@ -2504,9 +2489,8 @@ pub struct CommandSuggestionResultV1 {
     pub item_id: Option<ItemId>,
 }
 
-/// Strict typed projection of `next` output `result`, matching `next-result-v1.schema.json`.
+/// Typed projection of `next` output `result` that tolerates additive response fields.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NextResultV1 {
     #[serde(deserialize_with = "deserialize_required_option")]
     pub stage: Option<NextStageResultV1>,
