@@ -8,9 +8,13 @@ endif
 RUST_TOOLCHAIN_BIN := $(dir $(RUST_TOOLCHAIN_CARGO))
 RUST_TOOLCHAIN_ENV = PATH="$(RUST_TOOLCHAIN_BIN):$${PATH}"
 DIST_DIR ?= dist
+PRESET_DIR ?= sot/presets
+PRESET_VALIDATOR ?= target/debug/podway
+export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
 .PHONY: test test-prepare test-prepare-core test-unit test-int test-e2e \
-	toolchain codegen format vet lint architecture dist
+	toolchain codegen format vet lint architecture preset-validator \
+	preset-create preset-import preset-tool-test dist
 
 toolchain:
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
@@ -53,6 +57,31 @@ architecture:
 	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'arch_*' --locked
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --all
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_verification_runner.py
+	$(MAKE) preset-tool-test
+
+preset-validator:
+	$(RUST_TOOLCHAIN_ENV) cargo build --locked -p podway-cli --bin podway
+
+preset-create: preset-validator
+	@test -n "$$PRESET_ID" || { echo "PRESET_ID is required" >&2; exit 2; }
+	@test -n "$$PRESET_NAME" || { echo "PRESET_NAME is required" >&2; exit 2; }
+	@test -n "$$PRESET_DESCRIPTION" || { echo "PRESET_DESCRIPTION is required" >&2; exit 2; }
+	$(RUST_TOOLCHAIN_ENV) python3 tools/manage_presets.py create \
+		--id "$$PRESET_ID" \
+		--name "$$PRESET_NAME" \
+		--description "$$PRESET_DESCRIPTION" \
+		--output-dir "$$PRESET_DIR" \
+		--podway "$$PRESET_VALIDATOR"
+
+preset-import: preset-validator
+	@test -n "$$PRESET_FILE" || { echo "PRESET_FILE is required" >&2; exit 2; }
+	$(RUST_TOOLCHAIN_ENV) python3 tools/manage_presets.py import \
+		--source "$$PRESET_FILE" \
+		--output-dir "$$PRESET_DIR" \
+		--podway "$$PRESET_VALIDATOR"
+
+preset-tool-test: preset-validator
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_preset_tooling.py --podway "$$PRESET_VALIDATOR"
 
 test-unit:
 	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --lib --bins --locked

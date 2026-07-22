@@ -21,7 +21,17 @@ ROUTES_PATH = Path("contracts/command-routes.json")
 ADJACENCY_VERSION = "podway.cargo-adjacency/v1"
 ROUTES_VERSION = "podway.command-routes/v1"
 MAKEFILE_PATH = Path("Makefile")
-REQUIRED_MAKE_TARGETS = ("test", "test-prepare", "test-unit", "test-int", "test-e2e", "dist")
+REQUIRED_MAKE_TARGETS = (
+    "test",
+    "test-prepare",
+    "test-unit",
+    "test-int",
+    "test-e2e",
+    "preset-create",
+    "preset-import",
+    "preset-tool-test",
+    "dist",
+)
 REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) test-prepare",
     "$(MAKE) test-unit",
@@ -37,6 +47,7 @@ REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_test_layout.py --check",
     "python3 tools/verify_quality_contracts.py",
     "python3 tools/verify_contracts.py --all",
+    "python3 tools/verify_preset_tooling.py --podway",
     "python3 tools/phase0_receipts.py --check",
 )
 CRATE_ORDER = (
@@ -424,6 +435,13 @@ def validate_makefile_contract(root: Path) -> int:
     missing_commands = [command for command in REQUIRED_PREPARE_COMMANDS if command not in text]
     if missing_commands:
         fail(f"Makefile omits required prepare commands: {missing_commands}", "makefile_contract_drift")
+    for target, command in (
+        ("preset-create", "tools/manage_presets.py create"),
+        ("preset-import", "tools/manage_presets.py import"),
+    ):
+        recipe = re.search(rf"^{target}\s*:[^\n]*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
+        if recipe is None or command not in recipe.group(1):
+            fail(f"Makefile {target} target omits {command}", "makefile_contract_drift")
     dist_recipe = re.search(r"^dist\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
     if dist_recipe is None or "$(MAKE) test" not in dist_recipe.group(1):
         fail("Makefile dist target must run the sole release gate first", "makefile_contract_drift")

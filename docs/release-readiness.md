@@ -26,6 +26,11 @@ formatted tree, not from stale pre-format bytes.
 | `make test-int` | Multi-component scenarios using fixtures and test doubles without product binaries |
 | `make test-e2e` | User scenarios using the actual `podway` and `podwayd` binaries |
 
+The architecture portion also exercises the contributor-only preset tooling against
+the real Podway validator. `make preset-create` and `make preset-import` prepare
+canonical source candidates; they do not add public CLI commands or expand the four
+preset v0.1 catalog without the remaining SOT, catalog, and end-to-end work.
+
 Signing, notarization, archive assembly, checksum publication, and release-note
 publication may still be performed when distributing a build. They describe the
 published artifact and do not introduce another release-readiness gate.

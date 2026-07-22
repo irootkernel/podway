@@ -40,6 +40,11 @@ application. The repository's canonical verification entry point is the root
   and test doubles, without launching Podway product binaries.
 - `make test-e2e` builds and launches the real `podway` and `podwayd` binaries and
   includes the ignored production-vertical scenarios.
+- `make preset-create PRESET_ID=... PRESET_NAME=... PRESET_DESCRIPTION=...` creates
+  a validated built-in preset candidate for repository development.
+- `make preset-import PRESET_FILE=/path/to/file.yaml` validates and imports an
+  existing candidate without replacing files. These are contributor tools, not
+  public `podway` commands; the v0.1 shipped catalog remains fixed at four presets.
 - `make dist` reruns `make test`, builds both release binaries, and writes the
   deterministic archive, SHA-256 checksum, and provenance document under `dist/`.
 

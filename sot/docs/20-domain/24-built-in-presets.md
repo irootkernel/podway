@@ -115,6 +115,31 @@ A behavior-changing preset update increments its procedure version. Product rele
 
 ## Adding a preset
 
+The v0.1 shipped catalog is fixed at exactly `sw-dev`, `bug-fix`, `docs-only`, and
+`analysis`. The contributor commands below only prepare canonical source candidates;
+they do not modify the public CLI catalog or make a fifth preset shippable by
+themselves.
+
+Create a validated scaffold directly in `sot/presets/`:
+
+```sh
+make preset-create \
+  PRESET_ID=release-check \
+  PRESET_NAME='Release Check' \
+  PRESET_DESCRIPTION='Prepare and verify a release candidate.'
+```
+
+Import an existing procedure while preserving its exact bytes:
+
+```sh
+make preset-import PRESET_FILE=/path/to/release-check.yaml
+```
+
+Both targets use the repository's pinned Rust toolchain to build the real `podway`
+validator, reject invalid or oversized input, and never overwrite an existing preset.
+`PRESET_DIR` may point to a temporary directory for evaluation; its default is the
+canonical `sot/presets/` directory.
+
 A new built-in preset requires:
 
 1. repeated real-world use not covered well by the existing four;

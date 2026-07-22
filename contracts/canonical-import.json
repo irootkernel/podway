@@ -127,7 +127,7 @@
     {
       "source": "sot/presets/README.md",
       "destination": "presets/README.md",
-      "source_sha256": "333d4d8fb7785e514884333984f644ea7881d53736c985d847a9f2424cbaa686",
+      "source_sha256": "995c0ef69afc5bb3bfeade696509281d6abfa72d492e3ba9b2fd18fdbd30a3bd",
       "copy_mode": "exact",
       "owner": "sot",
       "generator_version": "phase-0a-v1"
