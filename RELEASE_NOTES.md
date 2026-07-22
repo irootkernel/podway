@@ -22,3 +22,11 @@ The current Apple-Silicon public package is **unsigned and not notarized**. Deve
 Developer ID signing and notarization are recommended when the necessary
 infrastructure is available, but they are not release-readiness requirements. The
 authoritative gate for the source revision is a successful local `make test` run.
+
+## Distribution metadata
+
+`make dist` produces the deterministic
+`podway-0.1.0-aarch64-apple-darwin.tar.gz` archive together with its SHA-256 file
+and `podway-0.1.0-aarch64-apple-darwin.provenance.json`. The provenance records the
+source commit, Rust 1.97.1 identity, Cargo.lock digest, target, binary digests,
+release-gate result, and the unsigned/not-notarized status above.

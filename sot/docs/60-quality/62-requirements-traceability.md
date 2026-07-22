@@ -91,8 +91,8 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 | ID | Requirement | Design source | Primary conformance |
 |---|---|---|---|
 | `REL-001` | Sole release tuple is `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}` | Release | `make test-e2e`; native service validation |
-| `REL-002` | Archive contains `podway` and `podwayd`, completions, schemas, presets, license | Release | Distribution layout documentation |
-| `REL-003` | Published archives include checksums and source/toolchain provenance | Release | Distribution metadata |
+| `REL-002` | Archive contains `podway` and `podwayd`, completions, schemas, presets, license | Release | `make test-e2e`; deterministic archive inspection |
+| `REL-003` | Published archives include checksums and source/toolchain provenance | Release | `make test-e2e`; distribution metadata inspection |
 | `REL-004` | Upgrade migration is tested | Release/storage | `make test-int`; `make test-e2e` |
 | `REL-005` | All product acceptance criteria pass | Product acceptance | `make test`; product-acceptance matrix validation |
 | `REL-006` | Complete public release is `v0.1.0` from design package `1.0.1-design` while public and storage contracts remain v1 | Gate S; release | `make test-prepare`; package inspection |

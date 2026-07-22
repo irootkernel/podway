@@ -80,17 +80,31 @@ def require_test_member(member: Any, criterion_id: str, source_files: set[str]) 
 
 def validate_acceptance_matrix() -> tuple[int, int]:
     matrix = load_object(MATRIX_PATH)
-    if matrix.get("schema") != "podway.product-acceptance-matrix/v1" or matrix.get("version") != 3:
+    if matrix.get("schema") != "podway.product-acceptance-matrix/v1" or matrix.get("version") != 4:
         fail("product acceptance matrix schema or version is unsupported")
     criteria = matrix.get("criteria")
-    if not isinstance(criteria, list) or len(criteria) != 71:
-        fail("product acceptance matrix must contain exactly 71 criteria")
+    if not isinstance(criteria, list) or not criteria:
+        fail("product acceptance matrix must contain criteria")
     source = matrix.get("source")
     if not isinstance(source, dict):
         fail("product acceptance matrix source binding is missing")
     source_path = repository_file(source.get("path"), "product acceptance source")
     source_lines = source_path.read_text(encoding="utf-8").splitlines()
-    expected_ids = [f"PAC-{number:03d}" for number in range(1, 72)]
+    try:
+        final_rule_line = source_lines.index("## Final acceptance rule") + 1
+    except ValueError:
+        fail("product acceptance source omits the final acceptance rule")
+    source_bullets = {
+        line_number: line.removeprefix("- ")
+        for line_number, line in enumerate(source_lines, start=1)
+        if line_number < final_rule_line and line.startswith("- ")
+    }
+    if len(criteria) != len(source_bullets):
+        fail(
+            "product acceptance matrix does not bind every mandatory SOT bullet: "
+            f"criteria={len(criteria)}, bullets={len(source_bullets)}"
+        )
+    expected_ids = [f"PAC-{number:03d}" for number in range(1, len(criteria) + 1)]
     proof_source_files: set[str] = set()
     semantic_coverage: dict[str, set[str]] = {}
     seen_lines: set[int] = set()
@@ -128,6 +142,8 @@ def validate_acceptance_matrix() -> tuple[int, int]:
             semantic_coverage[expected_id] = obligations
         else:
             fail(f"{expected_id} has unsupported proof kind: {kind}")
+    if seen_lines != set(source_bullets):
+        fail("product acceptance matrix source lines do not exactly cover every mandatory SOT bullet")
 
     source_files = matrix.get("source_files")
     if not isinstance(source_files, dict) or set(source_files) != proof_source_files:

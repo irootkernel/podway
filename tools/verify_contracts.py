@@ -21,7 +21,7 @@ ROUTES_PATH = Path("contracts/command-routes.json")
 ADJACENCY_VERSION = "podway.cargo-adjacency/v1"
 ROUTES_VERSION = "podway.command-routes/v1"
 MAKEFILE_PATH = Path("Makefile")
-REQUIRED_MAKE_TARGETS = ("test", "test-prepare", "test-unit", "test-int", "test-e2e")
+REQUIRED_MAKE_TARGETS = ("test", "test-prepare", "test-unit", "test-int", "test-e2e", "dist")
 REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) test-prepare",
     "$(MAKE) test-unit",
@@ -424,6 +424,12 @@ def validate_makefile_contract(root: Path) -> int:
     missing_commands = [command for command in REQUIRED_PREPARE_COMMANDS if command not in text]
     if missing_commands:
         fail(f"Makefile omits required prepare commands: {missing_commands}", "makefile_contract_drift")
+    dist_recipe = re.search(r"^dist\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
+    if dist_recipe is None or "$(MAKE) test" not in dist_recipe.group(1):
+        fail("Makefile dist target must run the sole release gate first", "makefile_contract_drift")
+    for required in ("cargo build --release --locked", "tools/release_archive.py package"):
+        if required not in text:
+            fail(f"Makefile dist target omits {required}", "makefile_contract_drift")
     return len(REQUIRED_MAKE_TARGETS) + len(REQUIRED_PREPARE_COMMANDS)
 
 

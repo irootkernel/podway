@@ -1,0 +1,114 @@
+//! Distribution acceptance for the real Podway binaries and archive builder.
+
+#![forbid(unsafe_code)]
+
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use serde_json::Value;
+
+fn daemon_binary() -> PathBuf {
+    std::env::var_os("PODWAYD_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd"))
+}
+
+fn package(output_directory: &Path) -> Value {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("python3")
+        .arg(root.join("tools/release_archive.py"))
+        .args(["package", "--allow-dirty", "--podway"])
+        .arg(env!("CARGO_BIN_EXE_podway"))
+        .arg("--podwayd")
+        .arg(daemon_binary())
+        .arg("--output-dir")
+        .arg(output_directory)
+        .current_dir(&root)
+        .output()
+        .expect("release archive builder must run");
+    assert!(
+        output.status.success(),
+        "release archive builder failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("release archive receipt must be JSON")
+}
+
+#[test]
+fn pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented() {
+    let root = std::env::temp_dir().join(format!("podway-release-e2e-{}", std::process::id()));
+    let first = root.join("first");
+    let second = root.join("second");
+    let first_receipt = package(&first);
+    let second_receipt = package(&second);
+
+    assert_eq!(first_receipt["ok"], true);
+    assert_eq!(first_receipt["mode"], "package");
+    assert_eq!(
+        first_receipt["archive_sha256"],
+        second_receipt["archive_sha256"]
+    );
+    let entries = first_receipt["entries"]
+        .as_array()
+        .expect("archive entries must be an array");
+    for required in [
+        "/bin/podway",
+        "/bin/podwayd",
+        "/share/completions/podway.bash",
+        "/share/completions/podway.fish",
+        "/share/completions/podway.zsh",
+        "/LICENSE",
+        "/README.md",
+        "/RELEASE_NOTES.md",
+    ] {
+        assert!(
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|entry| entry.ends_with(required)),
+            "release archive omits {required}"
+        );
+    }
+    assert!(
+        entries
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|entry| entry.contains("/share/podway/presets/"))
+    );
+    assert!(
+        entries
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|entry| entry.contains("/share/podway/schemas/"))
+    );
+
+    let provenance_path = first_receipt["provenance"]
+        .as_str()
+        .expect("provenance path must be present");
+    let provenance: Value =
+        serde_json::from_slice(&fs::read(provenance_path).expect("provenance must be readable"))
+            .expect("provenance must be JSON");
+    assert_eq!(provenance["schema"], "podway.release-provenance/v1");
+    assert_eq!(provenance["target"], "aarch64-apple-darwin");
+    assert_eq!(provenance["version"], "0.1.0");
+    assert_eq!(provenance["release_status"]["signing"], "unsigned");
+    assert_eq!(
+        provenance["release_status"]["notarization"],
+        "not-attempted"
+    );
+    assert!(
+        provenance["toolchain"]
+            .as_str()
+            .expect("toolchain must be text")
+            .starts_with("rustc 1.97.1 ")
+    );
+    assert_eq!(
+        provenance["archive"]["sha256"],
+        first_receipt["archive_sha256"]
+    );
+
+    fs::remove_dir_all(root).expect("release fixture cleanup must succeed");
+}

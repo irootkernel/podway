@@ -1119,12 +1119,87 @@
       },
       "status": "automated",
       "text": "Each preset passes at least one retry and one return scenario across the conformance suite."
+    },
+    {
+      "id": "PAC-072",
+      "line": 108,
+      "proof": {
+        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/e2e_release_archive.rs"
+      },
+      "status": "automated",
+      "text": "Rust lockfile is committed."
+    },
+    {
+      "id": "PAC-073",
+      "line": 109,
+      "proof": {
+        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/e2e_release_archive.rs"
+      },
+      "status": "automated",
+      "text": "Apple Silicon (`aarch64-apple-darwin`) binaries are built and exercised on the local arm64 release host."
+    },
+    {
+      "id": "PAC-074",
+      "line": 110,
+      "proof": {
+        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/e2e_release_archive.rs"
+      },
+      "status": "automated",
+      "text": "Release archive contains both binaries, completions, schemas, presets, README, and MIT License."
+    },
+    {
+      "id": "PAC-075",
+      "line": 111,
+      "proof": {
+        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/e2e_release_archive.rs"
+      },
+      "status": "automated",
+      "text": "Public artifacts have documented signing and notarization status."
+    },
+    {
+      "id": "PAC-076",
+      "line": 112,
+      "proof": {
+        "command": "cargo test -p podway-store --test int_phase2_schema_codec pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation --locked -- --exact",
+        "function": "pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation",
+        "kind": "cargo-test",
+        "path": "crates/podway-store/tests/int_phase2_schema_codec.rs"
+      },
+      "status": "automated",
+      "text": "Upgrade from the previous supported database schema is tested."
+    },
+    {
+      "id": "PAC-077",
+      "line": 113,
+      "proof": {
+        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/e2e_release_archive.rs"
+      },
+      "status": "automated",
+      "text": "Release notes document contract versions and any migration."
     }
   ],
   "input_closure": {
     "globs": [
       "Cargo.lock",
       "Cargo.toml",
+      "LICENSE",
+      "Makefile",
+      "README.md",
       ".cargo/config*",
       "rust-toolchain*",
       "build.rs",
@@ -1134,6 +1209,7 @@
       "schemas/**/*.json",
       "spec/**",
       "tests/fixtures/**",
+      "tools/release_archive.py",
       "RELEASE_NOTES.md"
     ],
     "requireCompleteFileDigests": true
@@ -1554,6 +1630,7 @@
     "path": "sot/docs/60-quality/61-product-acceptance.md"
   },
   "source_files": {
+    "crates/podway-cli/tests/e2e_release_archive.rs": "b27c53548d301d39769880f18f0ec8da14bc7c95b22b1da9ff9da321da1c2555",
     "crates/podway-cli/tests/e2e_phase4_commands.rs": "7a9cf2728bfa1e41659e1e4ed767dbf6300f40632e972f6dc7adfa35a765a16a",
     "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "c99661bb106c5ede22c3a50dabcd3b2f776a097bfd4d7fd6bec76614e855f792",
     "crates/podway-cli/tests/e2e_phase5_cli.rs": "d2bd08e1177ab641c3992eda1d0da9c3fad691e5f55cbaa3c648a8dc020b5231",
@@ -1578,5 +1655,5 @@
     "crates/podway-store/tests/int_phase2_schema_codec.rs": "3ede2a2cb9a531016a75be80f25d42681bad60a9bb0a57a9a99214feb548a13d",
     "crates/podway-store/tests/int_phase4_store_transactions.rs": "9f92eb6dc2c580c2ae9353b5438f3b40bcfa2e0f67b4e00817180b1746011845"
   },
-  "version": 3
+  "version": 4
 }

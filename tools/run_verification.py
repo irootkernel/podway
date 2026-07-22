@@ -60,7 +60,15 @@ INPUT_DIRECTORIES = (
     "tests",
     "tools",
 )
-REQUIRED_INPUT_FILES = ("Cargo.toml", "Cargo.lock", "Makefile", "deny.toml")
+REQUIRED_INPUT_FILES = (
+    "Cargo.toml",
+    "Cargo.lock",
+    "LICENSE",
+    "Makefile",
+    "README.md",
+    "RELEASE_NOTES.md",
+    "deny.toml",
+)
 OPTIONAL_INPUT_FILES = (
     ".clippy.toml",
     ".rustfmt.toml",

@@ -30,6 +30,20 @@ Signing, notarization, archive assembly, checksum publication, and release-note
 publication may still be performed when distributing a build. They describe the
 published artifact and do not introduce another release-readiness gate.
 
+## Distribution
+
+Run `make dist` from a clean native Apple Silicon working tree. The target reruns
+the complete `make test` gate, builds thin arm64 release binaries, and creates:
+
+- `dist/podway-0.1.0-aarch64-apple-darwin.tar.gz`;
+- the archive's `.sha256` file;
+- `dist/podway-0.1.0-aarch64-apple-darwin.provenance.json`.
+
+The archive builder rejects non-arm64 Mach-O binaries, incomplete layouts, stale
+binary versions, a non-1.97.1 Rust toolchain, and a dirty tracked or untracked tree.
+The local gate exercises the same builder with real debug binaries in temporary
+directories and proves that repeated construction produces the same archive digest.
+
 ## Current implementation state
 
 The implementation and all SOT requirements are represented in the local gate. A

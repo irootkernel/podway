@@ -242,4 +242,8 @@ targets sequentially:
 
 All required crash, migration, protocol, service, and acceptance scenarios are
 included in those targets. There is no hosted-CI or separate release lane
-requirement.
+requirement. The product-acceptance verifier binds every mandatory bullet in the
+acceptance source exactly once; adding an unmapped bullet fails `test-prepare`.
+Distribution acceptance constructs the deterministic archive twice from real
+binaries in disposable directories and compares their digests without publishing
+either artifact.

@@ -40,9 +40,12 @@ application. The repository's canonical verification entry point is the root
   and test doubles, without launching Podway product binaries.
 - `make test-e2e` builds and launches the real `podway` and `podwayd` binaries and
   includes the ignored production-vertical scenarios.
+- `make dist` reruns `make test`, builds both release binaries, and writes the
+  deterministic archive, SHA-256 checksum, and provenance document under `dist/`.
 
 The prepare target intentionally modifies generated files and formatting. Install
 `cargo-deny` before running the complete suite. Release tags and archives must use
 the resulting formatted tree; later source changes require another complete run.
+Distribution requires a clean native Apple Silicon working tree.
 
 See [`docs/release-readiness.md`](docs/release-readiness.md) for the release policy.

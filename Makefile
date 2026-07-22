@@ -7,9 +7,10 @@ $(error Rust $(RUST_TOOLCHAIN) is required; install it with rustup)
 endif
 RUST_TOOLCHAIN_BIN := $(dir $(RUST_TOOLCHAIN_CARGO))
 RUST_TOOLCHAIN_ENV = PATH="$(RUST_TOOLCHAIN_BIN):$${PATH}"
+DIST_DIR ?= dist
 
 .PHONY: test test-prepare test-prepare-core test-unit test-int test-e2e \
-	toolchain codegen format vet lint architecture
+	toolchain codegen format vet lint architecture dist
 
 toolchain:
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
@@ -64,3 +65,12 @@ test-int:
 test-e2e:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/run_e2e.py
+
+dist:
+	$(MAKE) test
+	$(RUST_TOOLCHAIN_ENV) cargo build --release --locked \
+		-p podway-cli --bin podway -p podway-daemon --bin podwayd
+	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
+		--podway target/release/podway \
+		--podwayd target/release/podwayd \
+		--output-dir $(DIST_DIR)

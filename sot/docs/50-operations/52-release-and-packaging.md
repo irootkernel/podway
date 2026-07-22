@@ -66,6 +66,22 @@ Each Apple Silicon archive contains both executables, `podway` and `podwayd`; th
 
 Presets are embedded in the binary for runtime availability. Source copies are shipped for inspection and customization.
 
+### Local archive construction
+
+From a clean native Apple Silicon working tree, `make dist` reruns the complete
+`make test` release gate, builds both release binaries, and writes the deterministic
+archive, its SHA-256 file, and a provenance JSON document under `dist/`. The archive
+builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
+version mismatches, incomplete archive contents, a Rust toolchain other than 1.97.1,
+and any dirty tracked or untracked source state.
+
+The provenance document records the source commit, Rust toolchain identifier,
+Cargo.lock digest, target architecture, both binary digests, archive digest,
+successful local-gate result, and signing/notarization status. `make test` exercises
+the same archive builder with real binaries in disposable directories and verifies
+that repeated construction produces the same archive digest; it does not publish a
+distribution artifact.
+
 ## Installation
 
 The binary installation mechanism may be a release archive or package manager. Regardless of mechanism:

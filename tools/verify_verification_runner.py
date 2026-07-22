@@ -186,7 +186,10 @@ def test_log_tamper() -> list[str]:
 def manifest_root(root: Path, include_race_file: bool) -> dict[str, Any]:
     (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
     (root / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    (root / "LICENSE").write_text("sentinel license\n", encoding="utf-8")
     (root / "Makefile").write_text("test:\n\t@true\n", encoding="utf-8")
+    (root / "README.md").write_text("# Sentinel\n", encoding="utf-8")
+    (root / "RELEASE_NOTES.md").write_text("# Sentinel release notes\n", encoding="utf-8")
     (root / "deny.toml").write_text("[advisories]\n", encoding="utf-8")
     tools = root / "tools"
     tools.mkdir()
