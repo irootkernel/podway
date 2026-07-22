@@ -7,23 +7,27 @@ Cargo.toml
 Cargo.lock
 crates/
   podway-cli/
-  podway-daemon/
-  podway-core/
-  podway-protocol/
   podway-config/
-  podway-store/
+  podway-core/
+  podway-daemon/
   podway-git/
-  podway-service/
   podway-presets/
+  podway-protocol/
+  podway-service/
+  podway-store/
 schemas/
 presets/
+release/
 tests/
-  conformance/
-  e2e/
   fixtures/
+tools/
 ```
 
-The repository commits `Cargo.lock` because Podway is an application.
+Each crate owns its Cargo integration-test targets under `crates/<crate>/tests/`.
+Those targets use the mechanically checked `arch_*`, `int_*`, and `e2e_*` prefixes;
+only `e2e_*` targets may launch the real `podway` or `podwayd` binaries. The root
+`tests/fixtures/` directory contains shared contract fixtures rather than test
+targets. The repository commits `Cargo.lock` because Podway is an application.
 
 ## Crate responsibilities
 
@@ -149,14 +153,22 @@ Owns:
 
 ## Runtime model
 
-The reference implementation uses an async event loop for socket I/O and scheduler coordination. Blocking work is isolated:
+The implementation uses bounded synchronous I/O and operating-system threads; it
+does not use an async runtime. The daemon's blocking Unix-domain socket accept loop
+admits same-user connections through a bounded handler budget. Each admitted
+connection is handled by a dedicated OS thread with absolute read and write deadlines.
 
-- SQLite operations run on dedicated blocking workers using an application-controlled SQLite build with the features required by schema v1;
-- file hashing runs on blocking workers;
-- Git discovery may run on a blocking worker;
-- no blocking work runs on the async reactor thread.
+Each active workspace has one worker thread that claims and executes its durable FIFO
+queue. Mutexes and condition variables coordinate scheduler generations, progress,
+retirement, maintenance, and shutdown. A daemon-wide bounded blocking executor limits
+simultaneous workspace operations, while the per-workspace serialization boundary
+permits exactly one mutation execution for that identity. SQLite, Git discovery,
+artifact hashing, and filesystem work run inside those bounded synchronous execution
+paths rather than on an event-loop reactor.
 
-Each workspace scheduler has a logical mutex that permits one mutation execution. A daemon-wide bounded semaphore limits simultaneous blocking workspace operations.
+Observability uses a separate bounded queue and sink thread. Saturation and sink
+failure are accounted explicitly, and graceful shutdown drains admitted handlers,
+workspace workers, and observability state before removing the owned socket.
 
 ## Safe Rust and platform code
 

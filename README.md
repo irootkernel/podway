@@ -48,4 +48,6 @@ The prepare target intentionally modifies generated files and formatting. Instal
 the resulting formatted tree; later source changes require another complete run.
 Distribution requires a clean native Apple Silicon working tree.
 
-See [`docs/release-readiness.md`](docs/release-readiness.md) for the release policy.
+See the [`docs/` index](docs/README.md) for the implementation/operator guide and
+the boundary between those guides and the normative SOT. The release policy is in
+[`docs/release-readiness.md`](docs/release-readiness.md).
