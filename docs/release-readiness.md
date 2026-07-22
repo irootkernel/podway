@@ -22,7 +22,7 @@ formatted tree, not from stale pre-format bytes.
 
 | Target | Scope |
 |---|---|
-| `make test-prepare` | SOT import, formatting, vet, lint, dependency policy, architecture, product-acceptance mapping, crash-boundary mapping, and contract checks |
+| `make test-prepare` | canonical asset synchronization, formatting, vet, lint, dependency policy, architecture, product-acceptance mapping, crash-boundary mapping, and contract checks |
 | `make test-unit` | Narrow library, binary, and documentation tests |
 | `make test-int` | Multi-component scenarios using fixtures and test doubles without product binaries |
 | `make test-fuzzing` | Fixed-run, fixed-seed frame-decoder and request-envelope fuzzing in disposable corpora |
@@ -31,7 +31,7 @@ formatted tree, not from stale pre-format bytes.
 The architecture portion also exercises the contributor-only preset tooling against
 the real Podway validator. `make preset-create` and `make preset-import` prepare
 canonical source candidates; they do not add public CLI commands or expand the four
-preset v0.1 catalog without the remaining SOT, catalog, and end-to-end work.
+preset v0.1 catalog without the remaining documentation, catalog, and end-to-end work.
 
 Signing, notarization, archive assembly, checksum publication, and release-note
 publication may still be performed when distributing a build. They describe the
@@ -53,6 +53,6 @@ directories and proves that repeated construction produces the same archive dige
 
 ## Current implementation state
 
-The implementation and all SOT requirements are represented in the local gate. A
+The implementation and all documented requirements are represented in the local gate. A
 successful `make test` is the authoritative evidence for the tested tree; generated
 reports from superseded qualification systems are not release inputs.

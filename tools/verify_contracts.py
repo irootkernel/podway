@@ -12,7 +12,7 @@ import tempfile
 import tomllib
 from typing import Any, Callable
 
-import import_sot
+import sync_docs_assets
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +28,7 @@ REQUIRED_MAKE_TARGETS = (
     "test-int",
     "test-fuzzing",
     "test-e2e",
+    "sync-docs-assets",
     "preset-create",
     "preset-import",
     "preset-tool-test",
@@ -41,7 +42,8 @@ REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) test-e2e",
 )
 REQUIRED_PREPARE_COMMANDS = (
-    "python3 tools/import_sot.py --write",
+    "python3 tools/sync_docs_assets.py --write",
+    "python3 tools/verify_docs.py",
     "cargo fmt --all",
     "cargo check --workspace --all-targets --locked",
     "cargo clippy --workspace --all-targets --locked -- -D warnings",
@@ -124,7 +126,7 @@ def fail(message: str, code: str = "contract_verification_failed") -> None:
 
 
 def read_json(root: Path, relative: Path, label: str) -> dict[str, Any]:
-    path = import_sot.checked_path(root, relative, label)
+    path = sync_docs_assets.checked_path(root, relative, label)
     if not path.is_file():
         fail(f"{label} is missing: {relative.as_posix()}")
     try:
@@ -139,56 +141,16 @@ def read_json(root: Path, relative: Path, label: str) -> dict[str, Any]:
 
 def validate_canonical_import(root: Path) -> int:
     try:
-        _, mappings = import_sot.validate_contract(root)
-        import_sot.validate_sources(root, mappings)
-        import_sot.validate_destination_tree(root, mappings, require_content=True)
-    except import_sot.ContractError as error:
+        _, mappings = sync_docs_assets.validate_contract(root)
+        sync_docs_assets.validate_sources(root, mappings)
+        sync_docs_assets.validate_destination_tree(root, mappings, require_content=True)
+    except sync_docs_assets.ContractError as error:
         fail(str(error))
     return len(mappings)
 
 
-def validate_checksums(root: Path) -> int:
-    checksum_relative = Path("sot/checksums.sha256")
-    checksum_path = import_sot.checked_path(root, checksum_relative, "SOT checksums")
-    if not checksum_path.is_file():
-        fail("SOT checksums file is missing")
-    try:
-        lines = checksum_path.read_text(encoding="utf-8").splitlines()
-    except OSError as error:
-        fail(f"cannot read SOT checksums: {error}")
-    if not lines:
-        fail("SOT checksums file is empty")
-
-    entries: dict[str, str] = {}
-    pattern = re.compile(r"^([0-9a-f]{64})  ([^\s].*)$")
-    for line_number, line in enumerate(lines, start=1):
-        match = pattern.fullmatch(line)
-        if match is None:
-            fail(f"SOT checksum format is invalid at line {line_number}")
-        digest, recorded_path = match.groups()
-        relative = import_sot.relative_path(recorded_path, f"SOT checksum path at line {line_number}")
-        if recorded_path in entries:
-            fail(f"SOT checksum path is duplicated: {recorded_path}")
-        target = import_sot.checked_path(root, Path("sot") / relative, "SOT checksum target")
-        if not target.is_file():
-            fail(f"SOT checksum target is not a regular file: {recorded_path}")
-        if import_sot.digest_file(target) != digest:
-            fail(f"SOT checksum digest drift: {recorded_path}")
-        entries[recorded_path] = digest
-
-    shipped = import_sot.regular_files(root, "sot", required=True)
-    expected = {path.removeprefix("sot/") for path in shipped if path != "sot/checksums.sha256"}
-    recorded = set(entries)
-    if recorded != expected:
-        fail(
-            "SOT checksums do not exactly cover shipped files; "
-            f"missing={sorted(expected - recorded)}, extra={sorted(recorded - expected)}"
-        )
-    return len(entries)
-
-
 def catalog_commands(root: Path) -> set[str]:
-    path = import_sot.checked_path(root, Path("sot/spec/command-catalog.yaml"), "command catalog")
+    path = sync_docs_assets.checked_path(root, Path("docs/spec/command-catalog.yaml"), "command catalog")
     if not path.is_file():
         fail("command catalog is missing")
     text = path.read_text(encoding="utf-8")
@@ -205,7 +167,7 @@ def validate_v1_identifiers(root: Path) -> int:
     adjacency = read_json(root, ADJACENCY_PATH, "Cargo adjacency contract")
     routes = read_json(root, ROUTES_PATH, "command route contract")
     expected_contract_versions = {
-        "canonical import contract": (canonical, import_sot.CONTRACT_VERSION),
+        "canonical import contract": (canonical, sync_docs_assets.CONTRACT_VERSION),
         "Cargo adjacency contract": (adjacency, ADJACENCY_VERSION),
         "command route contract": (routes, ROUTES_VERSION),
     }
@@ -215,13 +177,13 @@ def validate_v1_identifiers(root: Path) -> int:
 
     schema_files = sorted(
         path
-        for path in import_sot.regular_files(root, "sot/schemas", required=True)
+        for path in sync_docs_assets.regular_files(root, "docs/schemas", required=True)
         if path.endswith("-v1.schema.json")
     )
     if not schema_files:
         fail("no v1 JSON schemas were found")
     for relative_name in schema_files:
-        path = import_sot.checked_path(root, Path(relative_name), "schema")
+        path = sync_docs_assets.checked_path(root, Path(relative_name), "schema")
         try:
             schema = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
@@ -233,17 +195,17 @@ def validate_v1_identifiers(root: Path) -> int:
         if schema.get("$id") != expected_id:
             fail(f"schema v1 identifier drift: {relative_name}")
 
-    error_catalog = read_json(root, Path("sot/spec/error-codes.json"), "error catalog")
+    error_catalog = read_json(root, Path("docs/spec/error-codes.json"), "error catalog")
     if error_catalog.get("schema") != "podway.error-catalog/v1":
         fail("error catalog does not declare podway.error-catalog/v1")
     catalog_commands(root)
     preset_files = sorted(
-        path for path in import_sot.regular_files(root, "sot/presets", required=True) if path.endswith(".yaml")
+        path for path in sync_docs_assets.regular_files(root, "docs/presets", required=True) if path.endswith(".yaml")
     )
     if not preset_files:
         fail("no v1 preset files were found")
     for relative_name in preset_files:
-        path = import_sot.checked_path(root, Path(relative_name), "preset")
+        path = sync_docs_assets.checked_path(root, Path(relative_name), "preset")
         text = path.read_text(encoding="utf-8")
         if not re.search(r"^schema: podway\.procedure/v1$", text, flags=re.MULTILINE):
             fail(f"preset does not declare podway.procedure/v1: {relative_name}")
@@ -336,7 +298,7 @@ def internal_dependencies(table: dict[str, Any], known: set[str]) -> set[str]:
 def validate_adjacency(root: Path) -> int:
     crates = load_adjacency_contract(root)
     known = set(CRATE_ORDER)
-    root_manifest = read_toml(import_sot.checked_path(root, Path("Cargo.toml"), "workspace manifest"), "workspace manifest")
+    root_manifest = read_toml(sync_docs_assets.checked_path(root, Path("Cargo.toml"), "workspace manifest"), "workspace manifest")
     workspace = root_manifest.get("workspace")
     if not isinstance(workspace, dict) or not isinstance(workspace.get("members"), list):
         fail("workspace manifest must declare a members list")
@@ -347,7 +309,7 @@ def validate_adjacency(root: Path) -> int:
 
     for crate in crates:
         name = crate["name"]
-        manifest_path = import_sot.checked_path(root, Path(crate["path"]) / "Cargo.toml", f"manifest for {name}")
+        manifest_path = sync_docs_assets.checked_path(root, Path(crate["path"]) / "Cargo.toml", f"manifest for {name}")
         manifest = read_toml(manifest_path, f"manifest for {name}")
         package = manifest.get("package")
         if not isinstance(package, dict) or package.get("name") != name:
@@ -414,7 +376,7 @@ def validate_routes(root: Path) -> int:
         fail(f"command routes do not exactly cover catalog commands; missing={sorted(expected_commands - commands)}")
     return len(commands)
 def validate_makefile_contract(root: Path) -> int:
-    path = import_sot.checked_path(root, MAKEFILE_PATH, "Makefile")
+    path = sync_docs_assets.checked_path(root, MAKEFILE_PATH, "Makefile")
     if not path.is_file():
         fail("Makefile is missing", "makefile_contract_drift")
     try:
@@ -461,9 +423,9 @@ def copy_contracts(source_root: Path, destination_root: Path) -> None:
 
 
 def build_import_fixture(source_root: Path, destination_root: Path) -> None:
-    shutil.copytree(source_root / "sot", destination_root / "sot")
+    shutil.copytree(source_root / "docs", destination_root / "docs")
     copy_contracts(source_root, destination_root)
-    _, mappings = import_sot.validate_contract(destination_root)
+    _, mappings = sync_docs_assets.validate_contract(destination_root)
     for mapping in mappings:
         source = destination_root / mapping["source"]
         destination = destination_root / mapping["destination"]
@@ -492,7 +454,7 @@ def build_adjacency_fixture(source_root: Path, destination_root: Path) -> None:
 def require_known_failure(label: str, operation: Callable[[], object]) -> None:
     try:
         operation()
-    except (VerificationError, import_sot.ContractError):
+    except (VerificationError, sync_docs_assets.ContractError):
         return
     fail(f"known-fail sentinel did not fail: {label}")
 
@@ -520,7 +482,7 @@ def run_sentinels(root: Path) -> list[str]:
 
         route_fixture = temporary / "route-bypass"
         route_fixture.mkdir()
-        shutil.copytree(root / "sot", route_fixture / "sot")
+        shutil.copytree(root / "docs", route_fixture / "docs")
         copy_contracts(root, route_fixture)
         route_path = route_fixture / ROUTES_PATH
         route_contract = json.loads(route_path.read_text(encoding="utf-8"))
@@ -543,7 +505,6 @@ def receipt(mode: str, ok: bool, **details: Any) -> None:
 def production_checks(root: Path) -> dict[str, int]:
     return {
         "canonical_imports": validate_canonical_import(root),
-        "sot_checksums": validate_checksums(root),
         "v1_identifiers": validate_v1_identifiers(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
@@ -566,7 +527,7 @@ def main() -> int:
         if arguments.sentinels or arguments.all:
             details["sentinels"] = run_sentinels(ROOT)
         receipt(selected_mode, True, **details)
-    except (VerificationError, import_sot.ContractError, OSError, tomllib.TOMLDecodeError) as error:
+    except (VerificationError, sync_docs_assets.ContractError, OSError, tomllib.TOMLDecodeError) as error:
         code = error.code if isinstance(error, VerificationError) else "contract_verification_failed"
         receipt(selected_mode, False, error={"code": code, "message": str(error)})
         return 1

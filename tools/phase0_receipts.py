@@ -246,7 +246,7 @@ def canonical_import_mappings(root: Path) -> list[dict[str, str]]:
     )
     if contract["contract_version"] != "podway.canonical-import/v1":
         fail("identifier_drift", "canonical import contract version drift")
-    if contract["generator_version"] != "phase-0a-v1" or contract["owner"] != "sot" or contract["copy_mode"] != "exact":
+    if contract["generator_version"] != "docs-assets-v1" or contract["owner"] != "docs" or contract["copy_mode"] != "exact":
         fail("canonical_import_contract_drift", "canonical import contract ownership or copy mode drift")
 
     mappings: list[dict[str, str]] = []
@@ -262,11 +262,11 @@ def canonical_import_mappings(root: Path) -> list[dict[str, str]]:
         destination = relative_path(mapping["destination"], f"canonical import mapping {index} destination")
         source_name = source.as_posix()
         destination_name = destination.as_posix()
-        if len(source.parts) < 3 or source.parts[0] != "sot" or source.parts[1] not in SOURCE_DIRECTORIES:
-            fail("canonical_import_contract_drift", f"canonical import source is outside imported SOT assets: {source_name}")
+        if len(source.parts) < 3 or source.parts[0] != "docs" or source.parts[1] not in SOURCE_DIRECTORIES:
+            fail("canonical_import_contract_drift", f"canonical import source is outside documentation assets: {source_name}")
         if destination.parts != source.parts[1:]:
             fail("canonical_import_contract_drift", f"canonical import destination does not mirror source: {source_name}")
-        if mapping["copy_mode"] != "exact" or mapping["owner"] != "sot" or mapping["generator_version"] != "phase-0a-v1":
+        if mapping["copy_mode"] != "exact" or mapping["owner"] != "docs" or mapping["generator_version"] != "docs-assets-v1":
             fail("canonical_import_contract_drift", f"canonical import mapping policy drift: {source_name}")
         require_digest(mapping["source_sha256"], f"canonical import mapping {index} digest")
         if source_name in sources or destination_name in destinations:
@@ -277,9 +277,9 @@ def canonical_import_mappings(root: Path) -> list[dict[str, str]]:
 
     expected_sources: set[str] = set()
     for directory in SOURCE_DIRECTORIES:
-        expected_sources.update(regular_files(root, f"sot/{directory}", required=True))
+        expected_sources.update(regular_files(root, f"docs/{directory}", required=True))
     if sources != expected_sources:
-        fail("canonical_import_contract_drift", "canonical import mappings do not exactly cover imported SOT assets")
+        fail("canonical_import_contract_drift", "canonical import mappings do not exactly cover documentation assets")
     return mappings
 
 
@@ -298,7 +298,7 @@ def validate_canonical_import(root: Path) -> int:
         if not source.is_file() or not destination.is_file():
             fail("canonical_import_missing_file", "canonical import source or destination is not a regular file")
         if digest_file(source) != mapping["source_sha256"]:
-            fail("canonical_import_source_digest_drift", f"SOT source digest drift: {mapping['source']}")
+            fail("canonical_import_source_digest_drift", f"documentation source digest drift: {mapping['source']}")
         if digest_file(destination) != mapping["source_sha256"]:
             fail("canonical_import_digest_drift", f"imported asset digest drift: {mapping['destination']}")
     return len(mappings)
@@ -329,7 +329,7 @@ def expected_phase_lock_entries(root: Path, phase: str) -> set[str]:
         return {
             (LOCK_DIRECTORY / "phase-0a-contract-lock.json").as_posix(),
             (LOCK_DIRECTORY / "phase-0b-contract-lock.json").as_posix(),
-            "tools/import_sot.py",
+            "tools/sync_docs_assets.py",
             "tools/verify_contracts.py",
             "tools/phase0_receipts.py",
         }
@@ -686,7 +686,7 @@ def validate_requirement_groups(root: Path, reference: dict[str, Any]) -> int:
         require_unique(values, f"reference requirement group {name}")
         bound.extend(values)
     require_unique(bound, "reference requirement identifiers")
-    traceability = read_text(root, Path("sot/docs/60-quality/62-requirements-traceability.md"), "requirements traceability")
+    traceability = read_text(root, Path("docs/reference/quality/62-requirements-traceability.md"), "requirements traceability")
     source_ids = set(re.findall(r"\b(?:PRD|ARC|DOM|STO|API|SEC|OPS|REL)-[0-9]{3}\b", traceability))
     if source_ids != set(bound):
         fail("requirement_traceability_drift", "reference requirement groups do not exactly bind the traceability matrix")
@@ -1159,7 +1159,7 @@ def existing_handoffs(root: Path, reference: dict[str, Any], phase_lock_digests:
 
 
 def copy_sentinel_root(source_root: Path, temporary_root: Path) -> None:
-    for directory in ("sot", "schemas", "spec", "presets", "contracts"):
+    for directory in ("docs", "schemas", "spec", "presets", "contracts"):
         shutil.copytree(source_root / directory, temporary_root / directory)
     makefile = temporary_root / verify_contracts.MAKEFILE_PATH
     shutil.copy2(source_root / verify_contracts.MAKEFILE_PATH, makefile)

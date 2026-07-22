@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed, one-way import of immutable SOT assets into the repository."""
+"""Synchronize canonical documentation assets into repository-root mirrors."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_PATH = Path("contracts/canonical-import.json")
 SOURCE_DIRECTORIES = ("schemas", "spec", "presets")
 CONTRACT_VERSION = "podway.canonical-import/v1"
-GENERATOR_VERSION = "phase-0a-v1"
+GENERATOR_VERSION = "docs-assets-v1"
 MAPPING_KEYS = {
     "source",
     "destination",
@@ -136,9 +136,9 @@ def validate_contract(root: Path = ROOT) -> tuple[dict[str, Any], list[dict[str,
     if contract["contract_version"] != CONTRACT_VERSION:
         fail("canonical import contract version is not v1")
     if contract["generator_version"] != GENERATOR_VERSION:
-        fail("canonical import generator version is not phase-0a-v1")
-    if contract["owner"] != "sot" or contract["copy_mode"] != "exact":
-        fail("canonical import contract must be owned by sot in exact copy mode")
+        fail(f"canonical import generator version is not {GENERATOR_VERSION}")
+    if contract["owner"] != "docs" or contract["copy_mode"] != "exact":
+        fail("canonical import contract must be owned by docs in exact copy mode")
     raw_mappings = contract["imports"]
     if not isinstance(raw_mappings, list) or not raw_mappings:
         fail("canonical import contract imports must be a non-empty list")
@@ -155,12 +155,12 @@ def validate_contract(root: Path = ROOT) -> tuple[dict[str, Any], list[dict[str,
         source = relative_path(mapping["source"], f"mapping {index} source")
         destination = relative_path(mapping["destination"], f"mapping {index} destination")
         source_parts = source.parts
-        if len(source_parts) < 3 or source_parts[0] != "sot" or source_parts[1] not in SOURCE_DIRECTORIES:
-            fail(f"mapping {index} source is outside imported SOT directories")
+        if len(source_parts) < 3 or source_parts[0] != "docs" or source_parts[1] not in SOURCE_DIRECTORIES:
+            fail(f"mapping {index} source is outside canonical documentation asset directories")
         if destination.parts != source_parts[1:]:
-            fail(f"mapping {index} destination must exactly mirror its SOT-relative path")
-        if mapping["copy_mode"] != "exact" or mapping["owner"] != "sot":
-            fail(f"mapping {index} must be an exact SOT-owned copy")
+            fail(f"mapping {index} destination must exactly mirror its docs-relative path")
+        if mapping["copy_mode"] != "exact" or mapping["owner"] != "docs":
+            fail(f"mapping {index} must be an exact docs-owned copy")
         if mapping["generator_version"] != GENERATOR_VERSION:
             fail(f"mapping {index} has an unsupported generator version")
         if not len(mapping["source_sha256"]) == 64 or any(
@@ -177,23 +177,23 @@ def validate_contract(root: Path = ROOT) -> tuple[dict[str, Any], list[dict[str,
 
     shipped = set()
     for directory in SOURCE_DIRECTORIES:
-        shipped.update(regular_files(root, f"sot/{directory}", required=True))
+        shipped.update(regular_files(root, f"docs/{directory}", required=True))
     if sources != shipped:
         missing = sorted(shipped - sources)
         extra = sorted(sources - shipped)
-        fail(f"canonical mappings do not exactly cover shipped SOT files; missing={missing}, extra={extra}")
+        fail(f"canonical mappings do not exactly cover documentation assets; missing={missing}, extra={extra}")
     return contract, mappings
 
 
 def validate_sources(root: Path, mappings: list[dict[str, str]]) -> None:
     for mapping in mappings:
         source_relative = relative_path(mapping["source"], "mapping source")
-        source = checked_path(root, source_relative, "SOT source")
+        source = checked_path(root, source_relative, "documentation source")
         if not source.is_file():
-            fail(f"SOT source is not a regular file: {mapping['source']}")
+            fail(f"documentation source is not a regular file: {mapping['source']}")
         actual_digest = digest_file(source)
         if actual_digest != mapping["source_sha256"]:
-            fail(f"SOT source digest drift: {mapping['source']}")
+            fail(f"documentation source digest drift: {mapping['source']}")
 
 
 def validate_destination_tree(root: Path, mappings: list[dict[str, str]], require_content: bool) -> None:
@@ -251,7 +251,7 @@ def write(root: Path = ROOT) -> tuple[int, int]:
     validate_destination_tree(root, mappings, require_content=False)
     changed = 0
     for mapping in mappings:
-        source = checked_path(root, relative_path(mapping["source"], "mapping source"), "SOT source")
+        source = checked_path(root, relative_path(mapping["source"], "mapping source"), "documentation source")
         destination_relative = relative_path(mapping["destination"], "mapping destination")
         destination = checked_path(root, destination_relative, "destination")
         if destination.exists() and not destination.is_file():
@@ -272,7 +272,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="verify imported assets without writing")
-    mode.add_argument("--write", action="store_true", help="atomically import SOT assets into destination directories")
+    mode.add_argument("--write", action="store_true", help="atomically synchronize canonical documentation assets")
     arguments = parser.parse_args()
     selected_mode = "check" if arguments.check else "write"
     try:

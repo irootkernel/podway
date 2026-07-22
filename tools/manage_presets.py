@@ -16,7 +16,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PRESET_DIRECTORY = ROOT / "sot/presets"
+DEFAULT_PRESET_DIRECTORY = ROOT / "docs/presets"
 MAX_PROCEDURE_BYTES = 1_048_576
 MAX_VALIDATOR_OUTPUT_BYTES = 4 * 1_048_576
 VALIDATOR_TIMEOUT_SECONDS = 30

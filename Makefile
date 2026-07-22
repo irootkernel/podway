@@ -8,12 +8,12 @@ endif
 RUST_TOOLCHAIN_BIN := $(dir $(RUST_TOOLCHAIN_CARGO))
 RUST_TOOLCHAIN_ENV = PATH="$(RUST_TOOLCHAIN_BIN):$${PATH}"
 DIST_DIR ?= dist
-PRESET_DIR ?= sot/presets
+PRESET_DIR ?= docs/presets
 PRESET_VALIDATOR ?= target/debug/podway
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
 .PHONY: test test-prepare test-prepare-core test-unit test-int test-fuzzing test-e2e \
-	toolchain codegen format vet lint architecture preset-validator \
+	toolchain sync-docs-assets format vet lint architecture preset-validator \
 	preset-create preset-import preset-tool-test dist
 
 toolchain:
@@ -32,14 +32,14 @@ test-prepare:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/phase0_receipts.py --check
 
 test-prepare-core: toolchain
-	$(MAKE) codegen
+	$(MAKE) sync-docs-assets
 	$(MAKE) format
 	$(MAKE) vet
 	$(MAKE) lint
 	$(MAKE) architecture
 
-codegen:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/import_sot.py --write
+sync-docs-assets:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/sync_docs_assets.py --write
 
 format:
 	$(RUST_TOOLCHAIN_ENV) cargo fmt --all
@@ -52,6 +52,7 @@ lint:
 	$(RUST_TOOLCHAIN_ENV) cargo deny check
 
 architecture:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py

@@ -101,7 +101,7 @@ def validate_acceptance_matrix() -> tuple[int, int]:
     }
     if len(criteria) != len(source_bullets):
         fail(
-            "product acceptance matrix does not bind every mandatory SOT bullet: "
+            "product acceptance matrix does not bind every mandatory acceptance bullet: "
             f"criteria={len(criteria)}, bullets={len(source_bullets)}"
         )
     expected_ids = [f"PAC-{number:03d}" for number in range(1, len(criteria) + 1)]
@@ -118,7 +118,7 @@ def validate_acceptance_matrix() -> tuple[int, int]:
         if not isinstance(line, int) or line < 1 or line > len(source_lines) or line in seen_lines:
             fail(f"{expected_id} has an invalid or duplicate source line")
         if not isinstance(text, str) or source_lines[line - 1] != f"- {text}":
-            fail(f"{expected_id} text does not match its bound SOT bullet")
+            fail(f"{expected_id} text does not match its bound acceptance bullet")
         seen_lines.add(line)
         proof = criterion.get("proof")
         if not isinstance(proof, dict):
@@ -143,7 +143,7 @@ def validate_acceptance_matrix() -> tuple[int, int]:
         else:
             fail(f"{expected_id} has unsupported proof kind: {kind}")
     if seen_lines != set(source_bullets):
-        fail("product acceptance matrix source lines do not exactly cover every mandatory SOT bullet")
+        fail("product acceptance matrix source lines do not exactly cover every mandatory acceptance bullet")
 
     source_files = matrix.get("source_files")
     if not isinstance(source_files, dict) or set(source_files) != proof_source_files:

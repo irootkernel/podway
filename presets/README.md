@@ -12,7 +12,7 @@ The implementation embeds these exact files and validates them through the same 
 The v0.1 release catalog remains exactly these four presets. Repository contributors
 may prepare a future candidate with `make preset-create` or admit an existing YAML
 procedure with `make preset-import`. Both commands validate through the real Podway
-binary, write only to the canonical `sot/presets/` source directory by default, and
+binary, write only to the canonical `docs/presets/` source directory by default, and
 refuse to replace an existing file. Creating or importing a file does not add it to
-the shipped catalog: the contributor must still complete the SOT, embedded catalog,
-documentation, and test changes listed in the built-in preset specification.
+the shipped catalog: the contributor must still complete the canonical documentation,
+embedded catalog, and test changes listed in the built-in preset specification.

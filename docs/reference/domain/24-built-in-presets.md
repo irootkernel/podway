@@ -120,7 +120,7 @@ The v0.1 shipped catalog is fixed at exactly `sw-dev`, `bug-fix`, `docs-only`, a
 they do not modify the public CLI catalog or make a fifth preset shippable by
 themselves.
 
-Create a validated scaffold directly in `sot/presets/`:
+Create a validated scaffold directly in `docs/presets/`:
 
 ```sh
 make preset-create \
@@ -138,7 +138,7 @@ make preset-import PRESET_FILE=/path/to/release-check.yaml
 Both targets use the repository's pinned Rust toolchain to build the real `podway`
 validator, reject invalid or oversized input, and never overwrite an existing preset.
 `PRESET_DIR` may point to a temporary directory for evaluation; its default is the
-canonical `sot/presets/` directory.
+canonical `docs/presets/` directory.
 
 A new built-in preset requires:
 

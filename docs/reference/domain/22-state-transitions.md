@@ -255,7 +255,7 @@ It preserves workspace identity, schema metadata, tracked files, and daemon inst
 
 Reset is destructive and requires confirmation in interactive mode or `--yes` in non-interactive mode.
 
-`workspace.reset_all`, selected by `podway reset --all --force`, follows the filesystem-marker recovery protocol in [Recovery, Retention, and Maintenance](../40-storage/42-recovery-retention-and-maintenance.md). It is a separate canonical command because it can operate when the SQLite database is unreadable and it recreates workspace runtime state rather than deleting only a valid session.
+`workspace.reset_all`, selected by `podway reset --all --force`, follows the filesystem-marker recovery protocol in [Recovery, Retention, and Maintenance](../storage/42-recovery-retention-and-maintenance.md). It is a separate canonical command because it can operate when the SQLite database is unreadable and it recreates workspace runtime state rather than deleting only a valid session.
 
 ## Dry run
 

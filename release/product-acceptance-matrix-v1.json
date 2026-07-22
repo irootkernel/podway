@@ -1627,7 +1627,7 @@
     }
   ],
   "source": {
-    "path": "sot/docs/60-quality/61-product-acceptance.md"
+    "path": "docs/reference/quality/61-product-acceptance.md"
   },
   "source_files": {
     "crates/podway-cli/tests/e2e_release_archive.rs": "b27c53548d301d39769880f18f0ec8da14bc7c95b22b1da9ff9da321da1c2555",

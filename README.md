@@ -1,62 +1,140 @@
 # Podway
 
-Podway is a local, worktree-scoped procedure runner for durable software-delivery workflows.
+Podway is a local procedure guard for one task in one Git worktree. It keeps the
+current task on an explicit sequence, shows what is missing, and makes retry and
+rework visible instead of leaving them in shell history or chat context.
 
-## Status
+Podway does not run your build commands, edit Git state, contact a remote service,
+or store the contents of your artifacts. You do the work; Podway keeps the process
+honest.
 
-The workspace is at **v0.1.0** and implements the frozen **schema v1** interfaces. The
-[`sot/`](sot/) directory is the authoritative source of truth for product behavior,
-contracts, and compatibility requirements.
+> [!IMPORTANT]
+> Podway 0.1.0 is a pre-release for native Apple Silicon macOS only. Its release
+> archive is unsigned and not notarized.
 
-## Platform and safety boundary
+## Install
 
-Podway release artifacts target only untranslated native Apple Silicon macOS
-(`aarch64-apple-darwin`, `arm64`, host architecture `arm64`, Mach-O architecture
-`arm64`). Cross-built, relabeled, translated, and universal/fat binaries cannot
-satisfy the supported platform contract. A revision is release-ready when the
-repository-root `make test` command succeeds locally. Signing and notarization
-status describe a published artifact and do not add another release gate.
+Podway ships two matching binaries: `podway`, the CLI, and `podwayd`, the local
+daemon. Extract the release archive and install both on your `PATH`:
 
-The product is intentionally local and constrained:
+```bash
+mkdir -p "$HOME/.local/bin"
+install -m 755 podway-0.1.0-aarch64-apple-darwin/bin/podway "$HOME/.local/bin/podway"
+install -m 755 podway-0.1.0-aarch64-apple-darwin/bin/podwayd "$HOME/.local/bin/podwayd"
+export PATH="$HOME/.local/bin:$PATH"
 
-- It performs no network I/O.
-- It never executes arbitrary commands or provides a command runner.
-- It exposes no Git mutation APIs and never mutates Git state.
+podway daemon install --daemon-path "$HOME/.local/bin/podwayd"
+podway daemon status
+```
 
-## Development
+The daemon is installed as a per-user LaunchAgent and starts at login. See the
+[release notes](RELEASE_NOTES.md) for compatibility and signing details.
 
-Use the pinned Rust 1.97.1 toolchain in [`rust-toolchain.toml`](rust-toolchain.toml).
-The root Makefile resolves that exact rustup toolchain for product Cargo, rustc,
-and verification subprocesses, even when another Rust installation appears earlier
-in the invoking shell's `PATH`. The fuzzing-only gate uses the separately pinned
-`nightly-2026-07-17` toolchain and `cargo-fuzz 0.13.2`; neither is used to build the
-product binaries. `Cargo.lock` is committed because Podway is an application. The
-repository's canonical verification entry point is the root `Makefile`:
+## Quick start
 
-- `make test` runs prepare, unit, integration, bounded fuzzing, and end-to-end
-  verification in order.
-- `make test-prepare` synchronizes generated SOT assets, rewrites Rust formatting,
-  and runs vet, lint, dependency, architecture, and contract guardrails.
-- `make test-unit` runs narrow library, binary, and documentation tests.
-- `make test-int` runs component-integrated scenarios with deterministic fixtures
-  and test doubles, without launching Podway product binaries.
-- `make test-fuzzing` runs the frame decoder and request-envelope fuzz targets with
-  fixed seeds and fixed run counts in disposable corpora.
-- `make test-e2e` builds and launches the real `podway` and `podwayd` binaries and
-  includes the ignored production-vertical scenarios.
-- `make preset-create PRESET_ID=... PRESET_NAME=... PRESET_DESCRIPTION=...` creates
-  a validated built-in preset candidate for repository development.
-- `make preset-import PRESET_FILE=/path/to/file.yaml` validates and imports an
-  existing candidate without replacing files. These are contributor tools, not
-  public `podway` commands; the v0.1 shipped catalog remains fixed at four presets.
-- `make dist` reruns `make test`, builds both release binaries, and writes the
-  deterministic archive, SHA-256 checksum, and provenance document under `dist/`.
+Run Podway from inside a Git worktree:
 
-The prepare target intentionally modifies generated files and formatting. Install
-`cargo-deny` before running the complete suite. Release tags and archives must use
-the resulting formatted tree; later source changes require another complete run.
-Distribution requires a clean native Apple Silicon working tree.
+```bash
+podway init
+podway preset list
+podway start --preset sw-dev --task "add bounded retry backoff"
+podway next
+```
 
-See the [`docs/` index](docs/README.md) for the implementation/operator guide and
-the boundary between those guides and the normative SOT. The release policy is in
-[`docs/release-readiness.md`](docs/release-readiness.md).
+`podway next` describes the active stage, lists every missing item, and suggests
+the exact Podway commands that satisfy it. Record those items after doing the
+corresponding work, then advance:
+
+```bash
+podway set goal "Retry transient writes with a bounded exponential delay."
+podway check acceptance-criteria-defined
+podway complete
+podway next
+```
+
+Continue until the final stage completes. Inspect the session at any time with:
+
+```bash
+podway status
+podway status --verbose
+```
+
+When the completed task no longer needs its local history, prepare the worktree
+for another task:
+
+```bash
+podway reset --yes
+```
+
+## Choose a procedure
+
+Podway includes four procedures:
+
+| Preset | Use it for |
+|---|---|
+| `sw-dev` | Feature and implementation work |
+| `bug-fix` | Reproduction, diagnosis, repair, and regression coverage |
+| `docs-only` | Documentation changes with source and link validation |
+| `analysis` | Investigation that ends in supported conclusions |
+
+Inspect a preset before starting it:
+
+```bash
+podway preset explain bug-fix
+podway preset show bug-fix
+```
+
+You can also start from a worktree-local YAML procedure:
+
+```bash
+podway procedure validate .podway/procedures/custom.yaml
+podway start --procedure .podway/procedures/custom.yaml --task "review queue behavior"
+```
+
+## Rework and blockers
+
+- `podway retry --reason "..."` starts a clean attempt of the current stage.
+- `podway return --to <stage> --reason "..."` returns to an earlier stage and
+  marks reached downstream stages for redo.
+- `podway block --reason "..."` prevents completion while an external issue is
+  unresolved; `podway unblock --all` resumes the attempt.
+- `podway reopen --to <stage> --reason "..."` reopens a completed session before
+  it is reset.
+
+Use `--dry-run` on destructive transitions that support it to preview their
+effect.
+
+## Automation
+
+Add `--json` to receive one versioned JSON object instead of human-readable text:
+
+```bash
+podway status --json
+podway next --json
+```
+
+Automation should use JSON fields and stable error codes, not parse text output.
+Mutations support idempotency keys, revision preconditions, and detached job
+admission for reliable local integrations.
+
+## Safety and local data
+
+Podway trusts processes running as the same operating-system user. It is not a
+multi-user security boundary. Task state lives in the worktree under
+`.podway/runtime/`; deleting the worktree deletes that state. Podway performs no
+network I/O and exposes no Git mutation or arbitrary command-execution API.
+
+## Uninstall
+
+```bash
+podway daemon uninstall --yes
+```
+
+Then remove both binaries using the method that installed them. Uninstalling the
+daemon does not delete `.podway/` directories in existing worktrees.
+
+## Contributing
+
+The [contributor documentation](docs/README.md) explains the project goals,
+repository structure, architecture, implementation rules, detailed contracts,
+and completed roadmap.
