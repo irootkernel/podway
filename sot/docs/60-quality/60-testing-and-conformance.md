@@ -238,7 +238,15 @@ targets sequentially:
   dependency checks, architecture guardrails, quality mappings, and contracts;
 - `test-unit`: narrow library, binary, and documentation tests;
 - `test-int`: multi-component fixture scenarios without product binaries;
+- `test-fuzzing`: fixed-run, fixed-seed frame decoder and request schema
+  deserializer fuzzing in disposable corpora;
 - `test-e2e`: real `podway` and `podwayd` binary scenarios, including all four presets.
+
+`test-fuzzing` uses `nightly-2026-07-17` and `cargo-fuzz 0.13.2` only for
+sanitizer and coverage instrumentation. Product compilation and all non-fuzz test
+targets remain pinned to Rust 1.97.1. The bounded release-gate campaigns do not
+replace longer exploratory fuzzing during development; any discovered crash input
+becomes a deterministic regression test or retained corpus seed.
 
 All required crash, migration, protocol, service, and acceptance scenarios are
 included in those targets. There is no hosted-CI or separate release lane

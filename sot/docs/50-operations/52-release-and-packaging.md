@@ -154,8 +154,9 @@ Users may delete `.podway/runtime/` or the whole worktree when task state is no 
 ## Release readiness
 
 The repository-root `make test` command is the sole required release-readiness
-gate. It runs static preparation, unit tests, integration scenarios, and
-real-binary end-to-end scenarios sequentially. The preparation target includes
+gate. It runs static preparation, unit tests, integration scenarios, bounded
+protocol fuzzing, and real-binary end-to-end scenarios sequentially. The
+preparation target includes
 dependency/license review, architecture guardrails, product-acceptance mapping,
 crash-boundary mapping, and contract validation.
 

@@ -12,7 +12,7 @@ PRESET_DIR ?= sot/presets
 PRESET_VALIDATOR ?= target/debug/podway
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
-.PHONY: test test-prepare test-prepare-core test-unit test-int test-e2e \
+.PHONY: test test-prepare test-prepare-core test-unit test-int test-fuzzing test-e2e \
 	toolchain codegen format vet lint architecture preset-validator \
 	preset-create preset-import preset-tool-test dist
 
@@ -24,6 +24,7 @@ test:
 	$(MAKE) test-prepare
 	$(MAKE) test-unit
 	$(MAKE) test-int
+	$(MAKE) test-fuzzing
 	$(MAKE) test-e2e
 
 test-prepare:
@@ -90,6 +91,9 @@ test-unit:
 test-int:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'int_*' --locked
+
+test-fuzzing:
+	python3 tools/run_fuzzing.py
 
 test-e2e:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check

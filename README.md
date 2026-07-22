@@ -26,18 +26,22 @@ The product is intentionally local and constrained:
 ## Development
 
 Use the pinned Rust 1.97.1 toolchain in [`rust-toolchain.toml`](rust-toolchain.toml).
-The root Makefile resolves that exact rustup toolchain for Cargo, rustc, and all
-verification subprocesses, even when another Rust installation appears earlier in
-the invoking shell's `PATH`. `Cargo.lock` is committed because Podway is an
-application. The repository's canonical verification entry point is the root
-`Makefile`:
+The root Makefile resolves that exact rustup toolchain for product Cargo, rustc,
+and verification subprocesses, even when another Rust installation appears earlier
+in the invoking shell's `PATH`. The fuzzing-only gate uses the separately pinned
+`nightly-2026-07-17` toolchain and `cargo-fuzz 0.13.2`; neither is used to build the
+product binaries. `Cargo.lock` is committed because Podway is an application. The
+repository's canonical verification entry point is the root `Makefile`:
 
-- `make test` runs prepare, unit, integration, and end-to-end verification in order.
+- `make test` runs prepare, unit, integration, bounded fuzzing, and end-to-end
+  verification in order.
 - `make test-prepare` synchronizes generated SOT assets, rewrites Rust formatting,
   and runs vet, lint, dependency, architecture, and contract guardrails.
 - `make test-unit` runs narrow library, binary, and documentation tests.
 - `make test-int` runs component-integrated scenarios with deterministic fixtures
   and test doubles, without launching Podway product binaries.
+- `make test-fuzzing` runs the frame decoder and request-envelope fuzz targets with
+  fixed seeds and fixed run counts in disposable corpora.
 - `make test-e2e` builds and launches the real `podway` and `podwayd` binaries and
   includes the ignored production-vertical scenarios.
 - `make preset-create PRESET_ID=... PRESET_NAME=... PRESET_DESCRIPTION=...` creates

@@ -3,11 +3,12 @@
 Podway uses one required release gate: run `make test` locally from the repository root.
 The revision is release-ready when that command exits successfully. The command runs,
 in order, generated-source synchronization and static checks, unit tests, integration
-tests, and real-binary end-to-end tests.
+tests, bounded protocol fuzzing, and real-binary end-to-end tests.
 
-The gate requires rustup and resolves the exact Rust 1.97.1 toolchain for every Cargo,
-rustc, and Python-launched verification process. A Homebrew or system Rust earlier in
-the caller's `PATH` is not used by the gate.
+The gate requires rustup and resolves exact toolchains. Rust 1.97.1 builds and tests
+the product. The isolated fuzzing target uses `nightly-2026-07-17` and
+`cargo-fuzz 0.13.2` for sanitizer and coverage instrumentation only. A Homebrew or
+system Rust earlier in the caller's `PATH` is not used by either path.
 
 The gate is intentionally local. GitHub Actions, a hosted release pipeline,
 independent signatures, approval quorums, holdout runs, qualification archives, and
@@ -24,6 +25,7 @@ formatted tree, not from stale pre-format bytes.
 | `make test-prepare` | SOT import, formatting, vet, lint, dependency policy, architecture, product-acceptance mapping, crash-boundary mapping, and contract checks |
 | `make test-unit` | Narrow library, binary, and documentation tests |
 | `make test-int` | Multi-component scenarios using fixtures and test doubles without product binaries |
+| `make test-fuzzing` | Fixed-run, fixed-seed frame-decoder and request-envelope fuzzing in disposable corpora |
 | `make test-e2e` | User scenarios using the actual `podway` and `podwayd` binaries |
 
 The architecture portion also exercises the contributor-only preset tooling against

@@ -127,6 +127,7 @@ GATE_TIMEOUT_SECONDS = (
     30 * 60,
     30 * 60,
     60 * 60,
+    30 * 60,
     60 * 60,
     5 * 60,
     5 * 60,
@@ -156,9 +157,10 @@ GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("08-unit", ("cargo", "test", "--workspace", "--lib", "--bins", "--locked")),
     ("09-doc", ("cargo", "test", "--workspace", "--doc", "--locked")),
     ("10-integration", ("cargo", "test", "--workspace", "--test", "int_*", "--locked")),
-    ("11-e2e", ("python3", "tools/run_e2e.py")),
-    ("12-verify-contracts", ("python3", "tools/verify_contracts.py", "--all")),
-    ("13-verify-verification-runner", ("python3", "tools/verify_verification_runner.py")),
+    ("11-fuzzing", ("python3", "tools/run_fuzzing.py")),
+    ("12-e2e", ("python3", "tools/run_e2e.py")),
+    ("13-verify-contracts", ("python3", "tools/verify_contracts.py", "--all")),
+    ("14-verify-verification-runner", ("python3", "tools/verify_verification_runner.py")),
 )
 
 

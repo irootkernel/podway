@@ -19,8 +19,8 @@ behavior remains in the SOT documents and machine-readable contracts.
 ## Release readiness
 
 The repository has one required release gate: `make test`. It runs
-`test-prepare`, `test-unit`, `test-int`, and `test-e2e` sequentially. A revision is
-release-ready when this command succeeds locally. No independent signature,
+`test-prepare`, `test-unit`, `test-int`, `test-fuzzing`, and `test-e2e`
+sequentially. A revision is release-ready when this command succeeds locally. No independent signature,
 approval quorum, holdout run, qualification archive, or attestation bundle is
 required.
 

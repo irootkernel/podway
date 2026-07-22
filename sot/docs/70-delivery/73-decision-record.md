@@ -39,7 +39,7 @@
 35. Gate S S1 contains only derivative SOT edits that implement the recorded S0 baseline.
 36. Gate S S2 validates before emitting checksums as its final action, and Gate S S3 completes read-only acceptance before any product workspace is created.
 37. Gate S covers Phases 0 through 8; Phase 8 closes through the repository-local release gate.
-38. The repository-root `make test` command is the sole required release-readiness gate and runs preparation, unit, integration, and actual-binary end-to-end targets sequentially.
+38. The repository-root `make test` command is the sole required release-readiness gate and runs preparation, unit, integration, bounded protocol fuzzing, and actual-binary end-to-end targets sequentially.
 
 ## Intentionally deferred capabilities
 

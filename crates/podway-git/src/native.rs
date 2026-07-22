@@ -32,7 +32,7 @@ static LAYOUT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 // Retained candidate descriptors are capped well below the selector byte bound.
 const MAX_DISCOVERY_CANDIDATES: usize = MAX_SELECTOR_COMPONENT_BYTES_V1 / 64;
 #[cfg(test)]
-static DISCOVERY_MARKER_CREATION_TARGET: Mutex<Option<PathBuf>> = Mutex::new(None);
+static DISCOVERY_MARKER_CREATION_TARGET: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 #[cfg(all(test, target_os = "linux"))]
 static REGULAR_FILE_FIFO_REPLACEMENT_TARGET: Mutex<Option<PathBuf>> = Mutex::new(None);
 #[cfg(test)]
@@ -83,11 +83,20 @@ static WORKSPACE_IGNORE_PRE_EXCHANGE_FAILURE: Mutex<Option<WorkspaceIgnorePreExc
 static WORKSPACE_IGNORE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
-fn create_discovery_marker_for_test() {
-    let target = DISCOVERY_MARKER_CREATION_TARGET
-        .lock()
-        .expect("discovery test hook lock")
-        .take();
+fn create_discovery_marker_for_test(discovered_root: &Path) {
+    let target = {
+        let mut configured = DISCOVERY_MARKER_CREATION_TARGET
+            .lock()
+            .expect("discovery test hook lock");
+        if configured
+            .as_ref()
+            .is_some_and(|(expected_root, _)| expected_root == discovered_root)
+        {
+            configured.take().map(|(_, target)| target)
+        } else {
+            None
+        }
+    };
     if let Some(target) = target {
         fs::create_dir(&target).expect("create nearer Git marker");
     }
@@ -1877,7 +1886,7 @@ fn discover_main_worktree(
     )?;
 
     #[cfg(test)]
-    create_discovery_marker_for_test();
+    create_discovery_marker_for_test(root.path());
 
     Ok(DiscoveredLayout {
         worktree_root: root,
@@ -2016,7 +2025,7 @@ fn discover_linked_worktree(
     )?;
 
     #[cfg(test)]
-    create_discovery_marker_for_test();
+    create_discovery_marker_for_test(root.path());
     Ok(DiscoveredLayout {
         worktree_root: root,
         git_marker: GitMarker::File(marker),
@@ -2884,11 +2893,12 @@ mod tests {
         let child = outer.join("child");
         create_main(&outer);
         fs::create_dir_all(&child).expect("candidate directory");
+        let outer = fs::canonicalize(&outer).expect("canonical outer directory");
         let child = fs::canonicalize(&child).expect("canonical candidate directory");
 
         *DISCOVERY_MARKER_CREATION_TARGET
             .lock()
-            .expect("discovery test hook lock") = Some(child.join(".git"));
+            .expect("discovery test hook lock") = Some((outer, child.join(".git")));
         let layout = discover_worktree(child).expect("outer worktree discovery");
         assert!(matches!(
             layout.validate_resolution(),

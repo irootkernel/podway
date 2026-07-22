@@ -26,6 +26,7 @@ REQUIRED_MAKE_TARGETS = (
     "test-prepare",
     "test-unit",
     "test-int",
+    "test-fuzzing",
     "test-e2e",
     "preset-create",
     "preset-import",
@@ -36,6 +37,7 @@ REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) test-prepare",
     "$(MAKE) test-unit",
     "$(MAKE) test-int",
+    "$(MAKE) test-fuzzing",
     "$(MAKE) test-e2e",
 )
 REQUIRED_PREPARE_COMMANDS = (
@@ -431,13 +433,14 @@ def validate_makefile_contract(root: Path) -> int:
         fail("Makefile test target has no recipe", "makefile_contract_drift")
     commands = tuple(line.strip() for line in test_recipe.group(1).splitlines())
     if commands != REQUIRED_TEST_SEQUENCE:
-        fail("Makefile test target does not run prepare, unit, int, and e2e sequentially", "makefile_contract_drift")
+        fail("Makefile test target does not run prepare, unit, int, fuzzing, and e2e sequentially", "makefile_contract_drift")
     missing_commands = [command for command in REQUIRED_PREPARE_COMMANDS if command not in text]
     if missing_commands:
         fail(f"Makefile omits required prepare commands: {missing_commands}", "makefile_contract_drift")
     for target, command in (
         ("preset-create", "tools/manage_presets.py create"),
         ("preset-import", "tools/manage_presets.py import"),
+        ("test-fuzzing", "python3 tools/run_fuzzing.py"),
     ):
         recipe = re.search(rf"^{target}\s*:[^\n]*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
         if recipe is None or command not in recipe.group(1):

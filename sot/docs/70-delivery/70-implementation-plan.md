@@ -190,6 +190,8 @@ Deliverables:
   dependency review, architecture guardrails, quality mappings, and contracts;
 - `make test-unit` for narrow tests;
 - `make test-int` for multi-component scenarios and deterministic fixtures;
+- `make test-fuzzing` for bounded frame-decoder and request-envelope fuzzing with
+  fixed seeds and run counts;
 - `make test-e2e` for actual-binary user scenarios;
 - distribution layout, checksums, release notes, and install guide;
 - automated migration coverage proving that `schema-0`/uninitialized
