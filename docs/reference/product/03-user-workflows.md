@@ -40,7 +40,7 @@ Typical `next` output identifies the active stage, its instructions, missing req
 
 ```bash
 podway set goal "Retry transient writes with a bounded exponential delay."
-podway check acceptance-criteria-defined
+podway add acceptance-criteria "Transient write failures retry with bounded exponential backoff."
 podway complete
 ```
 
@@ -51,7 +51,7 @@ The next stage becomes active only after all required items are satisfied and no
 ```bash
 podway start --preset bug-fix --task "fix duplicate login session creation"
 podway next
-podway check reproduced
+podway check baseline-established
 podway set expected-behavior "A successful login creates exactly one session."
 podway set actual-behavior "Two sessions may be created under concurrent callbacks."
 podway attach reproduction-reference tests/login_race.rs

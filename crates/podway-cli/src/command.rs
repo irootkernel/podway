@@ -3069,7 +3069,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev --task 'add retry backoff'\n  podway status --json\n  podway next"
         }
         "workflow" => {
-            "Workflow:\n  podway start --preset sw-dev --task 'implement feature'\n  podway next\n  podway check reproduced\n  podway complete"
+            "Workflow:\n  podway start --preset sw-dev --task 'implement feature'\n  podway next\n  podway set goal 'Implement the requested feature.'\n  podway add acceptance-criteria 'The requested behavior is verified.'\n  podway complete"
         }
         "rework" => {
             "Rework:\n  podway return --to implement --reason 'review found a gap' --dry-run\n  podway reopen --to implement --reason 'follow-up'"
@@ -3084,7 +3084,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Daemon lifecycle grammar:\n  podway daemon status\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
         }
         "artifacts" => {
-            "Artifacts:\n  podway attach report report.md --media-type text/markdown\n  podway attach report --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
+            "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
         }
         "help" => "Usage:\n  podway help [<route>]\n\nExample:\n  podway help session.start",
         "version" => "Usage:\n  podway version\n\nExample:\n  podway version",
@@ -3169,9 +3169,11 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "workspace.reset_all" => {
             "Usage:\n  podway reset --all --force --yes\n\nExample:\n  podway reset --all --force --yes"
         }
-        "item.check" => "Usage:\n  podway check <item-id>\n\nExample:\n  podway check reproduced",
+        "item.check" => {
+            "Usage:\n  podway check <item-id>\n\nExample:\n  podway check baseline-established"
+        }
         "item.uncheck" => {
-            "Usage:\n  podway uncheck <item-id>\n\nExample:\n  podway uncheck reproduced"
+            "Usage:\n  podway uncheck <item-id>\n\nExample:\n  podway uncheck baseline-established"
         }
         "item.set" => {
             "Usage:\n  podway set <item-id> (<value> | --stdin)\n\nExample:\n  podway set implementation-summary 'completed work'"
@@ -3183,9 +3185,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway remove <item-id> <value> [--ignore-missing]\n\nExample:\n  podway remove affected-components daemon"
         }
         "item.attach" => {
-            "Usage:\n  podway attach <item-id> (<path> [--media-type <type>] | --reference <ref> --digest <sha256> --size <bytes> --media-type <type>)\n\nExample:\n  podway attach report report.md --media-type text/markdown"
+            "Usage:\n  podway attach <item-id> (<path> [--media-type <type>] | --reference <ref> --digest <sha256> --size <bytes> --media-type <type>)\n\nExample:\n  podway attach verification-reference report.md --media-type text/markdown"
         }
-        "item.clear" => "Usage:\n  podway clear <item-id>\n\nExample:\n  podway clear notes",
+        "item.clear" => "Usage:\n  podway clear <item-id>\n\nExample:\n  podway clear constraints",
         "job.list" => {
             "Usage:\n  podway job list [--state <queued|running|succeeded|failed|cancelled>]\n\nExample:\n  podway job list --state queued"
         }

@@ -47,7 +47,7 @@ corresponding work, then advance:
 
 ```bash
 podway set goal "Retry transient writes with a bounded exponential delay."
-podway check acceptance-criteria-defined
+podway add acceptance-criteria "Transient write failures retry with bounded exponential backoff."
 podway complete
 podway next
 ```
