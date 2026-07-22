@@ -1,8 +1,7 @@
 # ADR-0011: Use the local Makefile test suite as the release gate
 
-## Status
-
-Accepted.
+- Status: Accepted
+- Date: 2026-07-22
 
 ## Context
 

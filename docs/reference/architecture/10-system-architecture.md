@@ -204,18 +204,16 @@ Reads do not enter the write queue. Callers that require a quiescent view use `-
 
 ```text
 podway-core
-   ^
-   |
-podway-config     podway-protocol
-   ^                    ^
-   |                    |
-podway-store      podway-git      podway-service
-        \             |             /
-         \            |            /
-              podway-daemon
-                    ^
-                    |
-                podway-cli
+  ^-- podway-config <-- podway-presets
+  ^-- podway-protocol
+  ^-- podway-store
+  ^-- podway-git
+  ^-- podway-service
+
+podway-config + podway-protocol + podway-presets
+  + podway-store + podway-git + podway-service
+  -> podway-daemon
+  -> podway-cli
 ```
 
 `podway-core` depends on no infrastructure crate. Infrastructure crates may depend on core types, but core MUST NOT depend on them.

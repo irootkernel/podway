@@ -49,6 +49,8 @@ Default rotation:
 
 A logging failure must not corrupt task state. Sink failures and dropped records are accounted internally; daemon status has no logging-warning field.
 
+The LaunchAgent also directs standard output and standard error to `podwayd.log`, so launchd and the rotating sink can hold separate descriptors for that path. After rotation, launchd-originated output may continue in an older file until the service restarts; v0.1.0 has no separate bootstrap log.
+
 ## Daemon status
 
 `podway daemon status --json` reports:

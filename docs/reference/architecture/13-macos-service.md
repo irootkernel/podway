@@ -138,6 +138,8 @@ Defaults:
 
 `podway daemon logs` prints the resolved log path and recent content. `--follow` streams appended lines.
 
+The LaunchAgent sends both standard output and standard error to the same `podwayd.log` path used by the rotating daemon sink. There is no separate bootstrap log in v0.1.0; after sink rotation, launchd may retain an older file descriptor until the service restarts.
+
 ## Upgrade behavior
 
 A CLI and daemon major protocol mismatch fails clearly. Package upgrade should:

@@ -13,7 +13,7 @@ The resolver accepts:
 - the process current directory; or
 - an explicit `--worktree <path>`.
 
-It walks or uses the Git library's discovery API to find the containing worktree. It MUST support:
+The built-in read-only resolver walks the filesystem metadata to find the containing worktree. It MUST support:
 
 - a main worktree with a `.git` directory;
 - a linked worktree with a `.git` file;
@@ -27,7 +27,7 @@ It MUST reject:
 - inaccessible worktree administrative metadata;
 - ambiguous or unsupported repository layouts.
 
-The implementation SHOULD use a Rust Git library and MUST NOT depend on invoking the `git` executable for discovery.
+The resolver MUST NOT depend on invoking the `git` executable for discovery.
 
 ## Worktree layout
 

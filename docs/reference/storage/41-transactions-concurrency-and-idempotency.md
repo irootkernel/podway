@@ -17,13 +17,13 @@ Pseudocode:
 ```text
 BEGIN IMMEDIATE
   load workspace_state
-  reject if queued_count >= max_pending
   lookup idempotency_key
 
   if key exists:
     if request_digest differs: error IDEMPOTENCY_KEY_REUSED
     else: return existing job
 
+  reject if queued_count >= max_pending
   sequence = next_workspace_sequence + 1
   update workspace_state.next_workspace_sequence
   insert job(state=queued, sequence, canonical_request)

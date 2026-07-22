@@ -51,7 +51,7 @@ rework:
 | `schema` | yes | Exact value `podway.procedure/v1` |
 | `id` | yes | Kebab-case, 1 to 64 characters |
 | `version` | yes | Non-empty string, maximum 64 characters |
-| `name` | yes | 1 to 120 Unicode scalar values after trim |
+| `name` | yes | 1 to 120 Unicode scalar values |
 | `description` | no | Maximum 4000 characters |
 | `stages` | yes | 1 to 64 stages |
 | `rework` | yes | Return policy object |

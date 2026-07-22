@@ -72,6 +72,19 @@ Run the narrowest relevant layer while iterating and `make test` before treating
 revision as release-ready. `test-prepare` synchronizes assets and runs `rustfmt`, so
 review its resulting diff before committing.
 
+### Optional focused tools
+
+These tools are manual diagnostics and are not additional release gates:
+
+- `python3 tools/run_g005_vertical.py` builds the daemon and runs the ignored G005 lifecycle, recovery, replay, and conflict vertical directly; use it when changing the production command path.
+- `python3 tools/run_g008_dogfood.py` builds the daemon and runs the four-preset retry/return dogfood scenario directly; use it when changing presets or end-to-end workflow behavior.
+- `cargo +nightly-2026-07-17 fuzz run canonical_json` exercises canonical JSON after serialization or digest changes.
+- `cargo +nightly-2026-07-17 fuzz run selector` exercises selector and worktree-path parsing after Git/filesystem changes.
+- `cargo +nightly-2026-07-17 fuzz run response_additive` exercises additive response compatibility after protocol projection changes.
+- `cargo +nightly-2026-07-17 fuzz run config_procedure` exercises procedure parsing and validation after config or schema changes.
+
+Bound optional fuzz runs with the same libFuzzer run, timeout, and memory flags used by `tools/run_fuzzing.py`.
+
 ## Documentation rules
 
 - Write `README.md` and all Markdown under `docs/` in English.

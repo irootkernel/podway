@@ -113,7 +113,7 @@ Default pruning:
 - retain at least the newest 100 terminal jobs;
 - retain terminal jobs for up to 7 days;
 - cap terminal jobs at 1,000 per workspace;
-- prune oldest eligible rows after successful mutations and at daemon idle time.
+- prune oldest eligible rows after successful mutations.
 
 ### Idempotency records
 

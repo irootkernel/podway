@@ -349,7 +349,7 @@ Item updates additionally accept `--if-item-revision`. For an unset item, use re
 Commands requiring confirmation:
 
 - `start --replace`;
-- `reset` when a session exists;
+- `reset` always, except for `--dry-run`;
 - `reset --all --force`;
 - `daemon uninstall` when service files will be removed.
 

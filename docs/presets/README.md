@@ -1,6 +1,6 @@
 # Built-in Presets
 
-The four YAML files in this directory are the normative built-in procedure sources:
+The canonical built-in procedure sources live in `docs/presets/`; the repository-root `presets/` directory is a generated mirror. The catalog contains these four YAML files:
 
 - `sw-dev.yaml`
 - `bug-fix.yaml`

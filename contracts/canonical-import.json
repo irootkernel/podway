@@ -127,7 +127,7 @@
     {
       "source": "docs/presets/README.md",
       "destination": "presets/README.md",
-      "source_sha256": "4f2803a0f856787148064d3dc1474ae24e87b8a7a348172e334613543fe2bb8a",
+      "source_sha256": "d13778ce7b29b562a76b80936c733a987d4e1f78e181eb8f470149b6687ea010",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
