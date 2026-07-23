@@ -244,6 +244,25 @@ fn explicit_socket_selects_the_exact_daemon_endpoint_and_rejects_non_absolute_pa
     assert_eq!(response["code"], "REQUEST_INVALID");
 }
 
+#[test]
+fn daemon_install_rejects_invalid_explicit_socket_before_resolving_the_daemon() {
+    let fixture = Fixture::new();
+    let overlong = format!("/tmp/{}.sock", "x".repeat(104));
+
+    for invalid in [
+        "relative.sock",
+        "~/podwayd.sock",
+        "/tmp/../podwayd.sock",
+        overlong.as_str(),
+    ] {
+        let output = fixture.run(&["--json", "--socket", invalid, "daemon", "install"]);
+        assert_eq!(output.status.code(), Some(2), "{invalid}: {output:?}");
+        let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
+        assert_eq!(response["code"], "REQUEST_INVALID");
+        assert_eq!(response["command"], "daemon.install");
+    }
+}
+
 impl Reply {
     fn response_for(self, request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1> {
         match self {
