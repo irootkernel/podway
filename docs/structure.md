@@ -4,7 +4,7 @@
 
 ```text
 crates/                 Rust workspace crates
-contracts/              Executable dependency, route, and handoff contracts
+contracts/              Executable repository contracts and stable evidence
 docs/                   Canonical contributor docs and source assets
 presets/                Generated built-in preset mirror
 quality/                Crash-boundary registry
@@ -13,6 +13,7 @@ schemas/                Generated JSON Schema mirror
 spec/                   Generated executable specification mirror
 tests/fixtures/          Shared contract fixtures
 tools/                  Verification, synchronization, E2E, fuzz, and release tools
+artifacts/              Ignored, host-local verification output
 ```
 
 ## Crates
@@ -58,3 +59,16 @@ digests, so unreviewed drift fails closed.
 
 The detailed crate and runtime rules are in the
 [Rust codebase reference](reference/architecture/14-rust-codebase.md).
+
+## Contracts and verification artifacts
+
+`contracts/` is not a documentation mirror. It contains versioned inputs that
+repository tools execute, content-addressed Phase 0 locks and handoffs, and the
+minimal host-neutral attestations referenced by those handoffs. Stable evidence
+belongs under `contracts/evidence/`; no tracked contract may depend on an ignored
+file.
+
+`artifacts/` contains mutable reports, raw logs, fuzzing output, and other
+machine-specific results. The entire directory is ignored. A passed current report
+may be reduced explicitly with `python3 tools/run_verification.py --attest`; the
+resulting content-addressed attestation contains no runtime paths or raw logs.

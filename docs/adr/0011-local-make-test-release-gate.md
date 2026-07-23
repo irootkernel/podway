@@ -19,6 +19,11 @@ gate. It runs `test-prepare`, `test-unit`, `test-int`, `test-fuzzing`, and
 for bounded protocol-input fuzzing. The end-to-end target builds and executes the
 real `podway` and `podwayd` binaries with the product's pinned stable toolchain.
 
+This decision does not let a passing older gate waive accepted requirements that
+have not yet been implemented or registered as executable evidence. A release
+candidate exists only after its release-blocking roadmap work has entered the
+tested tree; `make test` then remains the single executable gate for that tree.
+
 Generated-source synchronization and formatting remain corrective operations in
 `test-prepare`. A release tag or archive uses the resulting formatted tree. Any
 later source change requires another complete `make test` run.

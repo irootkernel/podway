@@ -19,10 +19,7 @@
 /coverage/
 /dist/
 *.lcov
-/artifacts/g*/
-/artifacts/phase0/verification-logs/
-/artifacts/phase0/verification-report.json
-/artifacts/phase0/verification-report.pointer.json
+/artifacts/
 /fuzz/artifacts/
 /fuzz/corpus/
 *.log
@@ -31,7 +28,8 @@
 *.temp
 *~
 
-# Keep SOT and contract sources versioned; never ignore sot/ or contracts/.
+# Keep SOT, executable contracts, and stable contract evidence versioned;
+# never ignore docs/ or contracts/.
 
 # Python caches and bytecode
 /.ruff_cache/

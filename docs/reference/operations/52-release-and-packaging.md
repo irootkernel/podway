@@ -13,7 +13,8 @@ The complete `v0.1.0` public release is a macOS product. It includes:
 - MIT License;
 - checksums and release notes.
 
-Linux and Windows are not part of the first release gate.
+Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts
+are not Podway release or support targets.
 
 ## Versioning
 
@@ -58,6 +59,9 @@ podway-<version>-<target>/
     podway/
       presets/
       schemas/
+      specs/
+      canonicalization-fixtures/
+      contract-manifest.json
   LICENSE
   README.md
   RELEASE_NOTES.md
@@ -65,6 +69,10 @@ podway-<version>-<target>/
 Each Apple Silicon archive contains both executables, `podway` and `podwayd`; they are not separate architecture artifacts.
 
 Presets are embedded in the binary for runtime availability. Source copies are shipped for inspection and customization.
+
+The additional specs, fixtures, and contract manifest are accepted target archive
+contents and enter the package with `CONID`, `MCONT`, and `REL10`. The current
+archive builder does not yet make the target artifact release-ready.
 
 ### Local archive construction
 
@@ -86,7 +94,7 @@ distribution artifact.
 
 The binary installation mechanism may be a release archive or package manager. Regardless of mechanism:
 
-1. `podway` and `podwayd` versions must be installed together;
+1. `podway` and `podwayd` product and contract-manifest identities must match;
 2. the user runs `podway daemon install` or the package post-install equivalent;
 3. service install records the absolute daemon path;
 4. `podway daemon status` verifies health;
@@ -171,7 +179,10 @@ operations performed after the source revision is release-ready.
 
 ## Support policy
 
-The first release targets currently supported macOS major versions selected by the project at release time. The exact minimum deployment target is recorded in release engineering configuration and release notes. The architecture does not depend on a single hard-coded macOS version beyond required Unix socket and LaunchAgent behavior.
+Podway releases only for currently supported macOS major versions on native Apple
+Silicon. The exact minimum deployment target is recorded in release engineering
+configuration and release notes. Supporting another architecture or operating
+system requires a superseding architecture decision and native release gate.
 
 ## License
 

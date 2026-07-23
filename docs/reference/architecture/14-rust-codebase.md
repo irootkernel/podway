@@ -102,7 +102,7 @@ Owns:
 - macOS LaunchAgent implementation;
 - service install metadata;
 - socket/runtime/log path calculation;
-- future Linux systemd user implementation.
+- testable service and filesystem boundaries for the supported macOS implementation.
 
 ### `podway-presets`
 

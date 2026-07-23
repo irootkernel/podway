@@ -11,7 +11,7 @@ build and release archive; edit their sources here instead.
 2. [Repository structure](structure.md) maps crates, assets, tests, and dependency rules.
 3. [Architecture](architecture.md) follows a request through the CLI, daemon, queue, and store.
 4. [Contributing](contributing.md) gives implementation tips and verification commands.
-5. [Roadmap](roadmap.md) records the completed v0.1.0 implementation sequence.
+5. [Roadmap](roadmap.md) records the completed baseline and remaining v0.1.0 work.
 
 ## Detailed reference
 
@@ -22,7 +22,7 @@ build and release archive; edit their sources here instead.
 - [Domain](reference/domain/20-domain-model.md): procedures, items, transitions, and
   session lifecycle.
 - [Interfaces](reference/interfaces/30-cli-specification.md): CLI, JSON, IPC, errors,
-  and exit codes.
+  exit codes, and the accepted [automation client contract](reference/interfaces/34-automation-client-contract.md).
 - [Storage](reference/storage/40-sqlite-model.md): schema, transactions, recovery,
   retention, and reset behavior.
 - [Operations](reference/operations/50-security-and-trust.md): trust boundary,
@@ -51,5 +51,5 @@ When sources disagree, resolve them in this order:
 4. core contributor guides;
 5. examples.
 
-Fix every affected source when resolving a contradiction. There are no intentional
-contract disagreements in the v0.1.0 baseline.
+Fix every affected source when resolving a contradiction. Planned target behavior
+must be labeled as such until its machine contracts and executable evidence land.

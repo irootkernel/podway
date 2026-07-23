@@ -4,17 +4,25 @@
 
 Every public JSON response declares a schema identifier.
 
-V1 compatibility rules:
+Current common-envelope compatibility rules:
 
 - existing field meanings do not change;
 - required fields are not removed;
 - enum values are not repurposed;
-- additive optional fields may be introduced;
-- clients MUST ignore unknown fields;
+- additive optional fields may be introduced only in an explicitly open schema;
+- clients of the current generic envelope ignore unknown envelope fields;
 - breaking changes require a new schema identifier such as `podway.output/v2`;
 - human-readable `message` text is not stable; `code` and structured details are stable.
 
 All JSON is UTF-8 and emitted as one object followed by a newline.
+
+The accepted v0.1.0 automation target introduces discriminated, command-specific
+closed result and error-detail schemas. Unknown fields in those closed objects are
+invalid; adding a field requires a new result/detail schema identifier or
+discriminator version. The current generic `result` and `details` objects remain
+the implemented machine schema until the `MCONT` epic updates schemas, catalogs,
+fixtures, and binaries together. See the
+[automation contract](34-automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004).
 
 ## Common success envelope
 

@@ -1,9 +1,14 @@
 # Release Readiness
 
-Podway uses one required release gate: run `make test` locally from the repository root.
-The revision is release-ready when that command exits successfully. The command runs,
-in order, generated-source synchronization and static checks, unit tests, integration
-tests, bounded protocol fuzzing, and real-binary end-to-end tests.
+Podway uses one executable release gate: run `make test` locally from the repository
+root. That command is authoritative only for requirements and evidence already
+registered in the tested tree. Podway v0.1.0 is not release-ready while any
+release-blocking task in the [roadmap](roadmap.md) remains incomplete; a current
+successful run proves the implemented baseline, not the planned automation target.
+
+Once all target requirements and tests are included, the final clean-tree
+`make test` run is the sole executable source-readiness decision. It runs generated
+source checks, unit and integration tests, bounded fuzzing, and real-binary E2E.
 
 The gate requires rustup and resolves exact toolchains. Rust 1.97.1 builds and tests
 the product. The isolated fuzzing target uses `nightly-2026-07-17` and
@@ -55,6 +60,15 @@ provenance `source_commit` must equal the exact release-tag commit.
 
 ## Current implementation state
 
-The implementation and all documented requirements are represented in the local gate. A
-successful `make test` is the authoritative evidence for the tested tree; generated
-reports from superseded qualification systems are not release inputs.
+The completed historical baseline is represented in the local gate. The automation
+client contract is accepted target behavior, but its `RPATH` through `DOLGI`
+implementation and conformance tasks remain planned. `REL10005` is therefore
+blocked regardless of whether the unchanged baseline currently passes `make test`.
+Generated reports from superseded qualification systems are not release inputs.
+
+Raw verification reports and logs are host-local files under ignored `artifacts/`.
+They must never be referenced directly by a tracked contract. When a Phase 0
+handoff requires durable proof, `python3 tools/run_verification.py --attest`
+publishes a host-neutral, content-addressed summary under `contracts/evidence/`;
+the handoff binds that stable file by digest. A fresh source tree must validate
+all tracked receipts without any pre-existing `artifacts/` directory.

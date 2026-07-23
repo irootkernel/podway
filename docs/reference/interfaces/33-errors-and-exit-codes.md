@@ -6,6 +6,10 @@ Public failures use stable uppercase error codes. Human messages may improve wit
 
 The machine-readable catalog is [`../../spec/error-codes.json`](../../spec/error-codes.json).
 
+The tables below are the implemented catalog. Planned automation errors are not
+machine contracts until their `CASID`, `PSTRT`, `CONID`, `RPATH`, and `MCONT`
+tasks update the catalog, closed detail schemas, generated mirrors, and tests.
+
 ## Exit codes
 
 | Exit code | Class | Meaning |
@@ -132,6 +136,16 @@ On revision conflicts, details include current values:
 ```
 
 Clients should refresh `status --json`, reassess the active stage, and issue a new command rather than blindly changing only the revision.
+
+## Accepted automation target errors
+
+The v0.1.0 target adds stable entries for `WORKSPACE_UUID_MISMATCH`,
+`SESSION_ID_MISMATCH`, `PROCEDURE_DIGEST_MISMATCH`,
+`DAEMON_CONTRACT_MISMATCH`, invalid or over-long explicit socket paths, and closed
+admission-aware wait failures. Their details carry expected and actual identities
+and `admission.admitted`; a pre-admission mismatch reports `false` and admits no
+job. The normative target is the
+[automation error contract](34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
 
 ## Error redaction
 

@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from typing import Any
 import uuid
 
@@ -36,7 +37,10 @@ RUN_REPORT_NAME = "verification-report.json"
 REPORT_SCHEMA_VERSION = "podway.phase0.verification-report/v4"
 REPORT_POINTER_SCHEMA_VERSION = "podway.phase0.verification-report-pointer/v1"
 SOURCE_MANIFEST_SCHEMA_VERSION = "podway.phase0.source-manifest/v1"
+ATTESTATION_SCHEMA_VERSION = "podway.phase0.verification-attestation/v1"
 CANONICALIZATION = "podway.canonical-json/v1"
+ATTESTATION_DIRECTORY = Path("contracts/evidence")
+ATTESTATION_PREFIX = "phase0-verification-"
 # Reports are evidence for the preceding 24 hours only.  The bound is deliberately
 # short enough that receipts cannot be replayed as indefinitely-fresh evidence.
 MAX_REPORT_AGE_SECONDS = 24 * 60 * 60
@@ -96,6 +100,7 @@ EXCLUDED_COMPONENTS = frozenset(
     }
 )
 EXCLUDED_PREFIXES = (
+    ("contracts", "evidence"),
     ("contracts", "handoffs"),
     ("contracts", "locks"),
 )
@@ -1663,6 +1668,106 @@ def check_report(root: Path) -> tuple[dict[str, Any], str]:
     return report, report_digest
 
 
+def workspace_product_version(root: Path) -> str:
+    manifest_path = checked_path(root, Path("Cargo.toml"), "workspace manifest")
+    require_regular_file(manifest_path, "workspace manifest")
+    try:
+        with manifest_path.open("rb") as handle:
+            manifest = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        fail("invalid_manifest", f"cannot read workspace product version: {error}")
+    workspace = require_object(manifest.get("workspace"), "workspace manifest workspace")
+    package = require_object(workspace.get("package"), "workspace manifest package")
+    return require_string(package.get("version"), "workspace product version")
+
+
+def build_attestation(root: Path, report: dict[str, Any], report_digest: str) -> dict[str, Any]:
+    if report["status"] != "passed":
+        fail("verification_failed", "only a passed verification report can be attested")
+    attestation = {
+        "commands": [
+            {
+                "argv": command["argv"],
+                "exit_code": command["exit_code"],
+                "status": command["status"],
+                "termination": command["termination"],
+            }
+            for command in report["commands"]
+        ],
+        "product_version": workspace_product_version(root),
+        "report": {
+            "schema_version": report["schema_version"],
+            "self_digest": report["report_identity"]["digest"],
+            "sha256": report_digest,
+        },
+        "schema_version": ATTESTATION_SCHEMA_VERSION,
+        "source_manifest": {
+            "file_count": report["source_manifest"]["file_count"],
+            "sha256": report["source_manifest"]["sha256"],
+        },
+        "status": "passed",
+    }
+    return validate_attestation_shape(attestation)
+
+
+def validate_attestation_shape(value: Any) -> dict[str, Any]:
+    attestation = require_object(
+        value,
+        "verification attestation",
+        {"commands", "product_version", "report", "schema_version", "source_manifest", "status"},
+    )
+    if attestation["schema_version"] != ATTESTATION_SCHEMA_VERSION:
+        fail("invalid_schema", "verification attestation schema version is invalid")
+    require_string(attestation["product_version"], "verification attestation product version")
+    if attestation["status"] != "passed":
+        fail("verification_failed", "verification attestation status is not passed")
+
+    report = require_object(
+        attestation["report"],
+        "verification attestation report",
+        {"schema_version", "self_digest", "sha256"},
+    )
+    if report["schema_version"] != REPORT_SCHEMA_VERSION:
+        fail("invalid_schema", "attested verification report schema version is invalid")
+    require_digest(report["self_digest"], "attested verification report self digest")
+    require_digest(report["sha256"], "attested verification report digest")
+
+    source = require_object(
+        attestation["source_manifest"],
+        "verification attestation source manifest",
+        {"file_count", "sha256"},
+    )
+    require_integer(source["file_count"], "verification attestation source file count", minimum=1)
+    require_digest(source["sha256"], "verification attestation source manifest digest")
+
+    commands = require_list(attestation["commands"], "verification attestation commands")
+    if len(commands) != len(GATES):
+        fail("invalid_schema", "verification attestation must cover every fixed gate")
+    for index, raw_command in enumerate(commands):
+        command = require_object(
+            raw_command,
+            f"verification attestation command {index}",
+            {"argv", "exit_code", "status", "termination"},
+        )
+        argv = require_list(command["argv"], f"verification attestation command {index} argv")
+        if argv != list(GATES[index][1]):
+            fail("invalid_schema", f"verification attestation command {index} does not match the fixed gate")
+        if command["exit_code"] != 0 or command["status"] != "passed" or command["termination"] != "completed":
+            fail("verification_failed", f"verification attestation command {index} did not pass")
+    return attestation
+
+
+def publish_attestation(root: Path, report: dict[str, Any], report_digest: str) -> tuple[Path, str]:
+    attestation = build_attestation(root, report, report_digest)
+    content = canonical_json(attestation)
+    digest = digest_bytes(content)
+    relative = ATTESTATION_DIRECTORY / f"{ATTESTATION_PREFIX}{digest}.json"
+    atomic_write(root, relative, content, "verification attestation destination")
+    path = checked_path(root, relative, "verification attestation destination")
+    os.chmod(path, 0o644, follow_symlinks=False)
+    return relative, digest
+
+
 def publish_report(root: Path, report: dict[str, Any]) -> str:
     validate_report_shape(report, root)
     content = canonical_json(report)
@@ -1743,14 +1848,25 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--run", action="store_true", help="run fixed verification gates and publish a durable report")
     mode.add_argument("--check", action="store_true", help="validate the published report, source inputs, environment, and raw logs")
+    mode.add_argument("--attest", action="store_true", help="publish a host-neutral, content-addressed attestation from the current passed report")
     arguments = parser.parse_args()
-    selected_mode = "run" if arguments.run else "check"
+    selected_mode = "run" if arguments.run else "attest" if arguments.attest else "check"
     try:
         if arguments.run:
             report, ok, report_digest = run_verification(ROOT)
             receipt(selected_mode, ok, **receipt_details(report, report_digest))
             return 0 if ok else 1
         report, report_digest = check_report(ROOT)
+        if arguments.attest:
+            path, digest = publish_attestation(ROOT, report, report_digest)
+            receipt(
+                selected_mode,
+                True,
+                attestation_path=path.as_posix(),
+                attestation_sha256=digest,
+                **receipt_details(report, report_digest),
+            )
+            return 0
         receipt(selected_mode, True, **receipt_details(report, report_digest))
         return 0
     except (VerificationError, OSError, ValueError, RuntimeError) as error:

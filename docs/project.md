@@ -46,10 +46,14 @@ artifact bytes, and exposes no Git mutation API.
 
 ## Supported boundary
 
-Version 0.1.0 targets native Apple Silicon macOS and installs the daemon as a
-per-user LaunchAgent. Public v1 JSON, IPC, workspace, procedure, error, and SQLite
-contracts are frozen for the release. Linux service integration is a future port,
-not part of this release.
+Podway publishes and supports only native Apple Silicon macOS on the tuple
+`{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}`
+and installs the daemon as a per-user LaunchAgent. Linux, Windows, Intel macOS,
+translated, universal, fat, and cross-built artifacts are not release targets.
+
+The implemented v1 baseline remains usable, but the expanded automation contract
+is a v0.1.0 target until every release-blocking roadmap task and its executable
+evidence are complete.
 
 ## Core lifecycle
 

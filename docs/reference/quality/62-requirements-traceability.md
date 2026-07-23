@@ -64,7 +64,7 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 | ID | Requirement | Design source | Primary conformance |
 |---|---|---|---|
 | `API-001` | Every public response is versioned JSON | JSON contract | Schema validation |
-| `API-002` | Unknown additive response fields are tolerated | JSON contract | Compatibility client test |
+| `API-002` | Unknown fields are tolerated only in explicitly open response schemas | JSON contract | Compatibility client test |
 | `API-003` | Text is not scraped as API | JSON contract | Documentation and SDK tests |
 | `API-004` | IPC uses bounded length-prefixed JSON | IPC | Framing/fuzz suite |
 | `API-005` | Peer UID is checked where available | IPC/security | macOS socket test |
@@ -101,6 +101,11 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 The omitted seventh release requirement is retired by [ADR-0011](../../adr/0011-local-make-test-release-gate.md), which explains the intentional ID gap.
 
 ## Change-control rule
+
+The accepted but unimplemented automation requirements use `AUT-*` identifiers in
+the [automation client contract](../interfaces/34-automation-client-contract.md).
+They remain linked to planned roadmap evidence there until implementation promotes
+them into the machine-validated product acceptance matrix.
 
 A code change that affects a requirement must update:
 

@@ -90,8 +90,8 @@ Bound optional fuzz runs with the same libFuzzer run, timeout, and memory flags 
 - Write `README.md` and all Markdown under `docs/` in English.
 - Link to the most specific stable heading that supports a claim.
 - Update the detailed reference and machine contract together when behavior changes.
-- Keep the roadmap historical; new work belongs there only after the project adopts
-  a roadmap policy for future releases.
+- Preserve the completed historical roadmap prefix and add future work only under
+  the strict sequential status policy documented in the roadmap.
 - Run the documentation verifier through `make test-prepare` after renaming or moving
   a document.
 

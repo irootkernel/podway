@@ -23,10 +23,10 @@ A worktree with unreadable state is isolated. It does not prevent other worktree
 
 ## Minimal global registry
 
-Location on macOS:
+Accepted v0.1.0 target location:
 
 ```text
-~/Library/Application Support/Podway/workspaces.json
+<effective-user-home>/.podway/state/workspaces.json
 ```
 
 Shape:
@@ -44,7 +44,9 @@ Shape:
 }
 ```
 
-The daemon is the sole writer. Updates use temporary-file write, fsync where appropriate, and atomic rename.
+The daemon is the sole writer. The current implementation retains the legacy
+application-support location until the `RPATH` epic lands. Target updates use a
+same-directory temporary write, fsync where appropriate, and atomic rename.
 
 The registry contains no task title, procedure, stage, attempt, item, blocker, artifact, or job payload data.
 

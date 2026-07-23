@@ -55,6 +55,12 @@ Some commands require read-only work that may be slower than a transaction:
 - rehashing required local artifacts before completion;
 - canonicalizing and validating a procedure before start.
 
+For the accepted v0.1.0 start target, canonical Procedure bytes and their digest
+become part of the durable admitted input before acknowledgement. The job never
+depends on re-reading its source file after admission. This stronger boundary is
+planned under `PSTRT`; the current implementation must not be described as already
+satisfying it.
+
 The worker:
 
 1. reads the command and current identifiers;
@@ -208,6 +214,10 @@ It includes queue indicators so the caller knows whether later admitted mutation
 ## Exact-once effect, not exactly-once transport
 
 IPC transport may retry and responses may be lost. Podway guarantees **one logical state effect per idempotency key and canonical request**, not exactly one network exchange.
+
+The accepted target exposes lookup by idempotency key without replaying a request.
+It returns terminal receipt data after job-row pruning and makes pre-admission,
+admitted-timeout, and transport-outcome-unknown states machine-distinguishable.
 
 ## Crash outcomes
 

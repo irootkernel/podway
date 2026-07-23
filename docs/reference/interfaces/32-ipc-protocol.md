@@ -139,12 +139,18 @@ Before processing a frame, the daemon obtains local peer credentials when availa
 
 ## Compatibility
 
-The daemon compares the request protocol identifier before command parsing.
+The current daemon compares the request protocol identifier before command
+parsing. This is the implemented baseline, not the final v0.1.0 automation gate.
 
 - exact supported v1 is accepted;
 - unsupported identifiers return `PROTOCOL_VERSION_UNSUPPORTED` and a list of supported protocol IDs;
-- CLI and daemon package versions may differ when they share a compatible protocol and command schema;
+- current CLI and daemon package versions may differ when they share a compatible protocol and command schema;
 - commands or fields unavailable in the older peer return a structured compatibility error rather than being ignored.
+
+The accepted target additionally compares the exact embedded
+`podway.contract-manifest/v1` digest before command execution or durable admission.
+The bundled v0.1.0 CLI fails closed against any daemon with a different product or
+manifest identity even when the IPC identifier is compatible.
 
 ## Request canonicalization
 
@@ -154,8 +160,10 @@ For mutation idempotency, the daemon constructs canonical request identity from:
 protocol major version
 command
 workspace UUID
+workspace and session identity fences
 semantic preconditions
 payload
+canonical Procedure digest for start
 ```
 
 It excludes:

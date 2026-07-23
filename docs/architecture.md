@@ -47,18 +47,21 @@ or macOS services.
 
 ## IPC and compatibility
 
-The local protocol uses bounded frames and versioned request, success, and error
-envelopes. Same-user peer checks prevent accidental cross-user access to the socket;
-they do not defend against malicious processes running as the same user. Response
-clients tolerate additive fields, while authoring schemas reject unknown fields in
-v1.
+The implemented local protocol uses bounded frames and versioned request, success,
+and error envelopes. Same-user peer checks prevent accidental cross-user access to
+the socket; they do not defend against malicious processes running as the same
+user. The current generic response envelope tolerates additive fields. The accepted
+v0.1.0 [automation contract](reference/interfaces/34-automation-client-contract.md)
+replaces that policy for integration-critical result and error-detail objects with
+versioned closed schemas.
 
 ## macOS service and observability
 
-The CLI installs `podwayd` as a per-user LaunchAgent. Platform paths, socket and
-lock ownership, explicit stop behavior, health checks, and log retrieval are owned
-by `podway-service`. Structured logging uses a separate bounded queue and records
-drops or sink failures rather than blocking state mutation indefinitely. Podway
+The CLI installs `podwayd` as a per-user LaunchAgent. The accepted target uses the
+OS-account-derived `~/.podway` root, a fixed per-user lock, an explicit no-fallback
+socket option, and the verified daemon's actual absolute path. The current
+implementation still uses legacy environment-derived service paths until the
+`RPATH` roadmap epic lands. Structured logging remains local and bounded. Podway
 emits no telemetry and performs no network I/O.
 
 Detailed contracts are available for the

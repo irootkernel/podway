@@ -6,6 +6,8 @@ use crate::{
     native,
 };
 
+const MAX_INITIAL_REVALIDATION_ATTEMPTS: usize = 3;
+
 /// Whether a required worktree-local layout entry was created or was already valid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkspaceLayoutElementStatusV1 {
@@ -84,7 +86,7 @@ impl WorkspaceLayoutInitializerV1 {
         worktree: &ValidatedWorktreeV1,
         default_config_bytes: Option<&[u8]>,
     ) -> Result<WorkspaceLayoutReportV1, WorkspaceLayoutErrorV1> {
-        let revalidated = self.revalidate(worktree)?;
+        let revalidated = retry_initial_revalidation(|| self.revalidate(worktree))?;
         if !same_worktree_identity(worktree, &revalidated) {
             return Err(initialization_error(GitResolverErrorV1::Invariant {
                 problem: GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout,
@@ -148,6 +150,23 @@ impl WorkspaceLayoutInitializerV1 {
     }
 }
 
+fn retry_initial_revalidation(
+    mut revalidate: impl FnMut() -> Result<ValidatedWorktreeV1, WorkspaceLayoutErrorV1>,
+) -> Result<ValidatedWorktreeV1, WorkspaceLayoutErrorV1> {
+    for attempt in 1..=MAX_INITIAL_REVALIDATION_ATTEMPTS {
+        match revalidate() {
+            Err(WorkspaceLayoutErrorV1::Revalidation {
+                source:
+                    GitResolverErrorV1::Invariant {
+                        problem: GitInvariantViolationV1::MetadataChangedDuringResolution,
+                    },
+            }) if attempt < MAX_INITIAL_REVALIDATION_ATTEMPTS => continue,
+            result => return result,
+        }
+    }
+    unreachable!("the bounded initial revalidation loop always returns")
+}
+
 fn status(created: bool) -> WorkspaceLayoutElementStatusV1 {
     if created {
         WorkspaceLayoutElementStatusV1::Created
@@ -171,8 +190,10 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
+
+    static CONTAINMENT_SNAPSHOT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn create_main(root: &Path) {
         let administration = root.join(".git");
@@ -193,6 +214,66 @@ mod tests {
                 .expect("valid worktree selector"),
             )
             .expect("resolved worktree")
+    }
+
+    #[test]
+    fn initial_revalidation_retries_concurrent_layout_publication() {
+        let _hook_guard = CONTAINMENT_SNAPSHOT_TEST_LOCK
+            .lock()
+            .expect("containment snapshot test lock");
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("worktree");
+        create_main(&root);
+        let root = fs::canonicalize(&root).expect("canonical worktree");
+        let worktree = resolve(&root);
+        let barrier = Arc::new(Barrier::new(2));
+        crate::resolver::install_containment_snapshot_hook_for_test(
+            root.clone(),
+            Arc::clone(&barrier),
+        );
+
+        let racing_worktree = worktree.clone();
+        let racing_initializer =
+            thread::spawn(move || WorkspaceLayoutInitializerV1::new().initialize(&racing_worktree));
+
+        barrier.wait();
+        let winning_result = WorkspaceLayoutInitializerV1::new().initialize(&worktree);
+        assert!(
+            winning_result.is_ok(),
+            "winning initializer failed: {winning_result:#?}"
+        );
+        barrier.wait();
+
+        let racing_result = racing_initializer
+            .join()
+            .expect("racing initializer thread");
+        assert!(
+            racing_result.is_ok(),
+            "racing initializer did not retry the monotonic layout publication: {racing_result:#?}"
+        );
+        assert!(root.join(".podway/procedures").is_dir());
+        assert!(root.join(".podway/runtime").is_dir());
+        assert_eq!(
+            fs::read(root.join(".podway/.gitignore")).expect("runtime ignore file"),
+            b"runtime/\n"
+        );
+    }
+
+    #[test]
+    fn initial_revalidation_exhaustion_returns_the_original_error() {
+        let expected = WorkspaceLayoutErrorV1::Revalidation {
+            source: GitResolverErrorV1::Invariant {
+                problem: GitInvariantViolationV1::MetadataChangedDuringResolution,
+            },
+        };
+        let mut attempts = 0;
+        let result = retry_initial_revalidation(|| {
+            attempts += 1;
+            Err(expected.clone())
+        });
+
+        assert_eq!(attempts, MAX_INITIAL_REVALIDATION_ATTEMPTS);
+        assert_eq!(result, Err(expected));
     }
 
     #[test]

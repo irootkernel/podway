@@ -11,12 +11,36 @@ from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent.parent
 ROADMAP = ROOT / "docs/roadmap.md"
-EPIC_IDS = ("DESGN", "FOUND", "COREX", "STORE", "GITFS", "DAEMN", "CLINT", "MACOS", "DOGFD", "HARDN")
+EPIC_IDS = (
+    "DESGN",
+    "FOUND",
+    "COREX",
+    "STORE",
+    "GITFS",
+    "DAEMN",
+    "CLINT",
+    "MACOS",
+    "DOGFD",
+    "HARDN",
+    "AUTOM",
+    "RPATH",
+    "CONID",
+    "CASID",
+    "PSTRT",
+    "RECON",
+    "MCONT",
+    "DOLGI",
+    "REL10",
+)
+COMPLETED_BASELINE_EPIC_IDS = EPIC_IDS[:11]
 LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 HANGUL_RE = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
-EPIC_RE = re.compile(r"^## ([A-Z]{5}) — (.+)$")
-TASK_RE = re.compile(r"^\| `([A-Z]{5})(\d{3})` \| (.+?) \| (Completed) \| (.+?) \| (.+?) \|$")
+EPIC_RE = re.compile(r"^## ([A-Z0-9]{5}) — (.+)$")
+TASK_RE = re.compile(
+    r"^\| `([A-Z0-9]{5})(\d{3})` \| (.+?) \| "
+    r"(Planned|In Progress|Blocked|Completed) \| (.+?) \| (.+?) \|$"
+)
 
 
 class DocumentationError(RuntimeError):
@@ -101,6 +125,7 @@ def validate_roadmap() -> tuple[int, int]:
         fail(f"roadmap epic order drift: expected={EPIC_IDS}, actual={epic_ids}")
 
     task_count = 0
+    task_statuses: list[tuple[str, str]] = []
     for epic_index, (start, epic_id) in enumerate(epic_positions):
         end = epic_positions[epic_index + 1][0] if epic_index + 1 < len(epic_positions) else len(lines)
         section = lines[start + 1 : end]
@@ -120,11 +145,27 @@ def validate_roadmap() -> tuple[int, int]:
             row_epic, suffix, _, status, _, references = match.groups()
             if row_epic != epic_id or suffix != f"{expected_number:03d}":
                 fail(f"non-sequential roadmap task in {epic_id}: {row_epic}{suffix}")
-            if status != "Completed":
-                fail(f"historical roadmap task is not Completed: {row_epic}{suffix}")
+            if epic_id in COMPLETED_BASELINE_EPIC_IDS and status != "Completed":
+                fail(f"completed roadmap baseline task is not Completed: {row_epic}{suffix}")
             if LINK_RE.search(references) is None:
                 fail(f"roadmap task has no documentation reference: {row_epic}{suffix}")
+            task_statuses.append((f"{row_epic}{suffix}", status))
             task_count += 1
+
+    first_incomplete = next(
+        (index for index, (_, status) in enumerate(task_statuses) if status != "Completed"),
+        len(task_statuses),
+    )
+    incomplete = task_statuses[first_incomplete:]
+    if incomplete:
+        first_id, first_status = incomplete[0]
+        if first_status not in {"Planned", "In Progress", "Blocked"}:
+            fail(f"roadmap has an invalid first incomplete state: {first_id}={first_status}")
+        if first_status in {"In Progress", "Blocked"}:
+            incomplete = incomplete[1:]
+        for task_id, status in incomplete:
+            if status != "Planned":
+                fail(f"roadmap tasks after the first incomplete task must be Planned: {task_id}={status}")
     return len(epic_positions), task_count
 
 

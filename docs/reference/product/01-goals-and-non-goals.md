@@ -111,10 +111,11 @@ The daemon MUST NOT:
 
 ## Deferred, not required
 
-The following capabilities are intentionally deferred and are not release blockers:
+The following capabilities are outside the supported product and are not release
+goals:
 
-- Linux systemd user-service packaging;
-- Windows support;
+- Linux or Windows packaging and service integration;
+- Intel macOS, translated, universal, fat, or cross-built distribution;
 - remote synchronization;
 - team or server mode;
 - multiple simultaneous sessions in one worktree;

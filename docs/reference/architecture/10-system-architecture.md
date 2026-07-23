@@ -140,7 +140,9 @@ It does not stage, commit, branch, reset, push, or otherwise mutate Git.
 
 ### Service manager
 
-The service manager owns platform-specific daemon installation and lifecycle. On macOS it manages a user LaunchAgent. Platform-specific code is isolated behind a trait so Linux can later implement systemd user-service behavior without changing domain or protocol contracts.
+The service manager owns the supported native Apple Silicon macOS installation and
+lifecycle through a user LaunchAgent. Its trait boundary keeps platform mechanics
+out of the domain; it is not a commitment to release another service backend.
 
 ## Data ownership
 

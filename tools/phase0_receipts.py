@@ -20,6 +20,7 @@ import tempfile
 import tomllib
 from typing import Any
 
+import run_verification
 import verify_contracts
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,6 +28,8 @@ CANONICAL_IMPORT_PATH = Path("contracts/canonical-import.json")
 ADJACENCY_PATH = Path("contracts/cargo-adjacency.json")
 ROUTES_PATH = Path("contracts/command-routes.json")
 HANDOFF_SCHEMA_PATH = Path("contracts/handoff-schema-v1.json")
+ATTESTATION_SCHEMA_PATH = Path("contracts/verification-attestation-schema-v1.json")
+EVIDENCE_DIRECTORY = Path("contracts/evidence")
 FIXTURE_DIRECTORY = Path("tests/fixtures/phase0")
 REFERENCE_PATH = FIXTURE_DIRECTORY / "reference-model.json"
 SCHEMA_ZERO_PATH = FIXTURE_DIRECTORY / "schema-0-uninitialized.json"
@@ -316,6 +319,7 @@ def expected_phase_lock_entries(root: Path, phase: str) -> set[str]:
             ADJACENCY_PATH.as_posix(),
             ROUTES_PATH.as_posix(),
             "contracts/requirement-evidence-schema-v1.json",
+            ATTESTATION_SCHEMA_PATH.as_posix(),
             HANDOFF_SCHEMA_PATH.as_posix(),
         }
         entries.update(mapping["destination"] for mapping in canonical_import_mappings(root))
@@ -332,6 +336,7 @@ def expected_phase_lock_entries(root: Path, phase: str) -> set[str]:
             "tools/sync_docs_assets.py",
             "tools/verify_contracts.py",
             "tools/phase0_receipts.py",
+            "tools/run_verification.py",
         }
     fail("phase_lock_drift", f"unsupported Phase 0 lock: {phase}")
 def phase_lock_path(phase: str) -> Path:
@@ -873,6 +878,13 @@ def sentinel_definitions() -> list[dict[str, str]]:
             "expected_error": "proof_digest_drift",
         },
         {
+            "id": "ephemeral_artifact_proof",
+            "target": "artifacts/phase0/verification-report.json#proof_ref",
+            "mutation": "reference-ignored-runtime-report",
+            "validator": "proof_location",
+            "expected_error": "ephemeral_proof",
+        },
+        {
             "id": "wrong_file_right_digest_artifact_proof",
             "target": "contracts/locks/phase-0a-contract-lock.json#producer_proof",
             "mutation": "replace-lock-path-with-unrelated-copy",
@@ -920,14 +932,30 @@ def validate_proof_ref(root: Path, value: Any, label: str) -> dict[str, str]:
     proof = require_object(value, label, {"digest", "kind", "location"})
     digest = require_digest(proof["digest"], f"{label} digest")
     location = relative_path(proof["location"], f"{label} location")
+    kind = require_string(proof["kind"], f"{label} kind")
+    if location.parts and location.parts[0] == "artifacts":
+        fail("ephemeral_proof", f"{label} cannot reference ignored runtime artifacts: {location.as_posix()}")
     path = checked_path(root, location, label)
     if not path.is_file():
         fail("missing_proof", f"{label} is not a regular file: {location.as_posix()}")
     if digest_file(path) != digest:
         fail("proof_digest_drift", f"{label} digest does not match {location.as_posix()}")
+    if kind == "test-report":
+        if location.parent != EVIDENCE_DIRECTORY:
+            fail("unstable_test_report", f"{label} test report must be stable contract evidence")
+        expected_name = f"{run_verification.ATTESTATION_PREFIX}{digest}.json"
+        if location.name != expected_name:
+            fail("proof_digest_drift", f"{label} attestation filename does not match its content digest")
+        attestation = load_bounded_json(path, f"{label} attestation", "invalid_attestation")
+        try:
+            validated = run_verification.validate_attestation_shape(attestation)
+        except run_verification.VerificationError as error:
+            fail("invalid_attestation", f"{label} attestation is invalid: {error.message}")
+        if validated["product_version"] != run_verification.workspace_product_version(root):
+            fail("invalid_attestation", f"{label} attestation product version drift")
     return {
         "digest": digest,
-        "kind": require_string(proof["kind"], f"{label} kind"),
+        "kind": kind,
         "location": location.as_posix(),
     }
 
@@ -1272,6 +1300,21 @@ def run_sentinels(
                             }
                         ],
                         "tampered proof",
+                    ),
+                )
+            elif identifier == "ephemeral_artifact_proof":
+                expect_known_failure(
+                    sentinel["expected_error"],
+                    lambda: validate_proof_refs(
+                        fixture_root,
+                        [
+                            {
+                                "digest": "0" * 64,
+                                "kind": "test-report",
+                                "location": "artifacts/phase0/verification-report.json",
+                            }
+                        ],
+                        "ephemeral proof",
                     ),
                 )
             elif identifier == "wrong_file_right_digest_artifact_proof":

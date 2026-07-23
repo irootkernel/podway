@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-13
+- Platform scope: Partially superseded by ADR-0013
 
 ## Context
 
@@ -9,7 +10,10 @@ Podway needs a reliable local daemon, Unix-domain IPC, SQLite transactions, Git 
 
 ## Decision
 
-Podway is implemented in Rust. The first complete release targets only the Apple Silicon tuple `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}` and uses a user LaunchAgent. Linux and Windows support may later add service backends while preserving all public semantics.
+Podway is implemented in Rust. The release targets only the Apple Silicon tuple
+`{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}`
+and uses a user LaunchAgent. ADR-0013 supersedes the former option for later Linux
+and Windows release backends; the Rust implementation decision remains in force.
 
 ## Consequences
 
@@ -24,4 +28,5 @@ Negative:
 
 - Rust learning and compile-time costs;
 - macOS service integration is platform-specific;
-- Linux and Windows users wait for later ports.
+- Linux, Windows, Intel macOS, translated, and cross-built artifacts are not
+  release or support targets.

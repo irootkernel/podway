@@ -2,6 +2,10 @@
 
 use podway_core::{Sha256Digest, WorkspaceId};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{Arc, Barrier, Mutex};
 use uuid::Uuid;
 
 use crate::native;
@@ -15,6 +19,37 @@ use crate::{
 /// A zero-configuration, read-only resolver for supported native Unix Git worktrees.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct NativeGitResolverV1;
+
+#[cfg(test)]
+static CONTAINMENT_SNAPSHOT_BARRIER: Mutex<Option<(PathBuf, Arc<Barrier>)>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn install_containment_snapshot_hook_for_test(root: PathBuf, barrier: Arc<Barrier>) {
+    *CONTAINMENT_SNAPSHOT_BARRIER
+        .lock()
+        .expect("containment snapshot test hook lock") = Some((root, barrier));
+}
+
+#[cfg(test)]
+fn synchronize_containment_snapshot_for_test(root: &Path) {
+    let barrier = {
+        let mut configured = CONTAINMENT_SNAPSHOT_BARRIER
+            .lock()
+            .expect("containment snapshot test hook lock");
+        if configured
+            .as_ref()
+            .is_some_and(|(expected_root, _)| expected_root == root)
+        {
+            configured.take().map(|(_, barrier)| barrier)
+        } else {
+            None
+        }
+    };
+    if let Some(barrier) = barrier {
+        barrier.wait();
+        barrier.wait();
+    }
+}
 
 impl NativeGitResolverV1 {
     /// Creates a resolver that performs no process execution or filesystem mutation.
@@ -100,6 +135,8 @@ impl NativeGitResolverV1 {
             &layout.kind,
         )?;
         let containment_snapshot = native::inspect_containment(&layout.worktree_root)?;
+        #[cfg(test)]
+        synchronize_containment_snapshot_for_test(layout.worktree_root.path());
 
         // The result must describe one coherent snapshot, not a mixture of records
         // observed before and after a directory replacement.

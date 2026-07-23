@@ -4,16 +4,23 @@
 
 The public command is `podway`. The daemon binary is `podwayd` and is normally managed through `podway daemon ...`.
 
+This document describes the currently implemented grammar. The accepted v0.1.0
+automation additions below remain target behavior until their roadmap tasks are
+completed.
+
 ## Global options
 
 ```text
 --json                         emit the versioned JSON contract
 --worktree <path>              target an explicit Git worktree
+--socket <absolute-path>       target the only permitted daemon endpoint (target)
 --timeout <duration>           bound daemon connection or wait time
 --no-color                     disable color in text output
 --quiet                        suppress nonessential text output
 --idempotency-key <string>     override generated mutation key
 --detach                       return after durable job admission
+--if-workspace-uuid <uuid>     require an exact workspace identity (target)
+--if-session-id <uuid>         require an exact session identity (target)
 --if-session-revision <n>      require an exact session revision
 --if-attempt <uuid>            require an exact active attempt
 --if-item-revision <n>         require an exact item revision
@@ -48,6 +55,8 @@ podway daemon ...
 ```
 
 `procedure validate` and `procedure show` use the same Rust schema and canonicalization library as the daemon.
+The target machine identity form is `podway --json version` and requires no
+worktree, daemon, `HOME`, or `TMPDIR`.
 
 ## Help topics
 
@@ -91,6 +100,8 @@ podway daemon logs [--follow] [--lines <n>]
 ```
 
 `daemon status --json` returns service, socket, protocol, and queue summary.
+The target result also returns the configured/effective socket, daemon executable,
+process instance, and contract-manifest identity.
 
 ## Workspace commands
 
@@ -156,6 +167,7 @@ podway preset explain <name>
 ```bash
 podway start --preset <name> --task <title>
 podway start --procedure <worktree-relative-file> --task <title>
+podway start --procedure <worktree-relative-file> --expect-procedure-digest <sha256:hex> --task <title>
 podway start ... --replace --yes
 ```
 
@@ -164,7 +176,7 @@ Exactly one of `--preset` or `--procedure` is required. `--replace` deletes an e
 ### Status
 
 ```bash
-podway status [--verbose] [--wait-for-idle] [--after-job <uuid>]
+podway status [--verbose] [--wait-for-idle] [--compact] [--after-job <uuid>]
 ```
 
 Reports:
@@ -179,6 +191,9 @@ Reports:
 - whether the stage is ready to advance.
 
 `--verbose` includes previous attempt summaries for the current session. It does not provide an audit export.
+
+`--compact` is planned target behavior. With `--wait-for-idle` it returns the
+closed, bounded authority projection defined by the automation client contract.
 
 ### Next
 
@@ -324,15 +339,31 @@ podway job list [--state queued|running|succeeded|failed|cancelled]
 podway job status <job-id>
 podway job wait <job-id>
 podway job cancel <job-id>
+podway job lookup --idempotency-key <key>
 ```
 
-Job commands are scoped to the current worktree. `job wait` honors `--timeout`. `job cancel` only succeeds for queued jobs.
+Job commands are scoped to the current worktree. `job wait` honors `--timeout`.
+`job cancel` only succeeds for queued jobs. The planned `job lookup` is read-only,
+does not submit a mutation, and can return a retained terminal receipt after its
+job row is pruned.
 
 ## Automatic and explicit preconditions
 
 For interactive use, the CLI reads current state immediately before submitting a mutation and includes the observed preconditions.
 
 Automation SHOULD pass explicit values obtained from `status --json`:
+
+```text
+--if-workspace-uuid <uuid>
+--if-session-id <uuid>
+--if-session-revision <n>
+--if-attempt <uuid>
+--if-item-revision <n>
+```
+
+Workspace and session identity options are accepted target behavior. Their
+command-specific required combinations are normative in the
+[automation contract](34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007).
 
 ```bash
 podway complete \

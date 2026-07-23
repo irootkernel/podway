@@ -57,6 +57,13 @@
       "expected_error": "proof_digest_drift"
     },
     {
+      "id": "ephemeral_artifact_proof",
+      "target": "artifacts/phase0/verification-report.json#proof_ref",
+      "mutation": "reference-ignored-runtime-report",
+      "validator": "proof_location",
+      "expected_error": "ephemeral_proof"
+    },
+    {
       "id": "wrong_file_right_digest_artifact_proof",
       "target": "contracts/locks/phase-0a-contract-lock.json#producer_proof",
       "mutation": "replace-lock-path-with-unrelated-copy",

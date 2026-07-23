@@ -9,8 +9,8 @@ or store the contents of your artifacts. You do the work; Podway keeps the proce
 honest.
 
 > [!IMPORTANT]
-> Podway 0.1.0 is a pre-release for native Apple Silicon macOS only. Its release
-> archive is unsigned and not notarized.
+> Podway 0.1.0 is an unreleased target for native Apple Silicon macOS only. The
+> remaining release-blocking work is tracked in the [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -117,6 +117,11 @@ Automation should use JSON fields and stable error codes, not parse text output.
 Mutations support idempotency keys, revision preconditions, and detached job
 admission for reliable local integrations.
 
+The accepted v0.1.0 automation target adds a deterministic user-global endpoint,
+exact CLI/daemon contract identity, explicit workspace and session fences, durable
+outcome reconciliation, and closed command-specific results. These features are
+not all implemented yet; see the [automation client contract](docs/reference/interfaces/34-automation-client-contract.md).
+
 ## Safety and local data
 
 Podway trusts processes running as the same operating-system user. It is not a
@@ -137,4 +142,4 @@ daemon does not delete `.podway/` directories in existing worktrees.
 
 The [contributor documentation](docs/README.md) explains the project goals,
 repository structure, architecture, implementation rules, detailed contracts,
-and completed roadmap.
+and sequential release roadmap.

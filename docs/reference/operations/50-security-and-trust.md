@@ -99,6 +99,12 @@ JSON input follows equivalent bounds.
 - no environment-variable expansion in request fields;
 - no file path trusted without daemon-side canonicalization.
 
+The accepted explicit-endpoint target additionally validates that the socket path
+is absolute and within platform limits, the entry is a socket rather than a file,
+directory, or symlink, its owner and parent permissions are safe, and the peer UID
+matches. A failed explicit endpoint never falls back to another socket. The fixed
+per-user lock prevents a second daemon even when another socket is requested.
+
 ## Artifact handling
 
 For local paths, Podway stores worktree-relative location, digest, size, and media type. It does not store content.

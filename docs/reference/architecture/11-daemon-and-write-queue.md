@@ -161,6 +161,12 @@ The admission response includes the job ID, workspace sequence, and state `queue
 
 A client waiting synchronously may disconnect. The job continues. Retrying with the same idempotency key returns the existing result.
 
+The accepted automation target also provides read-only worktree-scoped
+`job lookup --idempotency-key`. It can recover a queued or running job and the
+original terminal envelope from a retained receipt after job-row pruning. Response
+loss after possible admission is an outcome-unknown state; it is not cancellation.
+Admission-aware envelopes and lookup remain planned under the `RECON` epic.
+
 ## Cancellation
 
 `podway job cancel <job-id>` is a daemon control operation, not an ordinary queued session mutation.

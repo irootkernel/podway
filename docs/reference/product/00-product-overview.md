@@ -56,7 +56,7 @@ Deleting the worktree deletes the task session and all task-local operational da
 | State location | Inside `.podway/runtime/` in the worktree |
 | Initial database state | schema-0/uninitialized; initialize or migrate transactionally to canonical schema-v1 |
 | Implementation | Rust |
-| Initial platform | macOS |
+| Release and support platform | Native Apple Silicon macOS only (`aarch64-apple-darwin`, thin arm64 Mach-O) |
 | Service lifecycle | User LaunchAgent, started at login |
 | UI | CLI, versioned JSON, zsh/bash/fish completion |
 | Procedure data | Built-in presets and worktree-local YAML |
@@ -108,4 +108,6 @@ The complete `v0.1.0` public release is a macOS product with:
 - complete crash, concurrency, Git, service, and preset conformance tests;
 - MIT licensing and release packaging.
 
-Linux support through a systemd user service is a later platform port. It must preserve the same domain, CLI, JSON, IPC semantics, and worktree-local state model.
+Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts
+are not Podway releases. Conditional non-macOS implementation code is internal and
+does not create a support or compatibility promise.

@@ -16,16 +16,18 @@ The label is an implementation constant for v1. Changing it requires migration o
 
 | Purpose | Location |
 |---|---|
-| LaunchAgent plist | `~/Library/LaunchAgents/dev.podway.podwayd.plist` |
-| Application support | `~/Library/Application Support/Podway/` |
-| Minimal registry | `~/Library/Application Support/Podway/workspaces.json` |
-| Service install metadata | `~/Library/Application Support/Podway/service.json` |
-| Logs | `~/Library/Logs/Podway/` |
-| Primary socket directory | `$TMPDIR/podway-<uid>/` |
-| Socket | `$TMPDIR/podway-<uid>/podwayd.sock` |
-| Singleton lock | `$TMPDIR/podway-<uid>/podwayd.lock` |
+| LaunchAgent plist | `<effective-user-home>/Library/LaunchAgents/dev.podway.podwayd.plist` |
+| Podway user-global root | `<effective-user-home>/.podway/` |
+| Minimal registry | `<effective-user-home>/.podway/state/workspaces.json` |
+| Service install metadata | `<effective-user-home>/.podway/state/service.json` |
+| Logs | `<effective-user-home>/.podway/logs/` |
+| Socket | `<effective-user-home>/.podway/run/podwayd.sock` |
+| Singleton lock | `<effective-user-home>/.podway/run/podwayd.lock` |
 
-The socket path must stay below the macOS Unix-domain path limit; an over-long expanded path is a `SocketPathTooLong` hard error. The runtime base is selected once from `TMPDIR`, or from `/tmp` only when `TMPDIR` is unset.
+These are accepted v0.1.0 target paths. The current implementation uses legacy
+environment-derived locations until `RPATH001`–`RPATH005` are completed. Target
+path resolution uses the effective OS account and does not require `HOME`,
+`TMPDIR`, or `XDG_*`. Over-long socket paths fail with a stable typed error.
 
 ## LaunchAgent configuration
 
@@ -59,15 +61,19 @@ podway daemon logs --follow
 
 `podway daemon install`:
 
-1. resolves the absolute `podwayd` binary path;
-2. verifies that the binary is executable and version-compatible with the CLI;
-3. creates application-support and log directories with user-private permissions;
+1. resolves the canonical absolute `podwayd` path by explicit option, CLI sibling,
+   then controlled `PATH`;
+2. verifies that the binary is executable and has the exact CLI product and
+   contract-manifest identity;
+3. creates PODWAY_HOME directories with user-private permissions;
 4. writes the plist atomically;
 5. bootstraps the LaunchAgent in the current GUI user domain;
 6. waits for the socket health check;
 7. records install metadata.
 
-The command is idempotent when the same binary and configuration are already installed. A changed binary path updates the plist and restarts the service.
+The target installer does not stage or copy the daemon. It is idempotent when the
+same actual binary and configuration are installed. A changed binary path or
+contract identity updates the plist and restarts the service.
 
 ### Stop and start
 
@@ -94,11 +100,14 @@ loaded
 reachable
 daemon_version
 protocol_versions
+contract_manifest_digest
 pid
 process_id
+executable_path
 started_at
 uptime_ms
-socket_path
+configured_socket_path
+effective_socket_path
 registered_worktree_count
 active_scheduler_count
 queued_job_count
@@ -111,8 +120,8 @@ running_job_count
 
 At startup the daemon:
 
-1. creates the runtime directory with mode `0700`;
-2. acquires the singleton lock;
+1. creates PODWAY_HOME and its directories with mode `0700`;
+2. acquires the fixed per-user singleton lock regardless of selected socket;
 3. inspects an existing socket;
 4. if a healthy daemon responds, exits as duplicate;
 5. if no process owns the stale socket, removes it;
@@ -123,7 +132,8 @@ The daemon verifies the peer UID using the platform's local-socket credential AP
 
 ## Logging
 
-The daemon writes structured local logs under `~/Library/Logs/Podway/`.
+The target daemon writes structured local logs under
+`<effective-user-home>/.podway/logs/`.
 
 Defaults:
 
@@ -142,7 +152,8 @@ The LaunchAgent sends both standard output and standard error to the same `podwa
 
 ## Upgrade behavior
 
-A CLI and daemon major protocol mismatch fails clearly. Package upgrade should:
+A CLI and daemon product or contract-manifest mismatch fails before command
+execution or admission. Package upgrade should:
 
 1. install both binaries together;
 2. run `podway daemon install` or equivalent service refresh;
@@ -166,4 +177,6 @@ The macOS integration suite MUST cover:
 - socket owner and mode;
 - log creation and rotation;
 - uninstall with state preservation;
-- incompatible CLI/daemon version reporting.
+- incompatible CLI/daemon product and contract identity reporting;
+- duplicate daemon rejection with the same and a different socket;
+- explicit socket no-fallback and sanitized-environment operation.

@@ -20,8 +20,11 @@ Podway provides no telemetry backend or network export.
 Default macOS directory:
 
 ```text
-~/Library/Logs/Podway/
+<effective-user-home>/.podway/logs/
 ```
+
+This is accepted target behavior; the current implementation retains the legacy
+user-log directory until the runtime-path epic lands.
 
 Each record is one structured line with exactly three fields:
 
@@ -62,11 +65,14 @@ loaded
 reachable
 daemon_version
 protocol_versions
+contract_manifest_digest
 pid
 process_id
+executable_path
 started_at
 uptime_ms
-socket_path
+configured_socket_path
+effective_socket_path
 registered_worktree_count
 active_scheduler_count
 queued_job_count

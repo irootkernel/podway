@@ -1,0 +1,51 @@
+{
+  "$id": "urn:podway:schema:phase0-verification-attestation:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "commands": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "argv": {
+            "items": { "minLength": 1, "type": "string" },
+            "minItems": 1,
+            "type": "array"
+          },
+          "exit_code": { "const": 0 },
+          "status": { "const": "passed" },
+          "termination": { "const": "completed" }
+        },
+        "required": ["argv", "exit_code", "status", "termination"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "product_version": { "minLength": 1, "type": "string" },
+    "report": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "podway.phase0.verification-report/v4" },
+        "self_digest": { "pattern": "^[a-f0-9]{64}$", "type": "string" },
+        "sha256": { "pattern": "^[a-f0-9]{64}$", "type": "string" }
+      },
+      "required": ["schema_version", "self_digest", "sha256"],
+      "type": "object"
+    },
+    "schema_version": { "const": "podway.phase0.verification-attestation/v1" },
+    "source_manifest": {
+      "additionalProperties": false,
+      "properties": {
+        "file_count": { "minimum": 1, "type": "integer" },
+        "sha256": { "pattern": "^[a-f0-9]{64}$", "type": "string" }
+      },
+      "required": ["file_count", "sha256"],
+      "type": "object"
+    },
+    "status": { "const": "passed" }
+  },
+  "required": ["commands", "product_version", "report", "schema_version", "source_manifest", "status"],
+  "title": "Podway Phase 0 Verification Attestation v1",
+  "type": "object"
+}

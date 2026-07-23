@@ -514,8 +514,16 @@ fn concurrent_identical_initializers_converge_without_temp_files() {
     });
     barrier.wait();
 
-    assert!(first.join().expect("first initializer thread").is_ok());
-    assert!(second.join().expect("second initializer thread").is_ok());
+    let first_result = first.join().expect("first initializer thread");
+    let second_result = second.join().expect("second initializer thread");
+    assert!(
+        first_result.is_ok(),
+        "first initializer failed: {first_result:#?}"
+    );
+    assert!(
+        second_result.is_ok(),
+        "second initializer failed: {second_result:#?}"
+    );
     assert_eq!(
         fs::read(worktree.join(".podway/.gitignore")).expect("ignore file"),
         b"runtime/\n"

@@ -181,9 +181,13 @@ Fixtures cover:
 - uninstall preserves worktree data;
 - incompatible binary/protocol reporting.
 
-Production `podway daemon install` MUST resolve, validate, and stage the actual
-`podwayd` binary. The LaunchAgent topology does not support a wrapper as its
-installed daemon path.
+Target `podway daemon install` MUST resolve and validate the actual `podwayd`
+binary without staging or copying it. The LaunchAgent records that canonical
+absolute path and does not support a wrapper or ambient `PATH` lookup.
+
+The planned automation conformance additions are defined in the
+[automation acceptance matrix](../interfaces/34-automation-client-contract.md#24-acceptance-matrix).
+They enter this implemented test inventory only with their production tasks.
 
 ## CLI and JSON tests
 
