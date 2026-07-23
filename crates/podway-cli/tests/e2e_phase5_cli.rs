@@ -2410,8 +2410,8 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
             "daemon.install" => {
                 assert_eq!(output.status.code(), Some(3), "{route}: {output:?}");
                 assert_eq!(response["schema"], "podway.error/v1");
-                assert_eq!(response["code"], "DAEMON_VERSION_INCOMPATIBLE");
-                assert_eq!(response["retryable"], false);
+                assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
+                assert_eq!(response["retryable"], true);
                 assert_eq!(response["exit_code"], 3);
             }
             route if route.starts_with("daemon.") => {

@@ -24,9 +24,8 @@ The label is an implementation constant for v1. Changing it requires migration o
 | Socket | `<effective-user-home>/.podway/run/podwayd.sock` |
 | Singleton lock | `<effective-user-home>/.podway/run/podwayd.lock` |
 
-These are accepted v0.1.0 target paths. The current implementation uses legacy
-environment-derived locations until `RPATH001`–`RPATH005` are completed. Target
-path resolution uses the effective OS account and does not require `HOME`,
+These are the implemented v0.1.0 paths. Service installation and explicit
+endpoint resolution use the effective OS account and do not require `HOME`,
 `TMPDIR`, or `XDG_*`. Over-long socket paths fail with a stable typed error.
 
 ## LaunchAgent configuration
@@ -36,7 +35,7 @@ The installed plist MUST:
 - use the exact absolute path to the installed `podwayd` binary;
 - set `RunAtLoad` to true;
 - use a keep-alive policy that restarts unexpected exits;
-- pass a fixed `--service` mode argument;
+- pass fixed `--service --socket <absolute-path>` mode arguments;
 - avoid network service declarations;
 - set a conservative restart throttle;
 - avoid embedding secrets;

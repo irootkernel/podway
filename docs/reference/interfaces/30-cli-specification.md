@@ -13,7 +13,7 @@ completed.
 ```text
 --json                         emit the versioned JSON contract
 --worktree <path>              target an explicit Git worktree
---socket <absolute-path>       target the only permitted daemon endpoint (target)
+--socket <absolute-path>       target the only permitted daemon endpoint
 --timeout <duration>           bound daemon connection or wait time
 --no-color                     disable color in text output
 --quiet                        suppress nonessential text output
@@ -76,7 +76,7 @@ Help MUST include complete examples and must not require internet access.
 ### Install
 
 ```bash
-podway daemon install [--daemon-path <path>]
+podway daemon install [--daemon-path <path>] [--socket <absolute-path>]
 ```
 
 Installs or updates the user LaunchAgent and waits for health.

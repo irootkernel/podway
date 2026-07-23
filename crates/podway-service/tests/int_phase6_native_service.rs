@@ -204,10 +204,8 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
     let first_binary = root.join("bin/podwayd-v1");
     let second_binary = root.join("bin/podwayd-v2");
     let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\nbootstrap) printf '%s' 'replaced-before-launchd-resolves-source' > '{}'; chmod 700 '{}'; touch '{}';;\nbootout) rm -f '{}';;\nprint) if [ -f '{}' ]; then printf 'gui/501/dev.podway.podwayd = {{\\npid = 4242\\n'; else printf '%s\\n' 'Bad request.\nCould not find service \"dev.podway.podwayd\" in domain for user gui: 501' >&2; exit 113; fi;;\nesac\nexit 0\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\nbootstrap) touch '{}';;\nbootout) rm -f '{}';;\nprint) if [ -f '{}' ]; then printf 'gui/501/dev.podway.podwayd = {{\\npid = 4242\\n'; else printf '%s\\n' 'Bad request.\nCould not find service \"dev.podway.podwayd\" in domain for user gui: 501' >&2; exit 113; fi;;\nesac\nexit 0\n",
         launchctl_log.display(),
-        first_binary.display(),
-        first_binary.display(),
         launchctl_state.display(),
         launchctl_state.display(),
         launchctl_state.display(),
@@ -230,20 +228,24 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         .install(spec(&first_binary, &paths))
         .expect("native install");
     assert_eq!(installed.kind(), ServiceOutcomeKindV1::ChangedV1);
-    assert_eq!(
-        fs::read(&first_binary).expect("bootstrap replacement"),
-        b"replaced-before-launchd-resolves-source"
-    );
     manager
         .status()
-        .expect("receipt must describe staged bootstrap bytes");
-    write_executable(&first_binary, &native_arm64_macho(0));
+        .expect("receipt must describe selected daemon bytes");
     let plist = fs::read_to_string(paths.launch_agent_path().as_path()).expect("installed plist");
-    assert!(plist.contains(".podway-daemons-v1/"));
-    assert!(!plist.contains(first_binary.to_str().expect("UTF-8 fixture")));
+    assert!(plist.contains(first_binary.to_str().expect("UTF-8 fixture")));
     assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
     assert!(plist.contains("<key>SuccessfulExit</key>\n    <false/>"));
     assert!(plist.contains("<string>--service</string>"));
+    assert!(plist.contains("<string>--socket</string>"));
+    assert!(
+        plist.contains(
+            paths
+                .socket_path()
+                .as_path()
+                .to_str()
+                .expect("UTF-8 socket")
+        )
+    );
     let receipt: serde_json::Value = serde_json::from_slice(
         &fs::read(paths.metadata_index_path().as_path()).expect("installed receipt"),
     )
@@ -279,13 +281,14 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         ServiceOutcomeKindV1::AlreadyInDesiredStateV1
     );
     write_executable(&first_binary, &native_arm64_macho(9));
-    manager
-        .status()
-        .expect("the staged daemon must remain valid after source replacement");
+    assert!(
+        manager.status().is_err(),
+        "source drift must invalidate the receipt"
+    );
     assert_eq!(
         manager
             .install(spec(&first_binary, &paths))
-            .expect("install must stage a replacement source generation")
+            .expect("install must record a replacement source generation")
             .kind(),
         ServiceOutcomeKindV1::ChangedV1
     );
@@ -293,7 +296,7 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
     assert_eq!(
         manager
             .update(spec(&first_binary, &paths))
-            .expect("update must stage same-path replacement")
+            .expect("update must record same-path replacement")
             .kind(),
         ServiceOutcomeKindV1::ChangedV1
     );
@@ -309,8 +312,7 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
     assert!(!socket.exists(), "update must remove a stale socket");
     let updated_plist =
         fs::read_to_string(paths.launch_agent_path().as_path()).expect("updated plist");
-    assert!(updated_plist.contains(".podway-daemons-v1/"));
-    assert!(!updated_plist.contains(second_binary.to_str().expect("UTF-8 fixture")));
+    assert!(updated_plist.contains(second_binary.to_str().expect("UTF-8 fixture")));
 
     assert_eq!(
         manager.stop().expect("explicit stop").kind(),
@@ -384,16 +386,6 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
     assert!(log_path.exists(), "ordinary uninstall must preserve logs");
     assert!(!paths.launch_agent_path().as_path().exists());
     assert!(!paths.metadata_index_path().as_path().exists());
-    assert!(
-        !paths
-            .metadata_index_path()
-            .as_path()
-            .parent()
-            .expect("metadata parent")
-            .join(".podway-daemons-v1")
-            .exists(),
-        "uninstall must remove the empty staged daemon directory"
-    );
 
     manager
         .install(spec(&second_binary, &paths))

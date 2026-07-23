@@ -14,6 +14,8 @@
   <array>
     <string>__PODWAYD_ABSOLUTE_PATH__</string>
     <string>--service</string>
+    <string>--socket</string>
+    <string>__PODWAYD_SOCKET_PATH__</string>
   </array>
 
   <key>RunAtLoad</key>

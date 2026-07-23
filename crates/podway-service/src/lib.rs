@@ -56,8 +56,6 @@ const SERVICE_TEMPORARY_SCAN_LIMIT_V1: usize = 8_192;
 const SERVICE_TEMPORARY_RETAIN_LIMIT_V1: usize = 64;
 const SERVICE_TEMPORARY_RETAIN_TARGET_V1: usize = 32;
 static SERVICE_TEMPORARY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
-const SERVICE_STAGED_DAEMONS_DIRECTORY_V1: &str = ".podway-daemons-v1";
-const SERVICE_STAGED_DAEMONS_MAX_ENTRIES_V1: usize = 4096;
 /// A non-authoritative, content-free observation emitted by the service adapter.
 ///
 /// Variants are stable categories only; paths, command arguments, process output, metadata, and
@@ -486,6 +484,7 @@ pub struct ServiceInstallMetadataV1 {
     label: String,
     daemon_binary: PathBuf,
     daemon_identity: String,
+    socket_path: PathBuf,
     artifact_role: ServiceArtifactRoleV1,
     installed_at: UnixMillis,
     updated_at: UnixMillis,
@@ -512,6 +511,7 @@ enum ServiceMetadataReadV1 {
 impl ServiceInstallMetadataV1 {
     pub fn new(
         daemon_binary: impl AsRef<Path>,
+        socket_path: impl AsRef<Path>,
         installed_at: UnixMillis,
         updated_at: UnixMillis,
     ) -> Result<Self, ServiceMetadataErrorV1> {
@@ -524,11 +524,20 @@ impl ServiceInstallMetadataV1 {
         let daemon_binary = daemon_binary.as_ref().to_path_buf();
         validate_service_path(&daemon_binary, "daemon_binary")
             .map_err(ServiceMetadataErrorV1::InvalidDaemonBinary)?;
+        let socket_path = socket_path.as_ref().to_path_buf();
+        validate_absolute_normalized_path(&socket_path, "socket_path")
+            .map_err(ServiceMetadataErrorV1::InvalidDaemonBinary)?;
+        if socket_path.as_os_str().len() >= 104 {
+            return Err(ServiceMetadataErrorV1::InvalidDaemonBinary(
+                ServicePathErrorV1::SocketPathTooLong { path: socket_path },
+            ));
+        }
         Ok(Self {
             version: SERVICE_METADATA_VERSION_V1,
             label: SERVICE_LABEL_V1.to_owned(),
             daemon_binary,
             daemon_identity: String::new(),
+            socket_path,
             artifact_role: ServiceArtifactRoleV1::ProductionDaemon,
             installed_at,
             updated_at,
@@ -567,6 +576,10 @@ impl ServiceInstallMetadataV1 {
 
     pub fn daemon_identity(&self) -> &str {
         &self.daemon_identity
+    }
+
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
     }
 
     pub const fn installed_at(&self) -> UnixMillis {
@@ -1749,13 +1762,7 @@ impl StdServiceFilesystemV1 {
     fn requires_owner_private_provenance(path: &Path) -> bool {
         path.file_name().is_some_and(|name| {
             let name = name.to_string_lossy();
-            name == "service.json"
-                || name == format!("{SERVICE_LABEL_V1}.plist")
-                || path.ancestors().skip(1).any(|parent| {
-                    parent.file_name().is_some_and(|name| {
-                        name.to_string_lossy() == SERVICE_STAGED_DAEMONS_DIRECTORY_V1
-                    })
-                })
+            name == "service.json" || name == format!("{SERVICE_LABEL_V1}.plist")
         })
     }
 
@@ -1876,40 +1883,6 @@ impl StdServiceFilesystemV1 {
             return false;
         };
         let mut fields = remainder.split('.');
-        let Some(process_id) = fields.next().and_then(|value| value.parse::<u32>().ok()) else {
-            return false;
-        };
-        let Some(timestamp_nanos) = fields.next().and_then(|value| value.parse::<u128>().ok())
-        else {
-            return false;
-        };
-        let Some(nonce) = fields.next().and_then(|value| value.parse::<u64>().ok()) else {
-            return false;
-        };
-        let Some(sequence) = fields.next().and_then(|value| value.parse::<u64>().ok()) else {
-            return false;
-        };
-        let _ = process_id;
-        nonce == sequence ^ timestamp_nanos as u64 && fields.next().is_none()
-    }
-    fn is_owned_staged_temporary_name_v1(name: &str) -> bool {
-        let Some(remainder) = name
-            .strip_prefix('.')
-            .and_then(|value| value.strip_suffix(".tmp"))
-        else {
-            return false;
-        };
-        let mut fields = remainder.split('.');
-        let Some(identity) = fields.next() else {
-            return false;
-        };
-        if identity.len() != 64
-            || !identity
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return false;
-        }
         let Some(process_id) = fields.next().and_then(|value| value.parse::<u32>().ok()) else {
             return false;
         };
@@ -3130,6 +3103,12 @@ where
                 message: "service publication is incomplete".to_owned(),
             }),
             (Some(metadata), true) => {
+                if metadata.socket_path() != paths.socket_path().as_path() {
+                    return Err(ServiceErrorV1::InvalidMetadataV1 {
+                        message: "persisted socket path does not match the configured endpoint"
+                            .to_owned(),
+                    });
+                }
                 let plist = self
                     .filesystem
                     .read_file_bounded(plist_path, SERVICE_PLIST_MAX_BYTES_V1)
@@ -3145,39 +3124,36 @@ where
                         message: "service publication receipt is not durable".to_owned(),
                     });
                 }
-                let staged_directory = paths
-                    .metadata_index_path()
-                    .as_path()
-                    .parent()
-                    .expect("validated metadata path has a parent")
-                    .join(SERVICE_STAGED_DAEMONS_DIRECTORY_V1);
-                if metadata.daemon_binary() != staged_directory.join(metadata.daemon_identity()) {
-                    return Err(ServiceErrorV1::InvalidMetadataV1 {
-                        message: "persisted daemon binary is not a controlled staged path"
-                            .to_owned(),
-                    });
-                }
-                if !self
-                    .filesystem
-                    .is_executable(metadata.daemon_binary())
-                    .map_err(|error| self.fs_error(op, metadata.daemon_binary(), error))?
-                {
-                    return Err(ServiceErrorV1::InvalidMetadataV1 {
-                        message: "persisted daemon binary is not executable".to_owned(),
-                    });
-                }
-                let daemon_bytes = self
-                    .filesystem
-                    .read_file_bounded(metadata.daemon_binary(), SERVICE_DAEMON_BINARY_MAX_BYTES_V1)
-                    .map_err(|error| self.fs_error(op, metadata.daemon_binary(), error))?;
-                if sha256_hex_v1(&daemon_bytes) != metadata.daemon_identity() {
-                    return Err(ServiceErrorV1::InvalidMetadataV1 {
-                        message: "persisted daemon binary identity does not match".to_owned(),
-                    });
-                }
+                self.verify_persisted_daemon(op, &metadata)?;
                 Ok(Some(metadata))
             }
         }
+    }
+
+    fn verify_persisted_daemon(
+        &self,
+        op: ServiceOperationV1,
+        metadata: &ServiceInstallMetadataV1,
+    ) -> Result<(), ServiceErrorV1> {
+        if !self
+            .filesystem
+            .is_executable(metadata.daemon_binary())
+            .map_err(|error| self.fs_error(op, metadata.daemon_binary(), error))?
+        {
+            return Err(ServiceErrorV1::InvalidMetadataV1 {
+                message: "persisted daemon binary is not executable".to_owned(),
+            });
+        }
+        let daemon_bytes = self
+            .filesystem
+            .read_file_bounded(metadata.daemon_binary(), SERVICE_DAEMON_BINARY_MAX_BYTES_V1)
+            .map_err(|error| self.fs_error(op, metadata.daemon_binary(), error))?;
+        if sha256_hex_v1(&daemon_bytes) != metadata.daemon_identity() {
+            return Err(ServiceErrorV1::InvalidMetadataV1 {
+                message: "persisted daemon binary identity does not match".to_owned(),
+            });
+        }
+        Ok(())
     }
 
     fn ensure_directories(
@@ -3198,133 +3174,6 @@ where
         }
         Ok(())
     }
-    fn stage_daemon(
-        &self,
-        op: ServiceOperationV1,
-        paths: &ServiceRuntimePathsV1,
-        bytes: &[u8],
-        identity: &str,
-    ) -> Result<PathBuf, ServiceErrorV1> {
-        let parent = paths
-            .metadata_index_path()
-            .as_path()
-            .parent()
-            .expect("validated metadata path has a parent");
-        let directory = parent.join(SERVICE_STAGED_DAEMONS_DIRECTORY_V1);
-        let staged = directory.join(identity);
-        if self
-            .filesystem
-            .exists(&staged)
-            .map_err(|error| self.fs_error(op, &staged, error))?
-        {
-            let staged_bytes = self
-                .filesystem
-                .read_file_bounded(&staged, SERVICE_DAEMON_BINARY_MAX_BYTES_V1)
-                .map_err(|error| self.fs_error(op, &staged, error))?;
-            if !self
-                .filesystem
-                .is_executable(&staged)
-                .map_err(|error| self.fs_error(op, &staged, error))?
-                || staged_bytes.len() != bytes.len()
-                || staged_bytes != bytes
-                || sha256_hex_v1(&staged_bytes) != identity
-            {
-                return Err(ServiceErrorV1::InvalidMetadataV1 {
-                    message: "staged daemon binary identity does not match".to_owned(),
-                });
-            }
-            return Ok(staged);
-        }
-
-        self.filesystem
-            .create_directory(&directory, 0o700)
-            .map_err(|error| self.fs_error(op, &directory, error))?;
-        self.filesystem
-            .write_atomically(&staged, bytes, 0o700)
-            .map_err(|error| self.fs_error(op, &staged, error))?;
-        let staged_bytes = self
-            .filesystem
-            .read_file_bounded(&staged, SERVICE_DAEMON_BINARY_MAX_BYTES_V1)
-            .map_err(|error| self.fs_error(op, &staged, error))?;
-        if !self
-            .filesystem
-            .is_executable(&staged)
-            .map_err(|error| self.fs_error(op, &staged, error))?
-            || staged_bytes.len() != bytes.len()
-            || staged_bytes != bytes
-            || sha256_hex_v1(&staged_bytes) != identity
-        {
-            return Err(ServiceErrorV1::InvalidMetadataV1 {
-                message: "staged daemon binary identity does not match".to_owned(),
-            });
-        }
-        Ok(staged)
-    }
-    fn reconcile_staged_daemons(
-        &self,
-        op: ServiceOperationV1,
-        paths: &ServiceRuntimePathsV1,
-        keep: Option<&Path>,
-    ) -> Result<(), ServiceErrorV1> {
-        let directory = paths
-            .metadata_index_path()
-            .as_path()
-            .parent()
-            .expect("validated metadata path has a parent")
-            .join(SERVICE_STAGED_DAEMONS_DIRECTORY_V1);
-        if !self
-            .filesystem
-            .exists(&directory)
-            .map_err(|error| self.fs_error(op, &directory, error))?
-        {
-            return Ok(());
-        }
-        let entries = self
-            .filesystem
-            .list_directory_bounded(&directory, SERVICE_STAGED_DAEMONS_MAX_ENTRIES_V1)
-            .map_err(|error| self.fs_error(op, &directory, error))?;
-        for entry in entries {
-            let name = entry
-                .file_name()
-                .and_then(std::ffi::OsStr::to_str)
-                .ok_or_else(|| ServiceErrorV1::InvalidMetadataV1 {
-                    message: "staged daemon entry name is not canonical UTF-8".to_owned(),
-                })?;
-            if entry.parent() != Some(directory.as_path()) {
-                return Err(ServiceErrorV1::InvalidMetadataV1 {
-                    message: "staged daemon directory contains an unowned entry".to_owned(),
-                });
-            }
-            if StdServiceFilesystemV1::is_owned_staged_temporary_name_v1(name) {
-                self.filesystem
-                    .remove_file(&entry)
-                    .map_err(|error| self.fs_error(op, &entry, error))?;
-                continue;
-            }
-            if name.len() != 64
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
-                return Err(ServiceErrorV1::InvalidMetadataV1 {
-                    message: "staged daemon directory contains an unowned entry".to_owned(),
-                });
-            }
-            if keep == Some(entry.as_path()) {
-                continue;
-            }
-            self.filesystem
-                .remove_file(&entry)
-                .map_err(|error| self.fs_error(op, &entry, error))?;
-        }
-        if keep.is_none() {
-            self.filesystem
-                .remove_directory(&directory)
-                .map_err(|error| self.fs_error(op, &directory, error))?;
-        }
-        Ok(())
-    }
-
     fn bootstrap(
         &self,
         op: ServiceOperationV1,
@@ -3433,7 +3282,7 @@ where
         Ok(())
     }
 
-    fn verify_staged_daemon_version(
+    fn verify_daemon_version(
         &self,
         op: ServiceOperationV1,
         binary: &Path,
@@ -3449,13 +3298,14 @@ where
         let observed = std::str::from_utf8(&output.stdout)
             .ok()
             .and_then(|stdout| stdout.strip_suffix('\n'))
+            .and_then(|stdout| stdout.strip_prefix("podwayd "))
             .filter(|version| !version.contains('\n') && !version.contains('\r'));
         if !output.status.success()
             || !output.stderr.is_empty()
             || observed != Some(expected_version)
         {
             return Err(ServiceErrorV1::InvalidExecutableV1 {
-                message: "staged daemon version is incompatible with this CLI".to_owned(),
+                message: "daemon version is incompatible with this CLI".to_owned(),
             });
         }
         Ok(())
@@ -3498,24 +3348,18 @@ where
                 ServiceOutcomeV1::NotInstalledV1(ServiceNotInstalledV1::new(self.clock.now())),
             ));
         }
-        self.reconcile_staged_daemons(
-            op,
-            paths,
-            existing
-                .as_ref()
-                .map(ServiceInstallMetadataV1::daemon_binary),
-        )?;
-        let staged_binary = self.stage_daemon(op, paths, &daemon_bytes, &daemon_identity)?;
         if let Some(expected_version) = spec.expected_daemon_version.as_deref() {
-            self.verify_staged_daemon_version(op, &staged_binary, expected_version)?;
+            self.verify_daemon_version(op, binary, expected_version)?;
         }
         let now = self.clock.now();
         let same_binary = existing.as_ref().is_some_and(|metadata| {
-            metadata.daemon_binary() == staged_binary
+            metadata.daemon_binary() == binary
                 && metadata.daemon_identity() == daemon_identity
+                && metadata.socket_path() == paths.socket_path().as_path()
         });
         let metadata = ServiceInstallMetadataV1::new(
-            &staged_binary,
+            binary,
+            paths.socket_path().as_path(),
             existing
                 .as_ref()
                 .map_or(now, ServiceInstallMetadataV1::installed_at),
@@ -3536,7 +3380,8 @@ where
             message: error.to_string(),
         })?;
         let plist_without_generation = launch_agent_plist_with_generation_v1(
-            &staged_binary,
+            binary,
+            paths.socket_path().as_path(),
             paths.log_path().as_path(),
             None,
             Some(metadata.daemon_identity()),
@@ -3549,7 +3394,8 @@ where
             .with_publication_state(ServicePublicationStateV1::ReceiptDurable)
             .with_generation_for_plist(&plist_without_generation);
         let plist = launch_agent_plist_with_generation_v1(
-            &staged_binary,
+            binary,
+            paths.socket_path().as_path(),
             paths.log_path().as_path(),
             metadata.generation.as_deref(),
             Some(metadata.daemon_identity()),
@@ -3567,7 +3413,6 @@ where
             None
         };
         if existing.as_ref() == Some(&metadata) && observed_plist.as_deref() == Some(&plist) {
-            self.reconcile_staged_daemons(op, paths, Some(&staged_binary))?;
             return Ok(ServiceCommandResultV1::Outcome(
                 ServiceOutcomeV1::AlreadyInDesiredStateV1(ServiceAlreadyV1::new(
                     self.clock.now(),
@@ -3582,8 +3427,8 @@ where
                 self.remove_stale_socket(op, paths)?;
                 self.bootstrap(op, paths)?;
             }
+            self.verify_persisted_daemon(op, &metadata)?;
             self.publish_metadata(op, metadata_path, &metadata)?;
-            self.reconcile_staged_daemons(op, paths, Some(&staged_binary))?;
             return Ok(ServiceCommandResultV1::Outcome(
                 ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(now, Some(metadata))),
             ));
@@ -3599,8 +3444,8 @@ where
         self.observe(ServiceObservationV1::AtomicPlistPublished);
         self.rotate_log(op, paths)?;
         self.bootstrap(op, paths)?;
+        self.verify_persisted_daemon(op, &metadata)?;
         self.publish_metadata(op, metadata_path, &metadata)?;
-        self.reconcile_staged_daemons(op, paths, Some(&staged_binary))?;
         Ok(ServiceCommandResultV1::Outcome(
             ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(now, Some(metadata))),
         ))
@@ -3620,13 +3465,6 @@ where
             .filesystem
             .exists(metadata)
             .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, metadata, e))?;
-        let staged_directory = metadata
-            .parent()
-            .expect("validated metadata path has a parent")
-            .join(SERVICE_STAGED_DAEMONS_DIRECTORY_V1);
-        let has_staged_daemons = self.filesystem.exists(&staged_directory).map_err(|error| {
-            self.fs_error(ServiceOperationV1::Uninstall, &staged_directory, error)
-        })?;
         let runtime_files = [
             paths.socket_path().as_path(),
             paths.global_lock_path().as_path(),
@@ -3645,13 +3483,7 @@ where
             self.coherent_metadata(ServiceOperationV1::Uninstall, paths)?;
         }
         let loaded = self.loaded_or_not_loaded(ServiceOperationV1::Uninstall)?;
-        if !installed
-            && !has_metadata
-            && !has_staged_daemons
-            && !has_runtime_file
-            && !loaded
-            && !options.purge_logs()
-        {
+        if !installed && !has_metadata && !has_runtime_file && !loaded && !options.purge_logs() {
             return Ok(ServiceCommandResultV1::Outcome(
                 ServiceOutcomeV1::NotInstalledV1(ServiceNotInstalledV1::new(self.clock.now())),
             ));
@@ -3679,9 +3511,6 @@ where
                     .remove_file(path)
                     .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, path, e))?;
             }
-        }
-        if has_staged_daemons {
-            self.reconcile_staged_daemons(ServiceOperationV1::Uninstall, paths, None)?;
         }
         if options.purge_logs() {
             let log = paths.log_path().as_path();
@@ -3909,12 +3738,13 @@ where
 }
 
 /// Generates the exact v1 LaunchAgent template with XML-sensitive values escaped.
-pub fn launch_agent_plist_v1(binary: &Path, log_path: &Path) -> Vec<u8> {
-    launch_agent_plist_with_generation_v1(binary, log_path, None, None)
+pub fn launch_agent_plist_v1(binary: &Path, socket_path: &Path, log_path: &Path) -> Vec<u8> {
+    launch_agent_plist_with_generation_v1(binary, socket_path, log_path, None, None)
 }
 
 fn launch_agent_plist_with_generation_v1(
     binary: &Path,
+    socket_path: &Path,
     log_path: &Path,
     generation: Option<&str>,
     daemon_identity: Option<&str>,
@@ -3925,7 +3755,7 @@ fn launch_agent_plist_with_generation_v1(
     let daemon_identity = daemon_identity.map_or_else(String::new, |value| {
         format!("\n  <key>PodwayDaemonSha256</key>\n  <string>{value}</string>\n")
     });
-    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{SERVICE_LABEL_V1}</string>{generation}{daemon_identity}\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>--service</string>\n  </array>\n\n  <key>RunAtLoad</key>\n  <true/>\n\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\n  <key>ThrottleInterval</key>\n  <integer>5</integer>\n\n  <key>ProcessType</key>\n  <string>Background</string>\n\n  <key>StandardOutPath</key>\n  <string>{}</string>\n\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n", xml_escape(&binary.display().to_string()), xml_escape(&log_path.display().to_string()), xml_escape(&log_path.display().to_string())).into_bytes()
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{SERVICE_LABEL_V1}</string>{generation}{daemon_identity}\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>--service</string>\n    <string>--socket</string>\n    <string>{}</string>\n  </array>\n\n  <key>RunAtLoad</key>\n  <true/>\n\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\n  <key>ThrottleInterval</key>\n  <integer>5</integer>\n\n  <key>ProcessType</key>\n  <string>Background</string>\n\n  <key>StandardOutPath</key>\n  <string>{}</string>\n\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n", xml_escape(&binary.display().to_string()), xml_escape(&socket_path.display().to_string()), xml_escape(&log_path.display().to_string()), xml_escape(&log_path.display().to_string())).into_bytes()
 }
 
 fn xml_escape(value: &str) -> String {
@@ -3949,6 +3779,7 @@ struct ServiceMetadataWireV1 {
     label: String,
     daemon_binary: String,
     daemon_identity: String,
+    socket_path: String,
     artifact_role: ServiceArtifactRoleV1,
     installed_at: u64,
     updated_at: u64,
@@ -3962,6 +3793,7 @@ fn metadata_json_v1(metadata: &ServiceInstallMetadataV1) -> Result<String, Servi
         label: metadata.label.clone(),
         daemon_binary: metadata.daemon_binary.display().to_string(),
         daemon_identity: metadata.daemon_identity.clone(),
+        socket_path: metadata.socket_path.display().to_string(),
         artifact_role: metadata.artifact_role,
         installed_at: metadata.installed_at.get(),
         updated_at: metadata.updated_at.get(),
@@ -3989,6 +3821,7 @@ struct ServiceGenerationPreimageV1<'a> {
     label: &'a str,
     daemon_binary: String,
     daemon_identity: &'a str,
+    socket_path: String,
     artifact_role: ServiceArtifactRoleV1,
     installed_at: u64,
     updated_at: u64,
@@ -4003,6 +3836,7 @@ fn publication_generation_v1(
         label: metadata.label(),
         daemon_binary: metadata.daemon_binary().display().to_string(),
         daemon_identity: metadata.daemon_identity(),
+        socket_path: metadata.socket_path().display().to_string(),
         artifact_role: metadata.artifact_role,
         installed_at: metadata.installed_at().get(),
         updated_at: metadata.updated_at().get(),
@@ -4027,6 +3861,7 @@ fn authenticated_plist_v1(
     }
     let plist_without_generation = launch_agent_plist_with_generation_v1(
         metadata.daemon_binary(),
+        metadata.socket_path(),
         log_path,
         None,
         Some(metadata.daemon_identity()),
@@ -4039,6 +3874,7 @@ fn authenticated_plist_v1(
     }
     Ok(launch_agent_plist_with_generation_v1(
         metadata.daemon_binary(),
+        metadata.socket_path(),
         log_path,
         Some(&expected_generation),
         Some(metadata.daemon_identity()),
@@ -4159,6 +3995,7 @@ fn parse_metadata_v1(bytes: &[u8]) -> Result<ServiceInstallMetadataV1, ServiceEr
     }
     let mut metadata = ServiceInstallMetadataV1::new(
         wire.daemon_binary,
+        wire.socket_path,
         UnixMillis::new(wire.installed_at),
         UnixMillis::new(wire.updated_at),
     )
@@ -4176,6 +4013,17 @@ fn parse_metadata_v1(bytes: &[u8]) -> Result<ServiceInstallMetadataV1, ServiceEr
     };
     metadata.generation = Some(wire.generation);
     Ok(metadata)
+}
+
+/// Resolves the endpoint recorded by a complete installed-service receipt.
+pub fn installed_socket_path_from_metadata_v1(bytes: &[u8]) -> Result<PathBuf, ServiceErrorV1> {
+    let metadata = parse_metadata_v1(bytes)?;
+    if metadata.publication_state != ServicePublicationStateV1::ReceiptDurable {
+        return Err(ServiceErrorV1::InvalidMetadataV1 {
+            message: "service publication receipt is not durable".to_owned(),
+        });
+    }
+    Ok(metadata.socket_path)
 }
 struct DuplicateFreeMetadataKeysV1;
 

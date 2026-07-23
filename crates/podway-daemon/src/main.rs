@@ -26,27 +26,34 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mut arguments = env::args_os().skip(1);
-    match (arguments.next(), arguments.next()) {
-        (Some(argument), None) if argument == "--version" => {
+    let arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    let socket_path = match arguments.as_slice() {
+        [argument] if argument == "--version" => {
             println!("podwayd {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
-        (None, None) => {}
-        (Some(argument), None) if argument == "--service" => {}
-        _ => return Err("usage: podwayd [--service|--version]".into()),
-    }
-    run_service()
+        [] => None,
+        [argument] if argument == "--service" => None,
+        [service, socket, path] if service == "--service" && socket == "--socket" => {
+            Some(PathBuf::from(path))
+        }
+        _ => return Err("usage: podwayd [--service [--socket <absolute-path>]|--version]".into()),
+    };
+    run_service(socket_path)
 }
 
-fn run_service() -> Result<(), Box<dyn std::error::Error>> {
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or("HOME is not set")?;
-    let temporary = env::var_os("TMPDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    let paths = ServiceRuntimePathsV1::for_user(&home, temporary, geteuid().as_raw())?;
+fn run_service(socket_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let paths = if let Some(socket_path) = socket_path {
+        ServiceRuntimePathsV1::for_effective_user()?.with_socket_path(socket_path)?
+    } else {
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("HOME is not set")?;
+        let temporary = env::var_os("TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        ServiceRuntimePathsV1::for_user(&home, temporary, geteuid().as_raw())?
+    };
     let configuration = ProductionDaemonRuntimeConfigV1::new(
         WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
         NonZeroUsize::new(MAXIMUM_IN_FLIGHT_CONNECTIONS_V1)

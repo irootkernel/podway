@@ -213,6 +213,70 @@ fn explicit_socket_selects_the_exact_daemon_endpoint_and_rejects_non_absolute_pa
     assert_eq!(response["code"], "REQUEST_INVALID");
 }
 
+#[test]
+fn omitted_socket_uses_installed_metadata_and_invalid_metadata_never_falls_back() {
+    let fixture = Fixture::new();
+    let installed_socket = fixture.root.join("installed.sock");
+    let metadata_path = fixture.home.join(".podway/state/service.json");
+    fs::create_dir_all(metadata_path.parent().expect("metadata parent"))
+        .expect("metadata directory must exist");
+    let digest = "0".repeat(64);
+    fs::write(
+        &metadata_path,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "label": "dev.podway.podwayd",
+            "daemon_binary": "/Applications/Podway/podwayd",
+            "daemon_identity": digest,
+            "socket_path": installed_socket.display().to_string(),
+            "artifact_role": "production_daemon",
+            "installed_at": 1,
+            "updated_at": 1,
+            "publication_state": "receipt_durable",
+            "generation": "1".repeat(64),
+        }))
+        .expect("metadata fixture must serialize"),
+    )
+    .expect("metadata fixture must be written");
+    let default_listener =
+        UnixListener::bind(&fixture.socket_path).expect("default endpoint sentinel must bind");
+    default_listener
+        .set_nonblocking(true)
+        .expect("default endpoint sentinel must be nonblocking");
+    let daemon = FakeDaemon::start_at(installed_socket, vec![Reply::Status]);
+
+    let output = fixture.run(&["--json", "status"]);
+    assert!(
+        output.status.success(),
+        "installed endpoint failed: {output:?}"
+    );
+    assert_eq!(daemon.finish().len(), 1);
+    assert_eq!(
+        default_listener
+            .accept()
+            .expect_err("metadata endpoint must precede the fixed default")
+            .kind(),
+        io::ErrorKind::WouldBlock,
+    );
+
+    fs::write(&metadata_path, b"{}\n").expect("invalid metadata fixture must be written");
+    let output = fixture.run(&["--json", "status"]);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "invalid metadata: {output:?}"
+    );
+    let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
+    assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
+    assert_eq!(
+        default_listener
+            .accept()
+            .expect_err("invalid metadata must not fall back to the fixed default")
+            .kind(),
+        io::ErrorKind::WouldBlock,
+    );
+}
+
 impl Reply {
     fn response_for(self, request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1> {
         match self {

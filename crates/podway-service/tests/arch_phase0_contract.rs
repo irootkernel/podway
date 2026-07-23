@@ -19,6 +19,7 @@ use podway_service::{
     ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1,
     ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1,
     ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
+    installed_socket_path_from_metadata_v1,
 };
 
 fn service_paths() -> ServiceRuntimePathsV1 {
@@ -678,8 +679,7 @@ impl ServiceFilesystemV1 for Phase6Filesystem {
     }
 
     fn is_executable(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
-        Ok(path.starts_with("/Applications/Podway/")
-            || path.to_string_lossy().contains(".podway-daemons-v1/"))
+        Ok(path.starts_with("/Applications/Podway/"))
     }
 
     fn create_directory(&self, path: &Path, _: u32) -> Result<(), ServiceFilesystemErrorV1> {
@@ -953,22 +953,23 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
             "<key>{plist_key}</key>\n  <string>{value}</string>"
         )));
     }
-    let staged_binary = PathBuf::from(
+    let installed_binary = PathBuf::from(
         receipt["daemon_binary"]
             .as_str()
-            .expect("receipt staged daemon path"),
+            .expect("receipt daemon path"),
     );
     let daemon_identity = receipt["daemon_identity"]
         .as_str()
         .expect("receipt daemon identity");
+    assert_eq!(installed_binary, binary);
     assert_eq!(
-        staged_binary.file_name().and_then(|name| name.to_str()),
-        Some(daemon_identity),
-        "the immutable staged filename must be the authenticated daemon identity"
+        receipt["socket_path"],
+        paths.socket_path().as_path().display().to_string()
     );
-    let escaped_staged_binary = xml_escape(&staged_binary);
+    let escaped_installed_binary = xml_escape(&installed_binary);
+    let escaped_socket = xml_escape(paths.socket_path().as_path());
     assert!(plist.contains(&format!(
-        "<key>ProgramArguments</key>\n  <array>\n    <string>{escaped_staged_binary}</string>\n    <string>--service</string>\n  </array>"
+        "<key>ProgramArguments</key>\n  <array>\n    <string>{escaped_installed_binary}</string>\n    <string>--service</string>\n    <string>--socket</string>\n    <string>{escaped_socket}</string>\n  </array>"
     )));
     let expected_plist = include_str!("../../../docs/spec/launchagent.plist.template")
         .replace(
@@ -976,16 +977,14 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
             receipt["generation"].as_str().unwrap(),
         )
         .replace("__PODWAYD_SHA256__", daemon_identity)
-        .replace("__PODWAYD_ABSOLUTE_PATH__", &escaped_staged_binary)
+        .replace("__PODWAYD_ABSOLUTE_PATH__", &escaped_installed_binary)
+        .replace("__PODWAYD_SOCKET_PATH__", &escaped_socket)
         .replace("__PODWAYD_LOG_PATH__", &escaped_log);
     assert_eq!(
         plist, expected_plist,
         "the reference template keys and static values must exactly match installed output"
     );
-    assert!(
-        !plist.contains(&xml_escape(&binary)),
-        "the mutable source executable must not be rendered into the plist"
-    );
+    assert!(plist.contains(&xml_escape(&binary)));
 }
 
 #[test]
@@ -1023,22 +1022,10 @@ fn phase6_install_orders_atomic_plist_bootstrap_and_metadata() {
         .as_path()
         .display()
         .to_string();
-    let staged = format!(
-        "write:{}",
-        serde_json::from_slice::<serde_json::Value>(
-            filesystem.files.lock().expect("test lock")
-                [service_paths().metadata_index_path().as_path()]
-            .as_slice(),
-        )
-        .expect("receipt metadata")["daemon_binary"]
-            .as_str()
-            .expect("receipt staged daemon path")
-    );
     let relevant_events = events
         .iter()
         .filter(|event| {
-            event.as_str() == staged.as_str()
-                || event.as_str() == format!("write:{plist}")
+            event.as_str() == format!("write:{plist}")
                 || event.as_str() == format!("write:{metadata}:prepared")
                 || event.as_str() == format!("write:{metadata}:receipt_durable")
                 || event.starts_with("launchctl:bootstrap gui/501")
@@ -1048,7 +1035,6 @@ fn phase6_install_orders_atomic_plist_bootstrap_and_metadata() {
     assert_eq!(
         relevant_events,
         [
-            staged,
             format!("write:{metadata}:prepared"),
             format!("write:{plist}"),
             format!(
@@ -1069,10 +1055,14 @@ fn phase6_install_orders_atomic_plist_bootstrap_and_metadata() {
         serde_json::from_slice(&receipt).expect("receipt metadata must be parseable JSON");
     assert_eq!(receipt["publication_state"], "receipt_durable");
     assert_eq!(receipt["label"], "dev.podway.podwayd");
-    assert!(
-        receipt["daemon_binary"]
-            .as_str()
-            .is_some_and(|path| path.contains(".podway-daemons-v1/"))
+    assert_eq!(receipt["daemon_binary"], "/Applications/Podway/podwayd");
+    assert_eq!(
+        receipt["socket_path"],
+        service_paths()
+            .socket_path()
+            .as_path()
+            .display()
+            .to_string()
     );
     assert_eq!(receipt["installed_at"], 3_000);
     assert_eq!(receipt["updated_at"], 3_000);
@@ -1119,10 +1109,14 @@ fn phase6_install_launchctl_failure_preserves_prepared_metadata() {
         serde_json::from_slice(&metadata).expect("prepared metadata must be parseable JSON");
     assert_eq!(metadata["version"], 1);
     assert_eq!(metadata["label"], "dev.podway.podwayd");
-    assert!(
-        metadata["daemon_binary"]
-            .as_str()
-            .is_some_and(|path| path.contains(".podway-daemons-v1/"))
+    assert_eq!(metadata["daemon_binary"], "/Applications/Podway/podwayd");
+    assert_eq!(
+        metadata["socket_path"],
+        service_paths()
+            .socket_path()
+            .as_path()
+            .display()
+            .to_string()
     );
     assert_eq!(metadata["installed_at"], 3_001);
     assert_eq!(metadata["updated_at"], 3_001);
@@ -1137,12 +1131,6 @@ fn phase6_install_launchctl_failure_preserves_prepared_metadata() {
             .as_str()
             .is_some_and(|value| value.len() == 64)
     );
-    let staged = format!(
-        "write:{}",
-        metadata["daemon_binary"]
-            .as_str()
-            .expect("prepared staged daemon path")
-    );
     let events = filesystem.events.lock().expect("test lock").clone();
     let relevant_events = events
         .iter()
@@ -1154,7 +1142,6 @@ fn phase6_install_launchctl_failure_preserves_prepared_metadata() {
     assert_eq!(
         relevant_events,
         [
-            staged,
             format!(
                 "write:{}:prepared",
                 service_paths().metadata_index_path().as_path().display()
@@ -1219,17 +1206,22 @@ fn phase6_install_is_idempotent_and_plist_is_canonical() {
             [service_paths().metadata_index_path().as_path()],
     )
     .expect("receipt metadata");
-    let staged_binary = receipt["daemon_binary"]
+    let installed_binary = receipt["daemon_binary"]
         .as_str()
-        .expect("receipt staged daemon path");
+        .expect("receipt daemon path");
     let plist = String::from_utf8(
         filesystem.files.lock().expect("test lock")[service_paths().launch_agent_path().as_path()]
             .clone(),
     )
     .expect("plist UTF-8");
-    assert!(plist.contains(&format!("<string>{staged_binary}</string>")));
-    assert!(!plist.contains("<string>/Applications/Podway/podwayd</string>"));
+    assert!(plist.contains(&format!("<string>{installed_binary}</string>")));
+    assert_eq!(installed_binary, "/Applications/Podway/podwayd");
     assert!(plist.contains("<string>--service</string>"));
+    assert!(plist.contains("<string>--socket</string>"));
+    assert!(plist.contains(&format!(
+        "<string>{}</string>",
+        service_paths().socket_path().as_path().display()
+    )));
     assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
     assert!(plist.contains("<key>SuccessfulExit</key>\n    <false/>"));
 }
@@ -1447,13 +1439,13 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
             spec: phase6_spec(),
         })
         .expect("initial install");
-    let old_staged = serde_json::from_slice::<serde_json::Value>(
+    let old_identity = serde_json::from_slice::<serde_json::Value>(
         &filesystem.files.lock().expect("test lock")
             [service_paths().metadata_index_path().as_path()],
     )
-    .expect("initial receipt")["daemon_binary"]
+    .expect("initial receipt")["daemon_identity"]
         .as_str()
-        .expect("initial staged daemon path")
+        .expect("initial daemon identity")
         .to_owned();
     filesystem.files.lock().expect("test lock").insert(
         service_paths().socket_path().as_path().to_path_buf(),
@@ -1477,10 +1469,6 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
         ))
     ));
     let events = filesystem.events.lock().expect("test lock").clone();
-    let staged = events
-        .iter()
-        .position(|event| event.starts_with("write:") && event.contains(".podway-daemons-v1/"))
-        .expect("new daemon stage");
     let bootout = events
         .iter()
         .position(|event| event.starts_with("launchctl:bootout gui/501/"))
@@ -1509,12 +1497,8 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
                 )
         })
         .expect("receipt publication");
-    let superseded = events
-        .iter()
-        .position(|event| event == &format!("remove:{old_staged}"))
-        .expect("superseded staged daemon cleanup");
-    assert!(staged < bootout && bootout < socket_cleanup);
-    assert!(socket_cleanup < bootstrap && bootstrap < receipt && receipt < superseded);
+    assert!(bootout < socket_cleanup);
+    assert!(socket_cleanup < bootstrap && bootstrap < receipt);
     let plist = filesystem
         .files
         .lock()
@@ -1525,37 +1509,15 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
     assert!(
         String::from_utf8(plist)
             .expect("plist UTF-8")
-            .contains(".podway-daemons-v1/")
-    );
-    assert!(
-        !filesystem
-            .files
-            .lock()
-            .expect("test lock")
-            .contains_key(Path::new(&old_staged)),
-        "the receipt-durable update must remove only the superseded staged daemon"
+            .contains("<string>/Applications/Podway/podwayd</string>")
     );
     let receipt: serde_json::Value = serde_json::from_slice(
         &filesystem.files.lock().expect("test lock")
             [service_paths().metadata_index_path().as_path()],
     )
     .expect("current receipt");
-    let current_staged = PathBuf::from(
-        receipt["daemon_binary"]
-            .as_str()
-            .expect("current staged daemon path"),
-    );
-    let staged_parent = current_staged.parent().expect("staged daemon parent");
-    let orphans = (0_u16..257)
-        .map(|index| staged_parent.join(format!("{index:064x}")))
-        .filter(|path| path != &current_staged)
-        .collect::<Vec<_>>();
-    {
-        let mut files = filesystem.files.lock().expect("test lock");
-        for orphan in &orphans {
-            files.insert(orphan.clone(), b"orphaned-crash-generation".to_vec());
-        }
-    }
+    assert_eq!(receipt["daemon_binary"], "/Applications/Podway/podwayd");
+    assert_ne!(receipt["daemon_identity"], old_identity);
     assert!(matches!(
         runner.run(ServiceCommandV1::Update {
             requested_at: UnixMillis::new(3_004),
@@ -1565,9 +1527,6 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
             ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
         ))
     ));
-    let files = filesystem.files.lock().expect("test lock");
-    assert!(files.contains_key(&current_staged));
-    assert!(orphans.iter().all(|orphan| !files.contains_key(orphan)));
 }
 
 #[test]
@@ -1631,11 +1590,13 @@ fn phase6_start_stop_status_and_logs_cover_installed_lifecycle_states() {
                 .expect("stopped state retains receipt metadata");
             assert_eq!(metadata.version(), 1);
             assert_eq!(metadata.label(), "dev.podway.podwayd");
-            assert!(
-                metadata
-                    .daemon_binary()
-                    .to_string_lossy()
-                    .contains(".podway-daemons-v1/")
+            assert_eq!(
+                metadata.daemon_binary(),
+                Path::new("/Applications/Podway/podwayd")
+            );
+            assert_eq!(
+                metadata.socket_path(),
+                service_paths().socket_path().as_path()
             );
             assert_eq!(metadata.installed_at(), UnixMillis::new(3_005));
             assert_eq!(metadata.updated_at(), UnixMillis::new(3_005));
@@ -1867,6 +1828,40 @@ fn aut_home_003_explicit_socket_replaces_only_the_endpoint() {
         );
     }
 }
+
+#[test]
+fn aut_daemon_001_metadata_requires_and_returns_the_installed_socket() {
+    let metadata = serde_json::json!({
+        "version": 1,
+        "label": "dev.podway.podwayd",
+        "daemon_binary": "/Applications/Podway/podwayd",
+        "daemon_identity": "0".repeat(64),
+        "socket_path": "/Users/podway/.podway/run/custom.sock",
+        "artifact_role": "production_daemon",
+        "installed_at": 1,
+        "updated_at": 1,
+        "publication_state": "receipt_durable",
+        "generation": "1".repeat(64),
+    });
+    let bytes = serde_json::to_vec(&metadata).expect("metadata fixture");
+    assert_eq!(
+        installed_socket_path_from_metadata_v1(&bytes).expect("installed endpoint"),
+        Path::new("/Users/podway/.podway/run/custom.sock")
+    );
+
+    let mut legacy = metadata;
+    legacy
+        .as_object_mut()
+        .expect("metadata object")
+        .remove("socket_path");
+    assert!(
+        installed_socket_path_from_metadata_v1(
+            &serde_json::to_vec(&legacy).expect("legacy metadata fixture")
+        )
+        .is_err(),
+        "legacy metadata without an endpoint must not fall back"
+    );
+}
 #[test]
 fn phase6_direct_runtime_socket_path_rejects_unbindable_path() {
     let runtime_directory = format!("/{}", "a".repeat(120));
@@ -2023,11 +2018,13 @@ fn phase6_authenticated_generation_rejects_plist_semantic_tampering_and_install_
                 .expect("repair must publish receipt metadata");
             assert_eq!(metadata.version(), 1);
             assert_eq!(metadata.label(), "dev.podway.podwayd");
-            assert!(
-                metadata
-                    .daemon_binary()
-                    .to_string_lossy()
-                    .contains(".podway-daemons-v1/")
+            assert_eq!(
+                metadata.daemon_binary(),
+                Path::new("/Applications/Podway/podwayd")
+            );
+            assert_eq!(
+                metadata.socket_path(),
+                service_paths().socket_path().as_path()
             );
             assert_eq!(metadata.installed_at(), UnixMillis::new(3_008));
             assert_eq!(metadata.updated_at(), UnixMillis::new(3_008));
@@ -2049,11 +2046,13 @@ fn phase6_authenticated_generation_rejects_plist_semantic_tampering_and_install_
                 .expect("running state retains receipt metadata");
             assert_eq!(metadata.version(), 1);
             assert_eq!(metadata.label(), "dev.podway.podwayd");
-            assert!(
-                metadata
-                    .daemon_binary()
-                    .to_string_lossy()
-                    .contains(".podway-daemons-v1/")
+            assert_eq!(
+                metadata.daemon_binary(),
+                Path::new("/Applications/Podway/podwayd")
+            );
+            assert_eq!(
+                metadata.socket_path(),
+                service_paths().socket_path().as_path()
             );
             assert_eq!(metadata.installed_at(), UnixMillis::new(3_008));
             assert_eq!(metadata.updated_at(), UnixMillis::new(3_008));
@@ -2068,12 +2067,9 @@ fn phase6_authenticated_generation_rejects_plist_semantic_tampering_and_install_
             assert_eq!(already.observed_at(), UnixMillis::new(3_008));
             assert_eq!(already.metadata().version(), 1);
             assert_eq!(already.metadata().label(), "dev.podway.podwayd");
-            assert!(
-                already
-                    .metadata()
-                    .daemon_binary()
-                    .to_string_lossy()
-                    .contains(".podway-daemons-v1/")
+            assert_eq!(
+                already.metadata().daemon_binary(),
+                Path::new("/Applications/Podway/podwayd")
             );
         }
         other => panic!("repaired publication must converge, got {other:?}"),
@@ -2118,7 +2114,7 @@ fn phase6_install_repairs_oversized_metadata_but_preserves_unsafe_corruption() {
     };
     runner
         .run(install.clone())
-        .expect("initial install provides an immutable staged daemon");
+        .expect("initial install records the selected daemon");
 
     let unsafe_corrupt = br#"{"version":1,"label":"dev.podway.podwayd""#.to_vec();
     filesystem

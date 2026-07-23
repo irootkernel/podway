@@ -534,18 +534,9 @@ fn run_publication_crash_child(root: &Path, destination: &str, point: &str, writ
         .install(install_spec(&old_binary, &paths))
         .expect("publish complete old state");
 
-    let staged_identity = sha256_hex(&fs::read(&new_binary).expect("replacement binary"));
-    let staged_destination = paths
-        .metadata_index_path()
-        .as_path()
-        .parent()
-        .expect("metadata parent")
-        .join(".podway-daemons-v1")
-        .join(staged_identity);
     let destination = match destination {
         "plist" => paths.launch_agent_path().as_path(),
         "metadata" => paths.metadata_index_path().as_path(),
-        "staged" => staged_destination.as_path(),
         _ => panic!("unknown durability destination"),
     };
     StdServiceFilesystemV1::inject_durability_failpoint_for_testing(
@@ -584,7 +575,7 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
         return;
     }
 
-    for destination in ["plist", "metadata", "staged"] {
+    for destination in ["plist", "metadata"] {
         let write_invocations = if destination == "metadata" {
             1..=2
         } else {
@@ -631,39 +622,6 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
                 assert_mode_0600(plist, "replacement plist mode");
                 assert_mode_0600(metadata, "replacement metadata mode");
                 assert_service_temporaries_are_bounded_and_private(&paths);
-                let staged_directory = paths
-                    .metadata_index_path()
-                    .as_path()
-                    .parent()
-                    .expect("metadata parent")
-                    .join(".podway-daemons-v1");
-                let foreign_entry = staged_directory.join("foreign-entry");
-                if destination == "staged" {
-                    let owned_temporary_count = fs::read_dir(&staged_directory)
-                        .expect("staged daemon directory")
-                        .filter_map(Result::ok)
-                        .filter(|entry| {
-                            let name = entry.file_name();
-                            let name = name.to_string_lossy();
-                            name.starts_with('.')
-                                && name.ends_with(".tmp")
-                                && entry.file_type().is_ok_and(|kind| kind.is_file())
-                        })
-                        .count();
-                    assert_eq!(
-                        owned_temporary_count,
-                        if matches!(
-                            point,
-                            "after-temporary-write" | "after-file-sync-mode" | "before-rename"
-                        ) {
-                            1
-                        } else {
-                            0
-                        },
-                        "staged atomic crash must leave a writer temporary only before rename"
-                    );
-                    fs::write(&foreign_entry, b"foreign").expect("create foreign staged entry");
-                }
                 let clock = FixedServiceClockV1::new(UnixMillis::new(3));
                 let runner = MacosServiceCommandRunnerV1::new(
                     StdServiceFilesystemV1,
@@ -673,32 +631,6 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
                 )
                 .expect("retry runner");
                 let manager = ServiceManagerV1::new(runner, clock, paths.clone());
-                if destination == "staged" {
-                    let error = manager
-                        .install(install_spec(&root.join("bin/podwayd-new"), &paths))
-                        .expect_err("foreign staged entry must fail closed");
-                    assert!(matches!(
-                        error,
-                        ServiceErrorV1::OperationFailureV1 { source, .. }
-                            if matches!(source.as_ref(), ServiceErrorV1::InvalidMetadataV1 { .. })
-                    ));
-                    assert!(
-                        foreign_entry.exists(),
-                        "failed reconciliation must not touch a foreign staged entry"
-                    );
-                    assert!(
-                        !fs::read_dir(&staged_directory)
-                            .expect("reconciled staged daemon directory")
-                            .filter_map(Result::ok)
-                            .any(|entry| {
-                                let name = entry.file_name();
-                                let name = name.to_string_lossy();
-                                name.starts_with('.') && name.ends_with(".tmp")
-                            }),
-                        "reconciliation must reclaim the structurally owned staged temporary"
-                    );
-                    fs::remove_file(&foreign_entry).expect("remove foreign test entry");
-                }
                 manager
                     .install(install_spec(&root.join("bin/podwayd-new"), &paths))
                     .expect("retry convergence");
@@ -710,22 +642,16 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
                         let repaired = running
                             .metadata()
                             .expect("retry must publish authenticated metadata");
-                        let staged = repaired.daemon_binary();
+                        let installed = repaired.daemon_binary();
                         assert_eq!(
-                            staged.parent().and_then(Path::file_name),
-                            Some(std::ffi::OsStr::new(".podway-daemons-v1")),
-                            "{point} retry must bind a controlled staged daemon"
+                            installed,
+                            root.join("bin/podwayd-new"),
+                            "{point} retry must retain the selected daemon path"
                         );
                         assert_eq!(
-                            staged.file_name().and_then(std::ffi::OsStr::to_str),
-                            Some(repaired.daemon_identity()),
-                            "{point} staged daemon name must equal its authenticated identity"
-                        );
-                        assert_eq!(
-                            fs::read(staged).expect("staged replacement daemon"),
-                            fs::read(root.join("bin/podwayd-new"))
-                                .expect("replacement daemon source"),
-                            "{point} retry must stage the exact replacement bytes"
+                            repaired.daemon_identity(),
+                            sha256_hex(&fs::read(installed).expect("selected replacement daemon")),
+                            "{point} retry must authenticate the selected replacement bytes"
                         );
                     }
                     other => panic!("{point} retry must report running, got {other:?}"),
@@ -742,15 +668,6 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
                 );
                 assert_mode_0600(plist, "converged plist mode");
                 assert_mode_0600(metadata, "converged metadata mode");
-                if destination == "staged" {
-                    manager
-                        .uninstall()
-                        .expect("staged crash uninstall convergence");
-                    assert!(
-                        !staged_directory.exists(),
-                        "uninstall must reclaim the recovered staged daemon directory"
-                    );
-                }
                 fs::remove_dir_all(root).expect("remove fixture");
             }
         }

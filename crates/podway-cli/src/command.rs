@@ -39,9 +39,10 @@ use podway_protocol::{
 };
 use podway_service::{
     InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1,
-    ServiceClockV1, ServiceErrorV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1,
-    ServiceManagerV1, ServiceOutcomeV1, ServiceRuntimePathsV1, ServiceStatusV1,
-    StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
+    SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1, ServiceLabelV1,
+    ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1, ServiceOutcomeV1,
+    ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1, SystemLaunchctlRunnerV1,
+    UninstallOptionsV1, installed_socket_path_from_metadata_v1,
 };
 #[cfg(test)]
 use podway_service::{SERVICE_DAEMON_BINARY_MAX_BYTES_V1, validate_native_arm64_macos_macho_v1};
@@ -1370,7 +1371,29 @@ fn service_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFa
     let temporary = env::var_os("TMPDIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
+    let paths = ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
+        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    resolve_installed_service_endpoint(paths, command)
+}
+
+fn resolve_installed_service_endpoint(
+    paths: ServiceRuntimePathsV1,
+    command: &str,
+) -> Result<ServiceRuntimePathsV1, LocalFailure> {
+    let metadata_path = paths.metadata_index_path().as_path();
+    let metadata = match fs::metadata(metadata_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(paths),
+        Err(_) => return Err(LocalFailure::daemon_unavailable(command)),
+    };
+    if metadata.len() > SERVICE_METADATA_MAX_BYTES_V1 as u64 {
+        return Err(LocalFailure::daemon_unavailable(command));
+    }
+    let bytes = fs::read(metadata_path).map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    let socket_path = installed_socket_path_from_metadata_v1(&bytes)
+        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    paths
+        .with_socket_path(socket_path)
         .map_err(|_| LocalFailure::daemon_unavailable(command))
 }
 
@@ -1378,16 +1401,59 @@ fn resolve_daemon_executable(
     daemon_path: Option<&Path>,
     command: &str,
 ) -> Result<LocalPlatformPathV1, LocalFailure> {
-    let path = match daemon_path {
-        Some(path) => path.to_path_buf(),
-        None => env::current_exe()
-            .map_err(|_| LocalFailure::daemon_unavailable(command))?
-            .with_file_name("podwayd"),
-    };
-    resolve_platform_path(&path, command)
+    if let Some(path) = daemon_path {
+        return canonical_daemon_executable(path, command);
+    }
+    let current_exe = env::current_exe().map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    let search_path = env::var_os("PATH");
+    resolve_daemon_executable_from(daemon_path, &current_exe, search_path.as_deref(), command)
 }
-fn resolve_platform_path(path: &Path, command: &str) -> Result<LocalPlatformPathV1, LocalFailure> {
-    LocalPlatformPathV1::new(path).map_err(|_| {
+
+fn resolve_daemon_executable_from(
+    daemon_path: Option<&Path>,
+    current_exe: &Path,
+    search_path: Option<&OsStr>,
+    command: &str,
+) -> Result<LocalPlatformPathV1, LocalFailure> {
+    if let Some(path) = daemon_path {
+        return canonical_daemon_executable(path, command);
+    }
+
+    let sibling = current_exe.with_file_name("podwayd");
+    if is_executable_file(&sibling) {
+        return canonical_daemon_executable(&sibling, command);
+    }
+
+    let path = search_path.ok_or_else(|| LocalFailure::daemon_unavailable(command))?;
+    for directory in env::split_paths(path).filter(|directory| directory.is_absolute()) {
+        let candidate = directory.join("podwayd");
+        if is_executable_file(&candidate) {
+            return canonical_daemon_executable(&candidate, command);
+        }
+    }
+    Err(LocalFailure::daemon_unavailable(command))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0)
+}
+
+fn canonical_daemon_executable(
+    path: &Path,
+    command: &str,
+) -> Result<LocalPlatformPathV1, LocalFailure> {
+    if !path.is_absolute() {
+        return Err(LocalFailure::request_invalid(
+            "daemon executable path must be absolute and normalized",
+        )
+        .with_command(command));
+    }
+    let canonical =
+        fs::canonicalize(path).map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    if !is_executable_file(&canonical) {
+        return Err(LocalFailure::daemon_unavailable(command));
+    }
+    LocalPlatformPathV1::new(canonical).map_err(|_| {
         LocalFailure::request_invalid("daemon executable path must be absolute and normalized")
             .with_command(command)
     })
@@ -2272,6 +2338,7 @@ fn daemon_client(
 ) -> Result<DaemonClientV1, LocalFailure> {
     let paths = if socket_path.is_some() {
         ServiceRuntimePathsV1::for_effective_user()
+            .map_err(|_| LocalFailure::daemon_unavailable("cli"))
     } else {
         let home = env::var_os("HOME")
             .map(PathBuf::from)
@@ -2279,9 +2346,10 @@ fn daemon_client(
         let temporary = env::var_os("TMPDIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp"));
-        ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
-    }
-    .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
+        let paths = ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
+            .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
+        resolve_installed_service_endpoint(paths, "cli")
+    }?;
     let read_timeout = Duration::from_millis(wait_timeout_ms.saturating_add(1_000))
         .max(DEFAULT_DAEMON_CONNECT_TIMEOUT_V1);
     let timeouts = DaemonClientTimeoutsV1::new(
@@ -3266,9 +3334,9 @@ mod tests {
         Cli, Command, LocalEnvelopeClock, LocalFailure, local_generated_at, local_result,
         map_service_error, parse_timeout_millis, probe_daemon_version,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
-        resolve_daemon_executable, service_outcome_result, service_status_result,
-        stream_log_follow_update, system_service_clock, validate_native_arm64_macos_macho,
-        verify_daemon_compatibility,
+        resolve_daemon_executable, resolve_daemon_executable_from, service_outcome_result,
+        service_status_result, stream_log_follow_update, system_service_clock,
+        validate_native_arm64_macos_macho, verify_daemon_compatibility,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
@@ -3358,6 +3426,7 @@ mod tests {
             );
             let metadata = ServiceInstallMetadataV1::new(
                 &fixture.path,
+                "/tmp/podwayd.sock",
                 UnixMillis::new(1),
                 UnixMillis::new(1),
             )
@@ -3671,16 +3740,56 @@ mod tests {
     }
     #[test]
     fn daemon_install_path_resolution_rejects_non_platform_paths() {
-        let binary =
-            resolve_daemon_executable(Some(std::path::Path::new("/opt/podwayd")), "daemon.install")
-                .expect("absolute daemon path must be accepted");
-        assert_eq!(binary.as_path(), std::path::Path::new("/opt/podwayd"));
+        let fixture = VersionProbeScript::new("exit 0");
+        let binary = resolve_daemon_executable(Some(&fixture.path), "daemon.install")
+            .expect("existing absolute daemon path must be accepted");
+        assert_eq!(
+            binary.as_path(),
+            std::fs::canonicalize(&fixture.path).expect("fixture path must canonicalize")
+        );
 
         let failure =
             resolve_daemon_executable(Some(std::path::Path::new("podwayd")), "daemon.install")
                 .expect_err("relative daemon path must be rejected");
         assert_eq!(failure.code, "REQUEST_INVALID");
         assert_eq!(failure.command, "daemon.install");
+
+        let path_fixture = VersionProbeScript::new("exit 0");
+        let from_path = resolve_daemon_executable_from(
+            None,
+            &fixture.directory.join("missing/podway"),
+            Some(path_fixture.directory.as_os_str()),
+            "daemon.install",
+        )
+        .expect("controlled PATH daemon must be selected after a missing sibling");
+        assert_eq!(
+            from_path.as_path(),
+            std::fs::canonicalize(&path_fixture.path).expect("PATH fixture canonical path")
+        );
+
+        let sibling = resolve_daemon_executable_from(
+            None,
+            &fixture.directory.join("podway"),
+            Some(path_fixture.directory.as_os_str()),
+            "daemon.install",
+        )
+        .expect("resolved CLI sibling must precede PATH");
+        assert_eq!(
+            sibling.as_path(),
+            std::fs::canonicalize(&fixture.path).expect("sibling fixture canonical path")
+        );
+
+        let explicit = resolve_daemon_executable_from(
+            Some(&path_fixture.path),
+            &fixture.directory.join("podway"),
+            Some(fixture.directory.as_os_str()),
+            "daemon.install",
+        )
+        .expect("explicit daemon must precede sibling and PATH");
+        assert_eq!(
+            explicit.as_path(),
+            std::fs::canonicalize(&path_fixture.path).expect("explicit fixture canonical path")
+        );
     }
 }
 

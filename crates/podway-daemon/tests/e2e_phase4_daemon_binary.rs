@@ -129,4 +129,13 @@ fn podwayd_service_and_version_modes_are_explicit() {
         .expect("podwayd invalid-argument process must run");
     assert!(!invalid.status.success());
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("usage: podwayd"));
+
+    let relative_socket = Command::new(env!("CARGO_BIN_EXE_podwayd"))
+        .args(["--service", "--socket", "relative.sock"])
+        .env_remove("HOME")
+        .env_remove("TMPDIR")
+        .output()
+        .expect("podwayd explicit socket validation process must run");
+    assert!(!relative_socket.status.success());
+    assert!(String::from_utf8_lossy(&relative_socket.stderr).contains("must be absolute"));
 }
