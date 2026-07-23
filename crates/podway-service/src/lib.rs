@@ -48,6 +48,7 @@ pub const SERVICE_LOG_RETAINED_FILES_V1: u8 = 5;
 pub const SERVICE_METADATA_MAX_BYTES_V1: usize = 16 * 1024;
 pub const SERVICE_PLIST_MAX_BYTES_V1: usize = 64 * 1024;
 pub const SERVICE_DAEMON_BINARY_MAX_BYTES_V1: usize = 128 * 1024 * 1024;
+const MACOS_UNIX_SOCKET_PATH_CAPACITY_V1: usize = 104;
 const SERVICE_BINARY_IDENTITY_HEX_LENGTH_V1: usize = 64;
 const SERVICE_TEMPORARY_STALE_AGE_V1: Duration = Duration::from_secs(300);
 const SERVICE_LIFECYCLE_LOCK_TIMEOUT_V1: Duration = Duration::from_secs(10);
@@ -252,9 +253,7 @@ impl ServiceRuntimePathsV1 {
         validate_service_path(runtime_directory, "runtime_directory")?;
 
         let socket_path = runtime_directory.join("podwayd.sock");
-        if socket_path.as_os_str().len() >= 104 {
-            return Err(ServicePathErrorV1::SocketPathTooLong { path: socket_path });
-        }
+        validate_socket_path_capacity(&socket_path)?;
 
         Ok(Self {
             podway_home: None,
@@ -291,9 +290,7 @@ impl ServiceRuntimePathsV1 {
         let state_directory = home.as_path().join("state");
         let logs_directory = home.as_path().join("logs");
         let socket_path = runtime_directory.join("podwayd.sock");
-        if socket_path.as_os_str().len() >= 104 {
-            return Err(ServicePathErrorV1::SocketPathTooLong { path: socket_path });
-        }
+        validate_socket_path_capacity(&socket_path)?;
 
         Ok(Self {
             podway_home: Some(LocalPlatformPathV1::service_global(home.as_path())?),
@@ -354,11 +351,7 @@ impl ServiceRuntimePathsV1 {
         socket_path: impl AsRef<Path>,
     ) -> Result<Self, ServicePathErrorV1> {
         let socket_path = socket_path.as_ref();
-        if socket_path.as_os_str().len() >= 104 {
-            return Err(ServicePathErrorV1::SocketPathTooLong {
-                path: socket_path.to_path_buf(),
-            });
-        }
+        validate_socket_path_capacity(socket_path)?;
         self.socket_path = LocalPlatformPathV1::service_global(socket_path)?;
         Ok(self)
     }
@@ -534,11 +527,8 @@ impl ServiceInstallMetadataV1 {
         let socket_path = socket_path.as_ref().to_path_buf();
         validate_absolute_normalized_path(&socket_path, "socket_path")
             .map_err(ServiceMetadataErrorV1::InvalidDaemonBinary)?;
-        if socket_path.as_os_str().len() >= 104 {
-            return Err(ServiceMetadataErrorV1::InvalidDaemonBinary(
-                ServicePathErrorV1::SocketPathTooLong { path: socket_path },
-            ));
-        }
+        validate_socket_path_capacity(&socket_path)
+            .map_err(ServiceMetadataErrorV1::InvalidDaemonBinary)?;
         Ok(Self {
             version: SERVICE_METADATA_VERSION_V1,
             label: SERVICE_LABEL_V1.to_owned(),
@@ -1586,6 +1576,15 @@ fn validate_absolute_normalized_path(
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+fn validate_socket_path_capacity(path: &Path) -> Result<(), ServicePathErrorV1> {
+    if path.as_os_str().len() >= MACOS_UNIX_SOCKET_PATH_CAPACITY_V1 {
+        return Err(ServicePathErrorV1::SocketPathTooLong {
+            path: path.to_path_buf(),
+        });
     }
     Ok(())
 }

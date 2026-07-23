@@ -1812,6 +1812,20 @@ fn aut_home_003_explicit_socket_replaces_only_the_endpoint() {
 }
 
 #[test]
+fn explicit_socket_enforces_the_macos_sun_path_capacity_boundary() {
+    let paths = ServiceRuntimePathsV1::for_user("/Users/podway", "/tmp", 501)
+        .expect("canonical service paths");
+    let longest_bindable = format!("/{}", "s".repeat(102));
+    let first_unbindable = format!("/{}", "s".repeat(103));
+
+    assert!(paths.clone().with_socket_path(longest_bindable).is_ok());
+    assert!(matches!(
+        paths.with_socket_path(first_unbindable),
+        Err(ServicePathErrorV1::SocketPathTooLong { .. })
+    ));
+}
+
+#[test]
 fn aut_daemon_001_metadata_requires_and_returns_the_installed_socket() {
     let metadata = serde_json::json!({
         "version": 1,
