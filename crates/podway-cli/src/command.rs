@@ -1414,19 +1414,14 @@ fn resolve_daemon_executable(
     }
     let current_exe = env::current_exe().map_err(|_| LocalFailure::daemon_unavailable(command))?;
     let search_path = env::var_os("PATH");
-    resolve_daemon_executable_from(daemon_path, &current_exe, search_path.as_deref(), command)
+    resolve_implicit_daemon_executable_from(&current_exe, search_path.as_deref(), command)
 }
 
-fn resolve_daemon_executable_from(
-    daemon_path: Option<&Path>,
+fn resolve_implicit_daemon_executable_from(
     current_exe: &Path,
     search_path: Option<&OsStr>,
     command: &str,
 ) -> Result<LocalPlatformPathV1, LocalFailure> {
-    if let Some(path) = daemon_path {
-        return canonical_daemon_executable(path, command);
-    }
-
     let resolved_current_exe =
         fs::canonicalize(current_exe).map_err(|_| LocalFailure::daemon_unavailable(command))?;
     let sibling = resolved_current_exe.with_file_name("podwayd");
@@ -3299,7 +3294,7 @@ mod tests {
         Cli, Command, LocalEnvelopeClock, LocalFailure, local_generated_at, local_result,
         map_service_error, parse_timeout_millis, probe_daemon_version,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
-        resolve_daemon_executable, resolve_daemon_executable_from,
+        resolve_daemon_executable, resolve_implicit_daemon_executable_from,
         resolve_installed_service_endpoint, service_outcome_result, service_status_result,
         stream_log_follow_update, system_service_clock,
     };
@@ -3715,8 +3710,7 @@ mod tests {
         assert_eq!(failure.command, "daemon.install");
 
         let path_fixture = VersionProbeScript::new("exit 0");
-        let from_path = resolve_daemon_executable_from(
-            None,
+        let from_path = resolve_implicit_daemon_executable_from(
             std::path::Path::new("/bin/sh"),
             Some(path_fixture.directory.as_os_str()),
             "daemon.install",
@@ -3731,8 +3725,7 @@ mod tests {
         std::fs::write(&cli, "#!/bin/sh\nexit 0\n").expect("CLI fixture must be written");
         std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700))
             .expect("CLI fixture must be executable");
-        let sibling = resolve_daemon_executable_from(
-            None,
+        let sibling = resolve_implicit_daemon_executable_from(
             &cli,
             Some(path_fixture.directory.as_os_str()),
             "daemon.install",
@@ -3747,8 +3740,7 @@ mod tests {
         std::fs::create_dir(&symlink_directory).expect("CLI symlink directory must be created");
         let cli_symlink = symlink_directory.join("podway");
         std::os::unix::fs::symlink(&cli, &cli_symlink).expect("CLI symlink must be created");
-        let symlink_sibling = resolve_daemon_executable_from(
-            None,
+        let symlink_sibling = resolve_implicit_daemon_executable_from(
             &cli_symlink,
             Some(path_fixture.directory.as_os_str()),
             "daemon.install",
@@ -3757,18 +3749,6 @@ mod tests {
         assert_eq!(
             symlink_sibling.as_path(),
             std::fs::canonicalize(&fixture.path).expect("symlink sibling canonical path")
-        );
-
-        let explicit = resolve_daemon_executable_from(
-            Some(&path_fixture.path),
-            &fixture.directory.join("podway"),
-            Some(fixture.directory.as_os_str()),
-            "daemon.install",
-        )
-        .expect("explicit daemon must precede sibling and PATH");
-        assert_eq!(
-            explicit.as_path(),
-            std::fs::canonicalize(&path_fixture.path).expect("explicit fixture canonical path")
         );
     }
 }
