@@ -44,8 +44,6 @@ use podway_service::{
     ServiceOutcomeV1, ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1,
     SystemLaunchctlRunnerV1, UninstallOptionsV1, installed_socket_path_from_metadata_v1,
 };
-#[cfg(test)]
-use podway_service::{SERVICE_DAEMON_BINARY_MAX_BYTES_V1, validate_native_arm64_macos_macho_v1};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -1470,46 +1468,6 @@ fn canonical_daemon_executable(
             .with_command(command)
     })
 }
-#[cfg(test)]
-fn validate_native_arm64_macos_macho(binary: &Path) -> Result<(), ServiceErrorV1> {
-    let metadata = fs::metadata(binary).map_err(|error| ServiceErrorV1::IoV1 {
-        operation: None,
-        message: error.to_string(),
-    })?;
-    if !metadata.is_file() || metadata.mode() & 0o111 == 0 {
-        return Err(ServiceErrorV1::InvalidExecutableV1 {
-            message: format!("daemon binary is not executable: {}", binary.display()),
-        });
-    }
-    if metadata.len() > SERVICE_DAEMON_BINARY_MAX_BYTES_V1 as u64 {
-        return Err(ServiceErrorV1::InvalidExecutableV1 {
-            message: format!(
-                "daemon binary exceeds {} bytes",
-                SERVICE_DAEMON_BINARY_MAX_BYTES_V1
-            ),
-        });
-    }
-    let bytes = fs::read(binary).map_err(|error| ServiceErrorV1::IoV1 {
-        operation: None,
-        message: error.to_string(),
-    })?;
-    validate_native_arm64_macos_macho_v1(&bytes)
-}
-#[cfg(test)]
-fn verify_daemon_compatibility(binary: &Path, command: &str) -> Result<(), LocalFailure> {
-    let observed =
-        probe_daemon_version(binary).map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    let expected = env!("CARGO_PKG_VERSION");
-    if observed != expected {
-        return Err(LocalFailure::catalog(
-            "DAEMON_VERSION_INCOMPATIBLE",
-            format!("CLI {expected} is incompatible with podwayd {observed}"),
-            command,
-        ));
-    }
-    Ok(())
-}
-
 fn probe_daemon_version(binary: &Path) -> Result<String, ServiceErrorV1> {
     let runner = SystemLaunchctlRunnerV1::new(binary).with_bounds(
         DAEMON_VERSION_PROBE_TIMEOUT,
@@ -3343,8 +3301,7 @@ mod tests {
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
         resolve_daemon_executable, resolve_daemon_executable_from,
         resolve_installed_service_endpoint, service_outcome_result, service_status_result,
-        stream_log_follow_update, system_service_clock, validate_native_arm64_macos_macho,
-        verify_daemon_compatibility,
+        stream_log_follow_update, system_service_clock,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
@@ -3446,9 +3403,6 @@ mod tests {
             probe_daemon_version(&success.path).expect("valid probe output"),
             expected
         );
-        assert_eq!(probe_daemon_version(&success.path), Ok(expected.to_owned()));
-        verify_daemon_compatibility(&success.path, "daemon.install")
-            .expect("matching daemon version is compatible");
 
         for body in [
             "printf 'podwayd 0.0.0\\n'; exit 7",
@@ -3465,16 +3419,6 @@ mod tests {
             assert!(
                 probe_daemon_version(&fixture.path).is_err(),
                 "probe must reject script: {body}"
-            );
-            assert!(
-                probe_daemon_version(&fixture.path).is_err(),
-                "daemon version lookup must surface script failure: {body}"
-            );
-            assert_eq!(
-                verify_daemon_compatibility(&fixture.path, "daemon.install")
-                    .expect_err("invalid probe must fail install")
-                    .code,
-                "DAEMON_UNAVAILABLE"
             );
             let metadata = ServiceInstallMetadataV1::new(
                 &fixture.path,
@@ -3499,42 +3443,6 @@ mod tests {
                 "DAEMON_UNAVAILABLE"
             );
         }
-
-        let incompatible = VersionProbeScript::new("printf 'podwayd 0.0.0\\n'");
-        assert_eq!(
-            verify_daemon_compatibility(&incompatible.path, "daemon.install")
-                .expect_err("different daemon version is incompatible")
-                .code,
-            "DAEMON_VERSION_INCOMPATIBLE"
-        );
-    }
-    #[test]
-    fn native_arm64_macho_preflight_accepts_only_a_thin_macos_fixture() {
-        let directory = std::env::temp_dir().join(format!(
-            "podway-cli-native-daemon-{}-{}",
-            std::process::id(),
-            VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&directory).expect("create native daemon fixture directory");
-        let path = directory.join("podwayd");
-        let mut macho = vec![0_u8; 40];
-        macho[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
-        macho[4..8].copy_from_slice(&0x0100_000cu32.to_le_bytes());
-        macho[16..20].copy_from_slice(&1_u32.to_le_bytes());
-        macho[20..24].copy_from_slice(&8_u32.to_le_bytes());
-        macho[32..36].copy_from_slice(&0x32_u32.to_le_bytes());
-        macho[36..40].copy_from_slice(&8_u32.to_le_bytes());
-        fs::write(&path, macho).expect("write native daemon fixture");
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-            .expect("make native daemon fixture executable");
-
-        assert!(validate_native_arm64_macos_macho(&path).is_ok());
-        fs::write(&path, b"\xca\xfe\xba\xbe").expect("replace with universal fixture");
-        assert!(matches!(
-            validate_native_arm64_macos_macho(&path),
-            Err(podway_service::ServiceErrorV1::InvalidExecutableV1 { .. })
-        ));
-        fs::remove_dir_all(directory).expect("remove native daemon fixture directory");
     }
 
     #[test]

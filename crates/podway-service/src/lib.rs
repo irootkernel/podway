@@ -340,6 +340,7 @@ impl ServiceRuntimePathsV1 {
     pub fn workspace_registry_path(&self) -> &LocalPlatformPathV1 {
         &self.workspace_registry_path
     }
+
     pub fn socket_path(&self) -> &LocalPlatformPathV1 {
         &self.socket_path
     }
