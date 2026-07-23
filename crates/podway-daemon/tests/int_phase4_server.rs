@@ -282,9 +282,13 @@ fn send_and_half_close(client: &mut UnixStream, frame: &[u8]) {
     client
         .write_all(frame)
         .expect("client must write request bytes");
-    client
-        .shutdown(Shutdown::Write)
-        .expect("client must half-close request stream");
+    if let Err(error) = client.shutdown(Shutdown::Write) {
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::NotConnected,
+            "client half-close failed before the server closed its completed request"
+        );
+    }
 }
 
 fn assert_error_code(response: ResponseEnvelopeV1, code: &str) -> podway_protocol::ErrorEnvelopeV1 {
@@ -308,11 +312,6 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
         ServerTransportTimeoutsV1::new(Duration::from_secs(30), Duration::from_secs(5))
             .expect("fragmentation test timeouts are valid"),
     );
-    let handler = {
-        let transport = Arc::clone(&transport);
-        thread::spawn(move || transport.handle_connection(server))
-    };
-
     let frame = request_frame(&request());
     for byte in frame {
         client.write_all(&[byte]).expect("fragment must write");
@@ -321,14 +320,18 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
         .shutdown(Shutdown::Write)
         .expect("fragmented client must half-close");
 
-    match read_response(&mut client) {
+    let handler_result = transport.handle_connection(server);
+    let response = read_response(&mut client);
+    match response {
         ResponseEnvelopeV1::Output(output) => {
             assert_eq!(output.request_id().to_string(), REQUEST_ID);
             assert_eq!(output.command().as_str(), "session.status");
         }
-        ResponseEnvelopeV1::Error(error) => panic!("unexpected transport error: {error:?}"),
+        ResponseEnvelopeV1::Error(error) => {
+            panic!("unexpected transport error: {error:?}; handler result: {handler_result:?}")
+        }
     }
-    assert!(handler.join().expect("handler must not panic").is_ok());
+    assert!(handler_result.is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
