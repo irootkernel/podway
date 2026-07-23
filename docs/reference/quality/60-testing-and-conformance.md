@@ -185,9 +185,13 @@ Target `podway daemon install` MUST resolve and validate the actual `podwayd`
 binary without staging or copying it. The LaunchAgent records that canonical
 absolute path and does not support a wrapper or ambient `PATH` lookup.
 
-The planned automation conformance additions are defined in the
+Automation conformance scenarios are defined in the
 [automation acceptance matrix](../interfaces/34-automation-client-contract.md#24-acceptance-matrix).
-They enter this implemented test inventory only with their production tasks.
+Their evidence may span implementation and integration tasks. A scenario enters
+this implemented test inventory only when every task named by its roadmap mapping
+has supplied the required executable evidence. The product acceptance matrix
+remains the machine-readable binding for `PAC-*` criteria; it does not accept
+`AUT-*` evidence rows.
 
 ## CLI and JSON tests
 

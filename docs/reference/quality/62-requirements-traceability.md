@@ -102,10 +102,13 @@ The omitted seventh release requirement is retired by [ADR-0011](../../adr/0011-
 
 ## Change-control rule
 
-The accepted but unimplemented automation requirements use `AUT-*` identifiers in
-the [automation client contract](../interfaces/34-automation-client-contract.md).
-They remain linked to planned roadmap evidence there until implementation promotes
-them into the machine-validated product acceptance matrix.
+Automation requirements use `AUT-*` identifiers in the
+[automation client contract](../interfaces/34-automation-client-contract.md).
+Implemented requirements and their remaining integration evidence stay linked
+through that contract's acceptance matrix and roadmap mappings. The
+machine-validated product acceptance matrix is reserved for `PAC-*` criteria; a
+dedicated machine-readable automation evidence registry requires an explicit
+schema and verifier rather than additional rows in the product matrix.
 
 A code change that affects a requirement must update:
 
