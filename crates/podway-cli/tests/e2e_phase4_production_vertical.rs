@@ -33,7 +33,6 @@ static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 struct FixtureV1 {
     root: PathBuf,
     home: PathBuf,
-    temporary: PathBuf,
     paths: ServiceRuntimePathsV1,
     worktree: PathBuf,
 }
@@ -58,7 +57,6 @@ impl FixtureV1 {
         Self {
             root,
             home,
-            temporary,
             paths,
             worktree,
         }
@@ -66,13 +64,16 @@ impl FixtureV1 {
 
     fn run(&self, workspace: &Path, command: &str, arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(["--json", "--worktree"])
+            .args(["--json", "--socket"])
+            .arg(self.paths.socket_path().as_path())
+            .arg("--worktree")
             .arg(workspace)
             .arg(command)
             .args(arguments)
             .current_dir(&self.root)
-            .env("HOME", &self.home)
-            .env("TMPDIR", &self.temporary)
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME")
             .output()
             .expect("the real podway binary must run")
     }
@@ -342,9 +343,11 @@ impl RunningDaemonV1 {
         let socket_path = fixture.paths.socket_path().as_path().to_path_buf();
         let readiness_started = Instant::now();
         let mut child = Command::new(&daemon_binary)
+            .args(["--service", "--socket"])
+            .arg(&socket_path)
             .current_dir(&fixture.root)
-            .env("HOME", &fixture.home)
-            .env("TMPDIR", &fixture.temporary)
+            .env_clear()
+            .env("PODWAY_TEST_ACCOUNT_ROOT", &fixture.home)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

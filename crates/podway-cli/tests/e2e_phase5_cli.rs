@@ -23,17 +23,13 @@ use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
 
 fn run(arguments: &[&str]) -> Output {
-    let isolated = unique_short_fixture_path();
-    let temporary = unique_short_fixture_path();
-    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+    Command::new(env!("CARGO_BIN_EXE_podway"))
         .args(arguments)
-        .env("HOME", &isolated)
-        .env("TMPDIR", &temporary)
+        .env_remove("HOME")
+        .env_remove("TMPDIR")
+        .env_remove("XDG_CONFIG_HOME")
         .output()
-        .expect("podway binary must run");
-    let _ = fs::remove_dir_all(isolated);
-    let _ = fs::remove_dir_all(temporary);
-    output
+        .expect("podway binary must run")
 }
 fn frozen_command_catalog_routes() -> Vec<String> {
     let catalog = fs::read_to_string(
@@ -188,7 +184,20 @@ fn generated_dynamic_candidates(
     current_dir: &Path,
     words: &[String],
 ) -> (Vec<String>, Vec<u8>) {
-    let rendered_words = words
+    let mut effective_words = words.to_vec();
+    let has_socket = effective_words
+        .iter()
+        .any(|word| word == "--socket" || word.starts_with("--socket="));
+    if fixture.socket_path.exists() && !has_socket {
+        effective_words.splice(
+            1..1,
+            [
+                "--socket".to_owned(),
+                fixture.socket_path.display().to_string(),
+            ],
+        );
+    }
+    let rendered_words = effective_words
         .iter()
         .map(|word| shell_quote(word))
         .collect::<Vec<_>>()
@@ -204,37 +213,39 @@ fn generated_dynamic_candidates(
         "bash" => {
             let program = format!(
                 "source \"$1\"\nCOMP_WORDS=({rendered_words})\nCOMP_CWORD={}\n_podway\nprintf '%s\\n' \"${{COMPREPLY[@]}}\"\n",
-                words.len() - 1
+                effective_words.len() - 1
             );
             Command::new("bash")
                 .args(["-c", &program, "bash"])
                 .arg(&script.path)
                 .current_dir(current_dir)
                 .env("PATH", &path)
-                .env("HOME", &fixture.home)
-                .env("TMPDIR", &fixture.temporary)
+                .env_remove("HOME")
+                .env_remove("TMPDIR")
+                .env_remove("XDG_CONFIG_HOME")
                 .output()
                 .expect("bash must run")
         }
         "zsh" => {
             let program = format!(
                 "autoload -Uz compinit\ncompinit -D -i\nsource \"$1\"\nwords=({rendered_words})\nCURRENT={}\nroute=$(_podway_route)\n_podway_candidates \"$route\"\n",
-                words.len()
+                effective_words.len()
             );
             Command::new("zsh")
                 .args(["-fc", &program, "zsh"])
                 .arg(&script.path)
                 .current_dir(current_dir)
                 .env("PATH", &path)
-                .env("HOME", &fixture.home)
-                .env("TMPDIR", &fixture.temporary)
+                .env_remove("HOME")
+                .env_remove("TMPDIR")
+                .env_remove("XDG_CONFIG_HOME")
                 .output()
                 .expect("zsh must run")
         }
         "fish" => {
             let command_line = format!(
                 "{} ",
-                words
+                effective_words
                     .iter()
                     .filter(|word| !word.is_empty())
                     .map(|word| shell_quote(word))
@@ -247,8 +258,9 @@ fn generated_dynamic_candidates(
                 .arg(command_line)
                 .current_dir(current_dir)
                 .env("PATH", &path)
-                .env("HOME", &fixture.home)
-                .env("TMPDIR", &fixture.temporary)
+                .env_remove("HOME")
+                .env_remove("TMPDIR")
+                .env_remove("XDG_CONFIG_HOME")
                 .output()
                 .expect("fish must run")
         }
@@ -277,8 +289,6 @@ fn generated_dynamic_candidates(
 
 struct DynamicCompletionFixture {
     root: PathBuf,
-    home: PathBuf,
-    temporary: PathBuf,
     socket_path: PathBuf,
 }
 
@@ -303,28 +313,47 @@ impl DynamicCompletionFixture {
         .expect("fixture runtime directory must be private");
         Self {
             root,
-            home,
-            temporary,
             socket_path: paths.socket_path().as_path().to_path_buf(),
         }
     }
 
     fn run(&self, arguments: &[&str]) -> Output {
+        let arguments = self.arguments_with_explicit_endpoint(arguments);
         Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(arguments)
-            .env("HOME", &self.home)
-            .env("TMPDIR", &self.temporary)
+            .args(&arguments)
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME")
             .output()
             .expect("podway binary must run")
     }
     fn run_in(&self, directory: &Path, arguments: &[String]) -> Output {
+        let arguments = self.arguments_with_explicit_endpoint(
+            &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
         Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(arguments)
+            .args(&arguments)
             .current_dir(directory)
-            .env("HOME", &self.home)
-            .env("TMPDIR", &self.temporary)
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME")
             .output()
             .expect("podway binary must run")
+    }
+
+    fn arguments_with_explicit_endpoint(&self, arguments: &[&str]) -> Vec<String> {
+        let mut resolved = Vec::with_capacity(arguments.len() + 2);
+        if self.socket_path.exists()
+            && command_accepts_explicit_socket(arguments)
+            && !arguments
+                .iter()
+                .any(|argument| *argument == "--socket" || argument.starts_with("--socket="))
+        {
+            resolved.push("--socket".to_owned());
+            resolved.push(self.socket_path.display().to_string());
+        }
+        resolved.extend(arguments.iter().map(|argument| (*argument).to_owned()));
+        resolved
     }
 
     fn install_cli_on_path(&self) -> PathBuf {
@@ -336,10 +365,80 @@ impl DynamicCompletionFixture {
     }
 }
 
+fn command_accepts_explicit_socket(arguments: &[&str]) -> bool {
+    let mut index = 0;
+    while let Some(argument) = arguments.get(index) {
+        match *argument {
+            "--json" | "--no-color" | "--quiet" | "--yes" => index += 1,
+            "--worktree" | "--timeout" | "--daemon-path" => index += 2,
+            argument if argument.starts_with('-') => index += 1,
+            "version" | "completions" | "help" | "preset" | "procedure" => return false,
+            "daemon" => return arguments.get(index + 1) == Some(&"install"),
+            _ => return true,
+        }
+    }
+    false
+}
+
 impl Drop for DynamicCompletionFixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn aut_t_path_invokes_cli_symlink_from_sanitized_arbitrary_directory() {
+    let fixture = DynamicCompletionFixture::new();
+    let bin = fixture.install_cli_on_path();
+    let arbitrary = fixture.root.join("outside-worktree");
+    fs::create_dir(&arbitrary).expect("arbitrary working directory must be created");
+    let controlled_path = format!("{}:/usr/bin:/bin", bin.display());
+    assert!(
+        fs::symlink_metadata(bin.join("podway"))
+            .expect("controlled PATH CLI entry")
+            .file_type()
+            .is_symlink(),
+        "the controlled PATH probe must execute through a CLI symlink"
+    );
+
+    let version = Command::new("podway")
+        .args(["--json", "version"])
+        .current_dir(&arbitrary)
+        .env_clear()
+        .env("PATH", &controlled_path)
+        .output()
+        .expect("controlled PATH must resolve podway");
+    assert!(
+        version.status.success(),
+        "PATH version probe failed: {version:?}"
+    );
+    assert_eq!(
+        one_json(&version)["result"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let server = RecordingDaemon::start(
+        &fixture,
+        vec![RecordingReply::Output(authoritative_status_result(
+            serde_json::json!([]),
+        ))],
+    );
+    let status = Command::new("podway")
+        .args(["--json", "--socket"])
+        .arg(&fixture.socket_path)
+        .arg("--worktree")
+        .arg(&fixture.root)
+        .arg("status")
+        .current_dir(&arbitrary)
+        .env_clear()
+        .env("PATH", &controlled_path)
+        .output()
+        .expect("sanitized daemon-backed PATH probe must run");
+    assert!(
+        status.status.success(),
+        "PATH status probe failed: {status:?}"
+    );
+    assert_eq!(server.finish().len(), 1);
 }
 
 struct DynamicCompletionServer {

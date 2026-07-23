@@ -58,6 +58,19 @@ podway daemon ...
 The target machine identity form is `podway --json version` and requires no
 worktree, daemon, `HOME`, or `TMPDIR`.
 
+## PATH invocation and runtime environment
+
+Automation may invoke `podway` by command name through a controlled `PATH`,
+including when that entry is a symlink. Static and daemon-backed commands operate
+from arbitrary working directories without `HOME`, `TMPDIR`, or `XDG_*` when the
+required absolute worktree and socket are supplied.
+
+`podway daemon install` resolves `podwayd` in this order: an explicit
+`--daemon-path`, a sibling of the canonicalized current CLI executable, and then
+the controlled `PATH`. The selected daemon is canonicalized and identity-checked,
+and the LaunchAgent receives its absolute path rather than relying on a login
+shell or interactive environment.
+
 ## Help topics
 
 ```bash

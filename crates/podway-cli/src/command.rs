@@ -1365,13 +1365,7 @@ fn execute_service_lifecycle_with_manager(
 }
 
 fn service_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| LocalFailure::daemon_unavailable(command))?;
-    let temporary = env::var_os("TMPDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    let paths = ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
+    let paths = ServiceRuntimePathsV1::for_effective_user()
         .map_err(|_| LocalFailure::daemon_unavailable(command))?;
     resolve_installed_service_endpoint(paths, command)
 }
@@ -1435,7 +1429,9 @@ fn resolve_daemon_executable_from(
         return canonical_daemon_executable(path, command);
     }
 
-    let sibling = current_exe.with_file_name("podwayd");
+    let resolved_current_exe =
+        fs::canonicalize(current_exe).map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    let sibling = resolved_current_exe.with_file_name("podwayd");
     if is_executable_file(&sibling) {
         return canonical_daemon_executable(&sibling, command);
     }
@@ -2352,20 +2348,13 @@ fn daemon_client(
     wait_timeout_ms: u64,
     socket_path: Option<&Path>,
 ) -> Result<DaemonClientV1, LocalFailure> {
+    let paths = ServiceRuntimePathsV1::for_effective_user()
+        .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
     let paths = if socket_path.is_some() {
-        ServiceRuntimePathsV1::for_effective_user()
-            .map_err(|_| LocalFailure::daemon_unavailable("cli"))
+        paths
     } else {
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| LocalFailure::daemon_unavailable("cli"))?;
-        let temporary = env::var_os("TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
-        let paths = ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
-            .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
-        resolve_installed_service_endpoint(paths, "cli")
-    }?;
+        resolve_installed_service_endpoint(paths, "cli")?
+    };
     let read_timeout = Duration::from_millis(wait_timeout_ms.saturating_add(1_000))
         .max(DEFAULT_DAEMON_CONNECT_TIMEOUT_V1);
     let timeouts = DaemonClientTimeoutsV1::new(
@@ -3352,9 +3341,10 @@ mod tests {
         Cli, Command, LocalEnvelopeClock, LocalFailure, local_generated_at, local_result,
         map_service_error, parse_timeout_millis, probe_daemon_version,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
-        resolve_daemon_executable, resolve_daemon_executable_from, service_outcome_result,
-        service_status_result, stream_log_follow_update, system_service_clock,
-        validate_native_arm64_macos_macho, verify_daemon_compatibility,
+        resolve_daemon_executable, resolve_daemon_executable_from,
+        resolve_installed_service_endpoint, service_outcome_result, service_status_result,
+        stream_log_follow_update, system_service_clock, validate_native_arm64_macos_macho,
+        verify_daemon_compatibility,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
@@ -3390,6 +3380,50 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn installed_endpoint_resolution_uses_only_private_durable_metadata() {
+        use podway_service::ServiceRuntimePathsV1;
+
+        let fixture = VersionProbeScript::new("exit 0");
+        let state = fixture.directory.join("state");
+        fs::create_dir(&state).expect("metadata parent must be created");
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o700))
+            .expect("metadata parent must be private");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            fixture.directory.join("launch-agents"),
+            &state,
+            fixture.directory.join("logs"),
+            fixture.directory.join("run"),
+        )
+        .expect("metadata fixture paths must be valid");
+        let installed_socket = fixture.directory.join("installed.sock");
+        let metadata = serde_json::to_vec(&json!({
+            "version": 1,
+            "label": "dev.podway.podwayd",
+            "daemon_binary": fixture.path.display().to_string(),
+            "daemon_identity": "0".repeat(64),
+            "socket_path": installed_socket.display().to_string(),
+            "artifact_role": "production_daemon",
+            "installed_at": 1,
+            "updated_at": 1,
+            "publication_state": "receipt_durable",
+            "generation": "1".repeat(64),
+        }))
+        .expect("metadata fixture must serialize");
+        let metadata_path = paths.metadata_index_path().as_path();
+        fs::write(metadata_path, &metadata).expect("metadata fixture must be written");
+        fs::set_permissions(metadata_path, fs::Permissions::from_mode(0o600))
+            .expect("metadata fixture must be private");
+
+        let resolved = resolve_installed_service_endpoint(paths.clone(), "cli")
+            .expect("private durable metadata must select its endpoint");
+        assert_eq!(resolved.socket_path().as_path(), installed_socket);
+
+        fs::set_permissions(metadata_path, fs::Permissions::from_mode(0o644))
+            .expect("insecure metadata mode fixture must be installed");
+        assert!(resolve_installed_service_endpoint(paths, "cli").is_err());
     }
 
     #[test]
@@ -3775,7 +3809,7 @@ mod tests {
         let path_fixture = VersionProbeScript::new("exit 0");
         let from_path = resolve_daemon_executable_from(
             None,
-            &fixture.directory.join("missing/podway"),
+            std::path::Path::new("/bin/sh"),
             Some(path_fixture.directory.as_os_str()),
             "daemon.install",
         )
@@ -3785,9 +3819,13 @@ mod tests {
             std::fs::canonicalize(&path_fixture.path).expect("PATH fixture canonical path")
         );
 
+        let cli = fixture.directory.join("podway");
+        std::fs::write(&cli, "#!/bin/sh\nexit 0\n").expect("CLI fixture must be written");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700))
+            .expect("CLI fixture must be executable");
         let sibling = resolve_daemon_executable_from(
             None,
-            &fixture.directory.join("podway"),
+            &cli,
             Some(path_fixture.directory.as_os_str()),
             "daemon.install",
         )
@@ -3795,6 +3833,22 @@ mod tests {
         assert_eq!(
             sibling.as_path(),
             std::fs::canonicalize(&fixture.path).expect("sibling fixture canonical path")
+        );
+
+        let symlink_directory = path_fixture.directory.join("cli-link");
+        std::fs::create_dir(&symlink_directory).expect("CLI symlink directory must be created");
+        let cli_symlink = symlink_directory.join("podway");
+        std::os::unix::fs::symlink(&cli, &cli_symlink).expect("CLI symlink must be created");
+        let symlink_sibling = resolve_daemon_executable_from(
+            None,
+            &cli_symlink,
+            Some(path_fixture.directory.as_os_str()),
+            "daemon.install",
+        )
+        .expect("resolved CLI symlink sibling must precede PATH");
+        assert_eq!(
+            symlink_sibling.as_path(),
+            std::fs::canonicalize(&fixture.path).expect("symlink sibling canonical path")
         );
 
         let explicit = resolve_daemon_executable_from(

@@ -24,7 +24,6 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 struct ProcessFixtureV1 {
     root: PathBuf,
     home: PathBuf,
-    temporary: PathBuf,
     paths: ServiceRuntimePathsV1,
 }
 
@@ -44,18 +43,15 @@ impl ProcessFixtureV1 {
         make_private(&state_directory);
         let paths = ServiceRuntimePathsV1::for_user(&home, &temporary, geteuid().as_raw())
             .expect("short fixture service paths must be valid");
-        Self {
-            root,
-            home,
-            temporary,
-            paths,
-        }
+        Self { root, home, paths }
     }
 
     fn spawn(&self) -> Child {
         Command::new(env!("CARGO_BIN_EXE_podwayd"))
-            .env("HOME", &self.home)
-            .env("TMPDIR", &self.temporary)
+            .args(["--service", "--socket"])
+            .arg(self.paths.socket_path().as_path())
+            .env_clear()
+            .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

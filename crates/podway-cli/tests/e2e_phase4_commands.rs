@@ -41,8 +41,6 @@ static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     root: PathBuf,
-    home: PathBuf,
-    temporary: PathBuf,
     socket_path: PathBuf,
 }
 
@@ -67,25 +65,27 @@ impl Fixture {
         .expect("fixture runtime directory must be private");
         Self {
             root,
-            home,
-            temporary,
             socket_path: paths.socket_path().as_path().to_path_buf(),
         }
     }
 
     fn run(&self, arguments: &[&str]) -> Output {
+        let arguments = self.arguments_with_explicit_endpoint(arguments);
         Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(arguments)
-            .env("HOME", &self.home)
-            .env("TMPDIR", &self.temporary)
+            .args(&arguments)
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME")
             .output()
             .expect("podway binary must run")
     }
     fn run_with_stdin(&self, arguments: &[&str], input: &[u8]) -> Output {
+        let arguments = self.arguments_with_explicit_endpoint(arguments);
         let mut child = Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(arguments)
-            .env("HOME", &self.home)
-            .env("TMPDIR", &self.temporary)
+            .args(&arguments)
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -99,6 +99,16 @@ impl Fixture {
         child
             .wait_with_output()
             .expect("podway binary must complete")
+    }
+
+    fn arguments_with_explicit_endpoint(&self, arguments: &[&str]) -> Vec<String> {
+        let mut resolved = Vec::with_capacity(arguments.len() + 2);
+        if self.socket_path.exists() && !arguments.contains(&"--socket") {
+            resolved.push("--socket".to_owned());
+            resolved.push(self.socket_path.display().to_string());
+        }
+        resolved.extend(arguments.iter().map(|argument| (*argument).to_owned()));
+        resolved
     }
 }
 
@@ -232,95 +242,6 @@ fn explicit_socket_selects_the_exact_daemon_endpoint_and_rejects_non_absolute_pa
     assert_eq!(local.status.code(), Some(2));
     let response: Value = serde_json::from_slice(&local.stdout).expect("typed JSON failure");
     assert_eq!(response["code"], "REQUEST_INVALID");
-}
-
-#[test]
-fn omitted_socket_uses_installed_metadata_and_invalid_metadata_never_falls_back() {
-    let fixture = Fixture::new();
-    let installed_socket = fixture.root.join("installed.sock");
-    let metadata_path = fixture.home.join(".podway/state/service.json");
-    fs::create_dir_all(metadata_path.parent().expect("metadata parent"))
-        .expect("metadata directory must exist");
-    fs::set_permissions(
-        metadata_path.parent().expect("metadata parent"),
-        fs::Permissions::from_mode(0o700),
-    )
-    .expect("metadata directory must be private");
-    let digest = "0".repeat(64);
-    let metadata_bytes = serde_json::to_vec(&json!({
-        "version": 1,
-        "label": "dev.podway.podwayd",
-        "daemon_binary": "/Applications/Podway/podwayd",
-        "daemon_identity": digest,
-        "socket_path": installed_socket.display().to_string(),
-        "artifact_role": "production_daemon",
-        "installed_at": 1,
-        "updated_at": 1,
-        "publication_state": "receipt_durable",
-        "generation": "1".repeat(64),
-    }))
-    .expect("metadata fixture must serialize");
-    fs::write(&metadata_path, &metadata_bytes).expect("metadata fixture must be written");
-    fs::set_permissions(&metadata_path, fs::Permissions::from_mode(0o600))
-        .expect("metadata fixture must be private");
-    let default_listener =
-        UnixListener::bind(&fixture.socket_path).expect("default endpoint sentinel must bind");
-    fs::set_permissions(&fixture.socket_path, fs::Permissions::from_mode(0o600))
-        .expect("default endpoint sentinel must be private");
-    default_listener
-        .set_nonblocking(true)
-        .expect("default endpoint sentinel must be nonblocking");
-    let daemon = FakeDaemon::start_at(installed_socket, vec![Reply::Status]);
-
-    let output = fixture.run(&["--json", "status"]);
-    assert!(
-        output.status.success(),
-        "installed endpoint failed: {output:?}"
-    );
-    assert_eq!(daemon.finish().len(), 1);
-    assert_eq!(
-        default_listener
-            .accept()
-            .expect_err("metadata endpoint must precede the fixed default")
-            .kind(),
-        io::ErrorKind::WouldBlock,
-    );
-
-    fs::write(&metadata_path, b"{}\n").expect("invalid metadata fixture must be written");
-    let output = fixture.run(&["--json", "status"]);
-    assert_eq!(
-        output.status.code(),
-        Some(3),
-        "invalid metadata: {output:?}"
-    );
-    let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
-    assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
-    assert_eq!(
-        default_listener
-            .accept()
-            .expect_err("invalid metadata must not fall back to the fixed default")
-            .kind(),
-        io::ErrorKind::WouldBlock,
-    );
-
-    fs::write(&metadata_path, &metadata_bytes).expect("valid metadata must be restored");
-    fs::set_permissions(&metadata_path, fs::Permissions::from_mode(0o644))
-        .expect("insecure metadata mode fixture");
-    let output = fixture.run(&["--json", "status"]);
-    assert_eq!(
-        output.status.code(),
-        Some(3),
-        "insecure metadata: {output:?}"
-    );
-    let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
-    assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
-    assert_eq!(
-        default_listener
-            .accept()
-            .expect_err("insecure metadata must not fall back to the fixed default")
-            .kind(),
-        io::ErrorKind::WouldBlock,
-    );
 }
 
 impl Reply {

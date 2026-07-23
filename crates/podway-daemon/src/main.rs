@@ -2,6 +2,7 @@
 
 use std::{env, io, num::NonZeroUsize, path::PathBuf, process, sync::Arc, thread};
 
+#[cfg(debug_assertions)]
 use nix::unistd::geteuid;
 use podway_daemon::{
     ObservabilityCountersV1, ObservabilityFinalizationV1, ObservabilityV1, RotatingFileSinkV1,
@@ -43,16 +44,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_service(socket_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let paths = if let Some(socket_path) = socket_path {
-        ServiceRuntimePathsV1::for_effective_user()?.with_socket_path(socket_path)?
-    } else {
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or("HOME is not set")?;
-        let temporary = env::var_os("TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
-        ServiceRuntimePathsV1::for_user(&home, temporary, geteuid().as_raw())?
+    let paths = effective_service_paths()?;
+    let paths = match socket_path {
+        Some(socket_path) => paths.with_socket_path(socket_path)?,
+        None => paths,
     };
     let configuration = ProductionDaemonRuntimeConfigV1::new(
         WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
@@ -119,6 +114,14 @@ fn run_service(socket_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::E
         relay_result.map_err(|_| "signal relay panicked".to_owned()),
         observability_result.map_err(|error| error.to_string()),
     )
+}
+
+fn effective_service_paths() -> Result<ServiceRuntimePathsV1, podway_service::ServicePathErrorV1> {
+    #[cfg(debug_assertions)]
+    if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
+        return ServiceRuntimePathsV1::for_user(account_root, "/tmp", geteuid().as_raw());
+    }
+    ServiceRuntimePathsV1::for_effective_user()
 }
 
 type StageResult = Result<(), String>;

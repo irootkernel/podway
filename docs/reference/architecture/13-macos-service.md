@@ -30,6 +30,12 @@ endpoint resolution use the effective OS account and do not require `HOME`,
 PODWAY_HOME plus `run`, `state`, and `logs` use mode `0700`; service metadata,
 the registry, logs, the singleton lock, and the socket use mode `0600`.
 
+The production CLI and daemon resolve this layout from the effective OS account
+even when launched with a sanitized environment from an arbitrary working
+directory. Test-only account-root injection is compiled only in debug builds so
+process-level integration tests can exercise the real binaries without touching
+the developer's installed service state.
+
 ## LaunchAgent configuration
 
 The installed plist MUST:
@@ -75,6 +81,11 @@ podway daemon logs --follow
 The target installer does not stage or copy the daemon. It is idempotent when the
 same actual binary and configuration are installed. A changed binary path or
 contract identity updates the plist and restarts the service.
+
+The current CLI executable is canonicalized before sibling lookup. Consequently,
+invoking a PATH-installed CLI symlink still selects `podwayd` beside the resolved
+CLI binary before consulting the controlled `PATH`. Every selected daemon path is
+canonicalized and verified before the absolute path is written to the plist.
 
 ### Stop and start
 
@@ -186,4 +197,7 @@ The macOS integration suite MUST cover:
 - uninstall with state preservation;
 - incompatible CLI/daemon product and contract identity reporting;
 - duplicate daemon rejection with the same and a different socket;
-- explicit socket no-fallback and sanitized-environment operation.
+- explicit socket no-fallback and sanitized-environment operation;
+- command-name invocation through a CLI symlink from an arbitrary directory;
+- explicit, resolved-CLI-sibling, and controlled-PATH daemon selection;
+- absolute daemon execution in the generated LaunchAgent plist.
