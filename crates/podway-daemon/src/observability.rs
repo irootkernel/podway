@@ -4,11 +4,15 @@
 
 use std::{
     collections::VecDeque,
+    ffi::{OsStr, OsString},
     fmt,
-    fs::{self, File},
+    fs::File,
     io::{self, Write},
-    os::unix::fs::{MetadataExt, PermissionsExt},
-    path::{Path, PathBuf},
+    os::{
+        fd::OwnedFd,
+        unix::{ffi::OsStrExt, fs::MetadataExt},
+    },
+    path::Path,
     sync::{
         Arc, Condvar, Mutex, TryLockError,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -19,9 +23,11 @@ use std::{
 };
 
 use nix::{
-    fcntl::{OFlag, open},
-    sys::stat::Mode,
-    unistd::geteuid,
+    dir::Dir,
+    errno::Errno,
+    fcntl::{AtFlags, OFlag, open, openat, renameat},
+    sys::stat::{Mode, SFlag, fchmod, fstat, fstatat, mkdirat},
+    unistd::{UnlinkatFlags, geteuid, unlinkat},
 };
 
 pub const MAX_EVENT_BYTES_V1: usize = 8 * 1024;
@@ -776,7 +782,8 @@ fn format_event(seconds: u64, event: EventRecordV1) -> String {
 
 /// Local file sink with fixed-size rotation. Only this sink's five numbered files are owned.
 pub struct RotatingFileSinkV1 {
-    path: PathBuf,
+    directory: OwnedFd,
+    name: OsString,
     state: Mutex<FileState>,
 }
 struct FileState {
@@ -786,85 +793,142 @@ struct FileState {
 impl RotatingFileSinkV1 {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        ensure_private_log_parent(&path)?;
-        retain_exact_rotations(&path)?;
-        let file = open_private_log(&path)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no parent"))?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "log path has no file name")
+            })?
+            .to_os_string();
+        let directory = open_private_log_directory(parent)?;
+        retain_exact_rotations(&directory, &name)?;
+        let file = open_private_log(&directory, &name)?;
         let bytes = file.metadata()?.len();
         Ok(Self {
-            path,
+            directory,
+            name,
             state: Mutex::new(FileState { file, bytes }),
         })
     }
     fn rotate(&self, state: &mut FileState) -> io::Result<()> {
         state.file.flush()?;
         remove_if_present(
-            &self
-                .path
-                .with_extension(format!("log.{}", RETAINED_ROTATIONS_V1 + 1)),
+            &self.directory,
+            &rotated_log_name(&self.name, RETAINED_ROTATIONS_V1 + 1),
         )?;
         remove_if_present(
-            &self
-                .path
-                .with_extension(format!("log.{RETAINED_ROTATIONS_V1}")),
+            &self.directory,
+            &rotated_log_name(&self.name, RETAINED_ROTATIONS_V1),
         )?;
         for index in (1..RETAINED_ROTATIONS_V1).rev() {
-            let from = self.path.with_extension(format!("log.{index}"));
-            let to = self.path.with_extension(format!("log.{}", index + 1));
-            match fs::rename(from, to) {
+            let from = rotated_log_name(&self.name, index);
+            let to = rotated_log_name(&self.name, index + 1);
+            match renameat(
+                &self.directory,
+                from.as_os_str(),
+                &self.directory,
+                to.as_os_str(),
+            ) {
                 Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
+                Err(Errno::ENOENT) => {}
+                Err(error) => return Err(nix_io_error(error)),
             }
         }
-        let first = self.path.with_extension("log.1");
-        remove_if_present(&first)?;
-        match fs::rename(&self.path, &first) {
+        let first = rotated_log_name(&self.name, 1);
+        remove_if_present(&self.directory, &first)?;
+        match renameat(
+            &self.directory,
+            self.name.as_os_str(),
+            &self.directory,
+            first.as_os_str(),
+        ) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+            Err(Errno::ENOENT) => {}
+            Err(error) => return Err(nix_io_error(error)),
         }
-        state.file = open_private_log(&self.path)?;
+        state.file = open_private_log(&self.directory, &self.name)?;
         state.bytes = 0;
-        retain_exact_rotations(&self.path)?;
+        retain_exact_rotations(&self.directory, &self.name)?;
         Ok(())
     }
 }
 
-fn ensure_private_log_parent(path: &Path) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let metadata = fs::symlink_metadata(parent)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_dir()
-        || metadata.uid() != geteuid().as_raw()
+fn open_private_log_directory(path: &Path) -> io::Result<OwnedFd> {
+    let normalized;
+    let path = if let Ok(suffix) = path.strip_prefix("/var") {
+        normalized = Path::new("/private/var").join(suffix);
+        normalized.as_path()
+    } else if let Ok(suffix) = path.strip_prefix("/tmp") {
+        normalized = Path::new("/private/tmp").join(suffix);
+        normalized.as_path()
+    } else {
+        path
+    };
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "log parent must be absolute",
+        ));
+    }
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::RootDir => None,
+            std::path::Component::Normal(component) => Some(Ok(component)),
+            _ => Some(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "log parent must be normalized",
+            ))),
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    if components.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "log parent must be below the filesystem root",
+        ));
+    }
+    let mut directory = open(
+        "/",
+        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+        Mode::empty(),
+    )
+    .map_err(nix_io_error)?;
+    for component in components {
+        match mkdirat(&directory, component, Mode::from_bits_truncate(0o700)) {
+            Ok(()) | Err(Errno::EEXIST) => {}
+            Err(error) => return Err(nix_io_error(error)),
+        }
+        directory = openat(
+            &directory,
+            component,
+            OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+            Mode::empty(),
+        )
+        .map_err(nix_io_error)?;
+    }
+    let metadata = fstat(&directory).map_err(nix_io_error)?;
+    if SFlag::from_bits_truncate(metadata.st_mode) & SFlag::S_IFMT != SFlag::S_IFDIR
+        || metadata.st_uid != geteuid().as_raw()
     {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "log parent is not an effective-user-owned real directory",
         ));
     }
-    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+    fchmod(&directory, Mode::from_bits_truncate(0o700)).map_err(nix_io_error)?;
+    Ok(directory)
 }
 
-fn open_private_log(path: &Path) -> io::Result<File> {
-    if let Ok(metadata) = fs::symlink_metadata(path)
-        && (metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.uid() != geteuid().as_raw())
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "log is not an effective-user-owned regular file",
-        ));
-    }
-    let descriptor = open(
-        path,
+fn open_private_log(directory: &OwnedFd, name: &OsStr) -> io::Result<File> {
+    let descriptor = openat(
+        directory,
+        name,
         OFlag::O_APPEND | OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_NOFOLLOW | OFlag::O_WRONLY,
         Mode::S_IRUSR | Mode::S_IWUSR,
     )
-    .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+    .map_err(nix_io_error)?;
     let file = File::from(descriptor);
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.uid() != geteuid().as_raw() {
@@ -873,26 +937,37 @@ fn open_private_log(path: &Path) -> io::Result<File> {
             "opened log is not an effective-user-owned regular file",
         ));
     }
-    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    fchmod(&file, Mode::from_bits_truncate(0o600)).map_err(nix_io_error)?;
     Ok(file)
 }
-fn remove_if_present(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
+
+fn rotated_log_name(name: &OsStr, index: usize) -> OsString {
+    let mut rotated = name.to_os_string();
+    rotated.push(format!(".{index}"));
+    rotated
+}
+
+fn remove_if_present(directory: &OwnedFd, name: &OsStr) -> io::Result<()> {
+    match unlinkat(directory, name, UnlinkatFlags::NoRemoveDir) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
+        Err(Errno::ENOENT) => Ok(()),
+        Err(error) => Err(nix_io_error(error)),
     }
 }
-fn retain_exact_rotations(path: &Path) -> io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no file name"))?
-        .to_string_lossy();
+
+fn retain_exact_rotations(directory: &OwnedFd, name: &OsStr) -> io::Result<()> {
+    let name = name.to_string_lossy();
     let prefix = format!("{name}.");
-    for entry in fs::read_dir(parent)? {
-        let entry = entry?;
-        let candidate = entry.path();
+    let mut entries = Dir::openat(
+        directory,
+        ".",
+        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+        Mode::empty(),
+    )
+    .map_err(nix_io_error)?;
+    for entry in entries.iter() {
+        let entry = entry.map_err(nix_io_error)?;
+        let candidate = OsStr::from_bytes(entry.file_name().to_bytes());
         let suffix = entry
             .file_name()
             .to_string_lossy()
@@ -902,12 +977,21 @@ fn retain_exact_rotations(path: &Path) -> io::Result<()> {
         if !suffix.is_empty()
             && suffix.bytes().all(|byte| byte.is_ascii_digit())
             && !matches!(suffix.as_str(), "1" | "2" | "3" | "4" | "5")
-            && entry.metadata()?.is_file()
         {
-            remove_if_present(&candidate)?;
+            let metadata = fstatat(directory, candidate, AtFlags::AT_SYMLINK_NOFOLLOW)
+                .map_err(nix_io_error)?;
+            if SFlag::from_bits_truncate(metadata.st_mode) & SFlag::S_IFMT == SFlag::S_IFREG
+                && metadata.st_uid == geteuid().as_raw()
+            {
+                remove_if_present(directory, candidate)?;
+            }
         }
     }
     Ok(())
+}
+
+fn nix_io_error(error: Errno) -> io::Error {
+    io::Error::from_raw_os_error(error as i32)
 }
 impl LogSinkV1 for RotatingFileSinkV1 {
     fn write_event(&self, event: &str) -> io::Result<()> {

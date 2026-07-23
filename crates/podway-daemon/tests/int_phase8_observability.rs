@@ -1,6 +1,6 @@
 use std::{
     fs, io,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{PermissionsExt, symlink},
     path::PathBuf,
     sync::{
         Arc, Barrier, Condvar, Mutex,
@@ -463,6 +463,25 @@ fn rotation_owns_exactly_canonical_numbered_files() {
     }
     assert!(path.with_extension("log.keep").exists());
     let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn file_sink_rejects_symlinked_log_directory_components() {
+    let path = temporary_path("symlinked-parent");
+    let root = path.parent().unwrap().to_path_buf();
+    let target = root.join("redirect-target");
+    fs::create_dir(&target).unwrap();
+    let linked = root.join("linked");
+    symlink(&target, &linked).unwrap();
+
+    let error = match RotatingFileSinkV1::open(linked.join("logs/podwayd.log")) {
+        Ok(_) => panic!("an intermediate symlink must fail closed"),
+        Err(error) => error,
+    };
+
+    assert!(error.raw_os_error().is_some());
+    assert!(!target.join("logs").exists());
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
