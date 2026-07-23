@@ -229,11 +229,19 @@ fn explicit_socket_selects_the_exact_daemon_endpoint_and_rejects_non_absolute_pa
         io::ErrorKind::WouldBlock,
     );
 
-    for invalid in ["relative.sock", "~/podwayd.sock", "/tmp/../podwayd.sock"] {
+    for (invalid, message) in [
+        ("relative.sock", "socket path must be absolute"),
+        ("~/podwayd.sock", "socket path must be absolute"),
+        (
+            "/tmp/../podwayd.sock",
+            "socket path must be normalized and contain valid path characters",
+        ),
+    ] {
         let output = fixture.run(&["--json", "--socket", invalid, "status"]);
         assert_eq!(output.status.code(), Some(2), "{invalid}: {output:?}");
         let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
         assert_eq!(response["code"], "REQUEST_INVALID");
+        assert_eq!(response["message"], message);
     }
 
     let local = fixture.run(&["--json", "--socket", &explicit_socket_text, "version"]);
@@ -247,17 +255,24 @@ fn daemon_install_rejects_invalid_explicit_socket_before_resolving_the_daemon() 
     let fixture = Fixture::new();
     let overlong = format!("/tmp/{}.sock", "x".repeat(104));
 
-    for invalid in [
-        "relative.sock",
-        "~/podwayd.sock",
-        "/tmp/../podwayd.sock",
-        overlong.as_str(),
+    for (invalid, message) in [
+        ("relative.sock", "socket path must be absolute"),
+        ("~/podwayd.sock", "socket path must be absolute"),
+        (
+            "/tmp/../podwayd.sock",
+            "socket path must be normalized and contain valid path characters",
+        ),
+        (
+            overlong.as_str(),
+            "socket path exceeds the macOS Unix socket path limit",
+        ),
     ] {
         let output = fixture.run(&["--json", "--socket", invalid, "daemon", "install"]);
         assert_eq!(output.status.code(), Some(2), "{invalid}: {output:?}");
         let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
         assert_eq!(response["code"], "REQUEST_INVALID");
         assert_eq!(response["command"], "daemon.install");
+        assert_eq!(response["message"], message);
     }
 }
 

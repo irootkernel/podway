@@ -41,8 +41,9 @@ use podway_service::{
     InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1,
     SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1, ServiceFilesystemV1,
     ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1,
-    ServiceOutcomeV1, ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1,
-    SystemLaunchctlRunnerV1, UninstallOptionsV1, installed_socket_path_from_metadata_v1,
+    ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
+    StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
+    installed_socket_path_from_metadata_v1,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -1277,12 +1278,9 @@ fn execute_service_lifecycle(
         service_runtime_paths(command_name)?
     };
     if let Some(socket_path) = socket_path {
-        paths = paths.with_socket_path(socket_path).map_err(|_| {
-            LocalFailure::request_invalid(
-                "socket path must be absolute, normalized, and within the platform limit",
-            )
-            .with_command(command_name)
-        })?;
+        paths = paths
+            .with_socket_path(socket_path)
+            .map_err(|error| socket_path_failure(error).with_command(command_name))?;
     }
     let clock = system_service_clock(SystemTime::now(), command_name)?;
     let runner = MacosServiceCommandRunnerV1::new(
@@ -1360,6 +1358,27 @@ fn execute_service_lifecycle_with_manager(
         }
     };
     Ok(result)
+}
+
+fn socket_path_failure(error: ServicePathErrorV1) -> LocalFailure {
+    let message = match error {
+        ServicePathErrorV1::Empty { .. } | ServicePathErrorV1::Relative { .. } => {
+            "socket path must be absolute"
+        }
+        ServicePathErrorV1::Unnormalized { .. } => {
+            "socket path must be normalized and contain valid path characters"
+        }
+        ServicePathErrorV1::WorkspaceLocal { .. } => {
+            "socket path must not point into workspace-local Podway state"
+        }
+        ServicePathErrorV1::SocketPathTooLong { .. } => {
+            "socket path exceeds the macOS Unix socket path limit"
+        }
+        ServicePathErrorV1::EffectiveUserLookup { .. }
+        | ServicePathErrorV1::EffectiveUserNotFound { .. }
+        | ServicePathErrorV1::RootUser => "socket path could not be validated",
+    };
+    LocalFailure::request_invalid(message)
 }
 
 fn service_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
@@ -2317,11 +2336,9 @@ fn daemon_client(
     )
     .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
     let paths = match socket_path {
-        Some(socket_path) => paths.with_socket_path(socket_path).map_err(|_| {
-            LocalFailure::request_invalid(
-                "socket path must be absolute, normalized, and within the platform limit",
-            )
-        })?,
+        Some(socket_path) => paths
+            .with_socket_path(socket_path)
+            .map_err(socket_path_failure)?,
         None => paths,
     };
     Ok(DaemonClientV1::with_timeouts(paths, timeouts))
