@@ -82,6 +82,10 @@ struct Cli {
     #[arg(long, global = true, value_name = "DURATION", value_parser = parse_timeout_millis)]
     timeout: Option<u64>,
 
+    /// Connect to an explicit daemon Unix socket.
+    #[arg(long, global = true, value_name = "ABSOLUTE_PATH")]
+    socket: Option<PathBuf>,
+
     /// Disable text color. Podway v1 currently emits uncolored text.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     no_color: bool,
@@ -857,7 +861,7 @@ pub fn run() -> i32 {
 fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     if let Command::CompleteDynamic { kind } = &cli.command {
         let kind = kind.clone();
-        return dynamic_completion(cli.worktree.take(), &kind);
+        return dynamic_completion(cli.worktree.take(), cli.socket.take(), &kind);
     }
     if let Some(local) = execute_local(&cli)? {
         return Ok(local);
@@ -884,8 +888,8 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     let target = workspace_target(cli.worktree.take())?;
     let wait_timeout_ms = cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
     let explicit = ExplicitPreconditions::parse(&cli)?;
-    let client =
-        daemon_client(wait_timeout_ms).map_err(|failure| failure.with_command(wire_name))?;
+    let client = daemon_client(wait_timeout_ms, cli.socket.as_deref())
+        .map_err(|failure| failure.with_command(wire_name))?;
 
     let reset_all_workspace_id =
         if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. })) {
@@ -1180,6 +1184,7 @@ fn procedure_open_failure(error: Errno) -> LocalFailure {
 fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
     let local_flags = cli.worktree.is_some()
         || cli.timeout.is_some()
+        || cli.socket.is_some()
         || cli.detach
         || cli.idempotency_key.is_some()
         || cli.if_session_revision.is_some()
@@ -1234,6 +1239,11 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                     "daemon lifecycle commands accept no daemon request flags",
                 ));
             }
+            if cli.socket.is_some() && !matches!(command, DaemonCommand::Install { .. }) {
+                return Err(LocalFailure::request_invalid(
+                    "--socket applies only to daemon install or daemon-backed workflow commands",
+                ));
+            }
             if !matches!(command, DaemonCommand::Uninstall { .. }) && cli.yes {
                 return Err(LocalFailure::request_invalid(
                     "--yes applies only to daemon uninstall",
@@ -1247,15 +1257,34 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                     "--follow cannot be combined with --json",
                 ));
             }
-            Ok(Some(execute_service_lifecycle(command)?))
+            Ok(Some(execute_service_lifecycle(
+                command,
+                cli.socket.as_deref(),
+            )?))
         }
         _ => Ok(None),
     }
 }
 
-fn execute_service_lifecycle(command: &DaemonCommand) -> Result<RunResult, LocalFailure> {
+fn execute_service_lifecycle(
+    command: &DaemonCommand,
+    socket_path: Option<&Path>,
+) -> Result<RunResult, LocalFailure> {
     let command_name = daemon_command_name(command);
-    let paths = service_runtime_paths(command_name)?;
+    let mut paths = if socket_path.is_some() {
+        ServiceRuntimePathsV1::for_effective_user()
+            .map_err(|_| LocalFailure::daemon_unavailable(command_name))?
+    } else {
+        service_runtime_paths(command_name)?
+    };
+    if let Some(socket_path) = socket_path {
+        paths = paths.with_socket_path(socket_path).map_err(|_| {
+            LocalFailure::request_invalid(
+                "socket path must be absolute, normalized, and within the platform limit",
+            )
+            .with_command(command_name)
+        })?;
+    }
     let clock = system_service_clock(SystemTime::now(), command_name)?;
     let runner = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,
@@ -2237,15 +2266,22 @@ fn workspace_target(worktree: Option<PathBuf>) -> Result<WorkspaceTarget, LocalF
     })
 }
 
-fn daemon_client(wait_timeout_ms: u64) -> Result<DaemonClientV1, LocalFailure> {
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| LocalFailure::daemon_unavailable("cli"))?;
-    let temporary = env::var_os("TMPDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    let paths = ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
-        .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
+fn daemon_client(
+    wait_timeout_ms: u64,
+    socket_path: Option<&Path>,
+) -> Result<DaemonClientV1, LocalFailure> {
+    let paths = if socket_path.is_some() {
+        ServiceRuntimePathsV1::for_effective_user()
+    } else {
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| LocalFailure::daemon_unavailable("cli"))?;
+        let temporary = env::var_os("TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        ServiceRuntimePathsV1::for_user(home, temporary, geteuid().as_raw())
+    }
+    .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
     let read_timeout = Duration::from_millis(wait_timeout_ms.saturating_add(1_000))
         .max(DEFAULT_DAEMON_CONNECT_TIMEOUT_V1);
     let timeouts = DaemonClientTimeoutsV1::new(
@@ -2254,6 +2290,14 @@ fn daemon_client(wait_timeout_ms: u64) -> Result<DaemonClientV1, LocalFailure> {
         DEFAULT_DAEMON_WRITE_TIMEOUT_V1,
     )
     .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
+    let paths = match socket_path {
+        Some(socket_path) => paths.with_socket_path(socket_path).map_err(|_| {
+            LocalFailure::request_invalid(
+                "socket path must be absolute, normalized, and within the platform limit",
+            )
+        })?,
+        None => paths,
+    };
     Ok(DaemonClientV1::with_timeouts(paths, timeouts))
 }
 
@@ -2976,14 +3020,18 @@ fn render_warnings(
     Ok(())
 }
 
-fn dynamic_completion(worktree: Option<PathBuf>, kind: &str) -> Result<RunResult, LocalFailure> {
+fn dynamic_completion(
+    worktree: Option<PathBuf>,
+    socket_path: Option<PathBuf>,
+    kind: &str,
+) -> Result<RunResult, LocalFailure> {
     let target = match workspace_target(worktree) {
         Ok(target) => target,
         Err(_) => {
             return Ok(empty_dynamic_completion());
         }
     };
-    let client = match daemon_client(200) {
+    let client = match daemon_client(200, socket_path.as_deref()) {
         Ok(client) => client,
         Err(_) => {
             return Ok(empty_dynamic_completion());
@@ -3066,7 +3114,7 @@ fn dynamic_candidates(result: &Map<String, Value>, kind: &str) -> Vec<String> {
 fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
     let text = match topic.unwrap_or("overview") {
         "overview" => {
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev --task 'add retry backoff'\n  podway status --json\n  podway next"
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev --task 'add retry backoff'\n  podway status --json\n  podway next"
         }
         "workflow" => {
             "Workflow:\n  podway start --preset sw-dev --task 'implement feature'\n  podway next\n  podway set goal 'Implement the requested feature.'\n  podway add acceptance-criteria 'The requested behavior is verified.'\n  podway complete"
@@ -3105,7 +3153,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway preset explain <name>\n\nExample:\n  podway preset explain sw-dev"
         }
         "daemon.install" => {
-            "Usage:\n  podway daemon install [--daemon-path <path>]\n\nExample:\n  podway daemon install --daemon-path /absolute/podwayd"
+            "Usage:\n  podway daemon install [--daemon-path <path>] [--socket <absolute-path>]\n\nExample:\n  podway daemon install --daemon-path /absolute/podwayd --socket /absolute/podwayd.sock"
         }
         "daemon.uninstall" => {
             "Usage:\n  podway daemon uninstall [--purge-logs] [--yes]\n\nExample:\n  podway daemon uninstall --yes"

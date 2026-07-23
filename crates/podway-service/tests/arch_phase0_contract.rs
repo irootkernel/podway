@@ -1839,6 +1839,34 @@ fn aut_home_002_runtime_socket_path_rejects_overlong_account_home() {
         Err(ServicePathErrorV1::SocketPathTooLong { .. })
     ));
 }
+
+#[test]
+fn aut_home_003_explicit_socket_replaces_only_the_endpoint() {
+    let paths = ServiceRuntimePathsV1::for_user("/Users/podway", "/tmp", 501)
+        .expect("canonical service paths");
+    let explicit = paths
+        .clone()
+        .with_socket_path("/var/run/podway-explicit.sock")
+        .expect("absolute normalized explicit endpoint");
+
+    assert_eq!(
+        explicit.socket_path().as_path(),
+        Path::new("/var/run/podway-explicit.sock")
+    );
+    assert_eq!(explicit.global_lock_path(), paths.global_lock_path());
+    assert_eq!(explicit.metadata_index_path(), paths.metadata_index_path());
+    assert_eq!(
+        explicit.workspace_registry_path(),
+        paths.workspace_registry_path()
+    );
+
+    for invalid in ["relative.sock", "~/podwayd.sock", "/tmp/../podwayd.sock"] {
+        assert!(
+            paths.clone().with_socket_path(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+}
 #[test]
 fn phase6_direct_runtime_socket_path_rejects_unbindable_path() {
     let runtime_directory = format!("/{}", "a".repeat(120));

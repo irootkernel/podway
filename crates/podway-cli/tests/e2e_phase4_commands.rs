@@ -115,7 +115,11 @@ struct FakeDaemon {
 
 impl FakeDaemon {
     fn start(fixture: &Fixture, replies: Vec<Reply>) -> Self {
-        let listener = UnixListener::bind(&fixture.socket_path)
+        Self::start_at(fixture.socket_path.clone(), replies)
+    }
+
+    fn start_at(socket_path: PathBuf, replies: Vec<Reply>) -> Self {
+        let listener = UnixListener::bind(socket_path)
             .expect("fake daemon must bind the service-owned socket path");
         let handle = thread::spawn(move || {
             let mut wires = Vec::with_capacity(replies.len());
@@ -155,6 +159,58 @@ impl FakeDaemon {
             .expect("fake daemon thread must not panic")
             .expect("fake daemon I/O must succeed")
     }
+}
+
+#[test]
+fn explicit_socket_selects_the_exact_daemon_endpoint_and_rejects_non_absolute_paths() {
+    let fixture = Fixture::new();
+    let explicit_socket = fixture.root.join("explicit.sock");
+    let default_listener =
+        UnixListener::bind(&fixture.socket_path).expect("default endpoint sentinel must bind");
+    default_listener
+        .set_nonblocking(true)
+        .expect("default endpoint sentinel must be nonblocking");
+    let daemon = FakeDaemon::start_at(explicit_socket.clone(), vec![Reply::Status]);
+    let explicit_socket_text = explicit_socket.display().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+        .args([
+            "--json",
+            "--socket",
+            &explicit_socket_text,
+            "--worktree",
+            fixture.root.to_str().expect("fixture path must be UTF-8"),
+            "status",
+        ])
+        .env_remove("HOME")
+        .env_remove("TMPDIR")
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("podway binary must run with a sanitized environment");
+    assert!(
+        output.status.success(),
+        "explicit socket failed: {output:?}"
+    );
+    assert_eq!(daemon.finish().len(), 1);
+    assert_eq!(
+        default_listener
+            .accept()
+            .expect_err("an explicit endpoint must not fall back to the default socket")
+            .kind(),
+        io::ErrorKind::WouldBlock,
+    );
+
+    for invalid in ["relative.sock", "~/podwayd.sock", "/tmp/../podwayd.sock"] {
+        let output = fixture.run(&["--json", "--socket", invalid, "status"]);
+        assert_eq!(output.status.code(), Some(2), "{invalid}: {output:?}");
+        let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
+        assert_eq!(response["code"], "REQUEST_INVALID");
+    }
+
+    let local = fixture.run(&["--json", "--socket", &explicit_socket_text, "version"]);
+    assert_eq!(local.status.code(), Some(2));
+    let response: Value = serde_json::from_slice(&local.stdout).expect("typed JSON failure");
+    assert_eq!(response["code"], "REQUEST_INVALID");
 }
 
 impl Reply {

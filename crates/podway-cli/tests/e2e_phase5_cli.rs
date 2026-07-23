@@ -477,11 +477,15 @@ struct RecordingDaemon {
 
 impl RecordingDaemon {
     fn start(fixture: &DynamicCompletionFixture, replies: Vec<RecordingReply>) -> Self {
-        if fixture.socket_path.exists() {
-            fs::remove_file(&fixture.socket_path)
+        Self::start_at(fixture.socket_path.clone(), replies)
+    }
+
+    fn start_at(socket_path: PathBuf, replies: Vec<RecordingReply>) -> Self {
+        if socket_path.exists() {
+            fs::remove_file(&socket_path)
                 .expect("previous recording daemon socket must be removed");
         }
-        let listener = UnixListener::bind(&fixture.socket_path)
+        let listener = UnixListener::bind(socket_path)
             .expect("recording daemon socket must bind at the service-owned path");
         let handle = thread::spawn(move || {
             let mut requests = Vec::with_capacity(replies.len());
@@ -972,11 +976,19 @@ struct RouteSurface {
 }
 
 const DISPLAY_FLAGS: &[&str] = &["--json", "--no-color", "--quiet"];
-const DAEMON_READ_FLAGS: &[&str] = &["--json", "--worktree", "--timeout", "--no-color", "--quiet"];
+const DAEMON_READ_FLAGS: &[&str] = &[
+    "--json",
+    "--worktree",
+    "--timeout",
+    "--socket",
+    "--no-color",
+    "--quiet",
+];
 const SESSION_MUTATION_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -988,6 +1000,7 @@ const ITEM_MUTATION_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -999,6 +1012,7 @@ const START_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1015,6 +1029,7 @@ const RESET_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1029,6 +1044,7 @@ const STATUS_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--verbose",
@@ -1039,6 +1055,7 @@ const NEXT_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--wait-for-idle",
@@ -1048,6 +1065,7 @@ const SKIP_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1060,6 +1078,7 @@ const RETURN_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1074,6 +1093,7 @@ const UNBLOCK_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1086,6 +1106,7 @@ const REOPEN_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1099,6 +1120,7 @@ const SET_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1111,6 +1133,7 @@ const REMOVE_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1123,6 +1146,7 @@ const ATTACH_SURFACE_FLAGS: &[&str] = &[
     "--json",
     "--worktree",
     "--timeout",
+    "--socket",
     "--no-color",
     "--quiet",
     "--idempotency-key",
@@ -1203,7 +1227,13 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
     RouteSurface {
         route: "daemon.install",
         parser: &["daemon", "install"],
-        flags: &["--json", "--no-color", "--quiet", "--daemon-path"],
+        flags: &[
+            "--json",
+            "--no-color",
+            "--quiet",
+            "--socket",
+            "--daemon-path",
+        ],
         values: &[],
         help_tokens: &["--daemon-path"],
         dynamic: None,
@@ -1263,6 +1293,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--json",
             "--worktree",
             "--timeout",
+            "--socket",
             "--no-color",
             "--quiet",
             "--idempotency-key",
@@ -1280,6 +1311,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--json",
             "--worktree",
             "--timeout",
+            "--socket",
             "--no-color",
             "--quiet",
             "--deep",
@@ -1501,6 +1533,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--json",
             "--worktree",
             "--timeout",
+            "--socket",
             "--no-color",
             "--quiet",
             "--state",
@@ -2837,6 +2870,24 @@ fn generated_dynamic_completion_forwards_the_selected_worktree_in_every_shell() 
                 );
             }
         }
+
+        let explicit_socket = fixture.root.join(format!("completion-{shell}.sock"));
+        let explicit = RecordingDaemon::start_at(
+            explicit_socket.clone(),
+            vec![RecordingReply::Output(dynamic_completion_result("items"))],
+        );
+        let words = vec![
+            "podway".to_owned(),
+            "--socket".to_owned(),
+            explicit_socket.display().to_string(),
+            "check".to_owned(),
+            String::new(),
+        ];
+        let (candidates, stderr) =
+            generated_dynamic_candidates(shell, &script, &fixture, &bin, &default_worktree, &words);
+        assert!(stderr.is_empty());
+        assert!(candidates.contains(&"decision".to_owned()));
+        assert_eq!(explicit.finish().len(), 1);
 
         if fixture.socket_path.exists() {
             fs::remove_file(&fixture.socket_path)

@@ -49,6 +49,10 @@ const TIMEOUT: Flag = Flag {
     long: "timeout",
     takes_value: true,
 };
+const SOCKET: Flag = Flag {
+    long: "socket",
+    takes_value: true,
+};
 const NO_COLOR: Flag = Flag {
     long: "no-color",
     takes_value: false,
@@ -191,11 +195,12 @@ const STATE: Flag = Flag {
 };
 
 const DISPLAY_FLAGS: &[&Flag] = &[&JSON, &NO_COLOR, &QUIET];
-const DAEMON_READ_FLAGS: &[&Flag] = &[&JSON, &WORKTREE, &TIMEOUT, &NO_COLOR, &QUIET];
+const DAEMON_READ_FLAGS: &[&Flag] = &[&JSON, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET];
 const SESSION_MUTATION_FLAGS: &[&Flag] = &[
     &JSON,
     &WORKTREE,
     &TIMEOUT,
+    &SOCKET,
     &NO_COLOR,
     &QUIET,
     &IDEMPOTENCY_KEY,
@@ -207,6 +212,7 @@ const ITEM_MUTATION_FLAGS: &[&Flag] = &[
     &JSON,
     &WORKTREE,
     &TIMEOUT,
+    &SOCKET,
     &NO_COLOR,
     &QUIET,
     &IDEMPOTENCY_KEY,
@@ -218,6 +224,7 @@ const START_FLAGS: &[&Flag] = &[
     &JSON,
     &WORKTREE,
     &TIMEOUT,
+    &SOCKET,
     &NO_COLOR,
     &QUIET,
     &IDEMPOTENCY_KEY,
@@ -234,6 +241,7 @@ const RESET_FLAGS: &[&Flag] = &[
     &JSON,
     &WORKTREE,
     &TIMEOUT,
+    &SOCKET,
     &NO_COLOR,
     &QUIET,
     &IDEMPOTENCY_KEY,
@@ -298,7 +306,7 @@ const ROUTES: &[Route] = &[
     },
     Route {
         words: "daemon install",
-        flags: &[&JSON, &NO_COLOR, &QUIET, &DAEMON_PATH],
+        flags: &[&JSON, &NO_COLOR, &QUIET, &SOCKET, &DAEMON_PATH],
         values: "",
         dynamic: None,
     },
@@ -344,6 +352,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -355,7 +364,9 @@ const ROUTES: &[Route] = &[
     },
     Route {
         words: "doctor",
-        flags: &[&JSON, &WORKTREE, &TIMEOUT, &NO_COLOR, &QUIET, &DEEP],
+        flags: &[
+            &JSON, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &DEEP,
+        ],
         values: "",
         dynamic: None,
     },
@@ -383,6 +394,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &VERBOSE,
@@ -398,6 +410,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &WAIT_FOR_IDLE,
@@ -418,6 +431,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -435,6 +449,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -452,6 +467,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -471,6 +487,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -488,6 +505,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -505,6 +523,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -522,6 +541,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -558,6 +578,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -581,6 +602,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -598,6 +620,7 @@ const ROUTES: &[Route] = &[
             &JSON,
             &WORKTREE,
             &TIMEOUT,
+            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
@@ -620,7 +643,9 @@ const ROUTES: &[Route] = &[
     },
     Route {
         words: "job list",
-        flags: &[&JSON, &WORKTREE, &TIMEOUT, &NO_COLOR, &QUIET, &STATE],
+        flags: &[
+            &JSON, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &STATE,
+        ],
         values: "queued running succeeded failed cancelled",
         dynamic: None,
     },
@@ -702,7 +727,7 @@ fn static_candidates(route: &Route) -> Vec<String> {
 
 fn bash_script() -> String {
     let mut script = String::from("# podway bash completion (generated from ROUTES)\n");
-    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n    esac\n  done\n  if [[ -n \"$worktree\" ]]; then\n    command podway --worktree \"$worktree\" __complete \"$kind\" 2>/dev/null\n  else\n    command podway __complete \"$kind\" 2>/dev/null\n  fi\n}\n");
+    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=${COMP_WORDS[index]} ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=()\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
     script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 1; index < COMP_CWORD; ++index)); do\n");
     script.push_str("    word=${COMP_WORDS[index]}\n");
@@ -775,7 +800,7 @@ fn write_bash_candidates(
 
 fn zsh_script() -> String {
     let mut script = String::from("#compdef podway\n# Generated from ROUTES.\n");
-    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n    esac\n  done\n  if [[ -n \"$worktree\" ]]; then\n    command podway --worktree \"$worktree\" __complete \"$kind\" 2>/dev/null\n  else\n    command podway __complete \"$kind\" 2>/dev/null\n  fi\n}\n");
+    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=$words[index] ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=()\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
     script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 2; index < CURRENT; ++index)); do\n");
     script.push_str("    word=$words[index]\n");
@@ -846,7 +871,7 @@ fn write_zsh_candidates(
 
 fn fish_script() -> String {
     let mut script = String::from("# podway fish completion (generated from ROUTES)\n");
-    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l expecting_worktree 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n    end\n  end\n  if test -n \"$worktree\"\n    command podway --worktree \"$worktree\" __complete $argv 2>/dev/null\n  else\n    command podway __complete $argv 2>/dev/null\n  end\nend\n");
+    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l socket\n  set -l expecting_worktree 0\n  set -l expecting_socket 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    if test $expecting_socket -eq 1\n      set socket \"$word\"\n      set expecting_socket 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n      case --socket\n        set expecting_socket 1\n      case '--socket=*'\n        set socket (string replace -- '--socket=' '' \"$word\")\n    end\n  end\n  set -l endpoint\n  set -l workspace\n  if test -n \"$socket\"; set endpoint --socket \"$socket\"; end\n  if test -n \"$worktree\"; set workspace --worktree \"$worktree\"; end\n  command podway $endpoint $workspace __complete $argv 2>/dev/null\nend\n");
     script.push_str("function __podway_route\n  set -l root\n  set -l expecting_worktree 0\n");
     script.push_str("  for word in (commandline -opc)\n    if test \"$word\" = podway\n      continue\n    end\n    if test $expecting_worktree -eq 1\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n        continue\n      case '--worktree=*'\n        continue\n    end\n");
     script.push_str("    if test -z \"$root\"\n      switch \"$word\"\n");

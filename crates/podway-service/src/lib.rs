@@ -342,6 +342,21 @@ impl ServiceRuntimePathsV1 {
     pub fn socket_path(&self) -> &LocalPlatformPathV1 {
         &self.socket_path
     }
+
+    /// Returns the same per-user service layout with an explicitly selected IPC endpoint.
+    pub fn with_socket_path(
+        mut self,
+        socket_path: impl AsRef<Path>,
+    ) -> Result<Self, ServicePathErrorV1> {
+        let socket_path = socket_path.as_ref();
+        if socket_path.as_os_str().len() >= 104 {
+            return Err(ServicePathErrorV1::SocketPathTooLong {
+                path: socket_path.to_path_buf(),
+            });
+        }
+        self.socket_path = LocalPlatformPathV1::service_global(socket_path)?;
+        Ok(self)
+    }
 }
 
 /// Input used to install or update the fixed v1 LaunchAgent definition.
