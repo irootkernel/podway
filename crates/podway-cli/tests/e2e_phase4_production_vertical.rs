@@ -49,7 +49,7 @@ impl FixtureV1 {
         make_private(&home);
         make_private(&temporary);
         create_non_bare_worktree(&worktree);
-        let registry_parent = home.join("Library/Application Support/Podway");
+        let registry_parent = home.join(".podway/state");
         fs::create_dir_all(&registry_parent).expect("fixture registry parent must be created");
         make_private(&registry_parent);
 

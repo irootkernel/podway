@@ -98,27 +98,27 @@ fn arc_008_service_v1_exposes_exact_global_runtime_paths() {
     );
     assert_eq!(
         paths.metadata_index_path().as_path(),
-        std::path::Path::new("/Users/podway/Library/Application Support/Podway/service.json")
+        std::path::Path::new("/Users/podway/.podway/state/service.json")
     );
     assert_eq!(
         paths.workspace_registry_path().as_path(),
-        std::path::Path::new("/Users/podway/Library/Application Support/Podway/workspaces.json")
+        std::path::Path::new("/Users/podway/.podway/state/workspaces.json")
     );
     assert_eq!(
         paths.log_path().as_path(),
-        std::path::Path::new("/Users/podway/Library/Logs/Podway/podwayd.log")
+        std::path::Path::new("/Users/podway/.podway/logs/podwayd.log")
     );
     assert_eq!(
         paths.runtime_directory().as_path(),
-        std::path::Path::new("/var/folders/podway/podway-501")
+        std::path::Path::new("/Users/podway/.podway/run")
     );
     assert_eq!(
         paths.socket_path().as_path(),
-        std::path::Path::new("/var/folders/podway/podway-501/podwayd.sock")
+        std::path::Path::new("/Users/podway/.podway/run/podwayd.sock")
     );
     assert_eq!(
         paths.global_lock_path().as_path(),
-        std::path::Path::new("/var/folders/podway/podway-501/podwayd.lock")
+        std::path::Path::new("/Users/podway/.podway/run/podwayd.lock")
     );
     assert_ne!(paths.metadata_index_path(), paths.workspace_registry_path());
 }
@@ -1832,10 +1832,10 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
 }
 
 #[test]
-fn phase6_runtime_socket_path_rejects_overlong_tmpdir_without_shared_fallback() {
-    let temporary_directory = format!("/{}", "a".repeat(120));
+fn aut_home_002_runtime_socket_path_rejects_overlong_account_home() {
+    let account_home = format!("/{}", "a".repeat(120));
     assert!(matches!(
-        ServiceRuntimePathsV1::for_user("/Users/podway", temporary_directory, 501),
+        ServiceRuntimePathsV1::for_user(account_home, "/ignored", 501),
         Err(ServicePathErrorV1::SocketPathTooLong { .. })
     ));
 }

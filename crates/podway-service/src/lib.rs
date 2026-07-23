@@ -144,6 +144,12 @@ impl LocalPlatformPathV1 {
     pub fn as_path(&self) -> &Path {
         &self.0
     }
+
+    fn service_global(path: impl AsRef<Path>) -> Result<Self, ServicePathErrorV1> {
+        let path = path.as_ref().to_path_buf();
+        validate_absolute_normalized_path(&path, "service_global_path")?;
+        Ok(Self(path))
+    }
 }
 
 /// The canonical per-user root for Podway service-global state.
@@ -270,25 +276,44 @@ impl ServiceRuntimePathsV1 {
 
     pub fn for_user(
         home_directory: impl AsRef<Path>,
-        temporary_directory: impl AsRef<Path>,
+        _temporary_directory: impl AsRef<Path>,
         user_id: u32,
     ) -> Result<Self, ServicePathErrorV1> {
-        if user_id == 0 {
-            return Err(ServicePathErrorV1::RootUser);
+        Self::from_podway_home(&PodwayHomeV1::from_account_home(home_directory, user_id)?)
+    }
+
+    pub fn for_effective_user() -> Result<Self, ServicePathErrorV1> {
+        Self::from_podway_home(&PodwayHomeV1::for_effective_user()?)
+    }
+
+    pub fn from_podway_home(home: &PodwayHomeV1) -> Result<Self, ServicePathErrorV1> {
+        let runtime_directory = home.as_path().join("run");
+        let state_directory = home.as_path().join("state");
+        let logs_directory = home.as_path().join("logs");
+        let socket_path = runtime_directory.join("podwayd.sock");
+        if socket_path.as_os_str().len() >= 104 {
+            return Err(ServicePathErrorV1::SocketPathTooLong { path: socket_path });
         }
 
-        let home_directory = home_directory.as_ref();
-        let temporary_directory = temporary_directory.as_ref();
-        validate_service_path(home_directory, "home_directory")?;
-        validate_service_path(temporary_directory, "temporary_directory")?;
-
-        let runtime_directory = temporary_directory.join(format!("podway-{user_id}"));
-        Self::from_directories(
-            home_directory.join("Library/LaunchAgents"),
-            home_directory.join("Library/Application Support/Podway"),
-            home_directory.join("Library/Logs/Podway"),
-            runtime_directory,
-        )
+        Ok(Self {
+            runtime_directory: LocalPlatformPathV1::service_global(&runtime_directory)?,
+            global_lock_path: LocalPlatformPathV1::service_global(
+                runtime_directory.join("podwayd.lock"),
+            )?,
+            launch_agent_path: LocalPlatformPathV1::service_global(
+                home.account_home()
+                    .join("Library/LaunchAgents")
+                    .join(format!("{SERVICE_LABEL_V1}.plist")),
+            )?,
+            log_path: LocalPlatformPathV1::service_global(logs_directory.join("podwayd.log"))?,
+            metadata_index_path: LocalPlatformPathV1::service_global(
+                state_directory.join("service.json"),
+            )?,
+            workspace_registry_path: LocalPlatformPathV1::service_global(
+                state_directory.join("workspaces.json"),
+            )?,
+            socket_path: LocalPlatformPathV1::service_global(socket_path)?,
+        })
     }
 
     pub fn global_lock_path(&self) -> &LocalPlatformPathV1 {
@@ -1485,7 +1510,10 @@ impl ServiceErrorV1 {
     }
 }
 
-fn validate_service_path(path: &Path, field: &'static str) -> Result<(), ServicePathErrorV1> {
+fn validate_absolute_normalized_path(
+    path: &Path,
+    field: &'static str,
+) -> Result<(), ServicePathErrorV1> {
     if path.as_os_str().is_empty() {
         return Err(ServicePathErrorV1::Empty { field });
     }
@@ -1510,12 +1538,6 @@ fn validate_service_path(path: &Path, field: &'static str) -> Result<(), Service
                     path: path.to_path_buf(),
                 });
             }
-            Component::Normal(component) if component == ".podway" => {
-                return Err(ServicePathErrorV1::WorkspaceLocal {
-                    field,
-                    path: path.to_path_buf(),
-                });
-            }
             Component::Normal(component)
                 if component
                     .as_encoded_bytes()
@@ -1529,6 +1551,20 @@ fn validate_service_path(path: &Path, field: &'static str) -> Result<(), Service
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+fn validate_service_path(path: &Path, field: &'static str) -> Result<(), ServicePathErrorV1> {
+    validate_absolute_normalized_path(path, field)?;
+    if path
+        .components()
+        .any(|component| matches!(component, Component::Normal(value) if value == ".podway"))
+    {
+        return Err(ServicePathErrorV1::WorkspaceLocal {
+            field,
+            path: path.to_path_buf(),
+        });
     }
     Ok(())
 }

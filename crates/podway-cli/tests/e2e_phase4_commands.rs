@@ -53,7 +53,7 @@ impl Fixture {
         fs::create_dir_all(&temporary).expect("fixture temporary directory must be created");
         let paths = ServiceRuntimePathsV1::for_user(&home, &temporary, geteuid().as_raw())
             .expect("fixture paths must be valid");
-        fs::create_dir(paths.runtime_directory().as_path())
+        fs::create_dir_all(paths.runtime_directory().as_path())
             .expect("fixture daemon runtime directory must be created");
         Self {
             root,

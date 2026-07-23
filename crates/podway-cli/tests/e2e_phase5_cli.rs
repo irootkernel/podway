@@ -23,7 +23,7 @@ use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
 
 fn run(arguments: &[&str]) -> Output {
-    let isolated = unique_fixture_path("podway-cli-phase5-no-daemon");
+    let isolated = unique_short_fixture_path();
     let temporary = unique_short_fixture_path();
     let output = Command::new(env!("CARGO_BIN_EXE_podway"))
         .args(arguments)
@@ -292,7 +292,7 @@ impl DynamicCompletionFixture {
         fs::create_dir_all(&temporary).expect("fixture temporary directory must be created");
         let paths = ServiceRuntimePathsV1::for_user(&home, &temporary, geteuid().as_raw())
             .expect("fixture paths must be valid");
-        fs::create_dir(paths.runtime_directory().as_path())
+        fs::create_dir_all(paths.runtime_directory().as_path())
             .expect("fixture daemon runtime directory must be created");
         Self {
             root,
@@ -3060,6 +3060,8 @@ fn hidden_dynamic_completion_silently_degrades_without_a_daemon() {
 fn daemon_install_rejects_non_native_executables_before_launchctl() {
     let root = unique_fixture_path("podway-invalid-daemon");
     fs::create_dir_all(&root).expect("invalid daemon fixture directory");
+    let home = unique_short_fixture_path();
+    fs::create_dir_all(&home).expect("invalid daemon HOME fixture directory");
     let temporary = unique_short_fixture_path();
 
     let matching_version_script = format!(
@@ -3089,7 +3091,7 @@ fn daemon_install_rejects_non_native_executables_before_launchctl() {
                 "--daemon-path",
                 &binary_argument,
             ])
-            .env("HOME", &root)
+            .env("HOME", &home)
             .env("TMPDIR", &temporary)
             .output()
             .expect("podway binary must run");
@@ -3102,12 +3104,13 @@ fn daemon_install_rejects_non_native_executables_before_launchctl() {
         );
         assert_eq!(response["retryable"], false, "{name}: {response}");
         assert!(
-            !root.join("Library/LaunchAgents").exists(),
+            !home.join("Library/LaunchAgents").exists(),
             "{name} must not publish a service"
         );
     }
 
     let _ = fs::remove_dir_all(temporary);
+    fs::remove_dir_all(home).expect("remove invalid daemon HOME fixture");
     fs::remove_dir_all(root).expect("remove invalid daemon fixture");
 }
 #[test]
