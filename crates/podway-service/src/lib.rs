@@ -14,7 +14,7 @@ use nix::{
         signal::{Signal, kill},
         stat::{Mode, SFlag, fchmod, fstat, fstatat, mkdirat},
     },
-    unistd::{Pid, UnlinkatFlags, fsync, geteuid, unlinkat},
+    unistd::{Pid, UnlinkatFlags, User, fsync, geteuid, unlinkat},
 };
 use podway_core::UnixMillis;
 use serde::{
@@ -143,6 +143,60 @@ impl LocalPlatformPathV1 {
 
     pub fn as_path(&self) -> &Path {
         &self.0
+    }
+}
+
+/// The canonical per-user root for Podway service-global state.
+///
+/// Production resolution uses the effective operating-system account rather than ambient
+/// environment variables. The explicit constructor exists for deterministic composition tests.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PodwayHomeV1 {
+    account_home: PathBuf,
+    root: PathBuf,
+    user_id: u32,
+}
+
+impl PodwayHomeV1 {
+    /// Resolves the effective user's account home through the operating-system account database.
+    pub fn for_effective_user() -> Result<Self, ServicePathErrorV1> {
+        let user_id = geteuid().as_raw();
+        if user_id == 0 {
+            return Err(ServicePathErrorV1::RootUser);
+        }
+        let user = User::from_uid(geteuid())
+            .map_err(|_| ServicePathErrorV1::EffectiveUserLookup { user_id })?
+            .ok_or(ServicePathErrorV1::EffectiveUserNotFound { user_id })?;
+        Self::from_account_home(user.dir, user_id)
+    }
+
+    /// Constructs a canonical Podway home from an explicit operating-system account home.
+    pub fn from_account_home(
+        account_home: impl AsRef<Path>,
+        user_id: u32,
+    ) -> Result<Self, ServicePathErrorV1> {
+        if user_id == 0 {
+            return Err(ServicePathErrorV1::RootUser);
+        }
+        let account_home = account_home.as_ref();
+        validate_service_path(account_home, "account_home")?;
+        Ok(Self {
+            account_home: account_home.to_path_buf(),
+            root: account_home.join(".podway"),
+            user_id,
+        })
+    }
+
+    pub fn account_home(&self) -> &Path {
+        &self.account_home
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.root
+    }
+
+    pub const fn user_id(&self) -> u32 {
+        self.user_id
     }
 }
 
@@ -1193,6 +1247,8 @@ pub enum ServicePathErrorV1 {
     Relative { field: &'static str, path: PathBuf },
     Unnormalized { field: &'static str, path: PathBuf },
     WorkspaceLocal { field: &'static str, path: PathBuf },
+    EffectiveUserLookup { user_id: u32 },
+    EffectiveUserNotFound { user_id: u32 },
     RootUser,
     SocketPathTooLong { path: PathBuf },
 }
@@ -1216,6 +1272,18 @@ impl fmt::Display for ServicePathErrorV1 {
                 "{field} must not point into workspace-local Podway state: {}",
                 path.display()
             ),
+            Self::EffectiveUserLookup { user_id } => {
+                write!(
+                    formatter,
+                    "could not query effective operating-system user {user_id}"
+                )
+            }
+            Self::EffectiveUserNotFound { user_id } => {
+                write!(
+                    formatter,
+                    "effective operating-system user {user_id} was not found"
+                )
+            }
             Self::RootUser => formatter.write_str("a per-user service cannot use the root user"),
             Self::SocketPathTooLong { path } => write!(
                 formatter,

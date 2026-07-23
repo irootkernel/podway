@@ -13,12 +13,12 @@ use std::{
 use podway_core::UnixMillis;
 use podway_service::{
     FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1, LaunchctlRunnerV1, LocalPlatformPathV1,
-    LogLocationV1, LogQueryV1, MacosServiceCommandRunnerV1, RecordingServiceCommandRunnerV1,
-    RecordingServiceManagerV1, SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1,
-    ServiceCommandResultV1, ServiceCommandRunnerV1, ServiceCommandV1, ServiceErrorV1,
-    ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1, ServiceManagerContractV1,
-    ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1, ServiceRunningV1,
-    ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
+    LogLocationV1, LogQueryV1, MacosServiceCommandRunnerV1, PodwayHomeV1,
+    RecordingServiceCommandRunnerV1, RecordingServiceManagerV1, SERVICE_METADATA_MAX_BYTES_V1,
+    ServiceClockV1, ServiceCommandResultV1, ServiceCommandRunnerV1, ServiceCommandV1,
+    ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1,
+    ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1,
+    ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
 };
 
 fn service_paths() -> ServiceRuntimePathsV1 {
@@ -31,6 +31,58 @@ fn service_paths() -> ServiceRuntimePathsV1 {
         Ok(value) => value,
         Err(_) => panic!("fixture service paths must be valid"),
     }
+}
+
+#[test]
+fn aut_home_001_podway_home_is_derived_from_the_os_account_home() {
+    let home = PodwayHomeV1::from_account_home("/Users/podway", 501)
+        .expect("fixture account home must be valid");
+
+    assert_eq!(home.account_home(), Path::new("/Users/podway"));
+    assert_eq!(home.as_path(), Path::new("/Users/podway/.podway"));
+    assert_eq!(home.user_id(), 501);
+}
+
+#[test]
+fn aut_home_001_effective_user_resolution_matches_the_os_account_database() {
+    let effective_user_id = nix::unistd::geteuid();
+    if effective_user_id.is_root() {
+        assert!(matches!(
+            PodwayHomeV1::for_effective_user(),
+            Err(ServicePathErrorV1::RootUser)
+        ));
+        return;
+    }
+
+    let account = nix::unistd::User::from_uid(effective_user_id)
+        .expect("effective user lookup must succeed")
+        .expect("effective user must exist");
+    let home = PodwayHomeV1::for_effective_user().expect("Podway home must resolve");
+    assert_eq!(home.account_home(), account.dir);
+    assert_eq!(home.as_path(), account.dir.join(".podway"));
+    assert_eq!(home.user_id(), effective_user_id.as_raw());
+}
+
+#[test]
+fn aut_home_001_podway_home_rejects_root_and_invalid_account_homes() {
+    assert!(matches!(
+        PodwayHomeV1::from_account_home("/var/root", 0),
+        Err(ServicePathErrorV1::RootUser)
+    ));
+    assert!(matches!(
+        PodwayHomeV1::from_account_home("Users/podway", 501),
+        Err(ServicePathErrorV1::Relative {
+            field: "account_home",
+            ..
+        })
+    ));
+    assert!(matches!(
+        PodwayHomeV1::from_account_home("/Users/../podway", 501),
+        Err(ServicePathErrorV1::Unnormalized {
+            field: "account_home",
+            ..
+        })
+    ));
 }
 
 #[test]
