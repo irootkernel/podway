@@ -1784,7 +1784,7 @@ fn aut_home_002_runtime_socket_path_rejects_overlong_account_home() {
 }
 
 #[test]
-fn aut_home_003_explicit_socket_replaces_only_the_endpoint() {
+fn aut_sock_001_explicit_socket_replaces_only_the_endpoint() {
     let paths = ServiceRuntimePathsV1::for_account_home("/Users/podway", 501)
         .expect("canonical service paths");
     let explicit = paths
@@ -1802,7 +1802,12 @@ fn aut_home_003_explicit_socket_replaces_only_the_endpoint() {
         explicit.workspace_registry_path(),
         paths.workspace_registry_path()
     );
+}
 
+#[test]
+fn aut_sock_002_explicit_socket_rejects_relative_and_unnormalized_paths() {
+    let paths = ServiceRuntimePathsV1::for_account_home("/Users/podway", 501)
+        .expect("canonical service paths");
     for invalid in ["relative.sock", "~/podwayd.sock", "/tmp/../podwayd.sock"] {
         assert!(
             paths.clone().with_socket_path(invalid).is_err(),
