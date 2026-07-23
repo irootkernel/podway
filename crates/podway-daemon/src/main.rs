@@ -119,7 +119,7 @@ fn run_service(socket_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::E
 fn effective_service_paths() -> Result<ServiceRuntimePathsV1, podway_service::ServicePathErrorV1> {
     #[cfg(debug_assertions)]
     if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
-        return ServiceRuntimePathsV1::for_user(account_root, "/tmp", geteuid().as_raw());
+        return ServiceRuntimePathsV1::for_account_home(account_root, geteuid().as_raw());
     }
     ServiceRuntimePathsV1::for_effective_user()
 }

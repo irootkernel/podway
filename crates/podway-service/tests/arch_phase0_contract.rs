@@ -88,7 +88,7 @@ fn aut_home_001_podway_home_rejects_root_and_invalid_account_homes() {
 
 #[test]
 fn arc_008_service_v1_exposes_exact_global_runtime_paths() {
-    let paths = match ServiceRuntimePathsV1::for_user("/Users/podway", "/var/folders/podway", 501) {
+    let paths = match ServiceRuntimePathsV1::for_account_home("/Users/podway", 501) {
         Ok(value) => value,
         Err(_) => panic!("fixture service paths must be valid"),
     };
@@ -200,7 +200,7 @@ fn arc_008_service_v1_runtime_paths_are_global_and_value_equal() {
 #[test]
 fn arc_008_sec_002_service_v1_rejects_root_and_path_bound_inputs() {
     assert!(matches!(
-        ServiceRuntimePathsV1::for_user("/Users/podway", "/var/folders/podway", 0),
+        ServiceRuntimePathsV1::for_account_home("/Users/podway", 0),
         Err(ServicePathErrorV1::RootUser)
     ));
     assert!(matches!(
@@ -1778,14 +1778,14 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
 fn aut_home_002_runtime_socket_path_rejects_overlong_account_home() {
     let account_home = format!("/{}", "a".repeat(120));
     assert!(matches!(
-        ServiceRuntimePathsV1::for_user(account_home, "/ignored", 501),
+        ServiceRuntimePathsV1::for_account_home(account_home, 501),
         Err(ServicePathErrorV1::SocketPathTooLong { .. })
     ));
 }
 
 #[test]
 fn aut_home_003_explicit_socket_replaces_only_the_endpoint() {
-    let paths = ServiceRuntimePathsV1::for_user("/Users/podway", "/tmp", 501)
+    let paths = ServiceRuntimePathsV1::for_account_home("/Users/podway", 501)
         .expect("canonical service paths");
     let explicit = paths
         .clone()
@@ -1813,7 +1813,7 @@ fn aut_home_003_explicit_socket_replaces_only_the_endpoint() {
 
 #[test]
 fn explicit_socket_enforces_the_macos_sun_path_capacity_boundary() {
-    let paths = ServiceRuntimePathsV1::for_user("/Users/podway", "/tmp", 501)
+    let paths = ServiceRuntimePathsV1::for_account_home("/Users/podway", 501)
         .expect("canonical service paths");
     let longest_bindable = format!("/{}", "s".repeat(102));
     let first_unbindable = format!("/{}", "s".repeat(103));

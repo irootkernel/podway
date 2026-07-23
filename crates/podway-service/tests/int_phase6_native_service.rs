@@ -190,7 +190,7 @@ fn service_mutations_reject_symlinked_ancestors_without_touching_outside_sentine
 fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl() {
     let root = unique_root();
     let home = unique_runtime();
-    let paths = ServiceRuntimePathsV1::for_user(&home, root.join("temporary"), geteuid().as_raw())
+    let paths = ServiceRuntimePathsV1::for_account_home(&home, geteuid().as_raw())
         .expect("fixture service paths");
 
     let launchctl_log = root.join("launchctl.argv");

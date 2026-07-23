@@ -33,15 +33,12 @@ impl ProcessFixtureV1 {
         let root = PathBuf::from(format!("/tmp/pdb-{}-{sequence}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let home = root.join("h");
-        let temporary = root.join("t");
         let state_directory = home.join(".podway/state");
         fs::create_dir_all(&state_directory).expect("state directory fixture must exist");
-        fs::create_dir_all(&temporary).expect("temporary fixture must exist");
         make_private(&home);
-        make_private(&temporary);
         make_private(home.join(".podway").as_path());
         make_private(&state_directory);
-        let paths = ServiceRuntimePathsV1::for_user(&home, &temporary, geteuid().as_raw())
+        let paths = ServiceRuntimePathsV1::for_account_home(&home, geteuid().as_raw())
             .expect("short fixture service paths must be valid");
         Self { root, home, paths }
     }

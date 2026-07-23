@@ -41,18 +41,15 @@ impl FixtureV1 {
     fn new() -> Self {
         let root = unique_private_directory("pw4v");
         let home = root.join("h");
-        let temporary = root.join("t");
         let worktree = root.join("w");
         fs::create_dir(&home).expect("fixture HOME must be created");
-        fs::create_dir(&temporary).expect("fixture TMPDIR must be created");
         make_private(&home);
-        make_private(&temporary);
         create_non_bare_worktree(&worktree);
         let registry_parent = home.join(".podway/state");
         fs::create_dir_all(&registry_parent).expect("fixture registry parent must be created");
         make_private(&registry_parent);
 
-        let paths = ServiceRuntimePathsV1::for_user(&home, &temporary, geteuid().as_raw())
+        let paths = ServiceRuntimePathsV1::for_account_home(&home, geteuid().as_raw())
             .expect("short private fixture paths must be valid");
         Self {
             root,

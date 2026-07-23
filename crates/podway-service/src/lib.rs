@@ -273,9 +273,8 @@ impl ServiceRuntimePathsV1 {
         })
     }
 
-    pub fn for_user(
+    pub fn for_account_home(
         home_directory: impl AsRef<Path>,
-        _temporary_directory: impl AsRef<Path>,
         user_id: u32,
     ) -> Result<Self, ServicePathErrorV1> {
         Self::from_podway_home(&PodwayHomeV1::from_account_home(home_directory, user_id)?)
