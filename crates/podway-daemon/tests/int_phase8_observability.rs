@@ -1,5 +1,6 @@
 use std::{
     fs, io,
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{
         Arc, Barrier, Condvar, Mutex,
@@ -433,12 +434,29 @@ fn rotation_owns_exactly_canonical_numbered_files() {
     }
     fs::write(path.with_extension("log.keep"), "neighbor").unwrap();
     let sink = RotatingFileSinkV1::open(&path).unwrap();
+    assert_eq!(
+        fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     let event = "x".repeat(8 * 1024);
     for _ in 0..=(ROTATION_BYTES_V1 as usize / event.len()) * (RETAINED_ROTATIONS_V1 + 1) {
         sink.write_event(&event).unwrap();
     }
     for index in 1..=RETAINED_ROTATIONS_V1 {
-        assert!(path.with_extension(format!("log.{index}")).exists());
+        let rotation = path.with_extension(format!("log.{index}"));
+        assert!(rotation.exists());
+        assert_eq!(
+            fs::metadata(rotation).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
     for suffix in ["0", "00", "01", "6", "99", "000000000000000000000"] {
         assert!(!path.with_extension(format!("log.{suffix}")).exists());

@@ -106,6 +106,10 @@ pub enum EndpointErrorV1 {
         path: PathBuf,
         violation: EndpointPathViolationV1,
     },
+    UnsafeSocketParent {
+        path: PathBuf,
+        violation: EndpointPathViolationV1,
+    },
     UnsafeLockFile {
         path: PathBuf,
         violation: EndpointPathViolationV1,
@@ -147,6 +151,9 @@ impl fmt::Display for EndpointErrorV1 {
                     "runtime directory {} {violation}",
                     path.display()
                 )
+            }
+            Self::UnsafeSocketParent { path, violation } => {
+                write!(formatter, "socket parent {} {violation}", path.display())
             }
             Self::UnsafeLockFile { path, violation } => {
                 write!(formatter, "lock file {} {violation}", path.display())
@@ -212,6 +219,7 @@ impl SingletonEndpointV1 {
         ensure_runtime_directory(runtime_directory, current_uid)?;
         let lock = open_and_lock(lock_path, current_uid)?;
 
+        ensure_socket_parent(socket_path, runtime_directory, current_uid)?;
         prepare_socket_path(socket_path, current_uid)?;
         let (listener, socket_token) =
             bind_and_configure_socket(socket_path, current_uid, configure_bound_socket)?;
@@ -224,6 +232,33 @@ impl SingletonEndpointV1 {
             socket_token,
         })
     }
+}
+
+fn ensure_socket_parent(
+    socket_path: &Path,
+    runtime_directory: &Path,
+    current_uid: u32,
+) -> Result<(), EndpointErrorV1> {
+    let parent = socket_path
+        .parent()
+        .ok_or_else(|| EndpointErrorV1::UnsafeSocketParent {
+            path: socket_path.to_path_buf(),
+            violation: EndpointPathViolationV1::NotDirectory,
+        })?;
+    if parent == runtime_directory {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(parent).map_err(|source| EndpointErrorV1::Io {
+        operation: "inspect socket parent",
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    validate_private_directory(parent, &metadata, current_uid).map_err(|violation| {
+        EndpointErrorV1::UnsafeSocketParent {
+            path: parent.to_path_buf(),
+            violation,
+        }
+    })
 }
 
 /// Owns a daemon listener, its exclusive process lock, and the socket identity used for cleanup.
@@ -573,6 +608,19 @@ fn validate_runtime_directory(
     metadata: &Metadata,
     current_uid: u32,
 ) -> Result<(), EndpointErrorV1> {
+    validate_private_directory(path, metadata, current_uid).map_err(|violation| {
+        EndpointErrorV1::UnsafeRuntimeDirectory {
+            path: path.to_path_buf(),
+            violation,
+        }
+    })
+}
+
+fn validate_private_directory(
+    _path: &Path,
+    metadata: &Metadata,
+    current_uid: u32,
+) -> Result<(), EndpointPathViolationV1> {
     let violation = if metadata.file_type().is_symlink() {
         Some(EndpointPathViolationV1::Symlink)
     } else if !metadata.is_dir() {
@@ -590,12 +638,7 @@ fn validate_runtime_directory(
         })
     };
 
-    violation.map_or(Ok(()), |violation| {
-        Err(EndpointErrorV1::UnsafeRuntimeDirectory {
-            path: path.to_path_buf(),
-            violation,
-        })
-    })
+    violation.map_or(Ok(()), Err)
 }
 
 fn validate_lock_file(

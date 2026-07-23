@@ -27,6 +27,8 @@ The label is an implementation constant for v1. Changing it requires migration o
 These are the implemented v0.1.0 paths. Service installation and explicit
 endpoint resolution use the effective OS account and do not require `HOME`,
 `TMPDIR`, or `XDG_*`. Over-long socket paths fail with a stable typed error.
+PODWAY_HOME plus `run`, `state`, and `logs` use mode `0700`; service metadata,
+the registry, logs, the singleton lock, and the socket use mode `0600`.
 
 ## LaunchAgent configuration
 
@@ -83,7 +85,8 @@ contract identity updates the plist and restarts the service.
 `uninstall`:
 
 - stops and removes the LaunchAgent;
-- removes service metadata and stale socket files;
+- removes service metadata while leaving socket and lock ownership to the daemon
+  endpoint guard;
 - preserves all worktree-local Podway state;
 - preserves daemon logs by default;
 - supports `--purge-logs` as an explicit option.
@@ -121,17 +124,22 @@ At startup the daemon:
 
 1. creates PODWAY_HOME and its directories with mode `0700`;
 2. acquires the fixed per-user singleton lock regardless of selected socket;
-3. inspects an existing socket;
-4. if a healthy daemon responds, exits as duplicate;
-5. if no process owns the stale socket, removes it;
-6. binds the new socket and sets mode `0600`;
-7. begins accepting requests.
+3. validates the selected socket parent as a real, effective-user-owned mode
+   `0700` directory;
+4. rejects a regular file, directory, symlink, wrong-owner socket, or
+   wrong-mode socket without unlinking it;
+5. if a healthy daemon responds, exits as duplicate;
+6. removes a refused stale socket only while holding the singleton lock and
+   only when its type, owner, mode, device, and inode still match;
+7. binds the new socket, sets mode `0600`, and begins accepting requests.
 
-The daemon verifies the peer UID using the platform's local-socket credential API where available.
+The daemon verifies the client peer UID before reading a frame. The CLI likewise
+validates socket type, owner, mode, parent permissions, path length, and the
+connected daemon peer UID before sending a frame.
 
 ## Logging
 
-The target daemon writes structured local logs under
+The daemon writes structured local logs under
 `<effective-user-home>/.podway/logs/`.
 
 Defaults:
@@ -171,7 +179,7 @@ The macOS integration suite MUST cover:
 - update after binary path change;
 - start at login in an isolated test account or equivalent harness;
 - explicit stop despite keep-alive;
-- restart and stale socket cleanup;
+- endpoint-owned stale socket cleanup without service-layer unlinking;
 - duplicate daemon prevention;
 - socket owner and mode;
 - log creation and rotation;

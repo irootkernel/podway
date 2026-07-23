@@ -778,6 +778,29 @@ fn singleton_loser_never_unlinks_the_live_socket() {
 
     owner.shutdown().expect("owner must shut down cleanly");
 }
+
+#[test]
+fn singleton_loser_with_a_different_socket_never_reaches_that_endpoint() {
+    let fixture = RuntimeFixture::new();
+    let alternate_socket = fixture.runtime_directory().join("alternate.sock");
+    let alternate_paths = fixture
+        .paths
+        .clone()
+        .with_socket_path(&alternate_socket)
+        .expect("alternate socket path must be valid");
+    let owner = SingletonEndpointV1::acquire(&fixture.paths).expect("first daemon owns singleton");
+
+    assert!(matches!(
+        SingletonEndpointV1::acquire(&alternate_paths),
+        Err(EndpointErrorV1::AlreadyRunning)
+    ));
+    assert!(
+        !alternate_socket.exists(),
+        "lock loser must not inspect, remove, or bind its different socket"
+    );
+
+    owner.shutdown().expect("owner must shut down cleanly");
+}
 #[test]
 fn pac063_daemon_exposes_only_a_private_unix_endpoint_and_no_network_surface() {
     let manifest = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
@@ -963,6 +986,45 @@ fn unsafe_runtime_lock_and_socket_paths_fail_closed() {
         SingletonEndpointV1::acquire(&lock_mode_fixture.paths),
         Err(EndpointErrorV1::UnsafeLockFile {
             violation: EndpointPathViolationV1::WrongMode { .. },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn explicit_socket_parent_must_be_an_owner_private_real_directory() {
+    let insecure_fixture = RuntimeFixture::new();
+    let insecure_parent = insecure_fixture.root.join("insecure-run");
+    fs::create_dir(&insecure_parent).expect("insecure parent fixture must be created");
+    set_mode(&insecure_parent, 0o755);
+    let insecure_paths = insecure_fixture
+        .paths
+        .clone()
+        .with_socket_path(insecure_parent.join("podwayd.sock"))
+        .expect("explicit socket path must be structurally valid");
+    assert!(matches!(
+        SingletonEndpointV1::acquire(&insecure_paths),
+        Err(EndpointErrorV1::UnsafeSocketParent {
+            violation: EndpointPathViolationV1::WrongMode { .. },
+            ..
+        })
+    ));
+
+    let symlink_fixture = RuntimeFixture::new();
+    let real_parent = symlink_fixture.root.join("real-run");
+    let linked_parent = symlink_fixture.root.join("linked-run");
+    fs::create_dir(&real_parent).expect("real parent fixture must be created");
+    set_mode(&real_parent, 0o700);
+    symlink(&real_parent, &linked_parent).expect("socket parent symlink must be created");
+    let linked_paths = symlink_fixture
+        .paths
+        .clone()
+        .with_socket_path(linked_parent.join("podwayd.sock"))
+        .expect("linked socket path must be structurally valid");
+    assert!(matches!(
+        SingletonEndpointV1::acquire(&linked_paths),
+        Err(EndpointErrorV1::UnsafeSocketParent {
+            violation: EndpointPathViolationV1::Symlink,
             ..
         })
     ));

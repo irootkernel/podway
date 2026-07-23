@@ -112,7 +112,6 @@ fn service_observer_emits_only_stable_categories_at_production_boundaries() {
             ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
-            ServiceObservationV1::StaleSocketRemoved,
             ServiceObservationV1::LogRotationCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,

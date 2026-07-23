@@ -23,7 +23,7 @@ use nix::{
     errno::Errno,
     fcntl::{Flock, FlockArg, OFlag, open},
     sys::stat::Mode,
-    unistd::{getuid, mkdir},
+    unistd::{geteuid, mkdir},
 };
 use podway_core::{WorkspaceId, canonicalize_json_v1, verify_canonical_json_v1};
 use podway_protocol::Rfc3339MillisV1;
@@ -756,7 +756,7 @@ impl RegistryStoreV1 {
             .lock()
             .map_err(|_| RegistryErrorV1::InProcessLockPoisoned)?;
         let parent = self.parent_directory()?;
-        let current_uid = getuid().as_raw();
+        let current_uid = geteuid().as_raw();
         ensure_private_parent_v1(&parent, current_uid)?;
 
         let lock_path = self.lock_path(&parent)?;

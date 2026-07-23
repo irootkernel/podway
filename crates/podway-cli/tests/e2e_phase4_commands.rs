@@ -2,7 +2,10 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::Shutdown,
-    os::unix::{fs::symlink, net::UnixListener},
+    os::unix::{
+        fs::{PermissionsExt, symlink},
+        net::UnixListener,
+    },
     path::PathBuf,
     process::{Command, Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -55,6 +58,13 @@ impl Fixture {
             .expect("fixture paths must be valid");
         fs::create_dir_all(paths.runtime_directory().as_path())
             .expect("fixture daemon runtime directory must be created");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("fixture root must be private");
+        fs::set_permissions(
+            paths.runtime_directory().as_path(),
+            fs::Permissions::from_mode(0o700),
+        )
+        .expect("fixture runtime directory must be private");
         Self {
             root,
             home,
@@ -121,6 +131,15 @@ impl FakeDaemon {
     fn start_at(socket_path: PathBuf, replies: Vec<Reply>) -> Self {
         let listener = UnixListener::bind(socket_path)
             .expect("fake daemon must bind the service-owned socket path");
+        fs::set_permissions(
+            listener
+                .local_addr()
+                .expect("fake daemon socket address must be readable")
+                .as_pathname()
+                .expect("fake daemon socket must be named"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("fake daemon socket must be private");
         let handle = thread::spawn(move || {
             let mut wires = Vec::with_capacity(replies.len());
             for reply in replies {
@@ -167,6 +186,8 @@ fn explicit_socket_selects_the_exact_daemon_endpoint_and_rejects_non_absolute_pa
     let explicit_socket = fixture.root.join("explicit.sock");
     let default_listener =
         UnixListener::bind(&fixture.socket_path).expect("default endpoint sentinel must bind");
+    fs::set_permissions(&fixture.socket_path, fs::Permissions::from_mode(0o600))
+        .expect("default endpoint sentinel must be private");
     default_listener
         .set_nonblocking(true)
         .expect("default endpoint sentinel must be nonblocking");
@@ -220,26 +241,32 @@ fn omitted_socket_uses_installed_metadata_and_invalid_metadata_never_falls_back(
     let metadata_path = fixture.home.join(".podway/state/service.json");
     fs::create_dir_all(metadata_path.parent().expect("metadata parent"))
         .expect("metadata directory must exist");
-    let digest = "0".repeat(64);
-    fs::write(
-        &metadata_path,
-        serde_json::to_vec(&json!({
-            "version": 1,
-            "label": "dev.podway.podwayd",
-            "daemon_binary": "/Applications/Podway/podwayd",
-            "daemon_identity": digest,
-            "socket_path": installed_socket.display().to_string(),
-            "artifact_role": "production_daemon",
-            "installed_at": 1,
-            "updated_at": 1,
-            "publication_state": "receipt_durable",
-            "generation": "1".repeat(64),
-        }))
-        .expect("metadata fixture must serialize"),
+    fs::set_permissions(
+        metadata_path.parent().expect("metadata parent"),
+        fs::Permissions::from_mode(0o700),
     )
-    .expect("metadata fixture must be written");
+    .expect("metadata directory must be private");
+    let digest = "0".repeat(64);
+    let metadata_bytes = serde_json::to_vec(&json!({
+        "version": 1,
+        "label": "dev.podway.podwayd",
+        "daemon_binary": "/Applications/Podway/podwayd",
+        "daemon_identity": digest,
+        "socket_path": installed_socket.display().to_string(),
+        "artifact_role": "production_daemon",
+        "installed_at": 1,
+        "updated_at": 1,
+        "publication_state": "receipt_durable",
+        "generation": "1".repeat(64),
+    }))
+    .expect("metadata fixture must serialize");
+    fs::write(&metadata_path, &metadata_bytes).expect("metadata fixture must be written");
+    fs::set_permissions(&metadata_path, fs::Permissions::from_mode(0o600))
+        .expect("metadata fixture must be private");
     let default_listener =
         UnixListener::bind(&fixture.socket_path).expect("default endpoint sentinel must bind");
+    fs::set_permissions(&fixture.socket_path, fs::Permissions::from_mode(0o600))
+        .expect("default endpoint sentinel must be private");
     default_listener
         .set_nonblocking(true)
         .expect("default endpoint sentinel must be nonblocking");
@@ -272,6 +299,25 @@ fn omitted_socket_uses_installed_metadata_and_invalid_metadata_never_falls_back(
         default_listener
             .accept()
             .expect_err("invalid metadata must not fall back to the fixed default")
+            .kind(),
+        io::ErrorKind::WouldBlock,
+    );
+
+    fs::write(&metadata_path, &metadata_bytes).expect("valid metadata must be restored");
+    fs::set_permissions(&metadata_path, fs::Permissions::from_mode(0o644))
+        .expect("insecure metadata mode fixture");
+    let output = fixture.run(&["--json", "status"]);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "insecure metadata: {output:?}"
+    );
+    let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
+    assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
+    assert_eq!(
+        default_listener
+            .accept()
+            .expect_err("insecure metadata must not fall back to the fixed default")
             .kind(),
         io::ErrorKind::WouldBlock,
     );
@@ -630,6 +676,8 @@ impl StatefulCursorDaemon {
     fn start(fixture: &Fixture, seeded: SessionAggregateV1, advanced: SessionAggregateV1) -> Self {
         let listener = UnixListener::bind(&fixture.socket_path)
             .expect("stateful evaluator must bind the service-owned socket path");
+        fs::set_permissions(&fixture.socket_path, fs::Permissions::from_mode(0o600))
+            .expect("stateful evaluator socket must be private");
         let handle = thread::spawn(move || {
             let evaluator = StatefulCursorEvaluator::new(advanced);
             for request_index in 0..2 {

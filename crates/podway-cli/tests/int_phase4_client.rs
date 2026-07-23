@@ -2,7 +2,10 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::Shutdown,
-    os::unix::net::UnixListener,
+    os::unix::{
+        fs::{PermissionsExt, symlink},
+        net::UnixListener,
+    },
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -46,6 +49,8 @@ impl RuntimeFixture {
         for directory in [&launch_agents, &application_support, &logs, &runtime_root] {
             fs::create_dir(directory).expect("client fixture directory must be created");
         }
+        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700))
+            .expect("client runtime directory must be private");
         let paths = ServiceRuntimePathsV1::from_directories(
             launch_agents,
             application_support,
@@ -96,6 +101,8 @@ impl FakeSocketServer {
     fn start(fixture: &RuntimeFixture, behavior: ServerBehavior) -> Self {
         let listener = UnixListener::bind(fixture.socket_path())
             .expect("fake daemon socket must bind at the service-owned path");
+        fs::set_permissions(fixture.socket_path(), fs::Permissions::from_mode(0o600))
+            .expect("fake daemon socket must be private");
         let (request_sender, request_receiver) = mpsc::channel();
         let handle = thread::spawn(move || {
             let (mut connection, _) = listener.accept()?;
@@ -317,6 +324,53 @@ fn absent_daemon_is_a_typed_connection_failure() {
             ..
         })
     ));
+}
+
+#[test]
+fn unsafe_socket_parent_type_and_mode_are_rejected_before_request_io() {
+    let insecure_parent = RuntimeFixture::new();
+    fs::set_permissions(
+        insecure_parent.paths.runtime_directory().as_path(),
+        fs::Permissions::from_mode(0o755),
+    )
+    .expect("insecure parent mode fixture must be installed");
+    assert!(matches!(
+        client(&insecure_parent).request(&request()),
+        Err(DaemonClientErrorV1::EndpointSecurity { .. })
+    ));
+
+    let regular_file = RuntimeFixture::new();
+    fs::write(regular_file.socket_path(), "not a socket")
+        .expect("regular endpoint fixture must be created");
+    fs::set_permissions(
+        regular_file.socket_path(),
+        fs::Permissions::from_mode(0o600),
+    )
+    .expect("regular endpoint fixture mode must be private");
+    assert!(matches!(
+        client(&regular_file).request(&request()),
+        Err(DaemonClientErrorV1::EndpointSecurity { .. })
+    ));
+
+    let linked_socket = RuntimeFixture::new();
+    let target = linked_socket.root.join("socket-target");
+    fs::write(&target, "not a socket").expect("socket symlink target must be created");
+    symlink(&target, linked_socket.socket_path()).expect("socket symlink must be created");
+    assert!(matches!(
+        client(&linked_socket).request(&request()),
+        Err(DaemonClientErrorV1::EndpointSecurity { .. })
+    ));
+
+    let wrong_mode = RuntimeFixture::new();
+    let listener =
+        UnixListener::bind(wrong_mode.socket_path()).expect("wrong-mode socket fixture must bind");
+    fs::set_permissions(wrong_mode.socket_path(), fs::Permissions::from_mode(0o660))
+        .expect("wrong-mode socket fixture must be installed");
+    assert!(matches!(
+        client(&wrong_mode).request(&request()),
+        Err(DaemonClientErrorV1::EndpointSecurity { .. })
+    ));
+    drop(listener);
 }
 
 #[test]

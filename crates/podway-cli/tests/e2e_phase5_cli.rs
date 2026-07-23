@@ -294,6 +294,13 @@ impl DynamicCompletionFixture {
             .expect("fixture paths must be valid");
         fs::create_dir_all(paths.runtime_directory().as_path())
             .expect("fixture daemon runtime directory must be created");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("fixture root must be private");
+        fs::set_permissions(
+            paths.runtime_directory().as_path(),
+            fs::Permissions::from_mode(0o700),
+        )
+        .expect("fixture runtime directory must be private");
         Self {
             root,
             home,
@@ -343,6 +350,8 @@ impl DynamicCompletionServer {
     fn start(fixture: &DynamicCompletionFixture, result: Value) -> Self {
         let listener = UnixListener::bind(&fixture.socket_path)
             .expect("fake daemon socket must bind at the service-owned path");
+        fs::set_permissions(&fixture.socket_path, fs::Permissions::from_mode(0o600))
+            .expect("fake daemon socket must be private");
         let handle = thread::spawn(move || {
             let (mut connection, _) = listener.accept()?;
             let mut wire = Vec::new();
@@ -487,6 +496,15 @@ impl RecordingDaemon {
         }
         let listener = UnixListener::bind(socket_path)
             .expect("recording daemon socket must bind at the service-owned path");
+        fs::set_permissions(
+            listener
+                .local_addr()
+                .expect("recording daemon socket address must be readable")
+                .as_pathname()
+                .expect("recording daemon socket must be named"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("recording daemon socket must be private");
         let handle = thread::spawn(move || {
             let mut requests = Vec::with_capacity(replies.len());
             for reply in replies {

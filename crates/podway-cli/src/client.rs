@@ -2,15 +2,19 @@
 
 use std::{
     error::Error,
-    fmt,
+    fmt, fs,
     io::{self, Read, Write},
-    os::unix::net::UnixStream,
-    path::PathBuf,
+    os::unix::{
+        fs::{FileTypeExt, MetadataExt, PermissionsExt},
+        net::UnixStream,
+    },
+    path::{Path, PathBuf},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
+use nix::unistd::geteuid;
 use podway_protocol::{
     FrameErrorV1, PayloadCodecErrorV1, RequestEnvelopeV1, ResponseEnvelopeV1, SliceErrorV1,
     SliceRequestV1, decode_response_payload_v1, encode_request_payload_v1, read_single_frame_v1,
@@ -124,6 +128,10 @@ pub enum DaemonClientErrorV1 {
         operation: DaemonClientIoOperationV1,
         source: io::Error,
     },
+    /// The selected endpoint is not an owner-private Unix socket in an owner-private directory.
+    EndpointSecurity { message: String },
+    /// The connected daemon process does not have the client's effective UID.
+    PeerIdentity { expected_uid: u32, actual_uid: u32 },
     /// The client's bounded local I/O operation expired.
     Timeout {
         operation: DaemonClientIoOperationV1,
@@ -158,6 +166,16 @@ impl fmt::Display for DaemonClientErrorV1 {
             Self::SocketConfiguration { operation, source } => {
                 write!(formatter, "cannot {operation} for daemon socket: {source}")
             }
+            Self::EndpointSecurity { message } => {
+                write!(formatter, "daemon endpoint is unsafe: {message}")
+            }
+            Self::PeerIdentity {
+                expected_uid,
+                actual_uid,
+            } => write!(
+                formatter,
+                "daemon peer UID {actual_uid} does not match client UID {expected_uid}"
+            ),
             Self::Timeout { operation } => write!(formatter, "daemon {operation} timed out"),
             Self::RequestAdmission { source } => {
                 write!(formatter, "daemon request is invalid: {source}")
@@ -192,6 +210,8 @@ impl Error for DaemonClientErrorV1 {
             Self::RequestEncoding { source } | Self::ResponseDecoding { source } => Some(source),
             Self::Framing { source } => Some(source),
             Self::InvalidTimeout { .. }
+            | Self::EndpointSecurity { .. }
+            | Self::PeerIdentity { .. }
             | Self::Timeout { .. }
             | Self::MissingResponse
             | Self::ResponseMismatch { .. } => None,
@@ -244,10 +264,10 @@ impl DaemonClientV1 {
         let payload = encode_request_payload_v1(request)
             .map_err(|source| DaemonClientErrorV1::RequestEncoding { source })?;
 
-        let mut stream = connect_with_timeout(
-            self.runtime_paths.socket_path().as_path().to_path_buf(),
-            self.timeouts.connect(),
-        )?;
+        let socket_path = self.runtime_paths.socket_path().as_path();
+        validate_endpoint_path(socket_path)?;
+        let mut stream = connect_with_timeout(socket_path.to_path_buf(), self.timeouts.connect())?;
+        validate_peer_uid(&stream)?;
         stream
             .set_write_timeout(Some(self.timeouts.write()))
             .map_err(|source| DaemonClientErrorV1::SocketConfiguration {
@@ -285,6 +305,107 @@ impl DaemonClientV1 {
             .map_err(|source| DaemonClientErrorV1::ResponseDecoding { source })?;
         validate_response_correlation(request, &response)?;
         Ok(response)
+    }
+}
+
+fn validate_endpoint_path(socket_path: &Path) -> Result<(), DaemonClientErrorV1> {
+    let expected_uid = geteuid().as_raw();
+    let parent = socket_path
+        .parent()
+        .ok_or_else(|| DaemonClientErrorV1::EndpointSecurity {
+            message: "socket path has no parent directory".to_owned(),
+        })?;
+    let parent_metadata =
+        fs::symlink_metadata(parent).map_err(|source| DaemonClientErrorV1::EndpointSecurity {
+            message: format!("cannot inspect socket parent: {source}"),
+        })?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err(DaemonClientErrorV1::EndpointSecurity {
+            message: "socket parent is not a real directory".to_owned(),
+        });
+    }
+    let parent_mode = parent_metadata.permissions().mode() & 0o777;
+    if parent_metadata.uid() != expected_uid || parent_mode != 0o700 {
+        return Err(DaemonClientErrorV1::EndpointSecurity {
+            message: format!("socket parent must be owned by UID {expected_uid} with mode 700"),
+        });
+    }
+
+    let socket_metadata = match fs::symlink_metadata(socket_path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(DaemonClientErrorV1::EndpointSecurity {
+                message: format!("cannot inspect socket: {source}"),
+            });
+        }
+    };
+    let socket_mode = socket_metadata.permissions().mode() & 0o777;
+    if !socket_metadata.file_type().is_socket()
+        || socket_metadata.uid() != expected_uid
+        || socket_mode != 0o600
+    {
+        return Err(DaemonClientErrorV1::EndpointSecurity {
+            message: format!(
+                "socket must be a Unix socket owned by UID {expected_uid} with mode 600"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_peer_uid(stream: &UnixStream) -> Result<(), DaemonClientErrorV1> {
+    let expected_uid = geteuid().as_raw();
+    let actual_uid =
+        native_peer_uid(stream).map_err(|source| DaemonClientErrorV1::EndpointSecurity {
+            message: format!("cannot obtain daemon peer credentials: {source}"),
+        })?;
+    if actual_uid != expected_uid {
+        return Err(DaemonClientErrorV1::PeerIdentity {
+            expected_uid,
+            actual_uid,
+        });
+    }
+    Ok(())
+}
+
+fn native_peer_uid(stream: &UnixStream) -> io::Result<u32> {
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        nix::unistd::getpeereid(stream)
+            .map(|(uid, _)| uid.as_raw())
+            .map_err(|error| io::Error::from_raw_os_error(error as i32))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials)
+            .map(|credentials| credentials.uid())
+            .map_err(|error| io::Error::from_raw_os_error(error as i32))
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "linux"
+    )))]
+    {
+        let _ = stream;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Unix peer credentials are unsupported on this platform",
+        ))
     }
 }
 

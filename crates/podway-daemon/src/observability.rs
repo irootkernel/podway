@@ -5,8 +5,9 @@
 use std::{
     collections::VecDeque,
     fmt,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Write},
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex, TryLockError,
@@ -15,6 +16,12 @@ use std::{
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use nix::{
+    fcntl::{OFlag, open},
+    sys::stat::Mode,
+    unistd::geteuid,
 };
 
 pub const MAX_EVENT_BYTES_V1: usize = 8 * 1024;
@@ -779,11 +786,9 @@ struct FileState {
 impl RotatingFileSinkV1 {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        ensure_private_log_parent(&path)?;
         retain_exact_rotations(&path)?;
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let file = open_private_log(&path)?;
         let bytes = file.metadata()?.len();
         Ok(Self {
             path,
@@ -818,14 +823,58 @@ impl RotatingFileSinkV1 {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        state.file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
+        state.file = open_private_log(&self.path)?;
         state.bytes = 0;
         retain_exact_rotations(&self.path)?;
         Ok(())
     }
+}
+
+fn ensure_private_log_parent(path: &Path) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let metadata = fs::symlink_metadata(parent)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != geteuid().as_raw()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "log parent is not an effective-user-owned real directory",
+        ));
+    }
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+}
+
+fn open_private_log(path: &Path) -> io::Result<File> {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && (metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.uid() != geteuid().as_raw())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "log is not an effective-user-owned regular file",
+        ));
+    }
+    let descriptor = open(
+        path,
+        OFlag::O_APPEND | OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_NOFOLLOW | OFlag::O_WRONLY,
+        Mode::S_IRUSR | Mode::S_IWUSR,
+    )
+    .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+    let file = File::from(descriptor);
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.uid() != geteuid().as_raw() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "opened log is not an effective-user-owned regular file",
+        ));
+    }
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(file)
 }
 fn remove_if_present(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {

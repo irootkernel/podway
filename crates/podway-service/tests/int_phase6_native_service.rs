@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use nix::unistd::geteuid;
 use podway_core::UnixMillis;
 use podway_service::{
     FixedServiceClockV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
@@ -188,15 +189,9 @@ fn service_mutations_reject_symlinked_ancestors_without_touching_outside_sentine
 #[test]
 fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl() {
     let root = unique_root();
-    let home = root.join("home");
-    let runtime = unique_runtime();
-    let paths = ServiceRuntimePathsV1::from_directories(
-        home.join("Library/LaunchAgents"),
-        home.join("Library/Application Support/Podway"),
-        home.join("Library/Logs/Podway"),
-        &runtime,
-    )
-    .expect("fixture service paths");
+    let home = unique_runtime();
+    let paths = ServiceRuntimePathsV1::for_user(&home, root.join("temporary"), geteuid().as_raw())
+        .expect("fixture service paths");
 
     let launchctl_log = root.join("launchctl.argv");
     let fake_launchctl = root.join("bin/launchctl");
@@ -255,7 +250,7 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         plist.contains(receipt["generation"].as_str().expect("receipt generation")),
         "the loaded plist must contain the receipt-durable generation"
     );
-    assert!(!plist.contains("/.podway/"));
+    assert!(!plist.contains(".podway-daemons-v1"));
     assert_eq!(
         fs::metadata(paths.launch_agent_path().as_path())
             .expect("plist metadata")
@@ -271,6 +266,31 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
             .mode()
             & 0o777,
         0o700
+    );
+    for directory in [
+        home.join(".podway"),
+        home.join(".podway/run"),
+        home.join(".podway/state"),
+        home.join(".podway/logs"),
+    ] {
+        assert_eq!(
+            fs::metadata(&directory)
+                .unwrap_or_else(|error| panic!("{} metadata: {error}", directory.display()))
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "{} must remain owner-private",
+            directory.display()
+        );
+    }
+    assert_eq!(
+        fs::metadata(paths.metadata_index_path().as_path())
+            .expect("service receipt metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
     );
 
     let idempotent = manager
@@ -309,7 +329,12 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         .update(spec(&second_binary, &paths))
         .expect("binary update");
     assert_eq!(updated.kind(), ServiceOutcomeKindV1::ChangedV1);
-    assert!(!socket.exists(), "update must remove a stale socket");
+    assert_eq!(
+        fs::read(socket).expect("regular socket-path sentinel must survive update"),
+        b"stale",
+        "service update must not unlink a non-socket endpoint object"
+    );
+    fs::remove_file(socket).expect("regular endpoint sentinel cleanup");
     let updated_plist =
         fs::read_to_string(paths.launch_agent_path().as_path()).expect("updated plist");
     assert!(updated_plist.contains(second_binary.to_str().expect("UTF-8 fixture")));
@@ -332,9 +357,13 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         ServiceOutcomeKindV1::ChangedV1
     );
     assert!(
-        fs::symlink_metadata(socket).is_err(),
-        "start must unlink a dangling stale socket before bootstrap"
+        fs::symlink_metadata(socket)
+            .expect("socket symlink sentinel must survive start")
+            .file_type()
+            .is_symlink(),
+        "service start must leave endpoint validation and cleanup to the daemon"
     );
+    fs::remove_file(socket).expect("socket symlink sentinel cleanup");
     fs::write(socket, b"stale-again").expect("second stale socket fixture");
     let log_path = paths.log_path().as_path();
     fs::write(
@@ -346,7 +375,11 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         manager.restart().expect("ordered restart").kind(),
         ServiceOutcomeKindV1::ChangedV1
     );
-    assert!(!socket.exists(), "restart must remove a stale socket");
+    assert_eq!(
+        fs::read(socket).expect("regular socket-path sentinel must survive restart"),
+        b"stale-again",
+        "service restart must not unlink a non-socket endpoint object"
+    );
     let rotated_log = PathBuf::from(format!("{}.1", log_path.display()));
     assert!(rotated_log.exists(), "restart must rotate an oversized log");
     assert_eq!(
@@ -434,7 +467,7 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         }
     }
     assert_no_temp_files(&root);
-    fs::remove_dir_all(&runtime).expect("remove native service runtime");
+    fs::remove_dir_all(&home).expect("remove native service home");
     fs::remove_dir_all(root).expect("remove native service fixture");
 }
 fn process_exists(process_id: &str) -> bool {

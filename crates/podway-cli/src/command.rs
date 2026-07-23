@@ -39,10 +39,10 @@ use podway_protocol::{
 };
 use podway_service::{
     InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1,
-    SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1, ServiceLabelV1,
-    ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1, ServiceOutcomeV1,
-    ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1, SystemLaunchctlRunnerV1,
-    UninstallOptionsV1, installed_socket_path_from_metadata_v1,
+    SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1, ServiceFilesystemV1,
+    ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1,
+    ServiceOutcomeV1, ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1,
+    SystemLaunchctlRunnerV1, UninstallOptionsV1, installed_socket_path_from_metadata_v1,
 };
 #[cfg(test)]
 use podway_service::{SERVICE_DAEMON_BINARY_MAX_BYTES_V1, validate_native_arm64_macos_macho_v1};
@@ -1381,15 +1381,31 @@ fn resolve_installed_service_endpoint(
     command: &str,
 ) -> Result<ServiceRuntimePathsV1, LocalFailure> {
     let metadata_path = paths.metadata_index_path().as_path();
-    let metadata = match fs::metadata(metadata_path) {
+    let metadata = match fs::symlink_metadata(metadata_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(paths),
         Err(_) => return Err(LocalFailure::daemon_unavailable(command)),
     };
-    if metadata.len() > SERVICE_METADATA_MAX_BYTES_V1 as u64 {
+    let parent = metadata_path
+        .parent()
+        .ok_or_else(|| LocalFailure::daemon_unavailable(command))?;
+    let parent_metadata =
+        fs::symlink_metadata(parent).map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    if parent_metadata.file_type().is_symlink()
+        || !parent_metadata.is_dir()
+        || parent_metadata.uid() != geteuid().as_raw()
+        || parent_metadata.mode() & 0o777 != 0o700
+        || metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.uid() != geteuid().as_raw()
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.len() > SERVICE_METADATA_MAX_BYTES_V1 as u64
+    {
         return Err(LocalFailure::daemon_unavailable(command));
     }
-    let bytes = fs::read(metadata_path).map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    let bytes = StdServiceFilesystemV1
+        .read_file_bounded(metadata_path, SERVICE_METADATA_MAX_BYTES_V1)
+        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
     let socket_path = installed_socket_path_from_metadata_v1(&bytes)
         .map_err(|_| LocalFailure::daemon_unavailable(command))?;
     paths
@@ -2486,6 +2502,8 @@ fn map_client_error(error: DaemonClientErrorV1) -> LocalFailure {
         }
         DaemonClientErrorV1::InvalidTimeout { .. }
         | DaemonClientErrorV1::Connection { .. }
+        | DaemonClientErrorV1::EndpointSecurity { .. }
+        | DaemonClientErrorV1::PeerIdentity { .. }
         | DaemonClientErrorV1::SocketConfiguration { .. }
         | DaemonClientErrorV1::Timeout { .. } => LocalFailure::daemon_unavailable("cli"),
     }

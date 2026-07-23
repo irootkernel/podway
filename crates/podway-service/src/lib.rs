@@ -221,6 +221,7 @@ impl ServiceLabelV1 {
 /// All bounded global paths owned by the per-user Podway service.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceRuntimePathsV1 {
+    podway_home: Option<LocalPlatformPathV1>,
     runtime_directory: LocalPlatformPathV1,
     global_lock_path: LocalPlatformPathV1,
     launch_agent_path: LocalPlatformPathV1,
@@ -256,6 +257,7 @@ impl ServiceRuntimePathsV1 {
         }
 
         Ok(Self {
+            podway_home: None,
             runtime_directory: LocalPlatformPathV1::new(runtime_directory)?,
             global_lock_path: LocalPlatformPathV1::new(runtime_directory.join("podwayd.lock"))?,
             launch_agent_path: LocalPlatformPathV1::new(
@@ -294,6 +296,7 @@ impl ServiceRuntimePathsV1 {
         }
 
         Ok(Self {
+            podway_home: Some(LocalPlatformPathV1::service_global(home.as_path())?),
             runtime_directory: LocalPlatformPathV1::service_global(&runtime_directory)?,
             global_lock_path: LocalPlatformPathV1::service_global(
                 runtime_directory.join("podwayd.lock"),
@@ -316,6 +319,10 @@ impl ServiceRuntimePathsV1 {
 
     pub fn global_lock_path(&self) -> &LocalPlatformPathV1 {
         &self.global_lock_path
+    }
+
+    pub fn podway_home(&self) -> Option<&LocalPlatformPathV1> {
+        self.podway_home.as_ref()
     }
 
     pub fn launch_agent_path(&self) -> &LocalPlatformPathV1 {
@@ -1848,6 +1855,12 @@ impl StdServiceFilesystemV1 {
             directory = next;
         }
         if let Some(mode) = create_final_mode {
+            let stat = fstat(&directory).map_err(Self::nix_error)?;
+            if stat.st_uid != geteuid().as_raw() {
+                return Err(ServiceFilesystemErrorV1::permission(
+                    "service directory is not owned by the effective user",
+                ));
+            }
             fchmod(&directory, Mode::from_bits_truncate(mode as _)).map_err(Self::nix_error)?;
         }
         Ok(Some(directory))
@@ -3161,13 +3174,14 @@ where
         op: ServiceOperationV1,
         paths: &ServiceRuntimePathsV1,
     ) -> Result<(), ServiceErrorV1> {
-        for path in [
+        let mut directories = vec![
             paths.metadata_index_path().as_path().parent(),
             paths.log_path().as_path().parent(),
             paths.launch_agent_path().as_path().parent(),
             Some(paths.runtime_directory().as_path()),
-        ] {
-            let path = path.expect("all validated service paths have a parent");
+        ];
+        directories.push(paths.podway_home().map(LocalPlatformPathV1::as_path));
+        for path in directories.into_iter().flatten() {
             self.filesystem
                 .create_directory(path, 0o700)
                 .map_err(|e| self.fs_error(op, path, e))?;
@@ -3250,25 +3264,6 @@ where
         self.observe(ServiceObservationV1::AtomicMetadataPublished);
         Ok(())
     }
-    fn remove_stale_socket(
-        &self,
-        op: ServiceOperationV1,
-        paths: &ServiceRuntimePathsV1,
-    ) -> Result<(), ServiceErrorV1> {
-        let socket = paths.socket_path().as_path();
-        let existed = self
-            .filesystem
-            .exists(socket)
-            .map_err(|error| self.fs_error(op, socket, error))?;
-        self.filesystem
-            .remove_file(socket)
-            .map_err(|error| self.fs_error(op, socket, error))?;
-        if existed {
-            self.observe(ServiceObservationV1::StaleSocketRemoved);
-        }
-        Ok(())
-    }
-
     fn rotate_log(
         &self,
         op: ServiceOperationV1,
@@ -3424,7 +3419,6 @@ where
         let metadata_path = paths.metadata_index_path().as_path();
         if existing.as_ref() == Some(&prepared) && observed_plist.as_deref() == Some(&plist) {
             if !self.loaded_or_not_loaded(op)? {
-                self.remove_stale_socket(op, paths)?;
                 self.bootstrap(op, paths)?;
             }
             self.verify_persisted_daemon(op, &metadata)?;
@@ -3436,7 +3430,6 @@ where
         if self.loaded_or_not_loaded(op)? {
             self.bootout(op)?;
         }
-        self.remove_stale_socket(op, paths)?;
         self.publish_metadata(op, metadata_path, &prepared)?;
         self.filesystem
             .write_atomically(plist_path, &plist, 0o600)
@@ -3465,25 +3458,11 @@ where
             .filesystem
             .exists(metadata)
             .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, metadata, e))?;
-        let runtime_files = [
-            paths.socket_path().as_path(),
-            paths.global_lock_path().as_path(),
-        ];
-        let mut has_runtime_file = false;
-        for path in runtime_files {
-            if self
-                .filesystem
-                .exists(path)
-                .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, path, e))?
-            {
-                has_runtime_file = true;
-            }
-        }
         if installed && has_metadata {
             self.coherent_metadata(ServiceOperationV1::Uninstall, paths)?;
         }
         let loaded = self.loaded_or_not_loaded(ServiceOperationV1::Uninstall)?;
-        if !installed && !has_metadata && !has_runtime_file && !loaded && !options.purge_logs() {
+        if !installed && !has_metadata && !loaded && !options.purge_logs() {
             return Ok(ServiceCommandResultV1::Outcome(
                 ServiceOutcomeV1::NotInstalledV1(ServiceNotInstalledV1::new(self.clock.now())),
             ));
@@ -3500,17 +3479,6 @@ where
             self.filesystem
                 .remove_file(metadata)
                 .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, metadata, e))?;
-        }
-        for path in runtime_files {
-            if self
-                .filesystem
-                .exists(path)
-                .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, path, e))?
-            {
-                self.filesystem
-                    .remove_file(path)
-                    .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, path, e))?;
-            }
         }
         if options.purge_logs() {
             let log = paths.log_path().as_path();
@@ -3591,7 +3559,6 @@ where
                         ));
                     }
                     self.rotate_log(ServiceOperationV1::Start, &paths)?;
-                    self.remove_stale_socket(ServiceOperationV1::Start, &paths)?;
                     self.bootstrap(ServiceOperationV1::Start, &paths)?;
                     Ok(ServiceCommandResultV1::Outcome(
                         ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(
@@ -3647,7 +3614,6 @@ where
                     if self.loaded_or_not_loaded(ServiceOperationV1::Restart)? {
                         self.bootout(ServiceOperationV1::Restart)?;
                     }
-                    self.remove_stale_socket(ServiceOperationV1::Restart, &paths)?;
                     self.rotate_log(ServiceOperationV1::Restart, &paths)?;
                     self.bootstrap(ServiceOperationV1::Restart, &paths)?;
                     Ok(ServiceCommandResultV1::Outcome(

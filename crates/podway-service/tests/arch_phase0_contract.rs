@@ -1226,7 +1226,7 @@ fn phase6_install_is_idempotent_and_plist_is_canonical() {
     assert!(plist.contains("<key>SuccessfulExit</key>\n    <false/>"));
 }
 #[test]
-fn phase6_restart_boots_out_removes_stale_socket_then_bootstraps() {
+fn phase6_restart_leaves_socket_recovery_to_daemon_endpoint_then_bootstraps() {
     let filesystem = Phase6Filesystem::default();
     let runner = MacosServiceCommandRunnerV1::new(
         filesystem.clone(),
@@ -1264,24 +1264,19 @@ fn phase6_restart_boots_out_removes_stale_socket_then_bootstraps() {
         .iter()
         .position(|event| event.starts_with("launchctl:bootout gui/501/"))
         .expect("bootout");
-    let remove = events
-        .iter()
-        .position(|event| {
-            event
-                == &format!(
-                    "remove:{}",
-                    service_paths().socket_path().as_path().display()
-                )
-        })
-        .expect("socket cleanup");
     let bootstrap = events
         .iter()
         .rposition(|event| event.starts_with("launchctl:bootstrap gui/501"))
         .expect("bootstrap");
-    assert!(bootout < remove && remove < bootstrap);
+    assert!(bootout < bootstrap);
+    assert!(!events.iter().any(|event| event
+        == &format!(
+            "remove:{}",
+            service_paths().socket_path().as_path().display()
+        )));
 }
 #[test]
-fn phase6_prepared_retry_removes_stale_socket_before_bootstrap_and_publishes_receipt() {
+fn phase6_prepared_retry_delegates_stale_socket_recovery_and_publishes_receipt() {
     let filesystem = Phase6Filesystem::default();
     let failing_runner = MacosServiceCommandRunnerV1::new(
         filesystem.clone(),
@@ -1329,16 +1324,6 @@ fn phase6_prepared_retry_removes_stale_socket_before_bootstrap_and_publishes_rec
     ));
 
     let events = filesystem.events.lock().expect("test lock").clone();
-    let remove = events
-        .iter()
-        .position(|event| {
-            event
-                == &format!(
-                    "remove:{}",
-                    service_paths().socket_path().as_path().display()
-                )
-        })
-        .expect("socket cleanup");
     let bootstrap = events
         .iter()
         .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
@@ -1353,11 +1338,16 @@ fn phase6_prepared_retry_removes_stale_socket_before_bootstrap_and_publishes_rec
                 )
         })
         .expect("receipt publication");
-    assert!(remove < bootstrap && bootstrap < receipt);
+    assert!(bootstrap < receipt);
+    assert!(!events.iter().any(|event| event
+        == &format!(
+            "remove:{}",
+            service_paths().socket_path().as_path().display()
+        )));
 }
 
 #[test]
-fn phase6_start_removes_stale_socket_after_unloaded_confirmation_before_bootstrap() {
+fn phase6_start_does_not_unlink_socket_before_daemon_endpoint_validation() {
     let filesystem = Phase6Filesystem::default();
     let runner = MacosServiceCommandRunnerV1::new(
         filesystem.clone(),
@@ -1392,21 +1382,19 @@ fn phase6_start_removes_stale_socket_after_unloaded_confirmation_before_bootstra
         ))
     ));
     let events = filesystem.events.lock().expect("test lock").clone();
-    let remove = events
-        .iter()
-        .position(|event| {
-            event
-                == &format!(
-                    "remove:{}",
-                    service_paths().socket_path().as_path().display()
-                )
-        })
-        .expect("socket cleanup");
     let bootstrap = events
         .iter()
         .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
         .expect("bootstrap");
-    assert!(remove < bootstrap);
+    assert!(
+        !events.iter().any(|event| event
+            == &format!(
+                "remove:{}",
+                service_paths().socket_path().as_path().display()
+            )),
+        "only the daemon endpoint guard may validate and remove a stale socket"
+    );
+    assert!(bootstrap < events.len());
     let receipt: serde_json::Value = serde_json::from_slice(
         filesystem
             .files
@@ -1420,7 +1408,7 @@ fn phase6_start_removes_stale_socket_after_unloaded_confirmation_before_bootstra
 }
 
 #[test]
-fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cleanup() {
+fn phase6_update_restarts_without_bypassing_daemon_socket_validation() {
     let filesystem = Phase6Filesystem::default();
     let runner = MacosServiceCommandRunnerV1::new(
         filesystem.clone(),
@@ -1473,16 +1461,6 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
         .iter()
         .position(|event| event.starts_with("launchctl:bootout gui/501/"))
         .expect("bootout");
-    let socket_cleanup = events
-        .iter()
-        .position(|event| {
-            event
-                == &format!(
-                    "remove:{}",
-                    service_paths().socket_path().as_path().display()
-                )
-        })
-        .expect("socket cleanup");
     let bootstrap = events
         .iter()
         .position(|event| event.starts_with("launchctl:bootstrap gui/501"))
@@ -1497,8 +1475,12 @@ fn phase6_update_after_binary_change_replaces_plist_and_restarts_with_socket_cle
                 )
         })
         .expect("receipt publication");
-    assert!(bootout < socket_cleanup);
-    assert!(socket_cleanup < bootstrap && bootstrap < receipt);
+    assert!(bootout < bootstrap && bootstrap < receipt);
+    assert!(!events.iter().any(|event| event
+        == &format!(
+            "remove:{}",
+            service_paths().socket_path().as_path().display()
+        )));
     let plist = filesystem
         .files
         .lock()
