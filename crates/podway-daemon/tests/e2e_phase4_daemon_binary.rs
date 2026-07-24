@@ -183,6 +183,10 @@ fn podwayd_reports_stable_live_process_identity() {
     let first = query_status(socket);
     thread::sleep(Duration::from_millis(2));
     let second = query_status(socket);
+    assert_eq!(
+        first["daemon_version"],
+        podway_protocol::build_identity_v1().version()
+    );
     assert_eq!(first["pid"], child.id());
     assert_eq!(first["pid"], second["pid"]);
     assert_eq!(first["process_id"], second["process_id"]);

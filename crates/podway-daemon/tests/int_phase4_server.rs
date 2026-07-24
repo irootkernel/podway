@@ -386,6 +386,41 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
 }
 
 #[test]
+fn declared_version_does_not_override_matching_contract_identity() {
+    let identity = build_identity_v1();
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        EXPECTED_UID,
+        ServerTransportTimeoutsV1::default(),
+    );
+    let request = request_with_client(
+        ClientInfoV1::new_with_contract_identity(
+            "podway-test",
+            "0.0.0-diagnostic",
+            42,
+            identity.product(),
+            identity.contract_manifest_digest(),
+        )
+        .expect("matching contract identity with a diagnostic version"),
+    );
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &request_frame(&request));
+    let ResponseEnvelopeV1::Output(output) = read_response(&mut client) else {
+        panic!("matching product and manifest must authorize the request");
+    };
+    assert_eq!(output.command().as_str(), "session.status");
+    assert!(handler.join().expect("handler must not panic").is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn contract_mismatch_is_rejected_before_dispatch_or_admission() {
     let identity = build_identity_v1();
     for (case, version, product, digest) in [
@@ -402,7 +437,7 @@ fn contract_mismatch_is_rejected_before_dispatch_or_admission() {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         ),
         (
-            "different_version_same_ipc",
+            "different_release_version_same_ipc",
             "0.0.0-stale",
             identity.product(),
             "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",

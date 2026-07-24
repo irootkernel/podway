@@ -111,6 +111,13 @@ When no explicit endpoint is supplied, an interactive client may read
 | `AUT-CONTRACT-004` | Installation and every daemon connection MUST reject a product or manifest mismatch before command execution or durable admission; IPC compatibility alone MUST NOT authorize the connection. |
 | `AUT-CONTRACT-005` | `daemon status --json` MUST expose daemon version, executable path, process-instance identity, configured and effective socket, and manifest digest. |
 
+The client version field is diagnostic and MUST NOT independently authorize or
+reject a connection. Admission is determined by product and manifest identity.
+Because the manifest covers product version, peers from different releases have
+different manifest digests even when they support the same IPC ID. Changing only
+the declared client version while retaining a matching product and manifest does
+not create a contract mismatch.
+
 ## 14. Workspace and session identity preconditions (AUT-ID-001–007)
 
 | ID | Normative requirement |

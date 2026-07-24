@@ -1167,7 +1167,7 @@ fn daemon_and_parser_errors_preserve_stable_exit_and_json_contracts() {
 }
 
 #[test]
-fn aut_t_contract_stale_daemon_mismatch_is_not_fabricated_as_status() {
+fn contract_mismatch_response_is_propagated_without_fabricated_status() {
     let fixture = Fixture::new();
     let daemon = FakeDaemon::start(&fixture, vec![Reply::ContractMismatch]);
     let output = fixture.run(&["--json", "--worktree", "/fixture", "status"]);

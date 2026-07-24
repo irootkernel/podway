@@ -201,6 +201,9 @@ remains the machine-readable binding for `PAC-*` criteria; it does not accept
 error-propagation, native service, and daemon-process E2E suites. Together they
 cover matching peers, stale manifests across version combinations, pre-publication
 installer rejection, replaced executable bytes, receipt refresh, and restart identity.
+Daemon ingress separately proves that a diagnostic version change with matching
+product and manifest is accepted, while a different release version with the same
+IPC ID and a different manifest is rejected before dispatch.
 
 ### CONID final review
 

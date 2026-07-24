@@ -1631,7 +1631,7 @@
   },
   "source_files": {
     "crates/podway-cli/tests/e2e_release_archive.rs": "b27c53548d301d39769880f18f0ec8da14bc7c95b22b1da9ff9da321da1c2555",
-    "crates/podway-cli/tests/e2e_phase4_commands.rs": "5433807f50ec37c23a13ab9d3f2b01ce51f4d6ad621d763a434e6ffa26e2fb2f",
+    "crates/podway-cli/tests/e2e_phase4_commands.rs": "4b024a897feaa8b86e82189954af52cd4f1b722c575bd563620c4f590a92830b",
     "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "6bf36fe04f7e6e827aa9e693e6ae093a69efc86540dc9c1dec1e9314db8a3d52",
     "crates/podway-cli/tests/e2e_phase5_cli.rs": "ae9229ae994e658f9ba99c2d86609d6b3c493fd8306b9164dfe8d61f7feb070e",
     "crates/podway-config/tests/int_procedure_v1.rs": "3d7e2b41ba761fc46a5719bbf433b72d6a2f19275eaa4941f2ac4f8f0847132f",
