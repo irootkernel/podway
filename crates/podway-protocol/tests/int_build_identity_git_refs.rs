@@ -5,6 +5,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
 #[path = "../build_support.rs"]
 mod build_support;
 
@@ -96,4 +99,45 @@ fn packed_branch_ref_creation_is_covered_by_a_rerun_path() {
         build_support::git_rerun_paths(&fixture.root).contains(&loose_ref),
         "the next build must watch the newly created loose ref directly"
     );
+}
+
+#[test]
+fn rust_build_canonicalization_matches_shared_known_answers() {
+    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/contract/canonicalization-v1.json");
+    let fixture: Value = serde_json::from_slice(
+        &fs::read(fixture_path).expect("canonicalization fixture must be readable"),
+    )
+    .expect("canonicalization fixture must be valid JSON");
+    let cases = fixture["cases"]
+        .as_array()
+        .expect("canonicalization fixture must contain cases");
+
+    for case in cases {
+        let identifier = case["id"].as_str().expect("case ID must be a string");
+        let expected = case["canonical"]
+            .as_str()
+            .expect("canonical bytes must be a string")
+            .as_bytes();
+        let observed = build_support::canonical_json_bytes(&case["input"])
+            .unwrap_or_else(|error| panic!("{identifier} must canonicalize: {error}"));
+        assert_eq!(observed, expected, "{identifier} canonical bytes drifted");
+        assert_eq!(
+            format!("sha256:{:x}", Sha256::digest(&observed)),
+            case["sha256"].as_str().expect("digest must be a string"),
+            "{identifier} canonical digest drifted"
+        );
+    }
+}
+
+#[test]
+fn rust_build_canonicalization_rejects_fractional_numbers_recursively() {
+    for source in ["1.5", "[0,1.0]", r#"{"nested":{"value":1e2}}"#] {
+        let value: Value = serde_json::from_str(source).expect("float fixture must parse");
+        assert_eq!(
+            build_support::canonical_json_bytes(&value),
+            Err("canonical JSON numbers must be integers"),
+            "{source} must be rejected"
+        );
+    }
 }

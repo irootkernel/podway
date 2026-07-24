@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 mod build_support;
 
-use build_support::git_rerun_paths;
+use build_support::{canonical_json_bytes, git_rerun_paths};
 
 const MANIFEST_SCHEMA: &str = "podway.contract-manifest/v1";
 
@@ -72,7 +72,10 @@ fn main() {
         .remove("digest");
     let expected_digest = format!(
         "sha256:{:x}",
-        Sha256::digest(serde_json::to_vec(&manifest).expect("manifest serializes"))
+        Sha256::digest(
+            canonical_json_bytes(&manifest)
+                .unwrap_or_else(|error| fail(format!("manifest is not canonicalizable: {error}")))
+        )
     );
     if digest != expected_digest {
         fail("manifest self digest is invalid");
@@ -108,7 +111,11 @@ fn main() {
     });
     let build_identity = format!(
         "sha256:{:x}",
-        Sha256::digest(serde_json::to_vec(&build_preimage).expect("build identity serializes"))
+        Sha256::digest(
+            canonical_json_bytes(&build_preimage).unwrap_or_else(|error| {
+                fail(format!("build identity is not canonicalizable: {error}"))
+            })
+        )
     );
     let ipc_ids = supported_ipc_ids
         .iter()
