@@ -108,10 +108,10 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/contract/canonicalization-v1.json",
-      "sha256": "sha256:6e9c2f659e060a8ecd0c1c5ae3e15aafb80f39650860b0c13417e8c4b7b15cf6"
+      "sha256": "sha256:fa6e02fb564a739ac0d007cedbeed8d003312647db331084407aa32394dcb538"
     }
   ],
-  "digest": "sha256:d6a21820ffccd3bf9dad55a1bebc2ad9b6a1e3c530553d08675bbfeb3cdbd88b",
+  "digest": "sha256:1e7ead68fdb4eb639b12d75e5943b6546464a2dea4a04971706ec7c0001c0647",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",

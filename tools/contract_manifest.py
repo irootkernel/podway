@@ -36,7 +36,19 @@ def fail(message: str) -> None:
     raise ManifestError(message)
 
 
+def reject_noncanonical_numbers(value: Any) -> None:
+    if isinstance(value, float):
+        fail("cannot canonicalize JSON: numbers must be signed integers")
+    if isinstance(value, dict):
+        for item in value.values():
+            reject_noncanonical_numbers(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            reject_noncanonical_numbers(item)
+
+
 def canonical_bytes(value: Any) -> bytes:
+    reject_noncanonical_numbers(value)
     try:
         return json.dumps(
             value,
@@ -240,6 +252,19 @@ def write(root: Path = ROOT) -> tuple[int, bool]:
 
 def self_test(root: Path = ROOT) -> list[str]:
     completed = []
+    for identifier, value in (
+        ("finite_float", 1.25),
+        ("nested_float", {"items": [1, 2.5]}),
+        ("nan", float("nan")),
+        ("infinity", float("inf")),
+    ):
+        try:
+            canonical_bytes(value)
+        except ManifestError:
+            completed.append(f"{identifier}_rejected")
+        else:
+            fail(f"{identifier} canonicalization sentinel did not fail")
+
     with tempfile.TemporaryDirectory(prefix="podway-contract-manifest-") as temporary_name:
         fixture = Path(temporary_name)
         shutil.copy2(root / "Cargo.toml", fixture / "Cargo.toml")

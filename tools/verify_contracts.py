@@ -532,8 +532,19 @@ def main() -> int:
         if arguments.sentinels or arguments.all:
             details["sentinels"] = run_sentinels(ROOT)
         receipt(selected_mode, True, **details)
-    except (VerificationError, sync_docs_assets.ContractError, OSError, tomllib.TOMLDecodeError) as error:
-        code = error.code if isinstance(error, VerificationError) else "contract_verification_failed"
+    except (
+        VerificationError,
+        sync_docs_assets.ContractError,
+        contract_manifest.ManifestError,
+        OSError,
+        tomllib.TOMLDecodeError,
+    ) as error:
+        if isinstance(error, VerificationError):
+            code = error.code
+        elif isinstance(error, contract_manifest.ManifestError):
+            code = "contract_manifest_invalid"
+        else:
+            code = "contract_verification_failed"
         receipt(selected_mode, False, error={"code": code, "message": str(error)})
         return 1
     return 0

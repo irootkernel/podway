@@ -18,6 +18,24 @@
       "input": { "message": "돌고래" },
       "canonical": "{\"message\":\"돌고래\"}",
       "sha256": "sha256:8f339d70b1c38ef8f8eab98f4b76d370973efac629affa44387950e0964ecc27"
+    },
+    {
+      "id": "signed-integers",
+      "input": { "negative": -42, "zero": 0, "positive": 42 },
+      "canonical": "{\"negative\":-42,\"positive\":42,\"zero\":0}",
+      "sha256": "sha256:7325801fa08d9cad6b5267acd334cf217dc032bbe758ea667bc245c7b26dee71"
+    },
+    {
+      "id": "empty-containers",
+      "input": { "array": [], "object": {} },
+      "canonical": "{\"array\":[],\"object\":{}}",
+      "sha256": "sha256:13b38aeab2e18a2c62de2945db9600720801b483e41936f5a154dbda7261be70"
+    },
+    {
+      "id": "deep-nesting",
+      "input": { "level1": [{ "level2": { "level3": [null, false, 9] } }] },
+      "canonical": "{\"level1\":[{\"level2\":{\"level3\":[null,false,9]}}]}",
+      "sha256": "sha256:2a6cca9c7f72f309aad75f4de32e11e8ef2d827969c7c881f7d216d5fe173d5f"
     }
   ]
 }
