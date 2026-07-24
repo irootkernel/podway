@@ -121,6 +121,7 @@ enum Reply {
     Status,
     Output,
     Error,
+    ContractMismatch,
     ResetUnreadable,
     MalformedFramedResponse,
     MalformedStatusResult,
@@ -286,6 +287,7 @@ impl Reply {
                 Some(job()),
             ),
             Self::Error => error_response(request),
+            Self::ContractMismatch => contract_mismatch_response(request),
             Self::ResetUnreadable => error_response_with(
                 request,
                 "WORKSPACE_STATE_UNREADABLE",
@@ -357,6 +359,35 @@ fn error_response(request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1>
         4,
         true,
     )
+}
+
+fn contract_mismatch_response(request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1> {
+    let expected = podway_protocol::build_identity_v1();
+    podway_protocol::ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+        request_id: request.request_id().clone(),
+        command: request.command().clone(),
+        generated_at: timestamp(),
+        code: ErrorCodeV1::new("DAEMON_CONTRACT_MISMATCH")
+            .expect("contract mismatch code must be valid"),
+        message: "CLI and daemon contract identities differ.".to_owned(),
+        retryable: false,
+        exit_code: ExitCodeV1::new(3).expect("daemon mismatch exit code must be valid"),
+        workspace: None,
+        details: serde_json::from_value(json!({
+            "expected": {
+                "product": "podway",
+                "contract_manifest_digest": format!("sha256:{}", "0".repeat(64)),
+            },
+            "actual": {
+                "product": expected.product(),
+                "contract_manifest_digest": expected.contract_manifest_digest(),
+            },
+            "admission": { "admitted": false },
+        }))
+        .expect("contract mismatch details must be an object"),
+    })
+    .map(ResponseEnvelopeV1::Error)
+    .map_err(|error| io::Error::other(error.to_string()))
 }
 
 fn error_response_with(
@@ -1133,6 +1164,29 @@ fn daemon_and_parser_errors_preserve_stable_exit_and_json_contracts() {
     assert_eq!(invalid_applicability_json["schema"], "podway.error/v1");
     assert_eq!(invalid_applicability_json["command"], "session.next");
     assert_eq!(invalid_applicability_json["code"], "REQUEST_INVALID");
+}
+
+#[test]
+fn aut_t_contract_stale_daemon_mismatch_is_not_fabricated_as_status() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::ContractMismatch]);
+    let output = fixture.run(&["--json", "--worktree", "/fixture", "status"]);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stderr.is_empty());
+    let response: Value =
+        serde_json::from_slice(&output.stdout).expect("contract mismatch must be JSON");
+    assert_eq!(response["schema"], "podway.error/v1");
+    assert_eq!(response["command"], "session.status");
+    assert_eq!(response["code"], "DAEMON_CONTRACT_MISMATCH");
+    assert_eq!(response["exit_code"], 3);
+    assert_eq!(response["retryable"], false);
+    assert_eq!(response["details"]["admission"]["admitted"], false);
+    let wires = daemon.finish();
+    assert_eq!(wires.len(), 1);
+    assert_eq!(
+        response["request_id"],
+        decode_request(&wires[0]).request_id().as_str()
+    );
 }
 #[test]
 fn malformed_framed_daemon_response_uses_the_stable_client_error_envelope() {

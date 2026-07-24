@@ -13,9 +13,9 @@ use podway_service::{
     FixedServiceClockV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
     MacosServiceCommandRunnerV1, SERVICE_LOG_MAX_BYTES_V1, SERVICE_METADATA_MAX_BYTES_V1,
     SERVICE_PLIST_MAX_BYTES_V1, ServiceErrorV1, ServiceFilesystemV1, ServiceLabelV1,
-    ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1, ServiceOutcomeKindV1,
-    ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1, SystemLaunchctlRunnerV1,
-    UninstallOptionsV1,
+    ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1, ServiceOperationV1,
+    ServiceOutcomeKindV1, ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1,
+    SystemLaunchctlRunnerV1, UninstallOptionsV1,
 };
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -245,6 +245,14 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         &fs::read(paths.metadata_index_path().as_path()).expect("installed receipt"),
     )
     .expect("installed receipt JSON");
+    let initial_daemon_identity = receipt["daemon_identity"]
+        .as_str()
+        .expect("initial daemon identity")
+        .to_owned();
+    let initial_generation = receipt["generation"]
+        .as_str()
+        .expect("initial generation")
+        .to_owned();
     assert_eq!(receipt["publication_state"], "receipt_durable");
     assert!(
         plist.contains(receipt["generation"].as_str().expect("receipt generation")),
@@ -301,16 +309,33 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
         ServiceOutcomeKindV1::AlreadyInDesiredStateV1
     );
     write_executable(&first_binary, &native_arm64_macho(9));
-    assert!(
-        manager.status().is_err(),
-        "source drift must invalidate the receipt"
-    );
+    assert!(matches!(
+        manager.status(),
+        Err(ServiceErrorV1::OperationFailureV1 {
+            operation: ServiceOperationV1::Status,
+            source,
+        }) if matches!(
+            source.as_ref(),
+            ServiceErrorV1::InvalidMetadataV1 { message }
+                if message == "persisted daemon binary identity does not match"
+        )
+    ));
     assert_eq!(
         manager
             .install(spec(&first_binary, &paths))
             .expect("install must record a replacement source generation")
             .kind(),
         ServiceOutcomeKindV1::ChangedV1
+    );
+    let refreshed: serde_json::Value = serde_json::from_slice(
+        &fs::read(paths.metadata_index_path().as_path()).expect("refreshed receipt"),
+    )
+    .expect("refreshed receipt JSON");
+    assert_ne!(refreshed["daemon_identity"], initial_daemon_identity);
+    assert_ne!(refreshed["generation"], initial_generation);
+    assert_eq!(
+        refreshed["daemon_binary"],
+        first_binary.display().to_string()
     );
     write_executable(&first_binary, &native_arm64_macho(10));
     assert_eq!(
@@ -326,8 +351,8 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
     let socket = paths.socket_path().as_path();
     fs::write(socket, b"stale").expect("stale socket fixture");
     let updated = manager
-        .update(spec(&second_binary, &paths))
-        .expect("binary update");
+        .install(spec(&second_binary, &paths))
+        .expect("public upgrade refresh");
     assert_eq!(updated.kind(), ServiceOutcomeKindV1::ChangedV1);
     assert_eq!(
         fs::read(socket).expect("regular socket-path sentinel must survive update"),
@@ -338,6 +363,16 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
     let updated_plist =
         fs::read_to_string(paths.launch_agent_path().as_path()).expect("updated plist");
     assert!(updated_plist.contains(second_binary.to_str().expect("UTF-8 fixture")));
+    let upgraded: serde_json::Value = serde_json::from_slice(
+        &fs::read(paths.metadata_index_path().as_path()).expect("upgraded receipt"),
+    )
+    .expect("upgraded receipt JSON");
+    assert_eq!(
+        upgraded["daemon_binary"],
+        second_binary.display().to_string()
+    );
+    assert_ne!(upgraded["daemon_identity"], refreshed["daemon_identity"]);
+    assert_eq!(upgraded["publication_state"], "receipt_durable");
 
     assert_eq!(
         manager.stop().expect("explicit stop").kind(),

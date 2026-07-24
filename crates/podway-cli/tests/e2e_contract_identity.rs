@@ -1,5 +1,12 @@
 use std::{fs, path::Path, process::Command};
 
+use nix::unistd::geteuid;
+use podway_core::UnixMillis;
+use podway_service::{
+    FixedServiceClockV1, InstallSpecV1, LocalPlatformPathV1, MacosServiceCommandRunnerV1,
+    ServiceErrorV1, ServiceManagerContractV1, ServiceManagerV1, ServiceOperationV1,
+    ServiceRuntimePathsV1, StdServiceFilesystemV1, SystemLaunchctlRunnerV1,
+};
 use serde_json::Value;
 
 fn digest_is_canonical(value: &str) -> bool {
@@ -87,4 +94,57 @@ fn matching_binary_identities_are_identical() {
     assert!(daemon.stderr.is_empty());
     let daemon: Value = serde_json::from_slice(&daemon.stdout).expect("podwayd version is JSON");
     assert_eq!(cli["result"], daemon);
+}
+
+#[test]
+fn mismatched_install_fails_before_service_publication_or_launchctl() {
+    let root = std::path::PathBuf::from(format!("/tmp/pci-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let home = root.join("home");
+    let paths = ServiceRuntimePathsV1::for_account_home(&home, geteuid().as_raw())
+        .expect("fixture service paths");
+    let daemon = Path::new(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd");
+    let runner = MacosServiceCommandRunnerV1::new(
+        StdServiceFilesystemV1,
+        SystemLaunchctlRunnerV1::new(root.join("launchctl-must-not-run")),
+        FixedServiceClockV1::new(UnixMillis::new(1)),
+        geteuid().as_raw(),
+    )
+    .expect("service runner");
+    let manager = ServiceManagerV1::new(
+        runner,
+        FixedServiceClockV1::new(UnixMillis::new(1)),
+        paths.clone(),
+    );
+    let spec = InstallSpecV1::new(
+        LocalPlatformPathV1::new(&daemon).expect("daemon binary path"),
+        podway_service::ServiceLabelV1::podwayd(),
+        paths.clone(),
+    )
+    .with_expected_contract_identity(
+        "podway",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    );
+
+    assert!(matches!(
+        manager.install(spec),
+        Err(ServiceErrorV1::OperationFailureV1 {
+            operation: ServiceOperationV1::Install,
+            source,
+        }) if matches!(
+            source.as_ref(),
+            ServiceErrorV1::ContractMismatchV1 {
+                actual_product: Some(product),
+                actual_manifest_digest: Some(digest),
+                ..
+            } if product == "podway" && digest != "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        )
+    ));
+    assert!(!paths.launch_agent_path().as_path().exists());
+    assert!(!paths.metadata_index_path().as_path().exists());
+    assert!(!root.join("launchctl-must-not-run").exists());
+    assert!(
+        !root.exists(),
+        "contract rejection must precede service directory creation"
+    );
 }

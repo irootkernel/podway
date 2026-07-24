@@ -1631,7 +1631,7 @@
   },
   "source_files": {
     "crates/podway-cli/tests/e2e_release_archive.rs": "b27c53548d301d39769880f18f0ec8da14bc7c95b22b1da9ff9da321da1c2555",
-    "crates/podway-cli/tests/e2e_phase4_commands.rs": "3688d97c498d4610a5358dae1ee8f5656568b768824a79e5dc64487c549b938c",
+    "crates/podway-cli/tests/e2e_phase4_commands.rs": "5433807f50ec37c23a13ab9d3f2b01ce51f4d6ad621d763a434e6ffa26e2fb2f",
     "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "6bf36fe04f7e6e827aa9e693e6ae093a69efc86540dc9c1dec1e9314db8a3d52",
     "crates/podway-cli/tests/e2e_phase5_cli.rs": "ae9229ae994e658f9ba99c2d86609d6b3c493fd8306b9164dfe8d61f7feb070e",
     "crates/podway-config/tests/int_procedure_v1.rs": "3d7e2b41ba761fc46a5719bbf433b72d6a2f19275eaa4941f2ac4f8f0847132f",
@@ -1649,7 +1649,7 @@
     "crates/podway-presets/tests/int_phase1_presets.rs": "acee4a25807fd15c49b0ff5dadd298f6863fb18af55802515ab8e0e19df74fa2",
     "crates/podway-protocol/tests/arch_phase0_contract.rs": "d2b8a0f564b98e40b73840a282b565b895ac257633af7d73763bc217b8dc3ddb",
     "crates/podway-protocol/tests/int_phase4_framing.rs": "c934041aa2b5bb48458d66979f6eab5af6fc7365a1775999c26f88216ce5f02f",
-    "crates/podway-service/tests/int_phase6_native_service.rs": "5707109edddf67cd54de020412ed820ee303cd1118291d7b274fb63b34a4ec02",
+    "crates/podway-service/tests/int_phase6_native_service.rs": "95954a95410e08e212d9c46857a7057e97a3c3eef5dac27096e1b0dfd08b892b",
     "crates/podway-store/tests/int_phase2_crash_matrix.rs": "52535165bfc92205997465d89b4a3e25d020e0a2d7715f4bc5b2a294494d667d",
     "crates/podway-store/tests/int_phase2_reset_lifecycle.rs": "8f8e705e6136381140b5fb2a8e6adbe76e21b39ebeef8a37a95c2132ca63e3ae",
     "crates/podway-store/tests/int_phase2_schema_codec.rs": "3ede2a2cb9a531016a75be80f25d42681bad60a9bb0a57a9a99214feb548a13d",

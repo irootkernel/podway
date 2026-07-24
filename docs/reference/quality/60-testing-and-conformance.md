@@ -180,6 +180,10 @@ Fixtures cover:
 - log creation and rotation;
 - uninstall preserves worktree data;
 - incompatible binary/protocol reporting.
+- same-version/different-manifest and different-version/same-IPC rejection;
+- replaced installed-executable detection before launchctl observation;
+- reinstall-based upgrade refresh with ordered restart, refreshed receipt identity,
+  and a new daemon process UUID.
 
 Target `podway daemon install` MUST resolve and validate the actual `podwayd`
 binary without staging or copying it. The LaunchAgent records that canonical
@@ -192,6 +196,11 @@ this implemented test inventory only when every task named by its roadmap mappin
 has supplied the required executable evidence. The product acceptance matrix
 remains the machine-readable binding for `PAC-*` criteria; it does not accept
 `AUT-*` evidence rows.
+
+`AUT-T-CONTRACT` is implemented by the binary identity, daemon ingress, CLI
+error-propagation, native service, and daemon-process E2E suites. Together they
+cover matching peers, stale manifests across version combinations, pre-publication
+installer rejection, replaced executable bytes, receipt refresh, and restart identity.
 
 ## CLI and JSON tests
 

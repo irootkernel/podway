@@ -388,11 +388,24 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
 #[test]
 fn contract_mismatch_is_rejected_before_dispatch_or_admission() {
     let identity = build_identity_v1();
-    for (product, digest) in [
-        ("another-product", identity.contract_manifest_digest()),
+    for (case, version, product, digest) in [
         (
+            "different_product",
+            env!("CARGO_PKG_VERSION"),
+            "another-product",
+            identity.contract_manifest_digest(),
+        ),
+        (
+            "same_version_different_manifest",
+            env!("CARGO_PKG_VERSION"),
             identity.product(),
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            "different_version_same_ipc",
+            "0.0.0-stale",
+            identity.product(),
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         ),
     ] {
         let (mut client, server) =
@@ -404,7 +417,7 @@ fn contract_mismatch_is_rejected_before_dispatch_or_admission() {
             ServerTransportTimeoutsV1::default(),
         );
         let request = request_with_client(
-            ClientInfoV1::new_with_contract_identity("podway-test", "1.0.0", 42, product, digest)
+            ClientInfoV1::new_with_contract_identity("podway-test", version, 42, product, digest)
                 .expect("mismatched fixture identity remains structurally valid"),
         );
         let handler = {
@@ -423,7 +436,7 @@ fn contract_mismatch_is_rejected_before_dispatch_or_admission() {
         );
         assert_eq!(error.details()["admission"]["admitted"], false);
         assert!(handler.join().expect("handler must not panic").is_ok());
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "{case}");
     }
 }
 

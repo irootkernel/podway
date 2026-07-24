@@ -76,11 +76,10 @@ fn make_private(path: &Path) {
         .expect("fixture directory must be private");
 }
 
-fn status_request() -> RequestEnvelopeV1 {
+fn status_request(client: ClientInfoV1) -> RequestEnvelopeV1 {
     RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(Uuid::new_v4().to_string()).expect("request UUID"),
-        client: ClientInfoV1::new("podway-e2e", env!("CARGO_PKG_VERSION"), std::process::id())
-            .expect("client identity"),
+        client,
         operation: OperationV1::Control,
         command: CommandNameV1::new("daemon.status").expect("status command"),
         workspace: None,
@@ -92,9 +91,8 @@ fn status_request() -> RequestEnvelopeV1 {
     .expect("status request")
 }
 
-fn query_status(socket: &Path) -> Value {
-    let request = status_request();
-    let payload = encode_request_payload_v1(&request).expect("status request must encode");
+fn exchange_status(socket: &Path, request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
+    let payload = encode_request_payload_v1(request).expect("status request must encode");
     let mut stream = UnixStream::connect(socket).expect("daemon status socket must connect");
     write_frame_v1(&mut stream, &payload).expect("status request must write");
     stream
@@ -103,7 +101,15 @@ fn query_status(socket: &Path) -> Value {
     let payload = read_single_frame_v1(&mut stream)
         .expect("status response frame must read")
         .expect("status response must exist");
-    match decode_response_payload_v1(&payload).expect("status response must decode") {
+    decode_response_payload_v1(&payload).expect("status response must decode")
+}
+
+fn query_status(socket: &Path) -> Value {
+    let request = status_request(
+        ClientInfoV1::new("podway-e2e", env!("CARGO_PKG_VERSION"), std::process::id())
+            .expect("client identity"),
+    );
+    match exchange_status(socket, &request) {
         ResponseEnvelopeV1::Output(output) => output.result().clone().into(),
         ResponseEnvelopeV1::Error(error) => panic!("daemon status failed: {:?}", error.code()),
     }
@@ -156,6 +162,24 @@ fn podwayd_reports_stable_live_process_identity() {
     }
     assert!(socket.exists(), "podwayd must bind before identity probing");
 
+    let stale_request = status_request(
+        ClientInfoV1::new_with_contract_identity(
+            "podway-e2e",
+            "0.0.0-stale",
+            std::process::id(),
+            "podway",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("stale client identity"),
+    );
+    let ResponseEnvelopeV1::Error(mismatch) = exchange_status(socket, &stale_request) else {
+        panic!("a stale contract must not receive fabricated daemon status");
+    };
+    assert_eq!(mismatch.code().as_str(), "DAEMON_CONTRACT_MISMATCH");
+    assert_eq!(mismatch.exit_code().get(), 3);
+    assert!(!mismatch.retryable());
+    assert_eq!(mismatch.details()["admission"]["admitted"], false);
+
     let first = query_status(socket);
     thread::sleep(Duration::from_millis(2));
     let second = query_status(socket);
@@ -184,6 +208,33 @@ fn podwayd_reports_stable_live_process_identity() {
 
     kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM).expect("stop podwayd");
     let output = child.wait_with_output().expect("read podwayd shutdown");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!socket.exists(), "the first daemon must release its socket");
+
+    let replacement = fixture.spawn();
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while !socket.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let restarted = query_status(socket);
+    assert_ne!(restarted["process_id"], first["process_id"]);
+    assert_ne!(restarted["started_at"], first["started_at"]);
+    assert_eq!(
+        restarted["contract_manifest_digest"],
+        first["contract_manifest_digest"]
+    );
+    assert_eq!(
+        restarted["configured_socket_path"],
+        first["configured_socket_path"]
+    );
+    kill(Pid::from_raw(replacement.id() as i32), Signal::SIGTERM).expect("stop replacement");
+    let output = replacement
+        .wait_with_output()
+        .expect("read replacement shutdown");
     assert!(
         output.status.success(),
         "{}",

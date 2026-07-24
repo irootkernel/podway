@@ -1425,7 +1425,7 @@ fn phase6_start_does_not_unlink_socket_before_daemon_endpoint_validation() {
 }
 
 #[test]
-fn phase6_update_restarts_without_bypassing_daemon_socket_validation() {
+fn phase6_replaced_executable_fails_closed_then_install_refresh_restarts() {
     let filesystem = Phase6Filesystem::default();
     let runner = MacosServiceCommandRunnerV1::new(
         filesystem.clone(),
@@ -1463,9 +1463,27 @@ fn phase6_update_restarts_without_bypassing_daemon_socket_validation() {
         PathBuf::from("/Applications/Podway/podwayd"),
         changed_daemon,
     );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Status {
+            requested_at: UnixMillis::new(3_004),
+            paths: service_paths(),
+        }),
+        Err(ServiceErrorV1::OperationFailureV1 {
+            operation: ServiceOperationV1::Status,
+            source,
+        }) if matches!(
+            source.as_ref(),
+            ServiceErrorV1::InvalidMetadataV1 { message }
+                if message == "persisted daemon binary identity does not match"
+        )
+    ));
+    assert!(
+        filesystem.events.lock().expect("test lock").is_empty(),
+        "stale executable detection must precede launchctl and publication side effects"
+    );
     let changed = phase6_spec();
     assert!(matches!(
-        runner.run(ServiceCommandV1::Update {
+        runner.run(ServiceCommandV1::Install {
             requested_at: UnixMillis::new(3_004),
             spec: changed,
         }),
@@ -1517,8 +1535,9 @@ fn phase6_update_restarts_without_bypassing_daemon_socket_validation() {
     .expect("current receipt");
     assert_eq!(receipt["daemon_binary"], "/Applications/Podway/podwayd");
     assert_ne!(receipt["daemon_identity"], old_identity);
+    assert_eq!(receipt["publication_state"], "receipt_durable");
     assert!(matches!(
-        runner.run(ServiceCommandV1::Update {
+        runner.run(ServiceCommandV1::Install {
             requested_at: UnixMillis::new(3_004),
             spec: phase6_spec(),
         }),
