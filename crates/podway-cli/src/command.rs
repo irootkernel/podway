@@ -56,7 +56,7 @@ const LOCAL_DAEMON_EXIT: i32 = 3;
 const LOCAL_CLIENT_EXIT: i32 = 6;
 const MAX_SERVICE_LOG_READ_BYTES: u64 = 10 * 1024 * 1024;
 const SERVICE_HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
-const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_VERSION_PROBE_OUTPUT_LIMIT: usize = 4 * 1024;
 const DAEMON_VERSION_PROBE_POST_KILL_DRAIN: Duration = Duration::from_millis(100);
 
@@ -1488,6 +1488,12 @@ fn probe_daemon_version(binary: &Path) -> Result<String, ServiceErrorV1> {
         DAEMON_VERSION_PROBE_OUTPUT_LIMIT,
         DAEMON_VERSION_PROBE_POST_KILL_DRAIN,
     );
+    probe_daemon_version_with_runner(&runner)
+}
+
+fn probe_daemon_version_with_runner(
+    runner: &impl LaunchctlRunnerV1,
+) -> Result<String, ServiceErrorV1> {
     let output = runner.run(&["--version".to_owned()])?;
     if output.exit_status != 0
         || !output.stderr.is_empty()
@@ -3310,10 +3316,11 @@ mod tests {
     use super::{
         Cli, Command, LocalEnvelopeClock, LocalFailure, local_generated_at, local_result,
         map_service_error, parse_timeout_millis, probe_daemon_version,
-        render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
-        resolve_daemon_executable, resolve_implicit_daemon_executable_from,
-        resolve_installed_service_endpoint, service_outcome_result, service_status_result,
-        stream_log_follow_update, system_service_clock,
+        probe_daemon_version_with_runner, render_local_failure_with_clock_and_writers,
+        render_result_with_clock_and_writers, resolve_daemon_executable,
+        resolve_implicit_daemon_executable_from, resolve_installed_service_endpoint,
+        service_outcome_result, service_status_result, stream_log_follow_update,
+        system_service_clock,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
@@ -3399,7 +3406,8 @@ mod tests {
     fn daemon_version_probes_are_bounded_and_fail_closed() {
         use podway_core::UnixMillis;
         use podway_service::{
-            ServiceInstallMetadataV1, ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1,
+            ServiceErrorV1, ServiceInstallMetadataV1, ServiceRunningV1, ServiceRuntimePathsV1,
+            ServiceStatusV1, SystemLaunchctlRunnerV1,
         };
 
         let expected = env!("CARGO_PKG_VERSION");
@@ -3419,7 +3427,6 @@ mod tests {
         for body in [
             "printf 'podwayd 0.0.0\\n'; exit 7",
             "kill -TERM $$",
-            "sleep 2",
             "i=0; while [ \"$i\" -lt 5000 ]; do printf x; i=$((i + 1)); done",
             "i=0; while [ \"$i\" -lt 5000 ]; do printf x >&2; i=$((i + 1)); done",
             "printf 'podwayd 0.0.0\\n'; printf unexpected >&2",
@@ -3455,6 +3462,17 @@ mod tests {
                 "DAEMON_UNAVAILABLE"
             );
         }
+
+        let stalled = VersionProbeScript::new("sleep 10");
+        let stalled_runner = SystemLaunchctlRunnerV1::new(&stalled.path).with_bounds(
+            Duration::from_millis(100),
+            4 * 1024,
+            Duration::from_millis(100),
+        );
+        assert!(matches!(
+            probe_daemon_version_with_runner(&stalled_runner),
+            Err(ServiceErrorV1::LaunchctlTimeoutV1 { timeout_ms: 100 })
+        ));
     }
 
     #[test]

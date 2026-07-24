@@ -319,17 +319,7 @@ fn validate_endpoint_path(socket_path: &Path) -> Result<(), DaemonClientErrorV1>
         fs::symlink_metadata(parent).map_err(|source| DaemonClientErrorV1::EndpointSecurity {
             message: format!("cannot inspect socket parent: {source}"),
         })?;
-    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
-        return Err(DaemonClientErrorV1::EndpointSecurity {
-            message: "socket parent is not a real directory".to_owned(),
-        });
-    }
-    let parent_mode = parent_metadata.permissions().mode() & 0o777;
-    if parent_metadata.uid() != expected_uid || parent_mode != 0o700 {
-        return Err(DaemonClientErrorV1::EndpointSecurity {
-            message: format!("socket parent must be owned by UID {expected_uid} with mode 700"),
-        });
-    }
+    validate_socket_parent_metadata(&parent_metadata, expected_uid)?;
 
     let socket_metadata = match fs::symlink_metadata(socket_path) {
         Ok(metadata) => metadata,
@@ -340,11 +330,33 @@ fn validate_endpoint_path(socket_path: &Path) -> Result<(), DaemonClientErrorV1>
             });
         }
     };
-    let socket_mode = socket_metadata.permissions().mode() & 0o777;
-    if !socket_metadata.file_type().is_socket()
-        || socket_metadata.uid() != expected_uid
-        || socket_mode != 0o600
-    {
+    validate_socket_metadata(&socket_metadata, expected_uid)
+}
+
+fn validate_socket_parent_metadata(
+    metadata: &fs::Metadata,
+    expected_uid: u32,
+) -> Result<(), DaemonClientErrorV1> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(DaemonClientErrorV1::EndpointSecurity {
+            message: "socket parent is not a real directory".to_owned(),
+        });
+    }
+    let parent_mode = metadata.permissions().mode() & 0o777;
+    if metadata.uid() != expected_uid || parent_mode != 0o700 {
+        return Err(DaemonClientErrorV1::EndpointSecurity {
+            message: format!("socket parent must be owned by UID {expected_uid} with mode 700"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_socket_metadata(
+    metadata: &fs::Metadata,
+    expected_uid: u32,
+) -> Result<(), DaemonClientErrorV1> {
+    let socket_mode = metadata.permissions().mode() & 0o777;
+    if !metadata.file_type().is_socket() || metadata.uid() != expected_uid || socket_mode != 0o600 {
         return Err(DaemonClientErrorV1::EndpointSecurity {
             message: format!(
                 "socket must be a Unix socket owned by UID {expected_uid} with mode 600"
@@ -626,4 +638,73 @@ fn validate_response_correlation(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        env, fs,
+        os::unix::{
+            fs::{MetadataExt, PermissionsExt},
+            net::UnixListener,
+        },
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use super::{DaemonClientErrorV1, validate_socket_metadata, validate_socket_parent_metadata};
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn temporary_directory() -> PathBuf {
+        let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let directory = env::temp_dir().join(format!(
+            "podway-cli-client-owner-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("test directory must be created");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .expect("test directory must be owner-private");
+        directory
+    }
+
+    #[test]
+    fn aut_t_sock_wrong_owner_metadata_fails_closed_without_chown() {
+        let directory = temporary_directory();
+        let socket_path = directory.join("endpoint.sock");
+        let listener = UnixListener::bind(&socket_path).expect("test socket must bind");
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
+            .expect("test socket must be owner-private");
+
+        let parent_metadata = fs::symlink_metadata(&directory).expect("parent metadata");
+        let socket_metadata = fs::symlink_metadata(&socket_path).expect("socket metadata");
+        let actual_uid = parent_metadata.uid();
+        let expected_uid = actual_uid.wrapping_add(1);
+        assert_ne!(expected_uid, actual_uid);
+        assert_eq!(socket_metadata.uid(), actual_uid);
+
+        let parent_error = validate_socket_parent_metadata(&parent_metadata, expected_uid)
+            .expect_err("wrong-owner parent must be rejected");
+        assert!(matches!(
+            parent_error,
+            DaemonClientErrorV1::EndpointSecurity { ref message }
+                if message == &format!(
+                    "socket parent must be owned by UID {expected_uid} with mode 700"
+                )
+        ));
+
+        let socket_error = validate_socket_metadata(&socket_metadata, expected_uid)
+            .expect_err("wrong-owner socket must be rejected");
+        assert!(matches!(
+            socket_error,
+            DaemonClientErrorV1::EndpointSecurity { ref message }
+                if message == &format!(
+                    "socket must be a Unix socket owned by UID {expected_uid} with mode 600"
+                )
+        ));
+
+        drop(listener);
+        fs::remove_file(&socket_path).expect("test socket must be removed");
+        fs::remove_dir(&directory).expect("test directory must be removed");
+    }
 }

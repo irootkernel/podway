@@ -728,7 +728,8 @@ mod tests {
     use super::{
         EndpointErrorV1, EndpointPathViolationV1, LOCK_FILE_MODE, SOCKET_MODE,
         SocketOwnershipTokenV1, bind_and_configure_socket, open_and_lock, release_endpoint,
-        remove_socket_if_current, set_mode, validated_socket_token,
+        remove_socket_if_current, set_mode, validate_lock_file, validate_runtime_directory,
+        validate_socket, validated_socket_token,
     };
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -750,6 +751,67 @@ mod tests {
             inode: metadata.ino(),
             owner_uid: metadata.uid(),
         }
+    }
+
+    #[test]
+    fn aut_t_sock_wrong_owner_metadata_fails_closed_without_chown() {
+        let directory = temporary_directory();
+        set_mode(&directory, 0o700, "set test directory permissions")
+            .expect("test directory must be owner-private");
+        let lock_path = directory.join("endpoint.lock");
+        let socket_path = directory.join("endpoint.sock");
+        let lock_file = File::create(&lock_path).expect("test lock file must be created");
+        set_mode(&lock_path, LOCK_FILE_MODE, "set test lock permissions")
+            .expect("test lock must be owner-private");
+        let listener = UnixListener::bind(&socket_path).expect("test socket must bind");
+        set_mode(&socket_path, SOCKET_MODE, "set test socket permissions")
+            .expect("test socket must be owner-private");
+
+        let directory_metadata = fs::symlink_metadata(&directory).expect("directory metadata");
+        let lock_metadata = fs::symlink_metadata(&lock_path).expect("lock metadata");
+        let socket_metadata = fs::symlink_metadata(&socket_path).expect("socket metadata");
+        let actual_uid = directory_metadata.uid();
+        let expected_uid = actual_uid.wrapping_add(1);
+        assert_ne!(expected_uid, actual_uid);
+        assert_eq!(lock_metadata.uid(), actual_uid);
+        assert_eq!(socket_metadata.uid(), actual_uid);
+
+        assert!(matches!(
+            validate_runtime_directory(&directory, &directory_metadata, expected_uid),
+            Err(EndpointErrorV1::UnsafeRuntimeDirectory {
+                violation: EndpointPathViolationV1::WrongOwner {
+                    expected_uid: observed_expected,
+                    actual_uid: observed_actual,
+                },
+                ..
+            }) if observed_expected == expected_uid && observed_actual == actual_uid
+        ));
+        assert!(matches!(
+            validate_lock_file(&lock_path, &lock_metadata, expected_uid),
+            Err(EndpointErrorV1::UnsafeLockFile {
+                violation: EndpointPathViolationV1::WrongOwner {
+                    expected_uid: observed_expected,
+                    actual_uid: observed_actual,
+                },
+                ..
+            }) if observed_expected == expected_uid && observed_actual == actual_uid
+        ));
+        assert!(matches!(
+            validate_socket(&socket_path, &socket_metadata, expected_uid),
+            Err(EndpointErrorV1::UnsafeSocket {
+                violation: EndpointPathViolationV1::WrongOwner {
+                    expected_uid: observed_expected,
+                    actual_uid: observed_actual,
+                },
+                ..
+            }) if observed_expected == expected_uid && observed_actual == actual_uid
+        ));
+
+        drop(listener);
+        drop(lock_file);
+        fs::remove_file(&socket_path).expect("test socket must be removed");
+        fs::remove_file(&lock_path).expect("test lock must be removed");
+        fs::remove_dir(&directory).expect("test directory must be removed");
     }
 
     #[test]
