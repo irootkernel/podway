@@ -1,0 +1,23 @@
+{
+  "schema_version": "podway.canonicalization-known-answers/v1",
+  "cases": [
+    {
+      "id": "object-key-order",
+      "input": { "z": 1, "a": 2 },
+      "canonical": "{\"a\":2,\"z\":1}",
+      "sha256": "sha256:c2985c5ba6f7d2a55e768f92490ca09388e95bc4cccb9fdf11b15f4d42f93e73"
+    },
+    {
+      "id": "nested-array-order",
+      "input": { "items": [{ "b": true, "a": null }, 7] },
+      "canonical": "{\"items\":[{\"a\":null,\"b\":true},7]}",
+      "sha256": "sha256:d8746440754db1980d788c3d97b4845f274a3a3d9577f75882c45eff84100cd5"
+    },
+    {
+      "id": "unicode-preserved",
+      "input": { "message": "돌고래" },
+      "canonical": "{\"message\":\"돌고래\"}",
+      "sha256": "sha256:8f339d70b1c38ef8f8eab98f4b76d370973efac629affa44387950e0964ecc27"
+    }
+  ]
+}

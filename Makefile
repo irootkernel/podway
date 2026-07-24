@@ -14,7 +14,7 @@ export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VA
 
 .PHONY: test test-prepare test-prepare-core test-unit test-int test-fuzzing test-e2e \
 	toolchain sync-docs-assets format vet lint architecture preset-validator \
-	preset-create preset-import preset-tool-test dist
+	preset-create preset-import preset-tool-test contract-manifest dist
 
 toolchain:
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
@@ -59,7 +59,11 @@ architecture:
 	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'arch_*' --locked
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --all
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_verification_runner.py
+	$(MAKE) contract-manifest
 	$(MAKE) preset-tool-test
+
+contract-manifest:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/contract_manifest.py --check
 
 preset-validator:
 	$(RUST_TOOLCHAIN_ENV) cargo build --locked -p podway-cli --bin podway

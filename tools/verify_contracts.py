@@ -13,6 +13,7 @@ import tomllib
 from typing import Any, Callable
 
 import sync_docs_assets
+import contract_manifest
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +34,7 @@ REQUIRED_MAKE_TARGETS = (
     "preset-import",
     "preset-tool-test",
     "dist",
+    "contract-manifest",
 )
 REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) test-prepare",
@@ -53,6 +55,7 @@ REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_contracts.py --all",
     "python3 tools/verify_preset_tooling.py --podway",
     "python3 tools/phase0_receipts.py --check",
+    "python3 tools/contract_manifest.py --check",
 )
 CRATE_ORDER = (
     "podway-core",
@@ -495,6 +498,7 @@ def run_sentinels(root: Path) -> list[str]:
         route_path.write_text(json.dumps(route_contract, sort_keys=True) + "\n", encoding="utf-8")
         require_known_failure("route bypass", lambda: validate_routes(route_fixture))
         completed.append("route_bypass")
+        completed.extend(f"contract_manifest_{item}" for item in contract_manifest.self_test(root))
     return completed
 
 
@@ -509,6 +513,7 @@ def production_checks(root: Path) -> dict[str, int]:
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
         "makefile_contract": validate_makefile_contract(root),
+        "contract_manifest_assets": contract_manifest.check(root),
     }
 
 

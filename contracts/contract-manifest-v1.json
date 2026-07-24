@@ -1,0 +1,111 @@
+{
+  "assets": [
+    {
+      "kind": "known_answer_fixture",
+      "path": "docs/examples/json/error-required-items.json",
+      "sha256": "sha256:ba460055e7e14d0932fec1b46713f002560de56bb308bbf987925beacab22e44"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "docs/examples/json/ipc-complete-request.json",
+      "sha256": "sha256:6f6d23fd82860b698cbc2192f59a0cacf2fece78a1c7d5c4ee8226184f520b3e"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "docs/examples/json/next-result.json",
+      "sha256": "sha256:eb5592f84f97409948bbe08826cd4fd6fabe6879f479813583d2934e8de4e8d5"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "docs/examples/json/output-complete.json",
+      "sha256": "sha256:14a0dac6e5bd18b41bfe8bf13e99040e929ee7a328282716d056c50011f95b25"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "docs/examples/json/registry.json",
+      "sha256": "sha256:293c7b5dc0ef90baa195852a6ea11b2922797ea652ae95e5f569d97da2a06fd8"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "docs/examples/json/status-result.json",
+      "sha256": "sha256:e31f3a9b336ea89b1062b4d63e12ae768d04788d94af82f1265e8c9156342ea3"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/contract-manifest-v1.schema.json",
+      "sha256": "sha256:df1abac74845a7e3eea91ff39f7e95d64a01152b187d00bc8987be8a8302526a"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/error-v1.schema.json",
+      "sha256": "sha256:370c7392a0880b0d5ab2989f9c7262bbe2182aee8159b9e7c555c147db3f409b"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/ipc-request-v1.schema.json",
+      "sha256": "sha256:e9691a43b3615a15fede925df2a1b25525b10db6b4d7f1c693c69083364f21b5"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/next-result-v1.schema.json",
+      "sha256": "sha256:986f55e085ad54fabbc231c651007f0c81f33db940f5ef2979dbef86a6004781"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/output-v1.schema.json",
+      "sha256": "sha256:ebb8d60f949778746892dc4e563aa76ca5f5e910a0f117188caf14cd7e71dd76"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/procedure-v1.schema.json",
+      "sha256": "sha256:cc2aed122f69032d612626248da614aee79bccbaa6a0a151e531119590b13e42"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/registry-v1.schema.json",
+      "sha256": "sha256:ae259c2fb9d5e285c8450a55b2f9133ab4758e32041905475fb0d1fd8ff3f2ad"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/status-result-v1.schema.json",
+      "sha256": "sha256:6601cbc14fd96bc363fbddc0da8a058866a6a734b533884282e09f0a6156ae2a"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/workspace-v1.schema.json",
+      "sha256": "sha256:97ef41946030151af10573ec05ad324ab4f44147d4e1e857851b186381be94cc"
+    },
+    {
+      "kind": "canonicalization_rules",
+      "path": "spec/canonicalization-v1.json",
+      "sha256": "sha256:1efd85254750efb73b2a9272b2fcdc7ae4a5c4c5bc980e7e20b6d7b71310f620"
+    },
+    {
+      "kind": "catalog",
+      "path": "spec/command-catalog.yaml",
+      "sha256": "sha256:04b31da0ee6fd745bae22af274e8d7873b8b67a2a38dca3db7914baf1ba6831f"
+    },
+    {
+      "kind": "catalog",
+      "path": "spec/error-codes.json",
+      "sha256": "sha256:3102851915bcb0148364e2b34944649407ffb9d5eaeb62265d25aedfbbbe074c"
+    },
+    {
+      "kind": "transition_matrix",
+      "path": "spec/state-transition-matrix.csv",
+      "sha256": "sha256:665e83e720084efcd9f7b62fa9606da1135c5a7e195e78f3ecf834018458b860"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/contract/canonicalization-v1.json",
+      "sha256": "sha256:6e9c2f659e060a8ecd0c1c5ae3e15aafb80f39650860b0c13417e8c4b7b15cf6"
+    }
+  ],
+  "digest": "sha256:db0937682ee135028f739cb4c0dbcf8b29d125ef44342624d32654dd8fe3954b",
+  "product": "podway",
+  "product_version": "0.1.0",
+  "schema_version": "podway.contract-manifest/v1",
+  "supported_ipc_ids": [
+    "podway.ipc/v1"
+  ]
+}

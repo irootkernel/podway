@@ -7,7 +7,15 @@
     {
       "source": "docs/schemas/README.md",
       "destination": "schemas/README.md",
-      "source_sha256": "81b80b40eeadc3193f775f0a7fe5d6e94688329f08715bb8ed234b6d0935d654",
+      "source_sha256": "3930f1974197d098dc4e6880336e6290ee79a829a7f290d9c80fb34cb728bb52",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/contract-manifest-v1.schema.json",
+      "destination": "schemas/contract-manifest-v1.schema.json",
+      "source_sha256": "df1abac74845a7e3eea91ff39f7e95d64a01152b187d00bc8987be8a8302526a",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -79,7 +87,15 @@
     {
       "source": "docs/spec/README.md",
       "destination": "spec/README.md",
-      "source_sha256": "fd8692c708c2be7729a1e71b320d769c56873b32bbc23af535901821e4c24357",
+      "source_sha256": "4e7480e709fa2745a382477aadc3caa46122a6589568075443eb42a7b83e305e",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/spec/canonicalization-v1.json",
+      "destination": "spec/canonicalization-v1.json",
+      "source_sha256": "1efd85254750efb73b2a9272b2fcdc7ae4a5c4c5bc980e7e20b6d7b71310f620",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
