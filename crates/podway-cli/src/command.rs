@@ -35,7 +35,7 @@ use podway_protocol::{
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
     ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1,
+    WorktreeSelectorWireV1, build_identity_v1,
 };
 use podway_service::{
     InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1,
@@ -1203,9 +1203,11 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
         }
         Command::Version => {
             reject_local_flags(local_flags, "version accepts no daemon-only flags")?;
+            let identity = build_identity_v1();
             Ok(Some(local_result(
                 "version",
-                json!({ "version": env!("CARGO_PKG_VERSION"), "protocol": "podway.ipc/v1" }),
+                serde_json::to_value(identity)
+                    .expect("the static build identity always serializes"),
                 format!("podway {}", env!("CARGO_PKG_VERSION")),
             )))
         }

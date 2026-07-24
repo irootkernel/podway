@@ -316,6 +316,7 @@ dependencies = [
  "podway-core",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

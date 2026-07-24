@@ -8,6 +8,7 @@ use podway_core::{AttemptId, JobId, Revision, SessionId, WorkspaceId};
 use serde::{Deserialize, Deserializer, Serialize, de};
 mod codec;
 mod framing;
+mod identity;
 mod slice;
 
 pub use codec::{
@@ -18,6 +19,7 @@ pub use framing::{
     FrameErrorV1, FrameIoPhaseV1, decode_single_frame_v1, encode_frame_v1, read_single_frame_v1,
     write_frame_v1,
 };
+pub use identity::{BuildIdentityV1, build_identity_v1};
 pub use slice::*;
 
 use serde_json::{Map, Value};
