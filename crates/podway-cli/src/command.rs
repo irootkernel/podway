@@ -1497,39 +1497,92 @@ fn canonical_daemon_executable(
             .with_command(command)
     })
 }
-fn probe_daemon_version(binary: &Path) -> Result<String, ServiceErrorV1> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DaemonStaticIdentityV1 {
+    product: String,
+    version: String,
+    target: String,
+    build_identity: String,
+    source_commit: Option<String>,
+    contract_manifest_schema: String,
+    contract_manifest_digest: String,
+    protocol_versions: Vec<String>,
+}
+
+fn probe_daemon_identity(binary: &Path) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
     let runner = SystemLaunchctlRunnerV1::new(binary).with_bounds(
         DAEMON_VERSION_PROBE_TIMEOUT,
         DAEMON_VERSION_PROBE_OUTPUT_LIMIT,
         DAEMON_VERSION_PROBE_POST_KILL_DRAIN,
     );
-    probe_daemon_version_with_runner(&runner)
+    probe_daemon_identity_with_runner(&runner)
 }
 
-fn probe_daemon_version_with_runner(
+fn probe_daemon_identity_with_runner(
     runner: &impl LaunchctlRunnerV1,
-) -> Result<String, ServiceErrorV1> {
-    let output = runner.run(&["--version".to_owned()])?;
-    if output.exit_status != 0
-        || !output.stderr.is_empty()
-        || output.stdout.contains('\u{fffd}')
-        || !output.stdout.ends_with('\n')
-        || output.stdout[..output.stdout.len() - 1].contains('\n')
-        || output.stdout[..output.stdout.len() - 1].contains('\r')
-    {
+) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
+    let output = runner.run(&["--json".to_owned(), "version".to_owned()])?;
+    if output.exit_status != 0 || !output.stderr.is_empty() || output.stdout.contains('\u{fffd}') {
         return Err(ServiceErrorV1::IoV1 {
             operation: None,
-            message: "daemon version probe returned malformed output".to_owned(),
+            message: "daemon identity probe returned malformed output".to_owned(),
         });
     }
-    output.stdout[..output.stdout.len() - 1]
-        .strip_prefix("podwayd ")
-        .filter(|version| !version.is_empty())
-        .map(str::to_owned)
+    let value =
+        serde_json::from_str::<Value>(&output.stdout).map_err(|_| ServiceErrorV1::IoV1 {
+            operation: None,
+            message: "daemon identity probe returned malformed output".to_owned(),
+        })?;
+    let object = value.as_object().ok_or_else(|| ServiceErrorV1::IoV1 {
+        operation: None,
+        message: "daemon identity probe returned malformed output".to_owned(),
+    })?;
+    let required_string = |field: &str| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ServiceErrorV1::IoV1 {
+                operation: None,
+                message: "daemon identity probe returned malformed output".to_owned(),
+            })
+    };
+    let source_commit = match object.get("source_commit") {
+        Some(Value::Null) | None => None,
+        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+        _ => {
+            return Err(ServiceErrorV1::IoV1 {
+                operation: None,
+                message: "daemon identity probe returned malformed output".to_owned(),
+            });
+        }
+    };
+    let protocol_versions = object
+        .get("supported_ipc_ids")
+        .and_then(Value::as_array)
+        .filter(|values| !values.is_empty())
+        .and_then(|values| {
+            values
+                .iter()
+                .map(Value::as_str)
+                .map(|value| value.map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        })
         .ok_or_else(|| ServiceErrorV1::IoV1 {
             operation: None,
-            message: "daemon version probe returned malformed output".to_owned(),
-        })
+            message: "daemon identity probe returned malformed output".to_owned(),
+        })?;
+    Ok(DaemonStaticIdentityV1 {
+        product: required_string("product")?,
+        version: required_string("version")?,
+        target: required_string("target")?,
+        build_identity: required_string("build_identity")?,
+        source_commit,
+        contract_manifest_schema: required_string("contract_manifest_schema")?,
+        contract_manifest_digest: required_string("contract_manifest_digest")?,
+        protocol_versions,
+    })
 }
 
 fn wait_for_service_socket(socket: &Path, command: &str) -> Result<(), LocalFailure> {
@@ -1557,70 +1610,223 @@ fn service_status_result(
     status: ServiceStatusV1,
     paths: &ServiceRuntimePathsV1,
 ) -> Result<RunResult, LocalFailure> {
-    let (status, installed, loaded, process_id, socket_path, daemon_version) = match status {
-        ServiceStatusV1::NotInstalledV1(_) => ("not_installed", false, false, None, None, None),
+    let (status, installed, loaded, metadata) = match status {
+        ServiceStatusV1::NotInstalledV1(_) => ("not_installed", false, false, None),
         ServiceStatusV1::RunningV1(running) => {
-            let daemon_version = running
-                .metadata()
-                .map(|metadata| probe_daemon_version(metadata.daemon_binary()))
-                .transpose()
-                .map_err(|error| map_service_error(error, command))?;
-            (
-                "running",
-                true,
-                true,
-                running.process_id(),
-                Some(paths.socket_path().as_path().display().to_string()),
-                daemon_version,
-            )
+            let _launchctl_pid = running.process_id();
+            ("running", true, true, running.metadata().cloned())
         }
         ServiceStatusV1::StoppedV1(stopped) => {
-            let daemon_version = stopped
-                .metadata()
-                .map(|metadata| probe_daemon_version(metadata.daemon_binary()))
-                .transpose()
-                .map_err(|error| map_service_error(error, command))?;
-            (
-                "stopped",
-                true,
-                false,
-                None,
-                Some(paths.socket_path().as_path().display().to_string()),
-                daemon_version,
-            )
+            ("stopped", true, false, stopped.metadata().cloned())
         }
     };
-    let reachable = loaded
-        && socket_path
-            .as_deref()
-            .is_some_and(|path| UnixStream::connect(path).is_ok());
-    let protocol_versions =
-        if reachable && daemon_version.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
-            vec!["podway.ipc/v1"]
-        } else {
-            Vec::new()
-        };
+    let static_identity = metadata
+        .as_ref()
+        .map(|metadata| probe_daemon_identity(metadata.daemon_binary()))
+        .transpose()
+        .map_err(|error| map_service_error(error, command))?;
+    if let Some(actual) = static_identity.as_ref() {
+        let expected = build_identity_v1();
+        if actual.product != expected.product()
+            || actual.contract_manifest_digest != expected.contract_manifest_digest()
+        {
+            return Err(map_service_error(
+                ServiceErrorV1::ContractMismatchV1 {
+                    expected_product: expected.product().to_owned(),
+                    actual_product: Some(actual.product.clone()),
+                    expected_manifest_digest: expected.contract_manifest_digest().to_owned(),
+                    actual_manifest_digest: Some(actual.contract_manifest_digest.clone()),
+                },
+                command,
+            ));
+        }
+    }
+    let configured_socket_path =
+        installed.then(|| paths.socket_path().as_path().display().to_string());
+    let executable_path = metadata
+        .as_ref()
+        .map(|metadata| metadata.daemon_binary().display().to_string());
+    let mut result = json!({
+        "schema": "podway.daemon-status-result/v1",
+        "status": status,
+        "installed": installed,
+        "loaded": loaded,
+        "reachable": false,
+        "product": static_identity.as_ref().map(|identity| identity.product.as_str()),
+        "daemon_version": static_identity.as_ref().map(|identity| identity.version.as_str()),
+        "target": static_identity.as_ref().map(|identity| identity.target.as_str()),
+        "build_identity": static_identity.as_ref().map(|identity| identity.build_identity.as_str()),
+        "source_commit": static_identity.as_ref().and_then(|identity| identity.source_commit.as_deref()),
+        "contract_manifest_schema": static_identity.as_ref().map(|identity| identity.contract_manifest_schema.as_str()),
+        "contract_manifest_digest": static_identity.as_ref().map(|identity| identity.contract_manifest_digest.as_str()),
+        "protocol_versions": static_identity.as_ref().map(|identity| identity.protocol_versions.as_slice()).unwrap_or(&[]),
+        "pid": Value::Null,
+        "process_id": Value::Null,
+        "executable_path": executable_path,
+        "started_at": Value::Null,
+        "uptime_ms": Value::Null,
+        "socket_path": configured_socket_path,
+        "configured_socket_path": configured_socket_path,
+        "effective_socket_path": Value::Null,
+        "registered_worktree_count": Value::Null,
+        "active_scheduler_count": Value::Null,
+        "queued_job_count": Value::Null,
+        "running_job_count": Value::Null,
+    })
+    .as_object()
+    .expect("daemon service status is an object")
+    .clone();
+    if loaded {
+        let request = build_daemon_status_request()?;
+        let client = DaemonClientV1::new(paths.clone());
+        match client.daemon_status(&request) {
+            Ok(ResponseEnvelopeV1::Error(error)) => {
+                return Ok(RunResult::Response(Box::new(ResponseEnvelopeV1::Error(
+                    error,
+                ))));
+            }
+            Ok(ResponseEnvelopeV1::Output(output)) => {
+                let live = validated_live_daemon_status(&output, static_identity.as_ref(), paths)?;
+                for (key, value) in live {
+                    result.insert(key, value);
+                }
+                result.insert("reachable".to_owned(), Value::Bool(true));
+            }
+            Err(
+                DaemonClientErrorV1::Connection { .. }
+                | DaemonClientErrorV1::SocketConfiguration { .. }
+                | DaemonClientErrorV1::Timeout { .. }
+                | DaemonClientErrorV1::Framing { .. }
+                | DaemonClientErrorV1::MissingResponse
+                | DaemonClientErrorV1::ResponseDecoding { .. },
+            ) => {}
+            Err(error) => return Err(map_client_error(error).with_command(command)),
+        }
+    }
     Ok(local_result(
         command,
-        json!({
-            "status": status,
-            "installed": installed,
-            "loaded": loaded,
-            "reachable": reachable,
-            "daemon_version": daemon_version,
-            "protocol_versions": protocol_versions,
-            "pid": process_id,
-            "process_id": process_id,
-            "started_at": Value::Null,
-            "uptime_ms": Value::Null,
-            "socket_path": socket_path,
-            "registered_worktree_count": Value::Null,
-            "active_scheduler_count": Value::Null,
-            "queued_job_count": Value::Null,
-            "running_job_count": Value::Null,
-        }),
+        Value::Object(result),
         status.replace('_', " "),
     ))
+}
+
+fn validated_live_daemon_status(
+    output: &podway_protocol::OutputEnvelopeV1,
+    installed: Option<&DaemonStaticIdentityV1>,
+    paths: &ServiceRuntimePathsV1,
+) -> Result<Map<String, Value>, LocalFailure> {
+    if output.command().as_str() != "daemon.status" {
+        return Err(LocalFailure::response_invalid(
+            "daemon status response command is invalid",
+        ));
+    }
+    let result = output.result();
+    const LIVE_FIELDS: [&str; 16] = [
+        "schema",
+        "product",
+        "daemon_version",
+        "target",
+        "build_identity",
+        "source_commit",
+        "contract_manifest_schema",
+        "contract_manifest_digest",
+        "protocol_versions",
+        "pid",
+        "process_id",
+        "executable_path",
+        "started_at",
+        "uptime_ms",
+        "configured_socket_path",
+        "effective_socket_path",
+    ];
+    if result.len() != LIVE_FIELDS.len()
+        || LIVE_FIELDS.iter().any(|field| !result.contains_key(*field))
+        || result.get("schema").and_then(Value::as_str) != Some("podway.daemon-status-result/v1")
+    {
+        return Err(LocalFailure::response_invalid(
+            "daemon status response schema is invalid",
+        ));
+    }
+    let string = |field: &str| {
+        result
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| LocalFailure::response_invalid("daemon status response is invalid"))
+    };
+    let product = string("product")?;
+    let manifest = string("contract_manifest_digest")?;
+    let local = build_identity_v1();
+    let (expected_product, expected_manifest) = installed
+        .map(|identity| {
+            (
+                identity.product.as_str(),
+                identity.contract_manifest_digest.as_str(),
+            )
+        })
+        .unwrap_or((local.product(), local.contract_manifest_digest()));
+    if product != expected_product || manifest != expected_manifest {
+        return Err(map_service_error(
+            ServiceErrorV1::ContractMismatchV1 {
+                expected_product: expected_product.to_owned(),
+                actual_product: Some(product.to_owned()),
+                expected_manifest_digest: expected_manifest.to_owned(),
+                actual_manifest_digest: Some(manifest.to_owned()),
+            },
+            "daemon.status",
+        ));
+    }
+    for field in [
+        "daemon_version",
+        "target",
+        "build_identity",
+        "contract_manifest_schema",
+        "executable_path",
+        "started_at",
+        "configured_socket_path",
+        "effective_socket_path",
+    ] {
+        string(field)?;
+    }
+    let process_id = string("process_id")?;
+    let executable_path = string("executable_path")?;
+    let started_at = string("started_at")?;
+    let configured_socket_path = string("configured_socket_path")?;
+    let effective_socket_path = string("effective_socket_path")?;
+    let source_commit_valid = result["source_commit"].is_null()
+        || result["source_commit"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty());
+    let protocols_valid = result
+        .get("protocol_versions")
+        .and_then(Value::as_array)
+        .is_some_and(|values| {
+            values.len() == local.supported_ipc_ids().len()
+                && values
+                    .iter()
+                    .zip(local.supported_ipc_ids())
+                    .all(|(actual, expected)| actual.as_str() == Some(*expected))
+        });
+    let expected_socket = paths.socket_path().as_path();
+    if Uuid::parse_str(process_id).is_err()
+        || !source_commit_valid
+        || string("contract_manifest_schema")? != local.contract_manifest_schema()
+        || result
+            .get("pid")
+            .and_then(Value::as_u64)
+            .is_none_or(|pid| pid == 0 || pid > u64::from(u32::MAX))
+        || result.get("uptime_ms").and_then(Value::as_u64).is_none()
+        || !protocols_valid
+        || !Path::new(executable_path).is_absolute()
+        || Rfc3339MillisV1::new(started_at).is_err()
+        || Path::new(configured_socket_path) != expected_socket
+        || Path::new(effective_socket_path) != expected_socket
+    {
+        return Err(LocalFailure::response_invalid(
+            "daemon status response is invalid",
+        ));
+    }
+    Ok(result.clone())
 }
 
 fn service_logs_result(
@@ -2460,6 +2666,25 @@ fn build_request(
         payload,
     })
     .map_err(|_| LocalFailure::request_invalid("invalid request"))
+}
+
+fn build_daemon_status_request() -> Result<RequestEnvelopeV1, LocalFailure> {
+    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(Uuid::new_v4().to_string())
+            .map_err(|_| LocalFailure::daemon_unavailable("daemon.status"))?,
+        client: ClientInfoV1::new("podway", env!("CARGO_PKG_VERSION"), std::process::id())
+            .map_err(|_| LocalFailure::daemon_unavailable("daemon.status"))?,
+        operation: OperationV1::Control,
+        command: CommandNameV1::new("daemon.status")
+            .map_err(|_| LocalFailure::request_invalid("invalid daemon status command"))?,
+        workspace: None,
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, 0)
+            .map_err(|_| LocalFailure::request_invalid("invalid daemon status options"))?,
+        payload: Map::new(),
+    })
+    .map_err(|_| LocalFailure::request_invalid("invalid daemon status request"))
 }
 
 fn mutation_key(value: Option<String>) -> Result<IdempotencyKeyV1, LocalFailure> {
@@ -3355,9 +3580,9 @@ mod tests {
     };
 
     use super::{
-        Cli, Command, LocalEnvelopeClock, LocalFailure, local_generated_at, local_result,
-        map_service_error, parse_timeout_millis, probe_daemon_version,
-        probe_daemon_version_with_runner, render_local_failure_with_clock_and_writers,
+        Cli, Command, LocalEnvelopeClock, LocalFailure, build_identity_v1, local_generated_at,
+        local_result, map_service_error, parse_timeout_millis, probe_daemon_identity,
+        probe_daemon_identity_with_runner, render_local_failure_with_clock_and_writers,
         render_result_with_clock_and_writers, resolve_daemon_executable,
         resolve_implicit_daemon_executable_from, resolve_installed_service_endpoint,
         service_outcome_result, service_status_result, stream_log_follow_update,
@@ -3444,40 +3669,94 @@ mod tests {
     }
 
     #[test]
-    fn daemon_version_probes_are_bounded_and_fail_closed() {
+    fn daemon_identity_probes_are_bounded_and_fail_closed() {
         use podway_core::UnixMillis;
         use podway_service::{
             ServiceErrorV1, ServiceInstallMetadataV1, ServiceRunningV1, ServiceRuntimePathsV1,
-            ServiceStatusV1, SystemLaunchctlRunnerV1,
+            ServiceStatusV1, ServiceStoppedV1, SystemLaunchctlRunnerV1,
         };
 
-        let expected = env!("CARGO_PKG_VERSION");
+        let expected = build_identity_v1();
+        let root = std::env::temp_dir().join(format!(
+            "podway-cli-status-{}-{}",
+            std::process::id(),
+            VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let runtime = root.join("runtime");
+        fs::create_dir_all(&runtime).expect("status fixture runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("status fixture runtime must be private");
         let paths = ServiceRuntimePathsV1::from_directories(
-            "/tmp/podway-cli-tests/LaunchAgents",
-            "/tmp/podway-cli-tests/ApplicationSupport",
-            "/tmp/podway-cli-tests/Logs",
-            "/tmp/podway-cli-tests/runtime",
+            root.join("LaunchAgents"),
+            root.join("ApplicationSupport"),
+            root.join("Logs"),
+            &runtime,
         )
         .expect("service status fixture paths");
-        let success = VersionProbeScript::new(&format!("printf 'podwayd {expected}\\n'"));
+        let success = VersionProbeScript::new(&format!(
+            "printf '%s\\n' '{{\"product\":\"{}\",\"version\":\"{}\",\"target\":\"{}\",\"build_identity\":\"{}\",\"source_commit\":null,\"contract_manifest_schema\":\"{}\",\"contract_manifest_digest\":\"{}\",\"supported_ipc_ids\":[\"podway.ipc/v1\"]}}'",
+            expected.product(),
+            expected.version(),
+            expected.target(),
+            expected.build_identity(),
+            expected.contract_manifest_schema(),
+            expected.contract_manifest_digest(),
+        ));
+        let observed = probe_daemon_identity(&success.path).expect("valid probe output");
+        assert_eq!(observed.product, expected.product());
+        assert_eq!(observed.version, expected.version());
         assert_eq!(
-            probe_daemon_version(&success.path).expect("valid probe output"),
-            expected
+            observed.contract_manifest_digest,
+            expected.contract_manifest_digest()
         );
+        let installed = ServiceInstallMetadataV1::new(
+            &success.path,
+            paths.socket_path().as_path(),
+            UnixMillis::new(1),
+            UnixMillis::new(1),
+        )
+        .expect("installed daemon fixture metadata");
+        let stopped = service_status_result(
+            "daemon.status",
+            ServiceStatusV1::StoppedV1(ServiceStoppedV1::new(UnixMillis::new(1), Some(installed))),
+            &paths,
+        )
+        .expect("stopped installed daemon status");
+        match stopped {
+            super::RunResult::Local { result, .. } => {
+                assert_eq!(result["schema"], "podway.daemon-status-result/v1");
+                assert_eq!(result["status"], "stopped");
+                assert_eq!(result["product"], expected.product());
+                assert_eq!(
+                    result["contract_manifest_digest"],
+                    expected.contract_manifest_digest()
+                );
+                assert_eq!(
+                    result["configured_socket_path"],
+                    paths.socket_path().as_path().display().to_string()
+                );
+                assert!(result["process_id"].is_null());
+                assert!(result["pid"].is_null());
+                assert!(result["started_at"].is_null());
+                assert!(result["effective_socket_path"].is_null());
+            }
+            _ => panic!("stopped daemon status must remain a local result"),
+        }
+        fs::remove_dir_all(root).expect("remove status fixture root");
 
         for body in [
-            "printf 'podwayd 0.0.0\\n'; exit 7",
+            "printf '{}\\n'; exit 7",
             "kill -TERM $$",
             "i=0; while [ \"$i\" -lt 5000 ]; do printf x; i=$((i + 1)); done",
             "i=0; while [ \"$i\" -lt 5000 ]; do printf x >&2; i=$((i + 1)); done",
-            "printf 'podwayd 0.0.0\\n'; printf unexpected >&2",
-            "printf 'podwayd 0.0.0\\nextra\\n'",
+            "printf '{}\\n'; printf unexpected >&2",
+            "printf '{}\\n{}\\n'",
             "printf '\\377\\n'",
-            "(sleep 10) & printf 'podwayd 0.0.0\\n'",
+            "(sleep 10) & printf '{}\\n'",
         ] {
             let fixture = VersionProbeScript::new(body);
             assert!(
-                probe_daemon_version(&fixture.path).is_err(),
+                probe_daemon_identity(&fixture.path).is_err(),
                 "probe must reject script: {body}"
             );
             let metadata = ServiceInstallMetadataV1::new(
@@ -3511,7 +3790,7 @@ mod tests {
             Duration::from_millis(100),
         );
         assert!(matches!(
-            probe_daemon_version_with_runner(&stalled_runner),
+            probe_daemon_identity_with_runner(&stalled_runner),
             Err(ServiceErrorV1::LaunchctlTimeoutV1 { timeout_ms: 100 })
         ));
     }
@@ -3701,11 +3980,20 @@ mod tests {
             ServiceChangedV1, ServiceErrorV1, ServiceNotInstalledV1, ServiceOutcomeV1,
             ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1,
         };
+        let root = std::env::temp_dir().join(format!(
+            "podway-cli-local-status-{}-{}",
+            std::process::id(),
+            VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let runtime = root.join("runtime");
+        fs::create_dir_all(&runtime).expect("local status fixture runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("local status fixture runtime must be private");
         let paths = ServiceRuntimePathsV1::from_directories(
-            "/tmp/podway-cli-tests/LaunchAgents",
-            "/tmp/podway-cli-tests/ApplicationSupport",
-            "/tmp/podway-cli-tests/Logs",
-            "/tmp/podway-cli-tests/runtime",
+            root.join("LaunchAgents"),
+            root.join("ApplicationSupport"),
+            root.join("Logs"),
+            &runtime,
         )
         .expect("service status fixture paths");
 
@@ -3735,7 +4023,9 @@ mod tests {
             } => {
                 assert_eq!(command, "daemon.status");
                 assert_eq!(result["status"], "running");
-                assert_eq!(result["process_id"], 42);
+                assert!(result["process_id"].is_null());
+                assert!(result["pid"].is_null());
+                assert_eq!(result["reachable"], false);
             }
             _ => panic!("service status must remain local results"),
         }
@@ -3783,6 +4073,7 @@ mod tests {
             }
             _ => panic!("service status must remain local results"),
         }
+        fs::remove_dir_all(root).expect("remove local status fixture root");
     }
     #[test]
     fn daemon_install_path_resolution_rejects_non_platform_paths() {
@@ -3846,7 +4137,7 @@ mod tests {
 
 #[cfg(test)]
 mod phase6_health_tests {
-    use std::{fs, os::unix::net::UnixListener};
+    use std::{fs, os::unix::fs::PermissionsExt, os::unix::net::UnixListener};
 
     use podway_core::UnixMillis;
     use podway_service::{ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1};
@@ -3859,6 +4150,8 @@ mod phase6_health_tests {
             std::env::temp_dir().join(format!("podway-cli-health-{}", std::process::id()));
         let _ = fs::remove_dir_all(&runtime);
         fs::create_dir_all(&runtime).expect("health fixture runtime");
+        fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700))
+            .expect("health fixture runtime must be private");
         let paths = ServiceRuntimePathsV1::from_directories(
             runtime.join("LaunchAgents"),
             runtime.join("ApplicationSupport"),
@@ -3868,9 +4161,20 @@ mod phase6_health_tests {
         .expect("health fixture service paths");
         let listener =
             UnixListener::bind(paths.socket_path().as_path()).expect("health fixture socket");
+        fs::set_permissions(
+            paths.socket_path().as_path(),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .expect("health fixture socket must be private");
 
         wait_for_service_socket(paths.socket_path().as_path(), "daemon.install")
             .expect("bound socket is reachable");
+        let responder = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().expect("health probe connection");
+                drop(stream);
+            }
+        });
         let result = service_status_result(
             "daemon.status",
             ServiceStatusV1::RunningV1(ServiceRunningV1::new(UnixMillis::new(1), Some(42), None)),
@@ -3879,13 +4183,13 @@ mod phase6_health_tests {
         .expect("status without daemon metadata must remain available");
         match result {
             super::RunResult::Local { result, .. } => {
-                assert_eq!(result["reachable"], true);
+                assert_eq!(result["reachable"], false);
                 assert_eq!(result["loaded"], true);
             }
             _ => panic!("service status must remain local"),
         }
 
-        drop(listener);
+        responder.join().expect("health fixture responder");
         fs::remove_dir_all(runtime).expect("remove health fixture");
     }
 }

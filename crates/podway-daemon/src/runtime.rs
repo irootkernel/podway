@@ -28,8 +28,8 @@ use crate::{
         WorkspaceRuntimeErrorV1, WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1,
     },
     server::{
-        BoundedAcceptLoopV1, ServerAcceptLoopErrorV1, ServerTransportTimeoutsV1,
-        ShutdownAdmissionV1, UnixServerTransportV1,
+        BoundedAcceptLoopV1, DaemonProcessIdentityV1, ServerAcceptLoopErrorV1,
+        ServerTransportTimeoutsV1, ShutdownAdmissionV1, UnixServerTransportV1,
     },
     worker::WorkerErrorV1,
     workspace::WorkspaceResolutionErrorV1,
@@ -41,6 +41,7 @@ pub struct ProductionDaemonRuntimeConfigV1 {
     worker_id: WorkerIdV1,
     maximum_in_flight_connections: NonZeroUsize,
     transport_timeouts: ServerTransportTimeoutsV1,
+    process_identity: Option<DaemonProcessIdentityV1>,
 }
 
 impl ProductionDaemonRuntimeConfigV1 {
@@ -53,7 +54,13 @@ impl ProductionDaemonRuntimeConfigV1 {
             worker_id,
             maximum_in_flight_connections,
             transport_timeouts,
+            process_identity: None,
         }
+    }
+
+    pub fn with_process_identity(mut self, identity: DaemonProcessIdentityV1) -> Self {
+        self.process_identity = Some(identity);
+        self
     }
 
     pub fn worker_id(&self) -> &WorkerIdV1 {
@@ -66,6 +73,10 @@ impl ProductionDaemonRuntimeConfigV1 {
 
     pub const fn transport_timeouts(&self) -> ServerTransportTimeoutsV1 {
         self.transport_timeouts
+    }
+
+    pub fn process_identity(&self) -> Option<&DaemonProcessIdentityV1> {
+        self.process_identity.as_ref()
     }
 }
 
@@ -376,12 +387,17 @@ impl ProductionDaemonRuntimeV1 {
         let recovery_report =
             recover_registered_workspaces(&manager, &worker, registry, &observability);
         let admission = ShutdownAdmissionV1::new();
-        let transport = Arc::new(ProductionTransportV1::new_with_observability(
+        let mut transport = ProductionTransportV1::new_with_observability(
             PeerUidVerifierV1::for_current_user(),
             dispatcher,
             configuration.transport_timeouts(),
             observability.clone(),
-        ));
+        );
+        if let Some(identity) = configuration.process_identity().cloned() {
+            transport = transport
+                .with_process_identity(identity.with_effective_socket_path(endpoint.socket_path()));
+        }
+        let transport = Arc::new(transport);
         let accept_loop = ProductionAcceptLoopV1::new_with_observability(
             transport,
             admission.clone(),

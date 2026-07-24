@@ -104,7 +104,8 @@ canonicalized and verified before the absolute path is written to the plist.
 
 ## Daemon health
 
-The daemon exposes a local health request over the socket. `podway daemon status --json` reports:
+The daemon exposes a pre-dispatch, read-only, non-durable health request over the socket.
+`podway daemon status --json` merges that live response with launchd service state and reports:
 
 ```text
 status
@@ -127,7 +128,12 @@ queued_job_count
 running_job_count
 ```
 
-`reachable=false` distinguishes an installed but unhealthy service from an uninstalled service.
+`process_id` is a UUID created once per daemon process; `pid` is the operating-system
+numeric process ID. `started_at` is fixed at process startup and `uptime_ms` is measured
+with a monotonic clock. `reachable=false` distinguishes an installed but unhealthy
+service from an uninstalled service. For a stopped or unreachable installation, static
+build identity, the canonical executable, and the configured socket remain available,
+while PID, process UUID, start time, uptime, and effective socket are `null`.
 
 ## Socket safety
 

@@ -9,6 +9,7 @@ These JSON Schema Draft 2020-12 files define Podway v1 structural contracts.
 - `output-v1.schema.json`: success envelope.
 - `error-v1.schema.json`: error envelope.
 - `status-result-v1.schema.json`: `status` result object.
+- `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
 - `next-result-v1.schema.json`: `next` result object.
 - `contract-manifest-v1.schema.json`: deterministic integration contract inventory.
 

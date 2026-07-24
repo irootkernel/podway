@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:daemon-status-result:v1",
+  "title": "Podway Daemon Status Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "status", "installed", "loaded", "reachable", "product",
+    "daemon_version", "target", "build_identity", "source_commit",
+    "contract_manifest_schema", "contract_manifest_digest", "protocol_versions",
+    "pid", "process_id", "executable_path", "started_at", "uptime_ms",
+    "socket_path", "configured_socket_path", "effective_socket_path",
+    "registered_worktree_count", "active_scheduler_count", "queued_job_count",
+    "running_job_count"
+  ],
+  "properties": {
+    "schema": { "const": "podway.daemon-status-result/v1" },
+    "status": { "enum": ["not_installed", "stopped", "running"] },
+    "installed": { "type": "boolean" },
+    "loaded": { "type": "boolean" },
+    "reachable": { "type": "boolean" },
+    "product": { "type": ["string", "null"], "minLength": 1 },
+    "daemon_version": { "type": ["string", "null"], "minLength": 1 },
+    "target": { "type": ["string", "null"], "minLength": 1 },
+    "build_identity": { "type": ["string", "null"], "minLength": 1 },
+    "source_commit": { "type": ["string", "null"], "minLength": 1 },
+    "contract_manifest_schema": { "type": ["string", "null"], "minLength": 1 },
+    "contract_manifest_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "protocol_versions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "pid": { "type": ["integer", "null"], "minimum": 1, "maximum": 4294967295 },
+    "process_id": { "type": ["string", "null"], "format": "uuid" },
+    "executable_path": { "type": ["string", "null"], "pattern": "^/" },
+    "started_at": { "type": ["string", "null"], "format": "date-time" },
+    "uptime_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "socket_path": { "type": ["string", "null"], "pattern": "^/" },
+    "configured_socket_path": { "type": ["string", "null"], "pattern": "^/" },
+    "effective_socket_path": { "type": ["string", "null"], "pattern": "^/" },
+    "registered_worktree_count": { "type": ["integer", "null"], "minimum": 0 },
+    "active_scheduler_count": { "type": ["integer", "null"], "minimum": 0 },
+    "queued_job_count": { "type": ["integer", "null"], "minimum": 0 },
+    "running_job_count": { "type": ["integer", "null"], "minimum": 0 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "reachable": { "const": true } }, "required": ["reachable"] },
+      "then": {
+        "properties": {
+          "installed": { "const": true }, "loaded": { "const": true },
+          "pid": { "type": "integer" }, "process_id": { "type": "string" },
+          "started_at": { "type": "string" }, "uptime_ms": { "type": "integer" },
+          "effective_socket_path": { "type": "string" }
+        }
+      },
+      "else": {
+        "properties": {
+          "pid": { "type": "null" }, "process_id": { "type": "null" },
+          "started_at": { "type": "null" }, "uptime_ms": { "type": "null" },
+          "effective_socket_path": { "type": "null" }
+        }
+      }
+    }
+  ]
+}

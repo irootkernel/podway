@@ -10,21 +10,22 @@ use std::{
     io::{self, Read, Write},
     num::NonZeroUsize,
     os::unix::net::{UnixListener, UnixStream},
+    path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use podway_protocol::{
     CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
-    FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, PayloadCodecErrorV1, ProtocolError,
-    RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV1, Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1,
-    SliceRequestV1, build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
-    encode_response_payload_v1, read_single_frame_v1, validate_frame_payload_length,
-    write_frame_v1,
+    FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, OperationV1, OutputEnvelopeInputV1,
+    OutputEnvelopeV1, PayloadCodecErrorV1, ProtocolError, RequestEnvelopeV1, RequestIdV1,
+    ResponseEnvelopeV1, Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceRequestV1, build_identity_v1,
+    decode_request_payload_v1, decode_single_frame_v1, encode_response_payload_v1,
+    read_single_frame_v1, validate_frame_payload_length, write_frame_v1,
 };
 use serde_json::{Map, Value};
 
@@ -32,6 +33,77 @@ use crate::{
     observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
     peer::{PeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1},
 };
+
+/// Immutable identity and monotonic lifetime of one daemon process instance.
+#[derive(Clone, Debug)]
+pub struct DaemonProcessIdentityV1 {
+    process_id: RequestIdV1,
+    pid: u32,
+    started_at: Rfc3339MillisV1,
+    started: Instant,
+    executable_path: PathBuf,
+    configured_socket_path: PathBuf,
+    effective_socket_path: PathBuf,
+}
+
+impl DaemonProcessIdentityV1 {
+    pub fn new(
+        process_id: RequestIdV1,
+        pid: u32,
+        started_at: Rfc3339MillisV1,
+        executable_path: impl Into<PathBuf>,
+        configured_socket_path: impl Into<PathBuf>,
+        effective_socket_path: impl Into<PathBuf>,
+    ) -> Result<Self, ProtocolError> {
+        if pid == 0 {
+            return Err(ProtocolError::EmptyValue {
+                field: "daemon.pid",
+            });
+        }
+        Ok(Self {
+            process_id,
+            pid,
+            started_at,
+            started: Instant::now(),
+            executable_path: executable_path.into(),
+            configured_socket_path: configured_socket_path.into(),
+            effective_socket_path: effective_socket_path.into(),
+        })
+    }
+
+    pub fn with_effective_socket_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.effective_socket_path = path.into();
+        self
+    }
+
+    pub fn process_id(&self) -> &RequestIdV1 {
+        &self.process_id
+    }
+
+    pub const fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn started_at(&self) -> &Rfc3339MillisV1 {
+        &self.started_at
+    }
+
+    pub fn executable_path(&self) -> &Path {
+        &self.executable_path
+    }
+
+    pub fn configured_socket_path(&self) -> &Path {
+        &self.configured_socket_path
+    }
+
+    pub fn effective_socket_path(&self) -> &Path {
+        &self.effective_socket_path
+    }
+
+    pub fn uptime_millis(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
 
 /// The documented default deadline for one framed request or response operation.
 pub const DEFAULT_FRAME_IO_TIMEOUT_V1: Duration = Duration::from_secs(5);
@@ -388,6 +460,7 @@ pub struct UnixServerTransportV1<Source, Dispatcher, Metadata = SystemResponseMe
     metadata: Arc<Metadata>,
     timeouts: ServerTransportTimeoutsV1,
     observability: Option<ObservabilityEmitterV1>,
+    process_identity: Option<DaemonProcessIdentityV1>,
 }
 
 impl<Source, Dispatcher> UnixServerTransportV1<Source, Dispatcher, SystemResponseMetadataSourceV1> {
@@ -438,7 +511,13 @@ impl<Source, Dispatcher, Metadata> UnixServerTransportV1<Source, Dispatcher, Met
             metadata: Arc::new(metadata),
             timeouts,
             observability,
+            process_identity: None,
         }
+    }
+
+    pub fn with_process_identity(mut self, identity: DaemonProcessIdentityV1) -> Self {
+        self.process_identity = Some(identity);
+        self
     }
 
     pub fn verifier(&self) -> &PeerUidVerifierV1<Source> {
@@ -585,6 +664,34 @@ where
             let response = self.contract_mismatch_response(&request)?;
             return self.write_response(&mut connection, &response);
         }
+        if request.command().as_str() == "daemon.status" {
+            if !is_daemon_status_request(&request) {
+                return self.write_transport_error(
+                    &mut connection,
+                    Some(RequestContextV1::from_request(&request)),
+                    TransportErrorKindV1::InvalidRequest,
+                );
+            }
+            let Some(process_identity) = self.process_identity.as_ref() else {
+                emit_observation(
+                    &self.observability,
+                    EventOperationV1::ServiceDispatch,
+                    EventOutcomeV1::Failed,
+                );
+                return self.write_transport_error(
+                    &mut connection,
+                    Some(RequestContextV1::from_request(&request)),
+                    TransportErrorKindV1::Internal,
+                );
+            };
+            let response = self.daemon_status_response(&request, process_identity)?;
+            emit_observation(
+                &self.observability,
+                EventOperationV1::ServiceDispatch,
+                EventOutcomeV1::Succeeded,
+            );
+            return self.write_response(&mut connection, &response);
+        }
         let slice_request = match SliceRequestV1::from_envelope(&request) {
             Ok(slice_request) => slice_request,
             Err(_) => {
@@ -673,6 +780,51 @@ where
                 details,
             })
             .expect("the daemon constructs a protocol-valid mismatch response"),
+        ))
+    }
+
+    fn daemon_status_response(
+        &self,
+        request: &RequestEnvelopeV1,
+        process: &DaemonProcessIdentityV1,
+    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+        let identity = build_identity_v1();
+        let result = serde_json::json!({
+            "schema": "podway.daemon-status-result/v1",
+            "product": identity.product(),
+            "daemon_version": identity.version(),
+            "target": identity.target(),
+            "build_identity": identity.build_identity(),
+            "source_commit": identity.source_commit(),
+            "contract_manifest_schema": identity.contract_manifest_schema(),
+            "contract_manifest_digest": identity.contract_manifest_digest(),
+            "protocol_versions": identity.supported_ipc_ids(),
+            "pid": process.pid(),
+            "process_id": process.process_id().as_str(),
+            "executable_path": process.executable_path().display().to_string(),
+            "started_at": process.started_at().as_str(),
+            "uptime_ms": process.uptime_millis(),
+            "configured_socket_path": process.configured_socket_path().display().to_string(),
+            "effective_socket_path": process.effective_socket_path().display().to_string(),
+        })
+        .as_object()
+        .expect("daemon status is an object")
+        .clone();
+        Ok(ResponseEnvelopeV1::Output(
+            OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self
+                    .metadata
+                    .try_generated_at()
+                    .map_err(ServerConnectionErrorV1::ResponseMetadata)?,
+                workspace: None,
+                job: None,
+                session: None,
+                result,
+                warnings: Vec::new(),
+            })
+            .expect("the daemon constructs a protocol-valid status response"),
         ))
     }
 
@@ -887,6 +1039,21 @@ fn response_matches_request(response: &ResponseEnvelopeV1, request: &RequestEnve
             error.request_id() == request.request_id() && error.command() == request.command()
         }
     }
+}
+
+fn is_daemon_status_request(request: &RequestEnvelopeV1) -> bool {
+    request.operation() == OperationV1::Control
+        && request.workspace().is_none()
+        && request.idempotency_key().is_none()
+        && request.preconditions().session_id().is_none()
+        && request.preconditions().session_revision().is_none()
+        && request.preconditions().attempt_id().is_none()
+        && request.preconditions().item_revision().is_none()
+        && request.preconditions().blocker_id().is_none()
+        && request.preconditions().job_state().is_none()
+        && !request.options().detach()
+        && request.options().wait_timeout_ms() == 0
+        && request.payload().is_empty()
 }
 
 fn emit_observation(

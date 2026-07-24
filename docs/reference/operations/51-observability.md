@@ -80,6 +80,11 @@ running_job_count
 ```
 
 It contains aggregate counts only, not task titles or item data.
+The process UUID and start time remain stable for one daemon lifetime, while uptime is
+monotonic. A stopped or unreachable installation retains static build identity,
+executable, and configured socket fields but reports every live process field as `null`.
+Contract-handshake failures are returned as `DAEMON_CONTRACT_MISMATCH`, never rewritten
+as an unreachable status result.
 
 ## Workspace status observability
 

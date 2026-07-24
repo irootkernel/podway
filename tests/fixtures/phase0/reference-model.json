@@ -19,6 +19,7 @@
       "procedure": "urn:podway:schema:procedure:v1",
       "registry": "urn:podway:schema:registry:v1",
       "status-result": "urn:podway:schema:status-result:v1",
+      "daemon-status-result": "urn:podway:schema:daemon-status-result:v1",
       "workspace": "urn:podway:schema:workspace:v1"
     }
   },

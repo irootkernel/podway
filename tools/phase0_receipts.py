@@ -639,7 +639,7 @@ def validate_identifiers(root: Path, reference: dict[str, Any]) -> int:
     }
     require_object(identifiers, "reference v1_identifiers", expected_identifier_keys)
     schemas = require_object(identifiers["schemas"], "reference v1 schema identifiers")
-    if set(schemas) != {"error", "ipc-request", "next-result", "output", "procedure", "registry", "status-result", "workspace"}:
+    if set(schemas) != {"daemon-status-result", "error", "ipc-request", "next-result", "output", "procedure", "registry", "status-result", "workspace"}:
         fail("reference_model_drift", "reference v1 schema identifiers drift")
     for name, identifier in schemas.items():
         schema = read_json(root, Path("schemas") / f"{name}-v1.schema.json", f"schema {name}")

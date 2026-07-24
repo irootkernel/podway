@@ -114,7 +114,9 @@ podway daemon logs [--follow] [--lines <n>]
 
 `daemon status --json` returns service, socket, protocol, and queue summary.
 The target result also returns the configured/effective socket, daemon executable,
-process instance, and contract-manifest identity.
+process UUID and numeric PID, start time, and contract-manifest identity. Live process
+fields are `null` when the installed service is stopped or cannot answer the status
+probe; static installed-binary identity and configuration remain present.
 
 ## Workspace commands
 

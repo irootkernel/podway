@@ -16,9 +16,9 @@ use std::{
 
 use nix::unistd::geteuid;
 use podway_protocol::{
-    FrameErrorV1, PayloadCodecErrorV1, RequestEnvelopeV1, ResponseEnvelopeV1, SliceErrorV1,
-    SliceRequestV1, decode_response_payload_v1, encode_request_payload_v1, read_single_frame_v1,
-    write_frame_v1,
+    FrameErrorV1, OperationV1, PayloadCodecErrorV1, RequestEnvelopeV1, ResponseEnvelopeV1,
+    SliceErrorV1, SliceRequestV1, decode_response_payload_v1, encode_request_payload_v1,
+    read_single_frame_v1, write_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 
@@ -261,6 +261,41 @@ impl DaemonClientV1 {
     ) -> Result<ResponseEnvelopeV1, DaemonClientErrorV1> {
         SliceRequestV1::from_envelope(request)
             .map_err(|source| DaemonClientErrorV1::RequestAdmission { source })?;
+        self.exchange(request)
+    }
+
+    /// Exchanges the exact read-only daemon process status probe outside the durable command slice.
+    pub fn daemon_status(
+        &self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<ResponseEnvelopeV1, DaemonClientErrorV1> {
+        if request.command().as_str() != "daemon.status"
+            || request.operation() != OperationV1::Control
+            || request.workspace().is_some()
+            || request.idempotency_key().is_some()
+            || request.preconditions().session_id().is_some()
+            || request.preconditions().session_revision().is_some()
+            || request.preconditions().attempt_id().is_some()
+            || request.preconditions().item_revision().is_some()
+            || request.preconditions().blocker_id().is_some()
+            || request.preconditions().job_state().is_some()
+            || request.options().detach()
+            || request.options().wait_timeout_ms() != 0
+            || !request.payload().is_empty()
+        {
+            return Err(DaemonClientErrorV1::RequestAdmission {
+                source: SliceErrorV1::InvalidCommand {
+                    received: request.command().as_str().to_owned(),
+                },
+            });
+        }
+        self.exchange(request)
+    }
+
+    fn exchange(
+        &self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<ResponseEnvelopeV1, DaemonClientErrorV1> {
         let payload = encode_request_payload_v1(request)
             .map_err(|source| DaemonClientErrorV1::RequestEncoding { source })?;
 

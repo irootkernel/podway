@@ -24,11 +24,11 @@ use podway_daemon::{
     },
     peer::{FixedPeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1},
     server::{
-        BoundedAcceptLoopV1, ConnectionHandlerSpawnerV1, FixedResponseMetadataSourceV1,
-        RequestDispatcherV1, ResponseMetadataClockErrorV1, ResponseMetadataClockV1,
-        ResponseMetadataErrorV1, ServerAcceptLoopErrorV1, ServerConnectionErrorV1,
-        ServerTransportTimeoutsV1, ShutdownAdmissionV1, SystemResponseMetadataSourceV1,
-        UnixServerTransportV1,
+        BoundedAcceptLoopV1, ConnectionHandlerSpawnerV1, DaemonProcessIdentityV1,
+        FixedResponseMetadataSourceV1, RequestDispatcherV1, ResponseMetadataClockErrorV1,
+        ResponseMetadataClockV1, ResponseMetadataErrorV1, ServerAcceptLoopErrorV1,
+        ServerConnectionErrorV1, ServerTransportTimeoutsV1, ShutdownAdmissionV1,
+        SystemResponseMetadataSourceV1, UnixServerTransportV1,
     },
 };
 use podway_protocol::{
@@ -249,6 +249,21 @@ fn request_with_client(client: ClientInfoV1) -> RequestEnvelopeV1 {
     .expect("fixture request is valid")
 }
 
+fn daemon_status_request(wait_timeout_ms: u64) -> RequestEnvelopeV1 {
+    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).expect("fixture request ID is valid"),
+        client: ClientInfoV1::new("podway-test", "1.0.0", 42).expect("fixture client is valid"),
+        operation: OperationV1::Control,
+        command: CommandNameV1::new("daemon.status").expect("fixture command is valid"),
+        workspace: None,
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, wait_timeout_ms).expect("fixture options are valid"),
+        payload: Map::new(),
+    })
+    .expect("daemon status fixture is valid")
+}
+
 fn request_frame(request: &RequestEnvelopeV1) -> Vec<u8> {
     let payload = encode_request_payload_v1(request).expect("fixture request must encode");
     encode_frame_v1(&payload).expect("fixture request frame must encode")
@@ -275,6 +290,35 @@ fn transport(
         timeouts,
         metadata(),
     ))
+}
+
+fn status_transport(
+    dispatcher: TestDispatcher,
+) -> Arc<
+    UnixServerTransportV1<
+        FixedPeerCredentialSourceV1,
+        TestDispatcher,
+        FixedResponseMetadataSourceV1,
+    >,
+> {
+    let identity = DaemonProcessIdentityV1::new(
+        RequestIdV1::new("3037d76d-6ea8-42c2-a11f-883248bb8774").unwrap(),
+        4242,
+        timestamp(),
+        "/usr/local/bin/podwayd",
+        "/tmp/podway-runtime/podwayd.sock",
+        "/tmp/podway-runtime/podwayd.sock",
+    )
+    .expect("process identity fixture is valid");
+    Arc::new(
+        UnixServerTransportV1::with_metadata(
+            PeerUidVerifierV1::new(EXPECTED_UID, FixedPeerCredentialSourceV1::uid(EXPECTED_UID)),
+            dispatcher,
+            ServerTransportTimeoutsV1::default(),
+            metadata(),
+        )
+        .with_process_identity(identity),
+    )
 }
 
 fn read_response(client: &mut UnixStream) -> ResponseEnvelopeV1 {
@@ -381,6 +425,60 @@ fn contract_mismatch_is_rejected_before_dispatch_or_admission() {
         assert!(handler.join().expect("handler must not panic").is_ok());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
+}
+
+#[test]
+fn daemon_status_is_stable_live_and_bypasses_dispatch() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = status_transport(TestDispatcher::new(
+        DispatcherOutcome::Success,
+        Arc::clone(&calls),
+    ));
+    let mut observations = Vec::new();
+    for _ in 0..2 {
+        let (mut client, server) =
+            UnixStream::pair().expect("Unix stream fixture pair must be created");
+        let transport = Arc::clone(&transport);
+        let handler = thread::spawn(move || transport.handle_connection(server));
+        send_and_half_close(&mut client, &request_frame(&daemon_status_request(0)));
+        let ResponseEnvelopeV1::Output(output) = read_response(&mut client) else {
+            panic!("daemon status must return output");
+        };
+        assert!(handler.join().expect("handler must not panic").is_ok());
+        observations.push(output.result().clone());
+    }
+    assert_eq!(observations[0]["process_id"], observations[1]["process_id"]);
+    assert_eq!(observations[0]["started_at"], observations[1]["started_at"]);
+    assert_eq!(observations[0]["pid"], 4242);
+    assert_eq!(observations[0]["executable_path"], "/usr/local/bin/podwayd");
+    assert_eq!(
+        observations[0]["effective_socket_path"],
+        "/tmp/podway-runtime/podwayd.sock"
+    );
+    assert!(
+        observations[1]["uptime_ms"].as_u64().unwrap()
+            >= observations[0]["uptime_ms"].as_u64().unwrap()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn malformed_daemon_status_is_rejected_before_dispatch() {
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = status_transport(TestDispatcher::new(
+        DispatcherOutcome::Success,
+        Arc::clone(&calls),
+    ));
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+    send_and_half_close(&mut client, &request_frame(&daemon_status_request(1)));
+    assert_error_code(read_response(&mut client), "REQUEST_INVALID");
+    assert!(handler.join().expect("handler must not panic").is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]

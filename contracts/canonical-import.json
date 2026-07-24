@@ -7,7 +7,7 @@
     {
       "source": "docs/schemas/README.md",
       "destination": "schemas/README.md",
-      "source_sha256": "3930f1974197d098dc4e6880336e6290ee79a829a7f290d9c80fb34cb728bb52",
+      "source_sha256": "8bcb464410d0885a13eee3c9897fcbcd41ed0f75caaee36bd3da5a78f02cc470",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -16,6 +16,14 @@
       "source": "docs/schemas/contract-manifest-v1.schema.json",
       "destination": "schemas/contract-manifest-v1.schema.json",
       "source_sha256": "df1abac74845a7e3eea91ff39f7e95d64a01152b187d00bc8987be8a8302526a",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/daemon-status-result-v1.schema.json",
+      "destination": "schemas/daemon-status-result-v1.schema.json",
+      "source_sha256": "558eafb8445cafab524cd7aa65764bf29e3332de01b7a67676a2541f1ce0fd5c",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

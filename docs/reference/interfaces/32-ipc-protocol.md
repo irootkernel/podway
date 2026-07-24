@@ -84,6 +84,15 @@ The normative structural schema is [`../../schemas/ipc-request-v1.schema.json`](
 
 The command catalog provides the definitive mapping.
 
+### Live daemon status probe
+
+The CLI may send `daemon.status` as an exact `control` request with no workspace,
+idempotency key, preconditions, detach, wait timeout, or payload. After the contract
+handshake, the transport answers this probe before worktree parsing, durable admission,
+or command dispatch. The response identifies the current daemon process and conforms
+to [`../../schemas/daemon-status-result-v1.schema.json`](../../schemas/daemon-status-result-v1.schema.json)
+after the CLI merges it with local service state.
+
 ## Workspace context
 
 Workspace requests include the canonical root discovered by the CLI. `expected_uuid` is omitted before initialization and included afterward when known.

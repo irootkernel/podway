@@ -8,15 +8,19 @@ use podway_daemon::{
     ObservabilityCountersV1, ObservabilityFinalizationV1, ObservabilityV1, RotatingFileSinkV1,
     SystemClockV1,
     runtime::{ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1},
-    server::ServerTransportTimeoutsV1,
+    server::{
+        DaemonProcessIdentityV1, ResponseMetadataSourceV1, ServerTransportTimeoutsV1,
+        SystemResponseMetadataSourceV1,
+    },
 };
-use podway_protocol::build_identity_v1;
+use podway_protocol::{RequestIdV1, build_identity_v1};
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
 use signal_hook::{
     consts::{SIGINT, SIGTERM},
     iterator::Signals,
 };
+use uuid::Uuid;
 
 const MAXIMUM_IN_FLIGHT_CONNECTIONS_V1: usize = 64;
 
@@ -63,12 +67,21 @@ fn run_service(socket_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::E
         Some(socket_path) => paths.with_socket_path(socket_path)?,
         None => paths,
     };
+    let process_identity = DaemonProcessIdentityV1::new(
+        RequestIdV1::new(Uuid::new_v4().to_string())?,
+        process::id(),
+        SystemResponseMetadataSourceV1::default().generated_at(),
+        env::current_exe()?.canonicalize()?,
+        paths.socket_path().as_path(),
+        paths.socket_path().as_path(),
+    )?;
     let configuration = ProductionDaemonRuntimeConfigV1::new(
         WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
         NonZeroUsize::new(MAXIMUM_IN_FLIGHT_CONNECTIONS_V1)
             .expect("the production connection limit is nonzero"),
         ServerTransportTimeoutsV1::default(),
-    );
+    )
+    .with_process_identity(process_identity);
     let inspection_options = SqliteStoreOptionsV1::new(1)?;
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
     let signal_control = signals.handle();
