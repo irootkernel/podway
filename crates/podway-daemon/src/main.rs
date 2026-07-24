@@ -10,6 +10,7 @@ use podway_daemon::{
     runtime::{ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1},
     server::ServerTransportTimeoutsV1,
 };
+use podway_protocol::build_identity_v1;
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
 use signal_hook::{
@@ -33,12 +34,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("podwayd {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
+        [json, version] if json == "--json" && version == "version" => {
+            println!(
+                "{}",
+                serde_json::to_string(&build_identity_v1())
+                    .expect("the static build identity always serializes")
+            );
+            return Ok(());
+        }
         [] => None,
         [argument] if argument == "--service" => None,
         [service, socket, path] if service == "--service" && socket == "--socket" => {
             Some(PathBuf::from(path))
         }
-        _ => return Err("usage: podwayd [--service [--socket <absolute-path>]|--version]".into()),
+        _ => {
+            return Err(
+                "usage: podwayd [--service [--socket <absolute-path>]|--version|--json version]"
+                    .into(),
+            );
+        }
     };
     run_service(socket_path)
 }

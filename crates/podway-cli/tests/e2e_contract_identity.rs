@@ -60,3 +60,31 @@ fn version_identity_is_static_complete_and_manifest_bound() {
             .is_some_and(digest_is_canonical)
     );
 }
+
+#[test]
+fn matching_binary_identities_are_identical() {
+    let cli = Command::new(env!("CARGO_BIN_EXE_podway"))
+        .args(["--json", "version"])
+        .output()
+        .expect("podway version probe must run");
+    assert!(cli.status.success());
+    let cli: Value = serde_json::from_slice(&cli.stdout).expect("podway version is JSON");
+
+    let daemon_path = Path::new(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd");
+    let daemon = Command::new(&daemon_path)
+        .args(["--json", "version"])
+        .output()
+        .unwrap_or_else(|error| {
+            panic!(
+                "podwayd version probe {} failed: {error}",
+                daemon_path.display()
+            )
+        });
+    assert!(
+        daemon.status.success(),
+        "podwayd version probe failed: {daemon:?}"
+    );
+    assert!(daemon.stderr.is_empty());
+    let daemon: Value = serde_json::from_slice(&daemon.stdout).expect("podwayd version is JSON");
+    assert_eq!(cli["result"], daemon);
+}

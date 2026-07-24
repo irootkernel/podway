@@ -17,6 +17,7 @@ use nix::{
     unistd::{Pid, geteuid},
 };
 use podway_service::ServiceRuntimePathsV1;
+use serde_json::Value;
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -114,6 +115,32 @@ fn podwayd_service_and_version_modes_are_explicit() {
     assert_eq!(
         String::from_utf8(version.stdout).expect("version output is UTF-8"),
         format!("podwayd {}\n", env!("CARGO_PKG_VERSION"))
+    );
+
+    let json_version = Command::new(env!("CARGO_BIN_EXE_podwayd"))
+        .args(["--json", "version"])
+        .env_clear()
+        .output()
+        .expect("podwayd JSON version process must run");
+    assert!(json_version.status.success());
+    assert!(json_version.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&json_version.stdout)
+            .lines()
+            .count(),
+        1
+    );
+    let identity: Value =
+        serde_json::from_slice(&json_version.stdout).expect("podwayd JSON version is valid");
+    assert_eq!(identity["product"], "podway");
+    assert_eq!(identity["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        identity["contract_manifest_schema"],
+        "podway.contract-manifest/v1"
+    );
+    assert_eq!(
+        identity["supported_ipc_ids"],
+        serde_json::json!(["podway.ipc/v1"])
     );
 
     let invalid = Command::new(env!("CARGO_BIN_EXE_podwayd"))
