@@ -202,6 +202,22 @@ error-propagation, native service, and daemon-process E2E suites. Together they
 cover matching peers, stale manifests across version combinations, pre-publication
 installer rejection, replaced executable bytes, receipt refresh, and restart identity.
 
+### CONID final review
+
+The final identity review binds each requirement to an executable proof:
+
+- `AUT-CONTRACT-001` uses the deterministic manifest check and its isolated
+  tamper controls;
+- `AUT-CONTRACT-002` and `AUT-CONTRACT-003` compare both binary identities and
+  require the embedded source commit to equal the explicit build revision or Git
+  `HEAD`, including rebuilds after a symbolic branch ref advances;
+- `AUT-CONTRACT-004` proves daemon ingress and installation reject mismatches
+  before dispatch, durable admission, service publication, or launchctl;
+- `AUT-CONTRACT-005` probes a real daemon twice, then restarts it and requires a
+  new process UUID with stable executable, endpoint, and manifest identity; and
+- `AUT-T-CONTRACT` runs mismatch rejection followed by a verified matching
+  install, live daemon status, and a restart with a new process UUID in one flow.
+
 ## CLI and JSON tests
 
 Every command requires:

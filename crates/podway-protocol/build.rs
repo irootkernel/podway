@@ -41,34 +41,52 @@ fn rust_string(value: &str) -> String {
     serde_json::to_string(value).expect("identity strings serialize")
 }
 
+fn git_path(workspace: &Path, name: &str) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["-C", workspace.to_str()?, "rev-parse", "--git-path", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+    if path.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(path);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        workspace.join(path)
+    })
+}
+
+fn emit_git_rerun_paths(workspace: &Path) {
+    let Some(head_path) = git_path(workspace, "HEAD") else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", head_path.display());
+    if let Ok(head) = fs::read_to_string(&head_path)
+        && let Some(reference) = head.trim().strip_prefix("ref: ")
+        && let Some(reference_path) = git_path(workspace, reference)
+        && reference_path.is_file()
+    {
+        println!("cargo:rerun-if-changed={}", reference_path.display());
+    }
+    if let Some(packed_refs) = git_path(workspace, "packed-refs")
+        && packed_refs.is_file()
+    {
+        println!("cargo:rerun-if-changed={}", packed_refs.display());
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=PODWAY_SOURCE_COMMIT");
     let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let workspace = crate_dir.join("../..");
     let manifest_path = workspace.join("contracts/contract-manifest-v1.json");
     println!("cargo:rerun-if-changed={}", manifest_path.display());
-    if let Ok(output) = Command::new("git")
-        .args([
-            "-C",
-            workspace.to_str().unwrap_or("."),
-            "rev-parse",
-            "--git-path",
-            "HEAD",
-        ])
-        .output()
-        && output.status.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        if !path.is_empty() {
-            let path = PathBuf::from(path);
-            let path = if path.is_absolute() {
-                path
-            } else {
-                workspace.join(path)
-            };
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
-    }
+    emit_git_rerun_paths(&workspace);
 
     let bytes = fs::read(&manifest_path).unwrap_or_else(|error| fail(error.to_string()));
     let mut manifest: Value =
