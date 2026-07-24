@@ -8,9 +8,9 @@ use podway_protocol::{
     RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1,
     Rfc3339MillisV1, SUPPORTED_ERROR_SCHEMAS_V1, SUPPORTED_OUTPUT_SCHEMAS_V1,
     SUPPORTED_PROTOCOLS_V1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
-    decode_request_payload_v1, decode_response_payload_v1, encode_request_payload_v1,
-    encode_response_payload_v1, error_code_catalog_v1, negotiate_protocol,
-    require_compatible_protocol, validate_frame_payload_length,
+    build_identity_v1, decode_request_payload_v1, decode_response_payload_v1,
+    encode_request_payload_v1, encode_response_payload_v1, error_code_catalog_v1,
+    negotiate_protocol, require_compatible_protocol, validate_frame_payload_length,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -98,10 +98,17 @@ fn valid_query_envelope() -> RequestEnvelopeV1 {
 }
 
 fn valid_query_envelope_json() -> Value {
+    let identity = build_identity_v1();
     json!({
         "protocol": IPC_PROTOCOL_V1,
         "request_id": REQUEST_ID,
-        "client": {"name": "podway-cli", "version": "0.1.0", "pid": 1},
+        "client": {
+            "name": "podway-cli",
+            "version": "0.1.0",
+            "pid": 1,
+            "product": identity.product(),
+            "contract_manifest_digest": identity.contract_manifest_digest(),
+        },
         "operation": "query",
         "command": "status",
         "options": {"detach": false, "wait_timeout_ms": 0},
@@ -120,6 +127,21 @@ fn api_004_request_envelope_validation_and_serde_rejection_are_enforced() {
     let decoded = serde_json::from_value::<RequestEnvelopeV1>(serialized)
         .expect("serialized validated request must deserialize");
     assert_eq!(decoded, envelope);
+
+    for field in ["product", "contract_manifest_digest"] {
+        let mut missing_identity = valid_query_envelope_json();
+        missing_identity["client"]
+            .as_object_mut()
+            .expect("client fixture must be an object")
+            .remove(field);
+        assert!(
+            serde_json::from_value::<RequestEnvelopeV1>(missing_identity).is_err(),
+            "client.{field} is required"
+        );
+    }
+    let mut malformed_digest = valid_query_envelope_json();
+    malformed_digest["client"]["contract_manifest_digest"] = json!("sha256:ABC");
+    assert!(serde_json::from_value::<RequestEnvelopeV1>(malformed_digest).is_err());
 
     let mut unexpected_idempotency_key = valid_query_envelope_json();
     unexpected_idempotency_key
@@ -248,6 +270,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("DAEMON_UNAVAILABLE", 3, true),
     ("DAEMON_SHUTTING_DOWN", 3, true),
     ("DAEMON_VERSION_INCOMPATIBLE", 3, false),
+    ("DAEMON_CONTRACT_MISMATCH", 3, false),
     ("PROTOCOL_VERSION_UNSUPPORTED", 3, false),
     ("REQUEST_TOO_LARGE", 2, false),
     ("REQUEST_INVALID", 2, false),

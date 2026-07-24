@@ -746,6 +746,7 @@ struct LocalFailure {
     exit_code: i32,
     command: String,
     request_id: Option<String>,
+    details: Map<String, Value>,
 }
 
 impl LocalFailure {
@@ -754,7 +755,9 @@ impl LocalFailure {
             "REQUEST_INVALID" | "REQUEST_TOO_LARGE" | "CONFIRMATION_REQUIRED" => {
                 (LOCAL_USAGE_EXIT, false)
             }
-            "DAEMON_NOT_INSTALLED" | "DAEMON_VERSION_INCOMPATIBLE" => (LOCAL_DAEMON_EXIT, false),
+            "DAEMON_NOT_INSTALLED" | "DAEMON_VERSION_INCOMPATIBLE" | "DAEMON_CONTRACT_MISMATCH" => {
+                (LOCAL_DAEMON_EXIT, false)
+            }
             "DAEMON_UNAVAILABLE" => (LOCAL_DAEMON_EXIT, true),
             "PRESET_NOT_FOUND"
             | "PROCEDURE_NOT_FOUND"
@@ -771,6 +774,7 @@ impl LocalFailure {
             exit_code,
             command: command.into(),
             request_id: None,
+            details: Map::new(),
         }
     }
 
@@ -818,6 +822,11 @@ impl LocalFailure {
     fn with_correlation(mut self, command: &str, request_id: &str) -> Self {
         self.command = command.to_owned();
         self.request_id = Some(request_id.to_owned());
+        self
+    }
+
+    fn with_details(mut self, details: Map<String, Value>) -> Self {
+        self.details = details;
         self
     }
 }
@@ -1305,8 +1314,12 @@ fn execute_service_lifecycle_with_manager(
     let result = match command {
         DaemonCommand::Install { daemon_path } => {
             let binary = resolve_daemon_executable(daemon_path.as_deref(), command_name)?;
+            let identity = build_identity_v1();
             let spec = InstallSpecV1::new(binary, ServiceLabelV1::podwayd(), paths.clone())
-                .with_expected_daemon_version(env!("CARGO_PKG_VERSION"));
+                .with_expected_contract_identity(
+                    identity.product(),
+                    identity.contract_manifest_digest(),
+                );
             let outcome = manager
                 .install(spec)
                 .map_err(|error| map_service_error(error, command_name))?;
@@ -1728,6 +1741,32 @@ fn stream_log_follow_update(
 
 fn map_service_error(error: ServiceErrorV1, command: &str) -> LocalFailure {
     match error {
+        ServiceErrorV1::ContractMismatchV1 {
+            expected_product,
+            actual_product,
+            expected_manifest_digest,
+            actual_manifest_digest,
+        } => LocalFailure::catalog(
+            "DAEMON_CONTRACT_MISMATCH",
+            "CLI and daemon contract identities differ.",
+            command,
+        )
+        .with_details(
+            json!({
+                "expected": {
+                    "product": expected_product,
+                    "contract_manifest_digest": expected_manifest_digest,
+                },
+                "actual": {
+                    "product": actual_product,
+                    "contract_manifest_digest": actual_manifest_digest,
+                },
+                "admission": { "admitted": false },
+            })
+            .as_object()
+            .expect("contract mismatch details are an object")
+            .clone(),
+        ),
         ServiceErrorV1::InvalidExecutableV1 { message } => {
             LocalFailure::catalog("DAEMON_VERSION_INCOMPATIBLE", message, command)
         }
@@ -2768,7 +2807,7 @@ fn render_local_failure_with_clock_and_writers(
         let request_id = failure
             .request_id
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let output = json!({ "schema": "podway.error/v1", "request_id": request_id, "command": failure.command, "generated_at": generated_at.as_str(), "code": failure.code, "message": failure.message, "retryable": failure.retryable, "exit_code": failure.exit_code, "details": {} });
+        let output = json!({ "schema": "podway.error/v1", "request_id": request_id, "command": failure.command, "generated_at": generated_at.as_str(), "code": failure.code, "message": failure.message, "retryable": failure.retryable, "exit_code": failure.exit_code, "details": failure.details });
         if serde_json::to_writer(&mut *stdout, &output).is_err() || writeln!(stdout).is_err() {
             return LOCAL_CLIENT_EXIT;
         }
@@ -3716,6 +3755,21 @@ mod tests {
             "daemon.start",
         );
         assert_eq!(unavailable.code, "DAEMON_UNAVAILABLE");
+        let mismatch = map_service_error(
+            ServiceErrorV1::ContractMismatchV1 {
+                expected_product: "podway".to_owned(),
+                actual_product: Some("other".to_owned()),
+                expected_manifest_digest: "sha256:expected".to_owned(),
+                actual_manifest_digest: Some("sha256:actual".to_owned()),
+            },
+            "daemon.install",
+        );
+        assert_eq!(mismatch.code, "DAEMON_CONTRACT_MISMATCH");
+        assert_eq!(mismatch.exit_code, 3);
+        assert!(!mismatch.retryable);
+        assert_eq!(mismatch.details["expected"]["product"], "podway");
+        assert_eq!(mismatch.details["actual"]["product"], "other");
+        assert_eq!(mismatch.details["admission"]["admitted"], false);
 
         let stopped = service_status_result(
             "daemon.status",

@@ -27,7 +27,9 @@
       "required": [
         "name",
         "version",
-        "pid"
+        "pid",
+        "product",
+        "contract_manifest_digest"
       ],
       "properties": {
         "name": {
@@ -43,6 +45,15 @@
         "pid": {
           "type": "integer",
           "minimum": 1
+        },
+        "product": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "contract_manifest_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         }
       }
     },

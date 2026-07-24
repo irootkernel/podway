@@ -36,8 +36,8 @@ use podway_protocol::{
     FrameIoPhaseV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1, OutputEnvelopeInputV1,
     OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1,
     RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1, decode_response_payload_v1, encode_frame_v1, encode_request_payload_v1,
-    read_single_frame_v1,
+    WorktreeSelectorWireV1, build_identity_v1, decode_response_payload_v1, encode_frame_v1,
+    encode_request_payload_v1, read_single_frame_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -221,6 +221,12 @@ fn fallback_request_id() -> RequestIdV1 {
 }
 
 fn request() -> RequestEnvelopeV1 {
+    request_with_client(
+        ClientInfoV1::new("podway-test", "1.0.0", 42).expect("fixture client is valid"),
+    )
+}
+
+fn request_with_client(client: ClientInfoV1) -> RequestEnvelopeV1 {
     let selector =
         WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None)
             .expect("fixture selector is valid");
@@ -228,7 +234,7 @@ fn request() -> RequestEnvelopeV1 {
         .expect("fixture payload is an object");
     RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(REQUEST_ID).expect("fixture request ID is valid"),
-        client: ClientInfoV1::new("podway-test", "1.0.0", 42).expect("fixture client is valid"),
+        client,
         operation: OperationV1::Query,
         command: CommandNameV1::new("session.status").expect("fixture command is valid"),
         workspace: Some(
@@ -333,6 +339,48 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
     }
     assert!(handler_result.is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn contract_mismatch_is_rejected_before_dispatch_or_admission() {
+    let identity = build_identity_v1();
+    for (product, digest) in [
+        ("another-product", identity.contract_manifest_digest()),
+        (
+            identity.product(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ),
+    ] {
+        let (mut client, server) =
+            UnixStream::pair().expect("Unix stream fixture pair must be created");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let transport = transport(
+            TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+            EXPECTED_UID,
+            ServerTransportTimeoutsV1::default(),
+        );
+        let request = request_with_client(
+            ClientInfoV1::new_with_contract_identity("podway-test", "1.0.0", 42, product, digest)
+                .expect("mismatched fixture identity remains structurally valid"),
+        );
+        let handler = {
+            let transport = Arc::clone(&transport);
+            thread::spawn(move || transport.handle_connection(server))
+        };
+
+        send_and_half_close(&mut client, &request_frame(&request));
+        let error = assert_error_code(read_response(&mut client), "DAEMON_CONTRACT_MISMATCH");
+        assert_eq!(error.exit_code().get(), 3);
+        assert!(!error.retryable());
+        assert_eq!(error.details()["actual"]["product"], product);
+        assert_eq!(
+            error.details()["actual"]["contract_manifest_digest"],
+            digest
+        );
+        assert_eq!(error.details()["admission"]["admitted"], false);
+        assert!(handler.join().expect("handler must not panic").is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[test]

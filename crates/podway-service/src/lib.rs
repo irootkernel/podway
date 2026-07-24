@@ -363,7 +363,7 @@ pub struct InstallSpecV1 {
     daemon_executable_path: LocalPlatformPathV1,
     label: ServiceLabelV1,
     runtime_paths: ServiceRuntimePathsV1,
-    expected_daemon_version: Option<String>,
+    expected_contract_identity: Option<(String, String)>,
 }
 
 impl InstallSpecV1 {
@@ -376,12 +376,16 @@ impl InstallSpecV1 {
             daemon_executable_path,
             label,
             runtime_paths,
-            expected_daemon_version: None,
+            expected_contract_identity: None,
         }
     }
 
-    pub fn with_expected_daemon_version(mut self, version: impl Into<String>) -> Self {
-        self.expected_daemon_version = Some(version.into());
+    pub fn with_expected_contract_identity(
+        mut self,
+        product: impl Into<String>,
+        contract_manifest_digest: impl Into<String>,
+    ) -> Self {
+        self.expected_contract_identity = Some((product.into(), contract_manifest_digest.into()));
         self
     }
 
@@ -1382,6 +1386,12 @@ pub enum ServiceErrorV1 {
     InvalidExecutableV1 {
         message: String,
     },
+    ContractMismatchV1 {
+        expected_product: String,
+        actual_product: Option<String>,
+        expected_manifest_digest: String,
+        actual_manifest_digest: Option<String>,
+    },
     IoV1 {
         operation: Option<ServiceOperationV1>,
         message: String,
@@ -1429,6 +1439,15 @@ impl fmt::Display for ServiceErrorV1 {
             Self::InvalidExecutableV1 { message } => {
                 write!(formatter, "service executable failure: {message}")
             }
+            Self::ContractMismatchV1 {
+                expected_product,
+                actual_product,
+                expected_manifest_digest,
+                actual_manifest_digest,
+            } => write!(
+                formatter,
+                "daemon contract mismatch: expected product {expected_product:?} and manifest {expected_manifest_digest:?}, received product {actual_product:?} and manifest {actual_manifest_digest:?}"
+            ),
             Self::IoV1 { operation, message } => match operation {
                 Some(operation) => write!(formatter, "{operation} I/O failure: {message}"),
                 None => write!(formatter, "service I/O failure: {message}"),
@@ -3276,30 +3295,33 @@ where
         Ok(())
     }
 
-    fn verify_daemon_version(
+    fn verify_daemon_contract(
         &self,
         op: ServiceOperationV1,
         binary: &Path,
-        expected_version: &str,
+        expected_product: &str,
+        expected_manifest_digest: &str,
     ) -> Result<(), ServiceErrorV1> {
         let output = Command::new(binary)
-            .arg("--version")
+            .args(["--json", "version"])
             .output()
             .map_err(|error| ServiceErrorV1::IoV1 {
                 operation: Some(op),
                 message: error.to_string(),
             })?;
-        let observed = std::str::from_utf8(&output.stdout)
-            .ok()
-            .and_then(|stdout| stdout.strip_suffix('\n'))
-            .and_then(|stdout| stdout.strip_prefix("podwayd "))
-            .filter(|version| !version.contains('\n') && !version.contains('\r'));
-        if !output.status.success()
-            || !output.stderr.is_empty()
-            || observed != Some(expected_version)
+        let (actual_product, actual_manifest_digest) = daemon_contract_probe_identity_v1(
+            output.status.success(),
+            &output.stdout,
+            &output.stderr,
+        );
+        if actual_product.as_deref() != Some(expected_product)
+            || actual_manifest_digest.as_deref() != Some(expected_manifest_digest)
         {
-            return Err(ServiceErrorV1::InvalidExecutableV1 {
-                message: "daemon version is incompatible with this CLI".to_owned(),
+            return Err(ServiceErrorV1::ContractMismatchV1 {
+                expected_product: expected_product.to_owned(),
+                actual_product,
+                expected_manifest_digest: expected_manifest_digest.to_owned(),
+                actual_manifest_digest,
             });
         }
         Ok(())
@@ -3328,6 +3350,11 @@ where
             .map_err(|error| self.fs_error(op, binary, error))?;
         validate_native_arm64_macos_macho_v1(&daemon_bytes)?;
         let daemon_identity = sha256_hex_v1(&daemon_bytes);
+        if let Some((expected_product, expected_manifest_digest)) =
+            spec.expected_contract_identity.as_ref()
+        {
+            self.verify_daemon_contract(op, binary, expected_product, expected_manifest_digest)?;
+        }
         let plist_path = paths.launch_agent_path().as_path();
         let exists = self
             .filesystem
@@ -3341,9 +3368,6 @@ where
             return Ok(ServiceCommandResultV1::Outcome(
                 ServiceOutcomeV1::NotInstalledV1(ServiceNotInstalledV1::new(self.clock.now())),
             ));
-        }
-        if let Some(expected_version) = spec.expected_daemon_version.as_deref() {
-            self.verify_daemon_version(op, binary, expected_version)?;
         }
         let now = self.clock.now();
         let same_binary = existing.as_ref().is_some_and(|metadata| {
@@ -3498,6 +3522,31 @@ where
             ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(self.clock.now(), None)),
         ))
     }
+}
+
+fn daemon_contract_probe_identity_v1(
+    successful: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> (Option<String>, Option<String>) {
+    let identity = if successful && stderr.is_empty() {
+        serde_json::from_slice::<serde_json::Value>(stdout)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+    } else {
+        None
+    };
+    let product = identity
+        .as_ref()
+        .and_then(|identity| identity.get("product"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let manifest_digest = identity
+        .as_ref()
+        .and_then(|identity| identity.get("contract_manifest_digest"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    (product, manifest_digest)
 }
 
 impl<F, L, C> ServiceCommandRunnerV1 for MacosServiceCommandRunnerV1<F, L, C>
@@ -4089,6 +4138,77 @@ mod tests {
             validate_native_arm64_macos_macho_v1(script),
             Err(ServiceErrorV1::InvalidExecutableV1 { .. })
         ));
+    }
+
+    #[test]
+    fn daemon_contract_probe_requires_matching_machine_identity() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let matching = serde_json::to_vec(&serde_json::json!({
+            "product": "podway",
+            "contract_manifest_digest": digest,
+        }))
+        .expect("identity fixture must serialize");
+        assert_eq!(
+            daemon_contract_probe_identity_v1(true, &matching, b""),
+            (Some("podway".to_owned()), Some(digest.clone()))
+        );
+        for (successful, stdout, stderr) in [
+            (false, matching.as_slice(), b"".as_slice()),
+            (true, matching.as_slice(), b"unexpected".as_slice()),
+            (true, b"not-json".as_slice(), b"".as_slice()),
+            (true, br#"{"product":"podway"}"#.as_slice(), b"".as_slice()),
+        ] {
+            let observed = daemon_contract_probe_identity_v1(successful, stdout, stderr);
+            assert_ne!(observed, (Some("podway".to_owned()), Some(digest.clone())));
+        }
+    }
+
+    #[test]
+    fn installer_contract_probe_executes_machine_version_mode_and_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "podway-service-contract-probe-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir(&directory).expect("probe fixture directory must be created");
+        let binary = directory.join("podwayd");
+        let digest = format!("sha256:{}", "a".repeat(64));
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\n[ \"$1 $2\" = \"--json version\" ] || exit 9\nprintf '%s\\n' '{{\"product\":\"podway\",\"contract_manifest_digest\":\"{digest}\"}}'\n"
+            ),
+        )
+        .expect("probe fixture must be written");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700))
+            .expect("probe fixture must be executable");
+        let runner = MacosServiceCommandRunnerV1::new(
+            StdServiceFilesystemV1,
+            SystemLaunchctlRunnerV1::new("/usr/bin/true"),
+            FixedServiceClockV1::new(UnixMillis::new(0)),
+            1,
+        )
+        .expect("non-root fixture uid is valid");
+        assert_eq!(
+            runner.verify_daemon_contract(ServiceOperationV1::Install, &binary, "podway", &digest,),
+            Ok(())
+        );
+        assert!(matches!(
+            runner.verify_daemon_contract(
+                ServiceOperationV1::Install,
+                &binary,
+                "podway",
+                &format!("sha256:{}", "b".repeat(64)),
+            ),
+            Err(ServiceErrorV1::ContractMismatchV1 {
+                actual_product: Some(ref product),
+                actual_manifest_digest: Some(ref actual),
+                ..
+            }) if product == "podway" && actual == &digest
+        ));
+        std::fs::remove_dir_all(directory).expect("probe fixture must be removed");
     }
 
     #[test]

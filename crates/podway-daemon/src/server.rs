@@ -22,8 +22,9 @@ use podway_protocol::{
     CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, PayloadCodecErrorV1, ProtocolError,
     RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV1, Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1,
-    SliceRequestV1, decode_request_payload_v1, decode_single_frame_v1, encode_response_payload_v1,
-    read_single_frame_v1, validate_frame_payload_length, write_frame_v1,
+    SliceRequestV1, build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
+    encode_response_payload_v1, read_single_frame_v1, validate_frame_payload_length,
+    write_frame_v1,
 };
 use serde_json::{Map, Value};
 
@@ -572,6 +573,18 @@ where
                 );
             }
         };
+        let identity = build_identity_v1();
+        if request.client().product() != identity.product()
+            || request.client().contract_manifest_digest() != identity.contract_manifest_digest()
+        {
+            emit_observation(
+                &self.observability,
+                EventOperationV1::TransportServiceRequest,
+                EventOutcomeV1::Rejected,
+            );
+            let response = self.contract_mismatch_response(&request)?;
+            return self.write_response(&mut connection, &response);
+        }
         let slice_request = match SliceRequestV1::from_envelope(&request) {
             Ok(slice_request) => slice_request,
             Err(_) => {
@@ -622,6 +635,45 @@ where
     ) -> Result<(), ServerConnectionErrorV1> {
         let response = self.transport_error_response(context, kind)?;
         self.write_response(connection, &response)
+    }
+
+    fn contract_mismatch_response(
+        &self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+        let expected = build_identity_v1();
+        let details = serde_json::json!({
+            "expected": {
+                "product": expected.product(),
+                "contract_manifest_digest": expected.contract_manifest_digest(),
+            },
+            "actual": {
+                "product": request.client().product(),
+                "contract_manifest_digest": request.client().contract_manifest_digest(),
+            },
+            "admission": { "admitted": false },
+        })
+        .as_object()
+        .expect("contract mismatch details are an object")
+        .clone();
+        Ok(ResponseEnvelopeV1::Error(
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self
+                    .metadata
+                    .try_generated_at()
+                    .map_err(ServerConnectionErrorV1::ResponseMetadata)?,
+                code: ErrorCodeV1::new("DAEMON_CONTRACT_MISMATCH")
+                    .expect("the mismatch code is catalog-defined"),
+                message: "CLI and daemon contract identities differ.".to_owned(),
+                retryable: false,
+                exit_code: ExitCodeV1::new(3).expect("daemon exit code is valid"),
+                workspace: None,
+                details,
+            })
+            .expect("the daemon constructs a protocol-valid mismatch response"),
+        ))
     }
 
     fn transport_error_response(

@@ -20,7 +20,8 @@ use podway_cli::client::{
 };
 use podway_protocol::{
     FrameErrorV1, OperationV1, ResponseEnvelopeV1, SliceCommandV1, SliceRequestV1,
-    decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1, encode_request_payload_v1,
+    build_identity_v1, decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1,
+    encode_request_payload_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 
@@ -180,9 +181,12 @@ fn client_with_read_timeout(fixture: &RuntimeFixture, read: Duration) -> DaemonC
 }
 
 fn request() -> podway_protocol::RequestEnvelopeV1 {
+    let identity = build_identity_v1();
     decode_request_payload_v1(
         format!(
-            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1}},"operation":"query","command":"session.status","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"options":{{"detach":false,"wait_timeout_ms":30000}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}}}}}}"#
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1,"product":"{}","contract_manifest_digest":"{}"}},"operation":"query","command":"session.status","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"options":{{"detach":false,"wait_timeout_ms":30000}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}}}}}}"#,
+            identity.product(),
+            identity.contract_manifest_digest(),
         )
         .as_bytes(),
     )
@@ -196,9 +200,12 @@ fn output_payload(command: &str) -> Vec<u8> {
     .into_bytes()
 }
 fn mutation_request() -> podway_protocol::RequestEnvelopeV1 {
+    let identity = build_identity_v1();
     decode_request_payload_v1(
         format!(
-            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1}},"operation":"mutate","command":"session.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"start-fixture","options":{{"detach":true,"wait_timeout_ms":1234}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"preset":"sw-dev","task_title":"A bounded fixture task"}}}}"#
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1,"product":"{}","contract_manifest_digest":"{}"}},"operation":"mutate","command":"session.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"start-fixture","options":{{"detach":true,"wait_timeout_ms":1234}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"preset":"sw-dev","task_title":"A bounded fixture task"}}}}"#,
+            identity.product(),
+            identity.contract_manifest_digest(),
         )
         .as_bytes(),
     )

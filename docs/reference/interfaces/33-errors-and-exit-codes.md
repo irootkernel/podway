@@ -30,6 +30,7 @@ tasks update the catalog, closed detail schemas, generated mirrors, and tests.
 | `DAEMON_UNAVAILABLE` | 3 | yes | Socket cannot be reached |
 | `DAEMON_SHUTTING_DOWN` | 3 | yes | Daemon is draining and not accepting work |
 | `DAEMON_VERSION_INCOMPATIBLE` | 3 | no | CLI and daemon cannot share a supported contract |
+| `DAEMON_CONTRACT_MISMATCH` | 3 | no | CLI and daemon product or manifest identity differs |
 | `PROTOCOL_VERSION_UNSUPPORTED` | 3 | no | Requested IPC protocol is unsupported |
 | `REQUEST_TOO_LARGE` | 2 | no | IPC frame exceeds limits |
 | `REQUEST_INVALID` | 2 | no | Request is malformed or violates schema |

@@ -1647,7 +1647,7 @@
     "crates/podway-git/tests/int_phase3_resolver.rs": "6a45015a7dca7f309615e2dcdc966f129dbc88c543930a8128669aae37cc9739",
     "crates/podway-git/tests/int_phase4_init_layout.rs": "f748291d2c4a329cf3717b4a3ffeeb806712309b3826d746a3b49a6849d90cd1",
     "crates/podway-presets/tests/int_phase1_presets.rs": "acee4a25807fd15c49b0ff5dadd298f6863fb18af55802515ab8e0e19df74fa2",
-    "crates/podway-protocol/tests/arch_phase0_contract.rs": "ccbafaee0b7cad1f0e5f22bc21c8db4d0b145285cf53b5388593297d85bb295b",
+    "crates/podway-protocol/tests/arch_phase0_contract.rs": "d2b8a0f564b98e40b73840a282b565b895ac257633af7d73763bc217b8dc3ddb",
     "crates/podway-protocol/tests/int_phase4_framing.rs": "c934041aa2b5bb48458d66979f6eab5af6fc7365a1775999c26f88216ce5f02f",
     "crates/podway-service/tests/int_phase6_native_service.rs": "5707109edddf67cd54de020412ed820ee303cd1118291d7b274fb63b34a4ec02",
     "crates/podway-store/tests/int_phase2_crash_matrix.rs": "52535165bfc92205997465d89b4a3e25d020e0a2d7715f4bc5b2a294494d667d",

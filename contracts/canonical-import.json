@@ -31,7 +31,7 @@
     {
       "source": "docs/schemas/ipc-request-v1.schema.json",
       "destination": "schemas/ipc-request-v1.schema.json",
-      "source_sha256": "e9691a43b3615a15fede925df2a1b25525b10db6b4d7f1c693c69083364f21b5",
+      "source_sha256": "56901c7428251194d97b2829531e110e6a08104a5b66a55f8381fa38d6f369af",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -111,7 +111,7 @@
     {
       "source": "docs/spec/error-codes.json",
       "destination": "spec/error-codes.json",
-      "source_sha256": "3102851915bcb0148364e2b34944649407ffb9d5eaeb62265d25aedfbbbe074c",
+      "source_sha256": "60fd5b75fc0ef433ab9acc44d5638cbad4536ca261e492827cf914b0fb784d8a",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

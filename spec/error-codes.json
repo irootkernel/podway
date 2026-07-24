@@ -35,6 +35,12 @@
       "summary": "CLI and daemon are not contract-compatible."
     },
     {
+      "code": "DAEMON_CONTRACT_MISMATCH",
+      "exit_code": 3,
+      "retryable": false,
+      "summary": "CLI and daemon product or contract manifest identity differs."
+    },
+    {
       "code": "PROTOCOL_VERSION_UNSUPPORTED",
       "exit_code": 3,
       "retryable": false,

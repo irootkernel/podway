@@ -299,6 +299,12 @@ fn arc_008_service_v1_exposes_exactly_the_manifest_error_surface() {
         ServiceErrorV1::InvalidExecutableV1 {
             message: "invalid executable".to_owned(),
         },
+        ServiceErrorV1::ContractMismatchV1 {
+            expected_product: "podway".to_owned(),
+            actual_product: Some("other".to_owned()),
+            expected_manifest_digest: "sha256:expected".to_owned(),
+            actual_manifest_digest: Some("sha256:actual".to_owned()),
+        },
         ServiceErrorV1::IoV1 {
             operation: Some(ServiceOperationV1::Status),
             message: "I/O failure".to_owned(),
@@ -344,6 +350,17 @@ fn arc_008_service_v1_exposes_exactly_the_manifest_error_surface() {
             }
             ServiceErrorV1::InvalidExecutableV1 { message } => {
                 assert_eq!(message, "invalid executable");
+            }
+            ServiceErrorV1::ContractMismatchV1 {
+                expected_product,
+                actual_product,
+                expected_manifest_digest,
+                actual_manifest_digest,
+            } => {
+                assert_eq!(expected_product, "podway");
+                assert_eq!(actual_product.as_deref(), Some("other"));
+                assert_eq!(expected_manifest_digest, "sha256:expected");
+                assert_eq!(actual_manifest_digest.as_deref(), Some("sha256:actual"));
             }
             ServiceErrorV1::IoV1 { operation, message } => {
                 assert_eq!(operation, Some(ServiceOperationV1::Status));

@@ -59,6 +59,9 @@ pub enum ProtocolError {
         maximum: usize,
         actual: usize,
     },
+    InvalidSha256Digest {
+        field: &'static str,
+    },
     InvalidTimestamp,
     TerminalJobMissingFinishedAt,
     NonterminalJobHasFinishedAt,
@@ -112,6 +115,9 @@ impl fmt::Display for ProtocolError {
                 formatter,
                 "{field} exceeds its maximum of {maximum} (received {actual})"
             ),
+            Self::InvalidSha256Digest { field } => {
+                write!(formatter, "{field} must be a canonical sha256 digest")
+            }
             Self::InvalidTimestamp => write!(
                 formatter,
                 "timestamp must be RFC 3339 UTC with milliseconds"
@@ -315,6 +321,8 @@ pub struct ClientInfoV1 {
     name: String,
     version: String,
     pid: u32,
+    product: String,
+    contract_manifest_digest: String,
 }
 
 impl ClientInfoV1 {
@@ -323,10 +331,29 @@ impl ClientInfoV1 {
         version: impl Into<String>,
         pid: u32,
     ) -> Result<Self, ProtocolError> {
+        let identity = build_identity_v1();
+        Self::new_with_contract_identity(
+            name,
+            version,
+            pid,
+            identity.product(),
+            identity.contract_manifest_digest(),
+        )
+    }
+
+    pub fn new_with_contract_identity(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        pid: u32,
+        product: impl Into<String>,
+        contract_manifest_digest: impl Into<String>,
+    ) -> Result<Self, ProtocolError> {
         let client = Self {
             name: name.into(),
             version: version.into(),
             pid,
+            product: product.into(),
+            contract_manifest_digest: contract_manifest_digest.into(),
         };
         client.validate()?;
         Ok(client)
@@ -344,6 +371,14 @@ impl ClientInfoV1 {
         self.pid
     }
 
+    pub fn product(&self) -> &str {
+        &self.product
+    }
+
+    pub fn contract_manifest_digest(&self) -> &str {
+        &self.contract_manifest_digest
+    }
+
     fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty_scalar_bounded(&self.name, MAX_CLIENT_TEXT_SCALARS_V1, "client.name")?;
         validate_non_empty_scalar_bounded(
@@ -356,6 +391,15 @@ impl ClientInfoV1 {
                 field: "client.pid",
             });
         }
+        validate_non_empty_scalar_bounded(
+            &self.product,
+            MAX_CLIENT_TEXT_SCALARS_V1,
+            "client.product",
+        )?;
+        validate_sha256_digest_v1(
+            &self.contract_manifest_digest,
+            "client.contract_manifest_digest",
+        )?;
         Ok(())
     }
 }
@@ -1372,6 +1416,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "DAEMON_CONTRACT_MISMATCH",
+        exit_code: 3,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "PROTOCOL_VERSION_UNSUPPORTED",
         exit_code: 3,
         retryable: false,
@@ -1966,6 +2015,20 @@ fn validate_non_empty_scalar_bounded(
             maximum,
             actual: length,
         });
+    }
+    Ok(())
+}
+
+fn validate_sha256_digest_v1(value: &str, field: &'static str) -> Result<(), ProtocolError> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err(ProtocolError::InvalidSha256Digest { field });
+    };
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ProtocolError::InvalidSha256Digest { field });
     }
     Ok(())
 }
