@@ -200,7 +200,8 @@ remains the machine-readable binding for `PAC-*` criteria; it does not accept
 `AUT-T-CONTRACT` is implemented by the binary identity, daemon ingress, CLI
 error-propagation, native service, and daemon-process E2E suites. Together they
 cover matching peers, stale manifests across version combinations, pre-publication
-installer rejection, replaced executable bytes, receipt refresh, and restart identity.
+installer rejection with bounded probing, replaced executable bytes, receipt refresh,
+identity-aware readiness through a stale-daemon window, and restart identity.
 Daemon ingress separately proves that a diagnostic version change with matching
 product and manifest is accepted, while a different release version with the same
 IPC ID and a different manifest is rejected before dispatch.
@@ -213,13 +214,16 @@ The final identity review binds each requirement to an executable proof:
   tamper controls;
 - `AUT-CONTRACT-002` and `AUT-CONTRACT-003` compare both binary identities and
   require the embedded source commit to equal the explicit build revision or Git
-  `HEAD`, including rebuilds after a symbolic branch ref advances;
+  `HEAD`, including rebuilds after a symbolic branch ref advances from packed to
+  loose ref storage;
 - `AUT-CONTRACT-004` proves daemon ingress and installation reject mismatches
   before dispatch, durable admission, service publication, or launchctl;
 - `AUT-CONTRACT-005` probes a real daemon twice, then restarts it and requires a
   new process UUID with stable executable, endpoint, and manifest identity; and
 - `AUT-T-CONTRACT` runs mismatch rejection followed by a verified matching
-  install, live daemon status, and a restart with a new process UUID in one flow.
+  install, rejects stale readiness on the service socket, accepts only the
+  replacement daemon with a new process UUID, verifies live status, and proves a
+  later restart creates another process UUID.
 
 ## CLI and JSON tests
 

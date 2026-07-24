@@ -70,12 +70,13 @@ podway daemon logs --follow
 
 1. resolves the canonical absolute `podwayd` path by explicit option, CLI sibling,
    then controlled `PATH`;
-2. verifies that the binary is executable and has the exact CLI product and
-   contract-manifest identity;
+2. runs a time- and output-bounded version probe and verifies that the binary is
+   executable and has the exact CLI product and contract-manifest identity;
 3. creates PODWAY_HOME directories with user-private permissions;
 4. writes the plist atomically;
 5. bootstraps the LaunchAgent in the current GUI user domain;
-6. waits for the socket health check;
+6. waits for `daemon.status` to report the installed executable path and the
+   complete expected build, protocol, and contract identity;
 7. records install metadata.
 
 The target installer does not stage or copy the daemon. It is idempotent when the
@@ -177,7 +178,10 @@ The LaunchAgent sends both standard output and standard error to the same `podwa
 ## Upgrade behavior
 
 A CLI and daemon product or contract-manifest mismatch fails before command
-execution or admission. Package upgrade should:
+execution or admission. During service refresh, a stale daemon that still owns
+the socket is not considered ready; installation waits until the replacement
+process reports the installed executable and current identity. Package upgrade
+should:
 
 1. install both binaries together;
 2. run `podway daemon install` or equivalent service refresh;

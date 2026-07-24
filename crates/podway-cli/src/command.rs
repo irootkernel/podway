@@ -56,7 +56,7 @@ const LOCAL_DAEMON_EXIT: i32 = 3;
 const LOCAL_CLIENT_EXIT: i32 = 6;
 const MAX_SERVICE_LOG_READ_BYTES: u64 = 10 * 1024 * 1024;
 const SERVICE_HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
-const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_VERSION_PROBE_OUTPUT_LIMIT: usize = 4 * 1024;
 const DAEMON_VERSION_PROBE_POST_KILL_DRAIN: Duration = Duration::from_millis(100);
 
@@ -4198,10 +4198,19 @@ mod tests {
 #[cfg(test)]
 mod phase6_health_tests {
     use std::{
-        fs, os::unix::fs::PermissionsExt, os::unix::net::UnixListener, path::Path, time::Duration,
+        fs,
+        io::{Read, Write},
+        net::Shutdown,
+        os::unix::fs::PermissionsExt,
+        os::unix::net::UnixListener,
+        path::Path,
+        time::Duration,
     };
 
     use podway_core::UnixMillis;
+    use podway_protocol::{
+        build_identity_v1, decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1,
+    };
     use podway_service::{ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1};
 
     use super::{service_status_result, wait_for_verified_service};
@@ -4261,5 +4270,104 @@ mod phase6_health_tests {
 
         responder.join().expect("health fixture responder");
         fs::remove_dir_all(runtime).expect("remove health fixture");
+    }
+
+    #[test]
+    fn readiness_waits_through_stale_identity_for_a_new_daemon_process() {
+        let runtime = std::env::temp_dir().join(format!(
+            "podway-cli-upgrade-readiness-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&runtime);
+        fs::create_dir_all(&runtime).expect("upgrade fixture directory must be created");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("upgrade fixture directory must be private");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            runtime.join("LaunchAgents"),
+            runtime.join("ApplicationSupport"),
+            runtime.join("Logs"),
+            &runtime,
+        )
+        .expect("upgrade fixture paths");
+        let listener =
+            UnixListener::bind(paths.socket_path().as_path()).expect("upgrade fixture socket");
+        fs::set_permissions(
+            paths.socket_path().as_path(),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("upgrade fixture socket must be private");
+
+        let expected_binary = runtime.join("installed/podwayd");
+        let responder_paths = paths.clone();
+        let responder_binary = expected_binary.clone();
+        let stale_process_id = "123e4567-e89b-42d3-a456-426614174001";
+        let current_process_id = "123e4567-e89b-42d3-a456-426614174002";
+        let responder = std::thread::spawn(move || {
+            let identity = build_identity_v1();
+            for (product, process_id) in [
+                ("stale-podway", stale_process_id),
+                (identity.product(), current_process_id),
+            ] {
+                let (mut connection, _) = listener.accept().expect("readiness connection");
+                let mut wire = Vec::new();
+                connection
+                    .read_to_end(&mut wire)
+                    .expect("readiness request must be readable");
+                let request = decode_request_payload_v1(
+                    decode_single_frame_v1(&wire).expect("readiness request frame"),
+                )
+                .expect("readiness request payload");
+                let response = serde_json::json!({
+                    "schema": "podway.output/v1",
+                    "request_id": request.request_id().as_str(),
+                    "command": request.command().as_str(),
+                    "generated_at": "2026-07-25T00:00:00.000Z",
+                    "result": {
+                        "schema": "podway.daemon-status-result/v1",
+                        "product": product,
+                        "daemon_version": identity.version(),
+                        "target": identity.target(),
+                        "build_identity": identity.build_identity(),
+                        "source_commit": identity.source_commit(),
+                        "contract_manifest_schema": identity.contract_manifest_schema(),
+                        "contract_manifest_digest": identity.contract_manifest_digest(),
+                        "protocol_versions": identity.supported_ipc_ids(),
+                        "pid": 4242,
+                        "process_id": process_id,
+                        "executable_path": responder_binary,
+                        "started_at": "2026-07-25T00:00:00.000Z",
+                        "uptime_ms": 1,
+                        "configured_socket_path": responder_paths.socket_path().as_path(),
+                        "effective_socket_path": responder_paths.socket_path().as_path(),
+                    },
+                    "warnings": [],
+                });
+                let frame = encode_frame_v1(
+                    &serde_json::to_vec(&response).expect("readiness response must serialize"),
+                )
+                .expect("readiness response frame");
+                connection
+                    .write_all(&frame)
+                    .expect("readiness response must be written");
+                connection
+                    .shutdown(Shutdown::Write)
+                    .expect("readiness response must finish");
+            }
+            (stale_process_id, current_process_id)
+        });
+
+        wait_for_verified_service(
+            &paths,
+            expected_binary.as_path(),
+            "daemon.install",
+            Duration::from_secs(2),
+        )
+        .expect("readiness must recover after the stale daemon is replaced");
+        let (observed_stale, observed_current) = responder.join().expect("readiness responder");
+        assert_ne!(
+            observed_stale, observed_current,
+            "the accepted daemon must have a new process UUID"
+        );
+        fs::remove_dir_all(runtime).expect("upgrade fixture must be removed");
     }
 }

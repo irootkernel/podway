@@ -2340,7 +2340,7 @@ impl LaunchctlOutputV1 {
 const LAUNCHCTL_TIMEOUT_V1: Duration = Duration::from_secs(10);
 const LAUNCHCTL_OUTPUT_LIMIT_V1: usize = 1024 * 1024;
 const LAUNCHCTL_POST_KILL_DRAIN_V1: Duration = Duration::from_millis(250);
-const DAEMON_CONTRACT_PROBE_TIMEOUT_V1: Duration = Duration::from_secs(5);
+const DAEMON_CONTRACT_PROBE_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const DAEMON_CONTRACT_PROBE_OUTPUT_LIMIT_V1: usize = 4 * 1024;
 const DAEMON_CONTRACT_PROBE_POST_KILL_DRAIN_V1: Duration = Duration::from_millis(100);
 
