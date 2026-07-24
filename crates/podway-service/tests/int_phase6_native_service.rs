@@ -10,13 +10,52 @@ use std::{
 use nix::unistd::geteuid;
 use podway_core::UnixMillis;
 use podway_service::{
-    FixedServiceClockV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
-    MacosServiceCommandRunnerV1, SERVICE_LOG_MAX_BYTES_V1, SERVICE_METADATA_MAX_BYTES_V1,
-    SERVICE_PLIST_MAX_BYTES_V1, ServiceErrorV1, ServiceFilesystemV1, ServiceLabelV1,
-    ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1, ServiceOperationV1,
-    ServiceOutcomeKindV1, ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1,
-    SystemLaunchctlRunnerV1, UninstallOptionsV1,
+    DaemonContractVerifierV1, FixedServiceClockV1, InstallSpecV1, LaunchctlRunnerV1,
+    LocalPlatformPathV1, LogQueryV1,
+    MacosServiceCommandRunnerV1 as ProductionMacosServiceCommandRunnerV1, SERVICE_LOG_MAX_BYTES_V1,
+    SERVICE_METADATA_MAX_BYTES_V1, SERVICE_PLIST_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1,
+    ServiceFilesystemV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1,
+    ServiceManagerV1, ServiceOperationV1, ServiceOutcomeKindV1, ServicePathErrorV1,
+    ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1, SystemLaunchctlRunnerV1,
+    UninstallOptionsV1,
 };
+
+#[derive(Clone, Copy, Debug)]
+struct MatchingDaemonContractVerifierV1;
+
+impl DaemonContractVerifierV1 for MatchingDaemonContractVerifierV1 {
+    fn verify(&self, _: &Path, _: &str, _: &str) -> Result<(), ServiceErrorV1> {
+        Ok(())
+    }
+}
+
+struct MacosServiceCommandRunnerV1;
+
+impl MacosServiceCommandRunnerV1 {
+    #[allow(clippy::new_ret_no_self)]
+    fn new<F, L, C>(
+        filesystem: F,
+        launchctl: L,
+        clock: C,
+        user_id: u32,
+    ) -> Result<
+        ProductionMacosServiceCommandRunnerV1<F, L, C, MatchingDaemonContractVerifierV1>,
+        ServicePathErrorV1,
+    >
+    where
+        F: ServiceFilesystemV1,
+        L: LaunchctlRunnerV1,
+        C: ServiceClockV1,
+    {
+        ProductionMacosServiceCommandRunnerV1::new_with_contract_verifier(
+            filesystem,
+            launchctl,
+            clock,
+            user_id,
+            MatchingDaemonContractVerifierV1,
+        )
+    }
+}
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 fn unique_root() -> PathBuf {
@@ -58,6 +97,8 @@ fn spec(binary: &Path, paths: &ServiceRuntimePathsV1) -> InstallSpecV1 {
         LocalPlatformPathV1::new(binary).expect("absolute binary path"),
         ServiceLabelV1::podwayd(),
         paths.clone(),
+        "podway",
+        format!("sha256:{}", "a".repeat(64)),
     )
 }
 #[test]

@@ -7,7 +7,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, File},
     io::{self, IsTerminal, Read, Seek, SeekFrom, Write},
-    os::unix::{ffi::OsStrExt, fs::MetadataExt, net::UnixStream},
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Component, Path, PathBuf},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -1314,12 +1314,15 @@ fn execute_service_lifecycle_with_manager(
     let result = match command {
         DaemonCommand::Install { daemon_path } => {
             let binary = resolve_daemon_executable(daemon_path.as_deref(), command_name)?;
+            let expected_binary = binary.as_path().to_path_buf();
             let identity = build_identity_v1();
-            let spec = InstallSpecV1::new(binary, ServiceLabelV1::podwayd(), paths.clone())
-                .with_expected_contract_identity(
-                    identity.product(),
-                    identity.contract_manifest_digest(),
-                );
+            let spec = InstallSpecV1::new(
+                binary,
+                ServiceLabelV1::podwayd(),
+                paths.clone(),
+                identity.product(),
+                identity.contract_manifest_digest(),
+            );
             let outcome = manager
                 .install(spec)
                 .map_err(|error| map_service_error(error, command_name))?;
@@ -1327,7 +1330,12 @@ fn execute_service_lifecycle_with_manager(
                 outcome,
                 ServiceOutcomeV1::ChangedV1(_) | ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
             ) {
-                wait_for_service_socket(paths.socket_path().as_path(), command_name)?;
+                wait_for_verified_service(
+                    paths,
+                    expected_binary.as_path(),
+                    command_name,
+                    SERVICE_HEALTH_TIMEOUT,
+                )?;
             }
             service_outcome_result(command_name, outcome)
         }
@@ -1585,15 +1593,50 @@ fn probe_daemon_identity_with_runner(
     })
 }
 
-fn wait_for_service_socket(socket: &Path, command: &str) -> Result<(), LocalFailure> {
-    let deadline = Instant::now() + SERVICE_HEALTH_TIMEOUT;
+fn wait_for_verified_service(
+    paths: &ServiceRuntimePathsV1,
+    expected_binary: &Path,
+    command: &str,
+    timeout: Duration,
+) -> Result<(), LocalFailure> {
+    let deadline = Instant::now() + timeout;
+    let client = DaemonClientV1::new(paths.clone());
+    let mut last_identity_failure = None;
     while Instant::now() < deadline {
-        if UnixStream::connect(socket).is_ok() {
-            return Ok(());
+        let request = build_daemon_status_request()?;
+        match client.daemon_status(&request) {
+            Ok(ResponseEnvelopeV1::Output(output)) => {
+                match validated_live_daemon_status(&output, None, paths, Some(expected_binary)) {
+                    Ok(_) => return Ok(()),
+                    Err(failure) => last_identity_failure = Some(failure),
+                }
+            }
+            Ok(ResponseEnvelopeV1::Error(error))
+                if error.code().as_str() == "DAEMON_CONTRACT_MISMATCH" =>
+            {
+                last_identity_failure = Some(
+                    LocalFailure::catalog("DAEMON_CONTRACT_MISMATCH", error.message(), command)
+                        .with_details(error.details().clone()),
+                );
+            }
+            Ok(ResponseEnvelopeV1::Error(_)) => {
+                last_identity_failure = Some(LocalFailure::response_invalid(
+                    "daemon readiness returned an unexpected error",
+                ));
+            }
+            Err(
+                DaemonClientErrorV1::Connection { .. }
+                | DaemonClientErrorV1::SocketConfiguration { .. }
+                | DaemonClientErrorV1::Timeout { .. }
+                | DaemonClientErrorV1::Framing { .. }
+                | DaemonClientErrorV1::MissingResponse
+                | DaemonClientErrorV1::ResponseDecoding { .. },
+            ) => {}
+            Err(error) => return Err(map_client_error(error).with_command(command)),
         }
         thread::sleep(Duration::from_millis(100));
     }
-    Err(LocalFailure::daemon_unavailable(command))
+    Err(last_identity_failure.unwrap_or_else(|| LocalFailure::daemon_unavailable(command)))
 }
 
 fn service_outcome_result(command: &str, outcome: ServiceOutcomeV1) -> RunResult {
@@ -1686,7 +1729,12 @@ fn service_status_result(
                 ))));
             }
             Ok(ResponseEnvelopeV1::Output(output)) => {
-                let live = validated_live_daemon_status(&output, static_identity.as_ref(), paths)?;
+                let live = validated_live_daemon_status(
+                    &output,
+                    static_identity.as_ref(),
+                    paths,
+                    metadata.as_ref().map(|metadata| metadata.daemon_binary()),
+                )?;
                 for (key, value) in live {
                     result.insert(key, value);
                 }
@@ -1714,6 +1762,7 @@ fn validated_live_daemon_status(
     output: &podway_protocol::OutputEnvelopeV1,
     installed: Option<&DaemonStaticIdentityV1>,
     paths: &ServiceRuntimePathsV1,
+    expected_executable: Option<&Path>,
 ) -> Result<Map<String, Value>, LocalFailure> {
     if output.command().as_str() != "daemon.status" {
         return Err(LocalFailure::response_invalid(
@@ -1808,6 +1857,15 @@ fn validated_live_daemon_status(
                     .all(|(actual, expected)| actual.as_str() == Some(*expected))
         });
     let expected_socket = paths.socket_path().as_path();
+    let installed_identity_matches = installed.is_none_or(|identity| {
+        result["daemon_version"].as_str() == Some(identity.version.as_str())
+            && result["target"].as_str() == Some(identity.target.as_str())
+            && result["build_identity"].as_str() == Some(identity.build_identity.as_str())
+            && result["source_commit"].as_str() == identity.source_commit.as_deref()
+            && result["contract_manifest_schema"].as_str()
+                == Some(identity.contract_manifest_schema.as_str())
+            && result["protocol_versions"] == serde_json::json!(identity.protocol_versions)
+    });
     if Uuid::parse_str(process_id).is_err()
         || !source_commit_valid
         || string("contract_manifest_schema")? != local.contract_manifest_schema()
@@ -1818,6 +1876,8 @@ fn validated_live_daemon_status(
         || result.get("uptime_ms").and_then(Value::as_u64).is_none()
         || !protocols_valid
         || !Path::new(executable_path).is_absolute()
+        || expected_executable.is_some_and(|expected| Path::new(executable_path) != expected)
+        || !installed_identity_matches
         || Rfc3339MillisV1::new(started_at).is_err()
         || Path::new(configured_socket_path) != expected_socket
         || Path::new(effective_socket_path) != expected_socket
@@ -4137,15 +4197,17 @@ mod tests {
 
 #[cfg(test)]
 mod phase6_health_tests {
-    use std::{fs, os::unix::fs::PermissionsExt, os::unix::net::UnixListener};
+    use std::{
+        fs, os::unix::fs::PermissionsExt, os::unix::net::UnixListener, path::Path, time::Duration,
+    };
 
     use podway_core::UnixMillis;
     use podway_service::{ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1};
 
-    use super::{service_status_result, wait_for_service_socket};
+    use super::{service_status_result, wait_for_verified_service};
 
     #[test]
-    fn socket_health_wait_and_status_reachability_use_a_real_local_socket() {
+    fn raw_socket_listener_is_not_verified_daemon_health() {
         let runtime =
             std::env::temp_dir().join(format!("podway-cli-health-{}", std::process::id()));
         let _ = fs::remove_dir_all(&runtime);
@@ -4167,14 +4229,22 @@ mod phase6_health_tests {
         )
         .expect("health fixture socket must be private");
 
-        wait_for_service_socket(paths.socket_path().as_path(), "daemon.install")
-            .expect("bound socket is reachable");
         let responder = std::thread::spawn(move || {
             for _ in 0..2 {
                 let (stream, _) = listener.accept().expect("health probe connection");
                 drop(stream);
             }
         });
+        assert!(
+            wait_for_verified_service(
+                &paths,
+                Path::new("/Applications/Podway/podwayd"),
+                "daemon.install",
+                Duration::from_millis(50),
+            )
+            .is_err(),
+            "a listener that does not complete the identity handshake is not healthy"
+        );
         let result = service_status_result(
             "daemon.status",
             ServiceStatusV1::RunningV1(ServiceRunningV1::new(UnixMillis::new(1), Some(42), None)),

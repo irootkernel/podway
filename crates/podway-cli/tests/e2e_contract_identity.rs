@@ -254,8 +254,6 @@ fn mismatched_install_then_verified_install_restores_daemon_operation() {
         LocalPlatformPathV1::new(&daemon).expect("daemon binary path"),
         podway_service::ServiceLabelV1::podwayd(),
         paths.clone(),
-    )
-    .with_expected_contract_identity(
         "podway",
         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     );
@@ -290,8 +288,9 @@ fn mismatched_install_then_verified_install_restores_daemon_operation() {
         LocalPlatformPathV1::new(&daemon).expect("daemon binary path"),
         podway_service::ServiceLabelV1::podwayd(),
         paths.clone(),
-    )
-    .with_expected_contract_identity(expected.product(), expected.contract_manifest_digest());
+        expected.product(),
+        expected.contract_manifest_digest(),
+    );
     assert_eq!(
         manager
             .install(matching)

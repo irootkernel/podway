@@ -363,7 +363,7 @@ pub struct InstallSpecV1 {
     daemon_executable_path: LocalPlatformPathV1,
     label: ServiceLabelV1,
     runtime_paths: ServiceRuntimePathsV1,
-    expected_contract_identity: Option<(String, String)>,
+    expected_contract_identity: (String, String),
 }
 
 impl InstallSpecV1 {
@@ -371,22 +371,18 @@ impl InstallSpecV1 {
         daemon_executable_path: LocalPlatformPathV1,
         label: ServiceLabelV1,
         runtime_paths: ServiceRuntimePathsV1,
+        expected_product: impl Into<String>,
+        expected_contract_manifest_digest: impl Into<String>,
     ) -> Self {
         Self {
             daemon_executable_path,
             label,
             runtime_paths,
-            expected_contract_identity: None,
+            expected_contract_identity: (
+                expected_product.into(),
+                expected_contract_manifest_digest.into(),
+            ),
         }
-    }
-
-    pub fn with_expected_contract_identity(
-        mut self,
-        product: impl Into<String>,
-        contract_manifest_digest: impl Into<String>,
-    ) -> Self {
-        self.expected_contract_identity = Some((product.into(), contract_manifest_digest.into()));
-        self
     }
 
     pub fn daemon_executable_path(&self) -> &LocalPlatformPathV1 {
@@ -2306,6 +2302,16 @@ pub trait LaunchctlRunnerV1: Send + Sync {
     fn run(&self, arguments: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1>;
 }
 
+/// Verifies that an executable reports the contract identity required by an installation.
+pub trait DaemonContractVerifierV1: Send + Sync {
+    fn verify(
+        &self,
+        binary: &Path,
+        expected_product: &str,
+        expected_manifest_digest: &str,
+    ) -> Result<(), ServiceErrorV1>;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchctlOutputV1 {
     pub exit_status: i32,
@@ -2334,6 +2340,9 @@ impl LaunchctlOutputV1 {
 const LAUNCHCTL_TIMEOUT_V1: Duration = Duration::from_secs(10);
 const LAUNCHCTL_OUTPUT_LIMIT_V1: usize = 1024 * 1024;
 const LAUNCHCTL_POST_KILL_DRAIN_V1: Duration = Duration::from_millis(250);
+const DAEMON_CONTRACT_PROBE_TIMEOUT_V1: Duration = Duration::from_secs(5);
+const DAEMON_CONTRACT_PROBE_OUTPUT_LIMIT_V1: usize = 4 * 1024;
+const DAEMON_CONTRACT_PROBE_POST_KILL_DRAIN_V1: Duration = Duration::from_millis(100);
 
 /// The process-backed `launchctl` adapter used by CLI composition on macOS.
 ///
@@ -2379,6 +2388,76 @@ impl SystemLaunchctlRunnerV1 {
 
     pub fn executable(&self) -> &Path {
         &self.executable
+    }
+}
+
+/// Bounded process-backed verifier used by production service installation.
+#[derive(Clone, Debug)]
+pub struct SystemDaemonContractVerifierV1 {
+    timeout: Duration,
+    output_limit: usize,
+    post_kill_drain: Duration,
+}
+
+impl Default for SystemDaemonContractVerifierV1 {
+    fn default() -> Self {
+        Self {
+            timeout: DAEMON_CONTRACT_PROBE_TIMEOUT_V1,
+            output_limit: DAEMON_CONTRACT_PROBE_OUTPUT_LIMIT_V1,
+            post_kill_drain: DAEMON_CONTRACT_PROBE_POST_KILL_DRAIN_V1,
+        }
+    }
+}
+
+impl SystemDaemonContractVerifierV1 {
+    /// Overrides execution limits for deterministic verifier tests.
+    pub fn with_bounds(
+        mut self,
+        timeout: Duration,
+        output_limit: usize,
+        post_kill_drain: Duration,
+    ) -> Self {
+        self.timeout = timeout;
+        self.output_limit = output_limit;
+        self.post_kill_drain = post_kill_drain;
+        self
+    }
+}
+
+impl DaemonContractVerifierV1 for SystemDaemonContractVerifierV1 {
+    fn verify(
+        &self,
+        binary: &Path,
+        expected_product: &str,
+        expected_manifest_digest: &str,
+    ) -> Result<(), ServiceErrorV1> {
+        let runner = SystemLaunchctlRunnerV1::new(binary).with_bounds(
+            self.timeout,
+            self.output_limit,
+            self.post_kill_drain,
+        );
+        let (actual_product, actual_manifest_digest) = runner
+            .run(&["--json".to_owned(), "version".to_owned()])
+            .ok()
+            .map(|output| {
+                daemon_contract_probe_identity_v1(
+                    output.exit_status == 0,
+                    output.stdout.as_bytes(),
+                    output.stderr.as_bytes(),
+                )
+            })
+            .unwrap_or((None, None));
+        if actual_product.as_deref() == Some(expected_product)
+            && actual_manifest_digest.as_deref() == Some(expected_manifest_digest)
+        {
+            return Ok(());
+        }
+        Err(ServiceErrorV1::ContractMismatchV1 {
+            expected_product: expected_product.to_owned(),
+            actual_product,
+            expected_manifest_digest: expected_manifest_digest.to_owned(),
+            actual_manifest_digest,
+        })
     }
 }
 
@@ -2968,15 +3047,16 @@ impl ServiceLifecycleTransactionLockV1 {
 }
 
 /// It owns only the fixed per-user service files supplied by [`ServiceRuntimePathsV1`]; no workspace path is accepted or traversed.
-pub struct MacosServiceCommandRunnerV1<F, L, C> {
+pub struct MacosServiceCommandRunnerV1<F, L, C, V = SystemDaemonContractVerifierV1> {
     filesystem: F,
     launchctl: L,
     clock: C,
+    contract_verifier: V,
     observer: Arc<dyn ServiceObserverV1>,
     user_id: u32,
 }
 
-impl<F, L, C> MacosServiceCommandRunnerV1<F, L, C>
+impl<F, L, C> MacosServiceCommandRunnerV1<F, L, C, SystemDaemonContractVerifierV1>
 where
     F: ServiceFilesystemV1,
     L: LaunchctlRunnerV1,
@@ -3011,6 +3091,53 @@ where
             filesystem,
             launchctl,
             clock,
+            contract_verifier: SystemDaemonContractVerifierV1::default(),
+            observer,
+            user_id,
+        })
+    }
+}
+
+impl<F, L, C, V> MacosServiceCommandRunnerV1<F, L, C, V>
+where
+    F: ServiceFilesystemV1,
+    L: LaunchctlRunnerV1,
+    C: ServiceClockV1,
+    V: DaemonContractVerifierV1,
+{
+    pub fn new_with_contract_verifier(
+        filesystem: F,
+        launchctl: L,
+        clock: C,
+        user_id: u32,
+        contract_verifier: V,
+    ) -> Result<Self, ServicePathErrorV1> {
+        Self::new_with_observer_and_contract_verifier(
+            filesystem,
+            launchctl,
+            clock,
+            user_id,
+            contract_verifier,
+            Arc::new(NoopServiceObserverV1),
+        )
+    }
+
+    pub fn new_with_observer_and_contract_verifier(
+        filesystem: F,
+        launchctl: L,
+        clock: C,
+        user_id: u32,
+        contract_verifier: V,
+        observer: Arc<dyn ServiceObserverV1>,
+    ) -> Result<Self, ServicePathErrorV1> {
+        if user_id == 0 {
+            return Err(ServicePathErrorV1::RootUser);
+        }
+        Ok(Self {
+            filesystem,
+            launchctl,
+            clock,
+            contract_verifier,
             observer,
             user_id,
         })
@@ -3295,38 +3422,6 @@ where
         Ok(())
     }
 
-    fn verify_daemon_contract(
-        &self,
-        op: ServiceOperationV1,
-        binary: &Path,
-        expected_product: &str,
-        expected_manifest_digest: &str,
-    ) -> Result<(), ServiceErrorV1> {
-        let output = Command::new(binary)
-            .args(["--json", "version"])
-            .output()
-            .map_err(|error| ServiceErrorV1::IoV1 {
-                operation: Some(op),
-                message: error.to_string(),
-            })?;
-        let (actual_product, actual_manifest_digest) = daemon_contract_probe_identity_v1(
-            output.status.success(),
-            &output.stdout,
-            &output.stderr,
-        );
-        if actual_product.as_deref() != Some(expected_product)
-            || actual_manifest_digest.as_deref() != Some(expected_manifest_digest)
-        {
-            return Err(ServiceErrorV1::ContractMismatchV1 {
-                expected_product: expected_product.to_owned(),
-                actual_product,
-                expected_manifest_digest: expected_manifest_digest.to_owned(),
-                actual_manifest_digest,
-            });
-        }
-        Ok(())
-    }
-
     fn install_or_update(
         &self,
         op: ServiceOperationV1,
@@ -3350,11 +3445,9 @@ where
             .map_err(|error| self.fs_error(op, binary, error))?;
         validate_native_arm64_macos_macho_v1(&daemon_bytes)?;
         let daemon_identity = sha256_hex_v1(&daemon_bytes);
-        if let Some((expected_product, expected_manifest_digest)) =
-            spec.expected_contract_identity.as_ref()
-        {
-            self.verify_daemon_contract(op, binary, expected_product, expected_manifest_digest)?;
-        }
+        let (expected_product, expected_manifest_digest) = &spec.expected_contract_identity;
+        self.contract_verifier
+            .verify(binary, expected_product, expected_manifest_digest)?;
         let plist_path = paths.launch_agent_path().as_path();
         let exists = self
             .filesystem
@@ -3549,11 +3642,12 @@ fn daemon_contract_probe_identity_v1(
     (product, manifest_digest)
 }
 
-impl<F, L, C> ServiceCommandRunnerV1 for MacosServiceCommandRunnerV1<F, L, C>
+impl<F, L, C, V> ServiceCommandRunnerV1 for MacosServiceCommandRunnerV1<F, L, C, V>
 where
     F: ServiceFilesystemV1,
     L: LaunchctlRunnerV1,
     C: ServiceClockV1,
+    V: DaemonContractVerifierV1,
 {
     fn run(&self, command: ServiceCommandV1) -> Result<ServiceCommandResultV1, ServiceErrorV1> {
         let operation = command.operation();
@@ -4184,20 +4278,10 @@ mod tests {
         .expect("probe fixture must be written");
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700))
             .expect("probe fixture must be executable");
-        let runner = MacosServiceCommandRunnerV1::new(
-            StdServiceFilesystemV1,
-            SystemLaunchctlRunnerV1::new("/usr/bin/true"),
-            FixedServiceClockV1::new(UnixMillis::new(0)),
-            1,
-        )
-        .expect("non-root fixture uid is valid");
-        assert_eq!(
-            runner.verify_daemon_contract(ServiceOperationV1::Install, &binary, "podway", &digest,),
-            Ok(())
-        );
+        let verifier = SystemDaemonContractVerifierV1::default();
+        assert_eq!(verifier.verify(&binary, "podway", &digest), Ok(()));
         assert!(matches!(
-            runner.verify_daemon_contract(
-                ServiceOperationV1::Install,
+            verifier.verify(
                 &binary,
                 "podway",
                 &format!("sha256:{}", "b".repeat(64)),
@@ -4208,6 +4292,46 @@ mod tests {
                 ..
             }) if product == "podway" && actual == &digest
         ));
+        std::fs::remove_dir_all(directory).expect("probe fixture must be removed");
+    }
+
+    #[test]
+    fn installer_contract_probe_bounds_runtime_and_output() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "podway-service-contract-probe-bounds-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir(&directory).expect("probe fixture directory must be created");
+        let verifier = SystemDaemonContractVerifierV1::default().with_bounds(
+            Duration::from_millis(50),
+            128,
+            Duration::from_millis(50),
+        );
+        for (name, script) in [
+            ("hang", "#!/bin/sh\nsleep 5\n"),
+            ("overflow", "#!/bin/sh\nexec /usr/bin/yes overflow\n"),
+        ] {
+            let binary = directory.join(name);
+            std::fs::write(&binary, script).expect("bounded probe fixture must be written");
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700))
+                .expect("bounded probe fixture must be executable");
+            let started = Instant::now();
+            assert!(matches!(
+                verifier.verify(&binary, "podway", &format!("sha256:{}", "a".repeat(64)),),
+                Err(ServiceErrorV1::ContractMismatchV1 {
+                    actual_product: None,
+                    actual_manifest_digest: None,
+                    ..
+                })
+            ));
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "{name} probe must remain bounded"
+            );
+        }
         std::fs::remove_dir_all(directory).expect("probe fixture must be removed");
     }
 
@@ -4324,6 +4448,8 @@ mod tests {
                     path("/private/tmp/podwayd"),
                     ServiceLabelV1::podwayd(),
                     paths,
+                    "podway",
+                    format!("sha256:{}", "a".repeat(64)),
                 ),
                 false,
             )

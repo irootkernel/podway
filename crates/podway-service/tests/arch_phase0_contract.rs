@@ -12,8 +12,9 @@ use std::{
 
 use podway_core::UnixMillis;
 use podway_service::{
-    FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1, LaunchctlRunnerV1, LocalPlatformPathV1,
-    LogLocationV1, LogQueryV1, MacosServiceCommandRunnerV1, PodwayHomeV1,
+    DaemonContractVerifierV1, FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1,
+    LaunchctlRunnerV1, LocalPlatformPathV1, LogLocationV1, LogQueryV1,
+    MacosServiceCommandRunnerV1 as ProductionMacosServiceCommandRunnerV1, PodwayHomeV1,
     RecordingServiceCommandRunnerV1, RecordingServiceManagerV1, SERVICE_METADATA_MAX_BYTES_V1,
     ServiceClockV1, ServiceCommandResultV1, ServiceCommandRunnerV1, ServiceCommandV1,
     ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1,
@@ -21,6 +22,43 @@ use podway_service::{
     ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
     installed_socket_path_from_metadata_v1,
 };
+
+#[derive(Clone, Copy, Debug)]
+struct MatchingDaemonContractVerifierV1;
+
+impl DaemonContractVerifierV1 for MatchingDaemonContractVerifierV1 {
+    fn verify(&self, _: &Path, _: &str, _: &str) -> Result<(), ServiceErrorV1> {
+        Ok(())
+    }
+}
+
+struct MacosServiceCommandRunnerV1;
+
+impl MacosServiceCommandRunnerV1 {
+    #[allow(clippy::new_ret_no_self)]
+    fn new<F, L, C>(
+        filesystem: F,
+        launchctl: L,
+        clock: C,
+        user_id: u32,
+    ) -> Result<
+        ProductionMacosServiceCommandRunnerV1<F, L, C, MatchingDaemonContractVerifierV1>,
+        ServicePathErrorV1,
+    >
+    where
+        F: ServiceFilesystemV1,
+        L: LaunchctlRunnerV1,
+        C: ServiceClockV1,
+    {
+        ProductionMacosServiceCommandRunnerV1::new_with_contract_verifier(
+            filesystem,
+            launchctl,
+            clock,
+            user_id,
+            MatchingDaemonContractVerifierV1,
+        )
+    }
+}
 
 fn service_paths() -> ServiceRuntimePathsV1 {
     match ServiceRuntimePathsV1::from_directories(
@@ -142,6 +180,8 @@ fn install_and_update_reject_runtime_paths_outside_manager_configuration() {
         LocalPlatformPathV1::new("/Applications/Podway/podwayd").expect("binary path"),
         podway_service::ServiceLabelV1::podwayd(),
         mismatched_paths,
+        "podway",
+        format!("sha256:{}", "a".repeat(64)),
     );
 
     for result in [manager.install(spec.clone()), manager.update(spec)] {
@@ -874,6 +914,8 @@ fn phase6_spec() -> InstallSpecV1 {
         LocalPlatformPathV1::new("/Applications/Podway/podwayd").expect("fixture binary path"),
         podway_service::ServiceLabelV1::podwayd(),
         service_paths(),
+        "podway",
+        format!("sha256:{}", "a".repeat(64)),
     )
 }
 #[test]
@@ -906,6 +948,8 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
                 LocalPlatformPathV1::new(&binary).expect("XML-sensitive binary path"),
                 podway_service::ServiceLabelV1::podwayd(),
                 paths.clone(),
+                "podway",
+                format!("sha256:{}", "a".repeat(64)),
             ),
         }),
         Ok(ServiceCommandResultV1::Outcome(

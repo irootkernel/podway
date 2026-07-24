@@ -7,11 +7,52 @@ use std::{
 
 use podway_core::UnixMillis;
 use podway_service::{
-    FixedServiceClockV1, InstallSpecV1, LocalPlatformPathV1, LogQueryV1,
-    MacosServiceCommandRunnerV1, ServiceLabelV1, ServiceManagerContractV1, ServiceManagerV1,
-    ServiceObservationV1, ServiceObserverV1, ServiceOperationV1, ServiceRuntimePathsV1,
-    StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
+    DaemonContractVerifierV1, FixedServiceClockV1, InstallSpecV1, LaunchctlRunnerV1,
+    LocalPlatformPathV1, LogQueryV1,
+    MacosServiceCommandRunnerV1 as ProductionMacosServiceCommandRunnerV1, ServiceClockV1,
+    ServiceErrorV1, ServiceFilesystemV1, ServiceLabelV1, ServiceManagerContractV1,
+    ServiceManagerV1, ServiceObservationV1, ServiceObserverV1, ServiceOperationV1,
+    ServicePathErrorV1, ServiceRuntimePathsV1, StdServiceFilesystemV1, SystemLaunchctlRunnerV1,
+    UninstallOptionsV1,
 };
+
+#[derive(Clone, Copy, Debug)]
+struct MatchingDaemonContractVerifierV1;
+
+impl DaemonContractVerifierV1 for MatchingDaemonContractVerifierV1 {
+    fn verify(&self, _: &Path, _: &str, _: &str) -> Result<(), ServiceErrorV1> {
+        Ok(())
+    }
+}
+
+struct MacosServiceCommandRunnerV1;
+
+impl MacosServiceCommandRunnerV1 {
+    fn new_with_observer<F, L, C>(
+        filesystem: F,
+        launchctl: L,
+        clock: C,
+        user_id: u32,
+        observer: Arc<dyn ServiceObserverV1>,
+    ) -> Result<
+        ProductionMacosServiceCommandRunnerV1<F, L, C, MatchingDaemonContractVerifierV1>,
+        ServicePathErrorV1,
+    >
+    where
+        F: ServiceFilesystemV1,
+        L: LaunchctlRunnerV1,
+        C: ServiceClockV1,
+    {
+        ProductionMacosServiceCommandRunnerV1::new_with_observer_and_contract_verifier(
+            filesystem,
+            launchctl,
+            clock,
+            user_id,
+            MatchingDaemonContractVerifierV1,
+            observer,
+        )
+    }
+}
 
 #[derive(Default)]
 struct RecordingObserver(Mutex<Vec<ServiceObservationV1>>);
@@ -44,6 +85,8 @@ fn spec(binary: &Path, paths: &ServiceRuntimePathsV1) -> InstallSpecV1 {
         LocalPlatformPathV1::new(binary).expect("absolute binary"),
         ServiceLabelV1::podwayd(),
         paths.clone(),
+        "podway",
+        format!("sha256:{}", "a".repeat(64)),
     )
 }
 

@@ -13,13 +13,52 @@ use std::{
 
 use podway_core::UnixMillis;
 use podway_service::{
-    DurabilityFailpointV1, FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1,
-    LaunchctlRunnerV1, LocalPlatformPathV1, MacosServiceCommandRunnerV1, SERVICE_LABEL_V1,
-    ServiceCommandRunnerV1, ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1,
-    ServiceLabelV1, ServiceManagerContractV1, ServiceManagerV1, ServiceOutcomeKindV1,
-    ServiceRuntimePathsV1, ServiceStatusV1, StdServiceFilesystemV1,
+    DaemonContractVerifierV1, DurabilityFailpointV1, FixedServiceClockV1, InstallSpecV1,
+    LaunchctlOutputV1, LaunchctlRunnerV1, LocalPlatformPathV1,
+    MacosServiceCommandRunnerV1 as ProductionMacosServiceCommandRunnerV1, SERVICE_LABEL_V1,
+    ServiceClockV1, ServiceCommandRunnerV1, ServiceErrorV1, ServiceFilesystemErrorV1,
+    ServiceFilesystemV1, ServiceLabelV1, ServiceManagerContractV1, ServiceManagerV1,
+    ServiceOutcomeKindV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
+    StdServiceFilesystemV1,
 };
 use sha2::{Digest, Sha256};
+
+#[derive(Clone, Copy, Debug)]
+struct MatchingDaemonContractVerifierV1;
+
+impl DaemonContractVerifierV1 for MatchingDaemonContractVerifierV1 {
+    fn verify(&self, _: &Path, _: &str, _: &str) -> Result<(), ServiceErrorV1> {
+        Ok(())
+    }
+}
+
+struct MacosServiceCommandRunnerV1;
+
+impl MacosServiceCommandRunnerV1 {
+    #[allow(clippy::new_ret_no_self)]
+    fn new<F, L, C>(
+        filesystem: F,
+        launchctl: L,
+        clock: C,
+        user_id: u32,
+    ) -> Result<
+        ProductionMacosServiceCommandRunnerV1<F, L, C, MatchingDaemonContractVerifierV1>,
+        ServicePathErrorV1,
+    >
+    where
+        F: ServiceFilesystemV1,
+        L: LaunchctlRunnerV1,
+        C: ServiceClockV1,
+    {
+        ProductionMacosServiceCommandRunnerV1::new_with_contract_verifier(
+            filesystem,
+            launchctl,
+            clock,
+            user_id,
+            MatchingDaemonContractVerifierV1,
+        )
+    }
+}
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 type PublicationBytes = (Vec<u8>, Vec<u8>);
@@ -291,6 +330,8 @@ fn install_spec(binary: &Path, paths: &ServiceRuntimePathsV1) -> InstallSpecV1 {
         LocalPlatformPathV1::new(binary).expect("absolute binary"),
         ServiceLabelV1::podwayd(),
         paths.clone(),
+        "podway",
+        format!("sha256:{}", "a".repeat(64)),
     )
 }
 
@@ -691,6 +732,8 @@ fn run_removal_crash_child(root: &Path) {
                 LocalPlatformPathV1::new(&binary).expect("fixture binary path"),
                 ServiceLabelV1::podwayd(),
                 paths.clone(),
+                "podway",
+                format!("sha256:{}", "a".repeat(64)),
             ),
         })
         .expect("complete service state must be installed before removal crash");
