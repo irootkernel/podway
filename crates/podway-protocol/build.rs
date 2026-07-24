@@ -7,6 +7,10 @@ use std::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+mod build_support;
+
+use build_support::git_rerun_paths;
+
 const MANIFEST_SCHEMA: &str = "podway.contract-manifest/v1";
 
 fn fail(message: impl AsRef<str>) -> ! {
@@ -41,42 +45,9 @@ fn rust_string(value: &str) -> String {
     serde_json::to_string(value).expect("identity strings serialize")
 }
 
-fn git_path(workspace: &Path, name: &str) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .args(["-C", workspace.to_str()?, "rev-parse", "--git-path", name])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = String::from_utf8(output.stdout).ok()?.trim().to_owned();
-    if path.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(path);
-    Some(if path.is_absolute() {
-        path
-    } else {
-        workspace.join(path)
-    })
-}
-
 fn emit_git_rerun_paths(workspace: &Path) {
-    let Some(head_path) = git_path(workspace, "HEAD") else {
-        return;
-    };
-    println!("cargo:rerun-if-changed={}", head_path.display());
-    if let Ok(head) = fs::read_to_string(&head_path)
-        && let Some(reference) = head.trim().strip_prefix("ref: ")
-        && let Some(reference_path) = git_path(workspace, reference)
-        && reference_path.is_file()
-    {
-        println!("cargo:rerun-if-changed={}", reference_path.display());
-    }
-    if let Some(packed_refs) = git_path(workspace, "packed-refs")
-        && packed_refs.is_file()
-    {
-        println!("cargo:rerun-if-changed={}", packed_refs.display());
+    for path in git_rerun_paths(workspace) {
+        println!("cargo:rerun-if-changed={}", path.display());
     }
 }
 
