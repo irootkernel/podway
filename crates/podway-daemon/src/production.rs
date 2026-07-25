@@ -35,7 +35,7 @@ use podway_store::{
         PersistedTerminalResultV1,
     },
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
@@ -1217,12 +1217,10 @@ fn preview_command(
 ) -> Result<(SessionCommandV1, Revision), DispatchFailureV1> {
     if let Some(expected) = preview_expected_session_id(command) {
         let actual = prior
-            .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound))?
-            .session_id();
-        if actual != expected {
-            return Err(DispatchFailureV1::new(
-                DispatchFailureKindV1::SessionNotFound,
-            ));
+            .map(podway_core::SessionAggregateV1::session_id)
+            .cloned();
+        if actual.as_ref() != Some(expected) {
+            return Err(session_id_mismatch_failure(expected.clone(), actual));
         }
     }
     match command {
@@ -1458,6 +1456,12 @@ fn map_preview_procedure_error(
         crate::execution::ExecutionBoundaryErrorV1::Domain(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::ProcedureInvalid)
         }
+        crate::execution::ExecutionBoundaryErrorV1::WorkspaceIdentityMismatch {
+            expected,
+            actual,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceUuidMismatch).with_details(
+            DispatchErrorDetailsV1::default().with_workspace_uuid_mismatch(expected, actual),
+        ),
         crate::execution::ExecutionBoundaryErrorV1::Transient { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
         }
@@ -1472,6 +1476,9 @@ fn map_preview_domain_error(error: DomainError, command: &SliceCommandV1) -> Dis
                     .with_expected_revision(expected)
                     .with_current_revision(actual),
             )
+        }
+        DomainError::SessionIdentityMismatch { expected, actual } => {
+            session_id_mismatch_failure(expected, actual)
         }
         DomainError::InvalidTransition { .. } | DomainError::InvalidState { .. } => {
             let kind = match command {
@@ -1579,6 +1586,12 @@ fn map_reset_preparation_error(error: ExecutionErrorV1) -> DispatchFailureV1 {
         }
         ExecutionErrorV1::BoundaryTransient { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
+        }
+        ExecutionErrorV1::SessionIdentityMismatch { expected, actual } => {
+            session_id_mismatch_failure(expected, actual)
+        }
+        ExecutionErrorV1::WorkspaceIdentityMismatch { expected, actual } => {
+            workspace_uuid_mismatch_failure(expected, actual)
         }
         ExecutionErrorV1::InvalidPersistedExecution { .. }
         | ExecutionErrorV1::InvalidStoreValue(_) => {
@@ -1772,7 +1785,7 @@ fn terminal_job_response(
             },
         )),
         PersistedTerminalResultV1::Failure(error) => Ok(TerminalJobResponseV1::Error(
-            terminal_job_error_projection(error, command)?,
+            terminal_job_error_projection(error, command, receipt)?,
         )),
         PersistedTerminalResultV1::Cancelled => Ok(TerminalJobResponseV1::Cancelled(
             TerminalJobCancellationProjectionV1 { cancelled: true },
@@ -1820,6 +1833,7 @@ fn terminal_job_success_result(result: &PersistedDomainResultV1) -> TerminalJobS
 fn terminal_job_error_projection(
     error: &PersistedDomainErrorV1,
     command: TerminalCommandKindV1,
+    receipt: &PersistedTerminalReceiptV1,
 ) -> Result<TerminalJobErrorProjectionV1, DispatchFailureV1> {
     let failure = map_terminal_domain_error(error, command);
     let (code, message, retryable, exit_code) = match failure.kind() {
@@ -1833,6 +1847,12 @@ fn terminal_job_error_projection(
             "SESSION_REVISION_CONFLICT",
             "The session changed after it was observed.",
             true,
+            4,
+        ),
+        DispatchFailureKindV1::SessionIdMismatch => (
+            "SESSION_ID_MISMATCH",
+            "The session ID differs from the expected identity.",
+            false,
             4,
         ),
         DispatchFailureKindV1::ItemRevisionConflict => (
@@ -1907,6 +1927,31 @@ fn terminal_job_error_projection(
         PersistedDomainErrorV1::PreconditionFailed { expected, actual } => Map::from_iter([
             ("expected_revision".to_owned(), Value::from(expected.get())),
             ("current_revision".to_owned(), Value::from(actual.get())),
+        ]),
+        PersistedDomainErrorV1::SessionIdentityMismatch { expected, actual } => Map::from_iter([
+            (
+                "schema".to_owned(),
+                Value::String("podway.session-id-mismatch-details/v1".to_owned()),
+            ),
+            (
+                "expected_session_id".to_owned(),
+                Value::String(expected.as_str().to_owned()),
+            ),
+            (
+                "actual_session_id".to_owned(),
+                actual
+                    .as_ref()
+                    .map(|actual| Value::String(actual.as_str().to_owned()))
+                    .unwrap_or(Value::Null),
+            ),
+            (
+                "admission".to_owned(),
+                json!({
+                    "admitted": true,
+                    "job_id": receipt.job().job_id().as_str(),
+                    "workspace_sequence": receipt.job().identity_sequence(),
+                }),
+            ),
         ]),
         _ => Map::new(),
     };
@@ -2098,6 +2143,9 @@ fn map_terminal_domain_error(
                     .with_current_revision(*actual),
             )
         }
+        PersistedDomainErrorV1::SessionIdentityMismatch { expected, actual } => {
+            session_id_mismatch_failure(expected.clone(), actual.clone())
+        }
         PersistedDomainErrorV1::ItemNotFound { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)
         }
@@ -2177,6 +2225,12 @@ fn map_worker_error(error: WorkerErrorV1) -> DispatchFailureV1 {
             crate::execution::ExecutionErrorV1::BoundaryTransient { .. } => {
                 DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
             }
+            crate::execution::ExecutionErrorV1::SessionIdentityMismatch { expected, actual } => {
+                session_id_mismatch_failure(expected, actual)
+            }
+            crate::execution::ExecutionErrorV1::WorkspaceIdentityMismatch { expected, actual } => {
+                workspace_uuid_mismatch_failure(expected, actual)
+            }
             crate::execution::ExecutionErrorV1::InvalidPersistedExecution { .. }
             | crate::execution::ExecutionErrorV1::InvalidStoreValue(_) => {
                 DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
@@ -2210,8 +2264,8 @@ fn map_read_error(error: ReadServiceErrorV1) -> DispatchFailureV1 {
         ReadServiceErrorV1::MissingSession => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound)
         }
-        ReadServiceErrorV1::SessionIdentityMismatch { .. } => {
-            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound)
+        ReadServiceErrorV1::SessionIdentityMismatch { expected, actual } => {
+            session_id_mismatch_failure(expected, actual)
         }
         ReadServiceErrorV1::ResultShapeConversion
         | ReadServiceErrorV1::InconsistentState { .. } => {
@@ -2321,8 +2375,12 @@ fn map_resolution_error(error: WorkspaceResolutionErrorV1) -> DispatchFailureV1 
         WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceAlreadyInitialized)
         }
-        WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch { .. }
-        | WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }
+        WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch { expected, actual } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceUuidMismatch).with_details(
+                DispatchErrorDetailsV1::default().with_workspace_uuid_mismatch(expected, actual),
+            )
+        }
+        WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }
         | WorkspaceResolutionErrorV1::PreliminaryIdentityWasNotCandidate { .. }
         | WorkspaceResolutionErrorV1::RevalidatedIdentityStateMismatch { .. }
         | WorkspaceResolutionErrorV1::RevalidatedStoreIdentityMismatch { .. }
@@ -2351,9 +2409,18 @@ fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict)
                 .with_details(details)
         }
-        StoreErrorV1::SessionIdentityConflictV1 { .. } => {
-            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound)
-        }
+        StoreErrorV1::SessionIdentityConflictV1 {
+            expected: Some(expected),
+            actual,
+        } => session_id_mismatch_failure(expected, actual),
+        StoreErrorV1::SessionIdentityConflictV1 {
+            expected: None,
+            actual: Some(_),
+        } => DispatchFailureV1::new(DispatchFailureKindV1::SessionAlreadyExists),
+        StoreErrorV1::SessionIdentityConflictV1 {
+            expected: None,
+            actual: None,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable),
         StoreErrorV1::NewerStateV1 { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceSchemaUnsupported)
         }
@@ -2371,6 +2438,23 @@ fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
         }
     }
+}
+
+fn session_id_mismatch_failure(
+    expected: SessionId,
+    actual: Option<SessionId>,
+) -> DispatchFailureV1 {
+    DispatchFailureV1::new(DispatchFailureKindV1::SessionIdMismatch)
+        .with_details(DispatchErrorDetailsV1::default().with_session_id_mismatch(expected, actual))
+}
+
+fn workspace_uuid_mismatch_failure(
+    expected: podway_core::WorkspaceId,
+    actual: podway_core::WorkspaceId,
+) -> DispatchFailureV1 {
+    DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceUuidMismatch).with_details(
+        DispatchErrorDetailsV1::default().with_workspace_uuid_mismatch(expected, actual),
+    )
 }
 
 fn rfc3339_millis(value: UnixMillis) -> Result<Rfc3339MillisV1, DispatchFailureV1> {
@@ -2438,6 +2522,71 @@ mod tests {
             UnixMillis::new(12),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn identity_boundary_mappers_preserve_expected_actual_and_absence() {
+        let expected_workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000031").unwrap();
+        let actual_workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000032").unwrap();
+        let workspace_failure = map_worker_error(WorkerErrorV1::Execution(
+            ExecutionErrorV1::WorkspaceIdentityMismatch {
+                expected: expected_workspace.clone(),
+                actual: actual_workspace.clone(),
+            },
+        ));
+        assert_eq!(
+            workspace_failure.kind(),
+            DispatchFailureKindV1::WorkspaceUuidMismatch
+        );
+        assert_eq!(
+            workspace_failure.into_details().into_json(),
+            Map::from_iter([
+                (
+                    "schema".to_owned(),
+                    json!("podway.workspace-uuid-mismatch-details/v1"),
+                ),
+                (
+                    "expected_workspace_uuid".to_owned(),
+                    json!(expected_workspace.as_str()),
+                ),
+                (
+                    "actual_workspace_uuid".to_owned(),
+                    json!(actual_workspace.as_str()),
+                ),
+                ("admission".to_owned(), json!({"admitted": false})),
+            ])
+        );
+
+        let expected_session = SessionId::new("00000000-0000-4000-8000-000000000033").unwrap();
+        let read_failure = map_read_error(ReadServiceErrorV1::SessionIdentityMismatch {
+            expected: expected_session.clone(),
+            actual: None,
+        });
+        assert_eq!(
+            read_failure.kind(),
+            DispatchFailureKindV1::SessionIdMismatch
+        );
+        assert_eq!(
+            read_failure.into_details().into_json()["actual_session_id"],
+            Value::Null
+        );
+
+        let store_failure = map_store_error(StoreErrorV1::SessionIdentityConflictV1 {
+            expected: Some(expected_session),
+            actual: None,
+        });
+        assert_eq!(
+            store_failure.kind(),
+            DispatchFailureKindV1::SessionIdMismatch
+        );
+        let start_conflict = map_store_error(StoreErrorV1::SessionIdentityConflictV1 {
+            expected: None,
+            actual: Some(SessionId::new("00000000-0000-4000-8000-000000000034").unwrap()),
+        });
+        assert_eq!(
+            start_conflict.kind(),
+            DispatchFailureKindV1::SessionAlreadyExists
+        );
     }
 
     fn terminal_view(
@@ -2892,6 +3041,44 @@ mod tests {
         assert_eq!(terminal["payload"]["exit_code"], 4);
         assert_eq!(terminal["payload"]["details"]["expected_revision"], 4);
         assert_eq!(terminal["payload"]["details"]["current_revision"], 5);
+
+        let expected = SessionId::new("00000000-0000-4000-8000-000000000026").unwrap();
+        let actual = SessionId::new("00000000-0000-4000-8000-000000000027").unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(26),
+            PersistedTerminalResultV1::Failure(PersistedDomainErrorV1::SessionIdentityMismatch {
+                expected: expected.clone(),
+                actual: Some(actual.clone()),
+            }),
+            terminal_job_projection(PersistedTerminalJobStateV1::Failed),
+            None,
+        )
+        .unwrap();
+        let view = terminal_view(
+            podway_store::CommandV1::SessionComplete,
+            StoreJobStateV1::Failed,
+            receipt,
+        );
+
+        let (_, terminal) = job_read_projection(&view).unwrap();
+
+        assert_eq!(terminal["kind"], "error");
+        assert_eq!(terminal["payload"]["code"], "SESSION_ID_MISMATCH");
+        assert_eq!(terminal["payload"]["retryable"], false);
+        assert_eq!(terminal["payload"]["exit_code"], 4);
+        assert_eq!(
+            terminal["payload"]["details"],
+            json!({
+                "schema": "podway.session-id-mismatch-details/v1",
+                "expected_session_id": expected.as_str(),
+                "actual_session_id": actual.as_str(),
+                "admission": {
+                    "admitted": true,
+                    "job_id": fixture_job(26).job_id().as_str(),
+                    "workspace_sequence": 26
+                }
+            })
+        );
     }
 
     #[test]
@@ -3135,7 +3322,7 @@ mod tests {
             )
             .unwrap_err()
             .kind(),
-            DispatchFailureKindV1::SessionNotFound
+            DispatchFailureKindV1::SessionIdMismatch
         );
         assert_eq!(
             production_preview_map(
@@ -3208,7 +3395,7 @@ mod tests {
             )
             .unwrap_err()
             .kind(),
-            DispatchFailureKindV1::SessionNotFound
+            DispatchFailureKindV1::SessionIdMismatch
         );
     }
 }

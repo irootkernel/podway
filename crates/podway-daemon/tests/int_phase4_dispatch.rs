@@ -950,3 +950,109 @@ fn errors_preserve_request_correlation_and_never_reflect_runtime_diagnostics() {
     assert!(!response.message().contains("secret.sqlite"));
     assert!(response.details().is_empty());
 }
+
+#[test]
+fn identity_conflicts_use_closed_details_before_and_after_admission() {
+    let expected_workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000105").unwrap();
+    let actual_workspace = WorkspaceId::new(WORKSPACE_ID).unwrap();
+    let runtime = FakeRuntime::new();
+    runtime.fail_existing(
+        DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceUuidMismatch).with_details(
+            DispatchErrorDetailsV1::default()
+                .with_workspace_uuid_mismatch(expected_workspace, actual_workspace),
+        ),
+    );
+    let preadmission_dispatcher = dispatcher(
+        runtime,
+        FakeReads::new(),
+        FakeWorker::new(terminal_success()),
+    );
+    let (request, slice) = request_and_slice(
+        "session.status",
+        json!({"selector": selector("/safe/worktree")}),
+        PreconditionsV1::default(),
+        false,
+        0,
+        42,
+    );
+    let response = error(preadmission_dispatcher.dispatch(&request, &slice));
+    assert_eq!(response.code().as_str(), "WORKSPACE_UUID_MISMATCH");
+    assert_eq!(response.exit_code().get(), 4);
+    assert!(!response.retryable());
+    assert_eq!(
+        response.details(),
+        &Map::from_iter([
+            (
+                "schema".to_owned(),
+                json!("podway.workspace-uuid-mismatch-details/v1"),
+            ),
+            (
+                "expected_workspace_uuid".to_owned(),
+                json!("00000000-0000-4000-8000-000000000105"),
+            ),
+            ("actual_workspace_uuid".to_owned(), json!(WORKSPACE_ID)),
+            ("admission".to_owned(), json!({"admitted": false})),
+        ])
+    );
+
+    let runtime = FakeRuntime::new();
+    runtime.fail_existing(DispatchFailureV1::new(
+        DispatchFailureKindV1::WorkspaceUuidMismatch,
+    ));
+    let malformed_dispatcher = dispatcher(
+        runtime,
+        FakeReads::new(),
+        FakeWorker::new(terminal_success()),
+    );
+    let response = error(malformed_dispatcher.dispatch(&request, &slice));
+    assert_eq!(response.code().as_str(), "INTERNAL_ERROR");
+    assert_eq!(response.exit_code().get(), 6);
+    assert!(response.details().is_empty());
+
+    let expected_session = SessionId::new(SESSION_ID).unwrap();
+    let actual_session = SessionId::new("00000000-0000-4000-8000-000000000106").unwrap();
+    let worker = FakeWorker::new(Ok(MutationDispatchOutcomeV1::Terminal {
+        job: terminal_job(),
+        result: DispatcherTerminalResultV1::Error(
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionIdMismatch).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_session_id_mismatch(expected_session, Some(actual_session)),
+            ),
+        ),
+    }));
+    let dispatcher = dispatcher(FakeRuntime::new(), FakeReads::new(), worker);
+    let (request, slice) = request_and_slice(
+        "session.complete",
+        json!({"selector": selector("/safe/worktree")}),
+        session_preconditions(),
+        false,
+        100,
+        43,
+    );
+    let response = error(dispatcher.dispatch(&request, &slice));
+    assert_eq!(response.code().as_str(), "SESSION_ID_MISMATCH");
+    assert_eq!(response.exit_code().get(), 4);
+    assert!(!response.retryable());
+    assert_eq!(
+        response.details(),
+        &Map::from_iter([
+            (
+                "schema".to_owned(),
+                json!("podway.session-id-mismatch-details/v1"),
+            ),
+            ("expected_session_id".to_owned(), json!(SESSION_ID)),
+            (
+                "actual_session_id".to_owned(),
+                json!("00000000-0000-4000-8000-000000000106"),
+            ),
+            (
+                "admission".to_owned(),
+                json!({
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 41
+                }),
+            ),
+        ])
+    );
+}

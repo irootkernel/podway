@@ -839,13 +839,28 @@ fn registry_predecessor_change_before_marker_publication_cannot_delete_the_sourc
     let ResponseEnvelopeV1::Error(error) = dispatcher.dispatch(&request, &slice) else {
         panic!("stale registry predecessor must return the public identity-conflict error");
     };
-    assert_eq!(error.code().as_str(), "WORKSPACE_ID_CONFLICT");
+    assert_eq!(error.code().as_str(), "WORKSPACE_UUID_MISMATCH");
     assert_eq!(
         error.message(),
-        "The workspace UUID is active at another root."
+        "The workspace UUID differs from the expected identity."
     );
-    assert_eq!(error.exit_code().get(), 5);
+    assert_eq!(error.exit_code().get(), 4);
     assert!(!error.retryable());
+    assert_eq!(
+        error.details(),
+        &serde_json::Map::from_iter([
+            (
+                "schema".to_owned(),
+                json!("podway.workspace-uuid-mismatch-details/v1"),
+            ),
+            (
+                "expected_workspace_uuid".to_owned(),
+                json!("00000000-0000-4000-8000-000000005095")
+            ),
+            ("actual_workspace_uuid".to_owned(), json!(previous.as_str()),),
+            ("admission".to_owned(), json!({"admitted": false})),
+        ])
+    );
     let after = fs::metadata(&database_path).expect("stale reset must preserve source database");
     assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
     assert!(

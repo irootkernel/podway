@@ -412,10 +412,12 @@ fn workspace_resolution_boundary_error_v1(
             ExecutionBoundaryErrorV1::transient("revalidate workspace binding")
         }
         WorkspaceResolutionErrorV1::Git { source, .. } => git_resolution_boundary_error_v1(source),
+        WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch { expected, actual } => {
+            ExecutionBoundaryErrorV1::workspace_identity_mismatch(expected, actual)
+        }
         WorkspaceResolutionErrorV1::Selector { .. }
         | WorkspaceResolutionErrorV1::ExistingBindingMissing
         | WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent
-        | WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch { .. }
         | WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }
         | WorkspaceResolutionErrorV1::PreliminaryIdentityWasNotCandidate { .. }
         | WorkspaceResolutionErrorV1::RevalidatedIdentityStateMismatch { .. }

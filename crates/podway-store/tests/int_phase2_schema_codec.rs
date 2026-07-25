@@ -7,7 +7,7 @@ use std::path::Path;
 
 use podway_core::{
     AttemptId, DomainCommand, DomainCommandKind, DomainError, DomainResult, ItemId, JobId,
-    Revision, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
+    Revision, SessionId, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_store::codec::{
     PersistedDomainCommandKindV1, PersistedDomainErrorV1, PersistedDomainResultV1,
@@ -917,6 +917,7 @@ fn assert_persisted_error_variant_coverage(error: &PersistedDomainErrorV1) {
         PersistedDomainErrorV1::PreconditionFailed { .. } => {}
         PersistedDomainErrorV1::ItemNotFound { .. } => {}
         PersistedDomainErrorV1::BlockerNotCurrent => {}
+        PersistedDomainErrorV1::SessionIdentityMismatch { .. } => {}
     }
 }
 
@@ -1131,6 +1132,19 @@ fn assert_failure_fields(actual: &PersistedDomainErrorV1, expected: &DomainError
         DomainError::BlockerNotCurrent => {
             assert!(matches!(actual, PersistedDomainErrorV1::BlockerNotCurrent));
         }
+        DomainError::SessionIdentityMismatch {
+            expected,
+            actual: expected_actual,
+        } => match actual {
+            PersistedDomainErrorV1::SessionIdentityMismatch {
+                expected: actual_expected,
+                actual: actual_actual,
+            } => {
+                assert_eq!(actual_expected, expected);
+                assert_eq!(actual_actual, expected_actual);
+            }
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
     }
 }
 
@@ -1230,6 +1244,9 @@ fn failure_golden_v1(error: &DomainError) -> &'static str {
         }
         DomainError::ArtifactChanged => {
             r#"{"job":{"identity_sequence":23,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"artifact_changed"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::SessionIdentityMismatch { .. } => {
+            r#"{"job":{"identity_sequence":24,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"actual":"00000000-0000-4000-8000-000000000005","expected":"00000000-0000-4000-8000-000000000004","kind":"session_identity_mismatch"}},"schema":"podway.store-terminal/v1"}"#
         }
     }
 }
@@ -1473,6 +1490,10 @@ fn terminal_codec_matches_independent_literal_goldens_for_results_errors_and_can
         DomainError::RequiredItemsMissing,
         DomainError::BlockersPresent,
         DomainError::ArtifactChanged,
+        DomainError::SessionIdentityMismatch {
+            expected: SessionId::new("00000000-0000-4000-8000-000000000004")?,
+            actual: Some(SessionId::new("00000000-0000-4000-8000-000000000005")?),
+        },
     ];
     for (index, error) in errors.into_iter().enumerate() {
         let sequence = u64::try_from(index + 10)?;

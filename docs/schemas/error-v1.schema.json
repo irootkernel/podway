@@ -4,6 +4,69 @@
   "title": "Podway Error Output v1",
   "type": "object",
   "additionalProperties": false,
+  "$defs": {
+    "notAdmitted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admitted"],
+      "properties": {
+        "admitted": { "const": false }
+      }
+    },
+    "admitted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admitted", "job_id", "workspace_sequence"],
+      "properties": {
+        "admitted": { "const": true },
+        "job_id": { "type": "string", "format": "uuid" },
+        "workspace_sequence": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "admission": {
+      "oneOf": [
+        { "$ref": "#/$defs/notAdmitted" },
+        { "$ref": "#/$defs/admitted" }
+      ]
+    },
+    "workspaceUuidMismatchDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "expected_workspace_uuid",
+        "actual_workspace_uuid",
+        "admission"
+      ],
+      "properties": {
+        "schema": { "const": "podway.workspace-uuid-mismatch-details/v1" },
+        "expected_workspace_uuid": { "type": "string", "format": "uuid" },
+        "actual_workspace_uuid": { "type": "string", "format": "uuid" },
+        "admission": { "$ref": "#/$defs/admission" }
+      }
+    },
+    "sessionIdMismatchDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "expected_session_id",
+        "actual_session_id",
+        "admission"
+      ],
+      "properties": {
+        "schema": { "const": "podway.session-id-mismatch-details/v1" },
+        "expected_session_id": { "type": "string", "format": "uuid" },
+        "actual_session_id": {
+          "oneOf": [
+            { "type": "string", "format": "uuid" },
+            { "type": "null" }
+          ]
+        },
+        "admission": { "$ref": "#/$defs/admission" }
+      }
+    }
+  },
   "required": [
     "schema",
     "request_id",
@@ -54,5 +117,29 @@
     "details": {
       "type": "object"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "code": { "const": "WORKSPACE_UUID_MISMATCH" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "#/$defs/workspaceUuidMismatchDetails" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "SESSION_ID_MISMATCH" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "#/$defs/sessionIdMismatchDetails" }
+        }
+      }
+    }
+  ]
 }

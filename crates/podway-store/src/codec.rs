@@ -450,6 +450,10 @@ pub enum PersistedDomainErrorV1 {
         expected: RevisionV1,
         actual: RevisionV1,
     },
+    SessionIdentityMismatch {
+        expected: podway_core::SessionId,
+        actual: Option<podway_core::SessionId>,
+    },
     ItemNotFound {
         item_id: ItemId,
     },
@@ -495,6 +499,12 @@ impl PersistedDomainErrorV1 {
                 expected: *expected,
                 actual: *actual,
             },
+            DomainError::SessionIdentityMismatch { expected, actual } => {
+                Self::SessionIdentityMismatch {
+                    expected: expected.clone(),
+                    actual: actual.clone(),
+                }
+            }
             DomainError::ItemNotFound { item_id } => Self::ItemNotFound {
                 item_id: item_id.clone(),
             },

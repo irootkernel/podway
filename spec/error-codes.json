@@ -101,6 +101,12 @@
       "summary": "The workspace UUID is active at another root."
     },
     {
+      "code": "WORKSPACE_UUID_MISMATCH",
+      "exit_code": 4,
+      "retryable": false,
+      "summary": "The workspace UUID differs from the expected identity."
+    },
+    {
       "code": "WORKSPACE_CONFIG_INVALID",
       "exit_code": 5,
       "retryable": false,
@@ -177,6 +183,12 @@
       "exit_code": 1,
       "retryable": false,
       "summary": "No current task session exists."
+    },
+    {
+      "code": "SESSION_ID_MISMATCH",
+      "exit_code": 4,
+      "retryable": false,
+      "summary": "The session ID differs from the expected identity."
     },
     {
       "code": "SESSION_ALREADY_EXISTS",

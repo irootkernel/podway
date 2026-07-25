@@ -73,6 +73,7 @@ pub enum ProtocolError {
         actual_exit_code: u8,
         actual_retryable: bool,
     },
+    InvalidIdentityConflictDetails,
     InvalidExitCode {
         value: u8,
     },
@@ -141,6 +142,12 @@ impl fmt::Display for ProtocolError {
                 formatter,
                 "error code {code} requires exit code {expected_exit_code} and retryable={expected_retryable}; received exit code {actual_exit_code} and retryable={actual_retryable}"
             ),
+            Self::InvalidIdentityConflictDetails => {
+                write!(
+                    formatter,
+                    "identity conflict details violate their closed v1 schema"
+                )
+            }
             Self::InvalidExitCode { value } => {
                 write!(
                     formatter,
@@ -1471,6 +1478,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_UUID_MISMATCH",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "WORKSPACE_CONFIG_INVALID",
         exit_code: 5,
         retryable: false,
@@ -1533,6 +1545,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
     ErrorCodeCatalogEntryV1 {
         code: "SESSION_NOT_FOUND",
         exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ID_MISMATCH",
+        exit_code: 4,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
@@ -1851,6 +1868,7 @@ impl ErrorEnvelopeV1 {
         }
         validate_non_empty_scalar_bounded(&self.message, usize::MAX, "message")?;
         validate_json_map_depth(&self.details, 1)?;
+        validate_identity_conflict_details_v1(self.code.as_str(), &self.details)?;
         if let Some(workspace) = &self.workspace {
             validate_json_map_depth(workspace, 1)?;
         }
@@ -1883,6 +1901,77 @@ impl ErrorEnvelopeV1 {
 
     pub fn details(&self) -> &Map<String, Value> {
         &self.details
+    }
+}
+
+fn validate_identity_conflict_details_v1(
+    code: &str,
+    details: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    let (schema, expected_key, actual_key, session) = match code {
+        "WORKSPACE_UUID_MISMATCH" => (
+            "podway.workspace-uuid-mismatch-details/v1",
+            "expected_workspace_uuid",
+            "actual_workspace_uuid",
+            false,
+        ),
+        "SESSION_ID_MISMATCH" => (
+            "podway.session-id-mismatch-details/v1",
+            "expected_session_id",
+            "actual_session_id",
+            true,
+        ),
+        _ => return Ok(()),
+    };
+    if details.len() != 4
+        || details.get("schema").and_then(Value::as_str) != Some(schema)
+        || !details.contains_key(expected_key)
+        || !details.contains_key(actual_key)
+        || !details.contains_key("admission")
+    {
+        return Err(ProtocolError::InvalidIdentityConflictDetails);
+    }
+    let expected = details
+        .get(expected_key)
+        .and_then(Value::as_str)
+        .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
+    if session {
+        SessionId::new(expected).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
+        if let Some(actual) = details.get(actual_key).and_then(Value::as_str) {
+            SessionId::new(actual).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
+        } else if details.get(actual_key) != Some(&Value::Null) {
+            return Err(ProtocolError::InvalidIdentityConflictDetails);
+        }
+    } else {
+        WorkspaceId::new(expected).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
+        let actual = details
+            .get(actual_key)
+            .and_then(Value::as_str)
+            .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
+        WorkspaceId::new(actual).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
+    }
+    let admission = details
+        .get("admission")
+        .and_then(Value::as_object)
+        .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
+    match admission.get("admitted").and_then(Value::as_bool) {
+        Some(false) if admission.len() == 1 => Ok(()),
+        Some(true) if admission.len() == 3 => {
+            let job_id = admission
+                .get("job_id")
+                .and_then(Value::as_str)
+                .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
+            JobId::new(job_id).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
+            let sequence = admission
+                .get("workspace_sequence")
+                .and_then(Value::as_u64)
+                .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
+            if sequence == 0 {
+                return Err(ProtocolError::InvalidIdentityConflictDetails);
+            }
+            Ok(())
+        }
+        _ => Err(ProtocolError::InvalidIdentityConflictDetails),
     }
 }
 impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {

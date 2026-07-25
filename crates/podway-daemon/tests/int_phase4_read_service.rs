@@ -472,7 +472,7 @@ fn guarded_immediate_read_rejects_a_replaced_session() {
         result,
         Err(ReadServiceErrorV1::SessionIdentityMismatch {
             expected: fixture_session_id(),
-            actual: replacement_session_id(),
+            actual: Some(replacement_session_id()),
         }),
     );
 }
@@ -501,7 +501,7 @@ fn guarded_idle_wait_rejects_session_replacement_after_notification() {
         result,
         Err(ReadServiceErrorV1::SessionIdentityMismatch {
             expected: fixture_session_id(),
-            actual: replacement_session_id(),
+            actual: Some(replacement_session_id()),
         }),
     );
 }
@@ -532,7 +532,7 @@ fn guarded_after_job_wait_rejects_session_replacement_after_notification() {
         result,
         Err(ReadServiceErrorV1::SessionIdentityMismatch {
             expected: fixture_session_id(),
-            actual: replacement_session_id(),
+            actual: Some(replacement_session_id()),
         }),
     );
 }

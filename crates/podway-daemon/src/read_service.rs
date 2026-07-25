@@ -150,7 +150,7 @@ pub enum ReadServiceErrorV1 {
     MissingSession,
     SessionIdentityMismatch {
         expected: SessionId,
-        actual: SessionId,
+        actual: Option<SessionId>,
     },
     Notification(ReadNotificationErrorV1),
     ResultShapeConversion,
@@ -649,11 +649,14 @@ fn validate_expected_session(
     let Some(expected) = expected_session_id else {
         return Ok(());
     };
-    let actual = current_session(view)?.session_id();
-    if actual != expected {
+    let actual = view
+        .current_session()
+        .map(SessionAggregateV1::session_id)
+        .cloned();
+    if actual.as_ref() != Some(expected) {
         return Err(ReadServiceErrorV1::SessionIdentityMismatch {
             expected: expected.clone(),
-            actual: actual.clone(),
+            actual,
         });
     }
     Ok(())

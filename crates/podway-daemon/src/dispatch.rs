@@ -4,7 +4,7 @@
 //! capabilities remain behind the injected runtime seams below. In particular, a workspace value is
 //! opaque to this module, so routing cannot accidentally turn a display path into an identity key.
 
-use podway_core::{JobId, Revision, SessionId};
+use podway_core::{JobId, Revision, SessionId, WorkspaceId};
 use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
     JobStateV1, NextResultV1, OutputEnvelopeInputV1, OutputEnvelopeV1, QueryWaitV1,
@@ -36,6 +36,19 @@ pub struct DispatchErrorDetailsV1 {
     job_sequence: Option<u64>,
     expected_revision: Option<Revision>,
     current_revision: Option<Revision>,
+    identity_conflict: Option<Box<IdentityConflictDetailsV1>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum IdentityConflictDetailsV1 {
+    Workspace {
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    },
+    Session {
+        expected: SessionId,
+        actual: Option<SessionId>,
+    },
 }
 
 impl DispatchErrorDetailsV1 {
@@ -55,7 +68,66 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
-    fn into_json(self) -> Map<String, Value> {
+    pub fn with_workspace_uuid_mismatch(
+        mut self,
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    ) -> Self {
+        self.identity_conflict = Some(Box::new(IdentityConflictDetailsV1::Workspace {
+            expected,
+            actual,
+        }));
+        self
+    }
+
+    pub fn with_session_id_mismatch(
+        mut self,
+        expected: SessionId,
+        actual: Option<SessionId>,
+    ) -> Self {
+        self.identity_conflict = Some(Box::new(IdentityConflictDetailsV1::Session {
+            expected,
+            actual,
+        }));
+        self
+    }
+
+    pub(crate) fn into_json(self) -> Map<String, Value> {
+        if let Some(identity) = self.identity_conflict {
+            let mut admission =
+                Map::from_iter([("admitted".to_owned(), Value::Bool(self.job_id.is_some()))]);
+            if let Some(job_id) = self.job_id {
+                admission.insert("job_id".to_owned(), Value::String(job_id.into_inner()));
+            }
+            if let Some(job_sequence) = self.job_sequence {
+                admission.insert("workspace_sequence".to_owned(), Value::from(job_sequence));
+            }
+            let (schema, expected_key, expected, actual_key, actual) = match *identity {
+                IdentityConflictDetailsV1::Workspace { expected, actual } => (
+                    "podway.workspace-uuid-mismatch-details/v1",
+                    "expected_workspace_uuid",
+                    Value::String(expected.into_inner()),
+                    "actual_workspace_uuid",
+                    Value::String(actual.into_inner()),
+                ),
+                IdentityConflictDetailsV1::Session { expected, actual } => (
+                    "podway.session-id-mismatch-details/v1",
+                    "expected_session_id",
+                    Value::String(expected.into_inner()),
+                    "actual_session_id",
+                    actual
+                        .map(SessionId::into_inner)
+                        .map(Value::String)
+                        .unwrap_or(Value::Null),
+                ),
+            };
+            return Map::from_iter([
+                ("schema".to_owned(), Value::String(schema.to_owned())),
+                (expected_key.to_owned(), expected),
+                (actual_key.to_owned(), actual),
+                ("admission".to_owned(), Value::Object(admission)),
+            ]);
+        }
         let mut details = Map::new();
         if let Some(job_id) = self.job_id {
             details.insert("job_id".to_owned(), Value::String(job_id.into_inner()));
@@ -96,6 +168,7 @@ pub enum DispatchFailureKindV1 {
     WorkspaceAlreadyInitialized,
     WorkspaceInitConflict,
     WorkspaceIdentityConflict,
+    WorkspaceUuidMismatch,
     WorkspaceConfigInvalid,
     WorkspaceStateUnreadable,
     WorkspaceSchemaUnsupported,
@@ -109,6 +182,7 @@ pub enum DispatchFailureKindV1 {
     ProcedureSchemaUnsupported,
     PresetNotFound,
     SessionNotFound,
+    SessionIdMismatch,
     SessionAlreadyExists,
     SessionNotRunning,
     SessionNotCompleted,
@@ -159,6 +233,7 @@ impl DispatchFailureV1 {
                 job_sequence: None,
                 expected_revision: None,
                 current_revision: None,
+                identity_conflict: None,
             },
         }
     }
@@ -182,7 +257,7 @@ impl DispatchFailureV1 {
         self
     }
 
-    fn into_details(self) -> DispatchErrorDetailsV1 {
+    pub(crate) fn into_details(self) -> DispatchErrorDetailsV1 {
         self.details
     }
 }
@@ -1000,10 +1075,11 @@ where
         failure: DispatchFailureV1,
     ) -> ResponseEnvelopeV1 {
         let presentation = self.errors.map_failure(&failure);
+        let generated_at = self.metadata.generated_at();
         let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
             request_id: request.request_id().clone(),
             command: request.command().clone(),
-            generated_at: self.metadata.generated_at(),
+            generated_at: generated_at.clone(),
             code: presentation.code,
             message: presentation.message.to_owned(),
             retryable: presentation.retryable,
@@ -1011,7 +1087,21 @@ where
             workspace: None,
             details: failure.into_details().into_json(),
         })
-        .expect("dispatcher error presentations and details are protocol-valid");
+        .unwrap_or_else(|_| {
+            let internal = DispatchErrorPresentationV1::catalog(DispatchFailureKindV1::Internal);
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at,
+                code: internal.code,
+                message: internal.message.to_owned(),
+                retryable: internal.retryable,
+                exit_code: internal.exit_code,
+                workspace: None,
+                details: Map::new(),
+            })
+            .expect("static internal dispatcher error must be protocol-valid")
+        });
         ResponseEnvelopeV1::Error(envelope)
     }
 }
@@ -1090,6 +1180,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             false,
             5,
         ),
+        DispatchFailureKindV1::WorkspaceUuidMismatch => (
+            "WORKSPACE_UUID_MISMATCH",
+            "The workspace UUID differs from the expected identity.",
+            false,
+            4,
+        ),
         DispatchFailureKindV1::WorkspaceConfigInvalid => (
             "WORKSPACE_CONFIG_INVALID",
             "Workspace configuration is invalid.",
@@ -1161,6 +1257,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "No current task session exists.",
             false,
             1,
+        ),
+        DispatchFailureKindV1::SessionIdMismatch => (
+            "SESSION_ID_MISMATCH",
+            "The session ID differs from the expected identity.",
+            false,
+            4,
         ),
         DispatchFailureKindV1::SessionAlreadyExists => (
             "SESSION_ALREADY_EXISTS",

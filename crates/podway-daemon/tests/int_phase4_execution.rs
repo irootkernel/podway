@@ -321,6 +321,7 @@ struct FixtureWorkspaces {
     manager_binding_available: Arc<AtomicBool>,
     selector_revalidations: Arc<AtomicUsize>,
     binding_revalidations: Arc<AtomicUsize>,
+    selector_identity_mismatch: Arc<Mutex<Option<(WorkspaceId, WorkspaceId)>>>,
 }
 
 impl FixtureWorkspaces {
@@ -332,6 +333,7 @@ impl FixtureWorkspaces {
             manager_binding_available: Arc::new(AtomicBool::new(true)),
             selector_revalidations: Arc::new(AtomicUsize::new(0)),
             binding_revalidations: Arc::new(AtomicUsize::new(0)),
+            selector_identity_mismatch: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -343,6 +345,7 @@ impl FixtureWorkspaces {
             manager_binding_available: Arc::new(AtomicBool::new(true)),
             selector_revalidations: Arc::new(AtomicUsize::new(0)),
             binding_revalidations: Arc::new(AtomicUsize::new(0)),
+            selector_identity_mismatch: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -353,6 +356,10 @@ impl FixtureWorkspaces {
         self.manager_binding_available
             .store(false, Ordering::SeqCst);
     }
+
+    fn mismatch_selector_identity(&self, expected: WorkspaceId, actual: WorkspaceId) {
+        *self.selector_identity_mismatch.lock().unwrap() = Some((expected, actual));
+    }
 }
 
 impl WorkspaceRevalidatorV1 for FixtureWorkspaces {
@@ -361,6 +368,11 @@ impl WorkspaceRevalidatorV1 for FixtureWorkspaces {
         _selector: &WorktreeSelectorWireV1,
     ) -> Result<WorkspaceBindingV1, ExecutionBoundaryErrorV1> {
         self.selector_revalidations.fetch_add(1, Ordering::SeqCst);
+        if let Some((expected, actual)) = self.selector_identity_mismatch.lock().unwrap().clone() {
+            return Err(ExecutionBoundaryErrorV1::workspace_identity_mismatch(
+                expected, actual,
+            ));
+        }
         if !self.selectors_available.load(Ordering::SeqCst) {
             return Err(ExecutionBoundaryErrorV1::domain(
                 DomainError::InvalidState {
@@ -907,7 +919,7 @@ fn session_identity_mismatch_is_rejected_before_durable_admission() {
         "session.cancel",
         json!({"selector": selector_json(), "reason": "wrong identity"}),
         PreconditionsV1::new(
-            Some(foreign),
+            Some(foreign.clone()),
             Some(current.revision()),
             Some(current.active_attempt_id().unwrap().clone()),
             None,
@@ -923,9 +935,56 @@ fn session_identity_mismatch_is_rejected_before_durable_admission() {
         .admit(&request, IdempotencyKeyV1::new("foreign-session").unwrap())
         .unwrap_err();
 
-    assert!(matches!(error, ExecutionErrorV1::BoundaryDomain(_)));
+    assert!(matches!(
+        error,
+        ExecutionErrorV1::SessionIdentityMismatch {
+            expected,
+            actual: Some(actual),
+        } if expected == foreign && actual == *current.session_id()
+    ));
     assert_eq!(harness.store.request_count(), requests_before);
     assert_eq!(harness.store.current_session(), Some(current));
+}
+
+#[test]
+fn workspace_identity_mismatch_survives_admission_revalidation() {
+    let durable_identity = identity();
+    let binding = binding(durable_identity.clone());
+    let store = RecordingStore::new(durable_identity);
+    let workspaces = FixtureWorkspaces::stable(binding);
+    let expected = WorkspaceId::new(WORKSPACE_ID).unwrap();
+    let actual = WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap();
+    workspaces.mismatch_selector_identity(expected.clone(), actual.clone());
+    let engine = DaemonExecutionEngineV1::new(
+        store.clone(),
+        FixtureIds::new(),
+        FixtureClock::new(),
+        FixtureProcedures,
+        FixtureArtifacts,
+        workspaces,
+    );
+    let request = slice_request(
+        "session.start",
+        json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Task"}),
+        PreconditionsV1::default(),
+        701,
+    );
+
+    let error = engine
+        .admit(
+            &request,
+            IdempotencyKeyV1::new("foreign-workspace").unwrap(),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ExecutionErrorV1::WorkspaceIdentityMismatch {
+            expected: error_expected,
+            actual: error_actual,
+        } if error_expected == expected && error_actual == actual
+    ));
+    assert_eq!(store.request_count(), 0);
 }
 
 #[test]

@@ -46,6 +46,7 @@ tasks update the catalog, closed detail schemas, generated mirrors, and tests.
 | `WORKSPACE_ALREADY_INITIALIZED` | 1 | no | Initialization requested where compatible state already exists in a non-idempotent mode |
 | `WORKSPACE_INIT_CONFLICT` | 5 | no | Existing `.podway` content conflicts with safe initialization |
 | `WORKSPACE_ID_CONFLICT` | 5 | no | Same workspace UUID appears at multiple live roots |
+| `WORKSPACE_UUID_MISMATCH` | 4 | no | Authoritative workspace UUID differs from the expected UUID |
 | `WORKSPACE_CONFIG_INVALID` | 5 | no | Workspace config fails schema or semantic validation |
 | `WORKSPACE_STATE_UNREADABLE` | 5 | no | SQLite state is corrupt or inaccessible |
 | `WORKSPACE_SCHEMA_UNSUPPORTED` | 5 | no | Database schema is newer or otherwise unsupported |
@@ -69,6 +70,7 @@ tasks update the catalog, closed detail schemas, generated mirrors, and tests.
 | Code | Exit | Retryable | Meaning |
 |---|---:|---:|---|
 | `SESSION_NOT_FOUND` | 1 | no | Workspace has no current session |
+| `SESSION_ID_MISMATCH` | 4 | no | Authoritative session ID differs from the expected ID, including when no current session exists |
 | `SESSION_ALREADY_EXISTS` | 1 | no | Start requested while a session exists |
 | `SESSION_NOT_RUNNING` | 1 | no | Command requires a running session |
 | `SESSION_NOT_COMPLETED` | 1 | no | Reopen requires a completed session |
@@ -138,14 +140,25 @@ On revision conflicts, details include current values:
 
 Clients should refresh `status --json`, reassess the active stage, and issue a new command rather than blindly changing only the revision.
 
-## Accepted automation target errors
+## Identity-conflict details
 
-The v0.1.0 target adds stable entries for `WORKSPACE_UUID_MISMATCH`,
-`SESSION_ID_MISMATCH`, `PROCEDURE_DIGEST_MISMATCH`,
+`WORKSPACE_UUID_MISMATCH` uses the closed
+`podway.workspace-uuid-mismatch-details/v1` object with
+`expected_workspace_uuid`, `actual_workspace_uuid`, and `admission`.
+`SESSION_ID_MISMATCH` uses the closed
+`podway.session-id-mismatch-details/v1` object with `expected_session_id`,
+nullable `actual_session_id`, and `admission`. A null actual session means the
+expected session no longer exists as the workspace's current session.
+
+Before durable admission, `admission` is exactly `{ "admitted": false }`. A
+terminal conflict discovered after admission uses `{ "admitted": true,
+"job_id": "<uuid>", "workspace_sequence": <positive integer> }`. The two
+identity errors are non-retryable exit-4 conflicts: callers must observe fresh
+identity before deciding whether a new operation is valid.
+
+The remaining v0.1.0 target adds stable entries for `PROCEDURE_DIGEST_MISMATCH`,
 `DAEMON_CONTRACT_MISMATCH`, invalid or over-long explicit socket paths, and closed
-admission-aware wait failures. Their details carry expected and actual identities
-and `admission.admitted`; a pre-admission mismatch reports `false` and admits no
-job. The normative target is the
+admission-aware wait failures. The normative target is the
 [automation error contract](34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
 
 ## Error redaction

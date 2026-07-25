@@ -31,7 +31,7 @@
     {
       "source": "docs/schemas/error-v1.schema.json",
       "destination": "schemas/error-v1.schema.json",
-      "source_sha256": "370c7392a0880b0d5ab2989f9c7262bbe2182aee8159b9e7c555c147db3f409b",
+      "source_sha256": "98619dede5b14ea4537b5c04a13483fb3f7032f1b9bd7851cff1414dfdd43a01",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -119,7 +119,7 @@
     {
       "source": "docs/spec/error-codes.json",
       "destination": "spec/error-codes.json",
-      "source_sha256": "60fd5b75fc0ef433ab9acc44d5638cbad4536ca261e492827cf914b0fb784d8a",
+      "source_sha256": "94126273b940b1482778404228746d0ecad7c82f7774d2d447b8740804a743aa",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

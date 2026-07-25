@@ -121,6 +121,7 @@ enum Reply {
     Status,
     Output,
     Error,
+    IdentityError,
     ContractMismatch,
     ResetUnreadable,
     MalformedFramedResponse,
@@ -287,6 +288,7 @@ impl Reply {
                 Some(job()),
             ),
             Self::Error => error_response(request),
+            Self::IdentityError => identity_error_response(request),
             Self::ContractMismatch => contract_mismatch_response(request),
             Self::ResetUnreadable => error_response_with(
                 request,
@@ -359,6 +361,32 @@ fn error_response(request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1>
         4,
         true,
     )
+}
+
+fn identity_error_response(request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1> {
+    podway_protocol::ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+        request_id: request.request_id().clone(),
+        command: request.command().clone(),
+        generated_at: timestamp(),
+        code: ErrorCodeV1::new("SESSION_ID_MISMATCH")
+            .expect("identity mismatch code must be valid"),
+        message: "The session ID differs from the expected identity.".to_owned(),
+        retryable: false,
+        exit_code: ExitCodeV1::new(4).expect("identity mismatch exit code must be valid"),
+        workspace: Some(Map::from_iter([
+            ("uuid".to_owned(), Value::String(WORKSPACE_ID.to_owned())),
+            ("root".to_owned(), Value::String("/fixture".to_owned())),
+        ])),
+        details: serde_json::from_value(json!({
+            "schema": "podway.session-id-mismatch-details/v1",
+            "expected_session_id": SESSION_ID,
+            "actual_session_id": null,
+            "admission": { "admitted": false }
+        }))
+        .expect("identity mismatch details must be an object"),
+    })
+    .map(ResponseEnvelopeV1::Error)
+    .map_err(|error| io::Error::other(error.to_string()))
 }
 
 fn contract_mismatch_response(request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1> {
@@ -1164,6 +1192,30 @@ fn daemon_and_parser_errors_preserve_stable_exit_and_json_contracts() {
     assert_eq!(invalid_applicability_json["schema"], "podway.error/v1");
     assert_eq!(invalid_applicability_json["command"], "session.next");
     assert_eq!(invalid_applicability_json["code"], "REQUEST_INVALID");
+}
+
+#[test]
+fn identity_conflict_preserves_closed_details_and_exit_four() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::IdentityError]);
+    let output = fixture.run(&["--json", "--worktree", "/fixture", "status"]);
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stderr.is_empty());
+    let response: Value =
+        serde_json::from_slice(&output.stdout).expect("identity conflict must be JSON");
+    assert_eq!(response["code"], "SESSION_ID_MISMATCH");
+    assert_eq!(response["retryable"], false);
+    assert_eq!(response["exit_code"], 4);
+    assert_eq!(
+        response["details"],
+        json!({
+            "schema": "podway.session-id-mismatch-details/v1",
+            "expected_session_id": SESSION_ID,
+            "actual_session_id": null,
+            "admission": { "admitted": false }
+        })
+    );
+    assert_eq!(daemon.finish().len(), 1);
 }
 
 #[test]

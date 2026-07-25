@@ -301,6 +301,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("WORKSPACE_ALREADY_INITIALIZED", 1, false),
     ("WORKSPACE_INIT_CONFLICT", 5, false),
     ("WORKSPACE_ID_CONFLICT", 5, false),
+    ("WORKSPACE_UUID_MISMATCH", 4, false),
     ("WORKSPACE_CONFIG_INVALID", 5, false),
     ("WORKSPACE_STATE_UNREADABLE", 5, false),
     ("WORKSPACE_SCHEMA_UNSUPPORTED", 5, false),
@@ -314,6 +315,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("PROCEDURE_SCHEMA_UNSUPPORTED", 1, false),
     ("PRESET_NOT_FOUND", 1, false),
     ("SESSION_NOT_FOUND", 1, false),
+    ("SESSION_ID_MISMATCH", 4, false),
     ("SESSION_ALREADY_EXISTS", 1, false),
     ("SESSION_NOT_RUNNING", 1, false),
     ("SESSION_NOT_COMPLETED", 1, false),
@@ -355,6 +357,25 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
         "the runtime catalog must contain exactly the frozen public entries"
     );
     for &(code, exit_code, retryable) in FROZEN_ERROR_CATALOG {
+        let details = match code {
+            "WORKSPACE_UUID_MISMATCH" => identity_details(
+                "podway.workspace-uuid-mismatch-details/v1",
+                "expected_workspace_uuid",
+                WORKSPACE_ID,
+                "actual_workspace_uuid",
+                Some("523e4567-e89b-12d3-a456-426614174000"),
+                false,
+            ),
+            "SESSION_ID_MISMATCH" => identity_details(
+                "podway.session-id-mismatch-details/v1",
+                "expected_session_id",
+                SESSION_ID,
+                "actual_session_id",
+                None,
+                false,
+            ),
+            _ => Map::new(),
+        };
         let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
             request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
             command: CommandNameV1::new("status").unwrap(),
@@ -364,7 +385,7 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             retryable,
             exit_code: ExitCodeV1::new(exit_code).unwrap(),
             workspace: None,
-            details: Map::new(),
+            details,
         })
         .unwrap();
         assert_eq!(envelope.code().as_str(), code);
@@ -405,6 +426,157 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             })
             .is_err()
         );
+    }
+}
+
+fn identity_details(
+    schema: &str,
+    expected_key: &str,
+    expected: &str,
+    actual_key: &str,
+    actual: Option<&str>,
+    admitted: bool,
+) -> Map<String, Value> {
+    let admission = if admitted {
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 7
+        })
+    } else {
+        json!({"admitted": false})
+    };
+    Map::from_iter([
+        ("schema".to_owned(), json!(schema)),
+        (expected_key.to_owned(), json!(expected)),
+        (
+            actual_key.to_owned(),
+            actual.map_or(Value::Null, |value| json!(value)),
+        ),
+        ("admission".to_owned(), admission),
+    ])
+}
+
+#[test]
+fn api_004_identity_conflict_details_are_closed_and_admission_aware() {
+    for (code, exit_code, details) in [
+        (
+            "WORKSPACE_UUID_MISMATCH",
+            4,
+            identity_details(
+                "podway.workspace-uuid-mismatch-details/v1",
+                "expected_workspace_uuid",
+                WORKSPACE_ID,
+                "actual_workspace_uuid",
+                Some("523e4567-e89b-12d3-a456-426614174000"),
+                false,
+            ),
+        ),
+        (
+            "SESSION_ID_MISMATCH",
+            4,
+            identity_details(
+                "podway.session-id-mismatch-details/v1",
+                "expected_session_id",
+                SESSION_ID,
+                "actual_session_id",
+                None,
+                true,
+            ),
+        ),
+    ] {
+        let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+            request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+            command: CommandNameV1::new("status").unwrap(),
+            generated_at: timestamp(),
+            code: ErrorCodeV1::new(code).unwrap(),
+            message: "identity mismatch".to_owned(),
+            retryable: false,
+            exit_code: ExitCodeV1::new(exit_code).unwrap(),
+            workspace: None,
+            details: details.clone(),
+        })
+        .unwrap();
+        assert_round_trip(envelope);
+
+        let mut unknown = details.clone();
+        unknown.insert("diagnostic".to_owned(), json!("forbidden"));
+        let mut malformed = valid_error_envelope_json();
+        malformed["code"] = json!(code);
+        malformed["exit_code"] = json!(exit_code);
+        malformed["retryable"] = json!(false);
+        malformed["details"] = Value::Object(unknown);
+        assert_error_rejected(malformed);
+
+        let mut malformed = valid_error_envelope_json();
+        malformed["code"] = json!(code);
+        malformed["exit_code"] = json!(exit_code);
+        malformed["retryable"] = json!(false);
+        malformed["details"] = Value::Object(details.clone());
+        malformed["details"]["admission"] = json!({"admitted": true});
+        assert_error_rejected(malformed);
+    }
+
+    let mut wrong_schema = valid_error_envelope_json();
+    wrong_schema["code"] = json!("SESSION_ID_MISMATCH");
+    wrong_schema["exit_code"] = json!(4);
+    wrong_schema["retryable"] = json!(false);
+    wrong_schema["details"] = Value::Object(identity_details(
+        "podway.session-id-mismatch-details/v2",
+        "expected_session_id",
+        SESSION_ID,
+        "actual_session_id",
+        Some("523e4567-e89b-12d3-a456-426614174000"),
+        false,
+    ));
+    assert_error_rejected(wrong_schema);
+
+    let workspace_details = identity_details(
+        "podway.workspace-uuid-mismatch-details/v1",
+        "expected_workspace_uuid",
+        WORKSPACE_ID,
+        "actual_workspace_uuid",
+        Some("523e4567-e89b-12d3-a456-426614174000"),
+        false,
+    );
+    for invalid_details in [
+        {
+            let mut details = workspace_details.clone();
+            details.insert("actual_workspace_uuid".to_owned(), Value::Null);
+            details
+        },
+        {
+            let mut details = workspace_details.clone();
+            details.insert("expected_workspace_uuid".to_owned(), json!("not-a-uuid"));
+            details
+        },
+        {
+            let mut details = workspace_details.clone();
+            details.insert(
+                "admission".to_owned(),
+                json!({"admitted": false, "job_id": JOB_ID}),
+            );
+            details
+        },
+        {
+            let mut details = workspace_details.clone();
+            details.insert(
+                "admission".to_owned(),
+                json!({
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 0
+                }),
+            );
+            details
+        },
+    ] {
+        let mut malformed = valid_error_envelope_json();
+        malformed["code"] = json!("WORKSPACE_UUID_MISMATCH");
+        malformed["exit_code"] = json!(4);
+        malformed["retryable"] = json!(false);
+        malformed["details"] = Value::Object(invalid_details);
+        assert_error_rejected(malformed);
     }
 }
 

@@ -59,6 +59,10 @@ pub enum DomainError {
         expected: Revision,
         actual: Revision,
     },
+    SessionIdentityMismatch {
+        expected: SessionId,
+        actual: Option<SessionId>,
+    },
     ItemNotFound {
         item_id: ItemId,
     },
@@ -119,6 +123,16 @@ impl fmt::Display for DomainError {
                 expected.get(),
                 actual.get()
             ),
+            Self::SessionIdentityMismatch { expected, actual } => match actual {
+                Some(actual) => write!(
+                    formatter,
+                    "session identity precondition failed: expected {expected}, found {actual}"
+                ),
+                None => write!(
+                    formatter,
+                    "session identity precondition failed: expected {expected}, found no session"
+                ),
+            },
             Self::ItemNotFound { item_id } => write!(formatter, "item {item_id} was not found"),
             Self::BlockerNotCurrent => {
                 write!(formatter, "the blocker is not on the active attempt")

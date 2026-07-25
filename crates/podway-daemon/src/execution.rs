@@ -88,7 +88,13 @@ enum AdmissionResolutionV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionBoundaryErrorV1 {
     Domain(DomainError),
-    Transient { operation: &'static str },
+    WorkspaceIdentityMismatch {
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    },
+    Transient {
+        operation: &'static str,
+    },
 }
 
 impl ExecutionBoundaryErrorV1 {
@@ -98,6 +104,10 @@ impl ExecutionBoundaryErrorV1 {
 
     pub const fn transient(operation: &'static str) -> Self {
         Self::Transient { operation }
+    }
+
+    pub fn workspace_identity_mismatch(expected: WorkspaceId, actual: WorkspaceId) -> Self {
+        Self::WorkspaceIdentityMismatch { expected, actual }
     }
 }
 
@@ -360,8 +370,20 @@ pub trait ArtifactVerifierV1: Send + Sync {
 #[derive(Debug)]
 pub enum ExecutionErrorV1 {
     BoundaryDomain(DomainError),
-    BoundaryTransient { operation: &'static str },
-    InvalidPersistedExecution { reason: &'static str },
+    BoundaryTransient {
+        operation: &'static str,
+    },
+    SessionIdentityMismatch {
+        expected: SessionId,
+        actual: Option<SessionId>,
+    },
+    WorkspaceIdentityMismatch {
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    },
+    InvalidPersistedExecution {
+        reason: &'static str,
+    },
     InvalidStoreValue(StoreValueErrorV1),
     Store(StoreErrorV1),
 }
@@ -378,6 +400,12 @@ impl fmt::Display for ExecutionErrorV1 {
                     "execution boundary is transiently unavailable: {operation}"
                 )
             }
+            Self::SessionIdentityMismatch { .. } => {
+                formatter.write_str("execution target session identity does not match")
+            }
+            Self::WorkspaceIdentityMismatch { .. } => {
+                formatter.write_str("execution target workspace identity does not match")
+            }
             Self::InvalidPersistedExecution { reason } => {
                 write!(formatter, "invalid persisted execution document: {reason}")
             }
@@ -393,7 +421,10 @@ impl Error for ExecutionErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::BoundaryDomain(error) => Some(error),
-            Self::BoundaryTransient { .. } | Self::InvalidPersistedExecution { .. } => None,
+            Self::BoundaryTransient { .. }
+            | Self::SessionIdentityMismatch { .. }
+            | Self::WorkspaceIdentityMismatch { .. }
+            | Self::InvalidPersistedExecution { .. } => None,
             Self::InvalidStoreValue(error) => Some(error),
             Self::Store(error) => Some(error),
         }
@@ -754,7 +785,15 @@ where
                 return Ok(outcome);
             }
         }
-        if expected_workspace.is_some_and(|expected| expected.identity() != binding.identity()) {
+        if let Some(expected) = expected_workspace
+            && expected.identity() != binding.identity()
+        {
+            if expected.identity().workspace_uuid() != binding.identity().workspace_uuid() {
+                return Err(ExecutionErrorV1::WorkspaceIdentityMismatch {
+                    expected: expected.identity().workspace_uuid().clone(),
+                    actual: binding.identity().workspace_uuid().clone(),
+                });
+            }
             return Err(ExecutionErrorV1::BoundaryDomain(
                 DomainError::InvalidState {
                     reason: "revalidated workspace does not match the scheduler identity",
@@ -888,6 +927,9 @@ where
                     error,
                     now,
                 );
+            }
+            Err(BoundaryDispositionV1::WorkspaceIdentityMismatch { expected, actual }) => {
+                return Err(ExecutionErrorV1::WorkspaceIdentityMismatch { expected, actual });
             }
             Err(BoundaryDispositionV1::Transient { operation }) => {
                 return Err(ExecutionErrorV1::BoundaryTransient { operation });
@@ -1026,9 +1068,10 @@ where
             .expected_uuid()
             .is_some_and(|expected| expected != binding.identity().workspace_uuid())
         {
-            return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                reason: "selector workspace UUID does not match revalidated identity",
-            }));
+            return Err(BoundaryDispositionV1::WorkspaceIdentityMismatch {
+                expected: selector.expected_uuid().cloned().expect("checked above"),
+                actual: binding.identity().workspace_uuid().clone(),
+            });
         }
         Ok(binding)
     }
@@ -1057,8 +1100,13 @@ where
                 },
             ));
         }
-        enforce_session_identity_v1(command, view.current_session())
-            .map_err(ExecutionErrorV1::BoundaryDomain)
+        match enforce_session_identity_v1(command, view.current_session()) {
+            Err(DomainError::SessionIdentityMismatch { expected, actual }) => {
+                Err(ExecutionErrorV1::SessionIdentityMismatch { expected, actual })
+            }
+            Err(error) => Err(ExecutionErrorV1::BoundaryDomain(error)),
+            Ok(()) => Ok(()),
+        }
     }
 
     fn emit_admission_result(&self, result: &Result<AdmitOutcomeV1, ExecutionErrorV1>) {
@@ -1500,13 +1548,22 @@ fn start_session_input_v1(
 #[derive(Debug)]
 enum BoundaryDispositionV1 {
     Domain(DomainError),
-    Transient { operation: &'static str },
+    WorkspaceIdentityMismatch {
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    },
+    Transient {
+        operation: &'static str,
+    },
 }
 
 impl From<ExecutionBoundaryErrorV1> for BoundaryDispositionV1 {
     fn from(error: ExecutionBoundaryErrorV1) -> Self {
         match error {
             ExecutionBoundaryErrorV1::Domain(error) => Self::Domain(error),
+            ExecutionBoundaryErrorV1::WorkspaceIdentityMismatch { expected, actual } => {
+                Self::WorkspaceIdentityMismatch { expected, actual }
+            }
             ExecutionBoundaryErrorV1::Transient { operation } => Self::Transient { operation },
         }
     }
@@ -1516,6 +1573,9 @@ impl ExecutionErrorV1 {
     fn from_boundary(error: BoundaryDispositionV1) -> Self {
         match error {
             BoundaryDispositionV1::Domain(error) => Self::BoundaryDomain(error),
+            BoundaryDispositionV1::WorkspaceIdentityMismatch { expected, actual } => {
+                Self::WorkspaceIdentityMismatch { expected, actual }
+            }
             BoundaryDispositionV1::Transient { operation } => Self::BoundaryTransient { operation },
         }
     }
@@ -1701,14 +1761,11 @@ fn enforce_session_identity_v1(
     let Some(expected) = expected_session_id_v1(command) else {
         return Ok(());
     };
-    let actual = current
-        .map(SessionAggregateV1::session_id)
-        .ok_or(DomainError::InvalidState {
-            reason: "session identity precondition requires an existing session",
-        })?;
-    if actual != expected {
-        return Err(DomainError::InvalidState {
-            reason: "session identity precondition does not match the current session",
+    let actual = current.map(SessionAggregateV1::session_id).cloned();
+    if actual.as_ref() != Some(expected) {
+        return Err(DomainError::SessionIdentityMismatch {
+            expected: expected.clone(),
+            actual,
         });
     }
     Ok(())
