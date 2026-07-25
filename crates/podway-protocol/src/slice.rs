@@ -1275,6 +1275,14 @@ impl SliceRequestV1 {
                 });
             }
         };
+        let workspace = envelope.workspace().ok_or(SliceErrorV1::MissingWorkspace {
+            command: command.command_name(),
+        })?;
+        if workspace.expected_uuid() != selector.expected_uuid() {
+            return Err(SliceErrorV1::InvalidValue {
+                field: "workspace.expected_uuid/selector.expected_uuid",
+            });
+        }
         Ok(Self { selector, command })
     }
 

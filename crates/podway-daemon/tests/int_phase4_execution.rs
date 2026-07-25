@@ -897,6 +897,61 @@ fn assert_failure(receipt: &TerminalReceiptV1) {
 }
 
 #[test]
+fn session_identity_mismatch_is_rejected_before_durable_admission() {
+    let mut harness = Harness::new();
+    assert_success(&harness.start());
+    let current = harness.store.current_session().unwrap();
+    let requests_before = harness.store.request_count();
+    let foreign = SessionId::new("00000000-0000-4000-8000-000000000099").unwrap();
+    let request = slice_request(
+        "session.cancel",
+        json!({"selector": selector_json(), "reason": "wrong identity"}),
+        PreconditionsV1::new(
+            Some(foreign),
+            Some(current.revision()),
+            Some(current.active_attempt_id().unwrap().clone()),
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+        700,
+    );
+
+    let error = harness
+        .engine
+        .admit(&request, IdempotencyKeyV1::new("foreign-session").unwrap())
+        .unwrap_err();
+
+    assert!(matches!(error, ExecutionErrorV1::BoundaryDomain(_)));
+    assert_eq!(harness.store.request_count(), requests_before);
+    assert_eq!(harness.store.current_session(), Some(current));
+}
+
+#[test]
+fn session_start_with_an_existing_session_is_rejected_before_admission() {
+    let mut harness = Harness::new();
+    assert_success(&harness.start());
+    let current = harness.store.current_session();
+    let requests_before = harness.store.request_count();
+    let request = slice_request(
+        "session.start",
+        json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Second"}),
+        PreconditionsV1::default(),
+        701,
+    );
+
+    let error = harness
+        .engine
+        .admit(&request, IdempotencyKeyV1::new("second-start").unwrap())
+        .unwrap_err();
+
+    assert!(matches!(error, ExecutionErrorV1::BoundaryDomain(_)));
+    assert_eq!(harness.store.request_count(), requests_before);
+    assert_eq!(harness.store.current_session(), current);
+}
+
+#[test]
 fn clean_start_is_claimed_decoded_and_committed() {
     let mut harness = Harness::new();
     assert_success(&harness.start());

@@ -5,11 +5,11 @@ use podway_daemon::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
         DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
-        DispatcherJobOutputV1, DispatcherPreviewServiceV1, DispatcherReadOutputV1,
-        DispatcherReadServiceV1, DispatcherStatusRequestV1, DispatcherTerminalOutputV1,
-        DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1,
-        MutationDispatchOutcomeV1, MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1,
-        WorkspaceRuntimeV1,
+        DispatcherJobOutputV1, DispatcherNextRequestV1, DispatcherPreviewServiceV1,
+        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherStatusRequestV1,
+        DispatcherTerminalOutputV1, DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1,
+        MutationAdmissionWorkerV1, MutationDispatchOutcomeV1, MutationWaitV1,
+        RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
     },
     server::RequestDispatcherV1,
 };
@@ -209,11 +209,11 @@ impl DispatcherReadServiceV1<Workspace> for Reads {
     fn next(
         &self,
         _workspace: &Workspace,
-        wait: RequestReadWaitV1,
+        input: DispatcherNextRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
         let invalid = {
             let mut calls = self.0.lock().unwrap();
-            calls.reads.push(("next", Some(wait)));
+            calls.reads.push(("next", Some(input.wait)));
             calls.invalid_read_route == Some("next")
         };
         Ok(DispatcherReadOutputV1::new(
@@ -476,12 +476,18 @@ fn request_with_options(
     } else {
         operation(command)
     };
+    let expected_workspace_id = payload
+        .get("selector")
+        .and_then(Value::as_object)
+        .and_then(|selector| selector.get("expected_uuid"))
+        .and_then(Value::as_str)
+        .map(|value| WorkspaceId::new(value.to_owned()).unwrap());
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{sequence:012}")).unwrap(),
         client: ClientInfoV1::new("phase5-dispatch", "1", 1).unwrap(),
         operation,
         command: CommandNameV1::new(command).unwrap(),
-        workspace: Some(WorkspaceContextV1::new("/client/path", None).unwrap()),
+        workspace: Some(WorkspaceContextV1::new("/client/path", expected_workspace_id).unwrap()),
         idempotency_key: matches!(operation, OperationV1::Mutate | OperationV1::Bootstrap)
             .then(|| IdempotencyKeyV1::new(format!("phase5-{sequence}")).unwrap()),
         preconditions,

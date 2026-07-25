@@ -2,7 +2,7 @@ use podway_core::{ItemId, Revision, Sha256Digest, WorkspaceId};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, DAEMON_COMMAND_NAMES_V1, ErrorCodeV1, ExitCodeV1,
     IdempotencyKeyV1, JobStateV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceRequestV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceErrorV1, SliceRequestV1,
     TerminalJobCancellationProjectionV1, TerminalJobErrorProjectionV1, TerminalJobResponseV1,
     TerminalJobSuccessProjectionV1, TerminalJobSuccessResultV1, WorkspaceContextV1,
     WorktreeSelectorWireV1, canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
@@ -94,18 +94,55 @@ fn envelope(
     command_payload: Value,
     preconditions: PreconditionsV1,
 ) -> RequestEnvelopeV1 {
+    envelope_with_workspace_uuid(
+        command,
+        operation,
+        durable,
+        command_payload,
+        preconditions,
+        Some(WorkspaceId::new(WORKSPACE_ID).unwrap()),
+    )
+}
+
+fn envelope_with_workspace_uuid(
+    command: &str,
+    operation: OperationV1,
+    durable: bool,
+    command_payload: Value,
+    preconditions: PreconditionsV1,
+    workspace_uuid: Option<WorkspaceId>,
+) -> RequestEnvelopeV1 {
     RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         client: ClientInfoV1::new("podway-cli", "1.0.0", 42).unwrap(),
         operation,
         command: CommandNameV1::new(command).unwrap(),
-        workspace: Some(WorkspaceContextV1::new("/worktree", None).unwrap()),
+        workspace: Some(WorkspaceContextV1::new("/worktree", workspace_uuid).unwrap()),
         idempotency_key: durable.then(|| IdempotencyKeyV1::new("phase5-contract").unwrap()),
         preconditions,
         options: RequestOptionsV1::new(false, 30_000).unwrap(),
         payload: payload(command_payload),
     })
     .unwrap()
+}
+
+#[test]
+fn casid003_rejects_mismatched_envelope_and_selector_workspace_uuids() {
+    let request = envelope_with_workspace_uuid(
+        "session.status",
+        OperationV1::Query,
+        false,
+        json!({"selector": selector()}),
+        PreconditionsV1::default(),
+        Some(WorkspaceId::new(OTHER_WORKSPACE_ID).unwrap()),
+    );
+
+    assert_eq!(
+        SliceRequestV1::from_envelope(&request),
+        Err(SliceErrorV1::InvalidValue {
+            field: "workspace.expected_uuid/selector.expected_uuid",
+        }),
+    );
 }
 
 struct RouteCase {
@@ -801,12 +838,13 @@ fn g006_reset_all_preserves_workspace_uuid_preconditions_and_selector_consistenc
     );
     let mut unreadable_selector = selector();
     unreadable_selector["expected_uuid"] = Value::Null;
-    let unreadable_request = SliceRequestV1::from_envelope(&envelope(
+    let unreadable_request = SliceRequestV1::from_envelope(&envelope_with_workspace_uuid(
         "workspace.reset_all",
         OperationV1::Bootstrap,
         true,
         json!({"selector": unreadable_selector, "confirmed": true}),
         PreconditionsV1::default(),
+        None,
     ))
     .unwrap();
     match unreadable_request.command() {
@@ -889,7 +927,7 @@ fn g006_reset_all_identity_binds_stable_git_fingerprints_not_workspace_uuids() {
 
     let mut replacement_selector = selector();
     replacement_selector["expected_uuid"] = json!(OTHER_WORKSPACE_ID);
-    let replacement = SliceRequestV1::from_envelope(&envelope(
+    let replacement = SliceRequestV1::from_envelope(&envelope_with_workspace_uuid(
         "workspace.reset_all",
         OperationV1::Bootstrap,
         true,
@@ -899,6 +937,7 @@ fn g006_reset_all_identity_binds_stable_git_fingerprints_not_workspace_uuids() {
             "expected_workspace_uuid": OTHER_WORKSPACE_ID,
         }),
         PreconditionsV1::default(),
+        Some(WorkspaceId::new(OTHER_WORKSPACE_ID).unwrap()),
     ))
     .unwrap();
 

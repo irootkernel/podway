@@ -980,6 +980,14 @@ pub struct RevisionAttemptItemPreconditionsV1 {
     expected_item_revision: Option<RevisionV1>,
 }
 
+/// Session identity condition checked atomically when a new job is admitted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AdmissionSessionIdentityV1 {
+    Any,
+    Absent,
+    Exact(SessionId),
+}
+
 impl RevisionAttemptItemPreconditionsV1 {
     pub fn new(
         expected_session_revision: Option<RevisionV1>,
@@ -1026,6 +1034,7 @@ pub struct AdmitRequestV1 {
     preconditions: RevisionAttemptItemPreconditionsV1,
     request_digest: CanonicalRequestDigestV1,
     submitted_at: EpochMillisV1,
+    session_identity: AdmissionSessionIdentityV1,
 }
 
 impl AdmitRequestV1 {
@@ -1050,6 +1059,7 @@ impl AdmitRequestV1 {
             preconditions,
             request_digest,
             submitted_at,
+            session_identity: AdmissionSessionIdentityV1::Any,
         }
     }
 
@@ -1072,7 +1082,13 @@ impl AdmitRequestV1 {
             preconditions,
             request_digest,
             submitted_at,
+            session_identity: AdmissionSessionIdentityV1::Any,
         }
+    }
+
+    pub fn with_session_identity(mut self, expected: AdmissionSessionIdentityV1) -> Self {
+        self.session_identity = expected;
+        self
     }
 
     pub fn command(&self) -> &CommandV1 {
@@ -1102,6 +1118,10 @@ impl AdmitRequestV1 {
 
     pub fn preconditions(&self) -> &RevisionAttemptItemPreconditionsV1 {
         &self.preconditions
+    }
+
+    pub fn session_identity(&self) -> &AdmissionSessionIdentityV1 {
+        &self.session_identity
     }
 
     pub fn request_digest(&self) -> &CanonicalRequestDigestV1 {
@@ -1635,6 +1655,10 @@ pub enum StoreErrorV1 {
     PreconditionConflictV1 {
         expected: Option<RevisionV1>,
         actual: Option<RevisionV1>,
+    },
+    SessionIdentityConflictV1 {
+        expected: Option<SessionId>,
+        actual: Option<SessionId>,
     },
     StorageIntegrityV1 {
         check: StoreIntegrityCheckV1,

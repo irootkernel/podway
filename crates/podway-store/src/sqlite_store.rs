@@ -335,6 +335,29 @@ impl StoreContractV1 for SqliteStoreV1 {
             transaction.commit().map_err(storage)?;
             return Ok(AdmitOutcomeV1::Existing(outcome));
         }
+        let current_session = load_current_session(&transaction)?;
+        let actual_session_id = current_session
+            .as_ref()
+            .map(podway_core::SessionAggregateV1::session_id)
+            .cloned();
+        let session_identity_matches = match request.session_identity() {
+            crate::AdmissionSessionIdentityV1::Any => true,
+            crate::AdmissionSessionIdentityV1::Absent => actual_session_id.is_none(),
+            crate::AdmissionSessionIdentityV1::Exact(expected) => {
+                actual_session_id.as_ref() == Some(expected)
+            }
+        };
+        if !session_identity_matches {
+            let expected = match request.session_identity() {
+                crate::AdmissionSessionIdentityV1::Any
+                | crate::AdmissionSessionIdentityV1::Absent => None,
+                crate::AdmissionSessionIdentityV1::Exact(expected) => Some(expected.clone()),
+            };
+            return Err(StoreErrorV1::SessionIdentityConflictV1 {
+                expected,
+                actual: actual_session_id,
+            });
+        }
         let barrier_exists: i64 = transaction
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM jobs WHERE state IN ('queued', 'running') \

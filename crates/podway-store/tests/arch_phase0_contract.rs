@@ -3,8 +3,8 @@
 //! Requirements: STO-001 through STO-006, INV-S10, ARC-002, ARC-003.
 
 use podway_core::{
-    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, Revision, Sha256Digest,
-    UnixMillis, WorkspaceId,
+    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, Revision, SessionId,
+    Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_store::codec::PersistedTerminalResultV1;
 use podway_store::{
@@ -444,6 +444,10 @@ fn store_v1_constructs_every_typed_error_variant() {
             expected: Some(Revision::new(4)),
             actual: Some(Revision::new(5)),
         },
+        StoreErrorV1::SessionIdentityConflictV1 {
+            expected: Some(SessionId::new("00000000-0000-4000-8000-000000000004").unwrap()),
+            actual: Some(SessionId::new("00000000-0000-4000-8000-000000000005").unwrap()),
+        },
         StoreErrorV1::StorageIntegrityV1 {
             check: StoreIntegrityCheckV1::JobQueue,
         },
@@ -509,6 +513,16 @@ fn store_v1_constructs_every_typed_error_variant() {
             StoreErrorV1::PreconditionConflictV1 { expected, actual } => {
                 assert_eq!(expected, Some(Revision::new(4)));
                 assert_eq!(actual, Some(Revision::new(5)));
+            }
+            StoreErrorV1::SessionIdentityConflictV1 { expected, actual } => {
+                assert_eq!(
+                    expected.unwrap().as_str(),
+                    "00000000-0000-4000-8000-000000000004"
+                );
+                assert_eq!(
+                    actual.unwrap().as_str(),
+                    "00000000-0000-4000-8000-000000000005"
+                );
             }
             StoreErrorV1::StorageIntegrityV1 { check } => {
                 assert_eq!(check, StoreIntegrityCheckV1::JobQueue);

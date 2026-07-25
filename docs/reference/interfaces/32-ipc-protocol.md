@@ -97,6 +97,9 @@ after the CLI merges it with local service state.
 
 Workspace requests include the canonical root discovered by the CLI. `expected_uuid` is omitted before initialization and included afterward when known.
 
+When both the envelope workspace context and worktree selector carry `expected_uuid`, the values
+must agree. The daemon rejects disagreement during request decoding, before dispatch.
+
 The daemon independently re-discovers and validates the worktree. It never trusts the path or UUID solely because the CLI supplied them.
 
 ## Preconditions
@@ -115,6 +118,12 @@ job_state
 The command specification determines required fields. Session-bearing reads accept an optional
 `session_id`; stage, item, reopen, replacement, and session-reset mutations require it. Unknown
 precondition fields are rejected in v1.
+
+The daemon compares these identities with the same authoritative Store view used by the operation.
+Waiting reads recheck the session identity on every Store observation. New mutations check identity
+inside the admission transaction before creating durable rows and again after claim before applying
+a domain transition. A mismatch admits no new job and changes no session state. An exact
+idempotency replay is returned before evaluating a now-stale identity fence.
 
 ## Mutation waiting
 

@@ -41,8 +41,8 @@ use podway_protocol::{
     canonical_reset_all_identity_v1,
 };
 use podway_store::{
-    AdmitOutcomeV1, AdmitRequestV1, CanonicalExecutionJsonV1, ClaimedJobV1,
-    DurableWorktreeIdentityV1, IdempotencyKeyV1, PersistedSessionMutationV1,
+    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CanonicalExecutionJsonV1,
+    ClaimedJobV1, DurableWorktreeIdentityV1, IdempotencyKeyV1, PersistedSessionMutationV1,
     RevisionAttemptItemPreconditionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
     StoreIdempotencyReadContractV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
     WorkerIdV1, WorkspaceBindingV1,
@@ -744,6 +744,16 @@ where
         let binding = self
             .bound_workspace(request.selector())
             .map_err(ExecutionErrorV1::from_boundary)?;
+        if expected_workspace.is_none() {
+            let request_digest = request_digest_v1(request, binding.identity().workspace_uuid())?;
+            if let Some(outcome) = self.store.read_idempotent_outcome(
+                binding.identity(),
+                &idempotency_key,
+                &request_digest,
+            )? {
+                return Ok(outcome);
+            }
+        }
         if expected_workspace.is_some_and(|expected| expected.identity() != binding.identity()) {
             return Err(ExecutionErrorV1::BoundaryDomain(
                 DomainError::InvalidState {
@@ -751,6 +761,7 @@ where
                 },
             ));
         }
+        self.enforce_admission_session_identity(request.command(), &binding)?;
         let command = command_for_admission_v1(request.command())?;
         let preconditions = store_preconditions_v1(request.command())?;
         let now = self.clock.now();
@@ -766,7 +777,8 @@ where
             request_digest,
             now,
             canonical_execution,
-        );
+        )
+        .with_session_identity(admission_session_identity_v1(request.command()));
         let outcome = self
             .store
             .admit(binding.identity(), admitted)
@@ -855,6 +867,10 @@ where
                 expected_workspace_revision,
                 now,
             );
+        }
+
+        if let Err(error) = enforce_session_identity_v1(&command, claimed.current_session()) {
+            return self.commit_domain_failure(&claimed, expected_workspace_revision, error, now);
         }
 
         let session_command = match self.prepare_session_command(
@@ -1016,6 +1032,35 @@ where
         }
         Ok(binding)
     }
+
+    fn enforce_admission_session_identity(
+        &self,
+        command: &SliceCommandV1,
+        workspace: &WorkspaceBindingV1,
+    ) -> Result<(), ExecutionErrorV1> {
+        let requires_absent_session = matches!(command, SliceCommandV1::SessionStart(_));
+        if expected_session_id_v1(command).is_none() && !requires_absent_session {
+            return Ok(());
+        }
+        let view = self.store.read_workspace_view(workspace.identity())?;
+        if view.identity() != workspace.identity()
+            || view.state().workspace_id() != workspace.identity().workspace_uuid()
+        {
+            return Err(ExecutionErrorV1::InvalidPersistedExecution {
+                reason: "Store read returned a different workspace identity before admission",
+            });
+        }
+        if requires_absent_session && view.current_session().is_some() {
+            return Err(ExecutionErrorV1::BoundaryDomain(
+                DomainError::InvalidState {
+                    reason: "session start requires no existing session",
+                },
+            ));
+        }
+        enforce_session_identity_v1(command, view.current_session())
+            .map_err(ExecutionErrorV1::BoundaryDomain)
+    }
+
     fn emit_admission_result(&self, result: &Result<AdmitOutcomeV1, ExecutionErrorV1>) {
         let (operation, outcome) = match result {
             Ok(AdmitOutcomeV1::New(_)) => {
@@ -1343,12 +1388,6 @@ where
                 reason: input.reason.clone(),
             })),
             SliceCommandV1::SessionReopen(input) => {
-                let expected_session_id = prior
-                    .map(SessionAggregateV1::session_id)
-                    .cloned()
-                    .ok_or(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                        reason: "session reopen requires an existing session",
-                    }))?;
                 let destination_attempt_id = match resolution {
                     AdmissionResolutionV1::SessionReopen {
                         destination_attempt_id,
@@ -1360,7 +1399,7 @@ where
                     }
                 };
                 Ok(SessionCommandV1::Reopen(ReopenSessionV1 {
-                    expected_session_id,
+                    expected_session_id: input.preconditions.expected_session_id.clone(),
                     destination_stage_id: input.destination_stage_id.clone(),
                     reason: input.reason.clone(),
                     destination_attempt_id,
@@ -1607,6 +1646,72 @@ fn store_preconditions_v1(
     };
     RevisionAttemptItemPreconditionsV1::new(session_revision, attempt_id, item_id, item_revision)
         .map_err(ExecutionErrorV1::InvalidStoreValue)
+}
+
+fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
+    match command {
+        SliceCommandV1::SessionStartReplace(input) => {
+            Some(&input.preconditions.expected_session_id)
+        }
+        SliceCommandV1::SessionComplete(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionSkip(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionRetry(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionReturn(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionBlock(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionUnblock(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionCancel(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionReopen(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionReset(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::ItemCheck(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::ItemUncheck(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::ItemSet(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::ItemAdd(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::ItemRemove(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::ItemAttach(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::ItemClear(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::WorkspaceInit(_)
+        | SliceCommandV1::WorkspaceResetAll(_)
+        | SliceCommandV1::SessionStart(_)
+        | SliceCommandV1::WorkspaceDoctor(_)
+        | SliceCommandV1::WorkspaceShow(_)
+        | SliceCommandV1::WorkspaceRepair(_)
+        | SliceCommandV1::SessionStatus(_)
+        | SliceCommandV1::SessionNext(_)
+        | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobStatus(_)
+        | SliceCommandV1::JobWait(_)
+        | SliceCommandV1::JobCancel(_) => None,
+    }
+}
+
+fn admission_session_identity_v1(command: &SliceCommandV1) -> AdmissionSessionIdentityV1 {
+    if matches!(command, SliceCommandV1::SessionStart(_)) {
+        AdmissionSessionIdentityV1::Absent
+    } else if let Some(expected) = expected_session_id_v1(command) {
+        AdmissionSessionIdentityV1::Exact(expected.clone())
+    } else {
+        AdmissionSessionIdentityV1::Any
+    }
+}
+
+fn enforce_session_identity_v1(
+    command: &SliceCommandV1,
+    current: Option<&SessionAggregateV1>,
+) -> Result<(), DomainError> {
+    let Some(expected) = expected_session_id_v1(command) else {
+        return Ok(());
+    };
+    let actual = current
+        .map(SessionAggregateV1::session_id)
+        .ok_or(DomainError::InvalidState {
+            reason: "session identity precondition requires an existing session",
+        })?;
+    if actual != expected {
+        return Err(DomainError::InvalidState {
+            reason: "session identity precondition does not match the current session",
+        });
+    }
+    Ok(())
 }
 
 fn item_store_preconditions_v1(

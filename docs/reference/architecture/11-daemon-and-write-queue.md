@@ -90,7 +90,7 @@ The scheduler claims a job by transactionally changing the lowest queued sequenc
 1. loads the canonical request;
 2. validates idempotency and target workspace identity;
 3. loads current session state;
-4. validates cursor or item preconditions;
+4. validates the target session identity, then cursor or item preconditions;
 5. invokes the pure domain transition;
 6. persists all relational changes;
 7. increments session revision exactly once when applicable;
@@ -99,6 +99,12 @@ The scheduler claims a job by transactionally changing the lowest queued sequenc
 10. commits atomically.
 
 For a domain error, a separate short transaction stores the error and marks the job `failed` without modifying session rows.
+
+New admissions validate `Absent` or `Exact(session_id)` against current session state in the same
+SQLite transaction that would allocate the queue sequence and insert job and idempotency rows.
+Workers repeat the identity check after claim so a queued command cannot cross a session
+replacement boundary. Exact idempotency replay remains immutable and is resolved before this
+fresh-admission fence.
 
 ## Idempotency
 

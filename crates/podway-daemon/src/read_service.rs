@@ -8,8 +8,8 @@ use std::{error::Error, fmt};
 
 use podway_core::{
     ArtifactLocationKindV1, AttemptLifecycle, AttemptV1, DerivedStageStatusV1, ItemTypeV1,
-    ItemValueTypeV1, SessionAggregateV1, SessionLifecycle, UnixMillis, derive_next_work_v1,
-    derive_session_status_v1,
+    ItemValueTypeV1, SessionAggregateV1, SessionId, SessionLifecycle, UnixMillis,
+    derive_next_work_v1, derive_session_status_v1,
 };
 use podway_protocol::{
     AllowedActionsResultV1, AttemptLifecycleResultV1, BlockerResultV1, CommandSuggestionResultV1,
@@ -141,9 +141,17 @@ impl ReadWaitV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReadServiceErrorV1 {
     DeadlineOverflow,
-    InconsistentState { reason: &'static str },
-    JobNotFound { job_id: JobIdV1 },
+    InconsistentState {
+        reason: &'static str,
+    },
+    JobNotFound {
+        job_id: JobIdV1,
+    },
     MissingSession,
+    SessionIdentityMismatch {
+        expected: SessionId,
+        actual: SessionId,
+    },
     Notification(ReadNotificationErrorV1),
     ResultShapeConversion,
     Store(StoreErrorV1),
@@ -162,6 +170,9 @@ impl fmt::Display for ReadServiceErrorV1 {
                 write!(formatter, "job {} was not found", job_id.as_str())
             }
             Self::MissingSession => formatter.write_str("workspace has no current session"),
+            Self::SessionIdentityMismatch { .. } => {
+                formatter.write_str("current session does not match the requested identity")
+            }
             Self::Notification(_) => formatter.write_str("read notification source is unavailable"),
             Self::ResultShapeConversion => {
                 formatter.write_str("read projection does not satisfy protocol shape")
@@ -224,7 +235,20 @@ where
         wait: ReadWaitV1,
         verbose: bool,
     ) -> Result<StatusResultV1, ReadServiceErrorV1> {
-        self.read_with_wait(identity, &wait, |view| Self::project_status(view, verbose))
+        self.status_guarded(identity, wait, verbose, None)
+    }
+
+    pub fn status_guarded(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        wait: ReadWaitV1,
+        verbose: bool,
+        expected_session_id: Option<&SessionId>,
+    ) -> Result<StatusResultV1, ReadServiceErrorV1> {
+        self.read_with_wait(identity, &wait, expected_session_id, |view| {
+            validate_expected_session(view, expected_session_id)?;
+            Self::project_status(view, verbose)
+        })
     }
 
     pub fn next(
@@ -232,7 +256,19 @@ where
         identity: &DurableWorktreeIdentityV1,
         wait: ReadWaitV1,
     ) -> Result<NextResultV1, ReadServiceErrorV1> {
-        self.read_with_wait(identity, &wait, Self::project_next)
+        self.next_guarded(identity, wait, None)
+    }
+
+    pub fn next_guarded(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        wait: ReadWaitV1,
+        expected_session_id: Option<&SessionId>,
+    ) -> Result<NextResultV1, ReadServiceErrorV1> {
+        self.read_with_wait(identity, &wait, expected_session_id, |view| {
+            validate_expected_session(view, expected_session_id)?;
+            Self::project_next(view)
+        })
     }
     /// Reads a named job from committed Store state.
     ///
@@ -248,7 +284,7 @@ where
         match wait {
             ReadWaitV1::Immediate => self.read_job(identity, job_id),
             ReadWaitV1::AfterJobUntil { .. } => {
-                self.read_with_wait(identity, &wait, |_| Ok(()))?;
+                self.read_with_wait(identity, &wait, None, |_| Ok(()))?;
                 self.read_job(identity, job_id)
             }
             ReadWaitV1::IdleUntil(_) => Err(ReadServiceErrorV1::InconsistentState {
@@ -272,13 +308,16 @@ where
         &self,
         identity: &DurableWorktreeIdentityV1,
         wait: &ReadWaitV1,
+        expected_session_id: Option<&SessionId>,
         project: Project,
     ) -> Result<Output, ReadServiceErrorV1>
     where
         Project: Fn(&WorkspaceViewV1) -> Result<Output, ReadServiceErrorV1>,
     {
         if matches!(wait, ReadWaitV1::Immediate) {
-            return project(&self.read_workspace_view(identity)?);
+            let view = self.read_workspace_view(identity)?;
+            validate_expected_session(&view, expected_session_id)?;
+            return project(&view);
         }
 
         let deadline = wait
@@ -294,7 +333,9 @@ where
                 .observe(identity)
                 .map_err(ReadServiceErrorV1::Notification)?;
 
-            if let Some(view) = self.predicate_satisfied_view(identity, wait)? {
+            if let Some(view) =
+                self.predicate_satisfied_view(identity, wait, expected_session_id)?
+            {
                 return project(&view);
             }
             if self.clock.now_millis() >= deadline.millis() {
@@ -310,7 +351,9 @@ where
                 ReadWaitOutcomeV1::TimedOut => {
                     // Recheck once after a timeout. A terminal commit or queue drain can race the
                     // waiter's deadline notification, but the notification itself is never proof.
-                    if let Some(view) = self.predicate_satisfied_view(identity, wait)? {
+                    if let Some(view) =
+                        self.predicate_satisfied_view(identity, wait, expected_session_id)?
+                    {
                         return project(&view);
                     }
                     return Err(ReadServiceErrorV1::WaitTimedOut);
@@ -323,16 +366,24 @@ where
         &self,
         identity: &DurableWorktreeIdentityV1,
         wait: &ReadWaitV1,
+        expected_session_id: Option<&SessionId>,
     ) -> Result<Option<WorkspaceViewV1>, ReadServiceErrorV1> {
         match wait {
-            ReadWaitV1::Immediate => Ok(Some(self.read_workspace_view(identity)?)),
+            ReadWaitV1::Immediate => {
+                let view = self.read_workspace_view(identity)?;
+                validate_expected_session(&view, expected_session_id)?;
+                Ok(Some(view))
+            }
             ReadWaitV1::IdleUntil(_) => {
                 let view = self.read_workspace_view(identity)?;
+                validate_expected_session(&view, expected_session_id)?;
                 let pending_mutations =
                     view.queued_job_count() != 0 || view.running_job_id().is_some();
                 Ok((!pending_mutations).then_some(view))
             }
             ReadWaitV1::AfterJobUntil { job_id, .. } => {
+                let observed_view = self.read_workspace_view(identity)?;
+                validate_expected_session(&observed_view, expected_session_id)?;
                 let job = self
                     .store
                     .read_job(identity, job_id)
@@ -343,7 +394,9 @@ where
                 if is_terminal_job(job.state()) {
                     // The job check occurs before this read, so the returned projection cannot
                     // predate the terminal job observation.
-                    Ok(Some(self.read_workspace_view(identity)?))
+                    let view = self.read_workspace_view(identity)?;
+                    validate_expected_session(&view, expected_session_id)?;
+                    Ok(Some(view))
                 } else {
                     Ok(None)
                 }
@@ -587,6 +640,23 @@ fn validate_workspace_view(
         });
     }
     validate_active_attempt(aggregate)
+}
+
+fn validate_expected_session(
+    view: &WorkspaceViewV1,
+    expected_session_id: Option<&SessionId>,
+) -> Result<(), ReadServiceErrorV1> {
+    let Some(expected) = expected_session_id else {
+        return Ok(());
+    };
+    let actual = current_session(view)?.session_id();
+    if actual != expected {
+        return Err(ReadServiceErrorV1::SessionIdentityMismatch {
+            expected: expected.clone(),
+            actual: actual.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn current_session(view: &WorkspaceViewV1) -> Result<&SessionAggregateV1, ReadServiceErrorV1> {

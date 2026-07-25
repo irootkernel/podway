@@ -70,7 +70,11 @@ fn envelope(
         operation,
         command: CommandNameV1::new(command).unwrap(),
         workspace: Some(
-            podway_protocol::WorkspaceContextV1::new(transport.workspace_root, None).unwrap(),
+            podway_protocol::WorkspaceContextV1::new(
+                transport.workspace_root,
+                Some(WorkspaceId::new(WORKSPACE_ID).unwrap()),
+            )
+            .unwrap(),
         ),
         idempotency_key: mutation.then(|| IdempotencyKeyV1::new("semantic-key").unwrap()),
         preconditions,
@@ -534,7 +538,7 @@ fn g005_enforces_workspace_and_command_text_reason_and_path_bounds() {
 }
 
 #[test]
-fn mutation_identity_excludes_transport_and_selector_identity_hints_but_keeps_semantics() {
+fn mutation_identity_excludes_transport_and_selector_location_but_keeps_semantics() {
     let first = envelope(
         "item.set",
         OperationV1::Mutate,
@@ -548,8 +552,7 @@ fn mutation_identity_excludes_transport_and_selector_identity_hints_but_keeps_se
             client_name: "podway-cli",
         },
     );
-    let mut moved_selector = selector_json(b"/moved-root", "/different diagnostic");
-    moved_selector["expected_uuid"] = Value::Null;
+    let moved_selector = selector_json(b"/moved-root", "/different diagnostic");
     let second = envelope(
         "item.set",
         OperationV1::Mutate,

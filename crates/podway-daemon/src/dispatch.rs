@@ -4,7 +4,7 @@
 //! capabilities remain behind the injected runtime seams below. In particular, a workspace value is
 //! opaque to this module, so routing cannot accidentally turn a display path into an identity key.
 
-use podway_core::{JobId, Revision};
+use podway_core::{JobId, Revision, SessionId};
 use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
     JobStateV1, NextResultV1, OutputEnvelopeInputV1, OutputEnvelopeV1, QueryWaitV1,
@@ -322,6 +322,13 @@ impl RequestReadWaitV1 {
 pub struct DispatcherStatusRequestV1 {
     pub wait: RequestReadWaitV1,
     pub verbose: bool,
+    pub expected_session_id: Option<SessionId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispatcherNextRequestV1 {
+    pub wait: RequestReadWaitV1,
+    pub expected_session_id: Option<SessionId>,
 }
 
 /// A pre-serialized authoritative query projection.
@@ -374,7 +381,7 @@ pub trait DispatcherReadServiceV1<Workspace>: Send + Sync {
     fn next(
         &self,
         workspace: &Workspace,
-        wait: RequestReadWaitV1,
+        input: DispatcherNextRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
 
     fn job_list(
@@ -587,12 +594,19 @@ where
             }
             SliceCommandV1::WorkspaceShow(_) => self.dispatch_show(request, slice_request),
             SliceCommandV1::WorkspaceRepair(_) => self.dispatch_repair(request, slice_request),
-            SliceCommandV1::SessionStatus(input) => {
-                self.dispatch_status(request, slice_request, &input.wait, input.verbose)
-            }
-            SliceCommandV1::SessionNext(input) => {
-                self.dispatch_next(request, slice_request, &input.wait)
-            }
+            SliceCommandV1::SessionStatus(input) => self.dispatch_status(
+                request,
+                slice_request,
+                &input.wait,
+                input.verbose,
+                input.preconditions.expected_session_id.clone(),
+            ),
+            SliceCommandV1::SessionNext(input) => self.dispatch_next(
+                request,
+                slice_request,
+                &input.wait,
+                input.preconditions.expected_session_id.clone(),
+            ),
             SliceCommandV1::SessionStart(input) if input.dry_run => {
                 self.dispatch_preview(request, slice_request)
             }
@@ -677,6 +691,7 @@ where
         slice_request: &SliceRequestV1,
         query_wait: &QueryWaitV1,
         verbose: bool,
+        expected_session_id: Option<SessionId>,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
         self.require_query_options(request)?;
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
@@ -688,6 +703,7 @@ where
                     request.options().wait_timeout_ms(),
                 ),
                 verbose,
+                expected_session_id,
             },
         )?;
         let result = StatusResultV1::from_result_map(&output.result)
@@ -708,12 +724,19 @@ where
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
         query_wait: &QueryWaitV1,
+        expected_session_id: Option<SessionId>,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
         self.require_query_options(request)?;
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
         let output = self.reads.next(
             &workspace,
-            RequestReadWaitV1::from_query_wait(query_wait, request.options().wait_timeout_ms()),
+            DispatcherNextRequestV1 {
+                wait: RequestReadWaitV1::from_query_wait(
+                    query_wait,
+                    request.options().wait_timeout_ms(),
+                ),
+                expected_session_id,
+            },
         )?;
         let result = NextResultV1::from_result_map(&output.result)
             .map(|result| result.to_result_map())

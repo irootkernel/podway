@@ -42,11 +42,11 @@ use crate::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
         DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
-        DispatcherJobOutputV1, DispatcherPreviewServiceV1, DispatcherReadOutputV1,
-        DispatcherReadServiceV1, DispatcherStatusRequestV1, DispatcherTerminalOutputV1,
-        DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1,
-        MutationDispatchOutcomeV1, MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1,
-        WorkspaceRuntimeV1,
+        DispatcherJobOutputV1, DispatcherNextRequestV1, DispatcherPreviewServiceV1,
+        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherStatusRequestV1,
+        DispatcherTerminalOutputV1, DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1,
+        MutationAdmissionWorkerV1, MutationDispatchOutcomeV1, MutationWaitV1,
+        RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
     },
     execution::{
         DaemonExecutionEngineV1, EmbeddedPresetProcedureProviderV1, ExecutionClockV1,
@@ -608,10 +608,11 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         let context = workspace.scheduler.context_snapshot();
         let result = self
             .service(workspace)
-            .status_with_verbose(
+            .status_guarded(
                 context.binding().identity(),
                 self.wait(input.wait)?,
                 input.verbose,
+                input.expected_session_id.as_ref(),
             )
             .map_err(map_read_error)?;
         protocol_result_map(&result).map(|result| DispatcherReadOutputV1::new(result, Vec::new()))
@@ -620,12 +621,16 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
     fn next(
         &self,
         workspace: &ProductionWorkspaceV1,
-        wait: RequestReadWaitV1,
+        input: DispatcherNextRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
         let context = workspace.scheduler.context_snapshot();
         let result = self
             .service(workspace)
-            .next(context.binding().identity(), self.wait(wait)?)
+            .next_guarded(
+                context.binding().identity(),
+                self.wait(input.wait)?,
+                input.expected_session_id.as_ref(),
+            )
             .map_err(map_read_error)?;
         protocol_result_map(&result).map(|result| DispatcherReadOutputV1::new(result, Vec::new()))
     }
@@ -1210,6 +1215,16 @@ fn preview_command(
     prior: Option<&podway_core::SessionAggregateV1>,
     now: UnixMillis,
 ) -> Result<(SessionCommandV1, Revision), DispatchFailureV1> {
+    if let Some(expected) = preview_expected_session_id(command) {
+        let actual = prior
+            .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound))?
+            .session_id();
+        if actual != expected {
+            return Err(DispatchFailureV1::new(
+                DispatchFailureKindV1::SessionNotFound,
+            ));
+        }
+    }
     match command {
         SliceCommandV1::SessionStart(input) => Ok((
             SessionCommandV1::Start(preview_start(input, workspace, now)?),
@@ -1237,20 +1252,16 @@ fn preview_command(
             }),
             input.preconditions.expected_session_revision,
         )),
-        SliceCommandV1::SessionReopen(input) => {
-            let prior = prior
-                .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound))?;
-            Ok((
-                SessionCommandV1::Reopen(ReopenSessionV1 {
-                    expected_session_id: prior.session_id().clone(),
-                    destination_stage_id: input.destination_stage_id.clone(),
-                    reason: input.reason.clone(),
-                    destination_attempt_id: AttemptId::new(PREVIEW_ATTEMPT_ID_V1)
-                        .expect("preview attempt ID is valid"),
-                }),
-                input.preconditions.expected_session_revision,
-            ))
-        }
+        SliceCommandV1::SessionReopen(input) => Ok((
+            SessionCommandV1::Reopen(ReopenSessionV1 {
+                expected_session_id: input.preconditions.expected_session_id.clone(),
+                destination_stage_id: input.destination_stage_id.clone(),
+                reason: input.reason.clone(),
+                destination_attempt_id: AttemptId::new(PREVIEW_ATTEMPT_ID_V1)
+                    .expect("preview attempt ID is valid"),
+            }),
+            input.preconditions.expected_session_revision,
+        )),
         SliceCommandV1::SessionReset(input) => Ok((
             SessionCommandV1::Reset(ResetSessionV1 {
                 expected_session_id: input.preconditions.expected_session_id.clone(),
@@ -1261,6 +1272,18 @@ fn preview_command(
         _ => Err(DispatchFailureV1::new(
             DispatchFailureKindV1::RequestInvalid,
         )),
+    }
+}
+
+fn preview_expected_session_id(command: &SliceCommandV1) -> Option<&SessionId> {
+    match command {
+        SliceCommandV1::SessionStartReplace(input) => {
+            Some(&input.preconditions.expected_session_id)
+        }
+        SliceCommandV1::SessionReturn(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionReopen(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionReset(input) => Some(&input.preconditions.expected_session_id),
+        _ => None,
     }
 }
 
@@ -2187,6 +2210,9 @@ fn map_read_error(error: ReadServiceErrorV1) -> DispatchFailureV1 {
         ReadServiceErrorV1::MissingSession => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound)
         }
+        ReadServiceErrorV1::SessionIdentityMismatch { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound)
+        }
         ReadServiceErrorV1::ResultShapeConversion
         | ReadServiceErrorV1::InconsistentState { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
@@ -2324,6 +2350,9 @@ fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
             }
             DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict)
                 .with_details(details)
+        }
+        StoreErrorV1::SessionIdentityConflictV1 { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound)
         }
         StoreErrorV1::NewerStateV1 { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceSchemaUnsupported)
@@ -3161,6 +3190,25 @@ mod tests {
             .unwrap_err()
             .kind(),
             DispatchFailureKindV1::SessionRevisionConflict
+        );
+
+        let foreign_session_id = SessionId::new("00000000-0000-4000-8000-000000000099").unwrap();
+        assert_eq!(
+            production_preview_map(
+                SliceCommandV1::SessionReset(podway_protocol::SessionResetV1 {
+                    confirmed: true,
+                    dry_run: true,
+                    preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
+                        expected_session_id: foreign_session_id,
+                        expected_session_revision: running.revision(),
+                    },
+                }),
+                &binding,
+                Some(&running),
+            )
+            .unwrap_err()
+            .kind(),
+            DispatchFailureKindV1::SessionNotFound
         );
     }
 }

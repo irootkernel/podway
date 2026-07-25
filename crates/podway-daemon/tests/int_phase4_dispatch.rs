@@ -1,15 +1,15 @@
 use std::sync::{Arc, Mutex};
 
-use podway_core::{AttemptId, JobId, Revision, WorkspaceId};
+use podway_core::{AttemptId, JobId, Revision, SessionId, WorkspaceId};
 use podway_daemon::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
         DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
-        DispatcherJobOutputV1, DispatcherPreviewServiceV1, DispatcherReadOutputV1,
-        DispatcherReadServiceV1, DispatcherStatusRequestV1, DispatcherTerminalOutputV1,
-        DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1,
-        MutationDispatchOutcomeV1, MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1,
-        WorkspaceRuntimeV1,
+        DispatcherJobOutputV1, DispatcherNextRequestV1, DispatcherPreviewServiceV1,
+        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherStatusRequestV1,
+        DispatcherTerminalOutputV1, DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1,
+        MutationAdmissionWorkerV1, MutationDispatchOutcomeV1, MutationWaitV1,
+        RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
     },
     server::RequestDispatcherV1,
 };
@@ -142,6 +142,8 @@ struct ReadState {
     status_waits: Vec<RequestReadWaitV1>,
     status_verbose: Vec<bool>,
     next_waits: Vec<RequestReadWaitV1>,
+    status_session_ids: Vec<Option<SessionId>>,
+    next_session_ids: Vec<Option<SessionId>>,
 }
 
 #[derive(Clone)]
@@ -214,15 +216,18 @@ impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
         let mut state = self.state.lock().unwrap();
         state.status_waits.push(input.wait);
         state.status_verbose.push(input.verbose);
+        state.status_session_ids.push(input.expected_session_id);
         Ok(DispatcherReadOutputV1::new(status_result(), Vec::new()))
     }
 
     fn next(
         &self,
         _workspace: &FakeWorkspace,
-        wait: RequestReadWaitV1,
+        input: DispatcherNextRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
-        self.state.lock().unwrap().next_waits.push(wait);
+        let mut state = self.state.lock().unwrap();
+        state.next_waits.push(input.wait);
+        state.next_session_ids.push(input.expected_session_id);
         Ok(DispatcherReadOutputV1::new(next_result(), Vec::new()))
     }
     fn job_list(
@@ -673,7 +678,15 @@ fn queries_preserve_pending_fields_and_use_the_request_wait() {
     let (request, slice) = request_and_slice(
         "session.status",
         json!({"selector": selector("/safe/worktree"), "wait_for_idle": true, "verbose": true}),
-        PreconditionsV1::default(),
+        PreconditionsV1::new(
+            Some(SessionId::new(SESSION_ID).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
         false,
         73,
         31,
@@ -690,6 +703,10 @@ fn queries_preserve_pending_fields_and_use_the_request_wait() {
         vec![RequestReadWaitV1::IdleUntil { timeout_millis: 73 }]
     );
     assert_eq!(reads.state.lock().unwrap().status_verbose, vec![true]);
+    assert_eq!(
+        reads.state.lock().unwrap().status_session_ids,
+        vec![Some(SessionId::new(SESSION_ID).unwrap())]
+    );
 }
 
 #[test]

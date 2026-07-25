@@ -107,9 +107,12 @@ fn snapshot() -> podway_core::ProcedureSnapshotV1 {
 }
 
 fn aggregate() -> SessionAggregateV1 {
+    aggregate_with_session("00000000-0000-4000-8000-000000000011")
+}
+
+fn aggregate_with_session(session_id: &str) -> SessionAggregateV1 {
     SessionAggregateV1::start(
-        SessionId::new("00000000-0000-4000-8000-000000000011")
-            .expect("fixture session UUID is valid"),
+        SessionId::new(session_id).expect("fixture session UUID is valid"),
         "Fixture task",
         snapshot(),
         attempt(1),
@@ -237,6 +240,30 @@ impl FakeStore {
             .clone();
         state.job = Some(job_view(job_id, JobStateV1::Succeeded));
     }
+
+    fn replace_session(&self, idle: bool) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("fixture Store lock is not poisoned");
+        let queued_job_count = if idle {
+            0
+        } else {
+            state.view.queued_job_count()
+        };
+        let running_job_id = if idle {
+            None
+        } else {
+            state.view.running_job_id().cloned()
+        };
+        let latest_workspace_sequence = state.view.latest_workspace_sequence() + 1;
+        state.view = workspace_view(
+            aggregate_with_session("00000000-0000-4000-8000-000000000099"),
+            queued_job_count,
+            running_job_id,
+            latest_workspace_sequence,
+        );
+    }
 }
 
 fn unavailable() -> StoreErrorV1 {
@@ -355,6 +382,8 @@ enum NotificationAction {
     Notify,
     MakeIdleThenNotify,
     MakeTerminalThenNotify,
+    ReplaceSessionAndMakeIdleThenNotify,
+    ReplaceSessionAndMakeTerminalThenNotify,
     TimeOut,
 }
 
@@ -402,9 +431,110 @@ impl ReadNotificationV1 for ScriptedNotifications {
                 self.store.set_terminal_job();
                 Ok(ReadWaitOutcomeV1::Notified)
             }
+            NotificationAction::ReplaceSessionAndMakeIdleThenNotify => {
+                self.store.replace_session(true);
+                Ok(ReadWaitOutcomeV1::Notified)
+            }
+            NotificationAction::ReplaceSessionAndMakeTerminalThenNotify => {
+                self.store.replace_session(false);
+                self.store.set_terminal_job();
+                Ok(ReadWaitOutcomeV1::Notified)
+            }
             NotificationAction::TimeOut => Ok(ReadWaitOutcomeV1::TimedOut),
         }
     }
+}
+
+fn fixture_session_id() -> SessionId {
+    SessionId::new("00000000-0000-4000-8000-000000000011").expect("fixture session UUID is valid")
+}
+
+fn replacement_session_id() -> SessionId {
+    SessionId::new("00000000-0000-4000-8000-000000000099")
+        .expect("replacement session UUID is valid")
+}
+
+#[test]
+fn guarded_immediate_read_rejects_a_replaced_session() {
+    let store = FakeStore::new(workspace_view(aggregate(), 0, None, 8), None);
+    store.replace_session(true);
+    let notifications = ScriptedNotifications::new(store.clone(), []);
+    let service = AuthoritativeReadServiceV1::new(store, notifications, FixedClock(0));
+
+    let result = service.status_guarded(
+        &identity(),
+        ReadWaitV1::Immediate,
+        false,
+        Some(&fixture_session_id()),
+    );
+
+    assert_eq!(
+        result,
+        Err(ReadServiceErrorV1::SessionIdentityMismatch {
+            expected: fixture_session_id(),
+            actual: replacement_session_id(),
+        }),
+    );
+}
+
+#[test]
+fn guarded_idle_wait_rejects_session_replacement_after_notification() {
+    let running_job = job(28);
+    let store = FakeStore::new(
+        workspace_view(aggregate(), 1, Some(running_job.clone()), 9),
+        Some(job_view(running_job, JobStateV1::Running)),
+    );
+    let notifications = ScriptedNotifications::new(
+        store.clone(),
+        [NotificationAction::ReplaceSessionAndMakeIdleThenNotify],
+    );
+    let service = AuthoritativeReadServiceV1::new(store, notifications, FixedClock(0));
+
+    let result = service.status_guarded(
+        &identity(),
+        ReadWaitV1::IdleUntil(MonotonicDeadlineV1::new(10)),
+        false,
+        Some(&fixture_session_id()),
+    );
+
+    assert_eq!(
+        result,
+        Err(ReadServiceErrorV1::SessionIdentityMismatch {
+            expected: fixture_session_id(),
+            actual: replacement_session_id(),
+        }),
+    );
+}
+
+#[test]
+fn guarded_after_job_wait_rejects_session_replacement_after_notification() {
+    let target_job = job(29);
+    let store = FakeStore::new(
+        workspace_view(aggregate(), 0, None, 10),
+        Some(job_view(target_job.clone(), JobStateV1::Running)),
+    );
+    let notifications = ScriptedNotifications::new(
+        store.clone(),
+        [NotificationAction::ReplaceSessionAndMakeTerminalThenNotify],
+    );
+    let service = AuthoritativeReadServiceV1::new(store, notifications, FixedClock(0));
+
+    let result = service.next_guarded(
+        &identity(),
+        ReadWaitV1::AfterJobUntil {
+            job_id: target_job,
+            deadline: MonotonicDeadlineV1::new(10),
+        },
+        Some(&fixture_session_id()),
+    );
+
+    assert_eq!(
+        result,
+        Err(ReadServiceErrorV1::SessionIdentityMismatch {
+            expected: fixture_session_id(),
+            actual: replacement_session_id(),
+        }),
+    );
 }
 
 #[test]

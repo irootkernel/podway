@@ -23,14 +23,14 @@ use podway_store::codec::{
     encode_persisted_terminal_receipt_v1,
 };
 use podway_store::{
-    AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, DurableWorktreeIdentityV1, IdempotencyKeyV1,
-    JobListQueryV1, JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1, PersistedSessionMutationV1,
-    PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
-    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StateTransitionV1,
-    StoreContractV1, StoreErrorV1, StoreFailpointV1, StoreIdempotencyReadContractV1,
-    StoreIntegrityCheckV1, StoreInvariantV1, StoreReadContractV1, StoreRecordKindV1,
-    StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
-    WorkerIdV1,
+    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1,
+    DurableWorktreeIdentityV1, IdempotencyKeyV1, JobListQueryV1, JobReceiptOrTerminalV1,
+    JobReceiptV1, JobStateV1, PersistedSessionMutationV1, PersistedTerminalJobProjectionV1,
+    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, RevisionAttemptItemPreconditionsV1,
+    SqliteStoreOptionsV1, SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
+    StoreFailpointV1, StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreInvariantV1,
+    StoreReadContractV1, StoreRecordKindV1, StoreUnavailableReasonV1, TerminalReceiptV1,
+    TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
 };
 use tempfile::TempDir;
 
@@ -537,6 +537,113 @@ fn session_reset_request(
         UnixMillis::new(now),
     )
 }
+
+fn admission_rows_and_sequence(path: &Path) -> (i64, i64, i64) {
+    Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM jobs),
+                (SELECT COUNT(*) FROM idempotency_records),
+                next_workspace_sequence
+             FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn exact_session_identity_conflict_rejects_before_admission_rows_or_sequence() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("state.sqlite3");
+    let store = store(&temporary);
+    let current = aggregate();
+    seed_current_session(&store, &current, job(70), "identity-exact-seed", 2);
+    let before = admission_rows_and_sequence(&database);
+    let wrong = SessionId::new("00000000-0000-4000-8000-000000000071").unwrap();
+    let request = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new("identity-exact-conflict").unwrap(),
+        job(71),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('7'),
+        UnixMillis::new(6),
+    )
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(wrong.clone()));
+
+    assert_eq!(
+        store.admit(&identity(), request),
+        Err(StoreErrorV1::SessionIdentityConflictV1 {
+            expected: Some(wrong),
+            actual: Some(current.session_id().clone()),
+        })
+    );
+    assert_eq!(admission_rows_and_sequence(&database), before);
+}
+
+#[test]
+fn absent_session_identity_conflict_rejects_before_admission_rows_or_sequence() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("state.sqlite3");
+    let store = store(&temporary);
+    let current = aggregate();
+    seed_current_session(&store, &current, job(72), "identity-absent-seed", 2);
+    let before = admission_rows_and_sequence(&database);
+    let request = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new("identity-absent-conflict").unwrap(),
+        job(73),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('8'),
+        UnixMillis::new(6),
+    )
+    .with_session_identity(AdmissionSessionIdentityV1::Absent);
+
+    assert_eq!(
+        store.admit(&identity(), request),
+        Err(StoreErrorV1::SessionIdentityConflictV1 {
+            expected: None,
+            actual: Some(current.session_id().clone()),
+        })
+    );
+    assert_eq!(admission_rows_and_sequence(&database), before);
+}
+
+#[test]
+fn exact_idempotent_replay_precedes_a_conflicting_session_identity_fence() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("state.sqlite3");
+    let store = store(&temporary);
+    let current = aggregate();
+    seed_current_session(&store, &current, job(74), "identity-replay-seed", 2);
+    let request = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new("identity-replay").unwrap(),
+        job(75),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('9'),
+        UnixMillis::new(6),
+    )
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        current.session_id().clone(),
+    ));
+    let receipt = match store.admit(&identity(), request.clone()).unwrap() {
+        AdmitOutcomeV1::New(receipt) => receipt,
+        outcome => panic!("expected a new admission, got {outcome:?}"),
+    };
+    let before_replay = admission_rows_and_sequence(&database);
+
+    assert_job_replay(
+        store.admit(
+            &identity(),
+            request.with_session_identity(AdmissionSessionIdentityV1::Absent),
+        ),
+        receipt,
+    );
+    assert_eq!(admission_rows_and_sequence(&database), before_replay);
+}
+
 #[test]
 fn terminal_session_projection_is_immutable_after_a_later_lifecycle_transition() {
     let temporary = TempDir::new().unwrap();
