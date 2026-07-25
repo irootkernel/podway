@@ -192,6 +192,10 @@ canonical Procedure digest for start
 For `session.start` and `session.start_replace`, the optional
 `expected_procedure_digest` payload field is accepted only with a Procedure-file source. The
 daemon compares it with the validated, defaulted canonical snapshot before durable admission.
+Start idempotency identity binds both that guard, when present, and the resolved canonical
+Procedure digest. Exact retries reconstruct the identity from the immutable admitted execution,
+so they do not depend on a later source-file read; a changed digest or start precondition reusing
+the same key returns `IDEMPOTENCY_KEY_REUSED`.
 
 It excludes:
 

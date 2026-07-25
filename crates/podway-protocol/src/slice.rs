@@ -2181,6 +2181,52 @@ pub fn canonical_mutation_identity_v1(
     })
 }
 
+/// Canonical semantic identity for a Procedure-backed start after daemon resolution.
+///
+/// The resolved digest is kept separate from the wire request because it is an admission fact,
+/// not client-controlled payload. The optional digest guard and replacement identity fences are
+/// retained as preconditions, while the validated, defaulted Procedure digest binds retries to
+/// the exact Procedure that the daemon observed.
+pub fn canonical_start_mutation_identity_v1(
+    request: &SliceRequestV1,
+    resolved_workspace_id: &WorkspaceId,
+    resolved_procedure_digest: &Sha256Digest,
+) -> Result<String, SliceErrorV1> {
+    let expected_procedure_digest = match request.command() {
+        SliceCommandV1::SessionStart(start) => start.expected_procedure_digest.as_ref(),
+        SliceCommandV1::SessionStartReplace(start) => {
+            start.start.expected_procedure_digest.as_ref()
+        }
+        _ => {
+            return Err(SliceErrorV1::InvalidValue {
+                field: "resolved_procedure_digest",
+            });
+        }
+    };
+    let canonical = canonical_mutation_identity_v1(request, resolved_workspace_id)?;
+    let mut identity: Value =
+        serde_json::from_str(&canonical).map_err(|error| SliceErrorV1::Canonicalization {
+            message: error.to_string(),
+        })?;
+    let preconditions = identity
+        .get_mut("preconditions")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| SliceErrorV1::Canonicalization {
+            message: "canonical mutation identity has no preconditions object".to_owned(),
+        })?;
+    preconditions.insert(
+        "procedure_digest".to_owned(),
+        json!(resolved_procedure_digest),
+    );
+    preconditions.insert(
+        "expected_procedure_digest".to_owned(),
+        json!(expected_procedure_digest),
+    );
+    canonicalize_json_v1(&identity).map_err(|error| SliceErrorV1::Canonicalization {
+        message: error.to_string(),
+    })
+}
+
 /// Convenience form for hash functions that accept a byte slice.
 pub fn canonical_mutation_identity_bytes_v1(
     request: &SliceRequestV1,

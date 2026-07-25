@@ -14,7 +14,7 @@ use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CanonicalExecutionJsonV1, ClaimedExecutionV1,
     DurableWorktreeIdentityV1, IdempotencyKeyV1, MAX_CANONICAL_EXECUTION_JSON_BYTES_V1,
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
-    StoreValueErrorV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    StoreIdempotencyReadContractV1, StoreValueErrorV1, ValidatedWorkspaceRootV1, WorkerIdV1,
 };
 use tempfile::TempDir;
 
@@ -255,6 +255,42 @@ fn full_execution_is_stored_in_canonical_request_json_and_survives_restart_claim
         claimed.job().request_digest(),
         &execution_digest(&semantic_execution)
     );
+}
+
+#[test]
+fn pstrt003_idempotency_lookup_returns_the_immutable_execution_after_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let semantic_execution = canonical_execution(serde_json::json!({
+        "command": "session.start",
+        "execution": {"procedure_digest": digest('c')},
+        "source": "procedure.yaml"
+    }));
+    let request_digest = execution_digest(&semantic_execution);
+    let key = IdempotencyKeyV1::new("pstrt003-execution-lookup").unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::SessionStart,
+        key.clone(),
+        job(2),
+        preconditions(),
+        request_digest.clone(),
+        UnixMillis::new(5),
+        semantic_execution.clone(),
+    );
+    let store = open_store(&temporary, 4);
+    assert!(matches!(
+        store.admit(&identity(), request),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    drop(store);
+
+    let reopened = open_store(&temporary, 6);
+    let existing = reopened
+        .read_idempotent_execution(&identity(), &key)
+        .unwrap()
+        .expect("admitted execution must be available by idempotency key");
+    assert_eq!(existing.request_digest(), &request_digest);
+    assert_eq!(existing.canonical_execution(), Some(&semantic_execution));
+    assert!(matches!(existing.outcome(), AdmitOutcomeV1::Existing(_)));
 }
 
 #[test]

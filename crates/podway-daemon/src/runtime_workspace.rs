@@ -27,11 +27,12 @@ use podway_protocol::Rfc3339MillisV1;
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
-    ClaimedJobV1, IdempotencyKeyV1, JobIdV1, JobListQueryV1, JobViewV1, RecoveryReportV1,
-    RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1,
-    StoreReadContractV1, StoreUnavailableReasonV1, StoreValueErrorV1, TerminalReceiptV1,
-    TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1,
+    ClaimedJobV1, IdempotencyKeyV1, IdempotentExecutionV1, JobIdV1, JobListQueryV1, JobViewV1,
+    RecoveryReportV1, RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1,
+    SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
+    StoreIdempotencyReadContractV1, StoreReadContractV1, StoreUnavailableReasonV1,
+    StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    WorkspaceBindingV1, WorkspaceViewV1,
 };
 
 use crate::{
@@ -210,6 +211,15 @@ impl StoreIdempotencyReadContractV1 for WorkspaceStoreReadFacadeV1 {
     ) -> Result<Option<AdmitOutcomeV1>, StoreErrorV1> {
         self.slot
             .read_idempotent_outcome(identity, idempotency_key, request_digest)
+    }
+
+    fn read_idempotent_execution(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1> {
+        self.slot
+            .read_idempotent_execution(identity, idempotency_key)
     }
 }
 impl StoreContractV1 for WorkspaceStoreReadFacadeV1 {
@@ -432,6 +442,14 @@ impl StoreIdempotencyReadContractV1 for WorkspaceStoreSlotV1 {
         self.with_open_store(|store| {
             store.read_idempotent_outcome(identity, idempotency_key, request_digest)
         })
+    }
+
+    fn read_idempotent_execution(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1> {
+        self.with_open_store(|store| store.read_idempotent_execution(identity, idempotency_key))
     }
 }
 

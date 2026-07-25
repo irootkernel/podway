@@ -24,10 +24,11 @@ use podway_protocol::{
 use podway_store::{
     AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1,
     CanonicalExecutionJsonV1, ClaimTokenV1, ClaimedExecutionV1, ClaimedJobV1,
-    DurableWorktreeIdentityV1, IdempotencyKeyV1, JobReceiptOrTerminalV1, JobReceiptV1,
-    PersistedSessionMutationV1, PersistedTerminalReceiptV1, RevisionAttemptItemPreconditionsV1,
-    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1,
-    TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1,
+    DurableWorktreeIdentityV1, IdempotencyKeyV1, IdempotentExecutionV1, JobReceiptOrTerminalV1,
+    JobReceiptV1, PersistedSessionMutationV1, PersistedTerminalReceiptV1,
+    RevisionAttemptItemPreconditionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
+    StoreIdempotencyReadContractV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1,
+    WorkspaceBindingV1, WorkspaceViewV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -694,6 +695,40 @@ impl StoreIdempotencyReadContractV1 for RecordingStore {
                 ))
             });
         Ok(Some(AdmitOutcomeV1::Existing(outcome)))
+    }
+
+    fn read_idempotent_execution(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1> {
+        assert_eq!(identity, &self.identity);
+        let state = self.state.lock().unwrap();
+        let Some(existing) = state
+            .requests
+            .iter()
+            .find(|existing| existing.idempotency_key().as_str() == idempotency_key.as_str())
+        else {
+            return Ok(None);
+        };
+        let outcome = state
+            .terminal
+            .iter()
+            .find(|terminal| terminal.job().job_id() == existing.job_id())
+            .map(PersistedTerminalReceiptV1::from_terminal_receipt)
+            .map(JobReceiptOrTerminalV1::TerminalReceipt)
+            .unwrap_or_else(|| {
+                JobReceiptOrTerminalV1::JobReceipt(JobReceiptV1::new(
+                    1,
+                    existing.job_id().clone(),
+                    existing.request_digest().clone(),
+                ))
+            });
+        Ok(Some(IdempotentExecutionV1::new(
+            existing.request_digest().clone(),
+            Some(existing.canonical_execution().clone()),
+            AdmitOutcomeV1::Existing(outcome),
+        )))
     }
 }
 
@@ -1556,6 +1591,96 @@ fn terminal_idempotency_replay_returns_the_exact_receipt_without_fresh_dependenc
     assert!(replay_ids.calls().is_empty());
     assert_eq!(store.request_count(), 1);
     assert_eq!(store.terminal(), vec![terminal]);
+}
+
+#[test]
+fn pstrt003_guarded_start_replays_by_digest_and_conflicts_on_a_different_digest() {
+    let identity = identity();
+    let binding = binding(identity.clone());
+    let store = RecordingStore::new(identity);
+    let expected_digest = FixtureProcedures
+        .load_preset_snapshot(
+            "sw-dev",
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009801").unwrap(),
+            UnixMillis::new(100),
+        )
+        .unwrap()
+        .digest()
+        .clone();
+    let request = slice_request(
+        "session.start",
+        json!({
+            "selector": selector_json(),
+            "procedure": "procedure.yaml",
+            "expected_procedure_digest": expected_digest,
+            "task_title": "Digest-bound start",
+        }),
+        PreconditionsV1::default(),
+        980,
+    );
+    let key = IdempotencyKeyV1::new("procedure-digest-bound").unwrap();
+    let admitted = DaemonExecutionEngineV1::new(
+        store.clone(),
+        FixtureIds::new(),
+        FixtureClock::new(),
+        FixtureProcedures,
+        FixtureArtifacts,
+        FixtureWorkspaces::stable(binding.clone()),
+    )
+    .admit_for_workspace(&binding, &request, key.clone())
+    .unwrap();
+    assert!(matches!(admitted, AdmitOutcomeV1::New(_)));
+
+    let replay_ids = SpyIds::new();
+    let replay_clock = SpyClock::new();
+    let replay_procedures = SpyProcedures::new();
+    let replay_workspaces = FixtureWorkspaces::stable(binding.clone());
+    replay_workspaces.reject_stale_selectors();
+    let replay_engine = DaemonExecutionEngineV1::new(
+        store.clone(),
+        replay_ids.clone(),
+        replay_clock.clone(),
+        replay_procedures.clone(),
+        FixtureArtifacts,
+        replay_workspaces.clone(),
+    );
+    assert!(matches!(
+        replay_engine.admit_for_workspace(&binding, &request, key.clone()),
+        Ok(AdmitOutcomeV1::Existing(
+            JobReceiptOrTerminalV1::JobReceipt(_)
+        ))
+    ));
+    assert_eq!(replay_procedures.call_count(), 0);
+    assert_eq!(replay_clock.call_count(), 0);
+    assert!(replay_ids.calls().is_empty());
+    assert_eq!(
+        replay_workspaces
+            .selector_revalidations
+            .load(Ordering::SeqCst),
+        0
+    );
+
+    let changed = slice_request(
+        "session.start",
+        json!({
+            "selector": selector_json(),
+            "procedure": "procedure.yaml",
+            "expected_procedure_digest": DIGEST,
+            "task_title": "Digest-bound start",
+        }),
+        PreconditionsV1::default(),
+        981,
+    );
+    assert!(matches!(
+        replay_engine.admit_for_workspace(&binding, &changed, key),
+        Err(ExecutionErrorV1::Store(
+            StoreErrorV1::IdempotencyDigestConflictV1 { .. }
+        ))
+    ));
+    assert_eq!(replay_procedures.call_count(), 0);
+    assert_eq!(replay_clock.call_count(), 0);
+    assert!(replay_ids.calls().is_empty());
+    assert_eq!(store.request_count(), 1);
 }
 
 #[test]

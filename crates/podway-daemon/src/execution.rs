@@ -765,9 +765,19 @@ where
                 reason: "workspace reset must be prepared through the maintenance path",
             });
         }
-        if let Some(expected_workspace) = expected_workspace {
-            let request_digest =
-                request_digest_v1(request, expected_workspace.identity().workspace_uuid())?;
+        let is_start = matches!(
+            request.command(),
+            SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+        );
+        let expected_procedure_digest = expected_start_procedure_digest_v1(request.command());
+        if let Some(expected_workspace) = expected_workspace
+            && (!is_start || expected_procedure_digest.is_some())
+        {
+            let request_digest = request_digest_v1(
+                request,
+                expected_workspace.identity().workspace_uuid(),
+                expected_procedure_digest,
+            )?;
             if let Some(outcome) = self.store.read_idempotent_outcome(
                 expected_workspace.identity(),
                 &idempotency_key,
@@ -776,11 +786,26 @@ where
                 return Ok(outcome);
             }
         }
+        if let Some(expected_workspace) = expected_workspace
+            && is_start
+            && expected_procedure_digest.is_none()
+            && let Some(outcome) = self.read_unresolved_start_idempotent_outcome(
+                expected_workspace.identity(),
+                request,
+                &idempotency_key,
+            )?
+        {
+            return Ok(outcome);
+        }
         let binding = self
             .bound_workspace(request.selector())
             .map_err(ExecutionErrorV1::from_boundary)?;
-        if expected_workspace.is_none() {
-            let request_digest = request_digest_v1(request, binding.identity().workspace_uuid())?;
+        if expected_workspace.is_none() && (!is_start || expected_procedure_digest.is_some()) {
+            let request_digest = request_digest_v1(
+                request,
+                binding.identity().workspace_uuid(),
+                expected_procedure_digest,
+            )?;
             if let Some(outcome) = self.store.read_idempotent_outcome(
                 binding.identity(),
                 &idempotency_key,
@@ -788,6 +813,17 @@ where
             )? {
                 return Ok(outcome);
             }
+        }
+        if expected_workspace.is_none()
+            && is_start
+            && expected_procedure_digest.is_none()
+            && let Some(outcome) = self.read_unresolved_start_idempotent_outcome(
+                binding.identity(),
+                request,
+                &idempotency_key,
+            )?
+        {
+            return Ok(outcome);
         }
         if let Some(expected) = expected_workspace
             && expected.identity() != binding.identity()
@@ -804,14 +840,34 @@ where
                 },
             ));
         }
-        self.enforce_admission_session_identity(request.command(), &binding)?;
+        if !is_start {
+            self.enforce_admission_session_identity(request.command(), &binding)?;
+        }
         let command = command_for_admission_v1(request.command())?;
         let preconditions = store_preconditions_v1(request.command())?;
         let now = self.clock.now();
         let resolution = self.admission_resolution(request.command(), &binding, now)?;
         let canonical_execution =
             canonical_execution_document_v1(request, binding.identity(), &resolution)?;
-        let request_digest = request_digest_v1(request, binding.identity().workspace_uuid())?;
+        let procedure_digest = match &resolution {
+            AdmissionResolutionV1::SessionStart { snapshot, .. } => Some(snapshot.digest()),
+            _ => None,
+        };
+        let request_digest = request_digest_v1(
+            request,
+            binding.identity().workspace_uuid(),
+            procedure_digest,
+        )?;
+        if is_start {
+            if let Some(outcome) = self.store.read_idempotent_outcome(
+                binding.identity(),
+                &idempotency_key,
+                &request_digest,
+            )? {
+                return Ok(outcome);
+            }
+            self.enforce_admission_session_identity(request.command(), &binding)?;
+        }
         let admitted = AdmitRequestV1::new_with_canonical_execution(
             command,
             idempotency_key,
@@ -833,6 +889,52 @@ where
             .admit(binding.identity(), admitted)
             .map_err(ExecutionErrorV1::from)?;
         Ok(outcome)
+    }
+
+    fn read_unresolved_start_idempotent_outcome(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        request: &SliceRequestV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        let Some(existing) = self
+            .store
+            .read_idempotent_execution(identity, idempotency_key)?
+        else {
+            return Ok(None);
+        };
+        let Some(canonical_execution) = existing.canonical_execution() else {
+            return Ok(None);
+        };
+        let (_selector, persisted_workspace_id, persisted_command, resolution) =
+            decode_execution_document_v1(canonical_execution.as_str())?;
+        if persisted_workspace_id != *identity.workspace_uuid() {
+            return Err(invalid_execution_v1(
+                "idempotent execution workspace identity is invalid",
+            ));
+        }
+        if !matches!(
+            persisted_command,
+            SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+        ) {
+            return Ok(None);
+        }
+        let AdmissionResolutionV1::SessionStart { snapshot, .. } = resolution else {
+            return Err(invalid_execution_v1(
+                "idempotent start has no admitted Procedure snapshot",
+            ));
+        };
+        let actual =
+            request_digest_v1(request, identity.workspace_uuid(), Some(snapshot.digest()))?;
+        if existing.request_digest() != &actual {
+            return Err(ExecutionErrorV1::Store(
+                StoreErrorV1::IdempotencyDigestConflictV1 {
+                    expected: existing.request_digest().clone(),
+                    actual,
+                },
+            ));
+        }
+        Ok(Some(existing.outcome().clone()))
     }
 
     /// Revalidates the manager-selected workspace before claiming at most one job. A transient
@@ -1754,6 +1856,16 @@ fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
     }
 }
 
+fn expected_start_procedure_digest_v1(command: &SliceCommandV1) -> Option<&Sha256Digest> {
+    match command {
+        SliceCommandV1::SessionStart(input) => input.expected_procedure_digest.as_ref(),
+        SliceCommandV1::SessionStartReplace(input) => {
+            input.start.expected_procedure_digest.as_ref()
+        }
+        _ => None,
+    }
+}
+
 fn admission_session_identity_v1(command: &SliceCommandV1) -> AdmissionSessionIdentityV1 {
     if matches!(command, SliceCommandV1::SessionStart(_)) {
         AdmissionSessionIdentityV1::Absent
@@ -2108,11 +2220,17 @@ fn canonical_execution_document_v1(
 fn request_digest_v1(
     request: &SliceRequestV1,
     workspace_id: &WorkspaceId,
+    resolved_procedure_digest: Option<&Sha256Digest>,
 ) -> Result<Sha256Digest, ExecutionErrorV1> {
-    let canonical = podway_protocol::canonical_mutation_identity_v1(request, workspace_id)
-        .map_err(|_| ExecutionErrorV1::InvalidPersistedExecution {
-            reason: "request identity cannot be canonicalized",
-        })?;
+    let canonical = match resolved_procedure_digest {
+        Some(digest) => {
+            podway_protocol::canonical_start_mutation_identity_v1(request, workspace_id, digest)
+        }
+        None => podway_protocol::canonical_mutation_identity_v1(request, workspace_id),
+    }
+    .map_err(|_| ExecutionErrorV1::InvalidPersistedExecution {
+        reason: "request identity cannot be canonicalized",
+    })?;
     Sha256Digest::new(format!("sha256:{}", sha256_hex_v1(canonical.as_bytes()))).map_err(|_| {
         ExecutionErrorV1::InvalidPersistedExecution {
             reason: "request identity digest is invalid",

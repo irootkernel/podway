@@ -32,14 +32,15 @@ use crate::state_rows::{
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
-    ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, EpochMillisV1, IntegrityModeV1,
-    JobIdV1, JobListQueryV1, JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1, JobViewV1,
-    PersistedSessionMutationV1, PruneReportV1, RecoveryReportV1, RevisionV1,
-    RusqliteErrorContextV1, SqliteStoreOptionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
-    StoreFailpointV1, StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreInvariantV1,
-    StoreReadContractV1, StoreRecordKindV1, StoreUnavailableReasonV1, TerminalReceiptV1,
-    TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1,
-    command_is_session_scoped_v1, command_name_v1, map_rusqlite_error_v1,
+    ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, EpochMillisV1,
+    IdempotentExecutionV1, IntegrityModeV1, JobIdV1, JobListQueryV1, JobReceiptOrTerminalV1,
+    JobReceiptV1, JobStateV1, JobViewV1, PersistedSessionMutationV1, PruneReportV1,
+    RecoveryReportV1, RevisionV1, RusqliteErrorContextV1, SqliteStoreOptionsV1, StateTransitionV1,
+    StoreContractV1, StoreErrorV1, StoreFailpointV1, StoreIdempotencyReadContractV1,
+    StoreIntegrityCheckV1, StoreInvariantV1, StoreReadContractV1, StoreRecordKindV1,
+    StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
+    WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1, command_is_session_scoped_v1, command_name_v1,
+    map_rusqlite_error_v1,
 };
 
 /// One process-local, synchronous SQLite v1 workspace store.
@@ -1000,6 +1001,51 @@ impl StoreIdempotencyReadContractV1 for SqliteStoreV1 {
         let outcome = replay_for_idempotency(&transaction, &job_id, &stored_digest, terminal)?;
         transaction.commit().map_err(storage)?;
         Ok(Some(AdmitOutcomeV1::Existing(outcome)))
+    }
+
+    fn read_idempotent_execution(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &crate::IdempotencyKeyV1,
+    ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection.transaction().map_err(storage)?;
+        let existing: Option<(String, String, Option<String>)> = transaction
+            .query_row(
+                "SELECT request_digest, job_id, terminal_response_json FROM idempotency_records \
+                 WHERE idempotency_key = ?1",
+                [idempotency_key.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|error| storage_record(error, StoreRecordKindV1::IdempotencyRecord))?;
+        let Some((stored_digest, job_id, terminal)) = existing else {
+            transaction.commit().map_err(storage)?;
+            return Ok(None);
+        };
+        let stored_digest = digest(stored_digest)?;
+        let canonical_execution = transaction
+            .query_row(
+                "SELECT canonical_request_json FROM jobs WHERE job_id = ?1",
+                [job_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| storage_record(error, StoreRecordKindV1::Job))?
+            .map(|encoded| {
+                decode_command_v1(&encoded)
+                    .map(|execution| execution.canonical_execution().clone())
+                    .map_err(|_| corrupt(StoreRecordKindV1::Job))
+            })
+            .transpose()?;
+        let outcome = replay_for_idempotency(&transaction, &job_id, &stored_digest, terminal)?;
+        transaction.commit().map_err(storage)?;
+        Ok(Some(IdempotentExecutionV1::new(
+            stored_digest,
+            canonical_execution,
+            AdmitOutcomeV1::Existing(outcome),
+        )))
     }
 }
 impl StoreReadContractV1 for SqliteStoreV1 {

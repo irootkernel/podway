@@ -739,6 +739,47 @@ pub trait StoreIdempotencyReadContractV1: StoreContractV1 {
         idempotency_key: &IdempotencyKeyV1,
         request_digest: &CanonicalRequestDigestV1,
     ) -> Result<Option<AdmitOutcomeV1>, StoreErrorV1>;
+
+    /// Reads the immutable execution bound to a key so callers can reconstruct a start identity
+    /// from its admitted Procedure digest before consulting fresh source dependencies.
+    fn read_idempotent_execution(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdempotentExecutionV1 {
+    canonical_execution: Option<CanonicalExecutionJsonV1>,
+    outcome: AdmitOutcomeV1,
+    request_digest: CanonicalRequestDigestV1,
+}
+
+impl IdempotentExecutionV1 {
+    pub fn new(
+        request_digest: CanonicalRequestDigestV1,
+        canonical_execution: Option<CanonicalExecutionJsonV1>,
+        outcome: AdmitOutcomeV1,
+    ) -> Self {
+        Self {
+            canonical_execution,
+            outcome,
+            request_digest,
+        }
+    }
+
+    pub fn request_digest(&self) -> &CanonicalRequestDigestV1 {
+        &self.request_digest
+    }
+
+    pub fn canonical_execution(&self) -> Option<&CanonicalExecutionJsonV1> {
+        self.canonical_execution.as_ref()
+    }
+
+    pub fn outcome(&self) -> &AdmitOutcomeV1 {
+        &self.outcome
+    }
 }
 
 impl<Store> StoreContractV1 for Arc<Store>
@@ -830,6 +871,14 @@ where
         request_digest: &CanonicalRequestDigestV1,
     ) -> Result<Option<AdmitOutcomeV1>, StoreErrorV1> {
         (**self).read_idempotent_outcome(identity, idempotency_key, request_digest)
+    }
+
+    fn read_idempotent_execution(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1> {
+        (**self).read_idempotent_execution(identity, idempotency_key)
     }
 }
 

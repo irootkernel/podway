@@ -6,6 +6,7 @@ use podway_protocol::{
     TerminalJobCancellationProjectionV1, TerminalJobErrorProjectionV1, TerminalJobResponseV1,
     TerminalJobSuccessProjectionV1, TerminalJobSuccessResultV1, WorkspaceContextV1,
     WorktreeSelectorWireV1, canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
+    canonical_start_mutation_identity_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -29,6 +30,40 @@ fn selector() -> Value {
         .unwrap(),
     )
     .unwrap()
+}
+
+#[test]
+fn pstrt003_start_identity_binds_resolved_digest_and_digest_guard() {
+    let request = SliceRequestV1::from_envelope(&envelope(
+        "session.start",
+        OperationV1::Mutate,
+        true,
+        json!({
+            "selector": selector(),
+            "procedure": "procedure.yaml",
+            "expected_procedure_digest": DIGEST,
+            "task_title": "Digest-bound start",
+        }),
+        PreconditionsV1::default(),
+    ))
+    .unwrap();
+    let workspace_id = WorkspaceId::new(WORKSPACE_ID).unwrap();
+    let first_digest = Sha256Digest::new(DIGEST).unwrap();
+    let second_digest = Sha256Digest::new(
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+    .unwrap();
+    let first =
+        canonical_start_mutation_identity_v1(&request, &workspace_id, &first_digest).unwrap();
+    let second =
+        canonical_start_mutation_identity_v1(&request, &workspace_id, &second_digest).unwrap();
+    let first_json: Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(first_json["preconditions"]["procedure_digest"], DIGEST);
+    assert_eq!(
+        first_json["preconditions"]["expected_procedure_digest"],
+        DIGEST
+    );
+    assert_ne!(first, second);
 }
 
 fn payload(value: Value) -> Map<String, Value> {
