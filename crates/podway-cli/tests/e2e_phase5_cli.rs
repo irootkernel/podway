@@ -739,6 +739,8 @@ const RECORDING_SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174004";
 const RECORDING_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174002";
 const RECORDING_JOB_ID: &str = "123e4567-e89b-42d3-a456-426614174003";
 const RECORDING_BLOCKER_ID: &str = "123e4567-e89b-42d3-a456-426614174006";
+const EXPLICIT_WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174007";
+const EXPLICIT_SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174008";
 
 #[derive(Clone, Copy, Debug)]
 enum PayloadValue {
@@ -1108,6 +1110,8 @@ const SESSION_MUTATION_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-session-revision",
     "--if-attempt",
 ];
@@ -1120,6 +1124,8 @@ const ITEM_MUTATION_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-attempt",
     "--if-item-revision",
 ];
@@ -1132,6 +1138,8 @@ const START_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-session-revision",
     "--preset",
     "--procedure",
@@ -1149,6 +1157,8 @@ const RESET_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-session-revision",
     "--all",
     "--force",
@@ -1162,6 +1172,8 @@ const STATUS_SURFACE_FLAGS: &[&str] = &[
     "--socket",
     "--no-color",
     "--quiet",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--verbose",
     "--wait-for-idle",
     "--after-job",
@@ -1173,6 +1185,8 @@ const NEXT_SURFACE_FLAGS: &[&str] = &[
     "--socket",
     "--no-color",
     "--quiet",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--wait-for-idle",
     "--after-job",
 ];
@@ -1185,6 +1199,8 @@ const SKIP_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-session-revision",
     "--if-attempt",
     "--reason",
@@ -1198,6 +1214,8 @@ const RETURN_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-session-revision",
     "--if-attempt",
     "--to",
@@ -1213,6 +1231,8 @@ const UNBLOCK_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-session-revision",
     "--if-attempt",
     "--all",
@@ -1226,6 +1246,8 @@ const REOPEN_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-session-revision",
     "--to",
     "--reason",
@@ -1240,6 +1262,8 @@ const SET_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-attempt",
     "--if-item-revision",
     "--stdin",
@@ -1253,6 +1277,8 @@ const REMOVE_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-attempt",
     "--if-item-revision",
     "--ignore-missing",
@@ -1266,6 +1292,8 @@ const ATTACH_SURFACE_FLAGS: &[&str] = &[
     "--quiet",
     "--idempotency-key",
     "--detach",
+    "--if-workspace-uuid",
+    "--if-session-id",
     "--if-attempt",
     "--if-item-revision",
     "--reference",
@@ -1456,7 +1484,13 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["start", "--preset", "sw-dev", "--task", "task"],
         flags: START_SURFACE_FLAGS,
         values: &["analysis", "bug-fix", "docs-only", "sw-dev"],
-        help_tokens: &["--preset", "--procedure", "--task", "--dry-run"],
+        help_tokens: &[
+            "--preset",
+            "--procedure",
+            "--task",
+            "--if-workspace-uuid",
+            "--dry-run",
+        ],
         dynamic: None,
     },
     RouteSurface {
@@ -1472,7 +1506,13 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         ],
         flags: START_SURFACE_FLAGS,
         values: &["analysis", "bug-fix", "docs-only", "sw-dev"],
-        help_tokens: &["--replace", "--yes", "--dry-run"],
+        help_tokens: &[
+            "--replace",
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--yes",
+            "--dry-run",
+        ],
         dynamic: None,
     },
     RouteSurface {
@@ -1480,7 +1520,13 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["status", "--verbose"],
         flags: STATUS_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--verbose", "--wait-for-idle", "--after-job"],
+        help_tokens: &[
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--verbose",
+            "--wait-for-idle",
+            "--after-job",
+        ],
         dynamic: None,
     },
     RouteSurface {
@@ -1488,7 +1534,12 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["next", "--wait-for-idle"],
         flags: NEXT_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--wait-for-idle", "--after-job"],
+        help_tokens: &[
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--wait-for-idle",
+            "--after-job",
+        ],
         dynamic: None,
     },
     RouteSurface {
@@ -1496,7 +1547,12 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["complete"],
         flags: SESSION_MUTATION_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--if-session-revision", "--if-attempt"],
+        help_tokens: &[
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--if-session-revision",
+            "--if-attempt",
+        ],
         dynamic: None,
     },
     RouteSurface {
@@ -1504,7 +1560,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["skip", "--reason", "reason"],
         flags: SKIP_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--reason"],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id", "--reason"],
         dynamic: None,
     },
     RouteSurface {
@@ -1512,7 +1568,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["retry", "--reason", "reason"],
         flags: SKIP_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--reason"],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id", "--reason"],
         dynamic: None,
     },
     RouteSurface {
@@ -1527,7 +1583,13 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         ],
         flags: RETURN_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--to", "--reason", "--dry-run"],
+        help_tokens: &[
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--to",
+            "--reason",
+            "--dry-run",
+        ],
         dynamic: Some("returns"),
     },
     RouteSurface {
@@ -1535,7 +1597,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["block", "--reason", "reason"],
         flags: SKIP_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--reason"],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id", "--reason"],
         dynamic: None,
     },
     RouteSurface {
@@ -1543,7 +1605,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["unblock", "--all"],
         flags: UNBLOCK_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--all"],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id", "--all"],
         dynamic: Some("blockers"),
     },
     RouteSurface {
@@ -1551,7 +1613,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["cancel", "--reason", "reason"],
         flags: SKIP_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--reason"],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id", "--reason"],
         dynamic: None,
     },
     RouteSurface {
@@ -1566,7 +1628,13 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         ],
         flags: REOPEN_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--to", "--reason", "--dry-run"],
+        help_tokens: &[
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--to",
+            "--reason",
+            "--dry-run",
+        ],
         dynamic: Some("returns"),
     },
     RouteSurface {
@@ -1574,7 +1642,12 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["reset", "--yes"],
         flags: RESET_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--dry-run", "--yes"],
+        help_tokens: &[
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--dry-run",
+            "--yes",
+        ],
         dynamic: None,
     },
     RouteSurface {
@@ -1582,7 +1655,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["reset", "--all", "--force", "--yes"],
         flags: RESET_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--all", "--force", "--yes"],
+        help_tokens: &["--if-workspace-uuid", "--all", "--force", "--yes"],
         dynamic: None,
     },
     RouteSurface {
@@ -1590,7 +1663,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["check", "item"],
         flags: ITEM_MUTATION_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &[],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id"],
         dynamic: Some("items"),
     },
     RouteSurface {
@@ -1598,7 +1671,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["uncheck", "item"],
         flags: ITEM_MUTATION_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &[],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id"],
         dynamic: Some("items"),
     },
     RouteSurface {
@@ -1606,7 +1679,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["set", "item", "value"],
         flags: SET_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--stdin"],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id", "--stdin"],
         dynamic: Some("items"),
     },
     RouteSurface {
@@ -1614,7 +1687,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["add", "item", "value"],
         flags: ITEM_MUTATION_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &[],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id"],
         dynamic: Some("items"),
     },
     RouteSurface {
@@ -1622,7 +1695,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["remove", "item", "value", "--ignore-missing"],
         flags: REMOVE_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--ignore-missing"],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id", "--ignore-missing"],
         dynamic: Some("items"),
     },
     RouteSurface {
@@ -1630,7 +1703,14 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["attach", "item", "path.txt", "--media-type", "text/plain"],
         flags: ATTACH_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &["--reference", "--digest", "--size", "[--media-type <type>]"],
+        help_tokens: &[
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--reference",
+            "--digest",
+            "--size",
+            "[--media-type <type>]",
+        ],
         dynamic: Some("items"),
     },
     RouteSurface {
@@ -1638,7 +1718,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["clear", "item"],
         flags: ITEM_MUTATION_SURFACE_FLAGS,
         values: &[],
-        help_tokens: &[],
+        help_tokens: &["--if-workspace-uuid", "--if-session-id"],
         dynamic: Some("items"),
     },
     RouteSurface {
@@ -1891,6 +1971,63 @@ fn assert_recorded_contract(
     }
 
     request_projection(request)
+}
+
+#[test]
+fn explicit_workspace_identity_guards_preflight_and_overrides_observed_identity() {
+    let fixture = DynamicCompletionFixture::new();
+    let server = RecordingDaemon::start(
+        &fixture,
+        vec![
+            RecordingReply::Output(recording_success_result("session.status")),
+            RecordingReply::Output(recording_success_result("session.complete")),
+        ],
+    );
+    let arguments = [
+        "--json",
+        "--worktree",
+        fixture.root.to_str().expect("fixture root must be UTF-8"),
+        "--if-workspace-uuid",
+        EXPLICIT_WORKSPACE_ID,
+        "complete",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    let output = fixture.run_in(&fixture.root, &arguments);
+    assert!(
+        output.status.success(),
+        "identity-guarded complete failed: {output:?}"
+    );
+
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request["workspace"]["expected_uuid"], EXPLICIT_WORKSPACE_ID);
+    }
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.complete");
+    assert_eq!(requests[1]["preconditions"]["session_revision"], 1);
+    assert_eq!(
+        requests[1]["preconditions"]["attempt_id"],
+        RECORDING_ATTEMPT_ID
+    );
+}
+
+#[test]
+fn session_identity_flag_is_accepted_on_guarded_reads() {
+    let output = run(&[
+        "--json",
+        "status",
+        "--if-session-id",
+        EXPLICIT_SESSION_ID,
+        "--socket",
+        "/tmp/podway-casid-missing.sock",
+    ]);
+    assert_eq!(output.status.code(), Some(3));
+    let response = one_json(&output);
+    assert_eq!(response["command"], "session.status");
+    assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
 }
 fn status_json_semantic_projection(response: &Value) -> Value {
     let result = &response["result"];
@@ -2784,6 +2921,32 @@ fn start_replace_dry_run_requires_the_readonly_daemon_preview() {
 fn invalid_applicability_and_confirmation_are_usage_json_errors() {
     for arguments in [
         &["--json", "version", "--worktree", "."][..],
+        &["--json", "status", "--if-workspace-uuid", "not-a-uuid"][..],
+        &[
+            "--json",
+            "doctor",
+            "--if-workspace-uuid",
+            EXPLICIT_WORKSPACE_ID,
+        ][..],
+        &[
+            "--json",
+            "start",
+            "--preset",
+            "sw-dev",
+            "--task",
+            "task",
+            "--if-session-id",
+            EXPLICIT_SESSION_ID,
+        ][..],
+        &[
+            "--json",
+            "reset",
+            "--all",
+            "--force",
+            "--yes",
+            "--if-session-id",
+            EXPLICIT_SESSION_ID,
+        ][..],
         &["--json", "status", "--detach"][..],
         &[
             "--json",

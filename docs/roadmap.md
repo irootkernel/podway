@@ -148,7 +148,7 @@ all later epics are release-blocking work that is not yet implemented.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `CASID001` | Add public identity precondition flags | Planned | Add workspace and session identity flags and define command applicability. | [AUT-ID-001–006](reference/interfaces/34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007) |
+| `CASID001` | Add public identity precondition flags | Completed | Add workspace and session identity flags and define command applicability. | [AUT-ID-001–006](reference/interfaces/34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007) |
 | `CASID002` | Propagate identity through IPC | Planned | Carry explicit identities in requests and canonical request identity. | [AUT-ID-001–006](reference/interfaces/34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007) |
 | `CASID003` | Enforce identity before transitions | Planned | Reject reads or mutations targeting a replaced workspace or session. | [AUT-ID-002–006](reference/interfaces/34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007) |
 | `CASID004` | Define closed identity-conflict errors | Planned | Add typed codes, closed details, catalog entries, and exit behavior. | [AUT-ID-007](reference/interfaces/34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007), [AUT-ERR-001–002](reference/interfaces/34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002) |

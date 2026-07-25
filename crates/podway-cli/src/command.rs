@@ -102,6 +102,14 @@ struct Cli {
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     detach: bool,
 
+    /// Require an exact workspace identifier.
+    #[arg(long, global = true, value_name = "UUID")]
+    if_workspace_uuid: Option<String>,
+
+    /// Require an exact session identifier.
+    #[arg(long, global = true, value_name = "UUID")]
+    if_session_id: Option<String>,
+
     /// Require an exact session revision.
     #[arg(long, global = true, value_name = "N")]
     if_session_revision: Option<u64>,
@@ -541,6 +549,56 @@ impl Command {
         )
     }
 
+    const fn accepts_workspace_identity(&self) -> bool {
+        matches!(
+            self,
+            Self::Start(_)
+                | Self::Status(_)
+                | Self::Next(_)
+                | Self::Complete
+                | Self::Skip { .. }
+                | Self::Retry { .. }
+                | Self::Return(_)
+                | Self::Block { .. }
+                | Self::Unblock { .. }
+                | Self::Cancel { .. }
+                | Self::Reopen(_)
+                | Self::Reset(_)
+                | Self::Check { .. }
+                | Self::Uncheck { .. }
+                | Self::Set(_)
+                | Self::Add { .. }
+                | Self::Remove { .. }
+                | Self::Attach(_)
+                | Self::Clear { .. }
+        )
+    }
+
+    const fn accepts_session_identity(&self) -> bool {
+        matches!(
+            self,
+            Self::Start(StartArgs { replace: true, .. })
+                | Self::Status(_)
+                | Self::Next(_)
+                | Self::Complete
+                | Self::Skip { .. }
+                | Self::Retry { .. }
+                | Self::Return(_)
+                | Self::Block { .. }
+                | Self::Unblock { .. }
+                | Self::Cancel { .. }
+                | Self::Reopen(_)
+                | Self::Reset(ResetArgs { all: false, .. })
+                | Self::Check { .. }
+                | Self::Uncheck { .. }
+                | Self::Set(_)
+                | Self::Add { .. }
+                | Self::Remove { .. }
+                | Self::Attach(_)
+                | Self::Clear { .. }
+        )
+    }
+
     const fn is_destructive(&self) -> bool {
         match self {
             Self::Start(args) => args.replace && !args.dry_run,
@@ -711,6 +769,8 @@ impl StatusFacts {
 
 #[derive(Clone, Debug, Default)]
 struct ExplicitPreconditions {
+    workspace_id: Option<WorkspaceId>,
+    session_id: Option<SessionId>,
     session_revision: Option<Revision>,
     attempt_id: Option<AttemptId>,
     item_revision: Option<Revision>,
@@ -718,6 +778,22 @@ struct ExplicitPreconditions {
 
 impl ExplicitPreconditions {
     fn parse(cli: &Cli) -> Result<Self, LocalFailure> {
+        let workspace_id = cli
+            .if_workspace_uuid
+            .as_deref()
+            .map(|id| {
+                WorkspaceId::new(id.to_owned())
+                    .map_err(|_| LocalFailure::request_invalid("invalid workspace identifier"))
+            })
+            .transpose()?;
+        let session_id = cli
+            .if_session_id
+            .as_deref()
+            .map(|id| {
+                SessionId::new(id.to_owned())
+                    .map_err(|_| LocalFailure::request_invalid("invalid session identifier"))
+            })
+            .transpose()?;
         let attempt_id = cli
             .if_attempt
             .as_deref()
@@ -727,6 +803,8 @@ impl ExplicitPreconditions {
             })
             .transpose()?;
         Ok(Self {
+            workspace_id,
+            session_id,
             session_revision: cli.if_session_revision.map(Revision::new),
             attempt_id,
             item_revision: cli.if_item_revision.map(Revision::new),
@@ -734,6 +812,14 @@ impl ExplicitPreconditions {
     }
 
     const fn any(&self) -> bool {
+        self.workspace_id.is_some()
+            || self.session_id.is_some()
+            || self.session_revision.is_some()
+            || self.attempt_id.is_some()
+            || self.item_revision.is_some()
+    }
+
+    const fn any_transition(&self) -> bool {
         self.session_revision.is_some() || self.attempt_id.is_some() || self.item_revision.is_some()
     }
 }
@@ -905,19 +991,23 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             let status_request = build_request(
                 "session.status",
                 &target,
-                RequestSpec::query(wait_timeout_ms, Map::new(), None),
+                identity_probe_spec(wait_timeout_ms, &explicit)?,
             )?;
             match request_daemon(&client, &status_request)
                 .map_err(|failure| failure.with_command(wire_name))?
             {
                 ResponseEnvelopeV1::Output(status) => Some(
-                    StatusPreflight::from_output(&status)
-                        .map_err(|failure| {
-                            failure.with_correlation(wire_name, status.request_id().as_str())
-                        })?
-                        .transport_workspace_id,
+                    explicit.workspace_id.clone().unwrap_or(
+                        StatusPreflight::from_output(&status)
+                            .map_err(|failure| {
+                                failure.with_correlation(wire_name, status.request_id().as_str())
+                            })?
+                            .transport_workspace_id,
+                    ),
                 ),
-                ResponseEnvelopeV1::Error(error) if reset_probe_can_recover(&error) => None,
+                ResponseEnvelopeV1::Error(error) if reset_probe_can_recover(&error) => {
+                    explicit.workspace_id.clone()
+                }
                 ResponseEnvelopeV1::Error(error) => {
                     return re_correlate_preflight_error(&error, wire_name);
                 }
@@ -930,7 +1020,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         let status_request = build_request(
             "session.status",
             &target,
-            RequestSpec::query(wait_timeout_ms, Map::new(), None),
+            identity_probe_spec(wait_timeout_ms, &explicit)?,
         )?;
         let status_response = request_daemon(&client, &status_request)
             .map_err(|failure| failure.with_command(wire_name))?;
@@ -947,7 +1037,10 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             .facts
             .preconditions(&cli.command, &explicit)
             .map_err(|failure| failure.with_correlation(wire_name, status.request_id().as_str()))?;
-        let expected_workspace_id = preflight.transport_workspace_id;
+        let expected_workspace_id = explicit
+            .workspace_id
+            .clone()
+            .unwrap_or(preflight.transport_workspace_id);
         let request = build_request(
             wire_name,
             &target,
@@ -979,11 +1072,11 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         &target,
         RequestSpec {
             operation,
-            expected_uuid: reset_all_workspace_id,
+            expected_uuid: reset_all_workspace_id.or_else(|| explicit.workspace_id.clone()),
             idempotency_key: requires_idempotency_key(operation)
                 .then(|| mutation_key(cli.idempotency_key))
                 .transpose()?,
-            preconditions: control_preconditions(&cli.command)?,
+            preconditions: direct_preconditions(&cli.command, &explicit)?,
             detach: cli.detach,
             wait_timeout_ms,
             payload,
@@ -1001,7 +1094,25 @@ fn reset_probe_can_recover(error: &podway_protocol::ErrorEnvelopeV1) -> bool {
     )
 }
 
-fn control_preconditions(command: &Command) -> Result<PreconditionsV1, LocalFailure> {
+fn identity_probe_spec(
+    wait_timeout_ms: u64,
+    explicit: &ExplicitPreconditions,
+) -> Result<RequestSpec, LocalFailure> {
+    Ok(RequestSpec {
+        operation: OperationV1::Query,
+        expected_uuid: explicit.workspace_id.clone(),
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        detach: false,
+        wait_timeout_ms,
+        payload: Map::new(),
+    })
+}
+
+fn direct_preconditions(
+    command: &Command,
+    _explicit: &ExplicitPreconditions,
+) -> Result<PreconditionsV1, LocalFailure> {
     match command {
         Command::Job {
             command: JobCommand::Cancel { .. },
@@ -1196,6 +1307,8 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
         || cli.socket.is_some()
         || cli.detach
         || cli.idempotency_key.is_some()
+        || cli.if_workspace_uuid.is_some()
+        || cli.if_session_id.is_some()
         || cli.if_session_revision.is_some()
         || cli.if_attempt.is_some()
         || cli.if_item_revision.is_some()
@@ -2245,7 +2358,17 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
         ));
     }
     let explicit = ExplicitPreconditions::parse(cli)?;
-    if explicit.any() && !command.needs_preflight() {
+    if cli.if_workspace_uuid.is_some() && !command.accepts_workspace_identity() {
+        return Err(LocalFailure::request_invalid(
+            "--if-workspace-uuid does not apply to this command",
+        ));
+    }
+    if cli.if_session_id.is_some() && !command.accepts_session_identity() {
+        return Err(LocalFailure::request_invalid(
+            "--if-session-id does not apply to this command",
+        ));
+    }
+    if explicit.any_transition() && !command.needs_preflight() {
         return Err(LocalFailure::request_invalid(
             "explicit preconditions do not apply to this command",
         ));
@@ -3500,7 +3623,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Rework:\n  podway return --to implement --reason 'review found a gap' --dry-run\n  podway reopen --to implement --reason 'follow-up'"
         }
         "automation" => {
-            "Automation:\n  podway complete --if-session-revision 12 --if-attempt <uuid> --idempotency-key task-42 --json"
+            "Automation:\n  podway complete --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 12 --if-attempt <uuid> --idempotency-key task-42 --json"
         }
         "procedures" => {
             "Procedures:\n  podway procedure validate .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --task 'perform work'"
@@ -3553,66 +3676,68 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file>) --task <title> [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --preset sw-dev --task 'preview procedure' --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file>) --task <title> [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --preset sw-dev --task 'preview procedure' --dry-run"
         }
         "session.start_replace" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file>) --task <title> --replace [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file>) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
         }
         "session.status" => {
-            "Usage:\n  podway status [--verbose] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway status --verbose"
+            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway status --verbose"
         }
         "session.next" => {
-            "Usage:\n  podway next [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway next"
+            "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway next"
         }
         "session.complete" => {
-            "Usage:\n  podway complete [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway complete --if-session-revision 12 --if-attempt <uuid>"
+            "Usage:\n  podway complete [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway complete --if-session-revision 12 --if-attempt <uuid>"
         }
         "session.skip" => {
-            "Usage:\n  podway skip [--reason <text>]\n\nExample:\n  podway skip --reason 'not applicable'"
+            "Usage:\n  podway skip [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--reason <text>]\n\nExample:\n  podway skip --reason 'not applicable'"
         }
         "session.retry" => {
-            "Usage:\n  podway retry --reason <text>\n\nExample:\n  podway retry --reason 'rerun after fixing input'"
+            "Usage:\n  podway retry --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway retry --reason 'rerun after fixing input'"
         }
         "session.return" => {
-            "Usage:\n  podway return --to <stage-id> --reason <text> [--dry-run]\n\nExample:\n  podway return --to implement --reason 'review found a gap' --dry-run"
+            "Usage:\n  podway return --to <stage-id> --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--dry-run]\n\nExample:\n  podway return --to implement --reason 'review found a gap' --dry-run"
         }
         "session.block" => {
-            "Usage:\n  podway block --reason <text>\n\nExample:\n  podway block --reason 'waiting for API owner'"
+            "Usage:\n  podway block --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway block --reason 'waiting for API owner'"
         }
         "session.unblock" => {
-            "Usage:\n  podway unblock (<blocker-id> | --all)\n\nExample:\n  podway unblock --all"
+            "Usage:\n  podway unblock (<blocker-id> | --all) [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway unblock --all"
         }
         "session.cancel" => {
-            "Usage:\n  podway cancel --reason <text>\n\nExample:\n  podway cancel --reason 'task no longer needed'"
+            "Usage:\n  podway cancel --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway cancel --reason 'task no longer needed'"
         }
         "session.reopen" => {
-            "Usage:\n  podway reopen --to <stage-id> --reason <text> [--dry-run]\n\nExample:\n  podway reopen --to implement --reason 'follow-up' --dry-run"
+            "Usage:\n  podway reopen --to <stage-id> --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--dry-run]\n\nExample:\n  podway reopen --to implement --reason 'follow-up' --dry-run"
         }
         "session.reset" => {
-            "Usage:\n  podway reset [--dry-run] [--yes]\n\nExample:\n  podway reset --yes"
+            "Usage:\n  podway reset [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--dry-run] [--yes]\n\nExample:\n  podway reset --yes"
         }
         "workspace.reset_all" => {
-            "Usage:\n  podway reset --all --force --yes\n\nExample:\n  podway reset --all --force --yes"
+            "Usage:\n  podway reset --all --force --yes [--if-workspace-uuid <uuid>]\n\nExample:\n  podway reset --all --force --yes"
         }
         "item.check" => {
-            "Usage:\n  podway check <item-id>\n\nExample:\n  podway check baseline-established"
+            "Usage:\n  podway check <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway check baseline-established"
         }
         "item.uncheck" => {
-            "Usage:\n  podway uncheck <item-id>\n\nExample:\n  podway uncheck baseline-established"
+            "Usage:\n  podway uncheck <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway uncheck baseline-established"
         }
         "item.set" => {
-            "Usage:\n  podway set <item-id> (<value> | --stdin)\n\nExample:\n  podway set implementation-summary 'completed work'"
+            "Usage:\n  podway set <item-id> (<value> | --stdin) [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway set implementation-summary 'completed work'"
         }
         "item.add" => {
-            "Usage:\n  podway add <item-id> <value>\n\nExample:\n  podway add affected-components daemon"
+            "Usage:\n  podway add <item-id> <value> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway add affected-components daemon"
         }
         "item.remove" => {
-            "Usage:\n  podway remove <item-id> <value> [--ignore-missing]\n\nExample:\n  podway remove affected-components daemon"
+            "Usage:\n  podway remove <item-id> <value> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--ignore-missing]\n\nExample:\n  podway remove affected-components daemon"
         }
         "item.attach" => {
-            "Usage:\n  podway attach <item-id> (<path> [--media-type <type>] | --reference <ref> --digest <sha256> --size <bytes> --media-type <type>)\n\nExample:\n  podway attach verification-reference report.md --media-type text/markdown"
+            "Usage:\n  podway attach <item-id> (<path> [--media-type <type>] | --reference <ref> --digest <sha256> --size <bytes> --media-type <type>) [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway attach verification-reference report.md --media-type text/markdown"
         }
-        "item.clear" => "Usage:\n  podway clear <item-id>\n\nExample:\n  podway clear constraints",
+        "item.clear" => {
+            "Usage:\n  podway clear <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway clear constraints"
+        }
         "job.list" => {
             "Usage:\n  podway job list [--state <queued|running|succeeded|failed|cancelled>]\n\nExample:\n  podway job list --state queued"
         }

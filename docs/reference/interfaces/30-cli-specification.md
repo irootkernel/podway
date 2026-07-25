@@ -376,8 +376,14 @@ Automation SHOULD pass explicit values obtained from `status --json`:
 --if-item-revision <n>
 ```
 
-Workspace and session identity options are accepted target behavior. Their
-command-specific required combinations are normative in the
+Workspace identity applies to session start and replacement, session-bearing
+reads, session and item mutations, reopen, reset, and reset-all. Session identity
+applies to session-bearing reads and commands that target an existing session;
+plain start and reset-all reject it. Static, daemon lifecycle, workspace
+maintenance, job, init, and doctor commands reject both identity options.
+
+Explicit workspace identity takes precedence over CLI preflight observations.
+The command-specific required IPC combinations remain normative in the
 [automation contract](34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007).
 
 ```bash
