@@ -13,7 +13,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "docs/examples/json/ipc-complete-request.json",
-      "sha256": "sha256:6f6d23fd82860b698cbc2192f59a0cacf2fece78a1c7d5c4ee8226184f520b3e"
+      "sha256": "sha256:c2e807b3519ffdc1cbc72d74a6f7234e007373b8d31171be46938a10c92c63ed"
     },
     {
       "kind": "known_answer_fixture",
@@ -111,7 +111,7 @@
       "sha256": "sha256:fa6e02fb564a739ac0d007cedbeed8d003312647db331084407aa32394dcb538"
     }
   ],
-  "digest": "sha256:1e7ead68fdb4eb639b12d75e5943b6546464a2dea4a04971706ec7c0001c0647",
+  "digest": "sha256:8b07f9e41bed293fae8bd9f2f700a1defbe97a0734e328d4ca5112c843d4d9c4",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",

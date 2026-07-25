@@ -4,7 +4,9 @@
   "client": {
     "name": "podway",
     "version": "0.1.0",
-    "pid": 12345
+    "pid": 12345,
+    "product": "podway",
+    "contract_manifest_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
   "operation": "mutate",
   "command": "session.complete",

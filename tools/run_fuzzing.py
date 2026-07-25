@@ -16,12 +16,7 @@ FUZZ_CARGO_VERSION = "cargo-fuzz 0.13.2"
 FUZZ_RUNS = 100_000
 FUZZ_SEED = 0x50D0A7
 FUZZ_TARGETS = ("frame_decoder", "request_envelope")
-
-VALID_REQUEST = (
-    b'{"protocol":"podway.ipc/v1","request_id":"00000000-0000-4000-8000-000000000001",'
-    b'"client":{"name":"podway-cli","version":"0.1.0","pid":1},"operation":"query",'
-    b'"command":"status","options":{"detach":false,"wait_timeout_ms":0},"payload":{}}'
-)
+VALID_REQUEST_PATH = ROOT / "docs/examples/json/ipc-complete-request.json"
 
 
 class FuzzGateError(RuntimeError):
@@ -65,11 +60,12 @@ def rustup_executable(name: str) -> str:
 def seed_corpus(directory: Path, target: str) -> None:
     directory.mkdir(mode=0o700)
     (directory / "malformed-json").write_bytes(b"{}")
+    valid_request = VALID_REQUEST_PATH.read_bytes()
     if target == "frame_decoder":
-        framed = len(VALID_REQUEST).to_bytes(4, byteorder="big") + VALID_REQUEST
+        framed = len(valid_request).to_bytes(4, byteorder="big") + valid_request
         (directory / "valid-request-frame").write_bytes(framed)
     else:
-        (directory / "valid-request-envelope").write_bytes(VALID_REQUEST)
+        (directory / "valid-request-envelope").write_bytes(valid_request)
 
 
 def main() -> int:

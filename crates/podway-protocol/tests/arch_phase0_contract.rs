@@ -187,6 +187,26 @@ fn api_004_request_envelope_validation_and_serde_rejection_are_enforced() {
         );
     }
 }
+
+#[test]
+fn api_004_public_request_fixture_is_a_valid_fuzz_seed() {
+    let fixture = include_bytes!("../../../docs/examples/json/ipc-complete-request.json");
+    let request = decode_request_payload_v1(fixture)
+        .expect("the public IPC request fixture must satisfy the runtime decoder");
+
+    assert_eq!(request.client().product(), "podway");
+    assert_eq!(
+        request.client().contract_manifest_digest(),
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
+    assert_eq!(
+        decode_request_payload_v1(
+            &encode_request_payload_v1(&request).expect("the public fixture must re-encode")
+        )
+        .expect("the re-encoded public fixture must decode"),
+        request
+    );
+}
 const WORKSPACE_ID: &str = "223e4567-e89b-12d3-a456-426614174000";
 const JOB_ID: &str = "323e4567-e89b-12d3-a456-426614174000";
 const SESSION_ID: &str = "423e4567-e89b-12d3-a456-426614174000";
