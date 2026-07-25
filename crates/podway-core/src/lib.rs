@@ -63,6 +63,10 @@ pub enum DomainError {
         expected: SessionId,
         actual: Option<SessionId>,
     },
+    AttemptNotCurrent {
+        expected: AttemptId,
+        actual: Option<AttemptId>,
+    },
     ItemNotFound {
         item_id: ItemId,
     },
@@ -131,6 +135,16 @@ impl fmt::Display for DomainError {
                 None => write!(
                     formatter,
                     "session identity precondition failed: expected {expected}, found no session"
+                ),
+            },
+            Self::AttemptNotCurrent { expected, actual } => match actual {
+                Some(actual) => write!(
+                    formatter,
+                    "attempt precondition failed: expected {expected}, found {actual}"
+                ),
+                None => write!(
+                    formatter,
+                    "attempt precondition failed: expected {expected}, found no active attempt"
                 ),
             },
             Self::ItemNotFound { item_id } => write!(formatter, "item {item_id} was not found"),

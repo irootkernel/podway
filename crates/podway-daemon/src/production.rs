@@ -1480,6 +1480,10 @@ fn map_preview_domain_error(error: DomainError, command: &SliceCommandV1) -> Dis
         DomainError::SessionIdentityMismatch { expected, actual } => {
             session_id_mismatch_failure(expected, actual)
         }
+        DomainError::AttemptNotCurrent { expected, actual } => DispatchFailureV1::new(
+            DispatchFailureKindV1::AttemptNotCurrent,
+        )
+        .with_details(DispatchErrorDetailsV1::default().with_attempt_mismatch(expected, actual)),
         DomainError::InvalidTransition { .. } | DomainError::InvalidState { .. } => {
             let kind = match command {
                 SliceCommandV1::SessionReturn(_) => DispatchFailureKindV1::ReturnNotAllowed,
@@ -1861,6 +1865,12 @@ fn terminal_job_error_projection(
             true,
             4,
         ),
+        DispatchFailureKindV1::AttemptNotCurrent => (
+            "ATTEMPT_NOT_CURRENT",
+            "The target attempt is no longer active.",
+            true,
+            4,
+        ),
         DispatchFailureKindV1::ItemNotFound => (
             "ITEM_NOT_FOUND",
             "The item does not exist on the active stage.",
@@ -1953,6 +1963,20 @@ fn terminal_job_error_projection(
                 }),
             ),
         ]),
+        PersistedDomainErrorV1::AttemptNotCurrent { expected, actual } => {
+            let mut details = Map::from_iter([(
+                "expected_attempt_id".to_owned(),
+                Value::String(expected.as_str().to_owned()),
+            )]);
+            details.insert(
+                "actual_attempt_id".to_owned(),
+                actual
+                    .as_ref()
+                    .map(|actual| Value::String(actual.as_str().to_owned()))
+                    .unwrap_or(Value::Null),
+            );
+            details
+        }
         _ => Map::new(),
     };
     Ok(TerminalJobErrorProjectionV1 {
@@ -2145,6 +2169,12 @@ fn map_terminal_domain_error(
         }
         PersistedDomainErrorV1::SessionIdentityMismatch { expected, actual } => {
             session_id_mismatch_failure(expected.clone(), actual.clone())
+        }
+        PersistedDomainErrorV1::AttemptNotCurrent { expected, actual } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::AttemptNotCurrent).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_attempt_mismatch(expected.clone(), actual.clone()),
+            )
         }
         PersistedDomainErrorV1::ItemNotFound { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)
@@ -3078,6 +3108,41 @@ mod tests {
                     "workspace_sequence": 26
                 }
             })
+        );
+
+        let expected_attempt = AttemptId::new("00000000-0000-4000-8000-000000000028").unwrap();
+        let actual_attempt = AttemptId::new("00000000-0000-4000-8000-000000000029").unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(28),
+            PersistedTerminalResultV1::Failure(PersistedDomainErrorV1::AttemptNotCurrent {
+                expected: expected_attempt.clone(),
+                actual: Some(actual_attempt.clone()),
+            }),
+            terminal_job_projection(PersistedTerminalJobStateV1::Failed),
+            None,
+        )
+        .unwrap();
+        let view = terminal_view(
+            podway_store::CommandV1::ItemCheck {
+                item_id: ItemId::new("proof").unwrap(),
+            },
+            StoreJobStateV1::Failed,
+            receipt,
+        );
+
+        let (_, terminal) = job_read_projection(&view).unwrap();
+
+        assert_eq!(terminal["kind"], "error");
+        assert_eq!(terminal["payload"]["code"], "ATTEMPT_NOT_CURRENT");
+        assert_eq!(terminal["payload"]["retryable"], true);
+        assert_eq!(terminal["payload"]["exit_code"], 4);
+        assert_eq!(
+            terminal["payload"]["details"]["expected_attempt_id"],
+            expected_attempt.as_str()
+        );
+        assert_eq!(
+            terminal["payload"]["details"]["actual_attempt_id"],
+            actual_attempt.as_str()
         );
     }
 

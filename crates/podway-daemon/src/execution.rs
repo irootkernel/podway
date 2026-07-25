@@ -665,13 +665,12 @@ where
                             reason:
                                 "workspace reset requires the previous workspace UUID when the Store is readable",
                         }),
-                    )?;
+                )?;
                 if expected_workspace_uuid != previous_workspace.workspace_uuid() {
-                    return Err(ExecutionErrorV1::BoundaryDomain(
-                        DomainError::InvalidState {
-                            reason: "workspace reset precondition does not match the previous workspace",
-                        },
-                    ));
+                    return Err(ExecutionErrorV1::WorkspaceIdentityMismatch {
+                        expected: expected_workspace_uuid.clone(),
+                        actual: previous_workspace.workspace_uuid().clone(),
+                    });
                 }
             }
             ResetAllStoreAuthorityKindV1::ValidatedUnavailable(proof) => {
@@ -680,17 +679,13 @@ where
                         reason: "unavailable Store proof does not match the inspected reset source",
                     });
                 }
-                if reset
-                    .preconditions
-                    .expected_workspace_id
-                    .as_ref()
-                    .is_some_and(|expected| expected != previous_workspace.workspace_uuid())
+                if let Some(expected) = reset.preconditions.expected_workspace_id.as_ref()
+                    && expected != previous_workspace.workspace_uuid()
                 {
-                    return Err(ExecutionErrorV1::BoundaryDomain(
-                        DomainError::InvalidState {
-                            reason: "workspace reset precondition does not match the previous workspace",
-                        },
-                    ));
+                    return Err(ExecutionErrorV1::WorkspaceIdentityMismatch {
+                        expected: expected.clone(),
+                        actual: previous_workspace.workspace_uuid().clone(),
+                    });
                 }
             }
         }
@@ -1081,8 +1076,7 @@ where
         command: &SliceCommandV1,
         workspace: &WorkspaceBindingV1,
     ) -> Result<(), ExecutionErrorV1> {
-        let requires_absent_session = matches!(command, SliceCommandV1::SessionStart(_));
-        if expected_session_id_v1(command).is_none() && !requires_absent_session {
+        if expected_session_id_v1(command).is_none() {
             return Ok(());
         }
         let view = self.store.read_workspace_view(workspace.identity())?;
@@ -1092,13 +1086,6 @@ where
             return Err(ExecutionErrorV1::InvalidPersistedExecution {
                 reason: "Store read returned a different workspace identity before admission",
             });
-        }
-        if requires_absent_session && view.current_session().is_some() {
-            return Err(ExecutionErrorV1::BoundaryDomain(
-                DomainError::InvalidState {
-                    reason: "session start requires no existing session",
-                },
-            ));
         }
         match enforce_session_identity_v1(command, view.current_session()) {
             Err(DomainError::SessionIdentityMismatch { expected, actual }) => {

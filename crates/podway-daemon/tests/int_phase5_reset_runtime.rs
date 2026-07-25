@@ -129,6 +129,15 @@ fn reset_request(
     root: &Path,
     expected_workspace_uuid: &WorkspaceId,
 ) -> (RequestEnvelopeV1, SliceRequestV1) {
+    reset_request_with_key(root, expected_workspace_uuid, 5_001, "phase5-live-reset")
+}
+
+fn reset_request_with_key(
+    root: &Path,
+    expected_workspace_uuid: &WorkspaceId,
+    request_number: u64,
+    idempotency_key: &str,
+) -> (RequestEnvelopeV1, SliceRequestV1) {
     #[cfg(unix)]
     let canonical_root = fs::canonicalize(root).expect("fixture worktree root must canonicalize");
     let selector = WorktreeSelectorWireV1::new(
@@ -150,7 +159,7 @@ fn reset_request(
         "expected_workspace_uuid": expected_workspace_uuid,
     });
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
-        request_id: RequestIdV1::new("00000000-0000-4000-8000-000000005001")
+        request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{request_number:012x}"))
             .expect("fixture request ID must be valid"),
         client: ClientInfoV1::new("phase5-reset-runtime", "1", 1)
             .expect("fixture client must be valid"),
@@ -161,7 +170,7 @@ fn reset_request(
                 .expect("fixture workspace context must be valid"),
         ),
         idempotency_key: Some(
-            podway_protocol::IdempotencyKeyV1::new("phase5-live-reset")
+            podway_protocol::IdempotencyKeyV1::new(idempotency_key)
                 .expect("fixture idempotency key must be valid"),
         ),
         preconditions: PreconditionsV1::default(),
@@ -498,6 +507,77 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
             .latest_workspace_sequence(),
         sequence_before_stale_request,
         "a stale workspace request must not consume target sequence"
+    );
+    let target_database_before_stale_reset =
+        fs::metadata(target_context.database_path()).expect("target database must exist");
+    let (stale_reset_envelope, stale_reset) = reset_request_with_key(
+        fixture.main(),
+        &old_workspace_uuid,
+        5_006,
+        "phase5-stale-reset-identity",
+    );
+    let ResponseEnvelopeV1::Error(stale_reset_error) =
+        dispatcher.dispatch(&stale_reset_envelope, &stale_reset)
+    else {
+        panic!("a fresh-key reset against the replaced UUID must fail identity validation");
+    };
+    assert_eq!(stale_reset_error.code().as_str(), "WORKSPACE_UUID_MISMATCH");
+    assert_eq!(stale_reset_error.exit_code().get(), 4);
+    assert!(!stale_reset_error.retryable());
+    assert_eq!(
+        stale_reset_error.details(),
+        &serde_json::Map::from_iter([
+            (
+                "schema".to_owned(),
+                json!("podway.workspace-uuid-mismatch-details/v1"),
+            ),
+            (
+                "expected_workspace_uuid".to_owned(),
+                json!(old_workspace_uuid.as_str()),
+            ),
+            (
+                "actual_workspace_uuid".to_owned(),
+                json!(target.uuid().as_str()),
+            ),
+            ("admission".to_owned(), json!({"admitted": false})),
+        ])
+    );
+    let target_database_after_stale_reset =
+        fs::metadata(target_context.database_path()).expect("target database must remain");
+    assert_eq!(
+        (
+            target_database_after_stale_reset.dev(),
+            target_database_after_stale_reset.ino(),
+        ),
+        (
+            target_database_before_stale_reset.dev(),
+            target_database_before_stale_reset.ino(),
+        ),
+        "a stale reset must not replace the target Store"
+    );
+    assert_eq!(
+        target_context
+            .store()
+            .list_jobs(
+                target_identity,
+                JobListQueryV1::new(100).expect("stale reset job query must be valid"),
+            )
+            .expect("target jobs must remain readable"),
+        jobs_before_stale_request,
+        "a stale reset must not admit a target job"
+    );
+    assert_eq!(
+        target_context
+            .store()
+            .read_workspace_view(target_identity)
+            .expect("target workspace view must remain readable")
+            .latest_workspace_sequence(),
+        sequence_before_stale_request,
+        "a stale reset must not consume target sequence"
+    );
+    assert!(
+        !fixture.main().join(".podway/runtime/reset.marker").exists(),
+        "a stale reset must fail before marker publication"
     );
     let (fresh_start_envelope, fresh_start) = workspace_mutation_request(
         fixture.main(),

@@ -19,8 +19,8 @@ completed.
 --quiet                        suppress nonessential text output
 --idempotency-key <string>     override generated mutation key
 --detach                       return after durable job admission
---if-workspace-uuid <uuid>     require an exact workspace identity (target)
---if-session-id <uuid>         require an exact session identity (target)
+--if-workspace-uuid <uuid>     require an exact workspace identity
+--if-session-id <uuid>         require an exact session identity
 --if-session-revision <n>      require an exact session revision
 --if-attempt <uuid>            require an exact active attempt
 --if-item-revision <n>         require an exact item revision

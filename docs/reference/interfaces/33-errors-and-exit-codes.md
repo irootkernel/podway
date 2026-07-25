@@ -157,7 +157,7 @@ identity errors are non-retryable exit-4 conflicts: callers must observe fresh
 identity before deciding whether a new operation is valid.
 
 The remaining v0.1.0 target adds stable entries for `PROCEDURE_DIGEST_MISMATCH`,
-`DAEMON_CONTRACT_MISMATCH`, invalid or over-long explicit socket paths, and closed
+invalid or over-long explicit socket paths, and closed
 admission-aware wait failures. The normative target is the
 [automation error contract](34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
 

@@ -454,6 +454,10 @@ pub enum PersistedDomainErrorV1 {
         expected: podway_core::SessionId,
         actual: Option<podway_core::SessionId>,
     },
+    AttemptNotCurrent {
+        expected: podway_core::AttemptId,
+        actual: Option<podway_core::AttemptId>,
+    },
     ItemNotFound {
         item_id: ItemId,
     },
@@ -505,6 +509,10 @@ impl PersistedDomainErrorV1 {
                     actual: actual.clone(),
                 }
             }
+            DomainError::AttemptNotCurrent { expected, actual } => Self::AttemptNotCurrent {
+                expected: expected.clone(),
+                actual: actual.clone(),
+            },
             DomainError::ItemNotFound { item_id } => Self::ItemNotFound {
                 item_id: item_id.clone(),
             },

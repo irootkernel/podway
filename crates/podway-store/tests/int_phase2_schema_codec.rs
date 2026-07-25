@@ -918,6 +918,7 @@ fn assert_persisted_error_variant_coverage(error: &PersistedDomainErrorV1) {
         PersistedDomainErrorV1::ItemNotFound { .. } => {}
         PersistedDomainErrorV1::BlockerNotCurrent => {}
         PersistedDomainErrorV1::SessionIdentityMismatch { .. } => {}
+        PersistedDomainErrorV1::AttemptNotCurrent { .. } => {}
     }
 }
 
@@ -1145,6 +1146,19 @@ fn assert_failure_fields(actual: &PersistedDomainErrorV1, expected: &DomainError
             }
             _ => panic!("decoded error kind differs from the literal golden"),
         },
+        DomainError::AttemptNotCurrent {
+            expected,
+            actual: expected_actual,
+        } => match actual {
+            PersistedDomainErrorV1::AttemptNotCurrent {
+                expected: actual_expected,
+                actual: actual_actual,
+            } => {
+                assert_eq!(actual_expected, expected);
+                assert_eq!(actual_actual, expected_actual);
+            }
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
     }
 }
 
@@ -1247,6 +1261,9 @@ fn failure_golden_v1(error: &DomainError) -> &'static str {
         }
         DomainError::SessionIdentityMismatch { .. } => {
             r#"{"job":{"identity_sequence":24,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"actual":"00000000-0000-4000-8000-000000000005","expected":"00000000-0000-4000-8000-000000000004","kind":"session_identity_mismatch"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::AttemptNotCurrent { .. } => {
+            r#"{"job":{"identity_sequence":25,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"actual":"00000000-0000-4000-8000-000000000007","expected":"00000000-0000-4000-8000-000000000006","kind":"attempt_not_current"}},"schema":"podway.store-terminal/v1"}"#
         }
     }
 }
@@ -1493,6 +1510,10 @@ fn terminal_codec_matches_independent_literal_goldens_for_results_errors_and_can
         DomainError::SessionIdentityMismatch {
             expected: SessionId::new("00000000-0000-4000-8000-000000000004")?,
             actual: Some(SessionId::new("00000000-0000-4000-8000-000000000005")?),
+        },
+        DomainError::AttemptNotCurrent {
+            expected: AttemptId::new("00000000-0000-4000-8000-000000000006")?,
+            actual: Some(AttemptId::new("00000000-0000-4000-8000-000000000007")?),
         },
     ];
     for (index, error) in errors.into_iter().enumerate() {

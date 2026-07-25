@@ -1329,7 +1329,10 @@ fn current_location(
         .active_attempt_id()
         .ok_or_else(|| invalid("running session has no active attempt"))?;
     if active_attempt_id != expected_attempt_id {
-        return Err(invalid("the expected attempt is not current"));
+        return Err(DomainError::AttemptNotCurrent {
+            expected: expected_attempt_id.clone(),
+            actual: Some(active_attempt_id.clone()),
+        });
     }
     let active_stage_id = prior
         .active_stage_id()

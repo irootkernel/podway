@@ -234,10 +234,11 @@ fn g006_reopen_reactivates_a_completed_session_at_the_requested_stage() {
 }
 
 #[test]
-fn claimed_item_mutation_rejects_same_revision_replacement_and_replays_terminal_error() {
+fn claimed_mutations_reject_same_revision_replacement_and_replay_terminal_errors() {
     let mut harness = Harness::new();
     assert_success(&harness.start());
     let original = harness.store.current_session().unwrap();
+    let original_session_preconditions = harness.session_preconditions();
     let replacement_request = slice_request(
         "session.start_replace",
         json!({
@@ -265,6 +266,17 @@ fn claimed_item_mutation_rejects_same_revision_replacement_and_replays_terminal_
     let key = IdempotencyKeyV1::new("same-revision-replacement-race").unwrap();
     assert!(matches!(
         harness.engine.admit(&request, key.clone()),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    let session_request = slice_request(
+        "session.cancel",
+        json!({"selector": selector_json(), "reason": "stale session mutation"}),
+        original_session_preconditions,
+        9_718,
+    );
+    let session_key = IdempotencyKeyV1::new("same-revision-session-race").unwrap();
+    assert!(matches!(
+        harness.engine.admit(&session_request, session_key.clone()),
         Ok(AdmitOutcomeV1::New(_))
     ));
 
@@ -312,9 +324,35 @@ fn claimed_item_mutation_rejects_same_revision_replacement_and_replays_terminal_
             PersistedTerminalReceiptV1::from_terminal_receipt(&terminal),
         ))
     );
-    assert_eq!(harness.store.current_session(), Some(replacement));
+    assert_eq!(harness.store.current_session(), Some(replacement.clone()));
     assert_eq!(harness.store.terminal().len(), terminal_count + 1);
     assert_eq!(harness.store.request_count(), requests_after_failure);
+
+    let session_terminal = harness
+        .engine
+        .execute_next(
+            &harness.binding,
+            WorkerIdV1::new("same-revision-session-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        session_terminal.result(),
+        &TerminalResultV1::Failure(DomainError::SessionIdentityMismatch {
+            expected: original.session_id().clone(),
+            actual: Some(replacement.session_id().clone()),
+        })
+    );
+    assert_eq!(harness.store.current_session(), Some(replacement.clone()));
+    assert_eq!(harness.store.terminal().len(), terminal_count + 2);
+    assert_eq!(
+        harness.engine.admit(&session_request, session_key).unwrap(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(
+            PersistedTerminalReceiptV1::from_terminal_receipt(&session_terminal),
+        ))
+    );
+    assert_eq!(harness.store.current_session(), Some(replacement));
+    assert_eq!(harness.store.terminal().len(), terminal_count + 2);
 }
 
 #[test]
@@ -780,8 +818,9 @@ fn claimed_item_mutation_rejects_stale_attempt_and_replays_terminal_error() {
         .unwrap();
     assert_eq!(
         terminal.result(),
-        &TerminalResultV1::Failure(DomainError::InvalidState {
-            reason: "the expected attempt is not current",
+        &TerminalResultV1::Failure(DomainError::AttemptNotCurrent {
+            expected: stale_attempt_id,
+            actual: before.active_attempt_id().cloned(),
         })
     );
     assert_eq!(harness.store.current_session().unwrap(), before);
@@ -1299,9 +1338,9 @@ fn g006_reset_preparation_rejects_a_mismatched_previous_workspace_uuid() {
             &previous,
             IdempotencyKeyV1::new("reset-mismatched-previous").unwrap(),
         ),
-        Err(ExecutionErrorV1::BoundaryDomain(
-            DomainError::InvalidState { .. }
-        ))
+        Err(ExecutionErrorV1::WorkspaceIdentityMismatch { expected, actual })
+            if expected.as_str() == "00000000-0000-4000-8000-000000009984"
+                && actual == *previous.workspace_uuid()
     ));
     assert_eq!(store.request_count(), 0, "mismatch must not admit a reset");
     assert!(ids.calls().is_empty(), "mismatch must not consume IDs");

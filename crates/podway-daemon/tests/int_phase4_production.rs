@@ -30,8 +30,8 @@ use podway_protocol::{
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CommandV1, IdempotencyKeyV1 as StoreIdempotencyKeyV1,
-    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
-    StoreReadContractV1, WorkerIdV1,
+    JobListQueryV1, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
+    StoreContractV1, StoreReadContractV1, WorkerIdV1,
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -241,6 +241,75 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
     assert!(
         started.session().is_some(),
         "session.start terminal output must project the persisted session"
+    );
+    let runtime = manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .expect("started workspace must resolve through the manager");
+    let context = runtime.context_snapshot();
+    let identity = context.binding().identity();
+    let session_before_duplicate = context
+        .store()
+        .read_session_aggregate(identity)
+        .expect("started session must be readable")
+        .expect("started session must exist");
+    let sequence_before_duplicate = context
+        .store()
+        .read_workspace_view(identity)
+        .expect("started workspace view must be readable")
+        .latest_workspace_sequence();
+    let jobs_before_duplicate = context
+        .store()
+        .list_jobs(
+            identity,
+            JobListQueryV1::new(100).expect("duplicate start job query must be valid"),
+        )
+        .expect("started jobs must be readable");
+    let duplicate_start = request(
+        2_001,
+        "session.start",
+        &main_selector,
+        json!({
+            "selector": serde_json::to_value(&main_selector).unwrap(),
+            "preset": "sw-dev",
+            "task_title": "Must not replace the current task"
+        }),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "duplicate-preset-start",
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV1::Error(duplicate_error) =
+        dispatcher.dispatch(&duplicate_start.0, &duplicate_start.1)
+    else {
+        panic!("a second plain start must fail before durable admission");
+    };
+    assert_eq!(duplicate_error.code().as_str(), "SESSION_ALREADY_EXISTS");
+    assert_eq!(duplicate_error.exit_code().get(), 1);
+    assert!(!duplicate_error.retryable());
+    assert_eq!(
+        context
+            .store()
+            .read_session_aggregate(identity)
+            .expect("session must remain readable")
+            .expect("session must remain present"),
+        session_before_duplicate
+    );
+    assert_eq!(
+        context
+            .store()
+            .list_jobs(
+                identity,
+                JobListQueryV1::new(100).expect("duplicate start job query must remain valid"),
+            )
+            .expect("jobs must remain readable"),
+        jobs_before_duplicate
+    );
+    assert_eq!(
+        context
+            .store()
+            .read_workspace_view(identity)
+            .expect("workspace view must remain readable")
+            .latest_workspace_sequence(),
+        sequence_before_duplicate
     );
 
     let status = request(

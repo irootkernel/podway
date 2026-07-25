@@ -4,7 +4,7 @@
 //! capabilities remain behind the injected runtime seams below. In particular, a workspace value is
 //! opaque to this module, so routing cannot accidentally turn a display path into an identity key.
 
-use podway_core::{JobId, Revision, SessionId, WorkspaceId};
+use podway_core::{AttemptId, JobId, Revision, SessionId, WorkspaceId};
 use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
     JobStateV1, NextResultV1, OutputEnvelopeInputV1, OutputEnvelopeV1, QueryWaitV1,
@@ -36,6 +36,7 @@ pub struct DispatchErrorDetailsV1 {
     job_sequence: Option<u64>,
     expected_revision: Option<Revision>,
     current_revision: Option<Revision>,
+    attempt_mismatch: Option<Box<AttemptMismatchDetailsV1>>,
     identity_conflict: Option<Box<IdentityConflictDetailsV1>>,
 }
 
@@ -49,6 +50,12 @@ enum IdentityConflictDetailsV1 {
         expected: SessionId,
         actual: Option<SessionId>,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AttemptMismatchDetailsV1 {
+    expected: AttemptId,
+    actual: Option<AttemptId>,
 }
 
 impl DispatchErrorDetailsV1 {
@@ -65,6 +72,11 @@ impl DispatchErrorDetailsV1 {
 
     pub fn with_current_revision(mut self, revision: Revision) -> Self {
         self.current_revision = Some(revision);
+        self
+    }
+
+    pub fn with_attempt_mismatch(mut self, expected: AttemptId, actual: Option<AttemptId>) -> Self {
+        self.attempt_mismatch = Some(Box::new(AttemptMismatchDetailsV1 { expected, actual }));
         self
     }
 
@@ -146,6 +158,18 @@ impl DispatchErrorDetailsV1 {
                 "current_revision".to_owned(),
                 Value::from(current_revision.get()),
             );
+        }
+        if let Some(attempt_mismatch) = self.attempt_mismatch {
+            details.insert(
+                "expected_attempt_id".to_owned(),
+                Value::String(attempt_mismatch.expected.into_inner()),
+            );
+            if let Some(actual_attempt_id) = attempt_mismatch.actual {
+                details.insert(
+                    "actual_attempt_id".to_owned(),
+                    Value::String(actual_attempt_id.into_inner()),
+                );
+            }
         }
         details
     }
@@ -233,6 +257,7 @@ impl DispatchFailureV1 {
                 job_sequence: None,
                 expected_revision: None,
                 current_revision: None,
+                attempt_mismatch: None,
                 identity_conflict: None,
             },
         }

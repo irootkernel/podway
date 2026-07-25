@@ -225,6 +225,26 @@ The final identity review binds each requirement to an executable proof:
   replacement daemon with a new process UUID, verifies live status, and proves a
   later restart creates another process UUID.
 
+`AUT-T-ID` is implemented by the CLI route-surface, protocol slicing, production
+dispatcher, execution/store race, reset-runtime, and guarded-read suites.
+
+### CASID final review
+
+The final identity-fence review binds each required scenario to executable proof:
+
+- public flags, help, completions, applicability, and canonical IPC propagation
+  are covered by the CLI route-surface and slice-contract tests;
+- the reset-runtime test rejects both a stale mutation and a fresh-key stale
+  reset after workspace replacement without admitting a job, consuming a
+  sequence, publishing a marker, or replacing the target Store;
+- claimed execution races replace a session before stale item, session-revision,
+  and reopen mutations execute, including the case where both sessions have
+  revision `1`, and retain exact terminal replay without changing the replacement;
+- stale attempt and item revisions terminate as `ATTEMPT_NOT_CURRENT` and
+  `ITEM_REVISION_CONFLICT` with immutable replay and no partial mutation; and
+- guarded status/next reads reject immediate, idle-wait, and after-job session
+  replacement using the authoritative Store observation made at return time.
+
 ## CLI and JSON tests
 
 Every command requires:

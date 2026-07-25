@@ -669,12 +669,7 @@ impl StatefulCursorEvaluator {
             },
         );
         assert!(
-            matches!(
-                outcome,
-                Err(DomainError::InvalidState {
-                    reason: "the expected attempt is not current"
-                })
-            ),
+            matches!(outcome, Err(DomainError::AttemptNotCurrent { .. })),
             "the production transition evaluator must reject the stale active attempt: {outcome:?}"
         );
     }

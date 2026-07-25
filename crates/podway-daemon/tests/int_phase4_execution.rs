@@ -22,12 +22,12 @@ use podway_protocol::{
     SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1,
 };
 use podway_store::{
-    AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalExecutionJsonV1, ClaimTokenV1,
-    ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, IdempotencyKeyV1,
-    JobReceiptOrTerminalV1, JobReceiptV1, PersistedSessionMutationV1, PersistedTerminalReceiptV1,
-    RevisionAttemptItemPreconditionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
-    StoreIdempotencyReadContractV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1,
-    WorkspaceBindingV1, WorkspaceViewV1,
+    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1,
+    CanonicalExecutionJsonV1, ClaimTokenV1, ClaimedExecutionV1, ClaimedJobV1,
+    DurableWorktreeIdentityV1, IdempotencyKeyV1, JobReceiptOrTerminalV1, JobReceiptV1,
+    PersistedSessionMutationV1, PersistedTerminalReceiptV1, RevisionAttemptItemPreconditionsV1,
+    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1,
+    TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -514,6 +514,27 @@ impl StoreContractV1 for RecordingStore {
                     ))
                 });
             return Ok(AdmitOutcomeV1::Existing(job));
+        }
+        let actual_session_id = state
+            .current_session
+            .as_ref()
+            .map(SessionAggregateV1::session_id)
+            .cloned();
+        let matches_session = match request.session_identity() {
+            AdmissionSessionIdentityV1::Any => true,
+            AdmissionSessionIdentityV1::Absent => actual_session_id.is_none(),
+            AdmissionSessionIdentityV1::Exact(expected) => {
+                actual_session_id.as_ref() == Some(expected)
+            }
+        };
+        if !matches_session {
+            return Err(StoreErrorV1::SessionIdentityConflictV1 {
+                expected: match request.session_identity() {
+                    AdmissionSessionIdentityV1::Exact(expected) => Some(expected.clone()),
+                    AdmissionSessionIdentityV1::Any | AdmissionSessionIdentityV1::Absent => None,
+                },
+                actual: actual_session_id,
+            });
         }
         state.sequence += 1;
         let receipt = JobReceiptV1::new(
@@ -1005,7 +1026,13 @@ fn session_start_with_an_existing_session_is_rejected_before_admission() {
         .admit(&request, IdempotencyKeyV1::new("second-start").unwrap())
         .unwrap_err();
 
-    assert!(matches!(error, ExecutionErrorV1::BoundaryDomain(_)));
+    assert!(matches!(
+        error,
+        ExecutionErrorV1::Store(StoreErrorV1::SessionIdentityConflictV1 {
+            expected: None,
+            actual: Some(_),
+        })
+    ));
     assert_eq!(harness.store.request_count(), requests_before);
     assert_eq!(harness.store.current_session(), current);
 }

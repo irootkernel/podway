@@ -122,7 +122,8 @@ precondition fields are rejected in v1.
 The daemon compares these identities with the same authoritative Store view used by the operation.
 Waiting reads recheck the session identity on every Store observation. New mutations check identity
 inside the admission transaction before creating durable rows and again after claim before applying
-a domain transition. A mismatch admits no new job and changes no session state. An exact
+a domain transition. An admission-time mismatch creates no job; a post-claim mismatch terminates
+the already admitted job as a typed failure. Neither path changes session state. An exact
 idempotency replay is returned before evaluating a now-stale identity fence.
 
 ## Mutation waiting
