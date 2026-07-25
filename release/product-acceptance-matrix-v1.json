@@ -1641,7 +1641,7 @@
     "crates/podway-daemon/tests/int_phase4_endpoint.rs": "e5ccba4339798d547a3c5aac2b291afc4bac1f306bd6f42a4266289973756bd2",
     "crates/podway-daemon/tests/int_phase4_runtime_workspace.rs": "f2f4768077f41d72efff7281e2de5698728a84e36901371334ecc840624280d5",
     "crates/podway-daemon/tests/int_phase4_scheduler.rs": "8a56672fc59d975e1c50f6737b656b92843eb11ab28351e11c324e3f12915ea0",
-    "crates/podway-daemon/tests/int_phase5_execution.rs": "5405a9a0f5793dc5b04022984061cd0eed50caf126d4153ffb7eba3b9ec963e2",
+    "crates/podway-daemon/tests/int_phase5_execution.rs": "3eb2cf0e4da79cdf803f8954b70a85f862927848a5f29c92c289744bbfa48bb5",
     "crates/podway-daemon/tests/int_phase5_reset_runtime.rs": "f3765c28f6e14f34f2949a09b614befe6c6e475b6a9a2dbd31512341a66286eb",
     "crates/podway-daemon/tests/int_phase8_observability.rs": "12161b83b37c5ca6e91708452953a62eebc1dbbc73c40ad5b016b6f35a07bdb9",
     "crates/podway-git/tests/int_phase3_resolver.rs": "6a45015a7dca7f309615e2dcdc966f129dbc88c543930a8128669aae37cc9739",

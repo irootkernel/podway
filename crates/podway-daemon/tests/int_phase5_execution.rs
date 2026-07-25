@@ -1016,6 +1016,227 @@ fn pstrt002_preset_and_custom_starts_bind_the_canonical_snapshot_to_admission() 
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn pstrt005_admitted_custom_procedure_survives_source_drift_worker_delay_and_engine_restart() {
+    enum SourceDrift {
+        Delete,
+        Replace,
+        Truncate,
+        ReplaceWithSymlink,
+    }
+
+    for (case, drift) in [
+        ("delete", SourceDrift::Delete),
+        ("replace", SourceDrift::Replace),
+        ("truncate", SourceDrift::Truncate),
+        ("symlink", SourceDrift::ReplaceWithSymlink),
+    ] {
+        let root = std::env::temp_dir().join(format!(
+            "podway-pstrt005-{case}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("procedure.yaml");
+        std::fs::write(&source, PROCEDURE_YAML).unwrap();
+        let identity = identity();
+        let binding = WorkspaceBindingV1::new(
+            identity.clone(),
+            podway_store::ValidatedWorkspaceRootV1::from_path(&root).unwrap(),
+        );
+        let store = RecordingStore::new(identity);
+        let request = slice_request(
+            "session.start",
+            json!({
+                "selector": selector_json(),
+                "procedure": "procedure.yaml",
+                "task_title": format!("Source drift: {case}"),
+            }),
+            PreconditionsV1::default(),
+            9_750,
+        );
+        let key = IdempotencyKeyV1::new(format!("pstrt005-{case}")).unwrap();
+        let admitting_engine = DaemonExecutionEngineV1::new(
+            store.clone(),
+            FixtureIds::new(),
+            FixtureClock::new(),
+            EmbeddedPresetProcedureProviderV1,
+            FixtureArtifacts,
+            FixtureWorkspaces::stable(binding.clone()),
+        );
+
+        assert!(matches!(
+            admitting_engine.admit(&request, key),
+            Ok(AdmitOutcomeV1::New(_))
+        ));
+        let admitted = store
+            .first_admitted_procedure_snapshot()
+            .expect("custom start must durably bind the admitted Procedure");
+
+        match drift {
+            SourceDrift::Delete => std::fs::remove_file(&source).unwrap(),
+            SourceDrift::Replace => {
+                let replacement = String::from_utf8(PROCEDURE_YAML.to_vec())
+                    .unwrap()
+                    .replace("Execution Test", "Replacement Procedure");
+                std::fs::write(&source, replacement).unwrap();
+            }
+            SourceDrift::Truncate => std::fs::write(&source, b"schema:").unwrap(),
+            SourceDrift::ReplaceWithSymlink => {
+                let replacement = root.join("replacement.yaml");
+                std::fs::write(&replacement, b"not: the admitted procedure").unwrap();
+                std::fs::remove_file(&source).unwrap();
+                std::os::unix::fs::symlink(&replacement, &source).unwrap();
+            }
+        }
+
+        let restarted_procedures = SpyProcedures::new();
+        let restarted_engine = DaemonExecutionEngineV1::new(
+            store.clone(),
+            FixtureIds::new(),
+            FixtureClock::new(),
+            restarted_procedures.clone(),
+            FixtureArtifacts,
+            FixtureWorkspaces::stable(binding.clone()),
+        );
+        let terminal = restarted_engine
+            .execute_next(
+                &binding,
+                WorkerIdV1::new(format!("pstrt005-{case}-worker")).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_success(&terminal);
+        assert_eq!(
+            restarted_procedures.call_count(),
+            0,
+            "worker execution must not reopen the Procedure source"
+        );
+        let session = store.current_session().unwrap();
+        assert_eq!(session.snapshot().digest(), admitted.digest());
+        assert_eq!(
+            session.snapshot().canonical_json(),
+            admitted.canonical_json()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn pstrt005_terminal_replay_and_digest_conflict_need_no_fresh_dependencies() {
+    let root = std::env::temp_dir().join(format!(
+        "podway-pstrt005-replay-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("procedure.yaml");
+    std::fs::write(&source, PROCEDURE_YAML).unwrap();
+    let identity = identity();
+    let binding = WorkspaceBindingV1::new(
+        identity.clone(),
+        podway_store::ValidatedWorkspaceRootV1::from_path(&root).unwrap(),
+    );
+    let store = RecordingStore::new(identity);
+    let request = slice_request(
+        "session.start",
+        json!({
+            "selector": selector_json(),
+            "procedure": "procedure.yaml",
+            "task_title": "Dependency-free replay",
+        }),
+        PreconditionsV1::default(),
+        9_751,
+    );
+    let key = IdempotencyKeyV1::new("pstrt005-terminal-replay").unwrap();
+    let admitting_engine = DaemonExecutionEngineV1::new(
+        store.clone(),
+        FixtureIds::new(),
+        FixtureClock::new(),
+        EmbeddedPresetProcedureProviderV1,
+        FixtureArtifacts,
+        FixtureWorkspaces::stable(binding.clone()),
+    );
+    assert!(matches!(
+        admitting_engine.admit(&request, key.clone()),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    let terminal = admitting_engine
+        .execute_next(
+            &binding,
+            WorkerIdV1::new("pstrt005-terminal-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_success(&terminal);
+    std::fs::remove_file(&source).unwrap();
+
+    let replay_ids = SpyIds::new();
+    let replay_clock = SpyClock::new();
+    let replay_procedures = SpyProcedures::new();
+    let replay_workspaces = FixtureWorkspaces::stable(binding.clone());
+    replay_workspaces.reject_stale_selectors();
+    let replay_engine = DaemonExecutionEngineV1::new(
+        store.clone(),
+        replay_ids.clone(),
+        replay_clock.clone(),
+        replay_procedures.clone(),
+        FixtureArtifacts,
+        replay_workspaces.clone(),
+    );
+
+    match replay_engine
+        .admit_for_workspace(&binding, &request, key.clone())
+        .unwrap()
+    {
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(replayed)) => {
+            assert_eq!(
+                replayed,
+                PersistedTerminalReceiptV1::from_terminal_receipt(&terminal)
+            );
+        }
+        outcome => panic!("expected exact terminal replay, got {outcome:?}"),
+    }
+
+    let different_digest = Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+    let conflicting_request = slice_request(
+        "session.start",
+        json!({
+            "selector": selector_json(),
+            "procedure": "procedure.yaml",
+            "expected_procedure_digest": different_digest,
+            "task_title": "Dependency-free replay",
+        }),
+        PreconditionsV1::default(),
+        9_752,
+    );
+    assert!(matches!(
+        replay_engine.admit_for_workspace(&binding, &conflicting_request, key),
+        Err(ExecutionErrorV1::Store(
+            StoreErrorV1::IdempotencyDigestConflictV1 { .. }
+        ))
+    ));
+    assert_eq!(replay_procedures.call_count(), 0);
+    assert_eq!(replay_clock.call_count(), 0);
+    assert!(replay_ids.calls().is_empty());
+    assert_eq!(
+        replay_workspaces
+            .selector_revalidations
+            .load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(store.request_count(), 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn g006_destructive_commands_require_protocol_validated_confirmation() {
     let mut harness = Harness::new();
