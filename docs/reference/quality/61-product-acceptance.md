@@ -112,6 +112,10 @@ The criteria below describe the implemented baseline bound to the current `make 
 - Upgrade from the previous supported database schema is tested.
 - Release notes document contract versions and any migration.
 
+## Automation integrity
+
+- Procedure starts enforce digest guards, durable admitted snapshots, source-drift and restart independence, digest-bound idempotent replay, and consistent returned Procedure identity.
+
 ## Final acceptance rule
 
 No criterion may be waived. A failed `make test` result means the tested tree is

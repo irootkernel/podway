@@ -23,8 +23,8 @@ use podway_store::schema::{
 };
 use podway_store::{
     ClaimTokenV1, ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, JobReceiptV1,
-    PersistedSessionMutationV1, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1,
-    StateTransitionV1, StoreErrorV1, StoreFailpointV1, StoreIntegrityCheckV1,
+    PersistedSessionMutationV1, PersistedStartIdentityV1, RevisionAttemptItemPreconditionsV1,
+    SqliteStoreOptionsV1, StateTransitionV1, StoreErrorV1, StoreFailpointV1, StoreIntegrityCheckV1,
     StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
     WorkerIdV1,
 };
@@ -1616,6 +1616,13 @@ fn terminal_codec_preserves_legacy_v0_literals_and_requires_v1_replay_projection
     assert_eq!(encode_persisted_terminal_receipt_v1(&enriched)?, golden);
     let decoded = decode_terminal_receipt_v1(golden)?;
     assert_eq!(decoded, enriched);
+    assert!(decoded.start_identity().is_none());
+    let start_identity = PersistedStartIdentityV1::new(5, digest('e'))?;
+    let retained = enriched.clone().with_start_identity(start_identity.clone());
+    let retained_json = encode_persisted_terminal_receipt_v1(&retained)?;
+    let retained_decoded = decode_terminal_receipt_v1(&retained_json)?;
+    assert_eq!(retained_decoded, retained);
+    assert_eq!(retained_decoded.start_identity(), Some(&start_identity));
     let job_projection = decoded.job_projection().expect("projection is present");
     assert_eq!(
         job_projection.state(),

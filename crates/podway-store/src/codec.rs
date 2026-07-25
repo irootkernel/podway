@@ -700,6 +700,48 @@ impl PersistedTerminalSessionProjectionV1 {
     }
 }
 
+/// Bounded start identity retained after terminal job pruning.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedStartIdentityV1 {
+    execution_version: u8,
+    procedure_digest: Sha256Digest,
+}
+
+impl PersistedStartIdentityV1 {
+    pub fn new(
+        execution_version: u8,
+        procedure_digest: Sha256Digest,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        if !matches!(execution_version, 4 | 5) {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "terminal start execution version",
+            });
+        }
+        Ok(Self {
+            execution_version,
+            procedure_digest,
+        })
+    }
+
+    pub fn execution_version(&self) -> u8 {
+        self.execution_version
+    }
+
+    pub fn procedure_digest(&self) -> &Sha256Digest {
+        &self.procedure_digest
+    }
+
+    fn validate(&self) -> Result<(), StoreCodecErrorV1> {
+        if !matches!(self.execution_version, 4 | 5) {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "terminal start execution version",
+            });
+        }
+        Ok(())
+    }
+}
+
 /// A fully validated terminal receipt decoded from the internal terminal envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PersistedTerminalReceiptV1 {
@@ -707,6 +749,7 @@ pub struct PersistedTerminalReceiptV1 {
     result: PersistedTerminalResultV1,
     job_projection: Option<PersistedTerminalJobProjectionV1>,
     session_projection: Option<PersistedTerminalSessionProjectionV1>,
+    start_identity: Option<PersistedStartIdentityV1>,
 }
 
 impl PersistedTerminalReceiptV1 {
@@ -717,6 +760,7 @@ impl PersistedTerminalReceiptV1 {
             result,
             job_projection: None,
             session_projection: None,
+            start_identity: None,
         }
     }
 
@@ -731,6 +775,7 @@ impl PersistedTerminalReceiptV1 {
             result,
             job_projection: Some(job_projection),
             session_projection,
+            start_identity: None,
         };
         receipt.validate_v1_projections()?;
         Ok(receipt)
@@ -763,16 +808,41 @@ impl PersistedTerminalReceiptV1 {
         self.session_projection.as_ref()
     }
 
+    pub fn start_identity(&self) -> Option<&PersistedStartIdentityV1> {
+        self.start_identity.as_ref()
+    }
+
+    pub fn with_start_identity(mut self, start_identity: PersistedStartIdentityV1) -> Self {
+        self.start_identity = Some(start_identity);
+        self
+    }
+
+    pub fn with_session_procedure_digest(mut self, procedure_digest: Sha256Digest) -> Self {
+        if let Some(session_projection) = self.session_projection.take() {
+            self.session_projection =
+                Some(session_projection.with_procedure_digest(procedure_digest));
+        }
+        self
+    }
+
     fn from_v1_envelope(
         job: JobReceiptV1,
         result: PersistedTerminalResultV1,
         job_projection: PersistedTerminalJobProjectionV1,
         session_projection: Option<PersistedTerminalSessionProjectionV1>,
+        start_identity: Option<PersistedStartIdentityV1>,
     ) -> Result<Self, StoreCodecErrorV1> {
-        Self::new_with_projections(job, result, job_projection, session_projection)
+        let receipt = Self::new_with_projections(job, result, job_projection, session_projection)?;
+        Ok(match start_identity {
+            Some(start_identity) => receipt.with_start_identity(start_identity),
+            None => receipt,
+        })
     }
 
     fn validate_legacy_projections(&self) -> Result<(), StoreCodecErrorV1> {
+        if let Some(start_identity) = &self.start_identity {
+            start_identity.validate()?;
+        }
         if self.job_projection.is_some() || self.session_projection.is_some() {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "terminal replay projections",
@@ -782,6 +852,9 @@ impl PersistedTerminalReceiptV1 {
     }
 
     fn validate_v1_projections(&self) -> Result<(), StoreCodecErrorV1> {
+        if let Some(start_identity) = &self.start_identity {
+            start_identity.validate()?;
+        }
         let job_projection =
             self.job_projection
                 .as_ref()
@@ -935,6 +1008,8 @@ struct TerminalEnvelopeV0 {
     schema: String,
     job: PersistedJobReceiptV1,
     result: PersistedTerminalResultV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_identity: Option<PersistedStartIdentityV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -946,6 +1021,8 @@ struct TerminalEnvelopeV1 {
     result: PersistedTerminalResultV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_projection: Option<PersistedTerminalSessionProjectionV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_identity: Option<PersistedStartIdentityV1>,
 }
 
 /// Core terminal receipts lack the immutable projections required by terminal schema v1, so they
@@ -977,6 +1054,7 @@ pub fn encode_persisted_terminal_receipt_v1(
                 job_projection: job_projection.clone(),
                 result: receipt.result().clone(),
                 session_projection: receipt.session_projection().cloned(),
+                start_identity: receipt.start_identity().cloned(),
             })
         }
         None => {
@@ -985,6 +1063,7 @@ pub fn encode_persisted_terminal_receipt_v1(
                 schema: STORE_TERMINAL_SCHEMA_V0.to_owned(),
                 job: receipt.job().into(),
                 result: receipt.result().clone(),
+                start_identity: receipt.start_identity().cloned(),
             })
         }
     }
@@ -1012,7 +1091,11 @@ pub fn decode_terminal_receipt_v1(
                     field: "identity sequence",
                 });
             }
-            PersistedTerminalReceiptV1::new(envelope.job.into(), envelope.result)
+            let receipt = PersistedTerminalReceiptV1::new(envelope.job.into(), envelope.result);
+            match envelope.start_identity {
+                Some(start_identity) => receipt.with_start_identity(start_identity),
+                None => receipt,
+            }
         }
         STORE_TERMINAL_SCHEMA_V1 => {
             let envelope: TerminalEnvelopeV1 =
@@ -1027,6 +1110,7 @@ pub fn decode_terminal_receipt_v1(
                 envelope.result,
                 envelope.job_projection,
                 envelope.session_projection,
+                envelope.start_identity,
             )?
         }
         found => {

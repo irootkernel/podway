@@ -12,11 +12,11 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 
 use crate::codec::{
-    PersistedDomainResultV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
-    PersistedTerminalReceiptV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
-    decode_command_v1, decode_terminal_receipt_v1, encode_command_v1,
-    encode_persisted_terminal_receipt_v1, validate_persisted_terminal_result_for_command_v1,
-    validate_terminal_result_for_command_v1,
+    PersistedDomainResultV1, PersistedStartIdentityV1, PersistedTerminalJobProjectionV1,
+    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalResultV1,
+    PersistedTerminalSessionProjectionV1, decode_command_v1, decode_terminal_receipt_v1,
+    encode_command_v1, encode_persisted_terminal_receipt_v1,
+    validate_persisted_terminal_result_for_command_v1, validate_terminal_result_for_command_v1,
 };
 use crate::schema::{
     DatabasePathStateV1, canonical_database_path_v1, inspect_database_path_v1,
@@ -565,7 +565,8 @@ impl StoreContractV1 for SqliteStoreV1 {
         let row: Option<JobStateRow> = transaction
             .query_row(
                 "SELECT workspace_sequence, request_digest, state, terminal_response_json, \
-                 submitted_at_ms, claimed_at_ms, finished_at_ms FROM jobs WHERE job_id = ?1",
+                 submitted_at_ms, claimed_at_ms, finished_at_ms, canonical_request_json \
+                 FROM jobs WHERE job_id = ?1",
                 [job.as_str()],
                 |row| {
                     Ok(JobStateRow {
@@ -576,6 +577,7 @@ impl StoreContractV1 for SqliteStoreV1 {
                         submitted_at: row.get(4)?,
                         claimed_at: row.get(5)?,
                         finished_at: row.get(6)?,
+                        request: row.get(7)?,
                     })
                 },
             )
@@ -629,13 +631,18 @@ impl StoreContractV1 for SqliteStoreV1 {
             now,
         )
         .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        let terminal = PersistedTerminalReceiptV1::new_with_projections(
-            receipt.clone(),
-            PersistedTerminalResultV1::Cancelled,
-            job_projection,
-            None,
-        )
-        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let execution =
+            decode_command_v1(&row.request).map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let terminal = enrich_terminal_from_execution(
+            PersistedTerminalReceiptV1::new_with_projections(
+                receipt.clone(),
+                PersistedTerminalResultV1::Cancelled,
+                job_projection,
+                None,
+            )
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
+            &execution,
+        )?;
         let encoded = encode_persisted_terminal_receipt_v1(&terminal)
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let changed = transaction.execute(
@@ -849,13 +856,16 @@ impl StoreContractV1 for SqliteStoreV1 {
                 .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let session_projection =
             terminal_session_projection(&persisted_result, post_transition_session.as_ref())?;
-        let persisted_receipt = PersistedTerminalReceiptV1::new_with_projections(
-            receipt.job().clone(),
-            persisted_result,
-            job_projection,
-            session_projection,
-        )
-        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let persisted_receipt = enrich_terminal_from_execution(
+            PersistedTerminalReceiptV1::new_with_projections(
+                receipt.job().clone(),
+                persisted_result,
+                job_projection,
+                session_projection,
+            )
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
+            &execution,
+        )?;
         let encoded = encode_persisted_terminal_receipt_v1(&persisted_receipt)
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let changed = transaction
@@ -1040,10 +1050,15 @@ impl StoreIdempotencyReadContractV1 for SqliteStoreV1 {
             })
             .transpose()?;
         let outcome = replay_for_idempotency(&transaction, &job_id, &stored_digest, terminal)?;
+        let retained_start_identity = match &outcome {
+            JobReceiptOrTerminalV1::TerminalReceipt(receipt) => receipt.start_identity().cloned(),
+            JobReceiptOrTerminalV1::JobReceipt(_) => None,
+        };
         transaction.commit().map_err(storage)?;
         Ok(Some(IdempotentExecutionV1::new(
             stored_digest,
             canonical_execution,
+            retained_start_identity,
             AdmitOutcomeV1::Existing(outcome),
         )))
     }
@@ -1268,6 +1283,7 @@ type TerminalPruneCandidateV1 = (
     String,
     String,
     Option<String>,
+    String,
     i64,
     Option<i64>,
     Option<i64>,
@@ -1283,6 +1299,7 @@ fn prune_terminal_jobs(
             .prepare(
                 "WITH ranked AS (
                     SELECT job_id, workspace_sequence, request_digest, state, terminal_response_json,
+                           canonical_request_json,
                            submitted_at_ms, claimed_at_ms, finished_at_ms,
                            ROW_NUMBER() OVER (
                                ORDER BY finished_at_ms DESC, workspace_sequence DESC
@@ -1291,6 +1308,7 @@ fn prune_terminal_jobs(
                     WHERE state IN ('succeeded', 'failed', 'cancelled')
                 )
                 SELECT job_id, workspace_sequence, request_digest, state, terminal_response_json,
+                       canonical_request_json,
                        submitted_at_ms, claimed_at_ms, finished_at_ms
                 FROM ranked
                 WHERE terminal_rank > ?1
@@ -1315,6 +1333,7 @@ fn prune_terminal_jobs(
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )
@@ -1322,8 +1341,17 @@ fn prune_terminal_jobs(
         rows.collect::<Result<Vec<_>, _>>().map_err(storage)?
     };
     let mut deleted = 0u32;
-    for (job, sequence, stored_digest, state, encoded, submitted_at, claimed_at, finished_at) in
-        candidates
+    for (
+        job,
+        sequence,
+        stored_digest,
+        state,
+        encoded,
+        canonical_request,
+        submitted_at,
+        claimed_at,
+        finished_at,
+    ) in candidates
     {
         let job_id = job_id(job)?;
         let request_digest = digest(stored_digest)?;
@@ -1336,6 +1364,27 @@ fn prune_terminal_jobs(
         let terminal = validated_terminal(&receipt, &state, encoded.as_deref())?;
         verify_terminal_job_projection(&terminal, &state, submitted_at, claimed_at, finished_at)?;
         verify_terminal_idempotency(transaction, &job_id, &request_digest, &terminal)?;
+        let execution =
+            decode_command_v1(&canonical_request).map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let enriched_terminal = enrich_terminal_from_execution(terminal, &execution)?;
+        let enriched_encoded = encode_persisted_terminal_receipt_v1(&enriched_terminal)
+            .map_err(|_| corrupt(StoreRecordKindV1::IdempotencyRecord))?;
+        if encoded.as_deref() != Some(enriched_encoded.as_str()) {
+            let updated = transaction
+                .execute(
+                    "UPDATE idempotency_records SET terminal_response_json = ?1 \
+                     WHERE job_id = ?2 AND terminal_response_json = ?3",
+                    params![
+                        enriched_encoded.as_str(),
+                        job_id.as_str(),
+                        encoded.as_deref()
+                    ],
+                )
+                .map_err(storage)?;
+            if updated != 1 {
+                return Err(corrupt(StoreRecordKindV1::IdempotencyRecord));
+            }
+        }
         let changed = transaction
             .execute(
                 "DELETE FROM jobs \
@@ -2527,7 +2576,8 @@ fn replay_for_idempotency(
     let row: Option<JobStateRow> = transaction
         .query_row(
             "SELECT workspace_sequence, request_digest, state, terminal_response_json, \
-             submitted_at_ms, claimed_at_ms, finished_at_ms FROM jobs WHERE job_id = ?1",
+             submitted_at_ms, claimed_at_ms, finished_at_ms, canonical_request_json \
+             FROM jobs WHERE job_id = ?1",
             [stored_job_id],
             |row| {
                 Ok(JobStateRow {
@@ -2538,6 +2588,7 @@ fn replay_for_idempotency(
                     submitted_at: row.get(4)?,
                     claimed_at: row.get(5)?,
                     finished_at: row.get(6)?,
+                    request: row.get(7)?,
                 })
             },
         )
@@ -2569,6 +2620,9 @@ fn replay_for_idempotency(
                         row.finished_at,
                     )?;
                     validate_persisted_terminal_for_job(transaction, stored_job_id, &terminal)?;
+                    let execution = decode_command_v1(&row.request)
+                        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+                    let terminal = enrich_terminal_from_execution(terminal, &execution)?;
                     Ok(JobReceiptOrTerminalV1::TerminalReceipt(terminal))
                 }
                 "queued" | "running" if row.terminal.is_none() => {
@@ -2592,6 +2646,68 @@ fn replay_for_idempotency(
             Ok(JobReceiptOrTerminalV1::TerminalReceipt(receipt))
         }
     }
+}
+
+fn enrich_terminal_from_execution(
+    mut terminal: PersistedTerminalReceiptV1,
+    execution: &ClaimedExecutionV1,
+) -> Result<PersistedTerminalReceiptV1, StoreErrorV1> {
+    let start_identity = admitted_start_identity(execution)?;
+    if terminal
+        .session_projection()
+        .is_some_and(|projection| projection.procedure_digest().is_none())
+        && let Some(start_identity) = &start_identity
+    {
+        terminal =
+            terminal.with_session_procedure_digest(start_identity.procedure_digest().clone());
+    }
+    match (terminal.start_identity(), start_identity) {
+        (Some(stored), Some(expected)) if stored != &expected => {
+            return Err(corrupt(StoreRecordKindV1::Job));
+        }
+        (Some(_), None) => return Err(corrupt(StoreRecordKindV1::Job)),
+        (None, Some(start_identity)) => {
+            terminal = terminal.with_start_identity(start_identity);
+        }
+        (Some(_), Some(_)) | (None, None) => {}
+    }
+    Ok(terminal)
+}
+
+fn admitted_start_identity(
+    execution: &ClaimedExecutionV1,
+) -> Result<Option<PersistedStartIdentityV1>, StoreErrorV1> {
+    if !matches!(
+        execution.command(),
+        crate::CommandV1::SessionStart | crate::CommandV1::SessionStartReplace
+    ) {
+        return Ok(None);
+    }
+    let document: serde_json::Value =
+        serde_json::from_str(execution.canonical_execution().as_str())
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    let Some(execution_version) = document
+        .get("execution_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u8::try_from(version).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(value) = document
+        .get("execution")
+        .and_then(|execution| execution.get("snapshot"))
+        .and_then(|snapshot| snapshot.get("digest"))
+    else {
+        return Ok(None);
+    };
+    let encoded = value
+        .as_str()
+        .ok_or_else(|| corrupt(StoreRecordKindV1::Job))?;
+    let procedure_digest = crate::Sha256Digest::new(encoded.to_owned())
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    PersistedStartIdentityV1::new(execution_version, procedure_digest)
+        .map(Some)
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))
 }
 
 fn validated_terminal(
@@ -3122,7 +3238,10 @@ fn decode_job_view_v1(
             if finished_at.is_none() {
                 return Err(corrupt(StoreRecordKindV1::Job));
             }
-            let terminal = validated_terminal(&job, &row.state, row.terminal.as_deref())?;
+            let terminal = enrich_terminal_from_execution(
+                validated_terminal(&job, &row.state, row.terminal.as_deref())?,
+                &execution,
+            )?;
             verify_terminal_job_projection(
                 &terminal,
                 &row.state,
@@ -3203,6 +3322,7 @@ struct JobStateRow {
     submitted_at: i64,
     claimed_at: Option<i64>,
     finished_at: Option<i64>,
+    request: String,
 }
 struct RunningJobRow {
     sequence: i64,

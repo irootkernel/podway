@@ -1191,6 +1191,77 @@
       },
       "status": "automated",
       "text": "Release notes document contract versions and any migration."
+    },
+    {
+      "id": "PAC-078",
+      "line": 117,
+      "proof": {
+        "criterion_id": "PAC-078",
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "command": "cargo test -p podway-daemon --test int_phase5_execution pstrt001_digest_mismatch_is_rejected_before_durable_admission --locked -- --exact",
+            "criterion_id": "PAC-078",
+            "function": "pstrt001_digest_mismatch_is_rejected_before_durable_admission",
+            "obligation_ids": [
+              "AUT-START-001"
+            ],
+            "path": "crates/podway-daemon/tests/int_phase5_execution.rs"
+          },
+          {
+            "command": "cargo test -p podway-store --test int_phase4_store_transactions pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen --locked -- --exact",
+            "criterion_id": "PAC-078",
+            "function": "pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen",
+            "obligation_ids": [
+              "AUT-START-002"
+            ],
+            "path": "crates/podway-store/tests/int_phase4_store_transactions.rs"
+          },
+          {
+            "command": "cargo test -p podway-daemon --test int_phase5_execution pstrt_v1_start_replay_survives_sqlite_prune_reopen_and_source_deletion --locked -- --exact",
+            "criterion_id": "PAC-078",
+            "function": "pstrt_v1_start_replay_survives_sqlite_prune_reopen_and_source_deletion",
+            "obligation_ids": [
+              "AUT-START-003"
+            ],
+            "path": "crates/podway-daemon/tests/int_phase5_execution.rs"
+          },
+          {
+            "command": "cargo test -p podway-daemon --test int_phase5_execution pstrt_v0_start_replay_survives_sqlite_prune_reopen_and_source_deletion --locked -- --exact",
+            "criterion_id": "PAC-078",
+            "function": "pstrt_v0_start_replay_survives_sqlite_prune_reopen_and_source_deletion",
+            "obligation_ids": [],
+            "path": "crates/podway-daemon/tests/int_phase5_execution.rs"
+          },
+          {
+            "command": "cargo test -p podway-daemon --test int_phase4_execution pstrt003_guarded_start_replays_by_digest_and_conflicts_on_a_different_digest --locked -- --exact",
+            "criterion_id": "PAC-078",
+            "function": "pstrt003_guarded_start_replays_by_digest_and_conflicts_on_a_different_digest",
+            "obligation_ids": [
+              "AUT-START-004"
+            ],
+            "path": "crates/podway-daemon/tests/int_phase4_execution.rs"
+          },
+          {
+            "command": "cargo test -p podway-daemon --test int_phase5_execution pstrt005_admitted_custom_procedure_survives_source_drift_worker_delay_and_engine_restart --locked -- --exact",
+            "criterion_id": "PAC-078",
+            "function": "pstrt005_admitted_custom_procedure_survives_source_drift_worker_delay_and_engine_restart",
+            "obligation_ids": [
+              "AUT-T-START"
+            ],
+            "path": "crates/podway-daemon/tests/int_phase5_execution.rs"
+          },
+          {
+            "command": "cargo test -p podway-cli --test e2e_phase4_production_vertical pstrt_production_vertical_binds_guard_replay_status_and_terminal_job_digest --locked -- --exact --ignored",
+            "criterion_id": "PAC-078",
+            "function": "pstrt_production_vertical_binds_guard_replay_status_and_terminal_job_digest",
+            "obligation_ids": [],
+            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs"
+          }
+        ]
+      },
+      "status": "automated",
+      "text": "Procedure starts enforce digest guards, durable admitted snapshots, source-drift and restart independence, digest-bound idempotent replay, and consistent returned Procedure identity."
     }
   ],
   "input_closure": {
@@ -1624,6 +1695,31 @@
           "statement": "The sentinel remains absent after closing and reopening the real SQLite store."
         }
       ]
+    },
+    {
+      "criterion_id": "PAC-078",
+      "obligations": [
+        {
+          "id": "AUT-START-001",
+          "statement": "A mismatching expected Procedure digest rejects before durable admission."
+        },
+        {
+          "id": "AUT-START-002",
+          "statement": "The canonical admitted Procedure snapshot commits atomically with admission and survives reopen."
+        },
+        {
+          "id": "AUT-START-003",
+          "statement": "Exact start replay remains independent of the Procedure source after terminal pruning and Store reopen."
+        },
+        {
+          "id": "AUT-START-004",
+          "statement": "Start idempotency binds the resolved Procedure digest and rejects key reuse with another identity."
+        },
+        {
+          "id": "AUT-T-START",
+          "statement": "Deterministic source deletion, replacement, truncation, symlink, worker-delay, and restart scenarios execute only the admitted snapshot."
+        }
+      ]
     }
   ],
   "source": {
@@ -1632,16 +1728,17 @@
   "source_files": {
     "crates/podway-cli/tests/e2e_release_archive.rs": "b27c53548d301d39769880f18f0ec8da14bc7c95b22b1da9ff9da321da1c2555",
     "crates/podway-cli/tests/e2e_phase4_commands.rs": "aa2b259e2d614f2aee2905ef0da19afa64f5f3a0b587dcf5de834ae9e9e3ae99",
-    "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "6bf36fe04f7e6e827aa9e693e6ae093a69efc86540dc9c1dec1e9314db8a3d52",
+    "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "7ce5c4fd4d8a2bea3d2f60514c3d851f4ee4f302ce41e4f7e533d1e14922cce3",
     "crates/podway-cli/tests/e2e_phase5_cli.rs": "eeaa9fff4c065ba7d51358aba94fa4d168a4a8e33af1ab452773e11ba764792b",
     "crates/podway-config/tests/int_procedure_v1.rs": "3d7e2b41ba761fc46a5719bbf433b72d6a2f19275eaa4941f2ac4f8f0847132f",
     "crates/podway-core/tests/int_phase1_state_matrix.rs": "32eb5ce27feb9fdb1da91947af68fc5dfb06248806b6ed857672bf37485c8a5b",
     "crates/podway-core/tests/int_phase1_transitions.rs": "3415506bf37a332e8588ee9b42db4c35d7e8e02ea19b27adee22c488935f4a7d",
     "crates/podway-daemon/tests/int_phase4_daemon_runtime.rs": "5ad8bda0e7bf2aacec78854a44fab427495329dec6ac80df2837ef9ed2f40911",
     "crates/podway-daemon/tests/int_phase4_endpoint.rs": "e5ccba4339798d547a3c5aac2b291afc4bac1f306bd6f42a4266289973756bd2",
+    "crates/podway-daemon/tests/int_phase4_execution.rs": "9062b76911f92d09d10c700d909ca36c41c0adb1bf6398db3a355d3d05d102b2",
     "crates/podway-daemon/tests/int_phase4_runtime_workspace.rs": "f2f4768077f41d72efff7281e2de5698728a84e36901371334ecc840624280d5",
     "crates/podway-daemon/tests/int_phase4_scheduler.rs": "8a56672fc59d975e1c50f6737b656b92843eb11ab28351e11c324e3f12915ea0",
-    "crates/podway-daemon/tests/int_phase5_execution.rs": "3eb2cf0e4da79cdf803f8954b70a85f862927848a5f29c92c289744bbfa48bb5",
+    "crates/podway-daemon/tests/int_phase5_execution.rs": "a78ef61a490e4bd0a46125d3e9df43ab0ebefaf76a5887e1aed3e82ee47d0485",
     "crates/podway-daemon/tests/int_phase5_reset_runtime.rs": "f3765c28f6e14f34f2949a09b614befe6c6e475b6a9a2dbd31512341a66286eb",
     "crates/podway-daemon/tests/int_phase8_observability.rs": "12161b83b37c5ca6e91708452953a62eebc1dbbc73c40ad5b016b6f35a07bdb9",
     "crates/podway-git/tests/int_phase3_resolver.rs": "6a45015a7dca7f309615e2dcdc966f129dbc88c543930a8128669aae37cc9739",
@@ -1652,8 +1749,8 @@
     "crates/podway-service/tests/int_phase6_native_service.rs": "3e721d314a6f601a6b8cffa307a89c2299ee68bd6f406f6ec6e2930ffed63c51",
     "crates/podway-store/tests/int_phase2_crash_matrix.rs": "52535165bfc92205997465d89b4a3e25d020e0a2d7715f4bc5b2a294494d667d",
     "crates/podway-store/tests/int_phase2_reset_lifecycle.rs": "8f8e705e6136381140b5fb2a8e6adbe76e21b39ebeef8a37a95c2132ca63e3ae",
-    "crates/podway-store/tests/int_phase2_schema_codec.rs": "da60be215bd91e86d5b87c14d3e0d7819d9bd91a7671cabf43a442b14e95d276",
-    "crates/podway-store/tests/int_phase4_store_transactions.rs": "a3ece154dfb5168871ee4753d0db013b4e027e10729d83e37ef9f8d3396cb47a"
+    "crates/podway-store/tests/int_phase2_schema_codec.rs": "e1a9dc2c7a90872da8a7bce027941f833300771ccbc3585914149b8043752f09",
+    "crates/podway-store/tests/int_phase4_store_transactions.rs": "eda545736f7f68ef4802b19a1e6ea86f71a79be7f62c89ad41ba5a0f8b3f0a97"
   },
   "version": 4
 }

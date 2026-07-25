@@ -468,6 +468,10 @@ impl RecordingStore {
             .to_owned()
     }
 
+    fn first_request(&self) -> AdmitRequestV1 {
+        self.state.lock().unwrap().requests.first().unwrap().clone()
+    }
+
     #[allow(dead_code)]
     fn first_admitted_procedure_snapshot(&self) -> Option<ProcedureSnapshotV1> {
         self.state
@@ -727,6 +731,7 @@ impl StoreIdempotencyReadContractV1 for RecordingStore {
         Ok(Some(IdempotentExecutionV1::new(
             existing.request_digest().clone(),
             Some(existing.canonical_execution().clone()),
+            None,
             AdmitOutcomeV1::Existing(outcome),
         )))
     }
@@ -1591,6 +1596,128 @@ fn terminal_idempotency_replay_returns_the_exact_receipt_without_fresh_dependenc
     assert!(replay_ids.calls().is_empty());
     assert_eq!(store.request_count(), 1);
     assert_eq!(store.terminal(), vec![terminal]);
+}
+
+#[test]
+fn legacy_v4_unguarded_start_replay_uses_the_legacy_identity_queued_and_terminal() {
+    for terminal in [false, true] {
+        let identity = identity();
+        let binding = binding(identity.clone());
+        let request = slice_request(
+            "session.start",
+            json!({"selector": selector_json(), "preset": "sw-dev", "task_title": "Legacy V4"}),
+            PreconditionsV1::default(),
+            if terminal { 9_903 } else { 9_902 },
+        );
+        let template_store = RecordingStore::new(identity.clone());
+        let template_engine = DaemonExecutionEngineV1::new(
+            template_store.clone(),
+            FixtureIds::new(),
+            FixtureClock::new(),
+            FixtureProcedures,
+            FixtureArtifacts,
+            FixtureWorkspaces::stable(binding.clone()),
+        );
+        template_engine
+            .admit_for_workspace(
+                &binding,
+                &request,
+                IdempotencyKeyV1::new("legacy-v4-template").unwrap(),
+            )
+            .unwrap();
+        let template = template_store.first_request();
+        let canonical_v4 = template
+            .canonical_execution()
+            .as_str()
+            .replace("\"execution_version\":5", "\"execution_version\":4")
+            .replace("\"expected_procedure_digest\":null,", "");
+        let legacy_identity =
+            podway_protocol::canonical_mutation_identity_v1(&request, identity.workspace_uuid())
+                .unwrap();
+        let legacy_digest = Sha256Digest::new(format!(
+            "sha256:{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(legacy_identity.as_bytes())
+        ))
+        .unwrap();
+        let key = IdempotencyKeyV1::new(if terminal {
+            "legacy-v4-terminal"
+        } else {
+            "legacy-v4-queued"
+        })
+        .unwrap();
+        let store = RecordingStore::new(identity.clone());
+        let persisted = AdmitRequestV1::new_with_canonical_execution(
+            DomainCommand::SessionStart,
+            key.clone(),
+            JobId::new(if terminal {
+                "00000000-0000-4000-8000-000000009903"
+            } else {
+                "00000000-0000-4000-8000-000000009902"
+            })
+            .unwrap(),
+            template.preconditions().clone(),
+            legacy_digest,
+            UnixMillis::new(90),
+            CanonicalExecutionJsonV1::new(canonical_v4).unwrap(),
+        )
+        .with_session_identity(AdmissionSessionIdentityV1::Absent);
+        assert!(matches!(
+            store.admit(&identity, persisted),
+            Ok(AdmitOutcomeV1::New(_))
+        ));
+        if terminal {
+            let executing = DaemonExecutionEngineV1::new(
+                store.clone(),
+                FixtureIds::new(),
+                FixtureClock::new(),
+                FixtureProcedures,
+                FixtureArtifacts,
+                FixtureWorkspaces::stable(binding.clone()),
+            );
+            assert_success(
+                &executing
+                    .execute_next(&binding, WorkerIdV1::new("legacy-v4-worker").unwrap())
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+
+        let replay_ids = SpyIds::new();
+        let replay_clock = SpyClock::new();
+        let replay_procedures = SpyProcedures::new();
+        let replay_workspaces = FixtureWorkspaces::stable(binding.clone());
+        replay_workspaces.reject_stale_selectors();
+        let replay_engine = DaemonExecutionEngineV1::new(
+            store,
+            replay_ids.clone(),
+            replay_clock.clone(),
+            replay_procedures.clone(),
+            FixtureArtifacts,
+            replay_workspaces.clone(),
+        );
+        let replay = replay_engine
+            .admit_for_workspace(&binding, &request, key)
+            .unwrap();
+        assert!(
+            matches!(
+                replay,
+                AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(_))
+                    if terminal
+            ) || matches!(
+                replay,
+                AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(_)) if !terminal
+            )
+        );
+        assert_eq!(replay_procedures.call_count(), 0);
+        assert_eq!(replay_clock.call_count(), 0);
+        assert!(replay_ids.calls().is_empty());
+        assert_eq!(
+            replay_workspaces
+                .selector_revalidations
+                .load(Ordering::SeqCst),
+            0
+        );
+    }
 }
 
 #[test]

@@ -903,29 +903,51 @@ where
         else {
             return Ok(None);
         };
-        let Some(canonical_execution) = existing.canonical_execution() else {
-            return Ok(None);
+        let (execution_version, procedure_digest) =
+            if let Some(canonical_execution) = existing.canonical_execution() {
+                let (
+                    execution_version,
+                    _selector,
+                    persisted_workspace_id,
+                    persisted_command,
+                    resolution,
+                ) = decode_execution_document_v1(canonical_execution.as_str())?;
+                if persisted_workspace_id != *identity.workspace_uuid() {
+                    return Err(invalid_execution_v1(
+                        "idempotent execution workspace identity is invalid",
+                    ));
+                }
+                if !matches!(
+                    persisted_command,
+                    SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+                ) {
+                    return Ok(None);
+                }
+                let AdmissionResolutionV1::SessionStart { snapshot, .. } = resolution else {
+                    return Err(invalid_execution_v1(
+                        "idempotent start has no admitted Procedure snapshot",
+                    ));
+                };
+                (execution_version, snapshot.digest().clone())
+            } else if let Some(start_identity) = existing.retained_start_identity() {
+                if !matches!(
+                    request.command(),
+                    SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+                ) {
+                    return Ok(None);
+                }
+                (
+                    u64::from(start_identity.execution_version()),
+                    start_identity.procedure_digest().clone(),
+                )
+            } else {
+                return Ok(None);
+            };
+        let actual = if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V4) {
+            request_digest_v1(request, identity.workspace_uuid(), None)?
+        } else {
+            request_digest_v1(request, identity.workspace_uuid(), Some(&procedure_digest))?
         };
-        let (_selector, persisted_workspace_id, persisted_command, resolution) =
-            decode_execution_document_v1(canonical_execution.as_str())?;
-        if persisted_workspace_id != *identity.workspace_uuid() {
-            return Err(invalid_execution_v1(
-                "idempotent execution workspace identity is invalid",
-            ));
-        }
-        if !matches!(
-            persisted_command,
-            SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
-        ) {
-            return Ok(None);
-        }
-        let AdmissionResolutionV1::SessionStart { snapshot, .. } = resolution else {
-            return Err(invalid_execution_v1(
-                "idempotent start has no admitted Procedure snapshot",
-            ));
-        };
-        let actual =
-            request_digest_v1(request, identity.workspace_uuid(), Some(snapshot.digest()))?;
         if existing.request_digest() != &actual {
             return Err(ExecutionErrorV1::Store(
                 StoreErrorV1::IdempotencyDigestConflictV1 {
@@ -975,7 +997,7 @@ where
         let expected_workspace_revision = claimed
             .current_session()
             .map_or(Revision::ZERO, SessionAggregateV1::revision);
-        let (_selector, workspace_id, command, resolution) =
+        let (_execution_version, _selector, workspace_id, command, resolution) =
             decode_execution_document_v1(claimed.execution().canonical_execution().as_str())?;
         if workspace_id != *claimed.claim().identity().workspace_uuid() {
             return Err(ExecutionErrorV1::InvalidPersistedExecution {
@@ -2662,6 +2684,7 @@ fn decode_execution_document_v1(
     source: &str,
 ) -> Result<
     (
+        u64,
         WorktreeSelectorWireV1,
         WorkspaceId,
         SliceCommandV1,
@@ -2748,7 +2771,7 @@ fn decode_execution_document_v1(
         }
         _ => unreachable!("only the v4 placeholder resolution is constructed here"),
     };
-    Ok((selector, workspace_id, command, resolution))
+    Ok((version, selector, workspace_id, command, resolution))
 }
 
 /// Returns the immutable Procedure digest embedded in an admitted start execution document.
@@ -2757,7 +2780,7 @@ fn decode_execution_document_v1(
 pub(crate) fn admitted_start_procedure_digest_v1(
     execution: &CanonicalExecutionJsonV1,
 ) -> Result<Option<Sha256Digest>, ExecutionErrorV1> {
-    let (_, _, command, resolution) = decode_execution_document_v1(execution.as_str())?;
+    let (_, _, _, command, resolution) = decode_execution_document_v1(execution.as_str())?;
     if !matches!(
         command,
         SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)

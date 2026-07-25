@@ -20,6 +20,7 @@ use nix::{
     sys::signal::{Signal, kill},
     unistd::{Pid, geteuid},
 };
+use podway_config::{ProcedureFormatV1, parse_procedure_v1};
 use podway_protocol::{
     ItemTypeResultV1, NextResultV1, OutputEnvelopeV1, ResponseEnvelopeV1, SessionLifecycleV1,
     StageStatusResultV1, StatusResultV1,
@@ -741,6 +742,67 @@ fn cli_output(
     }
 }
 
+fn cli_job_output(
+    fixture: &FixtureV1,
+    workspace: &Path,
+    arguments: &[&str],
+    expected_wire_command: &str,
+) -> OutputEnvelopeV1 {
+    let output = fixture.run(workspace, "job", arguments);
+    assert!(
+        output.stderr.is_empty(),
+        "successful CLI {expected_wire_command} must not write stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "CLI {expected_wire_command} must emit exactly one JSON response: {error}; stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+    });
+    assert_output_shape(&raw, expected_wire_command);
+    let response: ResponseEnvelopeV1 = serde_json::from_value(raw)
+        .expect("public job response must satisfy the exact protocol schema");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "CLI {expected_wire_command} must exit zero; stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    match response {
+        ResponseEnvelopeV1::Output(output) => output,
+        ResponseEnvelopeV1::Error(error) => panic!(
+            "CLI {expected_wire_command} returned unexpected {} error: {}",
+            error.code().as_str(),
+            error.message()
+        ),
+    }
+}
+
+fn public_jobs(fixture: &FixtureV1, workspace: &Path) -> OutputEnvelopeV1 {
+    cli_job_output(fixture, workspace, &["list"], "job.list")
+}
+
+fn jobs(output: &OutputEnvelopeV1) -> &[Value] {
+    output
+        .result()
+        .get("jobs")
+        .and_then(Value::as_array)
+        .expect("job.list must expose its jobs array")
+}
+
+fn assert_terminal_procedure_digest(terminal_response: &Value, expected: &str) {
+    assert_eq!(
+        terminal_response["kind"], "success",
+        "the start job must retain a successful terminal response"
+    );
+    assert_eq!(
+        terminal_response["payload"]["procedure_digest"], expected,
+        "the terminal start projection must retain its admitted Procedure digest"
+    );
+}
+
 fn cli_error(
     fixture: &FixtureV1,
     workspace: &Path,
@@ -984,6 +1046,185 @@ fn pac_001_public_init_on_a_valid_git_worktree_creates_no_task_session() {
     );
 
     daemon.stop();
+}
+
+#[test]
+#[ignore = "run with a freshly built podwayd artifact and its canonical build receipt"]
+fn pstrt_production_vertical_binds_guard_replay_status_and_terminal_job_digest() {
+    const PROCEDURE_FILE: &str = "pstrt-procedure.yaml";
+    const PROCEDURE_YAML: &str = r#"schema: podway.procedure/v1
+id: pstrt-production
+version: "1"
+name: PSTRT production acceptance
+stages:
+  - id: execute
+    title: Execute
+    instructions:
+      - Exercise the admitted Procedure snapshot.
+    items:
+      - type: confirm
+        id: accepted
+        prompt: Acceptance confirmed
+        required: true
+rework:
+  allow_return_to: any_previous
+"#;
+    const DIFFERENT_DIGEST: &str =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const IDEMPOTENCY_KEY: &str = "pstrt-production-exact-replay";
+
+    let fixture = FixtureV1::new();
+    let workspace = fixture.worktree.clone();
+    let procedure_path = workspace.join(PROCEDURE_FILE);
+    fs::write(&procedure_path, PROCEDURE_YAML)
+        .expect("custom Procedure fixture must be written inside the worktree");
+    let expected_digest = parse_procedure_v1(PROCEDURE_YAML, ProcedureFormatV1::Yaml)
+        .expect("custom Procedure fixture must be valid")
+        .digest()
+        .as_str()
+        .to_owned();
+
+    let daemon = RunningDaemonV1::start(&fixture);
+    cli_output(&fixture, &workspace, "init", &[]);
+    let jobs_before_guard = public_jobs(&fixture, &workspace);
+    let job_count_before_guard = jobs(&jobs_before_guard).len();
+
+    cli_error(
+        &fixture,
+        &workspace,
+        "start",
+        &[
+            "--procedure",
+            PROCEDURE_FILE,
+            "--expect-procedure-digest",
+            DIFFERENT_DIGEST,
+            "--task",
+            "Reject the mismatched Procedure",
+            "--idempotency-key",
+            "pstrt-production-mismatch",
+        ],
+        "PROCEDURE_DIGEST_MISMATCH",
+        4,
+        false,
+    );
+    assert_eq!(
+        jobs(&public_jobs(&fixture, &workspace)).len(),
+        job_count_before_guard,
+        "a digest mismatch must not admit a durable job"
+    );
+    cli_error(
+        &fixture,
+        &workspace,
+        "status",
+        &[],
+        "SESSION_NOT_FOUND",
+        1,
+        false,
+    );
+
+    let start_arguments = [
+        "--procedure",
+        PROCEDURE_FILE,
+        "--expect-procedure-digest",
+        expected_digest.as_str(),
+        "--task",
+        "Bind the admitted Procedure",
+        "--idempotency-key",
+        IDEMPOTENCY_KEY,
+    ];
+    let started = cli_output(&fixture, &workspace, "start", &start_arguments);
+    assert_eq!(
+        started
+            .result()
+            .get("procedure_digest")
+            .and_then(Value::as_str),
+        Some(expected_digest.as_str())
+    );
+    let started_job = started
+        .job()
+        .expect("terminal session.start must expose its durable job")
+        .clone();
+    let started_session = started
+        .session()
+        .expect("terminal session.start must expose its admitted session")
+        .clone();
+    let started_result = started.result().clone();
+
+    let (_, status) = public_status(&fixture, &workspace);
+    assert_eq!(status.task.procedure.digest.as_str(), expected_digest);
+    assert_eq!(status.session.id, *started_session.id());
+
+    let listed = public_jobs(&fixture, &workspace);
+    let listed_start = jobs(&listed)
+        .iter()
+        .find(|job| job["id"].as_str() == Some(started_job.id().as_str()))
+        .expect("job.list must contain the successful start job");
+    assert_terminal_procedure_digest(&listed_start["terminal_response"], &expected_digest);
+
+    let job_id = started_job.id().as_str();
+    for (subcommand, wire_command) in [("status", "job.status"), ("wait", "job.wait")] {
+        let output = cli_job_output(&fixture, &workspace, &[subcommand, job_id], wire_command);
+        assert_eq!(
+            output.job().map(|job| job.id()),
+            Some(started_job.id()),
+            "{wire_command} must project the selected start job"
+        );
+        assert_terminal_procedure_digest(
+            output
+                .result()
+                .get("job")
+                .expect("terminal job read must expose its immutable response"),
+            &expected_digest,
+        );
+    }
+
+    daemon.stop();
+    fs::remove_file(&procedure_path)
+        .expect("the custom Procedure source must be deleted before replay");
+    let restarted_daemon = RunningDaemonV1::start(&fixture);
+
+    let replayed = cli_output(&fixture, &workspace, "start", &start_arguments);
+    assert_eq!(replayed.job(), Some(&started_job));
+    assert_eq!(replayed.session(), Some(&started_session));
+    assert_eq!(replayed.result(), &started_result);
+    let (_, replayed_status) = public_status(&fixture, &workspace);
+    assert_eq!(
+        replayed_status.task.procedure.digest.as_str(),
+        expected_digest
+    );
+    assert_eq!(replayed_status.session.id, *started_session.id());
+
+    cli_error(
+        &fixture,
+        &workspace,
+        "start",
+        &[
+            "--procedure",
+            PROCEDURE_FILE,
+            "--expect-procedure-digest",
+            DIFFERENT_DIGEST,
+            "--task",
+            "Bind the admitted Procedure",
+            "--idempotency-key",
+            IDEMPOTENCY_KEY,
+        ],
+        "IDEMPOTENCY_KEY_REUSED",
+        2,
+        false,
+    );
+    let final_jobs = public_jobs(&fixture, &workspace);
+    assert_eq!(
+        jobs(&final_jobs).len(),
+        job_count_before_guard + 1,
+        "exact replay and idempotency conflict must not admit another job"
+    );
+    let final_start = jobs(&final_jobs)
+        .iter()
+        .find(|job| job["id"].as_str() == Some(started_job.id().as_str()))
+        .expect("the restarted daemon must retain the original start job");
+    assert_terminal_procedure_digest(&final_start["terminal_response"], &expected_digest);
+
+    restarted_daemon.stop();
 }
 #[test]
 #[ignore = "run with tools/run_g005_vertical.py so Cargo supplies a freshly built podwayd artifact"]

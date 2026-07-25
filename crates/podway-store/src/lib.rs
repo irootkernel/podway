@@ -23,10 +23,12 @@ pub mod codec;
 pub mod schema;
 pub mod sqlite_store;
 pub mod state_rows;
+#[doc(hidden)]
+pub mod test_support;
 
 pub use codec::{
-    PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
-    PersistedTerminalSessionProjectionV1,
+    PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
+    PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
 };
 pub use sqlite_store::SqliteStoreV1;
 
@@ -752,6 +754,7 @@ pub trait StoreIdempotencyReadContractV1: StoreContractV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IdempotentExecutionV1 {
     canonical_execution: Option<CanonicalExecutionJsonV1>,
+    retained_start_identity: Option<PersistedStartIdentityV1>,
     outcome: AdmitOutcomeV1,
     request_digest: CanonicalRequestDigestV1,
 }
@@ -760,10 +763,12 @@ impl IdempotentExecutionV1 {
     pub fn new(
         request_digest: CanonicalRequestDigestV1,
         canonical_execution: Option<CanonicalExecutionJsonV1>,
+        retained_start_identity: Option<PersistedStartIdentityV1>,
         outcome: AdmitOutcomeV1,
     ) -> Self {
         Self {
             canonical_execution,
+            retained_start_identity,
             outcome,
             request_digest,
         }
@@ -775,6 +780,10 @@ impl IdempotentExecutionV1 {
 
     pub fn canonical_execution(&self) -> Option<&CanonicalExecutionJsonV1> {
         self.canonical_execution.as_ref()
+    }
+
+    pub fn retained_start_identity(&self) -> Option<&PersistedStartIdentityV1> {
+        self.retained_start_identity.as_ref()
     }
 
     pub fn outcome(&self) -> &AdmitOutcomeV1 {

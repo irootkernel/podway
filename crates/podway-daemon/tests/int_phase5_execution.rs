@@ -13,7 +13,11 @@ use podway_daemon::{
 };
 use podway_git::NativeGitResolverV1;
 use podway_protocol::{SliceErrorV1, canonical_reset_all_identity_v1};
-use podway_store::{JobListQueryV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreReadContractV1};
+use podway_store::codec::PersistedTerminalResultV1;
+use podway_store::{
+    JobListQueryV1, PersistedTerminalSessionProjectionV1, SqliteStoreOptionsV1, SqliteStoreV1,
+    StoreReadContractV1,
+};
 use sha2::{Digest as _, Sha256};
 use support_phase4_workspace::{git_worktrees, selector as git_selector};
 
@@ -1177,6 +1181,7 @@ fn pstrt005_terminal_replay_and_digest_conflict_need_no_fresh_dependencies() {
         .unwrap()
         .unwrap();
     assert_success(&terminal);
+
     std::fs::remove_file(&source).unwrap();
 
     let replay_ids = SpyIds::new();
@@ -1235,6 +1240,328 @@ fn pstrt005_terminal_replay_and_digest_conflict_need_no_fresh_dependencies() {
     );
     assert_eq!(store.request_count(), 1);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+fn assert_pruned_start_replay(legacy_v0: bool) {
+    let case = if legacy_v0 { "v0" } else { "v1" };
+    let root = std::env::temp_dir().join(format!(
+        "podway-pstrt-pruned-replay-{case}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("procedure.yaml");
+    std::fs::write(&source, PROCEDURE_YAML).unwrap();
+    let database = root.join("state.sqlite3");
+    let identity = identity();
+    let workspace_root = podway_store::ValidatedWorkspaceRootV1::from_path(&root).unwrap();
+    let binding = WorkspaceBindingV1::new(identity.clone(), workspace_root.clone());
+    let options = SqliteStoreOptionsV1::new(8).unwrap();
+    let store = Arc::new(
+        SqliteStoreV1::open(
+            &database,
+            &workspace_root,
+            identity.clone(),
+            options.clone(),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    let request = slice_request(
+        "session.start",
+        json!({
+            "selector": selector_json(),
+            "procedure": "procedure.yaml",
+            "task_title": "Pruned replay",
+        }),
+        PreconditionsV1::default(),
+        9_753,
+    );
+    let key = IdempotencyKeyV1::new(format!("pstrt-pruned-start-{case}")).unwrap();
+    let admitting_engine = DaemonExecutionEngineV1::new(
+        store.clone(),
+        FixtureIds::new(),
+        FixtureClock::new(),
+        EmbeddedPresetProcedureProviderV1,
+        FixtureArtifacts,
+        FixtureWorkspaces::stable(binding.clone()),
+    );
+    let admitted = admitting_engine
+        .admit_for_workspace(&binding, &request, key.clone())
+        .unwrap();
+    let start_job = match admitted {
+        AdmitOutcomeV1::New(receipt) => receipt,
+        outcome => panic!("expected new start, got {outcome:?}"),
+    };
+    let terminal = admitting_engine
+        .execute_next(
+            &binding,
+            WorkerIdV1::new("pstrt-pruned-start-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_success(&terminal);
+
+    drop(admitting_engine);
+    drop(store);
+    podway_store::test_support::rewrite_start_terminal_as_legacy(
+        &database,
+        start_job.job_id(),
+        legacy_v0,
+    )
+    .unwrap();
+    let store = Arc::new(
+        SqliteStoreV1::open(
+            &database,
+            &workspace_root,
+            identity.clone(),
+            options.clone(),
+            UnixMillis::new(150),
+        )
+        .unwrap(),
+    );
+
+    for number in 0..100_u16 {
+        let job_id = JobId::new(format!("00000000-0000-4000-9000-{:012x}", number + 1)).unwrap();
+        let request = AdmitRequestV1::new(
+            DomainCommand::WorkspaceInitialize,
+            IdempotencyKeyV1::new(format!("pstrt-prune-filler-{case}-{number}")).unwrap(),
+            job_id,
+            RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+            Sha256Digest::new(format!("sha256:{:064x}", number + 1)).unwrap(),
+            UnixMillis::new(200 + u64::from(number)),
+        );
+        assert!(matches!(
+            store.admit(&identity, request),
+            Ok(AdmitOutcomeV1::New(_))
+        ));
+        let claim = store
+            .claim_next(
+                &identity,
+                WorkerIdV1::new("pstrt-prune-worker").unwrap(),
+                UnixMillis::new(300 + u64::from(number)),
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .commit_terminal(
+                claim.claim().clone(),
+                Revision::ZERO,
+                None,
+                TerminalResultV1::Failure(DomainError::InvalidState { reason: "fixture" }),
+                UnixMillis::new(604_800_500 + u64::from(number)),
+            )
+            .unwrap();
+    }
+    store
+        .prune_terminal_history(&identity, UnixMillis::new(604_801_000))
+        .unwrap();
+    assert!(
+        store
+            .read_job(&identity, start_job.job_id())
+            .unwrap()
+            .is_none()
+    );
+    drop(store);
+    std::fs::remove_file(&source).unwrap();
+
+    let reopened = Arc::new(
+        SqliteStoreV1::open(
+            &database,
+            &workspace_root,
+            identity.clone(),
+            options,
+            UnixMillis::new(604_801_001),
+        )
+        .unwrap(),
+    );
+    let retained = reopened
+        .read_idempotent_execution(&identity, &key)
+        .unwrap()
+        .expect("pruned start identity must remain durable");
+    assert!(retained.canonical_execution().is_none());
+    assert!(retained.retained_start_identity().is_some());
+    let replay_ids = SpyIds::new();
+    let replay_clock = SpyClock::new();
+    let replay_procedures = SpyProcedures::new();
+    let replay_workspaces = FixtureWorkspaces::stable(binding.clone());
+    replay_workspaces.reject_stale_selectors();
+    let replay_engine = DaemonExecutionEngineV1::new(
+        reopened,
+        replay_ids.clone(),
+        replay_clock.clone(),
+        replay_procedures.clone(),
+        FixtureArtifacts,
+        replay_workspaces.clone(),
+    );
+    let replay = replay_engine
+        .admit_for_workspace(&binding, &request, key)
+        .unwrap();
+    match replay {
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt)) => {
+            assert_eq!(receipt.job(), terminal.job());
+            assert_eq!(
+                receipt.result(),
+                &PersistedTerminalResultV1::from_terminal_result(terminal.result())
+            );
+            assert!(receipt.start_identity().is_some());
+            if legacy_v0 {
+                assert!(receipt.job_projection().is_none());
+                assert!(receipt.session_projection().is_none());
+            } else {
+                assert_eq!(
+                    receipt
+                        .session_projection()
+                        .and_then(PersistedTerminalSessionProjectionV1::procedure_digest),
+                    Some(
+                        replay_engine
+                            .store()
+                            .read_session_aggregate(&identity)
+                            .unwrap()
+                            .unwrap()
+                            .snapshot()
+                            .digest()
+                    )
+                );
+            }
+        }
+        outcome => panic!("expected pruned terminal replay, got {outcome:?}"),
+    }
+    assert_eq!(replay_procedures.call_count(), 0);
+    assert_eq!(replay_clock.call_count(), 0);
+    assert!(replay_ids.calls().is_empty());
+    assert_eq!(
+        replay_workspaces
+            .selector_revalidations
+            .load(Ordering::SeqCst),
+        0
+    );
+    drop(replay_engine);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn pstrt_v1_start_replay_survives_sqlite_prune_reopen_and_source_deletion() {
+    assert_pruned_start_replay(false);
+}
+
+#[test]
+fn pstrt_v0_start_replay_survives_sqlite_prune_reopen_and_source_deletion() {
+    assert_pruned_start_replay(true);
+}
+
+#[test]
+fn pstrt_v5_failed_and_cancelled_starts_retain_only_bounded_start_identity() {
+    for cancelled in [true, false] {
+        let case = if cancelled { "cancelled" } else { "failed" };
+        let root = std::env::temp_dir().join(format!(
+            "podway-pstrt-bounded-{case}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("procedure.yaml"), PROCEDURE_YAML).unwrap();
+        let identity = identity();
+        let workspace_root = podway_store::ValidatedWorkspaceRootV1::from_path(&root).unwrap();
+        let binding = WorkspaceBindingV1::new(identity.clone(), workspace_root.clone());
+        let store = Arc::new(
+            SqliteStoreV1::open(
+                root.join("state.sqlite3"),
+                &workspace_root,
+                identity.clone(),
+                SqliteStoreOptionsV1::new(8).unwrap(),
+                UnixMillis::new(1),
+            )
+            .unwrap(),
+        );
+        let request = slice_request(
+            "session.start",
+            json!({
+                "selector": selector_json(),
+                "procedure": "procedure.yaml",
+                "task_title": format!("Bounded {case}"),
+            }),
+            PreconditionsV1::default(),
+            if cancelled { 9_755 } else { 9_754 },
+        );
+        let key = IdempotencyKeyV1::new(format!("pstrt-bounded-{case}")).unwrap();
+        let engine = DaemonExecutionEngineV1::new(
+            store.clone(),
+            FixtureIds::new(),
+            FixtureClock::new(),
+            EmbeddedPresetProcedureProviderV1,
+            FixtureArtifacts,
+            FixtureWorkspaces::stable(binding),
+        );
+        let job = match engine.admit(&request, key.clone()).unwrap() {
+            AdmitOutcomeV1::New(job) => job,
+            outcome => panic!("expected new start, got {outcome:?}"),
+        };
+        if cancelled {
+            assert!(matches!(
+                store
+                    .cancel_before_claim(
+                        &identity,
+                        job.job_id().clone(),
+                        Revision::new(job.identity_sequence()),
+                        UnixMillis::new(200),
+                    )
+                    .unwrap(),
+                CancelOutcomeV1::Cancelled(_)
+            ));
+        } else {
+            let claim = store
+                .claim_next(
+                    &identity,
+                    WorkerIdV1::new("pstrt-bounded-worker").unwrap(),
+                    UnixMillis::new(200),
+                )
+                .unwrap()
+                .unwrap();
+            store
+                .commit_terminal(
+                    claim.claim().clone(),
+                    Revision::ZERO,
+                    None,
+                    TerminalResultV1::Failure(DomainError::InvalidState { reason: "fixture" }),
+                    UnixMillis::new(201),
+                )
+                .unwrap();
+        }
+        let retained = store
+            .read_idempotent_execution(&identity, &key)
+            .unwrap()
+            .unwrap();
+        assert!(retained.canonical_execution().is_some());
+        let receipt = match retained.outcome() {
+            AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt)) => receipt,
+            outcome => panic!("expected terminal replay, got {outcome:?}"),
+        };
+        let start_identity = receipt
+            .start_identity()
+            .expect("terminal start retains bounded identity");
+        assert_eq!(start_identity.execution_version(), 5);
+        assert_eq!(
+            start_identity.procedure_digest(),
+            parse_procedure_v1(PROCEDURE_YAML, ProcedureFormatV1::Yaml)
+                .unwrap()
+                .admit(ProcedureWarningPolicyV1::Accept)
+                .unwrap()
+                .digest()
+        );
+        let encoded = podway_store::codec::encode_persisted_terminal_receipt_v1(receipt).unwrap();
+        assert!(encoded.contains("\"start_identity\""));
+        assert!(!encoded.contains("canonical_execution"));
+        drop(engine);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]

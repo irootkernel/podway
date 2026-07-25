@@ -2103,6 +2103,21 @@ fn pac_045_pruning_bounds_terminal_and_idempotency_retention_with_oldest_replay(
     assert_eq!(job_projection.claimed_at(), Some(UnixMillis::new(0)));
     assert_eq!(job_projection.finished_at(), UnixMillis::new(0));
     assert!(replay.session_projection().is_none());
+    assert!(
+        replay.start_identity().is_none(),
+        "non-start terminal replay omits retained start identity"
+    );
+    let reopened = store(&temporary);
+    let lookup = reopened
+        .read_idempotent_execution(&identity(), &IdempotencyKeyV1::new("terminal-1").unwrap())
+        .unwrap()
+        .expect("pruned idempotency record remains readable after reopen");
+    assert!(lookup.canonical_execution().is_none());
+    assert!(lookup.retained_start_identity().is_none());
+    assert!(matches!(
+        lookup.outcome(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(_))
+    ));
     let automatic_prune_job = job(102);
     admit(
         &retention_store,
