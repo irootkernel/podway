@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use podway_core::{AttemptId, JobId, Revision, SessionId, WorkspaceId};
+use podway_core::{AttemptId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
 use podway_daemon::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
@@ -26,6 +26,8 @@ const SESSION_ID: &str = "00000000-0000-4000-8000-000000000502";
 const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000000503";
 const JOB_ID: &str = "00000000-0000-4000-8000-000000000504";
 const GENERATED_AT: &str = "2026-07-16T12:34:56.789Z";
+const PROCEDURE_DIGEST: &str =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[derive(Clone)]
 struct Workspace {
@@ -1093,7 +1095,10 @@ fn detached_queued_mutation_returns_a_durable_receipt_with_correlation() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let dispatcher = dispatcher_with_outcome(
         Arc::clone(&calls),
-        Ok(MutationDispatchOutcomeV1::Detached { job: queued_job() }),
+        Ok(MutationDispatchOutcomeV1::Detached {
+            job: queued_job(),
+            procedure_digest: Some(Sha256Digest::new(PROCEDURE_DIGEST).unwrap()),
+        }),
     );
     let (request, slice) = request_with_options(
         102,
@@ -1112,6 +1117,7 @@ fn detached_queued_mutation_returns_a_durable_receipt_with_correlation() {
             assert_eq!(output.job().unwrap().state(), JobStateV1::Queued);
             assert_eq!(output.result()["admitted"], Value::Bool(true));
             assert_eq!(output.result()["detached"], Value::Bool(true));
+            assert_eq!(output.result()["procedure_digest"], PROCEDURE_DIGEST);
         }
         ResponseEnvelopeV1::Error(error) => panic!("detached admission failed: {error:?}"),
     }
@@ -1335,7 +1341,10 @@ fn mutation_wait_and_outcome_mismatches_fail_closed_with_correlation() {
             108,
             false,
             783,
-            Ok(MutationDispatchOutcomeV1::Detached { job: queued_job() }),
+            Ok(MutationDispatchOutcomeV1::Detached {
+                job: queued_job(),
+                procedure_digest: None,
+            }),
             MutationWaitV1::UntilTerminal {
                 timeout_millis: 783,
             },

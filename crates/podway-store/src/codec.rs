@@ -14,7 +14,9 @@ use crate::{
     DomainResult, EpochMillisV1, JobReceiptV1, RevisionAttemptItemPreconditionsV1, RevisionV1,
     TerminalReceiptV1, TerminalResultV1,
 };
-use podway_core::{DomainCommandKind, ItemId, SessionId, SessionLifecycle, WorkspaceId};
+use podway_core::{
+    DomainCommandKind, ItemId, SessionId, SessionLifecycle, Sha256Digest, WorkspaceId,
+};
 
 pub const STORE_COMMAND_SCHEMA_V1: &str = "podway.store-command/v1";
 pub const STORE_COMMAND_SCHEMA_V2: &str = "podway.store-command/v2";
@@ -627,6 +629,8 @@ pub struct PersistedTerminalSessionProjectionV1 {
     lifecycle: PersistedSessionLifecycleV1,
     revision_before: RevisionV1,
     revision_after: RevisionV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    procedure_digest: Option<Sha256Digest>,
 }
 
 impl PersistedTerminalSessionProjectionV1 {
@@ -643,6 +647,7 @@ impl PersistedTerminalSessionProjectionV1 {
             lifecycle,
             revision_before,
             revision_after,
+            procedure_digest: None,
         };
         projection.validate()?;
         Ok(projection)
@@ -666,6 +671,15 @@ impl PersistedTerminalSessionProjectionV1 {
 
     pub fn revision_after(&self) -> RevisionV1 {
         self.revision_after
+    }
+
+    pub fn procedure_digest(&self) -> Option<&Sha256Digest> {
+        self.procedure_digest.as_ref()
+    }
+
+    pub fn with_procedure_digest(mut self, procedure_digest: Sha256Digest) -> Self {
+        self.procedure_digest = Some(procedure_digest);
+        self
     }
 
     fn validate(&self) -> Result<(), StoreCodecErrorV1> {

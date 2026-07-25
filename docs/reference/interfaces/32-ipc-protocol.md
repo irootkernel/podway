@@ -197,6 +197,13 @@ Procedure digest. Exact retries reconstruct the identity from the immutable admi
 so they do not depend on a later source-file read; a changed digest or start precondition reusing
 the same key returns `IDEMPOTENCY_KEY_REUSED`.
 
+Every successful `session.start` and `session.start_replace` response returns the admitted
+canonical digest as `result.procedure_digest`, including a newly queued detached admission,
+synchronous terminal completion, and an idempotent terminal replay. Terminal projections returned
+by `job.list`, `job.status`, and `job.wait` carry the same `procedure_digest`. Later
+`session.status` observations expose that identity as `result.task.procedure.digest`; these values
+come from the durable admitted snapshot and never require another source-file read.
+
 It excludes:
 
 ```text

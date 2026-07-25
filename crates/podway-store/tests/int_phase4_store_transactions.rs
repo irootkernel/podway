@@ -3854,7 +3854,8 @@ fn fresh_session_start_replace_retires_old_history_and_replays_its_terminal_rece
                     cancelled.revision(),
                     replacement.revision(),
                 )
-                .unwrap(),
+                .unwrap()
+                .with_procedure_digest(replacement.snapshot().digest().clone()),
             ),
         )
         .unwrap(),

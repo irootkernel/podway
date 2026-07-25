@@ -2358,6 +2358,8 @@ pub enum TerminalJobResponseV1 {
 pub struct TerminalJobSuccessProjectionV1 {
     pub result: TerminalJobSuccessResultV1,
     pub session: Option<SessionOutputV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub procedure_digest: Option<Sha256Digest>,
 }
 
 /// Public result facts from a successful terminal job receipt.

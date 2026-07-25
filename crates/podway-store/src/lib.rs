@@ -1231,6 +1231,7 @@ impl JobReceiptV1 {
 }
 
 /// A non-terminal job receipt or its immutable success, failure, or cancellation result.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JobReceiptOrTerminalV1 {
     JobReceipt(JobReceiptV1),
@@ -1238,6 +1239,7 @@ pub enum JobReceiptOrTerminalV1 {
 }
 
 /// Result of durable admission, distinguishing a new job from an idempotent replay.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdmitOutcomeV1 {
     Existing(JobReceiptOrTerminalV1),
@@ -1462,6 +1464,7 @@ impl TerminalReceiptV1 {
 }
 
 /// Result of cancellation before a claim can start execution.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CancelOutcomeV1 {
     AlreadyTerminal(JobReceiptOrTerminalV1),

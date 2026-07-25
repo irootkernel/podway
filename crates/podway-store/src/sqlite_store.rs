@@ -2703,6 +2703,7 @@ fn terminal_session_projection(
         revision_before,
         revision_after,
     )
+    .map(|projection| projection.with_procedure_digest(aggregate.snapshot().digest().clone()))
     .map(Some)
     .map_err(|_| corrupt(StoreRecordKindV1::Session))
 }

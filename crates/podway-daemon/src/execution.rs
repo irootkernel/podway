@@ -2751,6 +2751,27 @@ fn decode_execution_document_v1(
     Ok((selector, workspace_id, command, resolution))
 }
 
+/// Returns the immutable Procedure digest embedded in an admitted start execution document.
+///
+/// This deliberately decodes the complete document rather than consulting the source path again.
+pub(crate) fn admitted_start_procedure_digest_v1(
+    execution: &CanonicalExecutionJsonV1,
+) -> Result<Option<Sha256Digest>, ExecutionErrorV1> {
+    let (_, _, command, resolution) = decode_execution_document_v1(execution.as_str())?;
+    if !matches!(
+        command,
+        SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+    ) {
+        return Ok(None);
+    }
+    let AdmissionResolutionV1::SessionStart { snapshot, .. } = resolution else {
+        return Err(invalid_execution_v1(
+            "admitted start has no Procedure snapshot",
+        ));
+    };
+    Ok(Some(snapshot.digest().clone()))
+}
+
 fn decode_command_components_v1(
     execution_version: u64,
     command: &str,

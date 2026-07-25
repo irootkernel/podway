@@ -715,6 +715,7 @@ fn detached_mutation_returns_a_durable_receipt_without_waiting() {
     let reads = FakeReads::new();
     let worker = FakeWorker::new(Ok(MutationDispatchOutcomeV1::Detached {
         job: queued_job(),
+        procedure_digest: None,
     }));
     let dispatcher = dispatcher(runtime, reads, worker.clone());
     let (request, slice) = request_and_slice(
@@ -795,6 +796,7 @@ fn idempotent_replay_preserves_the_original_job_identity() {
     let reads = FakeReads::new();
     let worker = FakeWorker::new(Ok(MutationDispatchOutcomeV1::Detached {
         job: queued_job(),
+        procedure_digest: None,
     }));
     let dispatcher = dispatcher(runtime, reads, worker.clone());
     let (request, slice) = request_and_slice(

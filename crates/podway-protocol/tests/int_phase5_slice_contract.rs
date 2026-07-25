@@ -1129,6 +1129,7 @@ fn g006_terminal_job_responses_are_protocol_owned_typed_projections() {
             revision_after: Revision::new(5),
         },
         session: None,
+        procedure_digest: None,
     });
     assert_eq!(
         serde_json::to_value(success).unwrap(),

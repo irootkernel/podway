@@ -606,7 +606,10 @@ pub enum DispatcherTerminalResultV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MutationDispatchOutcomeV1 {
     /// A durable admission receipt. This is the normal detached response.
-    Detached { job: JobOutputV1 },
+    Detached {
+        job: JobOutputV1,
+        procedure_digest: Option<Sha256Digest>,
+    },
     /// A persisted terminal result, which may be returned for synchronous requests or for a
     /// detached replay that discovered a job had already completed.
     Terminal {
@@ -1048,9 +1051,13 @@ where
                 .admit_and_wait(&workspace, slice_request, idempotency_key, wait)?;
 
         match (wait, outcome) {
-            (MutationWaitV1::Detached, MutationDispatchOutcomeV1::Detached { job }) => {
-                self.detached_response(request, workspace_output, job)
-            }
+            (
+                MutationWaitV1::Detached,
+                MutationDispatchOutcomeV1::Detached {
+                    job,
+                    procedure_digest,
+                },
+            ) => self.detached_response(request, workspace_output, job, procedure_digest.as_ref()),
             (MutationWaitV1::Detached, MutationDispatchOutcomeV1::Terminal { job, result })
             | (
                 MutationWaitV1::UntilTerminal { .. },
@@ -1071,16 +1078,21 @@ where
         request: &RequestEnvelopeV1,
         workspace: WorkspaceOutputV1,
         job: JobOutputV1,
+        procedure_digest: Option<&Sha256Digest>,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        let mut result = Map::from_iter([
+            ("admitted".to_owned(), Value::Bool(true)),
+            ("detached".to_owned(), Value::Bool(true)),
+        ]);
+        if let Some(procedure_digest) = procedure_digest {
+            result.insert("procedure_digest".to_owned(), json!(procedure_digest));
+        }
         self.output_response(
             request,
             Some(workspace),
             Some(job),
             None,
-            Map::from_iter([
-                ("admitted".to_owned(), Value::Bool(true)),
-                ("detached".to_owned(), Value::Bool(true)),
-            ]),
+            result,
             Vec::new(),
         )
     }

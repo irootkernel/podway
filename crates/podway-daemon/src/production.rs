@@ -51,6 +51,7 @@ use crate::{
     execution::{
         DaemonExecutionEngineV1, EmbeddedPresetProcedureProviderV1, ExecutionClockV1,
         ExecutionErrorV1, ProcedureProviderV1, ResetAllPreparationOutcomeV1,
+        admitted_start_procedure_digest_v1,
     },
     native_execution::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeWorkspaceRevalidatorV1,
@@ -1052,8 +1053,12 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             });
         }
 
-        let job = match submission.completion() {
-            Some(WorkerWaitResultV1::TimedOut(view)) => job_output(view)?,
+        let (job, procedure_digest) = match submission.completion() {
+            Some(WorkerWaitResultV1::TimedOut(view)) => (
+                job_output(view)?,
+                admitted_start_procedure_digest_v1(view.execution().canonical_execution())
+                    .map_err(|_| terminal_replay_integrity_failure())?,
+            ),
             _ => job_output_from_context(&workspace.scheduler, submission.admission())?,
         };
         match submission.completion() {
@@ -1063,7 +1068,10 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             Some(WorkerWaitResultV1::Terminal(_)) => {
                 Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
             }
-            None => Ok(MutationDispatchOutcomeV1::Detached { job }),
+            None => Ok(MutationDispatchOutcomeV1::Detached {
+                job,
+                procedure_digest,
+            }),
         }
     }
     fn reset_all(
@@ -1531,7 +1539,7 @@ fn map_preview_domain_error(error: DomainError, command: &SliceCommandV1) -> Dis
 fn job_output_from_context(
     scheduler: &Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>,
     admission: &AdmitOutcomeV1,
-) -> Result<JobOutputV1, DispatchFailureV1> {
+) -> Result<(JobOutputV1, Option<Sha256Digest>), DispatchFailureV1> {
     let job_id = match admission {
         AdmitOutcomeV1::New(receipt) => receipt.job_id(),
         AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt)) => receipt.job_id(),
@@ -1544,7 +1552,10 @@ fn job_output_from_context(
         .read_job(job_id)
         .map_err(map_store_error)?
         .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::JobNotFound))?;
-    job_output(&view)
+    let procedure_digest =
+        admitted_start_procedure_digest_v1(view.execution().canonical_execution())
+            .map_err(|_| terminal_replay_integrity_failure())?;
+    Ok((job_output(&view)?, procedure_digest))
 }
 
 fn terminal_replay_integrity_failure() -> DispatchFailureV1 {
@@ -1747,6 +1758,7 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
 
 #[derive(Clone, Copy)]
 enum TerminalCommandKindV1 {
+    Start,
     ItemMutation,
     SessionReset,
     Skip,
@@ -1756,6 +1768,7 @@ enum TerminalCommandKindV1 {
 }
 fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> TerminalCommandKindV1 {
     match durable_command_name(command) {
+        "session.start" | "session.start_replace" => TerminalCommandKindV1::Start,
         "item.check" | "item.uncheck" | "item.set" | "item.add" | "item.remove" | "item.attach"
         | "item.clear" => TerminalCommandKindV1::ItemMutation,
         "session.reset" => TerminalCommandKindV1::SessionReset,
@@ -1797,6 +1810,17 @@ fn terminal_job_response(
                     receipt.session_projection(),
                     command,
                 )?,
+                procedure_digest: if matches!(command, TerminalCommandKindV1::Start) {
+                    Some(
+                        receipt
+                            .session_projection()
+                            .and_then(PersistedTerminalSessionProjectionV1::procedure_digest)
+                            .ok_or_else(terminal_replay_integrity_failure)?
+                            .clone(),
+                    )
+                } else {
+                    None
+                },
             },
         )),
         PersistedTerminalResultV1::Failure(error) => Ok(TerminalJobResponseV1::Error(
@@ -2030,7 +2054,17 @@ fn terminal_result(
                 receipt.session_projection(),
                 terminal_command_kind(command),
             )?;
-            let result = terminal_success_result_map(&terminal_job_success_result(result));
+            let mut result = terminal_success_result_map(&terminal_job_success_result(result));
+            if matches!(
+                command,
+                SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+            ) {
+                let procedure_digest = receipt
+                    .session_projection()
+                    .and_then(PersistedTerminalSessionProjectionV1::procedure_digest)
+                    .ok_or_else(terminal_replay_integrity_failure)?;
+                result.insert("procedure_digest".to_owned(), json!(procedure_digest));
+            }
             Ok(DispatcherTerminalResultV1::Output(
                 DispatcherTerminalOutputV1::new(session, result, Vec::new()),
             ))
@@ -2150,6 +2184,9 @@ fn terminal_command_kind(command: &SliceCommandV1) -> TerminalCommandKindV1 {
         | SliceCommandV1::ItemRemove(_)
         | SliceCommandV1::ItemAttach(_)
         | SliceCommandV1::ItemClear(_) => TerminalCommandKindV1::ItemMutation,
+        SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_) => {
+            TerminalCommandKindV1::Start
+        }
         SliceCommandV1::SessionReset(_) => TerminalCommandKindV1::SessionReset,
         SliceCommandV1::SessionSkip(_) => TerminalCommandKindV1::Skip,
         SliceCommandV1::SessionReturn(_) => TerminalCommandKindV1::Return,
@@ -2170,6 +2207,7 @@ fn map_terminal_domain_error(
                 | TerminalCommandKindV1::Skip
                 | TerminalCommandKindV1::Return
                 | TerminalCommandKindV1::Reopen
+                | TerminalCommandKindV1::Start
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionRevisionConflict,
             };
             DispatchFailureV1::new(kind).with_details(
@@ -2201,6 +2239,7 @@ fn map_terminal_domain_error(
                 TerminalCommandKindV1::Reopen => DispatchFailureKindV1::ReopenNotAllowed,
                 TerminalCommandKindV1::ItemMutation
                 | TerminalCommandKindV1::SessionReset
+                | TerminalCommandKindV1::Start
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionNotRunning,
             };
             DispatchFailureV1::new(kind)
@@ -2957,6 +2996,42 @@ mod tests {
         assert_eq!(output.lifecycle(), SessionLifecycleV1::Running);
         assert_eq!(output.revision_before(), Revision::new(4));
         assert_eq!(output.revision_after(), Revision::new(5));
+    }
+    #[test]
+    fn pstrt004_terminal_job_replay_exposes_the_admitted_procedure_digest() {
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000018").unwrap();
+        let digest = Sha256Digest::new(
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        )
+        .unwrap();
+        let projection = PersistedTerminalSessionProjectionV1::new(
+            session_id.clone(),
+            "Immutable start digest".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::ZERO,
+            Revision::new(1),
+        )
+        .unwrap()
+        .with_procedure_digest(digest.clone());
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(18),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id,
+                revision_before: Revision::ZERO,
+                revision_after: Revision::new(1),
+                changed: true,
+            }),
+            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+            Some(projection),
+        )
+        .unwrap();
+
+        let TerminalJobResponseV1::Success(output) =
+            terminal_job_response(&receipt, TerminalCommandKindV1::Start).unwrap()
+        else {
+            panic!("start receipt must project a terminal success");
+        };
+        assert_eq!(output.procedure_digest.as_ref(), Some(&digest));
     }
     #[test]
     fn projectionless_terminal_replay_fails_closed() {

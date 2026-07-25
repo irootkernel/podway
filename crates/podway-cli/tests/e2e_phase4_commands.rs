@@ -121,6 +121,7 @@ impl Drop for Fixture {
 enum Reply {
     Status,
     Output,
+    StartOutput,
     Error,
     IdentityError,
     ContractMismatch,
@@ -286,6 +287,20 @@ impl Reply {
             Self::Output => output_response(
                 request,
                 Map::from_iter([("admitted".to_owned(), Value::Bool(true))]),
+                Some(job()),
+            ),
+            Self::StartOutput => output_response(
+                request,
+                Map::from_iter([
+                    ("admitted".to_owned(), Value::Bool(true)),
+                    (
+                        "procedure_digest".to_owned(),
+                        Value::String(
+                            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                .to_owned(),
+                        ),
+                    ),
+                ]),
                 Some(job()),
             ),
             Self::Error => error_response(request),
@@ -1452,6 +1467,55 @@ fn text_success_uses_stdout_and_daemon_errors_use_stderr() {
             .contains("error: JOB_WAIT_TIMEOUT:")
     );
     assert_eq!(error_daemon.finish().len(), 1);
+}
+
+#[test]
+fn pstrt004_start_rendering_preserves_the_admitted_procedure_digest() {
+    const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let json_fixture = Fixture::new();
+    let json_daemon = FakeDaemon::start(&json_fixture, vec![Reply::StartOutput]);
+    let json_output = json_fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "Digest rendering",
+        "--detach",
+    ]);
+    assert!(
+        json_output.status.success(),
+        "JSON start failed: {json_output:?}"
+    );
+    let rendered: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(rendered["result"]["procedure_digest"], DIGEST);
+    assert_eq!(json_daemon.finish().len(), 1);
+
+    let text_fixture = Fixture::new();
+    let text_daemon = FakeDaemon::start(&text_fixture, vec![Reply::StartOutput]);
+    let text_output = text_fixture.run(&[
+        "--worktree",
+        "/fixture",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "Digest rendering",
+        "--detach",
+    ]);
+    assert!(
+        text_output.status.success(),
+        "text start failed: {text_output:?}"
+    );
+    assert!(
+        String::from_utf8(text_output.stdout)
+            .unwrap()
+            .contains(DIGEST),
+        "text start must render the admitted Procedure digest"
+    );
+    assert_eq!(text_daemon.finish().len(), 1);
 }
 
 #[test]

@@ -322,6 +322,11 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
         PreconditionsV1::default(),
     );
     let initial_status = status_result(&dispatch_command(&dispatcher, &status, "session.status"));
+    assert_eq!(
+        started.result()["procedure_digest"],
+        initial_status.task.procedure.digest.as_str(),
+        "session.start must return the exact digest observed by later status reads"
+    );
     let started_session = started
         .session()
         .expect("session.start terminal output includes a session");
