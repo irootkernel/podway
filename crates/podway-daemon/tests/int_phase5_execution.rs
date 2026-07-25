@@ -974,6 +974,49 @@ fn pstrt001_digest_mismatch_is_rejected_before_durable_admission() {
 }
 
 #[test]
+fn pstrt002_preset_and_custom_starts_bind_the_canonical_snapshot_to_admission() {
+    for (source, key) in [
+        (json!({"preset": "sw-dev"}), "pstrt002-preset"),
+        (
+            json!({"procedure": "procedures/test.yaml"}),
+            "pstrt002-custom",
+        ),
+    ] {
+        let harness = Harness::new();
+        let mut payload = source.as_object().unwrap().clone();
+        payload.insert("selector".to_owned(), selector_json());
+        payload.insert("task_title".to_owned(), json!("Durable snapshot"));
+        let request = slice_request(
+            "session.start",
+            Value::Object(payload),
+            PreconditionsV1::default(),
+            9_797,
+        );
+
+        assert!(matches!(
+            harness
+                .engine
+                .admit(&request, IdempotencyKeyV1::new(key).unwrap()),
+            Ok(AdmitOutcomeV1::New(_))
+        ));
+        let snapshot = harness
+            .store
+            .first_admitted_procedure_snapshot()
+            .expect("start admission must carry its canonical Procedure snapshot");
+        let admitted = parse_procedure_v1(PROCEDURE_YAML, ProcedureFormatV1::Yaml)
+            .unwrap()
+            .admit(ProcedureWarningPolicyV1::Accept)
+            .unwrap();
+        assert_eq!(snapshot.digest(), admitted.digest());
+        assert_eq!(
+            snapshot.canonical_json().as_str(),
+            admitted.canonical_json().as_str()
+        );
+        assert!(harness.store.current_session().is_none());
+    }
+}
+
+#[test]
 fn g006_destructive_commands_require_protocol_validated_confirmation() {
     let mut harness = Harness::new();
     assert_success(&harness.start());

@@ -268,7 +268,7 @@ fn load_snapshot(
     .map_err(|_| corrupt(StoreRecordKindV1::Snapshot))
 }
 
-fn persist_snapshot(
+pub(crate) fn persist_snapshot(
     transaction: &Transaction<'_>,
     snapshot: &ProcedureSnapshotV1,
 ) -> Result<(), StoreErrorV1> {

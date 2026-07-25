@@ -57,9 +57,10 @@ Some commands require read-only work that may be slower than a transaction:
 
 For the accepted v0.1.0 start target, canonical Procedure bytes and their digest
 become part of the durable admitted input before acknowledgement. The job never
-depends on re-reading its source file after admission. This stronger boundary is
-planned under `PSTRT`; the current implementation must not be described as already
-satisfying it.
+depends on re-reading its source file after admission. The normalized Procedure
+snapshot is committed in the same SQLite transaction as the queued job and its
+idempotency binding, so a pre-commit failure rolls back all three rows and a
+post-commit retry observes the exact admitted snapshot.
 
 The worker:
 

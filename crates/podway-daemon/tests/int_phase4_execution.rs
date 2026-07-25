@@ -467,6 +467,17 @@ impl RecordingStore {
             .to_owned()
     }
 
+    #[allow(dead_code)]
+    fn first_admitted_procedure_snapshot(&self) -> Option<ProcedureSnapshotV1> {
+        self.state
+            .lock()
+            .unwrap()
+            .requests
+            .first()
+            .and_then(AdmitRequestV1::admitted_procedure_snapshot)
+            .cloned()
+    }
+
     fn enqueue_persisted_session_start(&self, canonical_execution: &str) -> JobId {
         let mut state = self.state.lock().unwrap();
         state.sequence += 1;

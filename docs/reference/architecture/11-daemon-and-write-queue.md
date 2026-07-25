@@ -44,10 +44,11 @@ A mutation is admitted only after this transaction commits:
 2. canonicalize the request and compute its digest;
 3. look up the idempotency key;
 4. if new, increment `next_workspace_sequence`;
-5. insert the `queued` job;
-6. persist the idempotency binding;
-7. commit;
-8. acknowledge admission.
+5. for a start, persist the validated canonical Procedure snapshot;
+6. insert the `queued` job;
+7. persist the idempotency binding;
+8. commit;
+9. acknowledge admission.
 
 If the daemon exits before commit, the client has no admitted job. If the daemon exits after commit but before acknowledgement, retrying the same idempotency key returns the existing job.
 

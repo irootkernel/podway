@@ -1603,6 +1603,93 @@ fn post_commit_admission_and_claim_failpoints_are_retryable() {
 }
 
 #[test]
+fn pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let snapshot = aggregate().snapshot().clone();
+    let request = AdmitRequestV1::new(
+        DomainCommand::SessionStart,
+        IdempotencyKeyV1::new("pstrt002-admitted-snapshot").unwrap(),
+        job(16),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('b'),
+        UnixMillis::new(20),
+    )
+    .with_admitted_procedure_snapshot(snapshot.clone());
+
+    let rollback_store = store_with_options(
+        &temporary,
+        SqliteStoreOptionsV1::new(8).unwrap().with_failpoint(Some(
+            StoreFailpointV1::AdmissionAfterDurableRowsBeforeCommit,
+        )),
+        UnixMillis::new(1),
+    );
+    assert!(matches!(
+        rollback_store.admit(&identity(), request.clone()),
+        Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Recovery,
+        })
+    ));
+    drop(rollback_store);
+
+    let path = temporary.path().join("state.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    for table in ["procedure_snapshots", "jobs", "idempotency_records"] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "pre-commit failure must roll back {table}");
+    }
+    drop(connection);
+
+    let committed_store = store_with_options(
+        &temporary,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(21),
+    );
+    assert!(matches!(
+        committed_store.admit(&identity(), request.clone()),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    drop(committed_store);
+
+    let connection = Connection::open(&path).unwrap();
+    let persisted: (String, String, String) = connection
+        .query_row(
+            "SELECT digest, canonical_json, source_label FROM procedure_snapshots WHERE snapshot_id = ?1",
+            [snapshot.snapshot_id().as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted.0, snapshot.digest().as_str());
+    assert_eq!(persisted.1, snapshot.canonical_json().as_str());
+    assert_eq!(persisted.2, snapshot.source_label().label());
+    drop(connection);
+
+    let reopened = store_with_options(
+        &temporary,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(22),
+    );
+    assert_job_replay(
+        reopened.admit(&identity(), request),
+        JobReceiptV1::new(1, job(16), digest('b')),
+    );
+    drop(reopened);
+    let connection = Connection::open(path).unwrap();
+    let snapshot_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM procedure_snapshots", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        snapshot_count, 1,
+        "exact replay must not duplicate snapshots"
+    );
+}
+
+#[test]
 fn pac_027_terminal_state_and_result_roll_back_or_commit_together() {
     let terminal_temporary = TempDir::new().unwrap();
     let terminal_options = SqliteStoreOptionsV1::new(8)

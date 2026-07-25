@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 use podway_core::{
-    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, Revision,
-    SessionAggregateV1, SessionId, Sha256Digest, UnixMillis, WorkspaceId, WorkspaceState,
+    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, ProcedureSnapshotV1,
+    Revision, SessionAggregateV1, SessionId, Sha256Digest, UnixMillis, WorkspaceId, WorkspaceState,
 };
 
 pub mod codec;
@@ -1026,6 +1026,7 @@ impl RevisionAttemptItemPreconditionsV1 {
 /// A fully canonicalized mutation awaiting durable admission.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmitRequestV1 {
+    admitted_procedure_snapshot: Option<Box<ProcedureSnapshotV1>>,
     canonical_execution: CanonicalExecutionJsonV1,
     command: CommandV1,
     has_full_execution_document: bool,
@@ -1051,6 +1052,7 @@ impl AdmitRequestV1 {
         submitted_at: EpochMillisV1,
     ) -> Self {
         Self {
+            admitted_procedure_snapshot: None,
             canonical_execution: direct_store_canonical_execution_v1(&command, &preconditions),
             command,
             has_full_execution_document: true,
@@ -1074,6 +1076,7 @@ impl AdmitRequestV1 {
         canonical_execution: CanonicalExecutionJsonV1,
     ) -> Self {
         Self {
+            admitted_procedure_snapshot: None,
             canonical_execution,
             command,
             has_full_execution_document: true,
@@ -1089,6 +1092,17 @@ impl AdmitRequestV1 {
     pub fn with_session_identity(mut self, expected: AdmissionSessionIdentityV1) -> Self {
         self.session_identity = expected;
         self
+    }
+
+    /// Binds the immutable Procedure snapshot that must be committed in the same transaction as
+    /// this start job. The Store retains the normalized row independently of worker execution.
+    pub fn with_admitted_procedure_snapshot(mut self, snapshot: ProcedureSnapshotV1) -> Self {
+        self.admitted_procedure_snapshot = Some(Box::new(snapshot));
+        self
+    }
+
+    pub fn admitted_procedure_snapshot(&self) -> Option<&ProcedureSnapshotV1> {
+        self.admitted_procedure_snapshot.as_deref()
     }
 
     pub fn command(&self) -> &CommandV1 {

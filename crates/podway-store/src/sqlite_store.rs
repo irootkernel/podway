@@ -27,7 +27,9 @@ use crate::schema::{
     validate_publication_link_pair_v1, verify_inspection_integrity_connection_v1, verify_schema_v1,
     write_temporary_ownership_marker_v1,
 };
-use crate::state_rows::{load_current_session, load_workspace_state, replace_current_session};
+use crate::state_rows::{
+    load_current_session, load_workspace_state, persist_snapshot, replace_current_session,
+};
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
     ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, EpochMillisV1, IntegrityModeV1,
@@ -309,6 +311,14 @@ impl StoreContractV1 for SqliteStoreV1 {
         if matches!(request.command(), crate::CommandV1::WorkspaceResetAll) {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
+        if request.admitted_procedure_snapshot().is_some()
+            && !matches!(
+                request.command(),
+                crate::CommandV1::SessionStart | crate::CommandV1::SessionStartReplace
+            )
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
         self.trigger_failpoint(StoreFailpointV1::AdmissionBeforeTransaction)?;
         let mut connection = self.lock_connection()?;
         let transaction = connection
@@ -392,6 +402,9 @@ impl StoreContractV1 for SqliteStoreV1 {
             return Err(StoreErrorV1::StorageUnavailableV1 {
                 reason: StoreUnavailableReasonV1::Busy,
             });
+        }
+        if let Some(snapshot) = request.admitted_procedure_snapshot() {
+            persist_snapshot(&transaction, snapshot)?;
         }
         let sequence: i64 = transaction
             .query_row(

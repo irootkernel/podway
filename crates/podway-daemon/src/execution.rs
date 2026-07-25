@@ -822,6 +822,12 @@ where
             canonical_execution,
         )
         .with_session_identity(admission_session_identity_v1(request.command()));
+        let admitted = match &resolution {
+            AdmissionResolutionV1::SessionStart { snapshot, .. } => {
+                admitted.with_admitted_procedure_snapshot(snapshot.as_ref().clone())
+            }
+            _ => admitted,
+        };
         let outcome = self
             .store
             .admit(binding.identity(), admitted)
