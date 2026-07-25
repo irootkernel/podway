@@ -383,9 +383,11 @@ plain start and reset-all reject it. Static, daemon lifecycle, workspace
 maintenance, job, init, and doctor commands reject both identity options.
 
 Explicit workspace and session identities take precedence over CLI preflight observations. The
-CLI carries them through guarded reads and mutations, and mutation request identity binds both
-the resolved workspace UUID and the targeted session ID. The command-specific required IPC
-combinations remain normative in the
+CLI carries them through guarded reads and mutations. Ordinary mutation request identity binds
+the resolved workspace UUID and, for commands targeting an existing session, the session ID.
+`workspace.reset_all` instead binds stable Git common-directory and worktree-administration
+fingerprints and excludes rotating workspace UUIDs so an exact retry can replay after the reset.
+The command-specific required IPC combinations remain normative in the
 [automation contract](34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007).
 
 ```bash

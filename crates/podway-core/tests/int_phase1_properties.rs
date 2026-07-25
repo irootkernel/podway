@@ -1575,15 +1575,17 @@ fn exercise_operation_coverage_prelude(hits: &mut OperationHits) {
             reason: "explicit confirmation is required",
         },
     );
+    let stale_session_id = ids.next_session();
     assert_rejected_without_mutation_with_error(
         &session,
         SessionCommandV1::Reset(ResetSessionV1 {
-            expected_session_id: ids.next_session(),
+            expected_session_id: stale_session_id.clone(),
             confirmed: true,
         }),
         context(&session, 42),
-        DomainError::InvalidState {
-            reason: "the expected session identity does not match",
+        DomainError::SessionIdentityMismatch {
+            expected: stale_session_id,
+            actual: Some(session.session_id().clone()),
         },
     );
     assert_rejected_without_mutation_with_error(

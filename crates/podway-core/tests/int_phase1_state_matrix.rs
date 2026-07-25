@@ -1083,8 +1083,9 @@ fn case_start_replace() {
     assert_rejected_without_mutation(&session, stale_identity.clone(), context(&session, 11));
     assert_eq!(
         apply_transition_v1(Some(&session), &stale_identity, context(&session, 11)).unwrap_err(),
-        DomainError::InvalidState {
-            reason: "the expected session identity does not match",
+        DomainError::SessionIdentityMismatch {
+            expected: session_id(99),
+            actual: Some(session.session_id().clone()),
         }
     );
     let (_, cancelled) = apply_next(
@@ -2109,8 +2110,9 @@ fn case_reset() {
     assert_rejected_without_mutation(&session, stale_identity.clone(), context(&session, 11));
     assert_eq!(
         apply_transition_v1(Some(&session), &stale_identity, context(&session, 11)).unwrap_err(),
-        DomainError::InvalidState {
-            reason: "the expected session identity does not match",
+        DomainError::SessionIdentityMismatch {
+            expected: session_id(99),
+            actual: Some(session.session_id().clone()),
         }
     );
     let outcome = apply_equivalent(
@@ -2279,8 +2281,9 @@ fn assert_cross_cutting_preconditions() {
             context(&completed, 20),
         )
         .unwrap_err(),
-        DomainError::InvalidState {
-            reason: "the expected session identity does not match",
+        DomainError::SessionIdentityMismatch {
+            expected: foreign_completed.session_id().clone(),
+            actual: Some(completed.session_id().clone()),
         }
     );
 

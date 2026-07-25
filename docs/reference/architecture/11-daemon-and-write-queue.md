@@ -117,7 +117,13 @@ Every mutation has an idempotency key.
 - Idempotency records for session mutations remain until session reset.
 - Workspace-maintenance receipts are retained according to the bounded retention policy.
 
-Canonical request identity excludes transport-only fields such as wait timeout but includes command, workspace UUID, target session or attempt, all preconditions, and payload.
+Canonical request identity excludes transport-only fields such as wait timeout but ordinarily
+includes the command, resolved workspace UUID, target session or attempt, all semantic
+preconditions, and payload. `workspace.reset_all` is the deliberate exception: because a
+successful reset rotates the workspace UUID, its identity binds the stable Git common-directory
+and worktree-administration fingerprints and excludes the previous, expected, and target
+workspace UUIDs. This lets the same idempotency key replay the original reset from the replacement
+workspace rather than treating the UUID rotation caused by that reset as a different request.
 
 ## Concurrency preconditions
 

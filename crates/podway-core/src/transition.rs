@@ -1268,7 +1268,10 @@ fn require_session_identity(
     expected_session_id: &SessionId,
 ) -> Result<(), DomainError> {
     if prior.session_id() != expected_session_id {
-        return Err(invalid("the expected session identity does not match"));
+        return Err(DomainError::SessionIdentityMismatch {
+            expected: expected_session_id.clone(),
+            actual: Some(prior.session_id().clone()),
+        });
     }
     Ok(())
 }

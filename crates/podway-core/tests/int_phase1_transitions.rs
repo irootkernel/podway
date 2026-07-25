@@ -371,8 +371,9 @@ fn start_replace_accepts_running_completed_and_cancelled_sessions() {
             start: replacement_start,
         },
         11,
-        DomainError::InvalidState {
-            reason: "the expected session identity does not match",
+        DomainError::SessionIdentityMismatch {
+            expected: SessionId::new(UUID_F).unwrap(),
+            actual: Some(running.session_id().clone()),
         },
     );
 }
