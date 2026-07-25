@@ -34,6 +34,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 const WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174001";
+const EXPLICIT_WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174007";
 const ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174002";
 const SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174004";
 const JOB_ID: &str = "123e4567-e89b-42d3-a456-426614174003";
@@ -1190,10 +1191,17 @@ fn daemon_and_parser_errors_preserve_stable_exit_and_json_contracts() {
 }
 
 #[test]
-fn identity_conflict_preserves_closed_details_and_exit_four() {
+fn guarded_read_identity_conflict_preserves_request_and_closed_public_details() {
     let fixture = Fixture::new();
     let daemon = FakeDaemon::start(&fixture, vec![Reply::IdentityError]);
-    let output = fixture.run(&["--json", "--worktree", "/fixture", "status"]);
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--if-session-id",
+        SESSION_ID,
+        "status",
+    ]);
     assert_eq!(output.status.code(), Some(4));
     assert!(output.stderr.is_empty());
     let response: Value =
@@ -1210,7 +1218,14 @@ fn identity_conflict_preserves_closed_details_and_exit_four() {
             "admission": { "admitted": false }
         })
     );
-    assert_eq!(daemon.finish().len(), 1);
+    let wires = daemon.finish();
+    assert_eq!(wires.len(), 1);
+    let request = decode_request(&wires[0]);
+    assert_eq!(request.command().as_str(), "session.status");
+    assert_eq!(
+        request.preconditions().session_id().map(SessionId::as_str),
+        Some(SESSION_ID)
+    );
 }
 
 #[test]
@@ -1696,6 +1711,56 @@ fn reset_all_binds_readable_workspace_identity_without_session_preconditions() {
             .and_then(|workspace| workspace.expected_uuid())
             .map(WorkspaceId::as_str),
         Some(WORKSPACE_ID)
+    );
+    assert!(reset.preconditions().session_id().is_none());
+    assert!(reset.preconditions().session_revision().is_none());
+}
+
+#[test]
+fn reset_all_prefers_explicit_workspace_identity_for_probe_and_mutation() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--if-workspace-uuid",
+        EXPLICIT_WORKSPACE_ID,
+        "reset",
+        "--all",
+        "--force",
+        "--yes",
+    ]);
+    assert!(
+        output.status.success(),
+        "explicitly guarded reset all failed: {output:?}"
+    );
+
+    let wires = daemon.finish();
+    assert_eq!(wires.len(), 2, "reset all must issue one guarded probe");
+    let probe = decode_request(&wires[0]);
+    assert_eq!(probe.command().as_str(), "session.status");
+    assert_eq!(
+        probe
+            .workspace()
+            .and_then(|workspace| workspace.expected_uuid())
+            .map(WorkspaceId::as_str),
+        Some(EXPLICIT_WORKSPACE_ID)
+    );
+
+    let reset = decode_request(&wires[1]);
+    assert_eq!(reset.command().as_str(), "workspace.reset_all");
+    assert_eq!(
+        reset.payload()["expected_workspace_uuid"],
+        EXPLICIT_WORKSPACE_ID
+    );
+    assert_eq!(
+        reset
+            .workspace()
+            .and_then(|workspace| workspace.expected_uuid())
+            .map(WorkspaceId::as_str),
+        Some(EXPLICIT_WORKSPACE_ID)
     );
     assert!(reset.preconditions().session_id().is_none());
     assert!(reset.preconditions().session_revision().is_none());
