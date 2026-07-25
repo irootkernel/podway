@@ -234,6 +234,175 @@ fn g006_reopen_reactivates_a_completed_session_at_the_requested_stage() {
 }
 
 #[test]
+fn claimed_item_mutation_rejects_same_revision_replacement_and_replays_terminal_error() {
+    let mut harness = Harness::new();
+    assert_success(&harness.start());
+    let original = harness.store.current_session().unwrap();
+    let replacement_request = slice_request(
+        "session.start_replace",
+        json!({
+            "selector": selector_json(),
+            "preset": "sw-dev",
+            "task_title": "Replacement",
+            "confirmed": true,
+        }),
+        harness.session_identity_preconditions(),
+        9_712,
+    );
+    assert!(matches!(
+        harness.engine.admit(
+            &replacement_request,
+            IdempotencyKeyV1::new("same-revision-replacement").unwrap(),
+        ),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    let request = slice_request(
+        "item.check",
+        json!({"selector": selector_json(), "item_id": "confirm"}),
+        harness.item_preconditions("confirm"),
+        9_713,
+    );
+    let key = IdempotencyKeyV1::new("same-revision-replacement-race").unwrap();
+    assert!(matches!(
+        harness.engine.admit(&request, key.clone()),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+
+    let replacement_receipt = harness
+        .engine
+        .execute_next(
+            &harness.binding,
+            WorkerIdV1::new("same-revision-replacement-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_success(&replacement_receipt);
+    let replacement = harness.store.current_session().unwrap();
+    assert_ne!(original.session_id(), replacement.session_id());
+    assert_ne!(
+        original.active_attempt_id(),
+        replacement.active_attempt_id()
+    );
+    assert_eq!(original.revision(), Revision::new(1));
+    assert_eq!(replacement.revision(), original.revision());
+    let terminal_count = harness.store.terminal().len();
+
+    let terminal = harness
+        .engine
+        .execute_next(
+            &harness.binding,
+            WorkerIdV1::new("same-revision-race-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        terminal.result(),
+        &TerminalResultV1::Failure(DomainError::SessionIdentityMismatch {
+            expected: original.session_id().clone(),
+            actual: Some(replacement.session_id().clone()),
+        })
+    );
+    assert_eq!(harness.store.current_session(), Some(replacement.clone()));
+    assert_eq!(harness.store.terminal().len(), terminal_count + 1);
+    let requests_after_failure = harness.store.request_count();
+
+    assert_eq!(
+        harness.engine.admit(&request, key).unwrap(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(
+            PersistedTerminalReceiptV1::from_terminal_receipt(&terminal),
+        ))
+    );
+    assert_eq!(harness.store.current_session(), Some(replacement));
+    assert_eq!(harness.store.terminal().len(), terminal_count + 1);
+    assert_eq!(harness.store.request_count(), requests_after_failure);
+}
+
+#[test]
+fn claimed_reopen_rejects_session_replacement_after_admission_and_replays() {
+    let mut harness = Harness::new();
+    assert_success(&harness.start());
+    assert_success(&harness.check("confirm"));
+    assert_success(&harness.attach());
+    assert_success(&harness.complete());
+    assert_success(&harness.check("finish"));
+    assert_success(&harness.complete());
+    let original = harness.store.current_session().unwrap();
+    let replacement_request = slice_request(
+        "session.start_replace",
+        json!({
+            "selector": selector_json(),
+            "preset": "sw-dev",
+            "task_title": "Reopen replacement",
+            "confirmed": true,
+        }),
+        harness.session_identity_preconditions(),
+        9_714,
+    );
+    assert!(matches!(
+        harness.engine.admit(
+            &replacement_request,
+            IdempotencyKeyV1::new("stale-reopen-replacement").unwrap(),
+        ),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    let request = slice_request(
+        "session.reopen",
+        json!({
+            "selector": selector_json(),
+            "destination_stage_id": "first",
+            "reason": "stale reopen",
+            "dry_run": false,
+        }),
+        harness.session_revision_preconditions(),
+        9_715,
+    );
+    let key = IdempotencyKeyV1::new("stale-reopen-race").unwrap();
+    assert!(matches!(
+        harness.engine.admit(&request, key.clone()),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+
+    let replacement_receipt = harness
+        .engine
+        .execute_next(
+            &harness.binding,
+            WorkerIdV1::new("stale-reopen-replacement-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_success(&replacement_receipt);
+    let replacement = harness.store.current_session().unwrap();
+    assert_ne!(original.session_id(), replacement.session_id());
+    let terminal_count = harness.store.terminal().len();
+    let terminal = harness
+        .engine
+        .execute_next(
+            &harness.binding,
+            WorkerIdV1::new("stale-reopen-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        terminal.result(),
+        &TerminalResultV1::Failure(DomainError::SessionIdentityMismatch {
+            expected: original.session_id().clone(),
+            actual: Some(replacement.session_id().clone()),
+        })
+    );
+    assert_eq!(harness.store.current_session(), Some(replacement.clone()));
+    assert_eq!(harness.store.terminal().len(), terminal_count + 1);
+    assert_eq!(
+        harness.engine.admit(&request, key).unwrap(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(
+            PersistedTerminalReceiptV1::from_terminal_receipt(&terminal),
+        ))
+    );
+    assert_eq!(harness.store.current_session(), Some(replacement));
+    assert_eq!(harness.store.terminal().len(), terminal_count + 1);
+}
+
+#[test]
 fn g006_item_uncheck_remove_clear_and_opaque_attachment_use_typed_mutations() {
     let mut harness = Harness::new();
     assert_success(&harness.start());
@@ -541,11 +710,87 @@ fn g006_stale_uncheck_is_terminal_and_does_not_partially_mutate() {
     let stale_preconditions = harness.item_preconditions("confirm");
     assert_success(&harness.check("confirm"));
     let before = harness.store.current_session().unwrap();
-    assert_failure(&harness.submit(
+    let request = slice_request(
         "item.uncheck",
         json!({"selector": selector_json(), "item_id": "confirm"}),
         stale_preconditions,
+        9_716,
+    );
+    let key = IdempotencyKeyV1::new("stale-item-revision-race").unwrap();
+    assert!(matches!(
+        harness.engine.admit(&request, key.clone()),
+        Ok(AdmitOutcomeV1::New(_))
     ));
+    let terminal = harness
+        .engine
+        .execute_next(
+            &harness.binding,
+            WorkerIdV1::new("stale-item-revision-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        terminal.result(),
+        &TerminalResultV1::Failure(DomainError::PreconditionFailed {
+            expected: Revision::new(0),
+            actual: Revision::new(1),
+        })
+    );
+    assert_eq!(harness.store.current_session().unwrap(), before);
+    assert_eq!(
+        harness.engine.admit(&request, key).unwrap(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(
+            PersistedTerminalReceiptV1::from_terminal_receipt(&terminal),
+        ))
+    );
+    assert_eq!(harness.store.current_session().unwrap(), before);
+}
+
+#[test]
+fn claimed_item_mutation_rejects_stale_attempt_and_replays_terminal_error() {
+    let mut harness = Harness::new();
+    assert_success(&harness.start());
+    let stale_preconditions = harness.item_preconditions("confirm");
+    let stale_attempt_id = stale_preconditions.attempt_id().unwrap().clone();
+    assert_success(&harness.submit(
+        "session.retry",
+        json!({"selector": selector_json(), "reason": "replace attempt"}),
+        harness.session_preconditions(),
+    ));
+    let before = harness.store.current_session().unwrap();
+    assert_ne!(before.active_attempt_id(), Some(&stale_attempt_id));
+    let request = slice_request(
+        "item.check",
+        json!({"selector": selector_json(), "item_id": "confirm"}),
+        stale_preconditions,
+        9_717,
+    );
+    let key = IdempotencyKeyV1::new("stale-attempt-race").unwrap();
+    assert!(matches!(
+        harness.engine.admit(&request, key.clone()),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    let terminal = harness
+        .engine
+        .execute_next(
+            &harness.binding,
+            WorkerIdV1::new("stale-attempt-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        terminal.result(),
+        &TerminalResultV1::Failure(DomainError::InvalidState {
+            reason: "the expected attempt is not current",
+        })
+    );
+    assert_eq!(harness.store.current_session().unwrap(), before);
+    assert_eq!(
+        harness.engine.admit(&request, key).unwrap(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(
+            PersistedTerminalReceiptV1::from_terminal_receipt(&terminal),
+        ))
+    );
     assert_eq!(harness.store.current_session().unwrap(), before);
 }
 

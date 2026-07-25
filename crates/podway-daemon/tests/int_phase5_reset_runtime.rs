@@ -420,6 +420,85 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
             .is_none(),
         "the new workspace must not retain seeded source session history"
     );
+    let target_identity = target_context.binding().identity();
+    let sequence_before_stale_request = target_context
+        .store()
+        .read_workspace_view(target_identity)
+        .expect("fresh target workspace view must be readable")
+        .latest_workspace_sequence();
+    let jobs_before_stale_request = target_context
+        .store()
+        .list_jobs(
+            target_identity,
+            JobListQueryV1::new(100).expect("stale request job query must be valid"),
+        )
+        .expect("fresh target jobs must be readable");
+    let (stale_start_envelope, stale_start) = workspace_mutation_request(
+        fixture.main(),
+        &old_workspace_uuid,
+        5_005,
+        "session.start",
+        "phase5-reset-stale-workspace",
+        PreconditionsV1::default(),
+        json!({
+            "preset": "sw-dev",
+            "task_title": "must not enter replacement workspace",
+        }),
+    );
+    let ResponseEnvelopeV1::Error(stale_error) =
+        dispatcher.dispatch(&stale_start_envelope, &stale_start)
+    else {
+        panic!("the replaced workspace identity must reject stale mutation admission");
+    };
+    assert_eq!(stale_error.code().as_str(), "WORKSPACE_UUID_MISMATCH");
+    assert_eq!(stale_error.exit_code().get(), 4);
+    assert!(!stale_error.retryable());
+    assert_eq!(
+        stale_error.details(),
+        &serde_json::Map::from_iter([
+            (
+                "schema".to_owned(),
+                json!("podway.workspace-uuid-mismatch-details/v1"),
+            ),
+            (
+                "expected_workspace_uuid".to_owned(),
+                json!(old_workspace_uuid.as_str()),
+            ),
+            (
+                "actual_workspace_uuid".to_owned(),
+                json!(target.uuid().as_str()),
+            ),
+            ("admission".to_owned(), json!({"admitted": false})),
+        ])
+    );
+    assert!(
+        target_context
+            .store()
+            .read_session_aggregate(target_identity)
+            .expect("target session must remain readable")
+            .is_none(),
+        "a stale workspace request must not create a target session"
+    );
+    assert_eq!(
+        target_context
+            .store()
+            .list_jobs(
+                target_identity,
+                JobListQueryV1::new(100).expect("stale request job query must remain valid"),
+            )
+            .expect("target jobs must remain readable"),
+        jobs_before_stale_request,
+        "a stale workspace request must not admit a target job"
+    );
+    assert_eq!(
+        target_context
+            .store()
+            .read_workspace_view(target_identity)
+            .expect("target workspace view must remain readable")
+            .latest_workspace_sequence(),
+        sequence_before_stale_request,
+        "a stale workspace request must not consume target sequence"
+    );
     let (fresh_start_envelope, fresh_start) = workspace_mutation_request(
         fixture.main(),
         target.uuid(),
