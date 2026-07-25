@@ -382,8 +382,10 @@ applies to session-bearing reads and commands that target an existing session;
 plain start and reset-all reject it. Static, daemon lifecycle, workspace
 maintenance, job, init, and doctor commands reject both identity options.
 
-Explicit workspace identity takes precedence over CLI preflight observations.
-The command-specific required IPC combinations remain normative in the
+Explicit workspace and session identities take precedence over CLI preflight observations. The
+CLI carries them through guarded reads and mutations, and mutation request identity binds both
+the resolved workspace UUID and the targeted session ID. The command-specific required IPC
+combinations remain normative in the
 [automation contract](34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007).
 
 ```bash

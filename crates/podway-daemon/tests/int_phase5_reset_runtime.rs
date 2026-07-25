@@ -465,7 +465,7 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
         "item.set",
         "phase5-reset-fresh-mutation",
         PreconditionsV1::new(
-            None,
+            Some(fresh_session.session_id().clone()),
             None,
             Some(fresh_attempt.clone()),
             Some(goal_revision),

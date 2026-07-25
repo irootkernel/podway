@@ -696,6 +696,10 @@ impl StatusFacts {
         command: &Command,
         explicit: &ExplicitPreconditions,
     ) -> Result<PreconditionsV1, LocalFailure> {
+        let session_id = explicit
+            .session_id
+            .clone()
+            .unwrap_or_else(|| self.session_id.clone());
         let attempt_id = explicit
             .attempt_id
             .clone()
@@ -710,7 +714,7 @@ impl StatusFacts {
                     .find_map(|(id, revision)| (id == item_id).then_some(*revision))
             });
             return PreconditionsV1::new(
-                None,
+                Some(session_id),
                 None,
                 Some(attempt_id.ok_or_else(|| {
                     LocalFailure::response_invalid("status response omitted the active attempt")
@@ -727,7 +731,7 @@ impl StatusFacts {
         let session_revision = explicit.session_revision.unwrap_or(self.session_revision);
         if matches!(command, Command::Start(StartArgs { replace: true, .. })) {
             return PreconditionsV1::new(
-                Some(self.session_id.clone()),
+                Some(session_id),
                 Some(session_revision),
                 None,
                 None,
@@ -740,7 +744,7 @@ impl StatusFacts {
         }
         if matches!(command, Command::Reset(_)) {
             return PreconditionsV1::new(
-                Some(self.session_id.clone()),
+                Some(session_id),
                 Some(session_revision),
                 None,
                 None,
@@ -750,11 +754,18 @@ impl StatusFacts {
             .map_err(|_| LocalFailure::response_invalid("reset preconditions are invalid"));
         }
         if matches!(command, Command::Reopen(_)) {
-            return PreconditionsV1::new(None, Some(session_revision), None, None, None, None)
-                .map_err(|_| LocalFailure::response_invalid("reopen preconditions are invalid"));
+            return PreconditionsV1::new(
+                Some(session_id),
+                Some(session_revision),
+                None,
+                None,
+                None,
+                None,
+            )
+            .map_err(|_| LocalFailure::response_invalid("reopen preconditions are invalid"));
         }
         PreconditionsV1::new(
-            None,
+            Some(session_id),
             Some(session_revision),
             Some(attempt_id.ok_or_else(|| {
                 LocalFailure::response_invalid("status response omitted the active attempt")
@@ -1102,7 +1113,15 @@ fn identity_probe_spec(
         operation: OperationV1::Query,
         expected_uuid: explicit.workspace_id.clone(),
         idempotency_key: None,
-        preconditions: PreconditionsV1::default(),
+        preconditions: PreconditionsV1::new(
+            explicit.session_id.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .map_err(|_| LocalFailure::request_invalid("session identity precondition is invalid"))?,
         detach: false,
         wait_timeout_ms,
         payload: Map::new(),
@@ -1111,9 +1130,14 @@ fn identity_probe_spec(
 
 fn direct_preconditions(
     command: &Command,
-    _explicit: &ExplicitPreconditions,
+    explicit: &ExplicitPreconditions,
 ) -> Result<PreconditionsV1, LocalFailure> {
     match command {
+        Command::Status(_) | Command::Next(_) => {
+            PreconditionsV1::new(explicit.session_id.clone(), None, None, None, None, None).map_err(
+                |_| LocalFailure::request_invalid("session identity precondition is invalid"),
+            )
+        }
         Command::Job {
             command: JobCommand::Cancel { .. },
         } => PreconditionsV1::new(None, None, None, None, None, Some(JobStateV1::Queued)).map_err(

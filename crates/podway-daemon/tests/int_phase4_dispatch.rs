@@ -24,6 +24,7 @@ use serde_json::{Map, Value, json};
 const WORKSPACE_ID: &str = "00000000-0000-4000-8000-000000000101";
 const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000000102";
 const JOB_ID: &str = "00000000-0000-4000-8000-000000000103";
+const SESSION_ID: &str = "00000000-0000-4000-8000-000000000104";
 const GENERATED_AT: &str = "2026-07-15T12:34:56.789Z";
 
 #[derive(Clone)]
@@ -404,7 +405,7 @@ fn selector(display: &str) -> Value {
 
 fn item_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(
-        None,
+        Some(SESSION_ID.to_owned().try_into().unwrap()),
         None,
         Some(AttemptId::new(ATTEMPT_ID).unwrap()),
         Some(Revision::new(3)),
@@ -416,7 +417,7 @@ fn item_preconditions() -> PreconditionsV1 {
 
 fn session_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(
-        None,
+        Some(SESSION_ID.to_owned().try_into().unwrap()),
         Some(Revision::new(7)),
         Some(AttemptId::new(ATTEMPT_ID).unwrap()),
         None,

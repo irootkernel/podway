@@ -199,6 +199,8 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  preconditions:
+  - session_id_optional
 - name: session.next
   cli:
   - next
@@ -207,6 +209,8 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  preconditions:
+  - session_id_optional
 - name: session.complete
   cli:
   - complete
@@ -216,6 +220,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
@@ -228,6 +233,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
@@ -240,6 +246,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
@@ -252,6 +259,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
@@ -264,6 +272,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
@@ -276,6 +285,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
@@ -288,6 +298,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
@@ -300,6 +311,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - session_revision
   idempotency_scope: session
 - name: session.reset
@@ -337,6 +349,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
@@ -349,6 +362,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
@@ -361,6 +375,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
@@ -373,6 +388,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
@@ -385,6 +401,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
@@ -397,6 +414,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
@@ -409,6 +427,7 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session

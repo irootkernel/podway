@@ -159,7 +159,7 @@ fn session_preconditions(status: &StatusResultV1) -> PreconditionsV1 {
         .as_ref()
         .expect("running session must have a current attempt");
     PreconditionsV1::new(
-        None,
+        Some(status.session.id.clone()),
         Some(status.session.revision),
         Some(current.attempt_id.clone()),
         None,
@@ -180,7 +180,7 @@ fn item_preconditions(status: &StatusResultV1, item_id: &str) -> PreconditionsV1
         .find(|item| item.id.as_str() == item_id)
         .expect("current status must include the requested item");
     PreconditionsV1::new(
-        None,
+        Some(status.session.id.clone()),
         None,
         Some(current.attempt_id.clone()),
         Some(item.revision),

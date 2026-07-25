@@ -3005,6 +3005,7 @@ mod tests {
                 reason: "Return to first".to_owned(),
                 dry_run: true,
                 preconditions: podway_protocol::SessionMutationPreconditionsWireV1 {
+                    expected_session_id: second.session_id().clone(),
                     expected_attempt_id: second.active_attempt_id().unwrap().clone(),
                     expected_session_revision: second.revision(),
                 },
@@ -3029,6 +3030,7 @@ mod tests {
                 reason: "Reopen first".to_owned(),
                 dry_run: true,
                 preconditions: podway_protocol::SessionRevisionPreconditionsWireV1 {
+                    expected_session_id: completed.session_id().clone(),
                     expected_session_revision: completed.revision(),
                 },
             }),
@@ -3113,6 +3115,7 @@ mod tests {
                     reason: "Invalid forward return".to_owned(),
                     dry_run: true,
                     preconditions: podway_protocol::SessionMutationPreconditionsWireV1 {
+                        expected_session_id: running.session_id().clone(),
                         expected_attempt_id: running.active_attempt_id().unwrap().clone(),
                         expected_session_revision: running.revision(),
                     },
@@ -3131,6 +3134,7 @@ mod tests {
                     reason: "Running sessions cannot reopen".to_owned(),
                     dry_run: true,
                     preconditions: podway_protocol::SessionRevisionPreconditionsWireV1 {
+                        expected_session_id: running.session_id().clone(),
                         expected_session_revision: running.revision(),
                     },
                 }),

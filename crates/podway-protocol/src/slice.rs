@@ -354,6 +354,7 @@ impl<'de> Deserialize<'de> for WorktreeSelectorWireV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ItemMutationPreconditionsWireV1 {
+    pub expected_session_id: SessionId,
     pub expected_attempt_id: AttemptId,
     pub expected_item_revision: Revision,
 }
@@ -362,6 +363,7 @@ pub struct ItemMutationPreconditionsWireV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionMutationPreconditionsWireV1 {
+    pub expected_session_id: SessionId,
     pub expected_session_revision: Revision,
     pub expected_attempt_id: AttemptId,
 }
@@ -378,7 +380,15 @@ pub struct SessionIdentityPreconditionsWireV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionRevisionPreconditionsWireV1 {
+    pub expected_session_id: SessionId,
     pub expected_session_revision: Revision,
+}
+
+/// Optional identity guard accepted by session-bearing reads.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionReadPreconditionsWireV1 {
+    pub expected_session_id: Option<SessionId>,
 }
 
 /// Optimistic-concurrency facts required to cancel a queued job.
@@ -456,12 +466,14 @@ pub enum QueryWaitV1 {
 pub struct SessionStatusV1 {
     pub wait: QueryWaitV1,
     pub verbose: bool,
+    pub preconditions: SessionReadPreconditionsWireV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionNextV1 {
     pub wait: QueryWaitV1,
+    pub preconditions: SessionReadPreconditionsWireV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -928,24 +940,26 @@ impl SliceRequestV1 {
             }
             "session.status" => {
                 require_envelope(envelope, "session.status", OperationV1::Query, false)?;
-                require_no_preconditions(envelope.preconditions())?;
+                let preconditions = require_session_read_preconditions(envelope.preconditions())?;
                 let payload: SessionStatusPayloadV1 = parse_payload(envelope)?;
                 (
                     payload.selector,
                     SliceCommandV1::SessionStatus(SessionStatusV1 {
                         wait: validated_query_wait(payload.wait_for_idle, payload.after_job_id)?,
                         verbose: payload.verbose,
+                        preconditions,
                     }),
                 )
             }
             "session.next" => {
                 require_envelope(envelope, "session.next", OperationV1::Query, false)?;
-                require_no_preconditions(envelope.preconditions())?;
+                let preconditions = require_session_read_preconditions(envelope.preconditions())?;
                 let payload: SessionNextPayloadV1 = parse_payload(envelope)?;
                 (
                     payload.selector,
                     SliceCommandV1::SessionNext(SessionNextV1 {
                         wait: validated_query_wait(payload.wait_for_idle, payload.after_job_id)?,
+                        preconditions,
                     }),
                 )
             }
@@ -1546,6 +1560,13 @@ fn require_no_preconditions(preconditions: &PreconditionsV1) -> Result<(), Slice
 fn require_item_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<ItemMutationPreconditionsWireV1, SliceErrorV1> {
+    let expected_session_id =
+        preconditions
+            .session_id()
+            .cloned()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_id",
+            })?;
     let expected_attempt_id =
         preconditions
             .attempt_id()
@@ -1559,11 +1580,6 @@ fn require_item_preconditions(
             .ok_or(SliceErrorV1::MissingPrecondition {
                 field: "preconditions.item_revision",
             })?;
-    if preconditions.session_id().is_some() {
-        return Err(SliceErrorV1::UnexpectedPrecondition {
-            field: "preconditions.session_id",
-        });
-    }
     if preconditions.session_revision().is_some() {
         return Err(SliceErrorV1::UnexpectedPrecondition {
             field: "preconditions.session_revision",
@@ -1580,6 +1596,7 @@ fn require_item_preconditions(
         });
     }
     Ok(ItemMutationPreconditionsWireV1 {
+        expected_session_id,
         expected_attempt_id,
         expected_item_revision,
     })
@@ -1588,6 +1605,13 @@ fn require_item_preconditions(
 fn require_session_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<SessionMutationPreconditionsWireV1, SliceErrorV1> {
+    let expected_session_id =
+        preconditions
+            .session_id()
+            .cloned()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_id",
+            })?;
     let expected_session_revision =
         preconditions
             .session_revision()
@@ -1601,11 +1625,6 @@ fn require_session_preconditions(
             .ok_or(SliceErrorV1::MissingPrecondition {
                 field: "preconditions.attempt_id",
             })?;
-    if preconditions.session_id().is_some() {
-        return Err(SliceErrorV1::UnexpectedPrecondition {
-            field: "preconditions.session_id",
-        });
-    }
     if preconditions.item_revision().is_some() {
         return Err(SliceErrorV1::UnexpectedPrecondition {
             field: "preconditions.item_revision",
@@ -1622,6 +1641,7 @@ fn require_session_preconditions(
         });
     }
     Ok(SessionMutationPreconditionsWireV1 {
+        expected_session_id,
         expected_session_revision,
         expected_attempt_id,
     })
@@ -1672,15 +1692,51 @@ fn require_session_identity_preconditions(
 fn require_session_revision_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<SessionRevisionPreconditionsWireV1, SliceErrorV1> {
+    let expected_session_id =
+        preconditions
+            .session_id()
+            .cloned()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_id",
+            })?;
     let expected_session_revision =
         preconditions
             .session_revision()
             .ok_or(SliceErrorV1::MissingPrecondition {
                 field: "preconditions.session_revision",
             })?;
-    if preconditions.session_id().is_some() {
+    if preconditions.attempt_id().is_some() {
         return Err(SliceErrorV1::UnexpectedPrecondition {
-            field: "preconditions.session_id",
+            field: "preconditions.attempt_id",
+        });
+    }
+    if preconditions.item_revision().is_some() {
+        return Err(SliceErrorV1::UnexpectedPrecondition {
+            field: "preconditions.item_revision",
+        });
+    }
+    if preconditions.blocker_id().is_some() {
+        return Err(SliceErrorV1::UnexpectedPrecondition {
+            field: "preconditions.blocker_id",
+        });
+    }
+    if preconditions.job_state().is_some() {
+        return Err(SliceErrorV1::UnexpectedPrecondition {
+            field: "preconditions.job_state",
+        });
+    }
+    Ok(SessionRevisionPreconditionsWireV1 {
+        expected_session_id,
+        expected_session_revision,
+    })
+}
+
+fn require_session_read_preconditions(
+    preconditions: &PreconditionsV1,
+) -> Result<SessionReadPreconditionsWireV1, SliceErrorV1> {
+    if preconditions.session_revision().is_some() {
+        return Err(SliceErrorV1::UnexpectedPrecondition {
+            field: "preconditions.session_revision",
         });
     }
     if preconditions.attempt_id().is_some() {
@@ -1703,8 +1759,8 @@ fn require_session_revision_preconditions(
             field: "preconditions.job_state",
         });
     }
-    Ok(SessionRevisionPreconditionsWireV1 {
-        expected_session_revision,
+    Ok(SessionReadPreconditionsWireV1 {
+        expected_session_id: preconditions.session_id().cloned(),
     })
 }
 
@@ -2183,6 +2239,7 @@ fn item_attach_source_json(source: &ItemAttachSourceV1) -> Value {
 
 fn item_preconditions_json(preconditions: &ItemMutationPreconditionsWireV1) -> Value {
     json!({
+        "session_id": &preconditions.expected_session_id,
         "attempt_id": &preconditions.expected_attempt_id,
         "item_revision": preconditions.expected_item_revision,
     })
@@ -2190,6 +2247,7 @@ fn item_preconditions_json(preconditions: &ItemMutationPreconditionsWireV1) -> V
 
 fn session_preconditions_json(preconditions: &SessionMutationPreconditionsWireV1) -> Value {
     json!({
+        "session_id": &preconditions.expected_session_id,
         "session_revision": preconditions.expected_session_revision,
         "attempt_id": &preconditions.expected_attempt_id,
     })
@@ -2207,7 +2265,10 @@ fn session_identity_preconditions_json(
 fn session_revision_preconditions_json(
     preconditions: &SessionRevisionPreconditionsWireV1,
 ) -> Value {
-    json!({"session_revision": preconditions.expected_session_revision})
+    json!({
+        "session_id": &preconditions.expected_session_id,
+        "session_revision": preconditions.expected_session_revision,
+    })
 }
 
 fn workspace_reset_all_preconditions_json(

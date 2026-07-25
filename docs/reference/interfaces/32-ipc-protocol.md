@@ -59,9 +59,9 @@ The daemon reads the length before allocating the payload buffer and rejects ove
   },
   "idempotency_key": "task-42-verify-complete",
   "preconditions": {
+    "session_id": "9f8ad796-e4de-4f9d-b114-b68cf3de7561",
     "session_revision": 12,
-    "attempt_id": "6f8e...",
-    "item_revision": null
+    "attempt_id": "6f8e7429-3703-47cf-81dc-ae4048352f1f"
   },
   "options": {
     "detach": false,
@@ -112,7 +112,9 @@ blocker_id
 job_state
 ```
 
-The command specification determines required fields. Unknown precondition fields are rejected in v1.
+The command specification determines required fields. Session-bearing reads accept an optional
+`session_id`; stage, item, reopen, replacement, and session-reset mutations require it. Unknown
+precondition fields are rejected in v1.
 
 ## Mutation waiting
 

@@ -387,7 +387,7 @@ fn pac064_local_artifact_content_never_enters_durable_request_session_or_event_d
             "media_type": "text/plain",
         }),
         PreconditionsV1::new(
-            None,
+            Some(session.session_id().clone()),
             None,
             Some(attempt_id),
             Some(proof_revision),
@@ -458,7 +458,12 @@ fn pac064_local_artifact_content_never_enters_durable_request_session_or_event_d
     let durable_request: serde_json::Value =
         serde_json::from_str(durable_job.execution().canonical_execution().as_str())
             .expect("durable request document must remain valid canonical JSON");
+    assert_eq!(durable_request["execution_version"], 4);
     assert_eq!(durable_request["command"], "item.attach");
+    assert_eq!(
+        durable_request["preconditions"]["session_id"],
+        session.session_id().as_str()
+    );
     assert_eq!(durable_request["payload"]["item_id"], "proof");
     assert_eq!(durable_request["payload"]["source"]["path"], "proof.txt");
     assert_eq!(

@@ -737,7 +737,7 @@ where
             .find(|slot| slot.item_id().as_str() == item_id)
             .unwrap();
         PreconditionsV1::new(
-            None,
+            Some(session.session_id().clone()),
             None,
             Some(attempt_id),
             Some(slot.revision()),
@@ -750,7 +750,7 @@ where
     fn session_preconditions(&self) -> PreconditionsV1 {
         let session = self.store.current_session().unwrap();
         PreconditionsV1::new(
-            None,
+            Some(session.session_id().clone()),
             Some(session.revision()),
             session.active_attempt_id().cloned(),
             None,
@@ -776,7 +776,15 @@ where
     #[allow(dead_code)]
     fn session_revision_preconditions(&self) -> PreconditionsV1 {
         let session = self.store.current_session().unwrap();
-        PreconditionsV1::new(None, Some(session.revision()), None, None, None, None).unwrap()
+        PreconditionsV1::new(
+            Some(session.session_id().clone()),
+            Some(session.revision()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
     }
 
     fn check(&mut self, item_id: &str) -> TerminalReceiptV1 {
@@ -936,7 +944,7 @@ fn literal_legacy_v1_and_v2_documents_fail_closed_without_regeneration() {
 }
 
 #[test]
-fn v3_recovery_uses_the_persisted_snapshot_and_ids_without_regeneration() {
+fn v4_recovery_uses_the_persisted_snapshot_and_ids_without_regeneration() {
     let identity = identity();
     let binding = binding(identity.clone());
     let store = RecordingStore::new(identity);
@@ -955,7 +963,7 @@ fn v3_recovery_uses_the_persisted_snapshot_and_ids_without_regeneration() {
         950,
     );
     admitted
-        .admit(&request, IdempotencyKeyV1::new("persisted-v3").unwrap())
+        .admit(&request, IdempotencyKeyV1::new("persisted-v4").unwrap())
         .unwrap();
 
     let execution_ids = SpyIds::new();
@@ -970,7 +978,7 @@ fn v3_recovery_uses_the_persisted_snapshot_and_ids_without_regeneration() {
     );
     assert_success(
         &restarted
-            .execute_next(&binding, WorkerIdV1::new("v3-recovery").unwrap())
+            .execute_next(&binding, WorkerIdV1::new("v4-recovery").unwrap())
             .unwrap()
             .unwrap(),
     );
@@ -992,7 +1000,7 @@ fn v3_recovery_uses_the_persisted_snapshot_and_ids_without_regeneration() {
     );
 }
 #[test]
-fn v2_document_with_a_v3_execution_resolution_is_rejected_as_undocumented() {
+fn legacy_execution_version_with_a_v4_resolution_is_rejected() {
     let identity = identity();
     let binding = binding(identity.clone());
     let source_store = RecordingStore::new(identity.clone());
@@ -1014,8 +1022,8 @@ fn v2_document_with_a_v3_execution_resolution_is_rejected_as_undocumented() {
         .admit(&request, IdempotencyKeyV1::new("unsupported-v2").unwrap())
         .unwrap();
     let unsupported = source_store.first_canonical_execution().replacen(
+        "\"execution_version\":4",
         "\"execution_version\":3",
-        "\"execution_version\":2",
         1,
     );
 
@@ -1032,8 +1040,10 @@ fn v2_document_with_a_v3_execution_resolution_is_rejected_as_undocumented() {
     );
     recovery_store.enqueue_persisted_session_start(&unsupported);
     assert!(matches!(
-        recovery.execute_next(&binding, WorkerIdV1::new("unsupported-v2").unwrap()),
-        Err(ExecutionErrorV1::InvalidPersistedExecution { .. })
+        recovery.execute_next(&binding, WorkerIdV1::new("unsupported-v3").unwrap()),
+        Err(ExecutionErrorV1::InvalidPersistedExecution {
+            reason: "legacy execution document lacks session identity fences"
+        })
     ));
     assert_eq!(procedures.call_count(), 0);
     assert!(ids.calls().is_empty());

@@ -26,7 +26,7 @@ fn payload(value: Value) -> Map<String, Value> {
 
 fn item_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(
-        None,
+        Some(SESSION_ID.to_owned().try_into().unwrap()),
         None,
         Some(ATTEMPT_ID.to_owned().try_into().unwrap()),
         Some(Revision::new(2)),
@@ -38,7 +38,7 @@ fn item_preconditions() -> PreconditionsV1 {
 
 fn session_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(
-        None,
+        Some(SESSION_ID.to_owned().try_into().unwrap()),
         Some(Revision::new(3)),
         Some(ATTEMPT_ID.to_owned().try_into().unwrap()),
         None,
@@ -581,7 +581,7 @@ fn mutation_identity_excludes_transport_and_selector_identity_hints_but_keeps_se
         OperationV1::Mutate,
         json!({"selector": selector_json(b"/first-root", "/first diagnostic"), "item_id": "note", "value": "one"}),
         PreconditionsV1::new(
-            None,
+            Some(SESSION_ID.to_owned().try_into().unwrap()),
             None,
             Some(ATTEMPT_ID.to_owned().try_into().unwrap()),
             Some(Revision::new(3)),

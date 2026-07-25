@@ -394,7 +394,7 @@ fn selector() -> Value {
 
 fn item_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(
-        None,
+        Some(SessionId::new(SESSION_ID).unwrap()),
         None,
         Some(AttemptId::new(ATTEMPT_ID).unwrap()),
         Some(Revision::new(1)),
@@ -406,7 +406,7 @@ fn item_preconditions() -> PreconditionsV1 {
 
 fn session_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(
-        None,
+        Some(SessionId::new(SESSION_ID).unwrap()),
         Some(Revision::new(1)),
         Some(AttemptId::new(ATTEMPT_ID).unwrap()),
         None,
@@ -429,7 +429,15 @@ fn session_identity_preconditions() -> PreconditionsV1 {
 }
 
 fn session_revision_preconditions() -> PreconditionsV1 {
-    PreconditionsV1::new(None, Some(Revision::new(1)), None, None, None, None).unwrap()
+    PreconditionsV1::new(
+        Some(SessionId::new(SESSION_ID).unwrap()),
+        Some(Revision::new(1)),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap()
 }
 
 fn job_preconditions(state: JobStateV1) -> PreconditionsV1 {

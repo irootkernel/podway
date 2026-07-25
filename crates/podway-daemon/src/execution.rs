@@ -53,6 +53,7 @@ use sha2::{Digest as _, Sha256};
 const EXECUTION_DOCUMENT_VERSION_V1: u8 = 1;
 const EXECUTION_DOCUMENT_VERSION_V2: u8 = 2;
 const EXECUTION_DOCUMENT_VERSION_V3: u8 = 3;
+const EXECUTION_DOCUMENT_VERSION_V4: u8 = 4;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -1918,7 +1919,7 @@ fn canonical_execution_document_v1(
     let document = json!({
         "command": request.command().command_name(),
         "execution": admission_resolution_value_v1(resolution),
-        "execution_version": EXECUTION_DOCUMENT_VERSION_V3,
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V4,
         "payload": payload,
         "preconditions": preconditions,
         "selector": request.selector(),
@@ -2076,6 +2077,7 @@ fn item_preconditions_value_v1(
     preconditions: &podway_protocol::ItemMutationPreconditionsWireV1,
 ) -> Value {
     json!({
+        "session_id": preconditions.expected_session_id,
         "attempt_id": preconditions.expected_attempt_id,
         "item_revision": preconditions.expected_item_revision,
     })
@@ -2085,6 +2087,7 @@ fn session_preconditions_value_v1(
     preconditions: &podway_protocol::SessionMutationPreconditionsWireV1,
 ) -> Value {
     json!({
+        "session_id": preconditions.expected_session_id,
         "attempt_id": preconditions.expected_attempt_id,
         "session_revision": preconditions.expected_session_revision,
     })
@@ -2102,7 +2105,10 @@ fn session_identity_preconditions_value_v1(
 fn session_revision_preconditions_value_v1(
     preconditions: &podway_protocol::SessionRevisionPreconditionsWireV1,
 ) -> Value {
-    json!({"session_revision": preconditions.expected_session_revision})
+    json!({
+        "session_id": preconditions.expected_session_id,
+        "session_revision": preconditions.expected_session_revision,
+    })
 }
 
 fn workspace_reset_all_preconditions_value_v1(
@@ -2410,6 +2416,23 @@ fn decode_execution_document_v1(
                     "workspace_id",
                 ],
             )?;
+            return Err(invalid_execution_v1(
+                "legacy execution document lacks session identity fences",
+            ));
+        }
+        version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V4) => {
+            require_exact_keys_v1(
+                object,
+                &[
+                    "command",
+                    "execution",
+                    "execution_version",
+                    "payload",
+                    "preconditions",
+                    "selector",
+                    "workspace_id",
+                ],
+            )?;
             AdmissionResolutionV1::None
         }
         _ => return Err(invalid_execution_v1("unsupported execution version")),
@@ -2428,7 +2451,7 @@ fn decode_execution_document_v1(
         AdmissionResolutionV1::None => {
             decode_admission_resolution_v1(&command, value_object_v1(object, "execution")?)?
         }
-        _ => unreachable!("only the v3 placeholder resolution is constructed here"),
+        _ => unreachable!("only the v4 placeholder resolution is constructed here"),
     };
     Ok((selector, workspace_id, command, resolution))
 }
@@ -2642,8 +2665,9 @@ fn decode_item_attach_source_v1(
 fn decode_item_preconditions_v1(
     object: &Map<String, Value>,
 ) -> Result<podway_protocol::ItemMutationPreconditionsWireV1, ExecutionErrorV1> {
-    require_exact_keys_v1(object, &["attempt_id", "item_revision"])?;
+    require_exact_keys_v1(object, &["attempt_id", "item_revision", "session_id"])?;
     Ok(podway_protocol::ItemMutationPreconditionsWireV1 {
+        expected_session_id: value_typed_v1(object, "session_id")?,
         expected_attempt_id: value_typed_v1(object, "attempt_id")?,
         expected_item_revision: value_typed_v1(object, "item_revision")?,
     })
@@ -2652,8 +2676,9 @@ fn decode_item_preconditions_v1(
 fn decode_session_preconditions_v1(
     object: &Map<String, Value>,
 ) -> Result<podway_protocol::SessionMutationPreconditionsWireV1, ExecutionErrorV1> {
-    require_exact_keys_v1(object, &["attempt_id", "session_revision"])?;
+    require_exact_keys_v1(object, &["attempt_id", "session_id", "session_revision"])?;
     Ok(podway_protocol::SessionMutationPreconditionsWireV1 {
+        expected_session_id: value_typed_v1(object, "session_id")?,
         expected_attempt_id: value_typed_v1(object, "attempt_id")?,
         expected_session_revision: value_typed_v1(object, "session_revision")?,
     })
@@ -2672,8 +2697,9 @@ fn decode_session_identity_preconditions_v1(
 fn decode_session_revision_preconditions_v1(
     object: &Map<String, Value>,
 ) -> Result<podway_protocol::SessionRevisionPreconditionsWireV1, ExecutionErrorV1> {
-    require_exact_keys_v1(object, &["session_revision"])?;
+    require_exact_keys_v1(object, &["session_id", "session_revision"])?;
     Ok(podway_protocol::SessionRevisionPreconditionsWireV1 {
+        expected_session_id: value_typed_v1(object, "session_id")?,
         expected_session_revision: value_typed_v1(object, "session_revision")?,
     })
 }

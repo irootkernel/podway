@@ -17,6 +17,7 @@ const SESSION_ID: &str = "55555555-5555-4555-8555-555555555555";
 const JOB_ID: &str = "66666666-6666-4666-8666-666666666666";
 const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OTHER_WORKSPACE_ID: &str = "77777777-7777-4777-8777-777777777777";
+const OTHER_SESSION_ID: &str = "88888888-8888-4888-8888-888888888888";
 
 fn selector() -> Value {
     serde_json::to_value(
@@ -36,7 +37,7 @@ fn payload(value: Value) -> Map<String, Value> {
 
 fn item_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(
-        None,
+        Some(SESSION_ID.to_owned().try_into().unwrap()),
         None,
         Some(ATTEMPT_ID.to_owned().try_into().unwrap()),
         Some(Revision::new(2)),
@@ -48,7 +49,7 @@ fn item_preconditions() -> PreconditionsV1 {
 
 fn session_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(
-        None,
+        Some(SESSION_ID.to_owned().try_into().unwrap()),
         Some(Revision::new(3)),
         Some(ATTEMPT_ID.to_owned().try_into().unwrap()),
         None,
@@ -71,7 +72,15 @@ fn session_identity_preconditions() -> PreconditionsV1 {
 }
 
 fn session_revision_preconditions() -> PreconditionsV1 {
-    PreconditionsV1::new(None, Some(Revision::new(3)), None, None, None, None).unwrap()
+    PreconditionsV1::new(
+        Some(SESSION_ID.to_owned().try_into().unwrap()),
+        Some(Revision::new(3)),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap()
 }
 
 fn job_preconditions() -> PreconditionsV1 {
@@ -515,6 +524,75 @@ fn g006_enforces_route_specific_preconditions_and_confirmation() {
         job_preconditions(),
     );
     assert!(SliceRequestV1::from_envelope(&extra_query_precondition).is_err());
+}
+
+#[test]
+fn casid002_preserves_session_identity_for_reads_and_canonical_mutations() {
+    let guarded_read = SliceRequestV1::from_envelope(&envelope(
+        "session.status",
+        OperationV1::Query,
+        false,
+        json!({"selector": selector()}),
+        PreconditionsV1::new(
+            Some(SESSION_ID.to_owned().try_into().unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    match guarded_read.command() {
+        podway_protocol::SliceCommandV1::SessionStatus(status) => assert_eq!(
+            status
+                .preconditions
+                .expected_session_id
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            SESSION_ID,
+        ),
+        command => panic!("unexpected command {}", command.command_name()),
+    }
+
+    let first = SliceRequestV1::from_envelope(&envelope(
+        "session.complete",
+        OperationV1::Mutate,
+        true,
+        json!({"selector": selector()}),
+        session_preconditions(),
+    ))
+    .unwrap();
+    let second = SliceRequestV1::from_envelope(&envelope(
+        "session.complete",
+        OperationV1::Mutate,
+        true,
+        json!({"selector": selector()}),
+        PreconditionsV1::new(
+            Some(OTHER_SESSION_ID.to_owned().try_into().unwrap()),
+            Some(Revision::new(3)),
+            Some(ATTEMPT_ID.to_owned().try_into().unwrap()),
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    let workspace_id = WorkspaceId::new(WORKSPACE_ID).unwrap();
+    let first: Value =
+        serde_json::from_str(&canonical_mutation_identity_v1(&first, &workspace_id).unwrap())
+            .unwrap();
+    assert_eq!(first["preconditions"]["session_id"], SESSION_ID);
+    assert_ne!(
+        first,
+        serde_json::from_str::<Value>(
+            &canonical_mutation_identity_v1(&second, &workspace_id).unwrap(),
+        )
+        .unwrap(),
+    );
 }
 #[test]
 fn g006_dry_runs_are_query_only_and_excluded_from_mutation_identity() {

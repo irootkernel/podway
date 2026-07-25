@@ -1773,6 +1773,7 @@ fn expected_preconditions(expectation: PreconditionExpectation) -> Value {
     match expectation {
         PreconditionExpectation::None => serde_json::json!({}),
         PreconditionExpectation::SessionAttempt => serde_json::json!({
+            "session_id": RECORDING_SESSION_ID,
             "session_revision": 1,
             "attempt_id": RECORDING_ATTEMPT_ID,
         }),
@@ -1781,9 +1782,11 @@ fn expected_preconditions(expectation: PreconditionExpectation) -> Value {
             "session_revision": 1,
         }),
         PreconditionExpectation::SessionRevision => serde_json::json!({
+            "session_id": RECORDING_SESSION_ID,
             "session_revision": 1,
         }),
         PreconditionExpectation::Item => serde_json::json!({
+            "session_id": RECORDING_SESSION_ID,
             "attempt_id": RECORDING_ATTEMPT_ID,
             "item_revision": 1,
         }),
@@ -1989,6 +1992,8 @@ fn explicit_workspace_identity_guards_preflight_and_overrides_observed_identity(
         fixture.root.to_str().expect("fixture root must be UTF-8"),
         "--if-workspace-uuid",
         EXPLICIT_WORKSPACE_ID,
+        "--if-session-id",
+        EXPLICIT_SESSION_ID,
         "complete",
     ]
     .into_iter()
@@ -2006,7 +2011,15 @@ fn explicit_workspace_identity_guards_preflight_and_overrides_observed_identity(
         assert_eq!(request["workspace"]["expected_uuid"], EXPLICIT_WORKSPACE_ID);
     }
     assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(
+        requests[0]["preconditions"]["session_id"],
+        EXPLICIT_SESSION_ID
+    );
     assert_eq!(requests[1]["command"], "session.complete");
+    assert_eq!(
+        requests[1]["preconditions"]["session_id"],
+        EXPLICIT_SESSION_ID
+    );
     assert_eq!(requests[1]["preconditions"]["session_revision"], 1);
     assert_eq!(
         requests[1]["preconditions"]["attempt_id"],
@@ -2016,18 +2029,32 @@ fn explicit_workspace_identity_guards_preflight_and_overrides_observed_identity(
 
 #[test]
 fn session_identity_flag_is_accepted_on_guarded_reads() {
-    let output = run(&[
+    let fixture = DynamicCompletionFixture::new();
+    let server = RecordingDaemon::start(
+        &fixture,
+        vec![RecordingReply::Output(recording_success_result(
+            "session.status",
+        ))],
+    );
+    let arguments = [
         "--json",
-        "status",
+        "--worktree",
+        fixture.root.to_str().expect("fixture root must be UTF-8"),
         "--if-session-id",
         EXPLICIT_SESSION_ID,
-        "--socket",
-        "/tmp/podway-casid-missing.sock",
-    ]);
-    assert_eq!(output.status.code(), Some(3));
-    let response = one_json(&output);
-    assert_eq!(response["command"], "session.status");
-    assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
+        "status",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    let output = fixture.run_in(&fixture.root, &arguments);
+    assert!(output.status.success(), "guarded status failed: {output:?}");
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]["preconditions"]["session_id"],
+        EXPLICIT_SESSION_ID
+    );
 }
 fn status_json_semantic_projection(response: &Value) -> Value {
     let result = &response["result"];
