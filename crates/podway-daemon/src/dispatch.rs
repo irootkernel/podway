@@ -4,14 +4,14 @@
 //! capabilities remain behind the injected runtime seams below. In particular, a workspace value is
 //! opaque to this module, so routing cannot accidentally turn a display path into an identity key.
 
-use podway_core::{AttemptId, JobId, Revision, SessionId, WorkspaceId};
+use podway_core::{AttemptId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
 use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
     JobStateV1, NextResultV1, OutputEnvelopeInputV1, OutputEnvelopeV1, QueryWaitV1,
     RequestEnvelopeV1, ResponseEnvelopeV1, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
     SliceRequestV1, StatusResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::server::RequestDispatcherV1;
 
@@ -38,6 +38,7 @@ pub struct DispatchErrorDetailsV1 {
     current_revision: Option<Revision>,
     attempt_mismatch: Option<Box<AttemptMismatchDetailsV1>>,
     identity_conflict: Option<Box<IdentityConflictDetailsV1>>,
+    procedure_digest_mismatch: Option<Box<ProcedureDigestMismatchDetailsV1>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,6 +57,12 @@ enum IdentityConflictDetailsV1 {
 struct AttemptMismatchDetailsV1 {
     expected: AttemptId,
     actual: Option<AttemptId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProcedureDigestMismatchDetailsV1 {
+    expected: Sha256Digest,
+    actual: Sha256Digest,
 }
 
 impl DispatchErrorDetailsV1 {
@@ -104,7 +111,36 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_procedure_digest_mismatch(
+        mut self,
+        expected: Sha256Digest,
+        actual: Sha256Digest,
+    ) -> Self {
+        self.procedure_digest_mismatch = Some(Box::new(ProcedureDigestMismatchDetailsV1 {
+            expected,
+            actual,
+        }));
+        self
+    }
+
     pub(crate) fn into_json(self) -> Map<String, Value> {
+        if let Some(mismatch) = self.procedure_digest_mismatch {
+            return Map::from_iter([
+                (
+                    "schema".to_owned(),
+                    Value::String("podway.procedure-digest-mismatch-details/v1".to_owned()),
+                ),
+                (
+                    "expected_procedure_digest".to_owned(),
+                    Value::String(mismatch.expected.into_inner()),
+                ),
+                (
+                    "actual_procedure_digest".to_owned(),
+                    Value::String(mismatch.actual.into_inner()),
+                ),
+                ("admission".to_owned(), json!({"admitted": false})),
+            ]);
+        }
         if let Some(identity) = self.identity_conflict {
             let mut admission =
                 Map::from_iter([("admitted".to_owned(), Value::Bool(self.job_id.is_some()))]);
@@ -204,6 +240,7 @@ pub enum DispatchFailureKindV1 {
     ProcedureNotFound,
     ProcedureInvalid,
     ProcedureSchemaUnsupported,
+    ProcedureDigestMismatch,
     PresetNotFound,
     SessionNotFound,
     SessionIdMismatch,
@@ -259,6 +296,7 @@ impl DispatchFailureV1 {
                 current_revision: None,
                 attempt_mismatch: None,
                 identity_conflict: None,
+                procedure_digest_mismatch: None,
             },
         }
     }
@@ -1270,6 +1308,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "Procedure schema is unsupported.",
             false,
             1,
+        ),
+        DispatchFailureKindV1::ProcedureDigestMismatch => (
+            "PROCEDURE_DIGEST_MISMATCH",
+            "The canonical Procedure digest differs from the expected digest.",
+            false,
+            4,
         ),
         DispatchFailureKindV1::PresetNotFound => (
             "PRESET_NOT_FOUND",

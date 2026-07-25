@@ -440,6 +440,7 @@ pub enum SessionStartSourceV1 {
 #[serde(deny_unknown_fields)]
 pub struct SessionStartV1 {
     pub source: SessionStartSourceV1,
+    pub expected_procedure_digest: Option<Sha256Digest>,
     pub task_title: String,
     pub dry_run: bool,
 }
@@ -902,6 +903,7 @@ impl SliceRequestV1 {
                 let start = validated_start(
                     payload.preset,
                     payload.procedure,
+                    payload.expected_procedure_digest,
                     payload.task_title,
                     payload.dry_run,
                 )?;
@@ -926,6 +928,7 @@ impl SliceRequestV1 {
                 let start = validated_start(
                     payload.preset,
                     payload.procedure,
+                    payload.expected_procedure_digest,
                     payload.task_title,
                     payload.dry_run,
                 )?;
@@ -1332,6 +1335,8 @@ struct SessionStartPayloadV1 {
     preset: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     procedure: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    expected_procedure_digest: Option<Sha256Digest>,
     task_title: String,
     #[serde(default)]
     dry_run: bool,
@@ -1345,6 +1350,8 @@ struct SessionStartReplacePayloadV1 {
     preset: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     procedure: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    expected_procedure_digest: Option<Sha256Digest>,
     task_title: String,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     confirmed: Option<bool>,
@@ -1812,12 +1819,13 @@ fn require_job_preconditions(
 fn validated_start(
     preset: Option<String>,
     procedure: Option<String>,
+    expected_procedure_digest: Option<Sha256Digest>,
     task_title: String,
     dry_run: bool,
 ) -> Result<SessionStartV1, SliceErrorV1> {
     validate_title(&task_title)?;
     let source = match (preset, procedure) {
-        (Some(preset), None) => {
+        (Some(preset), None) if expected_procedure_digest.is_none() => {
             validate_preset(&preset)?;
             SessionStartSourceV1::Preset { preset }
         }
@@ -1833,6 +1841,7 @@ fn validated_start(
     };
     Ok(SessionStartV1 {
         source,
+        expected_procedure_digest,
         task_title,
         dry_run,
     })

@@ -9,8 +9,8 @@ use std::{sync::Arc, time::Instant};
 
 use podway_core::{
     AttemptId, CommandContextV1, DomainError, ProcedureSnapshotId, ReopenSessionV1, ResetSessionV1,
-    ReturnSessionV1, Revision, SessionCommandV1, SessionId, StartReplaceSessionV1, StartSessionV1,
-    UnixMillis, preview_transition_v1,
+    ReturnSessionV1, Revision, SessionCommandV1, SessionId, Sha256Digest, StartReplaceSessionV1,
+    StartSessionV1, UnixMillis, preview_transition_v1,
 };
 use podway_git::{
     Base64UrlPathBytesV1, DiagnosticPathDisplayV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1,
@@ -1302,6 +1302,14 @@ fn preview_start(
         }
     }
     .map_err(map_preview_procedure_error)?;
+    if let Some(expected) = input.expected_procedure_digest.as_ref()
+        && snapshot.digest() != expected
+    {
+        return Err(procedure_digest_mismatch_failure(
+            expected.clone(),
+            snapshot.digest().clone(),
+        ));
+    }
     Ok(StartSessionV1 {
         task_title: input.task_title.clone(),
         snapshot,
@@ -1596,6 +1604,9 @@ fn map_reset_preparation_error(error: ExecutionErrorV1) -> DispatchFailureV1 {
         }
         ExecutionErrorV1::WorkspaceIdentityMismatch { expected, actual } => {
             workspace_uuid_mismatch_failure(expected, actual)
+        }
+        ExecutionErrorV1::ProcedureDigestMismatch { expected, actual } => {
+            procedure_digest_mismatch_failure(expected, actual)
         }
         ExecutionErrorV1::InvalidPersistedExecution { .. }
         | ExecutionErrorV1::InvalidStoreValue(_) => {
@@ -2261,6 +2272,9 @@ fn map_worker_error(error: WorkerErrorV1) -> DispatchFailureV1 {
             crate::execution::ExecutionErrorV1::WorkspaceIdentityMismatch { expected, actual } => {
                 workspace_uuid_mismatch_failure(expected, actual)
             }
+            crate::execution::ExecutionErrorV1::ProcedureDigestMismatch { expected, actual } => {
+                procedure_digest_mismatch_failure(expected, actual)
+            }
             crate::execution::ExecutionErrorV1::InvalidPersistedExecution { .. }
             | crate::execution::ExecutionErrorV1::InvalidStoreValue(_) => {
                 DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
@@ -2487,6 +2501,15 @@ fn workspace_uuid_mismatch_failure(
     )
 }
 
+fn procedure_digest_mismatch_failure(
+    expected: Sha256Digest,
+    actual: Sha256Digest,
+) -> DispatchFailureV1 {
+    DispatchFailureV1::new(DispatchFailureKindV1::ProcedureDigestMismatch).with_details(
+        DispatchErrorDetailsV1::default().with_procedure_digest_mismatch(expected, actual),
+    )
+}
+
 fn rfc3339_millis(value: UnixMillis) -> Result<Rfc3339MillisV1, DispatchFailureV1> {
     let seconds = value.get() / 1_000;
     let millis = value.get() % 1_000;
@@ -2616,6 +2639,37 @@ mod tests {
         assert_eq!(
             start_conflict.kind(),
             DispatchFailureKindV1::SessionAlreadyExists
+        );
+    }
+
+    #[test]
+    fn pstrt001_digest_mismatch_mapper_preserves_closed_details() {
+        let expected = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let actual = Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let failure = map_worker_error(WorkerErrorV1::Execution(
+            ExecutionErrorV1::ProcedureDigestMismatch {
+                expected: expected.clone(),
+                actual: actual.clone(),
+            },
+        ));
+        assert_eq!(
+            failure.kind(),
+            DispatchFailureKindV1::ProcedureDigestMismatch
+        );
+        assert_eq!(
+            failure.into_details().into_json(),
+            Map::from_iter([
+                (
+                    "schema".to_owned(),
+                    json!("podway.procedure-digest-mismatch-details/v1"),
+                ),
+                (
+                    "expected_procedure_digest".to_owned(),
+                    json!(expected.as_str()),
+                ),
+                ("actual_procedure_digest".to_owned(), json!(actual.as_str()),),
+                ("admission".to_owned(), json!({"admitted": false})),
+            ])
         );
     }
 
@@ -2791,6 +2845,7 @@ mod tests {
             source: podway_protocol::SessionStartSourceV1::Preset {
                 preset: "bug-fix".to_owned(),
             },
+            expected_procedure_digest: None,
             task_title: title.to_owned(),
             dry_run: true,
         })
@@ -3257,6 +3312,7 @@ mod tests {
                     source: podway_protocol::SessionStartSourceV1::Preset {
                         preset: "bug-fix".to_owned(),
                     },
+                    expected_procedure_digest: None,
                     task_title: "Preview replacement".to_owned(),
                     dry_run: true,
                 },
@@ -3373,6 +3429,7 @@ mod tests {
                         source: podway_protocol::SessionStartSourceV1::Preset {
                             preset: "bug-fix".to_owned(),
                         },
+                        expected_procedure_digest: None,
                         task_title: "Missing session".to_owned(),
                         dry_run: true,
                     },

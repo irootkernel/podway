@@ -189,6 +189,10 @@ const DIGEST: Flag = Flag {
     long: "digest",
     takes_value: true,
 };
+const EXPECT_PROCEDURE_DIGEST: Flag = Flag {
+    long: "expect-procedure-digest",
+    takes_value: true,
+};
 const SIZE: Flag = Flag {
     long: "size",
     takes_value: true,
@@ -246,6 +250,7 @@ const START_FLAGS: &[&Flag] = &[
     &IF_SESSION_REVISION,
     &PRESET,
     &PROCEDURE,
+    &EXPECT_PROCEDURE_DIGEST,
     &TASK,
     &REPLACE,
     &DRY_RUN,

@@ -173,6 +173,12 @@
       "summary": "Procedure schema is unsupported."
     },
     {
+      "code": "PROCEDURE_DIGEST_MISMATCH",
+      "exit_code": 4,
+      "retryable": false,
+      "summary": "The canonical Procedure digest differs from the expected digest."
+    },
+    {
       "code": "PRESET_NOT_FOUND",
       "exit_code": 1,
       "retryable": false,

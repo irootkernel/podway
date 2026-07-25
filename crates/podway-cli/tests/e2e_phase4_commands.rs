@@ -1553,6 +1553,42 @@ fn session_start_uses_the_canonical_wire_name_and_source_payload() {
 }
 
 #[test]
+fn pstrt001_session_start_forwards_the_expected_procedure_digest() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::Output]);
+    let digest = format!("sha256:{}", "a".repeat(64));
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "start",
+        "--procedure",
+        "procedures/custom.yaml",
+        "--expect-procedure-digest",
+        &digest,
+        "--task",
+        "Guarded task",
+    ]);
+    assert!(output.status.success(), "guarded start failed: {output:?}");
+    let wires = daemon.finish();
+    let request = decode_request(&wires[0]);
+    assert_eq!(request.payload()["expected_procedure_digest"], digest);
+
+    let invalid = fixture.run(&[
+        "--json",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--expect-procedure-digest",
+        &format!("sha256:{}", "b".repeat(64)),
+        "--task",
+        "Invalid preset guard",
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+}
+
+#[test]
 fn reference_attachment_uses_size_bytes_and_item_preconditions() {
     let fixture = Fixture::new();
     let daemon = FakeDaemon::start(&fixture, vec![Reply::Status, Reply::Output]);

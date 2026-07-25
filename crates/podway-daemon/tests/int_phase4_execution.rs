@@ -1141,7 +1141,7 @@ fn v4_recovery_uses_the_persisted_snapshot_and_ids_without_regeneration() {
     );
 }
 #[test]
-fn legacy_execution_version_with_a_v4_resolution_is_rejected() {
+fn legacy_execution_version_with_a_v5_resolution_is_rejected() {
     let identity = identity();
     let binding = binding(identity.clone());
     let source_store = RecordingStore::new(identity.clone());
@@ -1163,7 +1163,7 @@ fn legacy_execution_version_with_a_v4_resolution_is_rejected() {
         .admit(&request, IdempotencyKeyV1::new("unsupported-v2").unwrap())
         .unwrap();
     let unsupported = source_store.first_canonical_execution().replacen(
-        "\"execution_version\":4",
+        "\"execution_version\":5",
         "\"execution_version\":3",
         1,
     );

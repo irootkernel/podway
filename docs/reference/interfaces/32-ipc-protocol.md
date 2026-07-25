@@ -189,6 +189,10 @@ payload
 canonical Procedure digest for start
 ```
 
+For `session.start` and `session.start_replace`, the optional
+`expected_procedure_digest` payload field is accepted only with a Procedure-file source. The
+daemon compares it with the validated, defaulted canonical snapshot before durable admission.
+
 It excludes:
 
 ```text

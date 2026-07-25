@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use podway_core::{AttemptId, JobId, Revision, SessionId, WorkspaceId};
+use podway_core::{AttemptId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
 use serde::{Deserialize, Deserializer, Serialize, de};
 mod codec;
 mod framing;
@@ -74,6 +74,7 @@ pub enum ProtocolError {
         actual_retryable: bool,
     },
     InvalidIdentityConflictDetails,
+    InvalidProcedureDigestMismatchDetails,
     InvalidExitCode {
         value: u8,
     },
@@ -148,6 +149,8 @@ impl fmt::Display for ProtocolError {
                     "identity conflict details violate their closed v1 schema"
                 )
             }
+            Self::InvalidProcedureDigestMismatchDetails => formatter
+                .write_str("Procedure digest mismatch details violate their closed v1 schema"),
             Self::InvalidExitCode { value } => {
                 write!(
                     formatter,
@@ -1538,6 +1541,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_DIGEST_MISMATCH",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "PRESET_NOT_FOUND",
         exit_code: 1,
         retryable: false,
@@ -1869,6 +1877,7 @@ impl ErrorEnvelopeV1 {
         validate_non_empty_scalar_bounded(&self.message, usize::MAX, "message")?;
         validate_json_map_depth(&self.details, 1)?;
         validate_identity_conflict_details_v1(self.code.as_str(), &self.details)?;
+        validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
         if let Some(workspace) = &self.workspace {
             validate_json_map_depth(workspace, 1)?;
         }
@@ -1973,6 +1982,37 @@ fn validate_identity_conflict_details_v1(
         }
         _ => Err(ProtocolError::InvalidIdentityConflictDetails),
     }
+}
+
+fn validate_procedure_digest_mismatch_details_v1(
+    code: &str,
+    details: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    if code != "PROCEDURE_DIGEST_MISMATCH" {
+        return Ok(());
+    }
+    if details.len() != 4
+        || details.get("schema").and_then(Value::as_str)
+            != Some("podway.procedure-digest-mismatch-details/v1")
+        || details
+            .get("admission")
+            .and_then(Value::as_object)
+            .is_none_or(|admission| {
+                admission.len() != 1
+                    || admission.get("admitted").and_then(Value::as_bool) != Some(false)
+            })
+    {
+        return Err(ProtocolError::InvalidProcedureDigestMismatchDetails);
+    }
+    for field in ["expected_procedure_digest", "actual_procedure_digest"] {
+        let value = details
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or(ProtocolError::InvalidProcedureDigestMismatchDetails)?;
+        Sha256Digest::new(value)
+            .map_err(|_| ProtocolError::InvalidProcedureDigestMismatchDetails)?;
+    }
+    Ok(())
 }
 impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

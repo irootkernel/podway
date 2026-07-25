@@ -665,7 +665,7 @@ fn pac064_local_artifact_content_never_enters_durable_request_session_or_event_d
     let durable_request: serde_json::Value =
         serde_json::from_str(durable_job.execution().canonical_execution().as_str())
             .expect("durable request document must remain valid canonical JSON");
-    assert_eq!(durable_request["execution_version"], 4);
+    assert_eq!(durable_request["execution_version"], 5);
     assert_eq!(durable_request["command"], "item.attach");
     assert_eq!(
         durable_request["preconditions"]["session_id"],
@@ -932,6 +932,45 @@ fn g006_workspace_reset_all_is_rejected_from_generic_admission_while_custom_proc
         requests_before_reset,
         "generic reset admission must not persist an old-generation job"
     );
+}
+
+#[test]
+fn pstrt001_digest_mismatch_is_rejected_before_durable_admission() {
+    let harness = Harness::new();
+    let admitted = parse_procedure_v1(PROCEDURE_YAML, ProcedureFormatV1::Yaml)
+        .unwrap()
+        .admit(ProcedureWarningPolicyV1::Accept)
+        .unwrap();
+    let actual = admitted.digest().clone();
+    let expected = Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+    assert_ne!(expected, actual);
+    let request = slice_request(
+        "session.start",
+        json!({
+            "selector": selector_json(),
+            "procedure": "procedures/test.yaml",
+            "expected_procedure_digest": expected.as_str(),
+            "task_title": "Guarded custom procedure",
+        }),
+        PreconditionsV1::default(),
+        9_798,
+    );
+
+    match harness.engine.admit(
+        &request,
+        IdempotencyKeyV1::new("pstrt001-mismatch").unwrap(),
+    ) {
+        Err(ExecutionErrorV1::ProcedureDigestMismatch {
+            expected: rejected_expected,
+            actual: rejected_actual,
+        }) => {
+            assert_eq!(rejected_expected, expected);
+            assert_eq!(rejected_actual, actual);
+        }
+        result => panic!("expected pre-admission digest mismatch, got {result:?}"),
+    }
+    assert_eq!(harness.store.request_count(), 0);
+    assert!(harness.store.current_session().is_none());
 }
 
 #[test]

@@ -260,6 +260,13 @@ struct StartArgs {
         required_unless_present = "preset"
     )]
     procedure: Option<String>,
+    #[arg(
+        long,
+        value_name = "SHA256",
+        requires = "procedure",
+        conflicts_with = "preset"
+    )]
+    expect_procedure_digest: Option<String>,
     #[arg(long, value_name = "TITLE")]
     task: String,
     #[arg(long, action = ArgAction::SetTrue)]
@@ -860,6 +867,7 @@ impl LocalFailure {
             | "PROCEDURE_NOT_FOUND"
             | "PROCEDURE_INVALID"
             | "PROCEDURE_SCHEMA_UNSUPPORTED" => (1, false),
+            "PROCEDURE_DIGEST_MISMATCH" => (4, false),
             "PATH_OUTSIDE_WORKTREE" => (5, false),
             "INTERNAL_ERROR" => (LOCAL_CLIENT_EXIT, false),
             _ => unreachable!("local failures must use a catalogued error code"),
@@ -909,6 +917,34 @@ impl LocalFailure {
 
     fn preset_not_found(message: impl Into<String>) -> Self {
         Self::catalog("PRESET_NOT_FOUND", message, "preset")
+    }
+
+    fn procedure_digest_mismatch(
+        expected: &Sha256Digest,
+        actual: &Sha256Digest,
+        command: &str,
+    ) -> Self {
+        let mut failure = Self::catalog(
+            "PROCEDURE_DIGEST_MISMATCH",
+            "The canonical Procedure digest differs from the expected digest.",
+            command,
+        );
+        failure.details = Map::from_iter([
+            (
+                "schema".to_owned(),
+                Value::String("podway.procedure-digest-mismatch-details/v1".to_owned()),
+            ),
+            (
+                "expected_procedure_digest".to_owned(),
+                Value::String(expected.as_str().to_owned()),
+            ),
+            (
+                "actual_procedure_digest".to_owned(),
+                Value::String(actual.as_str().to_owned()),
+            ),
+            ("admission".to_owned(), json!({"admitted": false})),
+        ]);
+        failure
     }
 
     fn with_command(mut self, command: &str) -> Self {
@@ -1182,6 +1218,21 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
         };
         let admitted = parse_procedure_v1(bytes, format)
             .map_err(|error| procedure_config_failure(error).with_command("session.start"))?;
+        if let Some(expected) = args.expect_procedure_digest.as_deref() {
+            let expected = Sha256Digest::new(expected.to_owned()).map_err(|_| {
+                LocalFailure::request_invalid(
+                    "expected procedure digest must be sha256:<lowercase-hex>",
+                )
+                .with_command("session.start")
+            })?;
+            if admitted.digest() != &expected {
+                return Err(LocalFailure::procedure_digest_mismatch(
+                    &expected,
+                    admitted.digest(),
+                    "session.start",
+                ));
+            }
+        }
         (
             admitted.definition().clone(),
             json!({ "procedure": procedure }),
@@ -2470,6 +2521,17 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
 }
 
 fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
+    if let Command::Start(StartArgs {
+        expect_procedure_digest: Some(digest),
+        ..
+    }) = command
+    {
+        Sha256Digest::new(digest.clone()).map_err(|_| {
+            LocalFailure::request_invalid(
+                "expected procedure digest must be sha256:<lowercase-hex>",
+            )
+        })?;
+    }
     if let Command::Attach(args) = command {
         let reference_mode = args.reference.is_some();
         let incomplete_reference = reference_mode
@@ -2578,6 +2640,12 @@ fn daemon_payload(
             }
             if let Some(procedure) = &args.procedure {
                 payload.insert("procedure".to_owned(), Value::String(procedure.clone()));
+            }
+            if let Some(digest) = &args.expect_procedure_digest {
+                payload.insert(
+                    "expected_procedure_digest".to_owned(),
+                    Value::String(digest.clone()),
+                );
             }
             if args.dry_run {
                 payload.insert("dry_run".to_owned(), Value::Bool(true));
@@ -3702,10 +3770,10 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file>) --task <title> [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --preset sw-dev --task 'preview procedure' --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --preset sw-dev --task 'preview procedure' --dry-run"
         }
         "session.start_replace" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file>) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
         }
         "session.status" => {
             "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway status --verbose"

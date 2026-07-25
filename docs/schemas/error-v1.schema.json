@@ -65,6 +65,28 @@
         },
         "admission": { "$ref": "#/$defs/admission" }
       }
+    },
+    "procedureDigestMismatchDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "expected_procedure_digest",
+        "actual_procedure_digest",
+        "admission"
+      ],
+      "properties": {
+        "schema": { "const": "podway.procedure-digest-mismatch-details/v1" },
+        "expected_procedure_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "actual_procedure_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "admission": { "$ref": "#/$defs/notAdmitted" }
+      }
     }
   },
   "required": [
@@ -138,6 +160,17 @@
       "then": {
         "properties": {
           "details": { "$ref": "#/$defs/sessionIdMismatchDetails" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "PROCEDURE_DIGEST_MISMATCH" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "#/$defs/procedureDigestMismatchDetails" }
         }
       }
     }

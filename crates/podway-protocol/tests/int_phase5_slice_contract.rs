@@ -2,7 +2,7 @@ use podway_core::{ItemId, Revision, Sha256Digest, WorkspaceId};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, DAEMON_COMMAND_NAMES_V1, ErrorCodeV1, ExitCodeV1,
     IdempotencyKeyV1, JobStateV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceErrorV1, SliceRequestV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceCommandV1, SliceErrorV1, SliceRequestV1,
     TerminalJobCancellationProjectionV1, TerminalJobErrorProjectionV1, TerminalJobResponseV1,
     TerminalJobSuccessProjectionV1, TerminalJobSuccessResultV1, WorkspaceContextV1,
     WorktreeSelectorWireV1, canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
@@ -798,6 +798,59 @@ fn g006_dry_runs_are_query_only_and_excluded_from_mutation_identity() {
         session_preconditions(),
     );
     assert!(SliceRequestV1::from_envelope(&malformed_dry_run).is_err());
+}
+
+#[test]
+fn pstrt001_parses_only_canonical_procedure_digest_guards() {
+    let guarded = envelope(
+        "session.start",
+        OperationV1::Mutate,
+        true,
+        json!({
+            "selector": selector(),
+            "procedure": "procedures/custom.yaml",
+            "expected_procedure_digest": DIGEST,
+            "task_title": "Guarded start",
+        }),
+        PreconditionsV1::default(),
+    );
+    let guarded = SliceRequestV1::from_envelope(&guarded).expect("guarded start must parse");
+    let SliceCommandV1::SessionStart(start) = guarded.command() else {
+        panic!("guarded request must remain a session start");
+    };
+    assert_eq!(
+        start
+            .expected_procedure_digest
+            .as_ref()
+            .expect("guard must be preserved")
+            .as_str(),
+        DIGEST,
+    );
+    for payload in [
+        json!({
+            "selector": selector(),
+            "preset": "bug-fix",
+            "expected_procedure_digest": DIGEST,
+            "task_title": "Preset guard is unsupported",
+        }),
+        json!({
+            "selector": selector(),
+            "procedure": "procedures/custom.yaml",
+            "expected_procedure_digest": "sha256:ABC",
+            "task_title": "Malformed guard",
+        }),
+    ] {
+        assert!(
+            SliceRequestV1::from_envelope(&envelope(
+                "session.start",
+                OperationV1::Mutate,
+                true,
+                payload,
+                PreconditionsV1::default(),
+            ))
+            .is_err()
+        );
+    }
 }
 #[test]
 fn g006_reset_all_preserves_workspace_uuid_preconditions_and_selector_consistency() {

@@ -54,6 +54,7 @@ const EXECUTION_DOCUMENT_VERSION_V1: u8 = 1;
 const EXECUTION_DOCUMENT_VERSION_V2: u8 = 2;
 const EXECUTION_DOCUMENT_VERSION_V3: u8 = 3;
 const EXECUTION_DOCUMENT_VERSION_V4: u8 = 4;
+const EXECUTION_DOCUMENT_VERSION_V5: u8 = 5;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -381,6 +382,10 @@ pub enum ExecutionErrorV1 {
         expected: WorkspaceId,
         actual: WorkspaceId,
     },
+    ProcedureDigestMismatch {
+        expected: Sha256Digest,
+        actual: Sha256Digest,
+    },
     InvalidPersistedExecution {
         reason: &'static str,
     },
@@ -406,6 +411,9 @@ impl fmt::Display for ExecutionErrorV1 {
             Self::WorkspaceIdentityMismatch { .. } => {
                 formatter.write_str("execution target workspace identity does not match")
             }
+            Self::ProcedureDigestMismatch { .. } => {
+                formatter.write_str("canonical Procedure digest does not match the expectation")
+            }
             Self::InvalidPersistedExecution { reason } => {
                 write!(formatter, "invalid persisted execution document: {reason}")
             }
@@ -424,6 +432,7 @@ impl Error for ExecutionErrorV1 {
             Self::BoundaryTransient { .. }
             | Self::SessionIdentityMismatch { .. }
             | Self::WorkspaceIdentityMismatch { .. }
+            | Self::ProcedureDigestMismatch { .. }
             | Self::InvalidPersistedExecution { .. } => None,
             Self::InvalidStoreValue(error) => Some(error),
             Self::Store(error) => Some(error),
@@ -1205,6 +1214,14 @@ where
                 .load_workspace_procedure_snapshot(workspace, procedure, snapshot_id, now),
         }
         .map_err(|error| ExecutionErrorV1::from_boundary(error.into()))?;
+        if let Some(expected) = input.expected_procedure_digest.as_ref()
+            && snapshot.digest() != expected
+        {
+            return Err(ExecutionErrorV1::ProcedureDigestMismatch {
+                expected: expected.clone(),
+                actual: snapshot.digest().clone(),
+            });
+        }
         Ok(AdmissionResolutionV1::SessionStart {
             snapshot: Box::new(snapshot),
             session_id: self.ids.next_session_id(),
@@ -2068,7 +2085,7 @@ fn canonical_execution_document_v1(
     let document = json!({
         "command": request.command().command_name(),
         "execution": admission_resolution_value_v1(resolution),
-        "execution_version": EXECUTION_DOCUMENT_VERSION_V4,
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V5,
         "payload": payload,
         "preconditions": preconditions,
         "selector": request.selector(),
@@ -2125,6 +2142,7 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
         SliceCommandV1::SessionStart(input) => (
             json!({}),
             json!({
+                "expected_procedure_digest": input.expected_procedure_digest,
                 "source": session_start_source_value_v1(&input.source),
                 "task_title": input.task_title,
             }),
@@ -2133,6 +2151,7 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
             session_identity_preconditions_value_v1(&input.preconditions),
             json!({
                 "confirmed": input.confirmed,
+                "expected_procedure_digest": input.start.expected_procedure_digest,
                 "source": session_start_source_value_v1(&input.start.source),
                 "task_title": input.start.task_title,
             }),
@@ -2569,7 +2588,10 @@ fn decode_execution_document_v1(
                 "legacy execution document lacks session identity fences",
             ));
         }
-        version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V4) => {
+        version
+            if version == u64::from(EXECUTION_DOCUMENT_VERSION_V4)
+                || version == u64::from(EXECUTION_DOCUMENT_VERSION_V5) =>
+        {
             require_exact_keys_v1(
                 object,
                 &[
@@ -2595,7 +2617,7 @@ fn decode_execution_document_v1(
     let command = value_string_v1(object, "command")?;
     let preconditions = value_object_v1(object, "preconditions")?;
     let payload = value_object_v1(object, "payload")?;
-    let command = decode_command_components_v1(command, preconditions, payload)?;
+    let command = decode_command_components_v1(version, command, preconditions, payload)?;
     let resolution = match resolution {
         AdmissionResolutionV1::None => {
             decode_admission_resolution_v1(&command, value_object_v1(object, "execution")?)?
@@ -2606,6 +2628,7 @@ fn decode_execution_document_v1(
 }
 
 fn decode_command_components_v1(
+    execution_version: u64,
     command: &str,
     preconditions: &Map<String, Value>,
     payload: &Map<String, Value>,
@@ -2631,21 +2654,48 @@ fn decode_command_components_v1(
         }
         "session.start" => {
             require_exact_keys_v1(preconditions, &[])?;
-            require_exact_keys_v1(payload, &["source", "task_title"])?;
+            let expected_procedure_digest =
+                if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V5) {
+                    require_exact_keys_v1(
+                        payload,
+                        &["expected_procedure_digest", "source", "task_title"],
+                    )?;
+                    value_optional_typed_v1(payload, "expected_procedure_digest")?
+                } else {
+                    require_exact_keys_v1(payload, &["source", "task_title"])?;
+                    None
+                };
             Ok(SliceCommandV1::SessionStart(SessionStartV1 {
                 source: decode_session_start_source_v1(value_object_v1(payload, "source")?)?,
+                expected_procedure_digest,
                 task_title: value_string_v1(payload, "task_title")?.to_owned(),
                 dry_run: false,
             }))
         }
         "session.start_replace" => {
-            require_exact_keys_v1(payload, &["confirmed", "source", "task_title"])?;
+            let expected_procedure_digest =
+                if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V5) {
+                    require_exact_keys_v1(
+                        payload,
+                        &[
+                            "confirmed",
+                            "expected_procedure_digest",
+                            "source",
+                            "task_title",
+                        ],
+                    )?;
+                    value_optional_typed_v1(payload, "expected_procedure_digest")?
+                } else {
+                    require_exact_keys_v1(payload, &["confirmed", "source", "task_title"])?;
+                    None
+                };
             Ok(SliceCommandV1::SessionStartReplace(
                 podway_protocol::SessionStartReplaceV1 {
                     start: SessionStartV1 {
                         source: decode_session_start_source_v1(value_object_v1(
                             payload, "source",
                         )?)?,
+                        expected_procedure_digest,
                         task_title: value_string_v1(payload, "task_title")?.to_owned(),
                         dry_run: false,
                     },

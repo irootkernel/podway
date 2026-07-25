@@ -158,7 +158,7 @@ all later epics are release-blocking work that is not yet implemented.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `PSTRT001` | Add the expected Procedure digest option | Planned | Reject a mismatching canonical Procedure digest without creating a session. | [AUT-START-001](reference/interfaces/34-automation-client-contract.md#15-procedure-start-integrity-aut-start-001004) |
+| `PSTRT001` | Add the expected Procedure digest option | Completed | Reject a mismatching canonical Procedure digest without creating a session. | [AUT-START-001](reference/interfaces/34-automation-client-contract.md#15-procedure-start-integrity-aut-start-001004) |
 | `PSTRT002` | Make the admitted Procedure immutable | Planned | Persist the canonical snapshot before reporting durable admission. | [AUT-START-002–003](reference/interfaces/34-automation-client-contract.md#15-procedure-start-integrity-aut-start-001004) |
 | `PSTRT003` | Bind start idempotency to the Procedure | Planned | Include the canonical digest and relevant start preconditions in request identity. | [AUT-START-004](reference/interfaces/34-automation-client-contract.md#15-procedure-start-integrity-aut-start-001004) |
 | `PSTRT004` | Return the admitted Procedure identity | Planned | Expose the exact digest in start and later session observations. | [AUT-START-004](reference/interfaces/34-automation-client-contract.md#15-procedure-start-integrity-aut-start-001004) |

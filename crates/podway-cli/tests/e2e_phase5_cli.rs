@@ -1143,6 +1143,7 @@ const START_SURFACE_FLAGS: &[&str] = &[
     "--if-session-revision",
     "--preset",
     "--procedure",
+    "--expect-procedure-digest",
     "--task",
     "--replace",
     "--dry-run",
@@ -1487,6 +1488,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         help_tokens: &[
             "--preset",
             "--procedure",
+            "--expect-procedure-digest",
             "--task",
             "--if-workspace-uuid",
             "--dry-run",
@@ -1511,6 +1513,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--if-workspace-uuid",
             "--if-session-id",
             "--if-session-revision",
+            "--expect-procedure-digest",
             "--yes",
             "--dry-run",
         ],

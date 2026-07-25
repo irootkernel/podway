@@ -313,6 +313,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("PROCEDURE_NOT_FOUND", 1, false),
     ("PROCEDURE_INVALID", 1, false),
     ("PROCEDURE_SCHEMA_UNSUPPORTED", 1, false),
+    ("PROCEDURE_DIGEST_MISMATCH", 4, false),
     ("PRESET_NOT_FOUND", 1, false),
     ("SESSION_NOT_FOUND", 1, false),
     ("SESSION_ID_MISMATCH", 4, false),
@@ -374,6 +375,25 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 None,
                 false,
             ),
+            "PROCEDURE_DIGEST_MISMATCH" => Map::from_iter([
+                (
+                    "schema".to_owned(),
+                    json!("podway.procedure-digest-mismatch-details/v1"),
+                ),
+                (
+                    "expected_procedure_digest".to_owned(),
+                    json!(
+                        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    ),
+                ),
+                (
+                    "actual_procedure_digest".to_owned(),
+                    json!(
+                        "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+                    ),
+                ),
+                ("admission".to_owned(), json!({"admitted": false})),
+            ]),
             _ => Map::new(),
         };
         let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {

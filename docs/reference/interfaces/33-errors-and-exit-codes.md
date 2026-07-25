@@ -156,8 +156,11 @@ terminal conflict discovered after admission uses `{ "admitted": true,
 identity errors are non-retryable exit-4 conflicts: callers must observe fresh
 identity before deciding whether a new operation is valid.
 
-The remaining v0.1.0 target adds stable entries for `PROCEDURE_DIGEST_MISMATCH`,
-invalid or over-long explicit socket paths, and closed
+`PROCEDURE_DIGEST_MISMATCH` is a non-retryable exit-4 conflict. Its closed
+`podway.procedure-digest-mismatch-details/v1` object contains the expected and actual canonical
+Procedure digests plus `{ "admitted": false }`; the comparison always precedes durable admission.
+
+The remaining v0.1.0 target adds stable entries for invalid or over-long explicit socket paths and closed
 admission-aware wait failures. The normative target is the
 [automation error contract](34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
 
