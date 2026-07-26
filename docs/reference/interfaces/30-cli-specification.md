@@ -188,6 +188,11 @@ podway start ... --replace --yes
 
 Exactly one of `--preset` or `--procedure` is required. `--replace` deletes an existing session before start and requires confirmation. `--dry-run` validates and shows the first stage without creating a session.
 
+A non-dry-run replacement with explicit `--if-workspace-uuid`, `--if-session-id`, and
+`--if-session-revision` sends those complete identity fences directly without a status preflight.
+This preserves the original replacement identity across an exact idempotent retry. If any fence is
+omitted, the CLI continues to preflight status and fills the missing identity from the observation.
+
 ### Status
 
 ```bash

@@ -1734,6 +1734,67 @@ fn start_replace_supplies_confirmation_and_identity_preconditions() {
     );
     assert!(request.preconditions().attempt_id().is_none());
 }
+
+#[test]
+fn pstrt_start_replace_with_complete_explicit_identity_skips_preflight_for_exact_replay() {
+    const PROCEDURE_DIGEST: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::StartOutput]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--if-workspace-uuid",
+        WORKSPACE_ID,
+        "--if-session-id",
+        SESSION_ID,
+        "--if-session-revision",
+        "12",
+        "--idempotency-key",
+        "pstrt-start-replace-exact-replay",
+        "start",
+        "--procedure",
+        "procedure.yaml",
+        "--expect-procedure-digest",
+        PROCEDURE_DIGEST,
+        "--task",
+        "Replacement",
+        "--replace",
+        "--yes",
+    ]);
+    assert!(
+        output.status.success(),
+        "fully fenced start replace failed: {output:?}"
+    );
+
+    let wires = daemon.finish();
+    assert_eq!(
+        wires.len(),
+        1,
+        "a fully fenced replacement must not issue a status preflight"
+    );
+    let request = decode_request(&wires[0]);
+    assert_eq!(request.command().as_str(), "session.start_replace");
+    assert_eq!(request.operation(), OperationV1::Mutate);
+    assert_eq!(
+        request.preconditions().session_id().map(SessionId::as_str),
+        Some(SESSION_ID)
+    );
+    assert_eq!(
+        request
+            .preconditions()
+            .session_revision()
+            .map(Revision::get),
+        Some(12)
+    );
+    assert_eq!(
+        request.payload()["expected_procedure_digest"],
+        PROCEDURE_DIGEST
+    );
+}
+
 #[test]
 fn start_replace_dry_run_uses_the_readonly_preflighted_preview_contract() {
     let fixture = Fixture::new();

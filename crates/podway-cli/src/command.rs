@@ -1065,7 +1065,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             None
         };
 
-    if cli.command.needs_preflight() {
+    if cli.command.needs_preflight() && !fully_fenced_start_replace(&cli.command, &explicit) {
         let status_request = build_request(
             "session.status",
             &target,
@@ -1136,6 +1136,20 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
 fn requires_idempotency_key(operation: OperationV1) -> bool {
     matches!(operation, OperationV1::Mutate | OperationV1::Bootstrap)
 }
+
+fn fully_fenced_start_replace(command: &Command, explicit: &ExplicitPreconditions) -> bool {
+    matches!(
+        command,
+        Command::Start(StartArgs {
+            replace: true,
+            dry_run: false,
+            ..
+        })
+    ) && explicit.workspace_id.is_some()
+        && explicit.session_id.is_some()
+        && explicit.session_revision.is_some()
+}
+
 fn reset_probe_can_recover(error: &podway_protocol::ErrorEnvelopeV1) -> bool {
     matches!(
         error.code().as_str(),
@@ -1171,6 +1185,19 @@ fn direct_preconditions(
     explicit: &ExplicitPreconditions,
 ) -> Result<PreconditionsV1, LocalFailure> {
     match command {
+        Command::Start(StartArgs {
+            replace: true,
+            dry_run: false,
+            ..
+        }) => PreconditionsV1::new(
+            explicit.session_id.clone(),
+            explicit.session_revision,
+            None,
+            None,
+            None,
+            None,
+        )
+        .map_err(|_| LocalFailure::request_invalid("start-replace preconditions are invalid")),
         Command::Status(_) | Command::Next(_) => {
             PreconditionsV1::new(explicit.session_id.clone(), None, None, None, None, None).map_err(
                 |_| LocalFailure::request_invalid("session identity precondition is invalid"),

@@ -61,11 +61,22 @@ impl FixtureV1 {
     }
 
     fn run(&self, workspace: &Path, command: &str, arguments: &[&str]) -> Output {
+        self.run_with_global_arguments(workspace, &[], command, arguments)
+    }
+
+    fn run_with_global_arguments(
+        &self,
+        workspace: &Path,
+        global_arguments: &[&str],
+        command: &str,
+        arguments: &[&str],
+    ) -> Output {
         Command::new(env!("CARGO_BIN_EXE_podway"))
             .args(["--json", "--socket"])
             .arg(self.paths.socket_path().as_path())
             .arg("--worktree")
             .arg(workspace)
+            .args(global_arguments)
             .arg(command)
             .args(arguments)
             .current_dir(&self.root)
@@ -710,7 +721,25 @@ fn cli_output(
     arguments: &[&str],
 ) -> OutputEnvelopeV1 {
     let expected_wire_command = wire_command(command);
-    let output = fixture.run(workspace, command, arguments);
+    cli_output_with_global_arguments(
+        fixture,
+        workspace,
+        &[],
+        command,
+        arguments,
+        expected_wire_command,
+    )
+}
+
+fn cli_output_with_global_arguments(
+    fixture: &FixtureV1,
+    workspace: &Path,
+    global_arguments: &[&str],
+    command: &str,
+    arguments: &[&str],
+    expected_wire_command: &str,
+) -> OutputEnvelopeV1 {
+    let output = fixture.run_with_global_arguments(workspace, global_arguments, command, arguments);
     assert!(
         output.stderr.is_empty(),
         "successful CLI {command} must not write stderr: {}",
@@ -813,7 +842,32 @@ fn cli_error(
     expected_retryable: bool,
 ) {
     let expected_wire_command = wire_command(command);
-    let output = fixture.run(workspace, command, arguments);
+    cli_error_with_global_arguments(
+        fixture,
+        workspace,
+        &[],
+        command,
+        arguments,
+        expected_wire_command,
+        expected_code,
+        expected_exit_code,
+        expected_retryable,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cli_error_with_global_arguments(
+    fixture: &FixtureV1,
+    workspace: &Path,
+    global_arguments: &[&str],
+    command: &str,
+    arguments: &[&str],
+    expected_wire_command: &str,
+    expected_code: &str,
+    expected_exit_code: i32,
+    expected_retryable: bool,
+) {
+    let output = fixture.run_with_global_arguments(workspace, global_arguments, command, arguments);
     let raw: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "CLI {command} must emit its public JSON error: {error}; stdout={} stderr={}",
@@ -1226,6 +1280,221 @@ rework:
 
     restarted_daemon.stop();
 }
+
+#[test]
+#[ignore = "run with a freshly built podwayd artifact and its canonical build receipt"]
+fn pstrt_start_replace_production_vertical_matches_start_integrity_and_exact_replay() {
+    const PROCEDURE_FILE: &str = "pstrt-replacement.yaml";
+    const PROCEDURE_YAML: &str = r#"schema: podway.procedure/v1
+id: pstrt-replacement
+version: "1"
+name: PSTRT replacement acceptance
+stages:
+  - id: replace
+    title: Replace
+    instructions:
+      - Exercise the admitted replacement Procedure snapshot.
+    items:
+      - type: confirm
+        id: accepted
+        prompt: Replacement accepted
+        required: true
+rework:
+  allow_return_to: any_previous
+"#;
+    const DIFFERENT_DIGEST: &str =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const IDEMPOTENCY_KEY: &str = "pstrt-production-replacement-exact-replay";
+
+    let fixture = FixtureV1::new();
+    let workspace = fixture.worktree.clone();
+    let procedure_path = workspace.join(PROCEDURE_FILE);
+    fs::write(&procedure_path, PROCEDURE_YAML)
+        .expect("replacement Procedure fixture must be written inside the worktree");
+    let expected_digest = parse_procedure_v1(PROCEDURE_YAML, ProcedureFormatV1::Yaml)
+        .expect("replacement Procedure fixture must be valid")
+        .digest()
+        .as_str()
+        .to_owned();
+
+    let daemon = RunningDaemonV1::start(&fixture);
+    cli_output(&fixture, &workspace, "init", &[]);
+    cli_output(
+        &fixture,
+        &workspace,
+        "start",
+        &["--preset", "sw-dev", "--task", "Seed replacement identity"],
+    );
+    let (seed_status_output, seed_status) = public_status(&fixture, &workspace);
+    let workspace_uuid = seed_status_output
+        .workspace()
+        .expect("seed status must identify the workspace")
+        .uuid()
+        .as_str()
+        .to_owned();
+    let seed_session_id = seed_status.session.id.as_str().to_owned();
+    let seed_session_revision = seed_status.session.revision.get().to_string();
+    let identity_arguments = [
+        "--if-workspace-uuid",
+        workspace_uuid.as_str(),
+        "--if-session-id",
+        seed_session_id.as_str(),
+        "--if-session-revision",
+        seed_session_revision.as_str(),
+    ];
+    let jobs_before_guard = public_jobs(&fixture, &workspace);
+    let job_count_before_guard = jobs(&jobs_before_guard).len();
+
+    cli_error_with_global_arguments(
+        &fixture,
+        &workspace,
+        &identity_arguments,
+        "start",
+        &[
+            "--procedure",
+            PROCEDURE_FILE,
+            "--expect-procedure-digest",
+            DIFFERENT_DIGEST,
+            "--task",
+            "Reject mismatched replacement",
+            "--replace",
+            "--yes",
+            "--idempotency-key",
+            "pstrt-production-replacement-mismatch",
+        ],
+        "session.start_replace",
+        "PROCEDURE_DIGEST_MISMATCH",
+        4,
+        false,
+    );
+    assert_eq!(
+        jobs(&public_jobs(&fixture, &workspace)).len(),
+        job_count_before_guard,
+        "a replacement digest mismatch must not admit a durable job"
+    );
+    let (_, status_after_mismatch) = public_status(&fixture, &workspace);
+    assert_eq!(status_after_mismatch.session.id.as_str(), seed_session_id);
+    assert_eq!(
+        status_after_mismatch.session.revision.get().to_string(),
+        seed_session_revision
+    );
+
+    let replacement_arguments = [
+        "--procedure",
+        PROCEDURE_FILE,
+        "--expect-procedure-digest",
+        expected_digest.as_str(),
+        "--task",
+        "Bind the replacement Procedure",
+        "--replace",
+        "--yes",
+        "--idempotency-key",
+        IDEMPOTENCY_KEY,
+    ];
+    let replaced = cli_output_with_global_arguments(
+        &fixture,
+        &workspace,
+        &identity_arguments,
+        "start",
+        &replacement_arguments,
+        "session.start_replace",
+    );
+    assert_eq!(
+        replaced
+            .result()
+            .get("procedure_digest")
+            .and_then(Value::as_str),
+        Some(expected_digest.as_str())
+    );
+    let replacement_job = replaced
+        .job()
+        .expect("terminal replacement must expose its durable job")
+        .clone();
+    let replacement_session = replaced
+        .session()
+        .expect("terminal replacement must expose its admitted session")
+        .clone();
+    let replacement_result = replaced.result().clone();
+    assert_ne!(replacement_session.id().as_str(), seed_session_id);
+
+    let (_, replacement_status) = public_status(&fixture, &workspace);
+    assert_eq!(replacement_status.session.id, *replacement_session.id());
+    assert_eq!(
+        replacement_status.task.procedure.digest.as_str(),
+        expected_digest
+    );
+    let listed = public_jobs(&fixture, &workspace);
+    let listed_replacement = jobs(&listed)
+        .iter()
+        .find(|job| job["id"].as_str() == Some(replacement_job.id().as_str()))
+        .expect("job.list must contain the replacement job");
+    assert_terminal_procedure_digest(&listed_replacement["terminal_response"], &expected_digest);
+    for (subcommand, wire_command) in [("status", "job.status"), ("wait", "job.wait")] {
+        let output = cli_job_output(
+            &fixture,
+            &workspace,
+            &[subcommand, replacement_job.id().as_str()],
+            wire_command,
+        );
+        assert_terminal_procedure_digest(
+            output
+                .result()
+                .get("job")
+                .expect("terminal replacement read must expose its immutable response"),
+            &expected_digest,
+        );
+    }
+
+    daemon.stop();
+    fs::remove_file(&procedure_path)
+        .expect("replacement source must be deleted before exact replay");
+    let restarted_daemon = RunningDaemonV1::start(&fixture);
+    let replayed = cli_output_with_global_arguments(
+        &fixture,
+        &workspace,
+        &identity_arguments,
+        "start",
+        &replacement_arguments,
+        "session.start_replace",
+    );
+    assert_eq!(replayed.job(), Some(&replacement_job));
+    assert_eq!(replayed.session(), Some(&replacement_session));
+    assert_eq!(replayed.result(), &replacement_result);
+
+    cli_error_with_global_arguments(
+        &fixture,
+        &workspace,
+        &identity_arguments,
+        "start",
+        &[
+            "--procedure",
+            PROCEDURE_FILE,
+            "--expect-procedure-digest",
+            DIFFERENT_DIGEST,
+            "--task",
+            "Bind the replacement Procedure",
+            "--replace",
+            "--yes",
+            "--idempotency-key",
+            IDEMPOTENCY_KEY,
+        ],
+        "session.start_replace",
+        "IDEMPOTENCY_KEY_REUSED",
+        2,
+        false,
+    );
+    assert_eq!(
+        jobs(&public_jobs(&fixture, &workspace)).len(),
+        job_count_before_guard + 1,
+        "replacement replay and conflict must not admit another job"
+    );
+    let (_, final_status) = public_status(&fixture, &workspace);
+    assert_eq!(final_status.session.id, *replacement_session.id());
+    assert_eq!(final_status.task.procedure.digest.as_str(), expected_digest);
+
+    restarted_daemon.stop();
+}
+
 #[test]
 #[ignore = "run with tools/run_g005_vertical.py so Cargo supplies a freshly built podwayd artifact"]
 fn pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history() {

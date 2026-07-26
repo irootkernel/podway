@@ -63,7 +63,8 @@ Requirements:
 - `.podway` MUST resolve within the worktree;
 - `.podway/runtime` MUST be a real directory, not a symlink;
 - configuration procedure paths MUST resolve within the worktree;
-- local procedure files MAY traverse symlinks only when the canonical target remains inside the worktree;
+- local procedure files MUST NOT traverse symlinks, including links whose targets remain inside the worktree;
+- local procedure admission MUST reject worktree-root or source-path replacement detected during the bounded read;
 - local artifact paths MUST canonicalize inside the worktree;
 - external artifact locations use the explicit `reference` form and are never treated as filesystem paths;
 - `..` components and symlinks MUST NOT permit escape.

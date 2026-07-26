@@ -6,9 +6,10 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use podway_config::MAX_PROCEDURE_DOCUMENT_BYTES_V1;
 use podway_core::{
     ArtifactLocationKindV1, ArtifactValueV1, AttemptId, BlockerId, DomainError, ItemId, JobId,
-    LocalArtifactVerificationV1, ProcedureSnapshotId, SessionId, UnixMillis,
+    LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1, SessionId, UnixMillis,
 };
 use podway_git::{
     Base64UrlPathBytesV1, DiagnosticPathDisplayV1, GitInvariantViolationV1, GitResolverErrorV1,
@@ -20,8 +21,9 @@ use uuid::Uuid;
 
 use crate::{
     execution::{
-        ArtifactVerifierV1, ExecutionBoundaryErrorV1, ExecutionClockV1, ExecutionIdSourceV1,
-        WorkspaceRevalidatorV1,
+        ArtifactVerifierV1, EmbeddedPresetProcedureProviderV1, ExecutionBoundaryErrorV1,
+        ExecutionClockV1, ExecutionIdSourceV1, ProcedureProviderV1, WorkspaceRevalidatorV1,
+        workspace_procedure_snapshot_from_bytes_v1,
     },
     workspace::{
         ResolvedWorkspaceV1, WorkspaceBindingInspectorV1, WorkspaceResolutionErrorV1,
@@ -209,6 +211,85 @@ where
 pub struct NativeArtifactVerifierV1<I> {
     resolver: WorkspaceResolverV1<NativeGitResolverV1, I>,
     git_resolver: NativeGitResolverV1,
+}
+
+/// Descriptor-anchored production Procedure provider over a freshly revalidated Store/Git root.
+pub struct NativeProcedureProviderV1<I> {
+    resolver: WorkspaceResolverV1<NativeGitResolverV1, I>,
+    git_resolver: NativeGitResolverV1,
+}
+
+impl<I> NativeProcedureProviderV1<I>
+where
+    I: WorkspaceBindingInspectorV1,
+{
+    pub fn new(binding_inspector: I) -> Self {
+        Self {
+            resolver: WorkspaceResolverV1::new(NativeGitResolverV1::new(), binding_inspector),
+            git_resolver: NativeGitResolverV1::new(),
+        }
+    }
+
+    fn resolve_bound_workspace(
+        &self,
+        workspace: &WorkspaceBindingV1,
+    ) -> Result<ResolvedWorkspaceV1, ExecutionBoundaryErrorV1> {
+        let selector = worktree_selector_from_store_root_v1(workspace)?;
+        let resolved = self
+            .resolver
+            .resolve_existing(selector, Some(workspace.identity().workspace_uuid()))
+            .map_err(workspace_resolution_boundary_error_v1)?;
+        if resolved.store_identity() != workspace.identity() {
+            return Err(domain_invalid_state_v1(
+                "Procedure workspace identity does not match the Store binding",
+            ));
+        }
+        Ok(resolved)
+    }
+}
+
+impl<I> ProcedureProviderV1 for NativeProcedureProviderV1<I>
+where
+    I: WorkspaceBindingInspectorV1 + Send + Sync,
+{
+    fn load_preset_snapshot(
+        &self,
+        preset: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+        EmbeddedPresetProcedureProviderV1.load_preset_snapshot(preset, snapshot_id, created_at)
+    }
+
+    fn load_workspace_procedure_snapshot(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        procedure: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+        let resolved = self.resolve_bound_workspace(workspace)?;
+        let candidate = artifact_path_from_root_v1(resolved.workspace_root(), procedure)?;
+        let source = self
+            .git_resolver
+            .read_bounded_local_file(
+                resolved.worktree(),
+                &candidate,
+                MAX_PROCEDURE_DOCUMENT_BYTES_V1,
+            )
+            .map_err(git_resolution_boundary_error_v1)?;
+        if source.canonical_path() != &candidate {
+            return Err(domain_invalid_state_v1(
+                "Procedure resolver returned a path outside the requested worktree location",
+            ));
+        }
+        workspace_procedure_snapshot_from_bytes_v1(
+            procedure,
+            source.bytes(),
+            snapshot_id,
+            created_at,
+        )
+    }
 }
 
 impl<I> NativeArtifactVerifierV1<I>

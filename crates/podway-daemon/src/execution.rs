@@ -4,20 +4,14 @@
 //! a canonical, self-contained execution document. Legacy v1/v2 documents fail closed because they
 //! lack immutable admission resolutions. Query commands remain outside of this execution path.
 
-use std::{
-    error::Error,
-    fmt, fs,
-    io::Read,
-    path::{Component, Path},
-};
+use std::{error::Error, fmt};
 
 use crate::{
     observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
     workspace::ResetMarkerV1,
 };
 use podway_config::{
-    MAX_PROCEDURE_DOCUMENT_BYTES_V1, ProcedureFormatV1, ProcedureSourceLabel,
-    ProcedureWarningPolicyV1, parse_procedure_v1,
+    ProcedureFormatV1, ProcedureSourceLabel, ProcedureWarningPolicyV1, parse_procedure_v1,
 };
 use podway_core::{
     AddItemV1, ArtifactLocationKindV1, ArtifactValueV1, AttachItemV1, AttemptId, AttemptV1,
@@ -184,141 +178,56 @@ impl ProcedureProviderV1 for EmbeddedPresetProcedureProviderV1 {
 
     fn load_workspace_procedure_snapshot(
         &self,
-        workspace: &WorkspaceBindingV1,
-        procedure: &str,
-        snapshot_id: ProcedureSnapshotId,
-        created_at: UnixMillis,
+        _workspace: &WorkspaceBindingV1,
+        _procedure: &str,
+        _snapshot_id: ProcedureSnapshotId,
+        _created_at: UnixMillis,
     ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        let source_label = ProcedureSourceLabel::workspace_path(procedure).map_err(|_| {
-            ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                reason: "workspace procedure path is invalid",
-            })
-        })?;
-        let path = verified_workspace_procedure_path_v1(workspace, procedure)?;
-        let metadata = fs::metadata(&path).map_err(|_| {
-            ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                reason: "workspace procedure source cannot be read",
-            })
-        })?;
-        if !metadata.is_file() || metadata.len() > MAX_PROCEDURE_DOCUMENT_BYTES_V1 as u64 {
-            return Err(ExecutionBoundaryErrorV1::domain(
-                DomainError::InvalidState {
-                    reason: "workspace procedure source is not a bounded regular file",
-                },
-            ));
-        }
-        let capacity = usize::try_from(metadata.len()).map_err(|_| {
-            ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                reason: "workspace procedure source size is invalid",
-            })
-        })?;
-        let mut source = Vec::with_capacity(capacity);
-        fs::File::open(&path)
-            .and_then(|mut file| file.read_to_end(&mut source))
-            .map_err(|_| {
-                ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                    reason: "workspace procedure source cannot be read",
-                })
-            })?;
-        if source.len() > MAX_PROCEDURE_DOCUMENT_BYTES_V1 {
-            return Err(ExecutionBoundaryErrorV1::domain(
-                DomainError::InvalidState {
-                    reason: "workspace procedure source exceeds the admission limit",
-                },
-            ));
-        }
-        parse_procedure_v1(source, workspace_procedure_format_v1(procedure)?)
-            .and_then(|procedure| {
-                procedure.into_snapshot_v1(
-                    snapshot_id,
-                    source_label,
-                    created_at,
-                    ProcedureWarningPolicyV1::Accept,
-                )
-            })
-            .map_err(|_| {
-                ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                    reason: "workspace procedure admission failed",
-                })
-            })
+        Err(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "workspace procedure sources require native workspace authority",
+            },
+        ))
     }
 }
 
-fn workspace_procedure_format_v1(
+pub(crate) fn workspace_procedure_snapshot_from_bytes_v1(
     procedure: &str,
-) -> Result<ProcedureFormatV1, ExecutionBoundaryErrorV1> {
-    match Path::new(procedure)
+    source: &[u8],
+    snapshot_id: ProcedureSnapshotId,
+    created_at: UnixMillis,
+) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+    let source_label = ProcedureSourceLabel::workspace_path(procedure).map_err(|_| {
+        ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
+            reason: "workspace procedure path is invalid",
+        })
+    })?;
+    let format = match std::path::Path::new(procedure)
         .extension()
         .and_then(|extension| extension.to_str())
     {
-        Some("json") => Ok(ProcedureFormatV1::Json),
-        Some("yaml" | "yml") => Ok(ProcedureFormatV1::Yaml),
+        Some("json") => ProcedureFormatV1::Json,
+        Some("yaml" | "yml") => ProcedureFormatV1::Yaml,
         _ => Err(ExecutionBoundaryErrorV1::domain(
             DomainError::InvalidState {
                 reason: "workspace procedure source has an unsupported extension",
             },
-        )),
-    }
-}
-
-fn verified_workspace_procedure_path_v1(
-    workspace: &WorkspaceBindingV1,
-    procedure: &str,
-) -> Result<std::path::PathBuf, ExecutionBoundaryErrorV1> {
-    #[cfg(unix)]
-    {
-        let root = workspace.last_validated_root().to_path_buf();
-        let canonical_root = fs::canonicalize(&root).map_err(|_| {
+        ))?,
+    };
+    parse_procedure_v1(source, format)
+        .and_then(|procedure| {
+            procedure.into_snapshot_v1(
+                snapshot_id,
+                source_label,
+                created_at,
+                ProcedureWarningPolicyV1::Accept,
+            )
+        })
+        .map_err(|_| {
             ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                reason: "workspace root cannot be canonicalized for procedure admission",
+                reason: "workspace procedure admission failed",
             })
-        })?;
-        let mut candidate = root;
-        for component in Path::new(procedure).components() {
-            let Component::Normal(component) = component else {
-                return Err(ExecutionBoundaryErrorV1::domain(
-                    DomainError::InvalidState {
-                        reason: "workspace procedure source escapes the worktree",
-                    },
-                ));
-            };
-            candidate.push(component);
-            let metadata = fs::symlink_metadata(&candidate).map_err(|_| {
-                ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                    reason: "workspace procedure source cannot be read",
-                })
-            })?;
-            if metadata.file_type().is_symlink() {
-                return Err(ExecutionBoundaryErrorV1::domain(
-                    DomainError::InvalidState {
-                        reason: "workspace procedure source must not traverse symlinks",
-                    },
-                ));
-            }
-        }
-        let canonical_candidate = fs::canonicalize(&candidate).map_err(|_| {
-            ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                reason: "workspace procedure source cannot be read",
-            })
-        })?;
-        if !canonical_candidate.starts_with(canonical_root) {
-            return Err(ExecutionBoundaryErrorV1::domain(
-                DomainError::InvalidState {
-                    reason: "workspace procedure source escapes the worktree",
-                },
-            ));
-        }
-        Ok(candidate)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (workspace, procedure);
-        Err(ExecutionBoundaryErrorV1::domain(
-            DomainError::InvalidState {
-                reason: "workspace procedure sources require Unix path support",
-            },
-        ))
-    }
+        })
 }
 
 /// Revalidates workspace evidence into the durable identity and lossless workspace root accepted

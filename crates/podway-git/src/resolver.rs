@@ -12,7 +12,7 @@ use crate::native;
 use crate::{
     ContainmentMetadataV1, DurableWorktreeIdentityV1, GitInvariantViolationV1, GitReadOperationV1,
     GitResolverContractV1, GitResolverErrorV1, HashedLocalArtifactV1, LosslessPathV1,
-    ValidatedWorktreeV1, WorkspaceIdentityStateV1, WorkspaceUuidVerificationV1,
+    ReadLocalFileV1, ValidatedWorktreeV1, WorkspaceIdentityStateV1, WorkspaceUuidVerificationV1,
     WorktreeMoveMetadataV1, WorktreeRepairMetadataV1, WorktreeRootsV1, WorktreeSelectorV1,
 };
 
@@ -104,6 +104,59 @@ impl NativeGitResolverV1 {
             native::lossless_path(opened.path())?,
             sha256_digest(hasher)?,
             byte_length,
+        ))
+    }
+
+    /// Reads one stable regular file beneath a freshly revalidated worktree root.
+    ///
+    /// The same descriptor-anchored and post-read identity checks used for local artifacts apply.
+    /// The caller-provided bound is checked before allocation and during streaming.
+    pub fn read_bounded_local_file(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+        file: &LosslessPathV1,
+        max_bytes: usize,
+    ) -> Result<ReadLocalFileV1, GitResolverErrorV1> {
+        let layout = self.reestablish_artifact_layout(worktree)?;
+        let supplied = native::decode_lossless_path(file)?;
+        if !native::is_strictly_contained(layout.worktree_root.path(), &supplied) {
+            return Err(GitResolverErrorV1::PathEscape { path: file.clone() });
+        }
+
+        let mut opened = native::open_artifact_beneath(&layout.worktree_root, &supplied)
+            .map_err(map_snapshot_change_to_artifact)?;
+        if opened.expected_size() > max_bytes as u64 {
+            return Err(GitResolverErrorV1::Representation {
+                problem: crate::GitRepresentationProblemV1::LocalFileTooLarge,
+            });
+        }
+        let mut bytes = Vec::with_capacity(opened.expected_size() as usize);
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let count = opened.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len().saturating_add(count) > max_bytes {
+                return Err(GitResolverErrorV1::Representation {
+                    problem: crate::GitRepresentationProblemV1::LocalFileTooLarge,
+                });
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+
+        #[cfg(test)]
+        native::synchronize_artifact_hash_replacement_for_test();
+        if bytes.len() as u64 != opened.expected_size() {
+            return Err(artifact_metadata_changed());
+        }
+        layout.validate_artifact_snapshot()?;
+        self.ensure_artifact_layout_matches(worktree, &layout)?;
+        opened.validate()?;
+
+        Ok(ReadLocalFileV1::new(
+            native::lossless_path(opened.path())?,
+            bytes,
         ))
     }
 
@@ -621,5 +674,114 @@ mod tests {
             fs::read(worktree.join("artifact")).expect("replacement bytes"),
             b"replacement artifact"
         );
+    }
+
+    #[test]
+    fn bounded_local_file_read_rejects_oversize_and_symlink_sources() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let worktree = temporary.path().join("worktree");
+        create_main(&worktree);
+        let worktree = fs::canonicalize(&worktree).expect("canonical worktree");
+        let source = worktree.join("procedure.yaml");
+        fs::write(&source, b"stable procedure bytes").expect("procedure bytes");
+
+        let resolver = NativeGitResolverV1::new();
+        let validated = resolver
+            .resolve_native(selector(&worktree))
+            .expect("validated worktree");
+        let source_path = native::lossless_path(&source).expect("lossless procedure path");
+        let read = resolver
+            .read_bounded_local_file(&validated, &source_path, 64)
+            .expect("bounded regular file");
+        assert_eq!(read.bytes(), b"stable procedure bytes");
+        assert_eq!(read.canonical_path(), &source_path);
+
+        assert!(matches!(
+            resolver.read_bounded_local_file(&validated, &source_path, 4),
+            Err(GitResolverErrorV1::Representation {
+                problem: crate::GitRepresentationProblemV1::LocalFileTooLarge
+            })
+        ));
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&source, worktree.join("linked.yaml"))
+                .expect("procedure symlink");
+            let linked =
+                native::lossless_path(&worktree.join("linked.yaml")).expect("lossless linked path");
+            assert!(
+                resolver
+                    .read_bounded_local_file(&validated, &linked, 64)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_local_file_read_rejects_a_stale_replaced_root() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let worktree = temporary.path().join("worktree");
+        create_main(&worktree);
+        let worktree = fs::canonicalize(&worktree).expect("canonical worktree");
+        fs::write(worktree.join("procedure.yaml"), b"original procedure")
+            .expect("original procedure");
+        let resolver = NativeGitResolverV1::new();
+        let validated = resolver
+            .resolve_native(selector(&worktree))
+            .expect("validated worktree");
+        let source = native::lossless_path(&worktree.join("procedure.yaml"))
+            .expect("lossless procedure path");
+
+        let retired = temporary.path().join("retired");
+        fs::rename(&worktree, &retired).expect("retire original worktree");
+        create_main(&worktree);
+        fs::write(worktree.join("procedure.yaml"), b"replacement procedure")
+            .expect("replacement procedure");
+
+        assert!(matches!(
+            resolver.read_bounded_local_file(&validated, &source, 64),
+            Err(GitResolverErrorV1::Invariant {
+                problem: GitInvariantViolationV1::MetadataChangedDuringArtifactHash
+            })
+        ));
+    }
+
+    #[test]
+    fn synchronized_bounded_read_rejects_post_open_root_replacement() {
+        let _hook_guard = ARTIFACT_HASH_TEST_LOCK
+            .lock()
+            .expect("artifact hash test lock");
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let worktree = temporary.path().join("worktree");
+        create_main(&worktree);
+        let worktree = fs::canonicalize(&worktree).expect("canonical worktree");
+        fs::write(worktree.join("procedure.yaml"), b"original procedure")
+            .expect("original procedure");
+
+        let resolver = NativeGitResolverV1::new();
+        let validated = resolver
+            .resolve_native(selector(&worktree))
+            .expect("validated worktree");
+        let source = native::lossless_path(&worktree.join("procedure.yaml"))
+            .expect("lossless procedure path");
+        let barrier = Arc::new(Barrier::new(2));
+        native::install_artifact_hash_replacement_hook_for_test(Arc::clone(&barrier));
+
+        let worker =
+            thread::spawn(move || resolver.read_bounded_local_file(&validated, &source, 64));
+        barrier.wait();
+        let retired = temporary.path().join("retired");
+        fs::rename(&worktree, &retired).expect("retire original worktree");
+        create_main(&worktree);
+        fs::write(worktree.join("procedure.yaml"), b"replacement procedure")
+            .expect("replacement procedure");
+        barrier.wait();
+
+        assert!(matches!(
+            worker.join().expect("read worker"),
+            Err(GitResolverErrorV1::Invariant {
+                problem: GitInvariantViolationV1::MetadataChangedDuringArtifactHash
+            })
+        ));
     }
 }

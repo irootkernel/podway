@@ -21,6 +21,54 @@ use podway_store::{
 use sha2::{Digest as _, Sha256};
 use support_phase4_workspace::{git_worktrees, selector as git_selector};
 
+#[derive(Clone, Copy)]
+struct FixtureWorkspaceFileProcedures;
+
+impl ProcedureProviderV1 for FixtureWorkspaceFileProcedures {
+    fn load_preset_snapshot(
+        &self,
+        preset: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+        EmbeddedPresetProcedureProviderV1.load_preset_snapshot(preset, snapshot_id, created_at)
+    }
+
+    fn load_workspace_procedure_snapshot(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        procedure: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+        let source = std::fs::read(
+            workspace
+                .last_validated_root()
+                .to_path_buf()
+                .join(procedure),
+        )
+        .map_err(|_| {
+            ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
+                reason: "fixture Procedure source cannot be read",
+            })
+        })?;
+        parse_procedure_v1(source, ProcedureFormatV1::Yaml)
+            .and_then(|procedure_document| {
+                procedure_document.into_snapshot_v1(
+                    snapshot_id,
+                    ProcedureSourceLabel::workspace_path(procedure)?,
+                    created_at,
+                    ProcedureWarningPolicyV1::Accept,
+                )
+            })
+            .map_err(|_| {
+                ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
+                    reason: "fixture Procedure admission failed",
+                })
+            })
+    }
+}
+
 fn assert_sentinel_absent_from_sqlite_files(database_path: &std::path::Path, sentinel: &[u8]) {
     for suffix in ["", "-wal", "-shm"] {
         let path = std::path::PathBuf::from(format!("{}{}", database_path.display(), suffix));
@@ -1068,7 +1116,7 @@ fn pstrt005_admitted_custom_procedure_survives_source_drift_worker_delay_and_eng
             store.clone(),
             FixtureIds::new(),
             FixtureClock::new(),
-            EmbeddedPresetProcedureProviderV1,
+            FixtureWorkspaceFileProcedures,
             FixtureArtifacts,
             FixtureWorkspaces::stable(binding.clone()),
         );
@@ -1165,7 +1213,7 @@ fn pstrt005_terminal_replay_and_digest_conflict_need_no_fresh_dependencies() {
         store.clone(),
         FixtureIds::new(),
         FixtureClock::new(),
-        EmbeddedPresetProcedureProviderV1,
+        FixtureWorkspaceFileProcedures,
         FixtureArtifacts,
         FixtureWorkspaces::stable(binding.clone()),
     );
@@ -1285,7 +1333,7 @@ fn assert_pruned_start_replay(legacy_v0: bool) {
         store.clone(),
         FixtureIds::new(),
         FixtureClock::new(),
-        EmbeddedPresetProcedureProviderV1,
+        FixtureWorkspaceFileProcedures,
         FixtureArtifacts,
         FixtureWorkspaces::stable(binding.clone()),
     );
@@ -1495,7 +1543,7 @@ fn pstrt_v5_failed_and_cancelled_starts_retain_only_bounded_start_identity() {
             store.clone(),
             FixtureIds::new(),
             FixtureClock::new(),
-            EmbeddedPresetProcedureProviderV1,
+            FixtureWorkspaceFileProcedures,
             FixtureArtifacts,
             FixtureWorkspaces::stable(binding),
         );
@@ -1978,7 +2026,7 @@ fn g006_reset_preparation_rejects_a_mismatched_previous_workspace_uuid() {
 }
 #[cfg(unix)]
 #[test]
-fn g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal() {
+fn embedded_provider_rejects_workspace_procedure_without_native_authority() {
     let unique = format!(
         "podway-phase5-procedure-{}-{}",
         std::process::id(),
@@ -2002,17 +2050,6 @@ fn g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_tr
                 &workspace,
                 "procedure.yaml",
                 ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009901").unwrap(),
-                UnixMillis::new(100),
-            )
-            .is_ok()
-    );
-    std::os::unix::fs::symlink(&procedure, root.join("linked.yaml")).unwrap();
-    assert!(
-        EmbeddedPresetProcedureProviderV1
-            .load_workspace_procedure_snapshot(
-                &workspace,
-                "linked.yaml",
-                ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009902").unwrap(),
                 UnixMillis::new(100),
             )
             .is_err()

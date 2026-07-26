@@ -13,14 +13,18 @@ use std::{
     process::Command,
 };
 
-use podway_core::{DomainError, ItemId, UnixMillis};
+use nix::{sys::stat::Mode, unistd::mkfifo};
+use podway_core::{
+    DomainError, ItemId, MAX_PROCEDURE_DOCUMENT_BYTES_V1, ProcedureSnapshotId, UnixMillis,
+};
 use podway_daemon::{
     execution::{
-        ArtifactVerifierV1, ExecutionBoundaryErrorV1, ExecutionIdSourceV1, WorkspaceRevalidatorV1,
+        ArtifactVerifierV1, ExecutionBoundaryErrorV1, ExecutionIdSourceV1, ProcedureProviderV1,
+        WorkspaceRevalidatorV1,
     },
     native_execution::{
-        NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeWorkspaceRevalidatorV1,
-        embedded_media_type_v1,
+        NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeProcedureProviderV1,
+        NativeWorkspaceRevalidatorV1, embedded_media_type_v1,
     },
     workspace::{SqliteWorkspaceBindingInspectorV1, WorkspaceResolverV1},
 };
@@ -33,6 +37,7 @@ use podway_store::{SqliteStoreOptionsV1, SqliteStoreV1, WorkspaceBindingV1};
 use uuid::{Uuid, Version};
 
 const FIXTURE_DISPLAY_V1: &str = "native execution fixture";
+const PROCEDURE_YAML: &[u8] = include_bytes!("../../../presets/sw-dev.yaml");
 
 struct WorktreeFixtureV1 {
     temporary_root: PathBuf,
@@ -142,6 +147,12 @@ fn artifact_verifier_v1(
     NativeArtifactVerifierV1::new(SqliteWorkspaceBindingInspectorV1::new(options))
 }
 
+fn procedure_provider_v1(
+    options: SqliteStoreOptionsV1,
+) -> NativeProcedureProviderV1<SqliteWorkspaceBindingInspectorV1> {
+    NativeProcedureProviderV1::new(SqliteWorkspaceBindingInspectorV1::new(options))
+}
+
 fn assert_domain_rejection_v1<T: std::fmt::Debug>(result: Result<T, ExecutionBoundaryErrorV1>) {
     match result {
         Err(ExecutionBoundaryErrorV1::Domain(DomainError::InvalidState { .. })) => {}
@@ -209,6 +220,125 @@ fn copied_sqlite_binding_is_rejected_as_a_different_worktree() {
             Some(fixture.binding.identity().workspace_uuid().clone()),
         ),
     ));
+}
+
+#[test]
+fn g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal() {
+    let fixture = fixture_v1();
+    fs::write(fixture.worktree_root.join("procedure.yaml"), PROCEDURE_YAML)
+        .expect("original Procedure");
+    let provider = procedure_provider_v1(fixture.options.clone());
+    provider
+        .load_workspace_procedure_snapshot(
+            &fixture.binding,
+            "procedure.yaml",
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009906").expect("snapshot ID"),
+            UnixMillis::new(100),
+        )
+        .expect("stable Procedure source");
+
+    symlink(
+        fixture.worktree_root.join("procedure.yaml"),
+        fixture.worktree_root.join("linked.yaml"),
+    )
+    .expect("Procedure symlink");
+    assert!(
+        provider
+            .load_workspace_procedure_snapshot(
+                &fixture.binding,
+                "linked.yaml",
+                ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009908")
+                    .expect("snapshot ID"),
+                UnixMillis::new(100),
+            )
+            .is_err()
+    );
+
+    let nested = fixture.worktree_root.join("nested");
+    fs::create_dir(&nested).expect("nested Procedure directory");
+    fs::write(nested.join("procedure.yaml"), PROCEDURE_YAML).expect("nested Procedure");
+    provider
+        .load_workspace_procedure_snapshot(
+            &fixture.binding,
+            "nested/procedure.yaml",
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009910").expect("snapshot ID"),
+            UnixMillis::new(100),
+        )
+        .expect("stable nested Procedure source");
+    symlink(&nested, fixture.worktree_root.join("linked-directory"))
+        .expect("Procedure directory symlink");
+    assert!(
+        provider
+            .load_workspace_procedure_snapshot(
+                &fixture.binding,
+                "linked-directory/procedure.yaml",
+                ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009911")
+                    .expect("snapshot ID"),
+                UnixMillis::new(100),
+            )
+            .is_err()
+    );
+
+    mkfifo(
+        &fixture.worktree_root.join("procedure.fifo"),
+        Mode::S_IRUSR | Mode::S_IWUSR,
+    )
+    .expect("Procedure FIFO");
+    assert!(
+        provider
+            .load_workspace_procedure_snapshot(
+                &fixture.binding,
+                "procedure.fifo",
+                ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009912")
+                    .expect("snapshot ID"),
+                UnixMillis::new(100),
+            )
+            .is_err()
+    );
+
+    let oversized = fs::File::create(fixture.worktree_root.join("oversized.yaml"))
+        .expect("oversized Procedure");
+    oversized
+        .set_len((MAX_PROCEDURE_DOCUMENT_BYTES_V1 + 1) as u64)
+        .expect("oversized Procedure length");
+    assert!(
+        provider
+            .load_workspace_procedure_snapshot(
+                &fixture.binding,
+                "oversized.yaml",
+                ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009909")
+                    .expect("snapshot ID"),
+                UnixMillis::new(100),
+            )
+            .is_err()
+    );
+
+    let retired = fixture.temporary_root.join("retired-worktree");
+    fs::rename(&fixture.worktree_root, &retired).expect("retire validated worktree");
+    let status = Command::new("git")
+        .arg("init")
+        .arg("--quiet")
+        .arg(&fixture.worktree_root)
+        .status()
+        .expect("replacement git init");
+    assert!(status.success());
+    fs::write(
+        fixture.worktree_root.join("procedure.yaml"),
+        b"replacement workspace bytes",
+    )
+    .expect("replacement Procedure");
+
+    assert!(
+        provider
+            .load_workspace_procedure_snapshot(
+                &fixture.binding,
+                "procedure.yaml",
+                ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009907")
+                    .expect("snapshot ID"),
+                UnixMillis::new(101),
+            )
+            .is_err()
+    );
 }
 
 #[test]

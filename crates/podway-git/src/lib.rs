@@ -653,6 +653,32 @@ pub struct HashedLocalArtifactV1 {
     byte_length: u64,
 }
 
+/// Stable bytes read from one regular file inside a validated worktree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadLocalFileV1 {
+    canonical_path: LosslessPathV1,
+    bytes: Vec<u8>,
+}
+
+impl ReadLocalFileV1 {
+    pub(crate) fn new(canonical_path: LosslessPathV1, bytes: Vec<u8>) -> Self {
+        Self {
+            canonical_path,
+            bytes,
+        }
+    }
+
+    /// Returns the canonical, native-byte-preserving path that was read.
+    pub fn canonical_path(&self) -> &LosslessPathV1 {
+        &self.canonical_path
+    }
+
+    /// Returns the immutable bytes observed through the validated descriptor chain.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
 impl HashedLocalArtifactV1 {
     pub(crate) fn new(
         canonical_path: LosslessPathV1,
@@ -770,6 +796,8 @@ pub enum GitRepresentationProblemV1 {
     UnsupportedRepositoryLayout,
     /// An artifact is not a regular file.
     NonRegularArtifact,
+    /// A bounded local-file read exceeded the caller's explicit byte limit.
+    LocalFileTooLarge,
     InvalidPathEncoding,
     /// A required worktree-local layout component is not a directory.
     WorkspaceLayoutComponentNotDirectory,

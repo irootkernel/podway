@@ -49,13 +49,12 @@ use crate::{
         RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
     },
     execution::{
-        DaemonExecutionEngineV1, EmbeddedPresetProcedureProviderV1, ExecutionClockV1,
-        ExecutionErrorV1, ProcedureProviderV1, ResetAllPreparationOutcomeV1,
-        admitted_start_procedure_digest_v1,
+        DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1, ProcedureProviderV1,
+        ResetAllPreparationOutcomeV1, admitted_start_procedure_digest_v1,
     },
     native_execution::{
-        NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeWorkspaceRevalidatorV1,
-        WallUtcExecutionClockV1,
+        NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeProcedureProviderV1,
+        NativeWorkspaceRevalidatorV1, WallUtcExecutionClockV1,
     },
     observability::ObservabilityEmitterV1,
     read_service::{
@@ -403,7 +402,7 @@ type ProductionExecutionEngineV1 = DaemonExecutionEngineV1<
     Arc<WorkspaceStoreSlotV1>,
     NativeExecutionIdSourceV1,
     WallUtcExecutionClockV1,
-    EmbeddedPresetProcedureProviderV1,
+    NativeProcedureProviderV1<SqliteWorkspaceBindingInspectorV1>,
     NativeArtifactVerifierV1<SqliteWorkspaceBindingInspectorV1>,
     NativeWorkspaceRevalidatorV1<SqliteWorkspaceBindingInspectorV1>,
 >;
@@ -422,7 +421,7 @@ impl NativeContextExecutionV1 {
             context.store_for_mutation(),
             NativeExecutionIdSourceV1,
             WallUtcExecutionClockV1,
-            EmbeddedPresetProcedureProviderV1,
+            NativeProcedureProviderV1::new(SqliteWorkspaceBindingInspectorV1::new(options.clone())),
             NativeArtifactVerifierV1::new(SqliteWorkspaceBindingInspectorV1::new(options.clone())),
             NativeWorkspaceRevalidatorV1::new(SqliteWorkspaceBindingInspectorV1::new(options)),
             observability,
@@ -438,7 +437,7 @@ impl NativeContextExecutionV1 {
             WorkspaceStoreSlotV1::unavailable_for_reset_preparation(),
             NativeExecutionIdSourceV1,
             WallUtcExecutionClockV1,
-            EmbeddedPresetProcedureProviderV1,
+            NativeProcedureProviderV1::new(SqliteWorkspaceBindingInspectorV1::new(options.clone())),
             NativeArtifactVerifierV1::new(SqliteWorkspaceBindingInspectorV1::new(options.clone())),
             NativeWorkspaceRevalidatorV1::new(SqliteWorkspaceBindingInspectorV1::new(options)),
         )
@@ -704,11 +703,15 @@ impl DispatcherPreviewServiceV1<ProductionWorkspaceV1> for ProductionPreviewServ
             .read_workspace_view(context.binding().identity())
             .map_err(map_store_error)?;
         let now = self.clock.now();
+        let provider = NativeProcedureProviderV1::new(SqliteWorkspaceBindingInspectorV1::new(
+            context.store_options().clone(),
+        ));
         let (command, expected_revision) = preview_command(
             request.command(),
             context.binding(),
             view.current_session(),
             now,
+            &provider,
         )?;
         let outcome = preview_transition_v1(
             view.current_session(),
@@ -1222,6 +1225,7 @@ fn preview_command(
     workspace: &WorkspaceBindingV1,
     prior: Option<&podway_core::SessionAggregateV1>,
     now: UnixMillis,
+    provider: &impl ProcedureProviderV1,
 ) -> Result<(SessionCommandV1, Revision), DispatchFailureV1> {
     if let Some(expected) = preview_expected_session_id(command) {
         let actual = prior
@@ -1233,7 +1237,7 @@ fn preview_command(
     }
     match command {
         SliceCommandV1::SessionStart(input) => Ok((
-            SessionCommandV1::Start(preview_start(input, workspace, now)?),
+            SessionCommandV1::Start(preview_start(input, workspace, now, provider)?),
             Revision::ZERO,
         )),
         SliceCommandV1::SessionStartReplace(input) => {
@@ -1243,7 +1247,7 @@ fn preview_command(
                 SessionCommandV1::StartReplace(StartReplaceSessionV1 {
                     expected_session_id: input.preconditions.expected_session_id.clone(),
                     confirmed: true,
-                    start: preview_start(&input.start, workspace, now)?,
+                    start: preview_start(&input.start, workspace, now, provider)?,
                 }),
                 input.preconditions.expected_session_revision,
             ))
@@ -1297,10 +1301,10 @@ fn preview_start(
     input: &podway_protocol::SessionStartV1,
     workspace: &WorkspaceBindingV1,
     now: UnixMillis,
+    provider: &impl ProcedureProviderV1,
 ) -> Result<StartSessionV1, DispatchFailureV1> {
     let snapshot_id =
         ProcedureSnapshotId::new(PREVIEW_SNAPSHOT_ID_V1).expect("preview snapshot ID is valid");
-    let provider = EmbeddedPresetProcedureProviderV1;
     let snapshot = match &input.source {
         podway_protocol::SessionStartSourceV1::Preset { preset } => {
             provider.load_preset_snapshot(preset, snapshot_id, now)
@@ -2865,8 +2869,13 @@ mod tests {
         binding: &WorkspaceBindingV1,
         prior: Option<&SessionAggregateV1>,
     ) -> Result<Map<String, Value>, DispatchFailureV1> {
-        let (domain_command, expected_revision) =
-            preview_command(&command, binding, prior, UnixMillis::new(30))?;
+        let (domain_command, expected_revision) = preview_command(
+            &command,
+            binding,
+            prior,
+            UnixMillis::new(30),
+            &crate::execution::EmbeddedPresetProcedureProviderV1,
+        )?;
         let outcome = preview_transition_v1(
             prior,
             &domain_command,
