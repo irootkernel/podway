@@ -771,28 +771,11 @@ where
         );
         let expected_procedure_digest = expected_start_procedure_digest_v1(request.command());
         if let Some(expected_workspace) = expected_workspace
-            && (!is_start || expected_procedure_digest.is_some())
-        {
-            let request_digest = request_digest_v1(
+            && let Some(outcome) = self.read_admission_idempotent_outcome(
+                expected_workspace.identity(),
                 request,
-                expected_workspace.identity().workspace_uuid(),
+                &idempotency_key,
                 expected_procedure_digest,
-            )?;
-            if let Some(outcome) = self.store.read_idempotent_outcome(
-                expected_workspace.identity(),
-                &idempotency_key,
-                &request_digest,
-            )? {
-                return Ok(outcome);
-            }
-        }
-        if let Some(expected_workspace) = expected_workspace
-            && is_start
-            && expected_procedure_digest.is_none()
-            && let Some(outcome) = self.read_unresolved_start_idempotent_outcome(
-                expected_workspace.identity(),
-                request,
-                &idempotency_key,
             )?
         {
             return Ok(outcome);
@@ -800,27 +783,12 @@ where
         let binding = self
             .bound_workspace(request.selector())
             .map_err(ExecutionErrorV1::from_boundary)?;
-        if expected_workspace.is_none() && (!is_start || expected_procedure_digest.is_some()) {
-            let request_digest = request_digest_v1(
-                request,
-                binding.identity().workspace_uuid(),
-                expected_procedure_digest,
-            )?;
-            if let Some(outcome) = self.store.read_idempotent_outcome(
-                binding.identity(),
-                &idempotency_key,
-                &request_digest,
-            )? {
-                return Ok(outcome);
-            }
-        }
         if expected_workspace.is_none()
-            && is_start
-            && expected_procedure_digest.is_none()
-            && let Some(outcome) = self.read_unresolved_start_idempotent_outcome(
+            && let Some(outcome) = self.read_admission_idempotent_outcome(
                 binding.identity(),
                 request,
                 &idempotency_key,
+                expected_procedure_digest,
             )?
         {
             return Ok(outcome);
@@ -889,6 +857,34 @@ where
             .admit(binding.identity(), admitted)
             .map_err(ExecutionErrorV1::from)?;
         Ok(outcome)
+    }
+
+    fn read_admission_idempotent_outcome(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        request: &SliceRequestV1,
+        idempotency_key: &IdempotencyKeyV1,
+        expected_procedure_digest: Option<&Sha256Digest>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        if matches!(
+            request.command(),
+            SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+        ) && expected_procedure_digest.is_none()
+        {
+            return self.read_unresolved_start_idempotent_outcome(
+                identity,
+                request,
+                idempotency_key,
+            );
+        }
+        let request_digest = request_digest_v1(
+            request,
+            identity.workspace_uuid(),
+            expected_procedure_digest,
+        )?;
+        self.store
+            .read_idempotent_outcome(identity, idempotency_key, &request_digest)
+            .map_err(ExecutionErrorV1::from)
     }
 
     fn read_unresolved_start_idempotent_outcome(
