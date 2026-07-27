@@ -4,8 +4,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Read,
+    io::{Read, Write},
+    net::Shutdown,
     os::unix::fs::PermissionsExt,
+    os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::{
@@ -22,8 +24,9 @@ use nix::{
 };
 use podway_config::{ProcedureFormatV1, parse_procedure_v1};
 use podway_protocol::{
-    ItemTypeResultV1, NextResultV1, OutputEnvelopeV1, ResponseEnvelopeV1, SessionLifecycleV1,
-    StageStatusResultV1, StatusResultV1,
+    ItemTypeResultV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeV1, ResponseEnvelopeV1,
+    SessionLifecycleV1, StageStatusResultV1, StatusResultV1, decode_request_payload_v1,
+    decode_response_payload_v1, decode_single_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
@@ -71,9 +74,26 @@ impl FixtureV1 {
         command: &str,
         arguments: &[&str],
     ) -> Output {
+        self.run_at_socket(
+            self.paths.socket_path().as_path(),
+            workspace,
+            global_arguments,
+            command,
+            arguments,
+        )
+    }
+
+    fn run_at_socket(
+        &self,
+        socket: &Path,
+        workspace: &Path,
+        global_arguments: &[&str],
+        command: &str,
+        arguments: &[&str],
+    ) -> Output {
         Command::new(env!("CARGO_BIN_EXE_podway"))
             .args(["--json", "--socket"])
-            .arg(self.paths.socket_path().as_path())
+            .arg(socket)
             .arg("--worktree")
             .arg(workspace)
             .args(global_arguments)
@@ -1097,6 +1117,166 @@ fn pac_001_public_init_on_a_valid_git_worktree_creates_no_task_session() {
                     .display()
                     .to_string()),
         "PAC-001 init must identify the initialized Git worktree"
+    );
+
+    daemon.stop();
+}
+
+#[test]
+#[ignore = "run with a freshly built podwayd artifact and its canonical build receipt"]
+fn recon_response_loss_is_recovered_by_lookup_and_exact_replay() {
+    const KEY: &str = "recon-response-loss";
+    const TASK: &str = "Recover a lost mutation response";
+
+    let fixture = FixtureV1::new();
+    let daemon = RunningDaemonV1::start(&fixture);
+    let _initialized = cli_output(&fixture, &fixture.worktree, "init", &[]);
+    let jobs_before = jobs(&public_jobs(&fixture, &fixture.worktree)).len();
+
+    let proxy_socket = fixture.root.join("recon-loss.sock");
+    let listener = UnixListener::bind(&proxy_socket).expect("response-loss relay must bind");
+    fs::set_permissions(&proxy_socket, fs::Permissions::from_mode(0o600))
+        .expect("response-loss relay socket must be private");
+    let daemon_socket = fixture.paths.socket_path().as_path().to_path_buf();
+    let relay = thread::spawn(move || {
+        let (mut downstream, _) = listener.accept()?;
+        let mut request_wire = Vec::new();
+        downstream.read_to_end(&mut request_wire)?;
+
+        let mut upstream = UnixStream::connect(daemon_socket)?;
+        upstream.write_all(&request_wire)?;
+        upstream.shutdown(Shutdown::Write)?;
+        let mut response_wire = Vec::new();
+        upstream.read_to_end(&mut response_wire)?;
+        drop(downstream);
+        Ok::<_, std::io::Error>((request_wire, response_wire))
+    });
+
+    let start_arguments = [
+        "--preset",
+        "sw-dev",
+        "--task",
+        TASK,
+        "--idempotency-key",
+        KEY,
+    ];
+    let lost = fixture.run_at_socket(
+        &proxy_socket,
+        &fixture.worktree,
+        &[],
+        "start",
+        &start_arguments,
+    );
+    assert_eq!(lost.status.code(), Some(4), "unexpected response: {lost:?}");
+    let unknown: Value =
+        serde_json::from_slice(&lost.stdout).expect("response loss must emit JSON");
+    assert_error_shape(&unknown, "session.start");
+    assert_eq!(unknown["code"], "MUTATION_OUTCOME_UNKNOWN");
+    assert_eq!(unknown["retryable"], true);
+    assert_eq!(
+        unknown["details"],
+        serde_json::json!({
+            "schema": "podway.mutation-outcome-unknown-details/v1",
+            "outcome": "unknown",
+            "idempotency_key": KEY,
+            "reconcile": {
+                "command": "job.lookup",
+                "idempotency_key": KEY,
+            },
+        })
+    );
+
+    let (request_wire, response_wire) = relay
+        .join()
+        .expect("response-loss relay must not panic")
+        .expect("response-loss relay must complete both socket exchanges");
+    let request_payload =
+        decode_single_frame_v1(&request_wire).expect("relay request must be exactly one frame");
+    let request = decode_request_payload_v1(request_payload)
+        .expect("relay request must be a valid mutation envelope");
+    assert_eq!(request.operation(), OperationV1::Mutate);
+    assert_eq!(request.command().as_str(), "session.start");
+    assert_eq!(request.idempotency_key().unwrap().as_str(), KEY);
+    assert_eq!(unknown["request_id"], request.request_id().as_str());
+
+    let response_payload = decode_single_frame_v1(&response_wire)
+        .expect("discarded daemon response must be exactly one frame");
+    let ResponseEnvelopeV1::Output(discarded) =
+        decode_response_payload_v1(response_payload).expect("discarded response must decode")
+    else {
+        panic!("the discarded mutation response must be successful");
+    };
+    let discarded_job = discarded
+        .job()
+        .expect("the discarded mutation response must expose its durable job")
+        .clone();
+    assert_eq!(discarded_job.state(), JobStateV1::Succeeded);
+    assert!(discarded_job.finished_at().is_some());
+
+    let lookup = cli_job_output(
+        &fixture,
+        &fixture.worktree,
+        &["lookup", "--idempotency-key", KEY],
+        "job.lookup",
+    );
+    assert_eq!(lookup.result()["found"], true);
+    assert_eq!(lookup.result()["job"]["id"], discarded_job.id().as_str());
+    assert_eq!(lookup.result()["job"]["sequence"], discarded_job.sequence());
+    assert_eq!(lookup.result()["job"]["command"], "session.start");
+    assert_eq!(lookup.result()["job"]["state"], "succeeded");
+    assert!(
+        lookup.result()["job"]["request_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:"))
+    );
+    assert_eq!(
+        lookup.result()["job"]["terminal_response"]["kind"],
+        "success"
+    );
+    let lookup_json = serde_json::to_string(lookup.result()).unwrap();
+    for forbidden in [
+        "canonical_request_json",
+        "preconditions",
+        "idempotency_key",
+        "preset",
+    ] {
+        assert!(
+            !lookup_json.contains(forbidden),
+            "lookup leaked {forbidden}"
+        );
+    }
+
+    let replayed = cli_output(&fixture, &fixture.worktree, "start", &start_arguments);
+    assert_eq!(replayed.job(), discarded.job());
+    assert_eq!(replayed.session(), discarded.session());
+    assert_eq!(replayed.result(), discarded.result());
+    assert_eq!(replayed.warnings(), discarded.warnings());
+    assert_eq!(
+        jobs(&public_jobs(&fixture, &fixture.worktree)).len(),
+        jobs_before + 1,
+        "response loss and exact replay must retain one durable admission"
+    );
+
+    cli_error(
+        &fixture,
+        &fixture.worktree,
+        "start",
+        &[
+            "--preset",
+            "sw-dev",
+            "--task",
+            "A different canonical request",
+            "--idempotency-key",
+            KEY,
+        ],
+        "IDEMPOTENCY_KEY_REUSED",
+        2,
+        false,
+    );
+    assert_eq!(
+        jobs(&public_jobs(&fixture, &fixture.worktree)).len(),
+        jobs_before + 1,
+        "conflicting key reuse must not admit another job"
     );
 
     daemon.stop();

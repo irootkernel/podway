@@ -172,7 +172,7 @@ all later epics are release-blocking work that is not yet implemented.
 | `RECON002` | Expose durable admission metadata | Completed | Make admitted and non-admitted outcomes distinguishable and preserve job identity on timeout. | [AUT-ADMIT-001–002](reference/interfaces/34-automation-client-contract.md#16-durable-mutation-admission-aut-admit-001002) |
 | `RECON003` | Preserve receipt-only lookup | Completed | Return the original terminal envelope after terminal job pruning. | [AUT-RECON-003](reference/interfaces/34-automation-client-contract.md#18-job-lookup-by-idempotency-key-aut-recon-001004) |
 | `RECON004` | Define unknown-outcome handling | Completed | Encode timeout and disconnect states without treating client termination as cancellation. | [AUT-ADMIT-003](reference/interfaces/34-automation-client-contract.md#17-timeout-disconnect-and-unknown-outcome-aut-admit-003), [AUT-RECON-004](reference/interfaces/34-automation-client-contract.md#18-job-lookup-by-idempotency-key-aut-recon-001004) |
-| `RECON005` | Test response-loss recovery | Planned | Cover response loss, wait timeout, every job state, pruning, and idempotent reconciliation. | [AUT-T-RECON](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix) |
+| `RECON005` | Test response-loss recovery | Completed | Cover response loss, wait timeout, every job state, pruning, and idempotent reconciliation. | [AUT-T-RECON](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix) |
 
 ## MCONT — Closed Machine Contracts
 

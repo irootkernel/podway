@@ -13,7 +13,7 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
 
-use podway_core::{JobId, Sha256Digest, UnixMillis, canonicalize_json_v1};
+use podway_core::{DomainError, JobId, Revision, Sha256Digest, UnixMillis, canonicalize_json_v1};
 use podway_daemon::{
     dispatch::WorkspaceRuntimeV1,
     production::{ProductionWorkspaceRuntimeV1, compose_dispatcher_v1},
@@ -31,7 +31,7 @@ use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CommandV1, IdempotencyKeyV1 as StoreIdempotencyKeyV1,
     JobListQueryV1, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StoreContractV1, StoreReadContractV1, WorkerIdV1,
+    StoreContractV1, StoreReadContractV1, TerminalResultV1, WorkerIdV1,
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -1155,5 +1155,239 @@ fn job_cancel_public_route_projects_committed_cancellation() {
             .expect("committed cancellation must be durable")
             .state(),
         podway_store::JobStateV1::Cancelled
+    );
+}
+
+#[test]
+fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let dispatcher = compose_dispatcher_v1(
+        Arc::clone(&runtime_manager),
+        WorkerIdV1::new("recon-matrix-dispatcher").unwrap(),
+    );
+    let workspace_selector = selector(fixture.main());
+    let initialize = request(
+        920,
+        "workspace.init",
+        &workspace_selector,
+        json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "recon-matrix-succeeded",
+        PreconditionsV1::default(),
+    );
+    let initialized = dispatch_command(&dispatcher, &initialize, "workspace.init");
+    assert_eq!(initialized.job().unwrap().state(), JobStateV1::Succeeded);
+
+    let runtime = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .expect("initialized workspace must resolve through the manager");
+    let context = runtime.context_snapshot();
+    let direct_store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        context.binding().identity().clone(),
+        context.store_options().clone(),
+        UnixMillis::new(10),
+    )
+    .expect("manager binding must reopen for deterministic reconciliation setup");
+
+    let admit = |job_number: u64, key: &str, digest_nibble: char, now: u64| {
+        let job_id = JobId::new(format!("00000000-0000-4000-8000-{job_number:012x}")).unwrap();
+        let outcome = direct_store
+            .admit(
+                context.binding().identity(),
+                AdmitRequestV1::new(
+                    CommandV1::WorkspaceInitialize,
+                    StoreIdempotencyKeyV1::new(key).unwrap(),
+                    job_id.clone(),
+                    RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+                    Sha256Digest::new(format!("sha256:{}", digest_nibble.to_string().repeat(64)))
+                        .unwrap(),
+                    UnixMillis::new(now),
+                ),
+            )
+            .expect("reconciliation fixture admission must succeed");
+        assert!(matches!(outcome, AdmitOutcomeV1::New(_)));
+        job_id
+    };
+
+    let failed_id = admit(921, "recon-matrix-failed", '1', 11);
+    let failed_claim = direct_store
+        .claim_next(
+            context.binding().identity(),
+            WorkerIdV1::new("recon-matrix-failed-worker").unwrap(),
+            UnixMillis::new(12),
+        )
+        .unwrap()
+        .expect("failed fixture must be claimable");
+    assert_eq!(failed_claim.job().job_id(), &failed_id);
+    direct_store
+        .commit_terminal(
+            failed_claim.claim().clone(),
+            Revision::ZERO,
+            None,
+            TerminalResultV1::Failure(DomainError::InvalidState {
+                reason: "deterministic reconciliation domain failure",
+            }),
+            UnixMillis::new(13),
+        )
+        .expect("domain failure must commit a terminal failed receipt");
+
+    let cancelled_id = admit(922, "recon-matrix-cancelled", '2', 14);
+    direct_store
+        .cancel_before_claim(
+            context.binding().identity(),
+            cancelled_id.clone(),
+            Revision::new(3),
+            UnixMillis::new(15),
+        )
+        .expect("queued reconciliation fixture must cancel");
+
+    for ordinal in 0..100_u64 {
+        let now = 20 + ordinal * 3;
+        let filler_id = admit(
+            1_000 + ordinal,
+            &format!("recon-matrix-retention-{ordinal}"),
+            '5',
+            now,
+        );
+        let filler_claim = direct_store
+            .claim_next(
+                context.binding().identity(),
+                WorkerIdV1::new("recon-matrix-retention-worker").unwrap(),
+                UnixMillis::new(now + 1),
+            )
+            .unwrap()
+            .expect("retention fixture must be claimable");
+        assert_eq!(filler_claim.job().job_id(), &filler_id);
+        direct_store
+            .commit_terminal(
+                filler_claim.claim().clone(),
+                Revision::ZERO,
+                None,
+                TerminalResultV1::Failure(DomainError::InvalidState {
+                    reason: "retention filler",
+                }),
+                UnixMillis::new(now + 2),
+            )
+            .expect("retention filler must commit");
+    }
+
+    let running_id = admit(923, "recon-matrix-running", '3', 400);
+    let running_claim = direct_store
+        .claim_next(
+            context.binding().identity(),
+            WorkerIdV1::new("recon-matrix-running-worker").unwrap(),
+            UnixMillis::new(401),
+        )
+        .unwrap()
+        .expect("running fixture must be claimable");
+    assert_eq!(running_claim.job().job_id(), &running_id);
+    let queued_id = admit(924, "recon-matrix-queued", '4', 402);
+
+    let prune = direct_store
+        .prune_terminal_history(context.binding().identity(), UnixMillis::new(604_800_500))
+        .expect("old terminal reconciliation fixtures must prune");
+    assert_eq!(prune.deleted_terminal_jobs(), 3);
+    for job_id in [&failed_id, &cancelled_id] {
+        assert!(
+            direct_store
+                .read_job(context.binding().identity(), job_id)
+                .unwrap()
+                .is_none(),
+            "terminal lookup must survive without job row {job_id}"
+        );
+    }
+
+    let jobs_before = direct_store
+        .list_jobs(
+            context.binding().identity(),
+            JobListQueryV1::new(1_000).unwrap(),
+        )
+        .unwrap();
+    drop(direct_store);
+
+    for (index, (key, expected_state, terminal_kind)) in [
+        ("recon-matrix-succeeded", "succeeded", Some("success")),
+        ("recon-matrix-failed", "failed", Some("error")),
+        ("recon-matrix-cancelled", "cancelled", Some("cancelled")),
+        ("recon-matrix-running", "running", None),
+        ("recon-matrix-queued", "queued", None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let lookup = request(
+            930 + index as u64,
+            "job.lookup",
+            &workspace_selector,
+            json!({
+                "selector": serde_json::to_value(&workspace_selector).unwrap(),
+                "idempotency_key": key,
+            }),
+            RequestOptionsV1::new(false, 0).unwrap(),
+            "unused-query-key",
+            PreconditionsV1::default(),
+        );
+        let lookup = dispatch_command(&dispatcher, &lookup, "job.lookup");
+        assert_eq!(lookup.result()["found"], true, "{key}");
+        assert_eq!(lookup.result()["job"]["state"], expected_state, "{key}");
+        assert!(
+            lookup.result()["job"]["request_digest"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("sha256:")),
+            "{key} must expose its canonical request digest"
+        );
+        match terminal_kind {
+            Some(kind) => assert_eq!(
+                lookup.result()["job"]["terminal_response"]["kind"],
+                kind,
+                "{key}"
+            ),
+            None => assert!(
+                lookup.result()["job"]["terminal_response"].is_null(),
+                "{key}"
+            ),
+        }
+    }
+
+    let missing = request(
+        940,
+        "job.lookup",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "idempotency_key": "recon-matrix-missing",
+        }),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-query-key",
+        PreconditionsV1::default(),
+    );
+    let missing = dispatch_command(&dispatcher, &missing, "job.lookup");
+    assert_eq!(
+        missing.result(),
+        &json!({"found": false}).as_object().unwrap().clone()
+    );
+
+    let jobs_after = context
+        .store()
+        .list_jobs(
+            context.binding().identity(),
+            JobListQueryV1::new(1_000).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        jobs_after, jobs_before,
+        "lookup must not claim, retry, or cancel jobs"
+    );
+    assert_eq!(
+        jobs_after
+            .iter()
+            .find(|job| job.job().job_id() == &queued_id)
+            .unwrap()
+            .state(),
+        podway_store::JobStateV1::Queued
     );
 }

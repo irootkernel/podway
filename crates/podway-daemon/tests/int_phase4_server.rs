@@ -778,6 +778,35 @@ fn read_timeout_returns_sanitized_internal_error_and_retains_frame_io_evidence()
 }
 
 #[test]
+fn disconnected_client_before_a_complete_frame_never_reaches_dispatch() {
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        EXPECTED_UID,
+        ServerTransportTimeoutsV1::default(),
+    );
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    let frame = request_frame(&request());
+    client
+        .write_all(&frame[..6])
+        .expect("partial request frame must reach the accepted connection");
+    drop(client);
+
+    assert!(handler.join().expect("handler must not panic").is_err());
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "disconnect before a complete request frame must not dispatch or admit"
+    );
+}
+
+#[test]
 fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
     let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
     let calls = Arc::new(AtomicUsize::new(0));

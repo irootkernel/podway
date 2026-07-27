@@ -115,6 +115,7 @@ The criteria below describe the implemented baseline bound to the current `make 
 ## Automation integrity
 
 - Procedure starts enforce digest guards, durable admitted snapshots, source-drift and restart independence, digest-bound idempotent replay, and consistent returned Procedure identity.
+- Mutation response loss reconciles by idempotency key without duplicate admission or cancellation, across pre-admission disconnect, wait timeout, every job state, domain failure, and terminal pruning.
 
 ## Final acceptance rule
 
