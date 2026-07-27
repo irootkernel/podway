@@ -7,7 +7,7 @@
 use podway_core::{AttemptId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
 use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
-    JobStateV1, NextResultV1, OutputEnvelopeInputV1, OutputEnvelopeV1, QueryWaitV1,
+    JobStateV1, NextResultV1, OperationV1, OutputEnvelopeInputV1, OutputEnvelopeV1, QueryWaitV1,
     RequestEnvelopeV1, ResponseEnvelopeV1, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
     SliceRequestV1, StatusResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
 };
@@ -123,7 +123,7 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
-    pub(crate) fn into_json(self) -> Map<String, Value> {
+    pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
         if let Some(mismatch) = self.procedure_digest_mismatch {
             return Map::from_iter([
                 (
@@ -176,6 +176,8 @@ impl DispatchErrorDetailsV1 {
                 ("admission".to_owned(), Value::Object(admission)),
             ]);
         }
+        let admission =
+            requires_admission.then(|| admission_value_v1(self.job_id.as_ref(), self.job_sequence));
         let mut details = Map::new();
         if let Some(job_id) = self.job_id {
             details.insert("job_id".to_owned(), Value::String(job_id.into_inner()));
@@ -207,8 +209,27 @@ impl DispatchErrorDetailsV1 {
                 );
             }
         }
+        if let Some(admission) = admission {
+            details.insert("admission".to_owned(), admission);
+        }
         details
     }
+}
+
+fn admission_value_v1(job_id: Option<&JobId>, workspace_sequence: Option<u64>) -> Value {
+    match (job_id, workspace_sequence) {
+        (Some(job_id), Some(workspace_sequence)) => json!({
+            "admitted": true,
+            "job_id": job_id,
+            "workspace_sequence": workspace_sequence,
+        }),
+        (None, None) => json!({"admitted": false}),
+        _ => unreachable!("admission identity is stored atomically"),
+    }
+}
+
+fn job_admission_value_v1(job: &JobOutputV1) -> Value {
+    admission_value_v1(Some(job.id()), Some(job.sequence()))
 }
 
 /// Stable public classifications used to bridge typed protocol, domain, Store, Git, and config
@@ -1109,7 +1130,7 @@ where
         procedure_digest: Option<&Sha256Digest>,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
         let mut result = Map::from_iter([
-            ("admitted".to_owned(), Value::Bool(true)),
+            ("admission".to_owned(), job_admission_value_v1(&job)),
             ("detached".to_owned(), Value::Bool(true)),
         ]);
         if let Some(procedure_digest) = procedure_digest {
@@ -1137,14 +1158,19 @@ where
             DispatcherTerminalResultV1::Output(output) if bootstrap && output.session.is_some() => {
                 Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
             }
-            DispatcherTerminalResultV1::Output(output) => self.output_response(
-                request,
-                Some(workspace),
-                Some(job),
-                output.session,
-                output.result,
-                output.warnings,
-            ),
+            DispatcherTerminalResultV1::Output(mut output) => {
+                output
+                    .result
+                    .insert("admission".to_owned(), job_admission_value_v1(&job));
+                self.output_response(
+                    request,
+                    Some(workspace),
+                    Some(job),
+                    output.session,
+                    output.result,
+                    output.warnings,
+                )
+            }
             DispatcherTerminalResultV1::Error(failure) => Err(failure.with_job(&job)),
         }
     }
@@ -1176,6 +1202,7 @@ where
         &self,
         request: &RequestEnvelopeV1,
         failure: DispatchFailureV1,
+        requires_admission: bool,
     ) -> ResponseEnvelopeV1 {
         let presentation = self.errors.map_failure(&failure);
         let generated_at = self.metadata.generated_at();
@@ -1188,7 +1215,7 @@ where
             retryable: presentation.retryable,
             exit_code: presentation.exit_code,
             workspace: None,
-            details: failure.into_details().into_json(),
+            details: failure.into_details().into_json(requires_admission),
         })
         .unwrap_or_else(|_| {
             let internal = DispatchErrorPresentationV1::catalog(DispatchFailureKindV1::Internal);
@@ -1201,7 +1228,11 @@ where
                 retryable: internal.retryable,
                 exit_code: internal.exit_code,
                 workspace: None,
-                details: Map::new(),
+                details: if requires_admission {
+                    Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
+                } else {
+                    Map::new()
+                },
             })
             .expect("static internal dispatcher error must be protocol-valid")
         });
@@ -1225,8 +1256,12 @@ where
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
     ) -> ResponseEnvelopeV1 {
+        let requires_admission = matches!(
+            slice_request.command().operation(),
+            OperationV1::Mutate | OperationV1::Bootstrap
+        );
         self.dispatch_valid(request, slice_request)
-            .unwrap_or_else(|failure| self.error_response(request, failure))
+            .unwrap_or_else(|failure| self.error_response(request, failure, requires_admission))
     }
 }
 

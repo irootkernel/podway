@@ -1133,7 +1133,14 @@ fn detached_queued_mutation_returns_a_durable_receipt_with_correlation() {
             assert_eq!(output.command(), request.command());
             assert_eq!(output.job().unwrap().id().as_str(), JOB_ID);
             assert_eq!(output.job().unwrap().state(), JobStateV1::Queued);
-            assert_eq!(output.result()["admitted"], Value::Bool(true));
+            assert_eq!(
+                output.result()["admission"],
+                json!({
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 1,
+                })
+            );
             assert_eq!(output.result()["detached"], Value::Bool(true));
             assert_eq!(output.result()["procedure_digest"], PROCEDURE_DIGEST);
         }
@@ -1169,6 +1176,14 @@ fn synchronous_mutation_honors_custom_wait_and_returns_terminal_output() {
             assert_eq!(output.command(), request.command());
             assert_eq!(output.job().unwrap().state(), JobStateV1::Succeeded);
             assert_eq!(output.result()["changed"], Value::Bool(true));
+            assert_eq!(
+                output.result()["admission"],
+                json!({
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 1,
+                })
+            );
         }
         ResponseEnvelopeV1::Error(error) => panic!("synchronous terminal wait failed: {error:?}"),
     }
@@ -1210,6 +1225,14 @@ fn synchronous_timeout_reports_admitted_job_details_with_correlation() {
             assert_eq!(error.exit_code().get(), 4);
             assert_eq!(error.details()["job_id"], Value::String(JOB_ID.to_owned()));
             assert_eq!(error.details()["job_sequence"], Value::from(1));
+            assert_eq!(
+                error.details()["admission"],
+                json!({
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 1,
+                })
+            );
         }
         ResponseEnvelopeV1::Output(_) => panic!("a synchronous timeout must fail"),
     }
@@ -1263,6 +1286,14 @@ fn terminal_error_preserves_job_details_and_request_correlation() {
             assert_eq!(error.details()["job_sequence"], Value::from(1));
             assert_eq!(error.details()["expected_revision"], Value::from(1));
             assert_eq!(error.details()["current_revision"], Value::from(2));
+            assert_eq!(
+                error.details()["admission"],
+                json!({
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 1,
+                })
+            );
         }
         ResponseEnvelopeV1::Output(_) => panic!("a terminal mutation error must fail"),
     }
@@ -1319,6 +1350,14 @@ fn detached_terminal_replay_preserves_the_immutable_job_and_result() {
         assert_eq!(output.job().unwrap().state(), JobStateV1::Succeeded);
         assert_eq!(output.job().unwrap().id().as_str(), JOB_ID);
         assert_eq!(output.job().unwrap().sequence(), 1);
+        assert_eq!(
+            output.result()["admission"],
+            json!({
+                "admitted": true,
+                "job_id": JOB_ID,
+                "workspace_sequence": 1,
+            })
+        );
         assert_eq!(
             output.result()["replay"],
             Value::String("immutable-terminal-result".to_owned())

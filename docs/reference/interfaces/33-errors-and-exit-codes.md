@@ -160,8 +160,10 @@ identity before deciding whether a new operation is valid.
 `podway.procedure-digest-mismatch-details/v1` object contains the expected and actual canonical
 Procedure digests plus `{ "admitted": false }`; the comparison always precedes durable admission.
 
-The remaining v0.1.0 target adds stable entries for invalid or over-long explicit socket paths and closed
-admission-aware wait failures. The normative target is the
+Every daemon mutation error now carries `details.admission`. Pre-admission
+errors use exactly `{ "admitted": false }`; terminal errors and
+`JOB_WAIT_TIMEOUT` use `{ "admitted": true, "job_id": "<uuid>",
+"workspace_sequence": <positive integer> }`. The normative target is the
 [automation error contract](34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
 
 ## Error redaction

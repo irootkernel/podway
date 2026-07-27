@@ -740,7 +740,14 @@ fn detached_mutation_returns_a_durable_receipt_without_waiting() {
 
     let response = output(dispatcher.dispatch(&request, &slice));
     assert_eq!(response.job().unwrap().id().as_str(), JOB_ID);
-    assert_eq!(response.result()["admitted"], Value::Bool(true));
+    assert_eq!(
+        response.result()["admission"],
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 41,
+        })
+    );
     assert_eq!(response.result()["detached"], Value::Bool(true));
     assert_eq!(
         worker.state.lock().unwrap().calls[0].wait,
@@ -766,6 +773,14 @@ fn synchronous_mutation_returns_the_immutable_terminal_response() {
     let response = output(dispatcher.dispatch(&request, &slice));
     assert_eq!(response.job().unwrap().state(), JobStateV1::Succeeded);
     assert_eq!(response.result()["changed"], Value::Bool(true));
+    assert_eq!(
+        response.result()["admission"],
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 41,
+        })
+    );
     assert_eq!(
         worker.state.lock().unwrap().calls[0].wait,
         MutationWaitV1::UntilTerminal { timeout_millis: 91 }
@@ -798,6 +813,14 @@ fn synchronous_timeout_reports_the_admitted_job_without_cancellation() {
         Value::String(JOB_ID.to_owned())
     );
     assert_eq!(response.details()["job_sequence"], Value::from(41));
+    assert_eq!(
+        response.details()["admission"],
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 41,
+        })
+    );
     assert_eq!(worker.state.lock().unwrap().calls.len(), 1);
 }
 
@@ -868,6 +891,14 @@ fn stale_terminal_conditions_are_retryable_and_include_only_safe_revisions() {
     assert_eq!(
         response.details()["job_id"],
         Value::String(JOB_ID.to_owned())
+    );
+    assert_eq!(
+        response.details()["admission"],
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 41,
+        })
     );
 }
 
@@ -962,6 +993,31 @@ fn errors_preserve_request_correlation_and_never_reflect_runtime_diagnostics() {
     assert_eq!(response.exit_code().get(), 5);
     assert!(!response.message().contains("secret.sqlite"));
     assert!(response.details().is_empty());
+}
+
+#[test]
+fn preadmission_mutation_errors_report_not_admitted() {
+    let runtime = FakeRuntime::new();
+    runtime.fail_existing(DispatchFailureV1::new(
+        DispatchFailureKindV1::WorkspaceStateUnreadable,
+    ));
+    let dispatcher = dispatcher(
+        runtime,
+        FakeReads::new(),
+        FakeWorker::new(terminal_success()),
+    );
+    let (request, slice) = request_and_slice(
+        "session.complete",
+        json!({"selector": selector("/safe/worktree")}),
+        session_preconditions(),
+        false,
+        100,
+        44,
+    );
+
+    let response = error(dispatcher.dispatch(&request, &slice));
+    assert_eq!(response.code().as_str(), "WORKSPACE_STATE_UNREADABLE");
+    assert_eq!(response.details()["admission"], json!({"admitted": false}));
 }
 
 #[test]

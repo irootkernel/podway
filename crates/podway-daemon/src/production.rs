@@ -2678,7 +2678,7 @@ mod tests {
             DispatchFailureKindV1::WorkspaceUuidMismatch
         );
         assert_eq!(
-            workspace_failure.into_details().into_json(),
+            workspace_failure.into_details().into_json(false),
             Map::from_iter([
                 (
                     "schema".to_owned(),
@@ -2706,7 +2706,7 @@ mod tests {
             DispatchFailureKindV1::SessionIdMismatch
         );
         assert_eq!(
-            read_failure.into_details().into_json()["actual_session_id"],
+            read_failure.into_details().into_json(false)["actual_session_id"],
             Value::Null
         );
 
@@ -2743,7 +2743,7 @@ mod tests {
             DispatchFailureKindV1::ProcedureDigestMismatch
         );
         assert_eq!(
-            failure.into_details().into_json(),
+            failure.into_details().into_json(false),
             Map::from_iter([
                 (
                     "schema".to_owned(),

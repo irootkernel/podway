@@ -75,6 +75,7 @@ pub enum ProtocolError {
     },
     InvalidIdentityConflictDetails,
     InvalidProcedureDigestMismatchDetails,
+    InvalidAdmissionMetadata,
     InvalidExitCode {
         value: u8,
     },
@@ -151,6 +152,9 @@ impl fmt::Display for ProtocolError {
             }
             Self::InvalidProcedureDigestMismatchDetails => formatter
                 .write_str("Procedure digest mismatch details violate their closed v1 schema"),
+            Self::InvalidAdmissionMetadata => {
+                formatter.write_str("admission metadata violates its closed v1 schema")
+            }
             Self::InvalidExitCode { value } => {
                 write!(
                     formatter,
@@ -1319,6 +1323,17 @@ impl OutputEnvelopeV1 {
             session.validate()?;
         }
         validate_json_map_depth(&self.result, 1)?;
+        if let Some(admission) = self.result.get("admission") {
+            let (job_id, sequence) = validate_admission_metadata_v1(admission, false)?
+                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
+            let job = self
+                .job
+                .as_ref()
+                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
+            if job.id() != &job_id || job.sequence() != sequence {
+                return Err(ProtocolError::InvalidAdmissionMetadata);
+            }
+        }
         for warning in &self.warnings {
             validate_json_map_depth(warning, 2)?;
         }
@@ -1876,6 +1891,9 @@ impl ErrorEnvelopeV1 {
         }
         validate_non_empty_scalar_bounded(&self.message, usize::MAX, "message")?;
         validate_json_map_depth(&self.details, 1)?;
+        if let Some(admission) = self.details.get("admission") {
+            validate_admission_metadata_v1(admission, true)?;
+        }
         validate_identity_conflict_details_v1(self.code.as_str(), &self.details)?;
         validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
         if let Some(workspace) = &self.workspace {
@@ -1910,6 +1928,32 @@ impl ErrorEnvelopeV1 {
 
     pub fn details(&self) -> &Map<String, Value> {
         &self.details
+    }
+}
+
+fn validate_admission_metadata_v1(
+    admission: &Value,
+    allow_not_admitted: bool,
+) -> Result<Option<(JobId, u64)>, ProtocolError> {
+    let admission = admission
+        .as_object()
+        .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
+    match admission.get("admitted").and_then(Value::as_bool) {
+        Some(false) if allow_not_admitted && admission.len() == 1 => Ok(None),
+        Some(true) if admission.len() == 3 => {
+            let job_id = admission
+                .get("job_id")
+                .and_then(Value::as_str)
+                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
+            let job_id = JobId::new(job_id).map_err(|_| ProtocolError::InvalidAdmissionMetadata)?;
+            let sequence = admission
+                .get("workspace_sequence")
+                .and_then(Value::as_u64)
+                .filter(|sequence| *sequence > 0)
+                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
+            Ok(Some((job_id, sequence)))
+        }
+        _ => Err(ProtocolError::InvalidAdmissionMetadata),
     }
 }
 

@@ -137,7 +137,12 @@
       "type": "object"
     },
     "details": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "admission": {
+          "$ref": "#/$defs/admission"
+        }
+      }
     }
   },
   "allOf": [

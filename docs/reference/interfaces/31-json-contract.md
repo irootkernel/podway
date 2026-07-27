@@ -261,7 +261,11 @@ Command-specific fields may be added, for example the attached artifact metadata
     "finished_at": null
   },
   "result": {
-    "admitted": true,
+    "admission": {
+      "admitted": true,
+      "job_id": "...",
+      "workspace_sequence": 42
+    },
     "detached": true
   },
   "warnings": []
@@ -269,6 +273,9 @@ Command-specific fields may be added, for example the attached artifact metadata
 ```
 
 Exit code is 0 after successful durable admission, even though the mutation may later fail.
+Every successful mutation, detached or terminal, carries the same closed
+`result.admission` object. Its job ID and workspace sequence exactly match the
+top-level `job` projection.
 
 ## Job result
 

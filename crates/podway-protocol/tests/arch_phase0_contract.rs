@@ -653,6 +653,58 @@ fn api_004_response_wire_surface_is_executable_and_round_trips() {
     assert_round_trip(ResponseEnvelopeV1::Error(error));
 }
 
+#[test]
+fn api_004_admission_metadata_is_closed_and_matches_the_output_job() {
+    let admitted = json!({
+        "admitted": true,
+        "job_id": JOB_ID,
+        "workspace_sequence": 1,
+    });
+    let mut output = valid_output_envelope_json();
+    output["result"]["admission"] = admitted.clone();
+    assert!(serde_json::from_value::<OutputEnvelopeV1>(output.clone()).is_ok());
+
+    for malformed in [
+        json!({"admitted": true}),
+        json!({"admitted": false}),
+        json!({
+            "admitted": true,
+            "job_id": "523e4567-e89b-12d3-a456-426614174000",
+            "workspace_sequence": 1,
+        }),
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 2,
+        }),
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 1,
+            "unknown": true,
+        }),
+    ] {
+        let mut malformed_output = output.clone();
+        malformed_output["result"]["admission"] = malformed;
+        assert_output_rejected(malformed_output);
+    }
+
+    for admission in [json!({"admitted": false}), admitted] {
+        let mut error = valid_error_envelope_json();
+        error["details"]["admission"] = admission;
+        assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_ok());
+    }
+
+    for malformed in [
+        json!({"admitted": false, "job_id": JOB_ID}),
+        json!({"admitted": true, "job_id": JOB_ID, "workspace_sequence": 0}),
+    ] {
+        let mut error = valid_error_envelope_json();
+        error["details"]["admission"] = malformed;
+        assert_error_rejected(error);
+    }
+}
+
 // API-004: Validated response DTOs reject invariant-bypassing known and nested wire payloads.
 #[test]
 fn api_004_response_deserialization_rejects_invalid_known_and_nested_values() {

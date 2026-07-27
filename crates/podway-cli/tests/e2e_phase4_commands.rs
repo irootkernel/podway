@@ -286,13 +286,27 @@ impl Reply {
             Self::Status => output_response(request, status_result(), None),
             Self::Output => output_response(
                 request,
-                Map::from_iter([("admitted".to_owned(), Value::Bool(true))]),
+                Map::from_iter([(
+                    "admission".to_owned(),
+                    json!({
+                        "admitted": true,
+                        "job_id": JOB_ID,
+                        "workspace_sequence": 7,
+                    }),
+                )]),
                 Some(job()),
             ),
             Self::StartOutput => output_response(
                 request,
                 Map::from_iter([
-                    ("admitted".to_owned(), Value::Bool(true)),
+                    (
+                        "admission".to_owned(),
+                        json!({
+                            "admitted": true,
+                            "job_id": JOB_ID,
+                            "workspace_sequence": 7,
+                        }),
+                    ),
                     (
                         "procedure_digest".to_owned(),
                         Value::String(
@@ -311,6 +325,7 @@ impl Reply {
                 "WORKSPACE_STATE_UNREADABLE",
                 "Workspace state is corrupt or inaccessible.",
                 5,
+                false,
                 false,
             ),
             Self::MalformedFramedResponse => Err(io::Error::other(
@@ -376,6 +391,7 @@ fn error_response(request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1>
         "The wait expired; the admitted job may continue.",
         4,
         true,
+        true,
     )
 }
 
@@ -440,6 +456,7 @@ fn error_response_with(
     message: &str,
     exit_code: u8,
     retryable: bool,
+    admitted: bool,
 ) -> io::Result<ResponseEnvelopeV1> {
     podway_protocol::ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
         request_id: request.request_id().clone(),
@@ -453,10 +470,22 @@ fn error_response_with(
             ("uuid".to_owned(), Value::String(WORKSPACE_ID.to_owned())),
             ("root".to_owned(), Value::String("/fixture".to_owned())),
         ])),
-        details: Map::from_iter([
-            ("job_id".to_owned(), Value::String(JOB_ID.to_owned())),
-            ("job_sequence".to_owned(), Value::from(7_u64)),
-        ]),
+        details: if admitted {
+            Map::from_iter([
+                ("job_id".to_owned(), Value::String(JOB_ID.to_owned())),
+                ("job_sequence".to_owned(), Value::from(7_u64)),
+                (
+                    "admission".to_owned(),
+                    json!({
+                        "admitted": true,
+                        "job_id": JOB_ID,
+                        "workspace_sequence": 7,
+                    }),
+                ),
+            ])
+        } else {
+            Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
+        },
     })
     .map(ResponseEnvelopeV1::Error)
     .map_err(|error| io::Error::other(error.to_string()))
@@ -737,6 +766,7 @@ impl StatefulCursorDaemon {
                             "The target attempt is no longer active.",
                             4,
                             true,
+                            true,
                         )?
                     }
                     _ => unreachable!(),
@@ -976,7 +1006,15 @@ fn pac_022_cursor_mutation_is_rejected_after_authoritative_active_stage_drift() 
             "retryable": true,
             "exit_code": 4,
             "workspace": { "uuid": WORKSPACE_ID, "root": "/fixture" },
-            "details": { "job_id": JOB_ID, "job_sequence": 7 }
+            "details": {
+                "job_id": JOB_ID,
+                "job_sequence": 7,
+                "admission": {
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 7
+                }
+            }
         }),
         "the stale cursor must retain the daemon's exact typed rejection",
     );
@@ -1111,6 +1149,14 @@ fn mutation_preflight_error_is_recorrelated_to_the_invoked_command() {
     assert_eq!(response["workspace"]["root"], "/fixture");
     assert_eq!(response["details"]["job_id"], JOB_ID);
     assert_eq!(response["details"]["job_sequence"], 7);
+    assert_eq!(
+        response["details"]["admission"],
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 7,
+        })
+    );
 
     let wires = daemon.finish();
     assert_eq!(

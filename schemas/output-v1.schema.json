@@ -39,7 +39,12 @@
       "$ref": "#/$defs/session"
     },
     "result": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "admission": {
+          "$ref": "#/$defs/admitted"
+        }
+      }
     },
     "warnings": {
       "type": "array",
@@ -49,6 +54,28 @@
     }
   },
   "$defs": {
+    "admitted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "admitted",
+        "job_id",
+        "workspace_sequence"
+      ],
+      "properties": {
+        "admitted": {
+          "const": true
+        },
+        "job_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "workspace_sequence": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "workspace": {
       "type": "object",
       "additionalProperties": false,

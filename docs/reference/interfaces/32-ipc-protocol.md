@@ -132,10 +132,13 @@ For `detach=false`:
 
 1. daemon admits the job durably;
 2. daemon waits for terminal state up to `wait_timeout_ms`;
-3. terminal success or error is returned;
-4. if wait expires, return `JOB_WAIT_TIMEOUT` with the admitted job ID; the job continues.
+3. terminal success returns `result.admission` with the admitted job ID and workspace sequence;
+4. terminal error returns the same identity in `details.admission`;
+5. if wait expires, return `JOB_WAIT_TIMEOUT` with that admitted identity; the job continues.
 
-For `detach=true`, the response returns immediately after admission.
+For `detach=true`, the response returns immediately after admission and carries
+the same closed `result.admission` identity. A failure proved to occur before
+durable admission carries exactly `details.admission={"admitted":false}`.
 
 A client disconnect never cancels an admitted job.
 
