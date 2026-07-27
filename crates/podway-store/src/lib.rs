@@ -745,18 +745,19 @@ pub trait StoreIdempotencyReadContractV1: StoreContractV1 {
         let Some(execution) = self.read_idempotent_execution(identity, idempotency_key)? else {
             return Ok(None);
         };
-        let job_id = match execution.outcome() {
+        let (job_id, terminal_receipt) = match execution.outcome() {
             AdmitOutcomeV1::New(receipt)
             | AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt)) => {
-                receipt.job_id().clone()
+                (receipt.job_id().clone(), None)
             }
             AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt)) => {
-                receipt.job().job_id().clone()
+                (receipt.job().job_id().clone(), Some(receipt.clone()))
             }
         };
-        Ok(Some(IdempotencyLookupV1::new(
+        Ok(Some(IdempotencyLookupV1::new_with_terminal_receipt(
             job_id,
             execution.request_digest().clone(),
+            terminal_receipt,
         )))
     }
 
@@ -781,6 +782,7 @@ pub trait StoreIdempotencyReadContractV1: StoreContractV1 {
 pub struct IdempotencyLookupV1 {
     job_id: JobIdV1,
     request_digest: CanonicalRequestDigestV1,
+    terminal_receipt: Option<PersistedTerminalReceiptV1>,
 }
 
 impl IdempotencyLookupV1 {
@@ -788,6 +790,19 @@ impl IdempotencyLookupV1 {
         Self {
             job_id,
             request_digest,
+            terminal_receipt: None,
+        }
+    }
+
+    pub fn new_with_terminal_receipt(
+        job_id: JobIdV1,
+        request_digest: CanonicalRequestDigestV1,
+        terminal_receipt: Option<PersistedTerminalReceiptV1>,
+    ) -> Self {
+        Self {
+            job_id,
+            request_digest,
+            terminal_receipt,
         }
     }
 
@@ -797,6 +812,10 @@ impl IdempotencyLookupV1 {
 
     pub fn request_digest(&self) -> &CanonicalRequestDigestV1 {
         &self.request_digest
+    }
+
+    pub fn terminal_receipt(&self) -> Option<&PersistedTerminalReceiptV1> {
+        self.terminal_receipt.as_ref()
     }
 }
 

@@ -18,8 +18,8 @@ use podway_core::{
     SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId, apply_transition_v1,
 };
 use podway_store::codec::{
-    PersistedDomainErrorV1, PersistedDomainResultV1, PersistedSessionLifecycleV1,
-    PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
+    PersistedDomainCommandV1, PersistedDomainErrorV1, PersistedDomainResultV1,
+    PersistedSessionLifecycleV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
     encode_persisted_terminal_receipt_v1,
 };
 use podway_store::{
@@ -327,12 +327,22 @@ fn direct_admission_uses_a_complete_deterministic_store_command_document() {
 }
 fn assert_terminal_replay(
     outcome: Result<AdmitOutcomeV1, StoreErrorV1>,
-    expected: PersistedTerminalReceiptV1,
+    mut expected: PersistedTerminalReceiptV1,
 ) {
     let replay = match outcome {
         Ok(AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt))) => receipt,
         outcome => panic!("expected terminal idempotency replay, got {outcome:?}"),
     };
+    if expected.lookup_command().is_none() {
+        expected = expected
+            .with_lookup_command(
+                replay
+                    .lookup_command()
+                    .expect("new terminal replays retain a lookup command")
+                    .clone(),
+            )
+            .unwrap();
+    }
     assert_eq!(replay, expected);
 }
 
@@ -2164,11 +2174,45 @@ fn pac_045_pruning_bounds_terminal_and_idempotency_retention_with_oldest_replay(
     assert_eq!(job_projection.claimed_at(), Some(UnixMillis::new(0)));
     assert_eq!(job_projection.finished_at(), UnixMillis::new(0));
     assert!(replay.session_projection().is_none());
+    assert_eq!(
+        replay.lookup_command(),
+        Some(&PersistedDomainCommandV1::WorkspaceInitialize)
+    );
     assert!(
         replay.start_identity().is_none(),
         "non-start terminal replay omits retained start identity"
     );
     let reopened = store(&temporary);
+    let retained_lookup = reopened
+        .read_idempotency_lookup(&identity(), &IdempotencyKeyV1::new("terminal-1").unwrap())
+        .unwrap()
+        .expect("pruned receipt remains available to read-only lookup");
+    assert_eq!(retained_lookup.job_id(), &job(1));
+    assert_eq!(retained_lookup.request_digest(), &digest('a'));
+    assert_eq!(
+        retained_lookup
+            .terminal_receipt()
+            .and_then(PersistedTerminalReceiptV1::lookup_command),
+        Some(&PersistedDomainCommandV1::WorkspaceInitialize)
+    );
+    let connection = Connection::open(&path).unwrap();
+    let retained_json: String = connection
+        .query_row(
+            "SELECT terminal_response_json FROM idempotency_records WHERE idempotency_key = 'terminal-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(retained_json.contains("podway.store-terminal/v2"));
+    for forbidden in [
+        "canonical_request_json",
+        "canonical_execution",
+        "preconditions",
+        "idempotency_key",
+    ] {
+        assert!(!retained_json.contains(forbidden));
+    }
+    drop(connection);
     let lookup = reopened
         .read_idempotent_execution(&identity(), &IdempotencyKeyV1::new("terminal-1").unwrap())
         .unwrap()
@@ -3699,6 +3743,8 @@ fn coherent_workspace_and_job_reads_return_bounded_sequence_ordered_terminal_fac
         .unwrap(),
         None,
     )
+    .unwrap()
+    .with_lookup_command(PersistedDomainCommandV1::WorkspaceInitialize)
     .unwrap();
     assert_eq!(terminal.state(), JobStateV1::Cancelled);
     assert_eq!(terminal.finished_at(), Some(UnixMillis::new(4)));

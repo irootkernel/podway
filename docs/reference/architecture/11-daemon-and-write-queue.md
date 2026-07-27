@@ -176,9 +176,10 @@ A client waiting synchronously may disconnect. The job continues. Retrying with 
 
 The daemon provides read-only worktree-scoped `job lookup --idempotency-key` for
 queued, running, and retained job rows without submitting or replaying a mutation.
-`RECON003` extends it to the original terminal envelope after job-row pruning. Response
-loss after possible admission is an outcome-unknown state; it is not cancellation.
-Admission-aware envelopes remain planned under the `RECON` epic.
+Receipt v2 retains only a bounded command discriminator plus immutable terminal
+projections, so lookup reconstructs the original terminal job response after job-row
+pruning without retaining the full request. Legacy commandless receipts fail closed.
+Response loss after possible admission remains an outcome-unknown state; it is not cancellation.
 
 ## Cancellation
 

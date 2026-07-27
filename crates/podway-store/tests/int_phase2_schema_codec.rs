@@ -10,12 +10,13 @@ use podway_core::{
     Revision, SessionId, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_store::codec::{
-    PersistedDomainCommandKindV1, PersistedDomainErrorV1, PersistedDomainResultV1,
-    PersistedSessionLifecycleV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
-    PersistedTerminalReceiptV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
-    STORE_COMMAND_SCHEMA_V1, STORE_COMMAND_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V0,
-    STORE_TERMINAL_SCHEMA_V1, StoreCodecErrorV1, decode_command_v1, decode_terminal_receipt_v1,
-    encode_command_v1, encode_persisted_terminal_receipt_v1, encode_terminal_receipt_v1,
+    PersistedDomainCommandKindV1, PersistedDomainCommandV1, PersistedDomainErrorV1,
+    PersistedDomainResultV1, PersistedSessionLifecycleV1, PersistedTerminalJobProjectionV1,
+    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalResultV1,
+    PersistedTerminalSessionProjectionV1, STORE_COMMAND_SCHEMA_V1, STORE_COMMAND_SCHEMA_V2,
+    STORE_TERMINAL_SCHEMA_V0, STORE_TERMINAL_SCHEMA_V1, STORE_TERMINAL_SCHEMA_V2,
+    StoreCodecErrorV1, decode_command_v1, decode_terminal_receipt_v1, encode_command_v1,
+    encode_persisted_terminal_receipt_v1, encode_terminal_receipt_v1,
 };
 use podway_store::schema::{
     SQLITE_INITIAL_MIGRATION_NAME_V1, SQLITE_SCHEMA_VERSION_V1, open_or_initialize_v1,
@@ -1704,6 +1705,62 @@ fn terminal_codec_preserves_legacy_v0_literals_and_requires_v1_replay_projection
         ))
         .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn terminal_v2_codec_round_trips_lookup_command_and_preserves_legacy_literals()
+-> Result<(), Box<dyn std::error::Error>> {
+    let legacy = r#"{"job":{"identity_sequence":99,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"cancelled"},"schema":"podway.store-terminal/v0"}"#;
+    assert_eq!(
+        encode_persisted_terminal_receipt_v1(&decode_terminal_receipt_v1(legacy)?)?,
+        legacy
+    );
+
+    let session_id = session_id();
+    let receipt = PersistedTerminalReceiptV1::new_with_projections(
+        receipt(101),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: Revision::new(3),
+            revision_after: Revision::new(4),
+            changed: true,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(20),
+            Some(UnixMillis::new(21)),
+            UnixMillis::new(22),
+        )?,
+        Some(PersistedTerminalSessionProjectionV1::new(
+            session_id,
+            "Lookup-safe task".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::new(3),
+            Revision::new(4),
+        )?),
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::SessionComplete)?;
+    let encoded = encode_persisted_terminal_receipt_v1(&receipt)?;
+    assert!(encoded.contains(STORE_TERMINAL_SCHEMA_V2));
+    assert!(encoded.contains(r#""command":{"kind":"session_complete"}"#));
+    assert!(!encoded.contains("canonical_request"));
+    assert_eq!(decode_terminal_receipt_v1(&encoded)?, receipt);
+
+    let missing_command = encoded.replacen(r#""command":{"kind":"session_complete"},"#, "", 1);
+    assert!(decode_terminal_receipt_v1(&missing_command).is_err());
+    let mismatched_command = encoded.replacen(
+        r#""command":{"kind":"session_complete"}"#,
+        r#""command":{"kind":"workspace_initialize"}"#,
+        1,
+    );
+    assert!(decode_terminal_receipt_v1(&mismatched_command).is_err());
+    let unknown_field = encoded.replacen(
+        r#""command":{"kind":"session_complete"}"#,
+        r#""command":{"kind":"session_complete","unknown":true}"#,
+        1,
+    );
+    assert!(decode_terminal_receipt_v1(&unknown_field).is_err());
     Ok(())
 }
 #[test]

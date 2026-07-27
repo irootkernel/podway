@@ -364,8 +364,8 @@ podway job lookup --idempotency-key <key>
 
 Job commands are scoped to the current worktree. `job wait` honors `--timeout`.
 `job cancel` only succeeds for queued jobs. `job lookup` is read-only and does not
-submit or replay a mutation. Receipt-only lookup after job-row pruning is completed
-separately by `RECON003`.
+submit or replay a mutation. After job-row pruning, lookup reconstructs the same
+terminal job response from the retained receipt without exposing the canonical request.
 
 ## Automatic and explicit preconditions
 

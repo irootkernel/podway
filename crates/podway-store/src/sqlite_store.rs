@@ -12,10 +12,10 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 
 use crate::codec::{
-    PersistedDomainResultV1, PersistedStartIdentityV1, PersistedTerminalJobProjectionV1,
-    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalResultV1,
-    PersistedTerminalSessionProjectionV1, decode_command_v1, decode_terminal_receipt_v1,
-    encode_command_v1, encode_persisted_terminal_receipt_v1,
+    PersistedDomainCommandV1, PersistedDomainResultV1, PersistedStartIdentityV1,
+    PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
+    PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1, decode_command_v1,
+    decode_terminal_receipt_v1, encode_command_v1, encode_persisted_terminal_receipt_v1,
     validate_persisted_terminal_result_for_command_v1, validate_terminal_result_for_command_v1,
 };
 use crate::schema::{
@@ -2654,6 +2654,11 @@ fn enrich_terminal_from_execution(
     mut terminal: PersistedTerminalReceiptV1,
     execution: &ClaimedExecutionV1,
 ) -> Result<PersistedTerminalReceiptV1, StoreErrorV1> {
+    if terminal.job_projection().is_some() {
+        terminal = terminal
+            .with_lookup_command(PersistedDomainCommandV1::from_command(execution.command()))
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    }
     let start_identity = admitted_start_identity(execution)?;
     if terminal
         .session_projection()

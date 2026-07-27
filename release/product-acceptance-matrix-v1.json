@@ -1764,8 +1764,8 @@
     "crates/podway-service/tests/int_phase6_native_service.rs": "3e721d314a6f601a6b8cffa307a89c2299ee68bd6f406f6ec6e2930ffed63c51",
     "crates/podway-store/tests/int_phase2_crash_matrix.rs": "e24470083c5de1efabbf215012725c77d0998785f43b928935048f6bda1eca4c",
     "crates/podway-store/tests/int_phase2_reset_lifecycle.rs": "8f8e705e6136381140b5fb2a8e6adbe76e21b39ebeef8a37a95c2132ca63e3ae",
-    "crates/podway-store/tests/int_phase2_schema_codec.rs": "e1a9dc2c7a90872da8a7bce027941f833300771ccbc3585914149b8043752f09",
-    "crates/podway-store/tests/int_phase4_store_transactions.rs": "3d7488eb6f37d9bad542912c01559331d4be97ce42b32700bbe24c8899f69593"
+    "crates/podway-store/tests/int_phase2_schema_codec.rs": "d8c423e421f8b2b7ebc16418f1a8e574fe4ea2eee868d53ecd23ce5b52993fe2",
+    "crates/podway-store/tests/int_phase4_store_transactions.rs": "97364f282f04ee1d2ac2b6af4d81bd8d65ed4c5eac56e335cbf2e1790f3360c4"
   },
   "version": 4
 }

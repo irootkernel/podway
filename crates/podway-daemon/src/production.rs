@@ -31,8 +31,8 @@ use podway_store::{
     StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1, StoreReadContractV1, WorkerIdV1,
     WorkspaceBindingV1,
     codec::{
-        PersistedDomainErrorV1, PersistedDomainResultV1, PersistedSessionLifecycleV1,
-        PersistedTerminalResultV1,
+        PersistedDomainCommandV1, PersistedDomainErrorV1, PersistedDomainResultV1,
+        PersistedSessionLifecycleV1, PersistedTerminalResultV1,
     },
 };
 use serde_json::{Map, Value, json};
@@ -667,7 +667,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         let context = workspace.scheduler.context_snapshot();
         let key = StoreIdempotencyKeyV1::new(idempotency_key.as_str().to_owned())
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
-        let Some(binding) = context
+        let Some(mut binding) = context
             .store()
             .read_idempotency_lookup(context.binding().identity(), &key)
             .map_err(map_store_error)?
@@ -680,12 +680,31 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         let view = context
             .store()
             .read_job(context.binding().identity(), binding.job_id())
-            .map_err(map_store_error)?
-            .ok_or_else(terminal_replay_integrity_failure)?;
-        if view.job().request_digest() != binding.request_digest() {
-            return Err(terminal_replay_integrity_failure());
-        }
-        let mut job = job_result_value(&view)?;
+            .map_err(map_store_error)?;
+        let mut job = if let Some(view) = view {
+            if view.job().request_digest() != binding.request_digest() {
+                return Err(terminal_replay_integrity_failure());
+            }
+            job_result_value(&view)?
+        } else {
+            if binding.terminal_receipt().is_none() {
+                binding = context
+                    .store()
+                    .read_idempotency_lookup(context.binding().identity(), &key)
+                    .map_err(map_store_error)?
+                    .filter(|current| {
+                        current.job_id() == binding.job_id()
+                            && current.request_digest() == binding.request_digest()
+                    })
+                    .ok_or_else(terminal_replay_integrity_failure)?;
+            }
+            receipt_only_job_result_value(
+                binding
+                    .terminal_receipt()
+                    .ok_or_else(terminal_replay_integrity_failure)?,
+                binding.request_digest(),
+            )?
+        };
         let job = job
             .as_object_mut()
             .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
@@ -1776,6 +1795,42 @@ fn job_result_value(view: &JobViewV1) -> Result<Value, DispatchFailureV1> {
     );
     object.insert("terminal_response".to_owned(), terminal_response);
     Ok(job)
+}
+
+fn receipt_only_job_result_value(
+    receipt: &PersistedTerminalReceiptV1,
+    request_digest: &CanonicalRequestDigestV1,
+) -> Result<Value, DispatchFailureV1> {
+    if receipt.job().request_digest() != request_digest {
+        return Err(terminal_replay_integrity_failure());
+    }
+    let command = receipt
+        .lookup_command()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let output = job_output_from_terminal_receipt(receipt)?;
+    let terminal_response =
+        terminal_job_response(receipt, terminal_command_kind_from_lookup(command))?;
+    let terminal_response = serde_json::to_value(terminal_response)
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+    let mut job = serde_json::to_value(output)
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+    let object = job
+        .as_object_mut()
+        .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+    object.insert(
+        "command".to_owned(),
+        Value::String(command.public_command_name().to_owned()),
+    );
+    object.insert("terminal_response".to_owned(), terminal_response);
+    object.insert(
+        "request_digest".to_owned(),
+        Value::String(request_digest.as_str().to_owned()),
+    );
+    Ok(job)
+}
+
+fn terminal_command_kind_from_lookup(command: &PersistedDomainCommandV1) -> TerminalCommandKindV1 {
+    terminal_command_kind_from_store(&command.command())
 }
 
 fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
@@ -3017,6 +3072,53 @@ mod tests {
         assert_eq!(
             output.finished_at().map(Rfc3339MillisV1::as_str),
             Some("1970-01-01T00:00:00.012Z")
+        );
+    }
+
+    #[test]
+    fn receipt_only_lookup_projects_terminal_response_and_rejects_legacy_receipts() {
+        let digest = Sha256Digest::new(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            JobReceiptV1::new(
+                7,
+                JobId::new("00000000-0000-4000-8000-000000000017").unwrap(),
+                digest.clone(),
+            ),
+            PersistedTerminalResultV1::Cancelled,
+            PersistedTerminalJobProjectionV1::new(
+                PersistedTerminalJobStateV1::Cancelled,
+                UnixMillis::new(10),
+                None,
+                UnixMillis::new(12),
+            )
+            .unwrap(),
+            None,
+        )
+        .unwrap();
+        assert!(receipt_only_job_result_value(&receipt, &digest).is_err());
+
+        let receipt = receipt
+            .with_lookup_command(PersistedDomainCommandV1::WorkspaceInitialize)
+            .unwrap();
+        let output = receipt_only_job_result_value(&receipt, &digest).unwrap();
+        assert_eq!(output["id"], receipt.job().job_id().as_str());
+        assert_eq!(output["sequence"], 7);
+        assert_eq!(output["state"], "cancelled");
+        assert_eq!(output["command"], "workspace.init");
+        assert_eq!(output["terminal_response"]["kind"], "cancelled");
+        assert_eq!(output["request_digest"], digest.as_str());
+        assert!(
+            receipt_only_job_result_value(
+                &receipt,
+                &Sha256Digest::new(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )
+                .unwrap()
+            )
+            .is_err()
         );
     }
 

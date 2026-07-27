@@ -123,7 +123,12 @@ Default pruning:
 - the barrier deletes old-session operational payloads after all earlier jobs are terminal;
 - reset and replace receipts are workspace-scoped and survive deletion of the old session;
 - workspace bootstrap and maintenance records retain the newest 100 or 30 days, whichever is smaller after the minimum set;
-- terminal response JSON remains after its job row is pruned.
+- terminal response JSON remains after its job row is pruned;
+- receipt v2 retains only the command discriminator and public terminal projections
+  required for lookup; canonical requests, selectors, preconditions, and submitted
+  values are not copied into the retained receipt;
+- commandless v0/v1 receipt-only lookup fails closed, while legacy idempotent replay
+  remains decodable.
 
 ### Operational journal
 

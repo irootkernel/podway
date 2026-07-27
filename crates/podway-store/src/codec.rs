@@ -22,6 +22,7 @@ pub const STORE_COMMAND_SCHEMA_V1: &str = "podway.store-command/v1";
 pub const STORE_COMMAND_SCHEMA_V2: &str = "podway.store-command/v2";
 pub const STORE_TERMINAL_SCHEMA_V0: &str = "podway.store-terminal/v0";
 pub const STORE_TERMINAL_SCHEMA_V1: &str = "podway.store-terminal/v1";
+pub const STORE_TERMINAL_SCHEMA_V2: &str = "podway.store-terminal/v2";
 
 /// Fail-closed rejection from a versioned internal store/domain envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -141,6 +142,35 @@ impl PersistedDomainCommandV1 {
             Self::ItemRemove { item_id } => CommandV1::ItemRemove { item_id },
             Self::ItemAttach { item_id } => CommandV1::ItemAttach { item_id },
             Self::ItemClear { item_id } => CommandV1::ItemClear { item_id },
+        }
+    }
+
+    pub fn command(&self) -> CommandV1 {
+        self.clone().into_command()
+    }
+
+    pub const fn public_command_name(&self) -> &'static str {
+        match self {
+            Self::WorkspaceInitialize => "workspace.init",
+            Self::WorkspaceResetAll => "workspace.reset_all",
+            Self::SessionStart => "session.start",
+            Self::SessionStartReplace => "session.start_replace",
+            Self::SessionComplete => "session.complete",
+            Self::SessionSkip => "session.skip",
+            Self::SessionRetry => "session.retry",
+            Self::SessionReturn => "session.return",
+            Self::SessionBlock => "session.block",
+            Self::SessionUnblock => "session.unblock",
+            Self::SessionCancel => "session.cancel",
+            Self::SessionReopen => "session.reopen",
+            Self::SessionReset => "session.reset",
+            Self::ItemCheck { .. } => "item.check",
+            Self::ItemUncheck { .. } => "item.uncheck",
+            Self::ItemSet { .. } => "item.set",
+            Self::ItemAdd { .. } => "item.add",
+            Self::ItemRemove { .. } => "item.remove",
+            Self::ItemAttach { .. } => "item.attach",
+            Self::ItemClear { .. } => "item.clear",
         }
     }
 }
@@ -750,6 +780,7 @@ pub struct PersistedTerminalReceiptV1 {
     job_projection: Option<PersistedTerminalJobProjectionV1>,
     session_projection: Option<PersistedTerminalSessionProjectionV1>,
     start_identity: Option<PersistedStartIdentityV1>,
+    lookup_command: Option<PersistedDomainCommandV1>,
 }
 
 impl PersistedTerminalReceiptV1 {
@@ -761,6 +792,7 @@ impl PersistedTerminalReceiptV1 {
             job_projection: None,
             session_projection: None,
             start_identity: None,
+            lookup_command: None,
         }
     }
 
@@ -776,6 +808,7 @@ impl PersistedTerminalReceiptV1 {
             job_projection: Some(job_projection),
             session_projection,
             start_identity: None,
+            lookup_command: None,
         };
         receipt.validate_v1_projections()?;
         Ok(receipt)
@@ -812,6 +845,26 @@ impl PersistedTerminalReceiptV1 {
         self.start_identity.as_ref()
     }
 
+    pub fn lookup_command(&self) -> Option<&PersistedDomainCommandV1> {
+        self.lookup_command.as_ref()
+    }
+
+    pub fn with_lookup_command(
+        mut self,
+        command: PersistedDomainCommandV1,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        if let Some(stored) = &self.lookup_command
+            && stored != &command
+        {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "terminal lookup command",
+            });
+        }
+        self.lookup_command = Some(command);
+        self.validate_v2_projection()?;
+        Ok(self)
+    }
+
     pub fn with_start_identity(mut self, start_identity: PersistedStartIdentityV1) -> Self {
         self.start_identity = Some(start_identity);
         self
@@ -839,11 +892,32 @@ impl PersistedTerminalReceiptV1 {
         })
     }
 
+    fn from_v2_envelope(
+        job: JobReceiptV1,
+        result: PersistedTerminalResultV1,
+        job_projection: PersistedTerminalJobProjectionV1,
+        session_projection: Option<PersistedTerminalSessionProjectionV1>,
+        start_identity: Option<PersistedStartIdentityV1>,
+        lookup_command: PersistedDomainCommandV1,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let receipt = Self::from_v1_envelope(
+            job,
+            result,
+            job_projection,
+            session_projection,
+            start_identity,
+        )?;
+        receipt.with_lookup_command(lookup_command)
+    }
+
     fn validate_legacy_projections(&self) -> Result<(), StoreCodecErrorV1> {
         if let Some(start_identity) = &self.start_identity {
             start_identity.validate()?;
         }
-        if self.job_projection.is_some() || self.session_projection.is_some() {
+        if self.job_projection.is_some()
+            || self.session_projection.is_some()
+            || self.lookup_command.is_some()
+        {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "terminal replay projections",
             });
@@ -972,6 +1046,19 @@ impl PersistedTerminalReceiptV1 {
         }
         Ok(())
     }
+
+    fn validate_v2_projection(&self) -> Result<(), StoreCodecErrorV1> {
+        self.validate_v1_projections()?;
+        let command = self
+            .lookup_command
+            .as_ref()
+            .ok_or(StoreCodecErrorV1::InvalidValue {
+                field: "terminal lookup command",
+            })?
+            .command();
+        validate_persisted_terminal_result_for_command_v1(&command, &self.result)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1025,6 +1112,20 @@ struct TerminalEnvelopeV1 {
     start_identity: Option<PersistedStartIdentityV1>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalEnvelopeV2 {
+    schema: String,
+    command: PersistedDomainCommandV1,
+    job: PersistedJobReceiptV1,
+    job_projection: PersistedTerminalJobProjectionV1,
+    result: PersistedTerminalResultV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_projection: Option<PersistedTerminalSessionProjectionV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_identity: Option<PersistedStartIdentityV1>,
+}
+
 /// Core terminal receipts lack the immutable projections required by terminal schema v1, so they
 /// canonically encode as legacy schema v0.
 pub fn encode_terminal_receipt_v1(
@@ -1045,8 +1146,20 @@ pub fn encode_persisted_terminal_receipt_v1(
         });
     }
 
-    match receipt.job_projection() {
-        Some(job_projection) => {
+    match (receipt.job_projection(), receipt.lookup_command()) {
+        (Some(job_projection), Some(lookup_command)) => {
+            receipt.validate_v2_projection()?;
+            canonical_json(&TerminalEnvelopeV2 {
+                schema: STORE_TERMINAL_SCHEMA_V2.to_owned(),
+                command: lookup_command.clone(),
+                job: receipt.job().into(),
+                job_projection: job_projection.clone(),
+                result: receipt.result().clone(),
+                session_projection: receipt.session_projection().cloned(),
+                start_identity: receipt.start_identity().cloned(),
+            })
+        }
+        (Some(job_projection), None) => {
             receipt.validate_v1_projections()?;
             canonical_json(&TerminalEnvelopeV1 {
                 schema: STORE_TERMINAL_SCHEMA_V1.to_owned(),
@@ -1057,7 +1170,7 @@ pub fn encode_persisted_terminal_receipt_v1(
                 start_identity: receipt.start_identity().cloned(),
             })
         }
-        None => {
+        (None, None) => {
             receipt.validate_legacy_projections()?;
             canonical_json(&TerminalEnvelopeV0 {
                 schema: STORE_TERMINAL_SCHEMA_V0.to_owned(),
@@ -1066,6 +1179,9 @@ pub fn encode_persisted_terminal_receipt_v1(
                 start_identity: receipt.start_identity().cloned(),
             })
         }
+        (None, Some(_)) => Err(StoreCodecErrorV1::InvalidValue {
+            field: "terminal lookup command",
+        }),
     }
 }
 
@@ -1113,9 +1229,26 @@ pub fn decode_terminal_receipt_v1(
                 envelope.start_identity,
             )?
         }
+        STORE_TERMINAL_SCHEMA_V2 => {
+            let envelope: TerminalEnvelopeV2 =
+                serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+            if envelope.job.identity_sequence == 0 {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "identity sequence",
+                });
+            }
+            PersistedTerminalReceiptV1::from_v2_envelope(
+                envelope.job.into(),
+                envelope.result,
+                envelope.job_projection,
+                envelope.session_projection,
+                envelope.start_identity,
+                envelope.command,
+            )?
+        }
         found => {
             return Err(StoreCodecErrorV1::UnsupportedSchema {
-                expected: STORE_TERMINAL_SCHEMA_V1,
+                expected: STORE_TERMINAL_SCHEMA_V2,
                 found: found.to_owned(),
             });
         }

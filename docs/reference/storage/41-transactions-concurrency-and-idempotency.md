@@ -216,9 +216,10 @@ It includes queue indicators so the caller knows whether later admitted mutation
 
 IPC transport may retry and responses may be lost. Podway guarantees **one logical state effect per idempotency key and canonical request**, not exactly one network exchange.
 
-The accepted target exposes lookup by idempotency key without replaying a request.
-It returns terminal receipt data after job-row pruning and makes pre-admission,
-admitted-timeout, and transport-outcome-unknown states machine-distinguishable.
+Lookup by idempotency key does not replay a request. Store terminal receipt v2 retains
+a bounded command discriminator with immutable job, result, and session projections;
+it returns terminal receipt data after job-row pruning without retaining canonical
+execution JSON. Pre-admission and admitted-timeout states are machine-distinguishable.
 
 ## Crash outcomes
 
