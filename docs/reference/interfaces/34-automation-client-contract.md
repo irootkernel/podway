@@ -153,7 +153,7 @@ the same session.
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-ADMIT-003` | Automation MUST treat response loss after possible admission as outcome unknown and MUST reconcile by idempotency key before deciding whether to retry with a new key. |
+| `AUT-ADMIT-003` | Automation MUST treat response loss after possible admission as `MUTATION_OUTCOME_UNKNOWN`, preserve the original idempotency key in its closed reconciliation details, and perform `job.lookup` before deciding whether to retry with a new key. |
 
 ## 18. Job lookup by idempotency key (AUT-RECON-001–004)
 

@@ -87,6 +87,25 @@
         },
         "admission": { "$ref": "#/$defs/notAdmitted" }
       }
+    },
+    "mutationOutcomeUnknownDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "outcome", "idempotency_key", "reconcile"],
+      "properties": {
+        "schema": { "const": "podway.mutation-outcome-unknown-details/v1" },
+        "outcome": { "const": "unknown" },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "reconcile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "idempotency_key"],
+          "properties": {
+            "command": { "const": "job.lookup" },
+            "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 }
+          }
+        }
+      }
     }
   },
   "required": [
@@ -176,6 +195,17 @@
       "then": {
         "properties": {
           "details": { "$ref": "#/$defs/procedureDigestMismatchDetails" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "MUTATION_OUTCOME_UNKNOWN" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "#/$defs/mutationOutcomeUnknownDetails" }
         }
       }
     }

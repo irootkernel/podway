@@ -867,6 +867,7 @@ impl LocalFailure {
                 (LOCAL_DAEMON_EXIT, false)
             }
             "DAEMON_UNAVAILABLE" => (LOCAL_DAEMON_EXIT, true),
+            "MUTATION_OUTCOME_UNKNOWN" => (4, true),
             "PRESET_NOT_FOUND"
             | "PROCEDURE_NOT_FOUND"
             | "PROCEDURE_INVALID"
@@ -909,6 +910,25 @@ impl LocalFailure {
 
     fn response_invalid(message: impl Into<String>) -> Self {
         Self::catalog("INTERNAL_ERROR", message, "cli")
+    }
+
+    fn mutation_outcome_unknown(idempotency_key: &IdempotencyKeyV1) -> Self {
+        let mut failure = Self::catalog(
+            "MUTATION_OUTCOME_UNKNOWN",
+            "mutation outcome is unknown; reconcile by idempotency key",
+            "cli",
+        );
+        failure.details = serde_json::from_value(json!({
+            "schema": "podway.mutation-outcome-unknown-details/v1",
+            "outcome": "unknown",
+            "idempotency_key": idempotency_key.as_str(),
+            "reconcile": {
+                "command": "job.lookup",
+                "idempotency_key": idempotency_key.as_str(),
+            },
+        }))
+        .expect("static mutation outcome details must be an object");
+        failure
     }
 
     fn procedure_not_found(message: impl Into<String>) -> Self {
@@ -1853,7 +1873,8 @@ fn wait_for_verified_service(
                 | DaemonClientErrorV1::Timeout { .. }
                 | DaemonClientErrorV1::Framing { .. }
                 | DaemonClientErrorV1::MissingResponse
-                | DaemonClientErrorV1::ResponseDecoding { .. },
+                | DaemonClientErrorV1::ResponseDecoding { .. }
+                | DaemonClientErrorV1::RequestPossiblyTransmitted { .. },
             ) => {}
             Err(error) => return Err(map_client_error(error).with_command(command)),
         }
@@ -1969,7 +1990,8 @@ fn service_status_result(
                 | DaemonClientErrorV1::Timeout { .. }
                 | DaemonClientErrorV1::Framing { .. }
                 | DaemonClientErrorV1::MissingResponse
-                | DaemonClientErrorV1::ResponseDecoding { .. },
+                | DaemonClientErrorV1::ResponseDecoding { .. }
+                | DaemonClientErrorV1::RequestPossiblyTransmitted { .. },
             ) => {}
             Err(error) => return Err(map_client_error(error).with_command(command)),
         }
@@ -3033,9 +3055,35 @@ fn request_daemon(
     request: &RequestEnvelopeV1,
 ) -> Result<ResponseEnvelopeV1, LocalFailure> {
     client.request(request).map_err(|error| {
-        map_client_error(error)
+        map_client_error_for_request(error, request)
             .with_correlation(request.command().as_str(), request.request_id().as_str())
     })
+}
+
+fn map_client_error_for_request(
+    error: DaemonClientErrorV1,
+    request: &RequestEnvelopeV1,
+) -> LocalFailure {
+    let is_mutation = matches!(
+        request.operation(),
+        OperationV1::Mutate | OperationV1::Bootstrap
+    );
+    if is_mutation && error.request_may_have_been_transmitted() {
+        return request.idempotency_key().map_or_else(
+            || LocalFailure::response_invalid("mutation response was lost without a request key"),
+            LocalFailure::mutation_outcome_unknown,
+        );
+    }
+    let mut failure = map_client_error(error);
+    if is_mutation {
+        failure.details.insert(
+            "admission".to_owned(),
+            json!({
+                "admitted": false,
+            }),
+        );
+    }
+    failure
 }
 
 fn re_correlate_preflight_error(
@@ -3057,6 +3105,7 @@ fn re_correlate_preflight_error(
 
 fn map_client_error(error: DaemonClientErrorV1) -> LocalFailure {
     match error {
+        DaemonClientErrorV1::RequestPossiblyTransmitted { source } => map_client_error(*source),
         DaemonClientErrorV1::RequestAdmission { .. }
         | DaemonClientErrorV1::RequestEncoding { .. } => {
             LocalFailure::request_invalid("the request cannot be admitted")

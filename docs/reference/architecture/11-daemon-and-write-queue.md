@@ -179,7 +179,8 @@ queued, running, and retained job rows without submitting or replaying a mutatio
 Receipt v2 retains only a bounded command discriminator plus immutable terminal
 projections, so lookup reconstructs the original terminal job response after job-row
 pruning without retaining the full request. Legacy commandless receipts fail closed.
-Response loss after possible admission remains an outcome-unknown state; it is not cancellation.
+Response loss after possible admission returns `MUTATION_OUTCOME_UNKNOWN` with
+the original idempotency key and a `job.lookup` instruction; it is not cancellation.
 
 ## Cancellation
 

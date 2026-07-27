@@ -371,6 +371,12 @@
       "summary": "The wait expired; the admitted job may continue."
     },
     {
+      "code": "MUTATION_OUTCOME_UNKNOWN",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The mutation may have been admitted; reconcile by idempotency key."
+    },
+    {
       "code": "CONFIRMATION_REQUIRED",
       "exit_code": 2,
       "retryable": false,

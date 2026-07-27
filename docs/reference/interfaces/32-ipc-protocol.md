@@ -163,6 +163,13 @@ Before processing a frame, the daemon obtains local peer credentials when availa
 - synchronous job wait timeout defaults to 30 seconds and is caller-configurable;
 - timeouts do not cancel admitted jobs.
 
+`JOB_WAIT_TIMEOUT` is a daemon response that proves admission and includes the
+job ID and workspace sequence. By contrast, response loss after mutation
+transmission may have begun produces the local `MUTATION_OUTCOME_UNKNOWN`
+error, which makes no admission claim and directs the caller to read-only
+`job.lookup` reconciliation with the original idempotency key. Neither case
+cancels the job.
+
 ## Compatibility
 
 The current daemon compares the request protocol identifier before command

@@ -115,6 +115,7 @@ tasks update the catalog, closed detail schemas, generated mirrors, and tests.
 | `JOB_NOT_FOUND` | 1 | no | Job ID is absent or pruned |
 | `JOB_NOT_CANCELLABLE` | 1 | no | Job is running or terminal |
 | `JOB_WAIT_TIMEOUT` | 4 | yes | Wait expired; admitted job may continue |
+| `MUTATION_OUTCOME_UNKNOWN` | 4 | yes | Response was lost after mutation transmission may have begun |
 
 ## Confirmation and internal errors
 
@@ -165,6 +166,28 @@ errors use exactly `{ "admitted": false }`; terminal errors and
 `JOB_WAIT_TIMEOUT` use `{ "admitted": true, "job_id": "<uuid>",
 "workspace_sequence": <positive integer> }`. The normative target is the
 [automation error contract](34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
+
+## Mutation outcome unknown details
+
+When the CLI loses a mutation response after request transmission may have begun,
+it emits `MUTATION_OUTCOME_UNKNOWN` with this closed details object:
+
+```json
+{
+  "schema": "podway.mutation-outcome-unknown-details/v1",
+  "outcome": "unknown",
+  "idempotency_key": "original-key",
+  "reconcile": {
+    "command": "job.lookup",
+    "idempotency_key": "original-key"
+  }
+}
+```
+
+The object deliberately omits `admission`, job ID, and sequence because none is
+known without a trustworthy response. `retryable=true` means the caller can
+recover safely: run `job lookup --idempotency-key <original-key>` first and do
+not submit a new-key mutation until reconciliation proves that is appropriate.
 
 ## Error redaction
 

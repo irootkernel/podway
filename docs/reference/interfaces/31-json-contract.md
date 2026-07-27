@@ -86,6 +86,31 @@ Optional top-level fields are omitted when not applicable. Static commands omit 
 
 The normative schemas are in [`../../schemas/output-v1.schema.json`](../../schemas/output-v1.schema.json) and [`../../schemas/error-v1.schema.json`](../../schemas/error-v1.schema.json).
 
+If a mutation response is lost after transmission may have begun, the local CLI
+preserves the original correlation and key without guessing admission:
+
+```json
+{
+  "schema": "podway.error/v1",
+  "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
+  "command": "session.start",
+  "generated_at": "2026-07-13T03:10:04.123Z",
+  "code": "MUTATION_OUTCOME_UNKNOWN",
+  "message": "mutation outcome is unknown; reconcile by idempotency key",
+  "retryable": true,
+  "exit_code": 4,
+  "details": {
+    "schema": "podway.mutation-outcome-unknown-details/v1",
+    "outcome": "unknown",
+    "idempotency_key": "original-key",
+    "reconcile": {
+      "command": "job.lookup",
+      "idempotency_key": "original-key"
+    }
+  }
+}
+```
+
 ## Status result
 
 ```json

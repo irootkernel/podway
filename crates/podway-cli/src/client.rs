@@ -128,6 +128,8 @@ pub enum DaemonClientErrorV1 {
         operation: DaemonClientIoOperationV1,
         source: io::Error,
     },
+    /// The exchange failed after request transmission began.
+    RequestPossiblyTransmitted { source: Box<DaemonClientErrorV1> },
     /// The selected endpoint is not an owner-private Unix socket in an owner-private directory.
     EndpointSecurity { message: String },
     /// The connected daemon process does not have the client's effective UID.
@@ -154,6 +156,22 @@ pub enum DaemonClientErrorV1 {
     },
 }
 
+impl DaemonClientErrorV1 {
+    fn possibly_transmitted(self) -> Self {
+        Self::RequestPossiblyTransmitted {
+            source: Box::new(self),
+        }
+    }
+
+    /// Returns true once request bytes may have reached the daemon.
+    ///
+    /// This is intentionally conservative: a partial write, shutdown failure, or any response-side
+    /// failure cannot prove that durable mutation admission did not happen.
+    pub const fn request_may_have_been_transmitted(&self) -> bool {
+        matches!(self, Self::RequestPossiblyTransmitted { .. })
+    }
+}
+
 impl fmt::Display for DaemonClientErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -166,6 +184,7 @@ impl fmt::Display for DaemonClientErrorV1 {
             Self::SocketConfiguration { operation, source } => {
                 write!(formatter, "cannot {operation} for daemon socket: {source}")
             }
+            Self::RequestPossiblyTransmitted { source } => source.fmt(formatter),
             Self::EndpointSecurity { message } => {
                 write!(formatter, "daemon endpoint is unsafe: {message}")
             }
@@ -206,6 +225,7 @@ impl Error for DaemonClientErrorV1 {
             Self::Connection { source, .. } | Self::SocketConfiguration { source, .. } => {
                 Some(source)
             }
+            Self::RequestPossiblyTransmitted { source } => Some(source.as_ref()),
             Self::RequestAdmission { source } => Some(source),
             Self::RequestEncoding { source } | Self::ResponseDecoding { source } => Some(source),
             Self::Framing { source } => Some(source),
@@ -320,25 +340,31 @@ impl DaemonClientV1 {
         {
             let mut writer = DeadlineStreamV1::for_write(&mut stream, write_deadline);
             write_frame_v1(&mut writer, &payload)
-                .map_err(|error| map_frame_error(error, DaemonClientIoOperationV1::Write))?;
+                .map_err(|error| map_frame_error(error, DaemonClientIoOperationV1::Write))
+                .map_err(DaemonClientErrorV1::possibly_transmitted)?;
         }
         write_deadline
             .check()
-            .map_err(|source| map_io_error(DaemonClientIoOperationV1::Write, source))?;
+            .map_err(|source| map_io_error(DaemonClientIoOperationV1::Write, source))
+            .map_err(DaemonClientErrorV1::possibly_transmitted)?;
         stream
             .shutdown(std::net::Shutdown::Write)
-            .map_err(|source| map_io_error(DaemonClientIoOperationV1::ShutdownWrite, source))?;
+            .map_err(|source| map_io_error(DaemonClientIoOperationV1::ShutdownWrite, source))
+            .map_err(DaemonClientErrorV1::possibly_transmitted)?;
 
         let read_deadline = ExchangeDeadlineV1::new(self.timeouts.read());
         let response = {
             let mut reader = DeadlineStreamV1::for_read(&mut stream, read_deadline);
             read_single_frame_v1(&mut reader)
-                .map_err(|error| map_frame_error(error, DaemonClientIoOperationV1::Read))?
-                .ok_or(DaemonClientErrorV1::MissingResponse)?
+                .map_err(|error| map_frame_error(error, DaemonClientIoOperationV1::Read))
+                .and_then(|response| response.ok_or(DaemonClientErrorV1::MissingResponse))
+                .map_err(DaemonClientErrorV1::possibly_transmitted)?
         };
         let response = decode_response_payload_v1(&response)
-            .map_err(|source| DaemonClientErrorV1::ResponseDecoding { source })?;
-        validate_response_correlation(request, &response)?;
+            .map_err(|source| DaemonClientErrorV1::ResponseDecoding { source })
+            .map_err(DaemonClientErrorV1::possibly_transmitted)?;
+        validate_response_correlation(request, &response)
+            .map_err(DaemonClientErrorV1::possibly_transmitted)?;
         Ok(response)
     }
 }

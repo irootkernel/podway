@@ -180,6 +180,14 @@ fn client_with_read_timeout(fixture: &RuntimeFixture, read: Duration) -> DaemonC
     DaemonClientV1::with_timeouts(fixture.paths.clone(), timeouts)
 }
 
+fn transmitted_source(error: DaemonClientErrorV1) -> DaemonClientErrorV1 {
+    assert!(error.request_may_have_been_transmitted());
+    match error {
+        DaemonClientErrorV1::RequestPossiblyTransmitted { source } => *source,
+        other => panic!("expected a possibly-transmitted exchange failure, received {other:?}"),
+    }
+}
+
 fn request() -> podway_protocol::RequestEnvelopeV1 {
     let identity = build_identity_v1();
     decode_request_payload_v1(
@@ -273,10 +281,10 @@ fn delayed_response_fragments_cannot_extend_the_absolute_read_deadline() {
     let result = client_with_read_timeout(&fixture, Duration::from_millis(60)).request(&request());
     let elapsed = started.elapsed();
     assert!(matches!(
-        result,
-        Err(DaemonClientErrorV1::Timeout {
+        transmitted_source(result.expect_err("delayed response must time out")),
+        DaemonClientErrorV1::Timeout {
             operation: DaemonClientIoOperationV1::Read
-        })
+        }
     ));
     assert!(
         elapsed < Duration::from_millis(500),
@@ -312,8 +320,8 @@ fn malformed_framed_response_is_a_typed_response_decoding_failure() {
 
     let result = client(&fixture).request(&request());
     assert!(matches!(
-        result,
-        Err(DaemonClientErrorV1::ResponseDecoding { .. })
+        transmitted_source(result.expect_err("malformed response must fail")),
+        DaemonClientErrorV1::ResponseDecoding { .. }
     ));
 
     let _ = server.request_wire();
@@ -324,12 +332,16 @@ fn malformed_framed_response_is_a_typed_response_decoding_failure() {
 fn absent_daemon_is_a_typed_connection_failure() {
     let fixture = RuntimeFixture::new();
 
+    let error = client(&fixture)
+        .request(&request())
+        .expect_err("an absent daemon must fail");
+    assert!(!error.request_may_have_been_transmitted());
     assert!(matches!(
-        client(&fixture).request(&request()),
-        Err(DaemonClientErrorV1::Connection {
+        error,
+        DaemonClientErrorV1::Connection {
             operation: DaemonClientIoOperationV1::Connect,
             ..
-        })
+        }
     ));
 }
 
@@ -388,10 +400,10 @@ fn response_timeout_is_a_typed_read_timeout() {
 
     let result = client_with_read_timeout(&fixture, Duration::from_millis(20)).request(&request());
     assert!(matches!(
-        result,
-        Err(DaemonClientErrorV1::Timeout {
+        transmitted_source(result.expect_err("stalled response must time out")),
+        DaemonClientErrorV1::Timeout {
             operation: DaemonClientIoOperationV1::Read
-        })
+        }
     ));
 
     let _ = server.request_wire();
@@ -408,10 +420,10 @@ fn truncated_response_is_a_typed_framing_failure() {
 
     let result = client(&fixture).request(&request());
     assert!(matches!(
-        result,
-        Err(DaemonClientErrorV1::Framing {
+        transmitted_source(result.expect_err("truncated response must fail")),
+        DaemonClientErrorV1::Framing {
             source: FrameErrorV1::UnexpectedEof { .. }
-        })
+        }
     ));
 
     let _ = server.request_wire();
@@ -428,10 +440,10 @@ fn trailing_response_data_is_a_typed_framing_failure() {
 
     let result = client(&fixture).request(&request());
     assert!(matches!(
-        result,
-        Err(DaemonClientErrorV1::Framing {
+        transmitted_source(result.expect_err("trailing response data must fail")),
+        DaemonClientErrorV1::Framing {
             source: FrameErrorV1::TrailingData
-        })
+        }
     ));
 
     let _ = server.request_wire();

@@ -75,6 +75,7 @@ pub enum ProtocolError {
     },
     InvalidIdentityConflictDetails,
     InvalidProcedureDigestMismatchDetails,
+    InvalidMutationOutcomeUnknownDetails,
     InvalidAdmissionMetadata,
     InvalidExitCode {
         value: u8,
@@ -152,6 +153,8 @@ impl fmt::Display for ProtocolError {
             }
             Self::InvalidProcedureDigestMismatchDetails => formatter
                 .write_str("Procedure digest mismatch details violate their closed v1 schema"),
+            Self::InvalidMutationOutcomeUnknownDetails => formatter
+                .write_str("mutation outcome unknown details violate their closed v1 schema"),
             Self::InvalidAdmissionMetadata => {
                 formatter.write_str("admission metadata violates its closed v1 schema")
             }
@@ -1721,6 +1724,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "MUTATION_OUTCOME_UNKNOWN",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "CONFIRMATION_REQUIRED",
         exit_code: 2,
         retryable: false,
@@ -1896,6 +1904,7 @@ impl ErrorEnvelopeV1 {
         }
         validate_identity_conflict_details_v1(self.code.as_str(), &self.details)?;
         validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
+        validate_mutation_outcome_unknown_details_v1(self.code.as_str(), &self.details)?;
         if let Some(workspace) = &self.workspace {
             validate_json_map_depth(workspace, 1)?;
         }
@@ -2055,6 +2064,39 @@ fn validate_procedure_digest_mismatch_details_v1(
             .ok_or(ProtocolError::InvalidProcedureDigestMismatchDetails)?;
         Sha256Digest::new(value)
             .map_err(|_| ProtocolError::InvalidProcedureDigestMismatchDetails)?;
+    }
+    Ok(())
+}
+
+fn validate_mutation_outcome_unknown_details_v1(
+    code: &str,
+    details: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    if code != "MUTATION_OUTCOME_UNKNOWN" {
+        return Ok(());
+    }
+    if details.len() != 4
+        || details.get("schema").and_then(Value::as_str)
+            != Some("podway.mutation-outcome-unknown-details/v1")
+        || details.get("outcome").and_then(Value::as_str) != Some("unknown")
+    {
+        return Err(ProtocolError::InvalidMutationOutcomeUnknownDetails);
+    }
+    let idempotency_key = details
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .ok_or(ProtocolError::InvalidMutationOutcomeUnknownDetails)?;
+    IdempotencyKeyV1::new(idempotency_key)
+        .map_err(|_| ProtocolError::InvalidMutationOutcomeUnknownDetails)?;
+    let reconcile = details
+        .get("reconcile")
+        .and_then(Value::as_object)
+        .ok_or(ProtocolError::InvalidMutationOutcomeUnknownDetails)?;
+    if reconcile.len() != 2
+        || reconcile.get("command").and_then(Value::as_str) != Some("job.lookup")
+        || reconcile.get("idempotency_key").and_then(Value::as_str) != Some(idempotency_key)
+    {
+        return Err(ProtocolError::InvalidMutationOutcomeUnknownDetails);
     }
     Ok(())
 }

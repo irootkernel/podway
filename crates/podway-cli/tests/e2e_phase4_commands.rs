@@ -126,6 +126,7 @@ enum Reply {
     IdentityError,
     ContractMismatch,
     ResetUnreadable,
+    CloseWithoutResponse,
     MalformedFramedResponse,
     MalformedStatusResult,
     MalformedNextResult,
@@ -164,6 +165,7 @@ impl FakeDaemon {
                     .map_err(|error| io::Error::other(error.to_string()))?;
                 wires.push(wire);
                 let frame = match reply {
+                    Reply::CloseWithoutResponse => continue,
                     Reply::MalformedFramedResponse => {
                         encode_frame_v1(br#"{"schema":"podway.output/v1","invalid":true}"#)
                             .map_err(|error| io::Error::other(error.to_string()))?
@@ -328,6 +330,9 @@ impl Reply {
                 false,
                 false,
             ),
+            Self::CloseWithoutResponse => Err(io::Error::other(
+                "response-loss fixture closes without an envelope",
+            )),
             Self::MalformedFramedResponse => Err(io::Error::other(
                 "malformed framed response does not have an envelope",
             )),
@@ -1332,6 +1337,97 @@ fn malformed_framed_daemon_response_uses_the_stable_client_error_envelope() {
         response["request_id"],
         decode_request(&wires[0]).request_id().as_str(),
         "client-envelope failures preserve the request correlation identifier"
+    );
+}
+
+#[test]
+fn mutation_response_loss_reports_unknown_outcome_with_reconciliation_key() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, vec![Reply::CloseWithoutResponse]);
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--idempotency-key",
+        "response-loss-key",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "Response loss task",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "unexpected output: {output:?}"
+    );
+    let response: Value =
+        serde_json::from_slice(&output.stdout).expect("unknown outcome must be JSON");
+    assert_eq!(response["schema"], "podway.error/v1");
+    assert_eq!(response["command"], "session.start");
+    assert_eq!(response["code"], "MUTATION_OUTCOME_UNKNOWN");
+    assert_eq!(response["exit_code"], 4);
+    assert_eq!(response["retryable"], true);
+    assert_eq!(
+        response["details"],
+        json!({
+            "schema": "podway.mutation-outcome-unknown-details/v1",
+            "outcome": "unknown",
+            "idempotency_key": "response-loss-key",
+            "reconcile": {
+                "command": "job.lookup",
+                "idempotency_key": "response-loss-key",
+            },
+        })
+    );
+
+    let wires = daemon.finish();
+    assert_eq!(
+        wires.len(),
+        1,
+        "response loss must not trigger an automatic retry"
+    );
+    let request = decode_request(&wires[0]);
+    assert_eq!(request.command().as_str(), "session.start");
+    assert_eq!(
+        request.idempotency_key().unwrap().as_str(),
+        "response-loss-key"
+    );
+    assert_eq!(response["request_id"], request.request_id().as_str());
+}
+
+#[test]
+fn mutation_connect_failure_reports_not_admitted_daemon_unavailable() {
+    let fixture = Fixture::new();
+    let socket = fixture.socket_path.display().to_string();
+    let output = fixture.run(&[
+        "--json",
+        "--socket",
+        &socket,
+        "--worktree",
+        "/fixture",
+        "--idempotency-key",
+        "connect-failure-key",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "Connect failure task",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "unexpected output: {output:?}"
+    );
+    let response: Value =
+        serde_json::from_slice(&output.stdout).expect("connect failure must be JSON");
+    assert_eq!(response["command"], "session.start");
+    assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
+    assert_eq!(response["retryable"], true);
+    assert_eq!(
+        response["details"],
+        json!({"admission": {"admitted": false}})
     );
 }
 #[test]

@@ -346,6 +346,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("JOB_NOT_FOUND", 1, false),
     ("JOB_NOT_CANCELLABLE", 1, false),
     ("JOB_WAIT_TIMEOUT", 4, true),
+    ("MUTATION_OUTCOME_UNKNOWN", 4, true),
     ("CONFIRMATION_REQUIRED", 2, false),
     ("INTERNAL_ERROR", 6, false),
 ];
@@ -394,6 +395,7 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 ),
                 ("admission".to_owned(), json!({"admitted": false})),
             ]),
+            "MUTATION_OUTCOME_UNKNOWN" => mutation_outcome_unknown_details("recon-key"),
             _ => Map::new(),
         };
         let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
@@ -445,6 +447,84 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 details: Map::new(),
             })
             .is_err()
+        );
+    }
+}
+
+fn mutation_outcome_unknown_details(idempotency_key: &str) -> Map<String, Value> {
+    Map::from_iter([
+        (
+            "schema".to_owned(),
+            json!("podway.mutation-outcome-unknown-details/v1"),
+        ),
+        ("outcome".to_owned(), json!("unknown")),
+        ("idempotency_key".to_owned(), json!(idempotency_key)),
+        (
+            "reconcile".to_owned(),
+            json!({
+                "command": "job.lookup",
+                "idempotency_key": idempotency_key,
+            }),
+        ),
+    ])
+}
+
+fn mutation_outcome_unknown_error(
+    details: Map<String, Value>,
+) -> Result<ErrorEnvelopeV1, ProtocolError> {
+    ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        command: CommandNameV1::new("session.start").unwrap(),
+        generated_at: timestamp(),
+        code: ErrorCodeV1::new("MUTATION_OUTCOME_UNKNOWN").unwrap(),
+        message: "mutation outcome is unknown".to_owned(),
+        retryable: true,
+        exit_code: ExitCodeV1::new(4).unwrap(),
+        workspace: None,
+        details,
+    })
+}
+
+#[test]
+fn api_004_mutation_outcome_unknown_details_are_closed_and_reconcilable() {
+    let valid = mutation_outcome_unknown_details("recon-key");
+    assert_round_trip(mutation_outcome_unknown_error(valid.clone()).unwrap());
+
+    let mut invalid_cases = Vec::new();
+    for field in ["schema", "outcome", "idempotency_key", "reconcile"] {
+        let mut details = valid.clone();
+        details.remove(field);
+        invalid_cases.push(details);
+    }
+    let mut extra = valid.clone();
+    extra.insert("admission".to_owned(), json!({"admitted": false}));
+    invalid_cases.push(extra);
+    let mut wrong_schema = valid.clone();
+    wrong_schema.insert("schema".to_owned(), json!("podway.unknown/v1"));
+    invalid_cases.push(wrong_schema);
+    let mut wrong_outcome = valid.clone();
+    wrong_outcome.insert("outcome".to_owned(), json!("failed"));
+    invalid_cases.push(wrong_outcome);
+    let mut invalid_key = mutation_outcome_unknown_details("");
+    invalid_key.insert("idempotency_key".to_owned(), json!(""));
+    invalid_cases.push(invalid_key);
+    let mut overlong_key = mutation_outcome_unknown_details(&"x".repeat(257));
+    overlong_key.insert("idempotency_key".to_owned(), json!("x".repeat(257)));
+    invalid_cases.push(overlong_key);
+    let mut wrong_command = valid.clone();
+    wrong_command["reconcile"]["command"] = json!("job.status");
+    invalid_cases.push(wrong_command);
+    let mut mismatched_key = valid.clone();
+    mismatched_key["reconcile"]["idempotency_key"] = json!("different-key");
+    invalid_cases.push(mismatched_key);
+    let mut extra_reconcile = valid;
+    extra_reconcile["reconcile"]["extra"] = json!(true);
+    invalid_cases.push(extra_reconcile);
+
+    for details in invalid_cases {
+        assert_eq!(
+            mutation_outcome_unknown_error(details),
+            Err(ProtocolError::InvalidMutationOutcomeUnknownDetails)
         );
     }
 }

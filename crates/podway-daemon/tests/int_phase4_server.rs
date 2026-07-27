@@ -781,6 +781,7 @@ fn read_timeout_returns_sanitized_internal_error_and_retains_frame_io_evidence()
 fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
     let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
     let calls = Arc::new(AtomicUsize::new(0));
+    let completed = Arc::new(AtomicUsize::new(0));
     let sink = Arc::new(CapturingObservabilitySink::default());
     let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedObservabilityClock));
     let transport = Arc::new(UnixServerTransportV1::with_metadata_and_observability(
@@ -788,7 +789,7 @@ fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
         BlockingDispatcher {
             gate: Arc::clone(&gate),
             calls,
-            completed: Arc::new(AtomicUsize::new(0)),
+            completed: Arc::clone(&completed),
         },
         ServerTransportTimeoutsV1::default(),
         metadata(),
@@ -811,6 +812,11 @@ fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
         Err(ServerConnectionErrorV1::ResponseWrite(_))
             | Err(ServerConnectionErrorV1::ResponseFlush(_))
     ));
+    assert_eq!(
+        completed.load(Ordering::SeqCst),
+        1,
+        "client disconnect must not abort work that was already dispatched"
+    );
     let report = observability.shutdown();
     assert_eq!(
         report.finalization(),
