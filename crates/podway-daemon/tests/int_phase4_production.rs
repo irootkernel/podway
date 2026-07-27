@@ -1341,11 +1341,24 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
             "{key} must expose its canonical request digest"
         );
         match terminal_kind {
-            Some(kind) => assert_eq!(
-                lookup.result()["job"]["terminal_response"]["kind"],
-                kind,
-                "{key}"
-            ),
+            Some(kind) => {
+                assert_eq!(
+                    lookup.result()["job"]["terminal_response"]["kind"],
+                    kind,
+                    "{key}"
+                );
+                if key == "recon-matrix-failed" {
+                    assert_eq!(
+                        lookup.result()["job"]["terminal_response"]["payload"]["details"]["admission"],
+                        json!({
+                            "admitted": true,
+                            "job_id": failed_id.as_str(),
+                            "workspace_sequence": 2
+                        }),
+                        "receipt-only failure lookup must preserve durable admission identity"
+                    );
+                }
+            }
             None => assert!(
                 lookup.result()["job"]["terminal_response"].is_null(),
                 "{key}"

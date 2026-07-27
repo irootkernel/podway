@@ -161,7 +161,7 @@ the same session.
 |---|---|
 | `AUT-RECON-001` | `job lookup --idempotency-key <key>` MUST be a read-only, worktree-scoped query and MUST NOT submit or replay a mutation. |
 | `AUT-RECON-002` | Lookup MUST return `found=false` for no record and MUST return job ID, sequence, command, request digest, and state for admitted non-terminal jobs. |
-| `AUT-RECON-003` | Lookup MUST return the original terminal success or error envelope from the retained receipt after the terminal job row is pruned and MUST NOT reveal the full original request. |
+| `AUT-RECON-003` | Lookup MUST return an immutable terminal success or error projection, including durable admission identity for errors, from the retained receipt after the terminal job row is pruned and MUST NOT reveal the full original request. |
 | `AUT-RECON-004` | Reusing an idempotency key for a different canonical request MUST continue to fail with the stable reuse error. |
 
 ## 19. Quiescent observation (AUT-OBS-001)

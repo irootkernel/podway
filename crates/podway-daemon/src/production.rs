@@ -2070,7 +2070,7 @@ fn terminal_job_error_projection(
         ),
         _ => return Err(terminal_replay_integrity_failure()),
     };
-    let details = match error {
+    let mut details = match error {
         PersistedDomainErrorV1::PreconditionFailed { expected, actual } => Map::from_iter([
             ("expected_revision".to_owned(), Value::from(expected.get())),
             ("current_revision".to_owned(), Value::from(actual.get())),
@@ -2091,14 +2091,6 @@ fn terminal_job_error_projection(
                     .map(|actual| Value::String(actual.as_str().to_owned()))
                     .unwrap_or(Value::Null),
             ),
-            (
-                "admission".to_owned(),
-                json!({
-                    "admitted": true,
-                    "job_id": receipt.job().job_id().as_str(),
-                    "workspace_sequence": receipt.job().identity_sequence(),
-                }),
-            ),
         ]),
         PersistedDomainErrorV1::AttemptNotCurrent { expected, actual } => {
             let mut details = Map::from_iter([(
@@ -2116,6 +2108,14 @@ fn terminal_job_error_projection(
         }
         _ => Map::new(),
     };
+    details.insert(
+        "admission".to_owned(),
+        json!({
+            "admitted": true,
+            "job_id": receipt.job().job_id().as_str(),
+            "workspace_sequence": receipt.job().identity_sequence(),
+        }),
+    );
     Ok(TerminalJobErrorProjectionV1 {
         code: ErrorCodeV1::new(code)
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?,
@@ -3420,6 +3420,14 @@ mod tests {
         assert_eq!(terminal["payload"]["code"], "ATTEMPT_NOT_CURRENT");
         assert_eq!(terminal["payload"]["retryable"], true);
         assert_eq!(terminal["payload"]["exit_code"], 4);
+        assert_eq!(
+            terminal["payload"]["details"]["admission"],
+            json!({
+                "admitted": true,
+                "job_id": fixture_job(28).job_id().as_str(),
+                "workspace_sequence": 28
+            })
+        );
         assert_eq!(
             terminal["payload"]["details"]["expected_attempt_id"],
             expected_attempt.as_str()

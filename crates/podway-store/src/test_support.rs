@@ -33,6 +33,7 @@ pub fn rewrite_start_terminal_as_legacy(
             "schema".to_owned(),
             Value::String("podway.store-terminal/v0".to_owned()),
         );
+        object.remove("command");
         object.remove("job_projection");
         object.remove("session_projection");
     } else {

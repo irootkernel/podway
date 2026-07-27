@@ -317,7 +317,9 @@ finished_at
 terminal_response
 ```
 
-`terminal_response` is the original success or error envelope for succeeded or failed jobs. It is `null` for queued, running, or cancelled jobs. Cancelled jobs include a cancellation summary.
+`terminal_response` is the immutable terminal response projection for succeeded,
+failed, or cancelled jobs. It is `null` only for queued or running jobs. A
+cancelled job uses `{ "kind": "cancelled", "payload": { "cancelled": true } }`.
 
 ## Artifact JSON
 
