@@ -343,14 +343,23 @@ fn request_for_command(
     digest_nibble: char,
     now: u64,
 ) -> AdmitRequestV1 {
-    AdmitRequestV1::new(
+    let admitted_snapshot = matches!(
+        command,
+        DomainCommand::SessionStart | DomainCommand::SessionStartReplace
+    )
+    .then(|| aggregate().snapshot().clone());
+    let request = AdmitRequestV1::new(
         command,
         IdempotencyKeyV1::new(key).unwrap(),
         job_id,
         RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
         digest(digest_nibble),
         UnixMillis::new(now),
-    )
+    );
+    match admitted_snapshot {
+        Some(snapshot) => request.with_admitted_procedure_snapshot(snapshot),
+        None => request,
+    }
 }
 
 fn crash_request(job_id: JobId, key: &str, digest_nibble: char, now: u64) -> AdmitRequestV1 {

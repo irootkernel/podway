@@ -1762,10 +1762,10 @@
     "crates/podway-protocol/tests/arch_phase0_contract.rs": "db5233800a5122c7a57996d7fc770f7e0ea75084c2f416a7723a741b0b361947",
     "crates/podway-protocol/tests/int_phase4_framing.rs": "c934041aa2b5bb48458d66979f6eab5af6fc7365a1775999c26f88216ce5f02f",
     "crates/podway-service/tests/int_phase6_native_service.rs": "3e721d314a6f601a6b8cffa307a89c2299ee68bd6f406f6ec6e2930ffed63c51",
-    "crates/podway-store/tests/int_phase2_crash_matrix.rs": "52535165bfc92205997465d89b4a3e25d020e0a2d7715f4bc5b2a294494d667d",
+    "crates/podway-store/tests/int_phase2_crash_matrix.rs": "e24470083c5de1efabbf215012725c77d0998785f43b928935048f6bda1eca4c",
     "crates/podway-store/tests/int_phase2_reset_lifecycle.rs": "8f8e705e6136381140b5fb2a8e6adbe76e21b39ebeef8a37a95c2132ca63e3ae",
     "crates/podway-store/tests/int_phase2_schema_codec.rs": "e1a9dc2c7a90872da8a7bce027941f833300771ccbc3585914149b8043752f09",
-    "crates/podway-store/tests/int_phase4_store_transactions.rs": "eda545736f7f68ef4802b19a1e6ea86f71a79be7f62c89ad41ba5a0f8b3f0a97"
+    "crates/podway-store/tests/int_phase4_store_transactions.rs": "ce4fbaa2c1c2d785c8464314ca1518d7577c4c8d93b80de5d8c343a8598d099c"
   },
   "version": 4
 }

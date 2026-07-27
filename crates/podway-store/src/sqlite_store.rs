@@ -312,12 +312,11 @@ impl StoreContractV1 for SqliteStoreV1 {
         if matches!(request.command(), crate::CommandV1::WorkspaceResetAll) {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
-        if request.admitted_procedure_snapshot().is_some()
-            && !matches!(
-                request.command(),
-                crate::CommandV1::SessionStart | crate::CommandV1::SessionStartReplace
-            )
-        {
+        let is_session_start = matches!(
+            request.command(),
+            crate::CommandV1::SessionStart | crate::CommandV1::SessionStartReplace
+        );
+        if request.admitted_procedure_snapshot().is_some() && !is_session_start {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
         self.trigger_failpoint(StoreFailpointV1::AdmissionBeforeTransaction)?;
@@ -345,6 +344,9 @@ impl StoreContractV1 for SqliteStoreV1 {
             let outcome = replay_for_idempotency(&transaction, &job_id, &stored_digest, terminal)?;
             transaction.commit().map_err(storage)?;
             return Ok(AdmitOutcomeV1::Existing(outcome));
+        }
+        if is_session_start && request.admitted_procedure_snapshot().is_none() {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
         let current_session = load_current_session(&transaction)?;
         let actual_session_id = current_session

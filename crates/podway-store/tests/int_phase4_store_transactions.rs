@@ -121,6 +121,11 @@ fn admit_for_command(
     digest_nibble: char,
     now: u64,
 ) {
+    let admitted_snapshot = matches!(
+        command,
+        DomainCommand::SessionStart | DomainCommand::SessionStartReplace
+    )
+    .then(|| aggregate().snapshot().clone());
     let request = AdmitRequestV1::new(
         command,
         IdempotencyKeyV1::new(key).unwrap(),
@@ -129,6 +134,10 @@ fn admit_for_command(
         digest(digest_nibble),
         UnixMillis::new(now),
     );
+    let request = match admitted_snapshot {
+        Some(snapshot) => request.with_admitted_procedure_snapshot(snapshot),
+        None => request,
+    };
     assert!(matches!(
         store.admit(&identity(), request),
         Ok(AdmitOutcomeV1::New(_))
@@ -1606,15 +1615,54 @@ fn post_commit_admission_and_claim_failpoints_are_retryable() {
 fn pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen() {
     let temporary = TempDir::new().unwrap();
     let snapshot = aggregate().snapshot().clone();
-    let request = AdmitRequestV1::new(
+    let bare_request = AdmitRequestV1::new(
         DomainCommand::SessionStart,
         IdempotencyKeyV1::new("pstrt002-admitted-snapshot").unwrap(),
         job(16),
         RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
         digest('b'),
         UnixMillis::new(20),
-    )
-    .with_admitted_procedure_snapshot(snapshot.clone());
+    );
+    let request = bare_request
+        .clone()
+        .with_admitted_procedure_snapshot(snapshot.clone());
+
+    let invariant_store = store_with_options(
+        &temporary,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(1),
+    );
+    for missing_snapshot_request in [
+        bare_request.clone(),
+        AdmitRequestV1::new(
+            DomainCommand::SessionStartReplace,
+            IdempotencyKeyV1::new("pstrt002-replacement-without-snapshot").unwrap(),
+            job(17),
+            RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+            digest('c'),
+            UnixMillis::new(20),
+        ),
+    ] {
+        assert!(matches!(
+            invariant_store.admit(&identity(), missing_snapshot_request),
+            Err(StoreErrorV1::InternalInvariantViolationV1 {
+                invariant: StoreInvariantV1::TransitionMutationShape,
+            })
+        ));
+    }
+    drop(invariant_store);
+
+    let path = temporary.path().join("state.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    for table in ["procedure_snapshots", "jobs", "idempotency_records"] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "missing snapshot must not mutate {table}");
+    }
+    drop(connection);
 
     let rollback_store = store_with_options(
         &temporary,
@@ -1631,7 +1679,6 @@ fn pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen
     ));
     drop(rollback_store);
 
-    let path = temporary.path().join("state.sqlite3");
     let connection = Connection::open(&path).unwrap();
     for table in ["procedure_snapshots", "jobs", "idempotency_records"] {
         let count: i64 = connection
@@ -1673,7 +1720,7 @@ fn pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen
         UnixMillis::new(22),
     );
     assert_job_replay(
-        reopened.admit(&identity(), request),
+        reopened.admit(&identity(), bare_request),
         JobReceiptV1::new(1, job(16), digest('b')),
     );
     drop(reopened);
@@ -3747,7 +3794,7 @@ fn fresh_session_start_replace_retires_old_history_and_replays_its_terminal_rece
     let replacement = SessionAggregateV1::start(
         SessionId::new("00000000-0000-4000-8000-000000000223").unwrap(),
         "Fresh replacement",
-        replacement_snapshot,
+        replacement_snapshot.clone(),
         AttemptId::new("00000000-0000-4000-8000-000000000224").unwrap(),
         UnixMillis::new(16),
     )
@@ -3761,7 +3808,8 @@ fn fresh_session_start_replace_retires_old_history_and_replays_its_terminal_rece
             .unwrap(),
         digest('c'),
         UnixMillis::new(16),
-    );
+    )
+    .with_admitted_procedure_snapshot(replacement_snapshot);
     store
         .admit(&identity(), replacement_request.clone())
         .unwrap();
@@ -3978,6 +4026,8 @@ fn fresh_session_start_replace_invalid_shapes_fail_closed() {
                 'f',
             ),
         };
+        let admitted_snapshot =
+            matches!(command, DomainCommand::SessionStartReplace).then(|| next.snapshot().clone());
         let request = AdmitRequestV1::new(
             command,
             IdempotencyKeyV1::new(request_key).unwrap(),
@@ -3987,6 +4037,10 @@ fn fresh_session_start_replace_invalid_shapes_fail_closed() {
             digest(request_digest),
             UnixMillis::new(13),
         );
+        let request = match admitted_snapshot {
+            Some(snapshot) => request.with_admitted_procedure_snapshot(snapshot),
+            None => request,
+        };
         store.admit(&identity(), request).unwrap();
         let claim = store
             .claim_next(

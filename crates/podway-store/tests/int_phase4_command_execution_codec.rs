@@ -6,7 +6,11 @@ use std::path::Path;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
-use podway_core::{DomainCommand, ItemId, JobId, Sha256Digest, UnixMillis, WorkspaceId};
+use podway_core::{
+    CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1, DomainCommand, ItemId, JobId,
+    ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1, Sha256Digest, UnixMillis,
+    WorkspaceId,
+};
 use podway_store::codec::{
     STORE_COMMAND_SCHEMA_V1, STORE_COMMAND_SCHEMA_V2, decode_command_v1, encode_command_v1,
 };
@@ -48,6 +52,41 @@ fn preconditions() -> RevisionAttemptItemPreconditionsV1 {
 
 fn canonical_execution(document: serde_json::Value) -> CanonicalExecutionJsonV1 {
     CanonicalExecutionJsonV1::new(podway_core::canonicalize_json_v1(&document).unwrap()).unwrap()
+}
+
+fn procedure_snapshot() -> ProcedureSnapshotV1 {
+    let authored = serde_json::json!({
+        "schema": "podway.procedure/v1",
+        "id": "phase4-command-execution-codec",
+        "version": "1",
+        "name": "Phase-4 command execution codec",
+        "stages": [{
+            "id": "first",
+            "title": "First",
+            "instructions": [],
+            "items": [{
+                "type": "confirm",
+                "id": "done",
+                "prompt": "Done",
+                "required": false
+            }]
+        }],
+        "rework": {"allow_return_to": "any_previous"}
+    });
+    let canonical = podway_core::canonicalize_json_v1(&authored).unwrap();
+    ProcedureSnapshotV1::from_canonical_json(CanonicalProcedureSnapshotInputV1 {
+        snapshot_id: ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000042").unwrap(),
+        schema_id: "podway.procedure/v1".to_owned(),
+        procedure_id: "phase4-command-execution-codec".to_owned(),
+        procedure_version: "1".to_owned(),
+        name: "Phase-4 command execution codec".to_owned(),
+        source_label: ProcedureSourceLabelV1::file("procedure.yaml").unwrap(),
+        canonical_json: CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
+        digest: Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+            .unwrap(),
+        created_at: UnixMillis::new(1),
+    })
+    .unwrap()
 }
 
 fn open_store(temporary: &TempDir, now: u64) -> SqliteStoreV1 {
@@ -260,9 +299,10 @@ fn full_execution_is_stored_in_canonical_request_json_and_survives_restart_claim
 #[test]
 fn pstrt003_idempotency_lookup_returns_the_immutable_execution_after_reopen() {
     let temporary = TempDir::new().unwrap();
+    let snapshot = procedure_snapshot();
     let semantic_execution = canonical_execution(serde_json::json!({
         "command": "session.start",
-        "execution": {"procedure_digest": digest('c')},
+        "execution": {"procedure_digest": snapshot.digest()},
         "source": "procedure.yaml"
     }));
     let request_digest = execution_digest(&semantic_execution);
@@ -275,7 +315,8 @@ fn pstrt003_idempotency_lookup_returns_the_immutable_execution_after_reopen() {
         request_digest.clone(),
         UnixMillis::new(5),
         semantic_execution.clone(),
-    );
+    )
+    .with_admitted_procedure_snapshot(snapshot);
     let store = open_store(&temporary, 4);
     assert!(matches!(
         store.admit(&identity(), request),
