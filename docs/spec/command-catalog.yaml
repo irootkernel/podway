@@ -440,6 +440,15 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+- name: job.lookup
+  cli:
+  - job
+  - lookup
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
 - name: job.status
   cli:
   - job

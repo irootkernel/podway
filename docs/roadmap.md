@@ -168,7 +168,7 @@ all later epics are release-blocking work that is not yet implemented.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `RECON001` | Add job lookup by idempotency key | Planned | Implement the read-only worktree-scoped lookup query. | [AUT-RECON-001–002](reference/interfaces/34-automation-client-contract.md#18-job-lookup-by-idempotency-key-aut-recon-001004) |
+| `RECON001` | Add job lookup by idempotency key | Completed | Implement the read-only worktree-scoped lookup query. | [AUT-RECON-001–002](reference/interfaces/34-automation-client-contract.md#18-job-lookup-by-idempotency-key-aut-recon-001004) |
 | `RECON002` | Expose durable admission metadata | Planned | Make admitted and non-admitted outcomes distinguishable and preserve job identity on timeout. | [AUT-ADMIT-001–002](reference/interfaces/34-automation-client-contract.md#16-durable-mutation-admission-aut-admit-001002) |
 | `RECON003` | Preserve receipt-only lookup | Planned | Return the original terminal envelope after terminal job pruning. | [AUT-RECON-003](reference/interfaces/34-automation-client-contract.md#18-job-lookup-by-idempotency-key-aut-recon-001004) |
 | `RECON004` | Define unknown-outcome handling | Planned | Encode timeout and disconnect states without treating client termination as cancellation. | [AUT-ADMIT-003](reference/interfaces/34-automation-client-contract.md#17-timeout-disconnect-and-unknown-outcome-aut-admit-003), [AUT-RECON-004](reference/interfaces/34-automation-client-contract.md#18-job-lookup-by-idempotency-key-aut-recon-001004) |

@@ -528,6 +528,12 @@ pub trait DispatcherReadServiceV1<Workspace>: Send + Sync {
         state: Option<JobStateV1>,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
 
+    fn job_lookup(
+        &self,
+        workspace: &Workspace,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
+
     fn job_status(
         &self,
         workspace: &Workspace,
@@ -766,6 +772,9 @@ where
             SliceCommandV1::JobList(input) => {
                 self.dispatch_job_list(request, slice_request, input.state)
             }
+            SliceCommandV1::JobLookup(input) => {
+                self.dispatch_job_lookup(request, slice_request, &input.idempotency_key)
+            }
             SliceCommandV1::JobStatus(input) => self.dispatch_job_status(
                 request,
                 slice_request,
@@ -920,6 +929,25 @@ where
         self.require_query_options(request)?;
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
         let output = self.reads.job_list(&workspace, state)?;
+        self.output_response(
+            request,
+            Some(self.runtime.workspace_output(&workspace)),
+            None,
+            None,
+            output.result,
+            output.warnings,
+        )
+    }
+
+    fn dispatch_job_lookup(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        let workspace = self.runtime.resolve_existing(slice_request.selector())?;
+        let output = self.reads.job_lookup(&workspace, idempotency_key)?;
         self.output_response(
             request,
             Some(self.runtime.workspace_output(&workspace)),

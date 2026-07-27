@@ -213,6 +213,7 @@
           "item.attach",
           "item.clear",
           "job.list",
+          "job.lookup",
           "job.status",
           "job.wait",
           "job.cancel"

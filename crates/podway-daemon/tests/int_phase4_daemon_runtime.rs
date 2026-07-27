@@ -675,6 +675,7 @@ fn pac017_daemon_is_the_sole_normal_store_writer() {
                     | "session.status"
                     | "session.next"
                     | "job.list"
+                    | "job.lookup"
                     | "job.status"
                     | "job.wait"
             )

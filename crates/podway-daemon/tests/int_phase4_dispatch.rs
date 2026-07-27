@@ -241,6 +241,17 @@ impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
         ))
     }
 
+    fn job_lookup(
+        &self,
+        _workspace: &FakeWorkspace,
+        _idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
+        Ok(DispatcherReadOutputV1::new(
+            map(json!({"found": false})),
+            Vec::new(),
+        ))
+    }
+
     fn job_status(
         &self,
         _workspace: &FakeWorkspace,
@@ -444,7 +455,7 @@ fn request_and_slice(
         "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
         "workspace.repair" | "job.cancel" => OperationV1::Control,
         "workspace.doctor" | "workspace.show" | "session.status" | "session.next" | "job.list"
-        | "job.status" | "job.wait" => OperationV1::Query,
+        | "job.lookup" | "job.status" | "job.wait" => OperationV1::Query,
         _ => OperationV1::Mutate,
     };
     let request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {

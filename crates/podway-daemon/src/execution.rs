@@ -1224,6 +1224,7 @@ where
             | SliceCommandV1::SessionStatus(_)
             | SliceCommandV1::SessionNext(_)
             | SliceCommandV1::JobList(_)
+            | SliceCommandV1::JobLookup(_)
             | SliceCommandV1::JobStatus(_)
             | SliceCommandV1::JobWait(_)
             | SliceCommandV1::JobCancel(_) => Err(ExecutionErrorV1::InvalidPersistedExecution {
@@ -1519,6 +1520,7 @@ where
             | SliceCommandV1::SessionStatus(_)
             | SliceCommandV1::SessionNext(_)
             | SliceCommandV1::JobList(_)
+            | SliceCommandV1::JobLookup(_)
             | SliceCommandV1::JobStatus(_)
             | SliceCommandV1::JobWait(_)
             | SliceCommandV1::JobCancel(_) => {
@@ -1666,6 +1668,7 @@ fn command_for_admission_v1(command: &SliceCommandV1) -> Result<DomainCommand, E
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
         | SliceCommandV1::JobWait(_)
         | SliceCommandV1::JobCancel(_) => {
@@ -1735,6 +1738,7 @@ fn store_preconditions_v1(
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
         | SliceCommandV1::JobWait(_)
         | SliceCommandV1::JobCancel(_) => {
@@ -1777,6 +1781,7 @@ fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
         | SliceCommandV1::JobWait(_)
         | SliceCommandV1::JobCancel(_) => None,
@@ -1892,6 +1897,7 @@ fn expected_revision_v1(command: &SliceCommandV1) -> Revision {
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
         | SliceCommandV1::JobWait(_)
         | SliceCommandV1::JobCancel(_) => Revision::ZERO,
@@ -2284,6 +2290,7 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
         | SliceCommandV1::JobWait(_)
         | SliceCommandV1::JobCancel(_) => {
@@ -2496,6 +2503,7 @@ fn decode_admission_resolution_v1(
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
         | SliceCommandV1::JobWait(_)
         | SliceCommandV1::JobCancel(_) => {

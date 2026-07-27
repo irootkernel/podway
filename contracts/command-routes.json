@@ -295,6 +295,13 @@
       "capabilities": []
     },
     {
+      "command": "job.lookup",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
       "command": "job.status",
       "owner": "podway-daemon",
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],

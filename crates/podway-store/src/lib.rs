@@ -735,6 +735,31 @@ pub trait StoreReadContractV1: StoreContractV1 {
 /// Additive pre-admission lookup used to return immutable idempotent outcomes before any fresh
 /// execution dependencies are consulted.
 pub trait StoreIdempotencyReadContractV1: StoreContractV1 {
+    /// Looks up the durable job binding for an idempotency key without admitting or replaying a
+    /// mutation.
+    fn read_idempotency_lookup(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<Option<IdempotencyLookupV1>, StoreErrorV1> {
+        let Some(execution) = self.read_idempotent_execution(identity, idempotency_key)? else {
+            return Ok(None);
+        };
+        let job_id = match execution.outcome() {
+            AdmitOutcomeV1::New(receipt)
+            | AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt)) => {
+                receipt.job_id().clone()
+            }
+            AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt)) => {
+                receipt.job().job_id().clone()
+            }
+        };
+        Ok(Some(IdempotencyLookupV1::new(
+            job_id,
+            execution.request_digest().clone(),
+        )))
+    }
+
     fn read_idempotent_outcome(
         &self,
         identity: &DurableWorktreeIdentityV1,
@@ -749,6 +774,30 @@ pub trait StoreIdempotencyReadContractV1: StoreContractV1 {
         identity: &DurableWorktreeIdentityV1,
         idempotency_key: &IdempotencyKeyV1,
     ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1>;
+}
+
+/// Minimal read-only binding exposed to idempotency reconciliation callers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdempotencyLookupV1 {
+    job_id: JobIdV1,
+    request_digest: CanonicalRequestDigestV1,
+}
+
+impl IdempotencyLookupV1 {
+    pub fn new(job_id: JobIdV1, request_digest: CanonicalRequestDigestV1) -> Self {
+        Self {
+            job_id,
+            request_digest,
+        }
+    }
+
+    pub fn job_id(&self) -> &JobIdV1 {
+        &self.job_id
+    }
+
+    pub fn request_digest(&self) -> &CanonicalRequestDigestV1 {
+        &self.request_digest
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -873,6 +922,14 @@ impl<Store> StoreIdempotencyReadContractV1 for Arc<Store>
 where
     Store: StoreIdempotencyReadContractV1 + ?Sized,
 {
+    fn read_idempotency_lookup(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<Option<IdempotencyLookupV1>, StoreErrorV1> {
+        (**self).read_idempotency_lookup(identity, idempotency_key)
+    }
+
     fn read_idempotent_outcome(
         &self,
         identity: &DurableWorktreeIdentityV1,

@@ -695,6 +695,20 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
+        words: "job lookup",
+        flags: &[
+            &JSON,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
         words: "job status",
         flags: DAEMON_READ_FLAGS,
         values: "",

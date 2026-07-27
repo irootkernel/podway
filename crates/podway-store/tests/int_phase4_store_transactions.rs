@@ -914,6 +914,10 @@ fn idempotency_outcome_reads_replay_every_durable_state_without_mutating_storage
     let store = store(&temporary);
     let missing_key = IdempotencyKeyV1::new("missing-idempotency-key")?;
     assert_eq!(
+        store.read_idempotency_lookup(&identity(), &missing_key)?,
+        None
+    );
+    assert_eq!(
         read_idempotent_outcome_without_mutation(&store, &database, &missing_key, &digest('a'),)??,
         None
     );
@@ -935,6 +939,16 @@ fn idempotency_outcome_reads_replay_every_durable_state_without_mutating_storage
     let expected_job_replay = Some(AdmitOutcomeV1::Existing(
         JobReceiptOrTerminalV1::JobReceipt(receipt.clone()),
     ));
+    let jobs_before_lookup = store.list_jobs(&identity(), JobListQueryV1::new(1_000)?)?;
+    let lookup = store
+        .read_idempotency_lookup(&identity(), &idempotency_key)?
+        .expect("admitted key must have a lookup binding");
+    assert_eq!(lookup.job_id(), receipt.job_id());
+    assert_eq!(lookup.request_digest(), &request_digest);
+    assert_eq!(
+        jobs_before_lookup,
+        store.list_jobs(&identity(), JobListQueryV1::new(1_000)?)?
+    );
     assert_eq!(
         read_idempotent_outcome_without_mutation(
             &store,

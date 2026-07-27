@@ -104,7 +104,8 @@ fn request(
     let operation = match command {
         "workspace.init" => OperationV1::Bootstrap,
         "workspace.repair" | "job.cancel" => OperationV1::Control,
-        "workspace.doctor" | "session.status" | "session.next" => OperationV1::Query,
+        "workspace.doctor" | "session.status" | "session.next" | "job.list" | "job.lookup"
+        | "job.status" | "job.wait" => OperationV1::Query,
         _ => OperationV1::Mutate,
     };
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
@@ -242,6 +243,52 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
         started.session().is_some(),
         "session.start terminal output must project the persisted session"
     );
+    let lookup = request(
+        2_000,
+        "job.lookup",
+        &main_selector,
+        json!({
+            "selector": serde_json::to_value(&main_selector).unwrap(),
+            "idempotency_key": "preset-start"
+        }),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-lookup-envelope-key",
+        PreconditionsV1::default(),
+    );
+    assert!(lookup.0.idempotency_key().is_none());
+    let lookup = dispatch_command(&dispatcher, &lookup, "job.lookup");
+    assert_eq!(lookup.result()["found"], true);
+    assert_eq!(
+        lookup.result()["job"]["id"],
+        started
+            .job()
+            .expect("start must expose its job")
+            .id()
+            .as_str()
+    );
+    assert_eq!(lookup.result()["job"]["command"], "session.start");
+    assert_eq!(lookup.result()["job"]["state"], "succeeded");
+    assert!(
+        lookup.result()["job"]["request_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")),
+        "lookup must expose the canonical request digest"
+    );
+    let missing_lookup = request(
+        2_002,
+        "job.lookup",
+        &main_selector,
+        json!({
+            "selector": serde_json::to_value(&main_selector).unwrap(),
+            "idempotency_key": "missing-key"
+        }),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-missing-lookup-key",
+        PreconditionsV1::default(),
+    );
+    let missing_lookup = dispatch_command(&dispatcher, &missing_lookup, "job.lookup");
+    assert_eq!(missing_lookup.result()["found"], false);
+    assert_eq!(missing_lookup.result().len(), 1);
     let runtime = manager
         .resolve_existing(git_selector(fixture.main()), None, observation())
         .expect("started workspace must resolve through the manager");

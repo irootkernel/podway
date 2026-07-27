@@ -374,6 +374,13 @@ fn route_cases() -> Vec<RouteCase> {
             preconditions: PreconditionsV1::default(),
         },
         RouteCase {
+            command: "job.lookup",
+            operation: OperationV1::Query,
+            durable: false,
+            payload: json!({"selector": selector.clone(), "idempotency_key": "lookup-key"}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
             command: "job.status",
             operation: OperationV1::Query,
             durable: false,
@@ -398,10 +405,10 @@ fn route_cases() -> Vec<RouteCase> {
 }
 
 #[test]
-fn g006_exhaustively_admits_only_the_29_canonical_daemon_routes() {
+fn recon001_exhaustively_admits_only_the_30_canonical_daemon_routes() {
     let cases = route_cases();
-    assert_eq!(cases.len(), 29);
-    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 29);
+    assert_eq!(cases.len(), 30);
+    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 30);
     assert_eq!(
         cases.iter().map(|case| case.command).collect::<Vec<_>>(),
         DAEMON_COMMAND_NAMES_V1.to_vec(),

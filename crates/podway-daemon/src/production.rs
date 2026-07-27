@@ -659,6 +659,49 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         ))
     }
 
+    fn job_lookup(
+        &self,
+        workspace: &ProductionWorkspaceV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
+        let context = workspace.scheduler.context_snapshot();
+        let key = StoreIdempotencyKeyV1::new(idempotency_key.as_str().to_owned())
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+        let Some(binding) = context
+            .store()
+            .read_idempotency_lookup(context.binding().identity(), &key)
+            .map_err(map_store_error)?
+        else {
+            return Ok(DispatcherReadOutputV1::new(
+                Map::from_iter([("found".to_owned(), Value::Bool(false))]),
+                Vec::new(),
+            ));
+        };
+        let view = context
+            .store()
+            .read_job(context.binding().identity(), binding.job_id())
+            .map_err(map_store_error)?
+            .ok_or_else(terminal_replay_integrity_failure)?;
+        if view.job().request_digest() != binding.request_digest() {
+            return Err(terminal_replay_integrity_failure());
+        }
+        let mut job = job_result_value(&view)?;
+        let job = job
+            .as_object_mut()
+            .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+        job.insert(
+            "request_digest".to_owned(),
+            Value::String(binding.request_digest().as_str().to_owned()),
+        );
+        Ok(DispatcherReadOutputV1::new(
+            Map::from_iter([
+                ("found".to_owned(), Value::Bool(true)),
+                ("job".to_owned(), Value::Object(job.clone())),
+            ]),
+            Vec::new(),
+        ))
+    }
+
     fn job_status(
         &self,
         workspace: &ProductionWorkspaceV1,

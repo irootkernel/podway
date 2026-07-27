@@ -233,6 +233,18 @@ impl DispatcherReadServiceV1<Workspace> for Reads {
         Ok(DispatcherReadOutputV1::new(Map::new(), Vec::new()))
     }
 
+    fn job_lookup(
+        &self,
+        _workspace: &Workspace,
+        _idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
+        self.0.lock().unwrap().reads.push(("job.lookup", None));
+        Ok(DispatcherReadOutputV1::new(
+            Map::from_iter([("found".to_owned(), Value::Bool(false))]),
+            Vec::new(),
+        ))
+    }
+
     fn job_status(
         &self,
         _workspace: &Workspace,
@@ -451,7 +463,7 @@ fn operation(command: &str) -> OperationV1 {
         "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
         "workspace.repair" | "job.cancel" => OperationV1::Control,
         "workspace.doctor" | "workspace.show" | "session.status" | "session.next" | "job.list"
-        | "job.status" | "job.wait" => OperationV1::Query,
+        | "job.lookup" | "job.status" | "job.wait" => OperationV1::Query,
         _ => OperationV1::Mutate,
     }
 }
@@ -684,6 +696,11 @@ fn every_g006_route_reaches_its_sole_authority() {
             PreconditionsV1::default(),
         ),
         (
+            "job.lookup",
+            json!({"selector": selector.clone(), "idempotency_key": "lookup-key"}),
+            PreconditionsV1::default(),
+        ),
+        (
             "job.status",
             json!({"selector": selector.clone(), "job_id": JOB_ID}),
             PreconditionsV1::default(),
@@ -754,6 +771,7 @@ fn every_g006_route_reaches_its_sole_authority() {
                 })
             ),
             ("job.list", None),
+            ("job.lookup", None),
             ("job", Some(RequestReadWaitV1::Immediate)),
             (
                 "job",

@@ -406,6 +406,7 @@ enum JobCommand {
         #[arg(value_name = "JOB_ID")]
         job_id: String,
     },
+    Lookup,
     Wait {
         #[arg(value_name = "JOB_ID")]
         job_id: String,
@@ -451,6 +452,9 @@ impl Command {
             Self::Job {
                 command: JobCommand::List { .. },
             } => Some("job.list"),
+            Self::Job {
+                command: JobCommand::Lookup,
+            } => Some("job.lookup"),
             Self::Job {
                 command: JobCommand::Status { .. },
             } => Some("job.status"),
@@ -1081,7 +1085,8 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         };
         let preflight = StatusPreflight::from_output(&status)
             .map_err(|failure| failure.with_correlation(wire_name, status.request_id().as_str()))?;
-        let (operation, payload) = daemon_payload(&mut cli.command)?;
+        let (operation, payload) =
+            daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
         let preconditions = preflight
             .facts
             .preconditions(&cli.command, &explicit)
@@ -1109,7 +1114,8 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             .map(|response| RunResult::Response(Box::new(response)));
     }
 
-    let (operation, mut payload) = daemon_payload(&mut cli.command)?;
+    let (operation, mut payload) =
+        daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
     if let Some(workspace_id) = &reset_all_workspace_id {
         payload.insert(
             "expected_workspace_uuid".to_owned(),
@@ -2451,7 +2457,18 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     let wire = command
         .daemon_wire_name()
         .ok_or_else(|| LocalFailure::request_invalid("unsupported command"))?;
-    if !command.is_mutation() && (cli.detach || cli.idempotency_key.is_some()) {
+    let lookup = matches!(
+        command,
+        Command::Job {
+            command: JobCommand::Lookup
+        }
+    );
+    if lookup && cli.idempotency_key.is_none() {
+        return Err(LocalFailure::request_invalid(
+            "job lookup requires --idempotency-key",
+        ));
+    }
+    if !command.is_mutation() && (cli.detach || (cli.idempotency_key.is_some() && !lookup)) {
         return Err(LocalFailure::request_invalid(
             "--detach and --idempotency-key apply only to mutations",
         ));
@@ -2628,6 +2645,7 @@ fn confirm_daemon_uninstall(cli: &Cli) -> Result<(), LocalFailure> {
 
 fn daemon_payload(
     command: &mut Command,
+    lookup_idempotency_key: Option<&str>,
 ) -> Result<(OperationV1, Map<String, Value>), LocalFailure> {
     let mut payload = Map::new();
     let operation = match command {
@@ -2762,6 +2780,20 @@ fn daemon_payload(
                 if let Some(state) = state {
                     payload.insert("state".to_owned(), Value::String(state.clone()));
                 }
+            }
+            JobCommand::Lookup => {
+                let key = IdempotencyKeyV1::new(
+                    lookup_idempotency_key
+                        .ok_or_else(|| {
+                            LocalFailure::request_invalid("job lookup requires --idempotency-key")
+                        })?
+                        .to_owned(),
+                )
+                .map_err(|_| LocalFailure::request_invalid("invalid idempotency key"))?;
+                payload.insert(
+                    "idempotency_key".to_owned(),
+                    Value::String(key.as_str().to_owned()),
+                );
             }
             JobCommand::Status { job_id }
             | JobCommand::Wait { job_id }
@@ -3861,6 +3893,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "job.list" => {
             "Usage:\n  podway job list [--state <queued|running|succeeded|failed|cancelled>]\n\nExample:\n  podway job list --state queued"
+        }
+        "job.lookup" => {
+            "Usage:\n  podway job lookup --idempotency-key <key>\n\nExample:\n  podway job lookup --idempotency-key mutation-123"
         }
         "job.status" => {
             "Usage:\n  podway job status <job-id>\n\nExample:\n  podway job status <uuid>"

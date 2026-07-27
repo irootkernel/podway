@@ -8,8 +8,8 @@ use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    ErrorCodeV1, ExitCodeV1, OperationV1, PreconditionsV1, RequestEnvelopeV1, Rfc3339MillisV1,
-    SessionLifecycleV1, SessionOutputV1,
+    ErrorCodeV1, ExitCodeV1, IdempotencyKeyV1, OperationV1, PreconditionsV1, RequestEnvelopeV1,
+    Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
 };
 
 /// The only selector representation accepted by the G006 daemon boundary.
@@ -636,6 +636,12 @@ pub struct JobStatusV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct JobLookupV1 {
+    pub idempotency_key: IdempotencyKeyV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct JobWaitV1 {
     pub job_id: JobId,
 }
@@ -648,7 +654,7 @@ pub struct JobCancelV1 {
 }
 
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 29] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 30] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
@@ -675,6 +681,7 @@ pub const DAEMON_COMMAND_NAMES_V1: [&str; 29] = [
     "item.attach",
     "item.clear",
     "job.list",
+    "job.lookup",
     "job.status",
     "job.wait",
     "job.cancel",
@@ -710,6 +717,7 @@ pub enum SliceCommandV1 {
     ItemAttach(ItemAttachV1),
     ItemClear(ItemClearV1),
     JobList(JobListV1),
+    JobLookup(JobLookupV1),
     JobStatus(JobStatusV1),
     JobWait(JobWaitV1),
     JobCancel(JobCancelV1),
@@ -744,6 +752,7 @@ impl SliceCommandV1 {
             Self::ItemAttach(_) => "item.attach",
             Self::ItemClear(_) => "item.clear",
             Self::JobList(_) => "job.list",
+            Self::JobLookup(_) => "job.lookup",
             Self::JobStatus(_) => "job.status",
             Self::JobWait(_) => "job.wait",
             Self::JobCancel(_) => "job.cancel",
@@ -794,6 +803,7 @@ impl SliceCommandV1 {
             | Self::SessionStatus(_)
             | Self::SessionNext(_)
             | Self::JobList(_)
+            | Self::JobLookup(_)
             | Self::JobStatus(_)
             | Self::JobWait(_) => OperationV1::Query,
             Self::SessionComplete(_)
@@ -1238,6 +1248,17 @@ impl SliceRequestV1 {
                     }),
                 )
             }
+            "job.lookup" => {
+                require_envelope(envelope, "job.lookup", OperationV1::Query, false)?;
+                require_no_preconditions(envelope.preconditions())?;
+                let payload: JobLookupPayloadV1 = parse_payload(envelope)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::JobLookup(JobLookupV1 {
+                        idempotency_key: payload.idempotency_key,
+                    }),
+                )
+            }
             "job.status" => {
                 require_envelope(envelope, "job.status", OperationV1::Query, false)?;
                 require_no_preconditions(envelope.preconditions())?;
@@ -1481,6 +1502,13 @@ struct JobListPayloadV1 {
     selector: WorktreeSelectorWireV1,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     state: Option<crate::JobStateV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobLookupPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    idempotency_key: IdempotencyKeyV1,
 }
 
 #[derive(Deserialize)]
@@ -2162,6 +2190,7 @@ pub fn canonical_mutation_identity_v1(
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
         | SliceCommandV1::JobWait(_)
         | SliceCommandV1::JobCancel(_) => {

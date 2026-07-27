@@ -43,8 +43,8 @@ fn frozen_command_catalog_routes() -> Vec<String> {
         .collect::<Vec<_>>();
     assert_eq!(
         routes.len(),
-        44,
-        "the frozen command catalog must contain exactly 44 routes"
+        45,
+        "the frozen command catalog must contain exactly 45 routes"
     );
     assert_eq!(
         routes.iter().collect::<BTreeSet<_>>().len(),
@@ -680,6 +680,7 @@ fn recording_success_result(command: &str) -> Value {
         }])),
         "session.next" => authoritative_next_result(),
         "job.list" => authoritative_job_list_result(),
+        "job.lookup" => serde_json::json!({"found": false}),
         "workspace.init" => serde_json::json!({"initialized": true}),
         "workspace.doctor" => serde_json::json!({"deep": true, "healthy": true}),
         "workspace.show" => serde_json::json!({"workspace": "recorded"}),
@@ -1050,6 +1051,15 @@ const DAEMON_CONTRACTS: &[DaemonContract] = &[
         arguments: &["job", "list", "--state", "queued"],
         operation: OperationV1::Query,
         payload: &[("state", PayloadValue::Text("queued"))],
+        preconditions: PreconditionExpectation::None,
+        status_probe: false,
+        detachable: false,
+    },
+    DaemonContract {
+        route: "job.lookup",
+        arguments: &["job", "lookup", "--idempotency-key", "recording-key"],
+        operation: OperationV1::Query,
+        payload: &[("idempotency_key", PayloadValue::Text("recording-key"))],
         preconditions: PreconditionExpectation::None,
         status_probe: false,
         detachable: false,
@@ -1810,6 +1820,22 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         dynamic: None,
     },
     RouteSurface {
+        route: "job.lookup",
+        parser: &["job", "lookup", "--idempotency-key", "recording-key"],
+        flags: &[
+            "--json",
+            "--worktree",
+            "--timeout",
+            "--socket",
+            "--no-color",
+            "--quiet",
+            "--idempotency-key",
+        ],
+        values: &[],
+        help_tokens: &["--idempotency-key"],
+        dynamic: None,
+    },
+    RouteSurface {
         route: "job.status",
         parser: &["job", "status", RECORDING_JOB_ID],
         flags: DAEMON_READ_FLAGS,
@@ -2274,7 +2300,7 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
         public_routes.iter().map(String::as_str).collect::<Vec<_>>(),
         "the CLI surface must exactly match the frozen, production command catalog",
     );
-    assert_eq!(DAEMON_CONTRACTS.len(), 29);
+    assert_eq!(DAEMON_CONTRACTS.len(), 30);
     for contract in DAEMON_CONTRACTS {
         assert!(
             public_routes.iter().any(|route| route == contract.route),
@@ -2524,7 +2550,7 @@ rework:
             .iter()
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 44 public routes"
+        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 45 public routes"
     );
 }
 
@@ -2711,6 +2737,10 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
         ("item.clear", &["clear", "item"]),
         ("job.list", &["job", "list", "--state", "queued"]),
         (
+            "job.lookup",
+            &["job", "lookup", "--idempotency-key", "recording-key"],
+        ),
+        (
             "job.status",
             &["job", "status", "123e4567-e89b-42d3-a456-426614174003"],
         ),
@@ -2723,7 +2753,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
             &["job", "cancel", "123e4567-e89b-42d3-a456-426614174003"],
         ),
     ];
-    assert_eq!(routes.len(), 44);
+    assert_eq!(routes.len(), 45);
 
     for (route, arguments) in routes {
         let mut argv = vec!["--json"];
@@ -2826,7 +2856,7 @@ fn completion_route(surface: &RouteSurface) -> String {
 
 #[test]
 fn public_route_surface_table_keeps_parser_help_and_completion_in_lockstep() {
-    assert_eq!(ROUTE_SURFACES.len(), 44);
+    assert_eq!(ROUTE_SURFACES.len(), 45);
     let bash = run(&["completions", "bash"]);
     let zsh = run(&["completions", "zsh"]);
     let fish = run(&["completions", "fish"]);
@@ -2968,11 +2998,12 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "item.attach",
         "item.clear",
         "job.list",
+        "job.lookup",
         "job.status",
         "job.wait",
         "job.cancel",
     ];
-    assert_eq!(routes.len(), 44);
+    assert_eq!(routes.len(), 45);
 
     for route in routes {
         let output = run(&["--json", "help", route]);
@@ -3049,6 +3080,8 @@ fn invalid_applicability_and_confirmation_are_usage_json_errors() {
             "--if-workspace-uuid",
             EXPLICIT_WORKSPACE_ID,
         ][..],
+        &["--json", "job", "lookup"][..],
+        &["--json", "job", "lookup", "--idempotency-key", ""][..],
         &[
             "--json",
             "start",
