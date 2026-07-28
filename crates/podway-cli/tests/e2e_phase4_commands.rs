@@ -1266,6 +1266,11 @@ fn daemon_and_parser_errors_preserve_stable_exit_and_json_contracts() {
         serde_json::from_slice(&malformed.stdout).expect("parser error stdout must be JSON");
     assert_eq!(malformed_json["schema"], "podway.error/v1");
     assert_eq!(malformed_json["exit_code"], 2);
+    assert_eq!(malformed_json["command"], "session.start");
+    assert_eq!(
+        malformed_json["details"],
+        json!({"admission": {"admitted": false}})
+    );
     assert_eq!(
         String::from_utf8(malformed.stdout)
             .expect("stdout must be UTF-8")

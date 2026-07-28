@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, ArgMatches, Args, CommandFactory, Parser, Subcommand};
 use nix::{
     errno::Errno,
     fcntl::{OFlag, open, openat},
@@ -1009,6 +1009,127 @@ enum RunResult {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ParseFailureCommandContext {
+    route: &'static str,
+    mutation: bool,
+}
+
+impl ParseFailureCommandContext {
+    const fn new(route: &'static str, mutation: bool) -> Self {
+        Self { route, mutation }
+    }
+}
+
+fn parse_failure_command_context(arguments: &[OsString]) -> Option<ParseFailureCommandContext> {
+    let matches = Cli::command()
+        .ignore_errors(true)
+        .try_get_matches_from(arguments)
+        .ok()?;
+    parse_failure_command_context_from_matches(&matches)
+}
+
+fn parse_failure_command_context_from_matches(
+    matches: &ArgMatches,
+) -> Option<ParseFailureCommandContext> {
+    let (command, matches) = matches.subcommand()?;
+    let context = match command {
+        "help" => ParseFailureCommandContext::new("help", false),
+        "version" => ParseFailureCommandContext::new("version", false),
+        "completions" => ParseFailureCommandContext::new("completions", false),
+        "procedure" => nested_parse_failure_context(
+            matches,
+            &[
+                ("validate", "procedure.validate"),
+                ("show", "procedure.show"),
+            ],
+        )?,
+        "preset" => nested_parse_failure_context(
+            matches,
+            &[
+                ("list", "preset.list"),
+                ("show", "preset.show"),
+                ("explain", "preset.explain"),
+            ],
+        )?,
+        "daemon" => nested_parse_failure_context(
+            matches,
+            &[
+                ("install", "daemon.install"),
+                ("uninstall", "daemon.uninstall"),
+                ("start", "daemon.start"),
+                ("stop", "daemon.stop"),
+                ("restart", "daemon.restart"),
+                ("status", "daemon.status"),
+                ("logs", "daemon.logs"),
+            ],
+        )?,
+        "init" => ParseFailureCommandContext::new("workspace.init", true),
+        "doctor" => ParseFailureCommandContext::new("workspace.doctor", false),
+        "workspace" => nested_parse_failure_context(
+            matches,
+            &[("show", "workspace.show"), ("repair", "workspace.repair")],
+        )?,
+        "start" => ParseFailureCommandContext::new(
+            if matches.get_flag("replace") {
+                "session.start_replace"
+            } else {
+                "session.start"
+            },
+            !matches.get_flag("dry_run"),
+        ),
+        "status" => ParseFailureCommandContext::new("session.status", false),
+        "next" => ParseFailureCommandContext::new("session.next", false),
+        "complete" => ParseFailureCommandContext::new("session.complete", true),
+        "skip" => ParseFailureCommandContext::new("session.skip", true),
+        "retry" => ParseFailureCommandContext::new("session.retry", true),
+        "return" => ParseFailureCommandContext::new("session.return", !matches.get_flag("dry_run")),
+        "block" => ParseFailureCommandContext::new("session.block", true),
+        "unblock" => ParseFailureCommandContext::new("session.unblock", true),
+        "cancel" => ParseFailureCommandContext::new("session.cancel", true),
+        "reopen" => ParseFailureCommandContext::new("session.reopen", !matches.get_flag("dry_run")),
+        "reset" => ParseFailureCommandContext::new(
+            if matches.get_flag("all") {
+                "workspace.reset_all"
+            } else {
+                "session.reset"
+            },
+            !matches.get_flag("dry_run"),
+        ),
+        "check" => ParseFailureCommandContext::new("item.check", true),
+        "uncheck" => ParseFailureCommandContext::new("item.uncheck", true),
+        "set" => ParseFailureCommandContext::new("item.set", true),
+        "add" => ParseFailureCommandContext::new("item.add", true),
+        "remove" => ParseFailureCommandContext::new("item.remove", true),
+        "attach" => ParseFailureCommandContext::new("item.attach", true),
+        "clear" => ParseFailureCommandContext::new("item.clear", true),
+        "job" => nested_parse_failure_context(
+            matches,
+            &[
+                ("list", "job.list"),
+                ("lookup", "job.lookup"),
+                ("status", "job.status"),
+                ("wait", "job.wait"),
+                ("cancel", "job.cancel"),
+            ],
+        )?,
+        "__complete" => ParseFailureCommandContext::new("__complete", false),
+        _ => return None,
+    };
+    Some(context)
+}
+
+fn nested_parse_failure_context(
+    matches: &ArgMatches,
+    routes: &[(&str, &'static str)],
+) -> Option<ParseFailureCommandContext> {
+    let (command, _) = matches.subcommand()?;
+    routes
+        .iter()
+        .find(|(candidate, _)| *candidate == command)
+        .map(|(_, route)| ParseFailureCommandContext::new(route, false))
+}
+
 /// Runs the CLI and returns its process exit code.
 pub fn run() -> i32 {
     let arguments: Vec<OsString> = env::args_os().collect();
@@ -1029,10 +1150,16 @@ pub fn run() -> i32 {
                 ),
             }
         }
-        Err(_) => render_local_failure(
-            LocalFailure::request_invalid("invalid command syntax"),
-            json_requested,
-        ),
+        Err(_) => {
+            let failure = LocalFailure::request_invalid("invalid command syntax");
+            let failure = match parse_failure_command_context(&arguments) {
+                Some(context) => failure
+                    .with_command(context.route)
+                    .with_not_admitted_if(context.mutation),
+                None => failure,
+            };
+            render_local_failure(failure, json_requested)
+        }
     }
 }
 
@@ -3982,6 +4109,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
 #[cfg(test)]
 mod tests {
     use std::{
+        ffi::OsString,
         fs::{self, File},
         io::{self, Seek, SeekFrom, Write},
         os::unix::fs::PermissionsExt,
@@ -3991,8 +4119,9 @@ mod tests {
     };
 
     use super::{
-        Cli, Command, LocalEnvelopeClock, LocalFailure, build_identity_v1, local_generated_at,
-        local_result, map_service_error, parse_timeout_millis, probe_daemon_identity,
+        Cli, Command, LocalEnvelopeClock, LocalFailure, ParseFailureCommandContext,
+        build_identity_v1, local_generated_at, local_result, map_service_error,
+        parse_failure_command_context, parse_timeout_millis, probe_daemon_identity,
         probe_daemon_identity_with_runner, render_local_failure_with_clock_and_writers,
         render_result_with_clock_and_writers, resolve_daemon_executable,
         resolve_implicit_daemon_executable_from, resolve_installed_service_endpoint,
@@ -4237,6 +4366,44 @@ mod tests {
             .is_ok()
         );
     }
+
+    #[test]
+    fn parser_failure_context_recovers_routes_and_admission_semantics() {
+        let context = |arguments: &[&str]| {
+            let arguments = arguments.iter().map(OsString::from).collect::<Vec<_>>();
+            parse_failure_command_context(&arguments)
+        };
+
+        assert_eq!(
+            context(&["podway", "start", "--preset", "sw-dev"]),
+            Some(ParseFailureCommandContext::new("session.start", true))
+        );
+        assert_eq!(
+            context(&["podway", "start", "--preset", "sw-dev", "--replace"]),
+            Some(ParseFailureCommandContext::new(
+                "session.start_replace",
+                true
+            ))
+        );
+        assert_eq!(
+            context(&["podway", "start", "--preset", "sw-dev", "--dry-run"]),
+            Some(ParseFailureCommandContext::new("session.start", false))
+        );
+        assert_eq!(
+            context(&["podway", "reset", "--all", "--unknown"]),
+            Some(ParseFailureCommandContext::new("workspace.reset_all", true))
+        );
+        assert_eq!(
+            context(&["podway", "status", "--unknown"]),
+            Some(ParseFailureCommandContext::new("session.status", false))
+        );
+        assert_eq!(
+            context(&["podway", "job", "lookup", "--unknown"]),
+            Some(ParseFailureCommandContext::new("job.lookup", false))
+        );
+        assert_eq!(context(&["podway", "unknown-command"]), None);
+    }
+
     #[test]
     fn daemon_status_help_flag_is_rejected_without_dispatch() {
         let error = Cli::try_parse_from(["podway", "daemon", "status", "--help"])
