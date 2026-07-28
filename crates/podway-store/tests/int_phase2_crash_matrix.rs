@@ -587,8 +587,8 @@ fn assert_schema_recovered_from_distinguishable_schema0(path: &Path) {
         .query_row("PRAGMA application_id", [], |row| row.get(0))
         .unwrap();
 
-    assert_eq!(user_version, 1);
-    assert_eq!(schema_migration_count, 1);
+    assert_eq!(user_version, 2);
+    assert_eq!(schema_migration_count, 2);
     assert_eq!(workspace_state_count, 1);
     assert_eq!(application_id, DISTINCT_SCHEMA0_APPLICATION_ID);
 }
@@ -683,8 +683,8 @@ fn assert_raw_initialized_publication(path: &Path) {
         )
         .unwrap();
 
-    assert_eq!(user_version, 1);
-    assert_eq!(migration_count, 1);
+    assert_eq!(user_version, 2);
+    assert_eq!(migration_count, 2);
     assert_eq!(
         workspace,
         (
@@ -762,7 +762,7 @@ fn assert_raw_reset_publication(path: &Path) {
         )
         .unwrap();
 
-    assert_eq!(user_version, 1);
+    assert_eq!(user_version, 2);
     assert_eq!(workspace_sequence, 1);
     assert_eq!(
         job_row,

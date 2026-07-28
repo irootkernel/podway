@@ -13,7 +13,10 @@ use std::sync::{Arc, Barrier};
 use podway_core::{
     DomainCommand, DomainResult, JobId, Revision, Sha256Digest, UnixMillis, WorkspaceId,
 };
-use podway_store::schema::{SQLITE_INITIAL_MIGRATION_NAME_V1, SQLITE_SCHEMA_VERSION_V1};
+use podway_store::schema::{
+    SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2, SQLITE_SCHEMA_VERSION_CURRENT,
+    SQLITE_SCHEMA_VERSION_V2, sqlite_v2_ddl_checksum,
+};
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, ClaimedExecutionV1, DurableWorktreeIdentityV1,
     IdempotencyKeyV1, JobReceiptOrTerminalV1, JobReceiptV1, PersistedTerminalJobProjectionV1,
@@ -22,15 +25,12 @@ use podway_store::{
     StoreFailpointV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreRecordKindV1,
     TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
     codec::{
-        PersistedDomainResultV1, PersistedTerminalResultV1, encode_command_v1,
-        encode_persisted_terminal_receipt_v1,
+        PersistedDomainCommandV1, PersistedDomainResultV1, PersistedTerminalResultV1,
+        encode_command_v1, encode_persisted_terminal_receipt_v1,
     },
 };
 use rusqlite::{Connection, OpenFlags};
 use tempfile::TempDir;
-const EXPECTED_SQLITE_V1_MIGRATION_SHA256: &str =
-    "sha256:20ea04d9635b8e1632e6d3aa5f3a888eaca49307b43ade9b9991363b30607423";
-
 fn digest(nibble: char) -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
 }
@@ -316,7 +316,7 @@ fn snapshot_reset_target(path: &Path) -> ResetTargetSnapshot {
         .unwrap();
     let migration = connection
         .query_row(
-            "SELECT version, name, checksum, applied_at_ms FROM schema_migrations",
+            "SELECT version, name, checksum, applied_at_ms FROM schema_migrations WHERE version = 2",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
@@ -534,6 +534,11 @@ fn canonical_reset_terminal_receipt_v1_json(
         .unwrap(),
         None,
     )
+    .and_then(|receipt| receipt.with_lookup_command(PersistedDomainCommandV1::WorkspaceResetAll))
+    .and_then(|receipt| match request.response_context() {
+        Some(context) => receipt.with_response_context(context.clone()),
+        None => Ok(receipt),
+    })
     .unwrap();
     encode_persisted_terminal_receipt_v1(&receipt).unwrap()
 }
@@ -575,13 +580,16 @@ fn assert_exact_published_reset_target(
             assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         }
     }
-    assert_eq!(snapshot.schema_version, i64::from(SQLITE_SCHEMA_VERSION_V1));
+    assert_eq!(
+        snapshot.schema_version,
+        i64::from(SQLITE_SCHEMA_VERSION_CURRENT)
+    );
     assert_eq!(
         snapshot.migration,
         (
-            i64::from(SQLITE_SCHEMA_VERSION_V1),
-            SQLITE_INITIAL_MIGRATION_NAME_V1.to_owned(),
-            EXPECTED_SQLITE_V1_MIGRATION_SHA256.to_owned(),
+            i64::from(SQLITE_SCHEMA_VERSION_V2),
+            SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2.to_owned(),
+            sqlite_v2_ddl_checksum(),
             now as i64,
         )
     );
@@ -685,7 +693,7 @@ fn assert_exact_initialized_destination(
     let schema_version = connection
         .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(schema_version, i64::from(SQLITE_SCHEMA_VERSION_V1));
+    assert_eq!(schema_version, i64::from(SQLITE_SCHEMA_VERSION_CURRENT));
     let mut statement = connection
         .prepare(
             "SELECT type, name FROM sqlite_schema \
@@ -729,10 +737,10 @@ fn assert_exact_initialized_destination(
             row.get::<_, i64>(0)
         })
         .unwrap();
-    assert_eq!(migration_count, 1);
+    assert_eq!(migration_count, 2);
     let migration = connection
         .query_row(
-            "SELECT version, name, checksum, applied_at_ms FROM schema_migrations",
+            "SELECT version, name, checksum, applied_at_ms FROM schema_migrations WHERE version = 2",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
@@ -740,9 +748,9 @@ fn assert_exact_initialized_destination(
     assert_eq!(
         migration,
         (
-            i64::from(SQLITE_SCHEMA_VERSION_V1),
-            SQLITE_INITIAL_MIGRATION_NAME_V1.to_owned(),
-            EXPECTED_SQLITE_V1_MIGRATION_SHA256.to_owned(),
+            i64::from(SQLITE_SCHEMA_VERSION_V2),
+            SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2.to_owned(),
+            sqlite_v2_ddl_checksum(),
             now as i64,
         )
     );

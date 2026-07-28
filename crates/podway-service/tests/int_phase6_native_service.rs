@@ -58,6 +58,10 @@ impl MacosServiceCommandRunnerV1 {
 }
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+// Keep functional adapter assertions independent from cold executable activation delays on macOS
+// hosts. The dedicated timeout cases below retain their 500 ms bound.
+const NON_TIMEOUT_LAUNCHCTL_TEST_BOUND: Duration = Duration::from_secs(180);
+
 fn unique_root() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -253,7 +257,11 @@ fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl
     let clock = FixedServiceClockV1::new(UnixMillis::new(7_000));
     let runner = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,
-        SystemLaunchctlRunnerV1::new(&fake_launchctl),
+        SystemLaunchctlRunnerV1::new(&fake_launchctl).with_bounds(
+            NON_TIMEOUT_LAUNCHCTL_TEST_BOUND,
+            1024 * 1024,
+            Duration::from_millis(250),
+        ),
         clock,
         501,
     )
@@ -606,7 +614,7 @@ esac
     );
 
     let runner = SystemLaunchctlRunnerV1::new(&fake_launchctl).with_bounds(
-        Duration::from_secs(10),
+        NON_TIMEOUT_LAUNCHCTL_TEST_BOUND,
         1024,
         Duration::from_millis(100),
     );

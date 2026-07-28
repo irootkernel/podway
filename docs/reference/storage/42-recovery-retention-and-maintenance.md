@@ -88,15 +88,15 @@ Because the database may be unreadable, reset-all is a daemon maintenance operat
 2. acquire the workspace maintenance lock;
 3. stop its scheduler and reject new admissions;
 4. close all database handles;
-5. create `.podway/runtime/reset.marker` atomically; the marker contains operation ID, idempotency key, request digest, target new workspace UUID, and submitted time;
+5. create `.podway/runtime/reset.marker` atomically; newly published v2 markers contain the operation ID, idempotency key, request digest, predecessor and target workspace UUIDs, submitted time, and original response request ID; v1 markers remain readable only so an upgrade can finish an already-published reset;
 6. remove `state.sqlite3`, `-wal`, and `-shm` files;
 7. create a new database using the target workspace UUID;
-8. insert a terminal workspace-scoped reset job and idempotency receipt into the new database;
+8. insert a terminal workspace-scoped reset job and v3 idempotency receipt into the new database, including the lookup command and full target-workspace response context;
 9. update the global registry;
 10. remove the marker;
 11. restart the scheduler.
 
-On startup, an existing marker causes the daemon to finish the reset before serving the workspace. A lost client response can be retried with the same idempotency key and is answered from the new database. The operation is idempotent.
+On startup, an existing marker causes the daemon to finish the reset before serving the workspace. A lost client response can be retried with the same idempotency key and is answered from the new database. After the terminal job row is pruned, `job.lookup` and exact reset replay reconstruct the same full terminal output from the retained workspace receipt. The operation is idempotent.
 
 ## Retention policy
 
@@ -124,11 +124,13 @@ Default pruning:
 - reset and replace receipts are workspace-scoped and survive deletion of the old session;
 - workspace bootstrap and maintenance records retain the newest 100 or 30 days, whichever is smaller after the minimum set;
 - terminal response JSON remains after its job row is pruned;
-- receipt v2 retains only the command discriminator and public terminal projections
-  required for lookup; canonical requests, selectors, preconditions, and submitted
-  values are not copied into the retained receipt;
-- commandless v0/v1 receipt-only lookup fails closed, while legacy idempotent replay
-  remains decodable.
+- receipt v3 retains the v2 command discriminator and public terminal projections,
+  plus bounded request ID, public command, workspace UUID/root/sequence response
+  context required to reproduce the full terminal wire envelope;
+- canonical requests, selectors, preconditions, idempotency keys, and submitted
+  values are not copied into the retained response context;
+- v0-v2 succeeded/failed receipt-only lookup fails closed when a complete envelope
+  cannot be reconstructed, while legacy receipts remain decodable for compatibility.
 
 ### Operational journal
 

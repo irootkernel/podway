@@ -29,17 +29,17 @@ use podway_core::{
 use podway_presets::lookup as lookup_embedded_preset_v1;
 use podway_protocol::{
     ItemAddV1, ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1, ItemRemoveV1, ItemSetV1,
-    ItemUncheckV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionReopenV1,
-    SessionResetV1, SessionRetryV1, SessionReturnV1, SessionSkipV1, SessionStartSourceV1,
-    SessionStartV1, SessionUnblockV1, SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
-    canonical_reset_all_identity_v1,
+    ItemUncheckV1, RequestIdV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1,
+    SessionReopenV1, SessionResetV1, SessionRetryV1, SessionReturnV1, SessionSkipV1,
+    SessionStartSourceV1, SessionStartV1, SessionUnblockV1, SliceCommandV1, SliceRequestV1,
+    WorktreeSelectorWireV1, canonical_reset_all_identity_v1,
 };
 use podway_store::{
     AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CanonicalExecutionJsonV1,
-    ClaimedJobV1, DurableWorktreeIdentityV1, IdempotencyKeyV1, PersistedSessionMutationV1,
-    RevisionAttemptItemPreconditionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
-    StoreIdempotencyReadContractV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
-    WorkerIdV1, WorkspaceBindingV1,
+    ClaimedJobV1, DurableWorktreeIdentityV1, IdempotencyKeyV1, PersistedResponseContextV1,
+    PersistedSessionMutationV1, RevisionAttemptItemPreconditionsV1, StateTransitionV1,
+    StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1, StoreValueErrorV1,
+    TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkspaceBindingV1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -382,8 +382,8 @@ impl PreparedWorkspaceResetAllV1 {
 /// requests carry only the marker publication inputs and never admit into the old Store.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResetAllPreparationOutcomeV1 {
-    Existing(AdmitOutcomeV1),
-    New(PreparedWorkspaceResetAllV1),
+    Existing(Box<AdmitOutcomeV1>),
+    New(Box<PreparedWorkspaceResetAllV1>),
 }
 
 /// Observational result of inspecting the exact reset-source database. It carries no authority to
@@ -530,23 +530,42 @@ where
             request,
             previous_workspace,
             idempotency_key,
+            None,
+            ResetAllStoreAuthorityV1::readable(&self.store),
+        )
+    }
+
+    pub fn prepare_workspace_reset_all_with_response_request_id(
+        &self,
+        request: &SliceRequestV1,
+        previous_workspace: &DurableWorktreeIdentityV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_request_id: RequestIdV1,
+    ) -> Result<ResetAllPreparationOutcomeV1, ExecutionErrorV1> {
+        self.prepare_workspace_reset_all_with_authority(
+            request,
+            previous_workspace,
+            idempotency_key,
+            Some(response_request_id),
             ResetAllStoreAuthorityV1::readable(&self.store),
         )
     }
 
     /// The manager-only recovery path permits no-Store preparation only with an unavailable proof
     /// issued for the exact source identity passed to this engine.
-    pub(crate) fn prepare_workspace_reset_all_with_unavailable_store(
+    pub(crate) fn prepare_workspace_reset_all_with_unavailable_store_and_response_request_id(
         &self,
         request: &SliceRequestV1,
         previous_workspace: &DurableWorktreeIdentityV1,
         idempotency_key: IdempotencyKeyV1,
+        response_request_id: RequestIdV1,
         proof: ValidatedUnavailableStoreV1,
     ) -> Result<ResetAllPreparationOutcomeV1, ExecutionErrorV1> {
         self.prepare_workspace_reset_all_with_authority(
             request,
             previous_workspace,
             idempotency_key,
+            Some(response_request_id),
             ResetAllStoreAuthorityV1::validated_unavailable(proof),
         )
     }
@@ -556,6 +575,7 @@ where
         request: &SliceRequestV1,
         previous_workspace: &DurableWorktreeIdentityV1,
         idempotency_key: IdempotencyKeyV1,
+        response_request_id: Option<RequestIdV1>,
         store_authority: ResetAllStoreAuthorityV1<'_, Store>,
     ) -> Result<ResetAllPreparationOutcomeV1, ExecutionErrorV1> {
         let SliceCommandV1::WorkspaceResetAll(reset) = request.command() else {
@@ -575,7 +595,7 @@ where
                         EventOperationV1::IdempotentReplay,
                         EventOutcomeV1::Succeeded,
                     );
-                    return Ok(ResetAllPreparationOutcomeV1::Existing(outcome));
+                    return Ok(ResetAllPreparationOutcomeV1::Existing(Box::new(outcome)));
                 }
                 let expected_workspace_uuid =
                     reset.preconditions.expected_workspace_id.as_ref().ok_or(
@@ -616,21 +636,32 @@ where
         }
         let operation_id = self.ids.next_job_id();
         let target_workspace_uuid = self.ids.next_workspace_id();
-        let marker = ResetMarkerV1::new(
-            operation_id,
-            idempotency_key,
-            request_digest,
-            previous_workspace.workspace_uuid().clone(),
-            target_workspace_uuid,
-            self.clock.now(),
-        );
-        Ok(ResetAllPreparationOutcomeV1::New(
+        let marker = match response_request_id {
+            Some(response_request_id) => ResetMarkerV1::new_with_response_request_id(
+                operation_id,
+                idempotency_key,
+                request_digest,
+                previous_workspace.workspace_uuid().clone(),
+                target_workspace_uuid,
+                self.clock.now(),
+                response_request_id,
+            ),
+            None => ResetMarkerV1::new(
+                operation_id,
+                idempotency_key,
+                request_digest,
+                previous_workspace.workspace_uuid().clone(),
+                target_workspace_uuid,
+                self.clock.now(),
+            ),
+        };
+        Ok(ResetAllPreparationOutcomeV1::New(Box::new(
             PreparedWorkspaceResetAllV1 {
                 marker,
                 previous_workspace_uuid: previous_workspace.workspace_uuid().clone(),
                 source: previous_workspace.clone(),
             },
-        ))
+        )))
     }
 
     /// Revalidates the selector, creates the complete immutable execution document, and asks the
@@ -643,7 +674,7 @@ where
         request: &SliceRequestV1,
         idempotency_key: IdempotencyKeyV1,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
-        let result = self.admit_with_expected_workspace(None, request, idempotency_key);
+        let result = self.admit_with_expected_workspace(None, request, idempotency_key, None);
         self.emit_admission_result(&result);
         result
     }
@@ -657,8 +688,29 @@ where
         request: &SliceRequestV1,
         idempotency_key: IdempotencyKeyV1,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
-        let result =
-            self.admit_with_expected_workspace(Some(expected_workspace), request, idempotency_key);
+        let result = self.admit_with_expected_workspace(
+            Some(expected_workspace),
+            request,
+            idempotency_key,
+            None,
+        );
+        self.emit_admission_result(&result);
+        result
+    }
+
+    pub fn admit_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &SliceRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
+        let result = self.admit_with_expected_workspace(
+            Some(expected_workspace),
+            request,
+            idempotency_key,
+            response_context,
+        );
         self.emit_admission_result(&result);
         result
     }
@@ -668,6 +720,7 @@ where
         expected_workspace: Option<&WorkspaceBindingV1>,
         request: &SliceRequestV1,
         idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
         if matches!(request.command(), SliceCommandV1::WorkspaceResetAll(_)) {
             return Err(ExecutionErrorV1::InvalidPersistedExecution {
@@ -755,6 +808,10 @@ where
             canonical_execution,
         )
         .with_session_identity(admission_session_identity_v1(request.command()));
+        let admitted = match response_context {
+            Some(context) => admitted.with_response_context(context),
+            None => admitted,
+        };
         let admitted = match &resolution {
             AdmissionResolutionV1::SessionStart { snapshot, .. } => {
                 admitted.with_admitted_procedure_snapshot(snapshot.as_ref().clone())

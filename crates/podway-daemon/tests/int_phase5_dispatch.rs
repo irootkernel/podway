@@ -314,6 +314,7 @@ impl MutationAdmissionWorkerV1<Workspace> for Mutations {
         _workspace: &Workspace,
         request: &SliceRequestV1,
         idempotency_key: &IdempotencyKeyV1,
+        _response_context: &podway_daemon::dispatch::MutationResponseContextV1,
         wait: MutationWaitV1,
     ) -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
         self.calls.lock().unwrap().mutations.push(MutationCall {
@@ -330,6 +331,7 @@ impl MutationAdmissionWorkerV1<Workspace> for Mutations {
         _selector: &WorktreeSelectorWireV1,
         request: &SliceRequestV1,
         idempotency_key: &IdempotencyKeyV1,
+        _response_request_id: &podway_protocol::RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1> {
         self.calls.lock().unwrap().mutations.push(MutationCall {
             authority: MutationAuthority::ResetAllMaintenance,
@@ -556,6 +558,7 @@ fn terminal_success() -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
             Map::from_iter([("changed".to_owned(), Value::Bool(true))]),
             Vec::new(),
         )),
+        response_context: None,
     })
 }
 
@@ -1264,6 +1267,7 @@ fn terminal_error_preserves_job_details_and_request_correlation() {
                             .with_current_revision(Revision::new(2)),
                     ),
             ),
+            response_context: None,
         }),
     );
     let (request, slice) = request_with_options(
@@ -1325,6 +1329,7 @@ fn detached_terminal_replay_preserves_the_immutable_job_and_result() {
                 )]),
                 Vec::new(),
             )),
+            response_context: None,
         }),
     );
     let (request, slice) = request_with_options(

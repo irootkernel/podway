@@ -337,6 +337,7 @@ impl MutationAdmissionWorkerV1<FakeWorkspace> for FakeWorker {
         _workspace: &FakeWorkspace,
         request: &SliceRequestV1,
         idempotency_key: &IdempotencyKeyV1,
+        _response_context: &podway_daemon::dispatch::MutationResponseContextV1,
         wait: MutationWaitV1,
     ) -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
         let mut state = self.state.lock().unwrap();
@@ -352,6 +353,7 @@ impl MutationAdmissionWorkerV1<FakeWorkspace> for FakeWorker {
         _selector: &WorktreeSelectorWireV1,
         request: &SliceRequestV1,
         idempotency_key: &IdempotencyKeyV1,
+        _response_request_id: &podway_protocol::RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1> {
         let mut state = self.state.lock().unwrap();
         state.calls.push(MutationCall {
@@ -513,6 +515,7 @@ fn terminal_success() -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
             map(json!({"changed": true})),
             Vec::new(),
         )),
+        response_context: None,
     })
 }
 
@@ -655,6 +658,7 @@ fn workspace_init_bootstraps_without_starting_a_task() {
             map(json!({"initialized": true})),
             Vec::new(),
         )),
+        response_context: None,
     }));
     let dispatcher = dispatcher(runtime.clone(), reads, worker.clone());
     let (request, slice) = request_and_slice(
@@ -871,6 +875,7 @@ fn stale_terminal_conditions_are_retryable_and_include_only_safe_revisions() {
                     .with_current_revision(Revision::new(8)),
             ),
         ),
+        response_context: None,
     }));
     let dispatcher = dispatcher(runtime, reads, worker);
     let (request, slice) = request_and_slice(
@@ -1088,6 +1093,7 @@ fn identity_conflicts_use_closed_details_before_and_after_admission() {
                     .with_session_id_mismatch(expected_session, Some(actual_session)),
             ),
         ),
+        response_context: None,
     }));
     let dispatcher = dispatcher(FakeRuntime::new(), FakeReads::new(), worker);
     let (request, slice) = request_and_slice(

@@ -27,8 +27,8 @@ pub mod state_rows;
 pub mod test_support;
 
 pub use codec::{
-    PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
-    PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
+    PersistedResponseContextV1, PersistedStartIdentityV1, PersistedTerminalJobProjectionV1,
+    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
 };
 pub use sqlite_store::SqliteStoreV1;
 
@@ -1168,6 +1168,7 @@ pub struct AdmitRequestV1 {
     job_id: JobIdV1,
     preconditions: RevisionAttemptItemPreconditionsV1,
     request_digest: CanonicalRequestDigestV1,
+    response_context: Option<PersistedResponseContextV1>,
     submitted_at: EpochMillisV1,
     session_identity: AdmissionSessionIdentityV1,
 }
@@ -1194,6 +1195,7 @@ impl AdmitRequestV1 {
             job_id,
             preconditions,
             request_digest,
+            response_context: None,
             submitted_at,
             session_identity: AdmissionSessionIdentityV1::Any,
         }
@@ -1218,6 +1220,7 @@ impl AdmitRequestV1 {
             job_id,
             preconditions,
             request_digest,
+            response_context: None,
             submitted_at,
             session_identity: AdmissionSessionIdentityV1::Any,
         }
@@ -1225,6 +1228,11 @@ impl AdmitRequestV1 {
 
     pub fn with_session_identity(mut self, expected: AdmissionSessionIdentityV1) -> Self {
         self.session_identity = expected;
+        self
+    }
+
+    pub fn with_response_context(mut self, context: PersistedResponseContextV1) -> Self {
+        self.response_context = Some(context);
         self
     }
 
@@ -1274,6 +1282,10 @@ impl AdmitRequestV1 {
 
     pub fn request_digest(&self) -> &CanonicalRequestDigestV1 {
         &self.request_digest
+    }
+
+    pub fn response_context(&self) -> Option<&PersistedResponseContextV1> {
+        self.response_context.as_ref()
     }
 
     pub fn submitted_at(&self) -> EpochMillisV1 {

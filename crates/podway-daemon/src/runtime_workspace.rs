@@ -28,11 +28,11 @@ use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
     ClaimedJobV1, IdempotencyKeyV1, IdempotentExecutionV1, JobIdV1, JobListQueryV1, JobViewV1,
-    RecoveryReportV1, RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1,
-    SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
-    StoreIdempotencyReadContractV1, StoreReadContractV1, StoreUnavailableReasonV1,
-    StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
-    WorkspaceBindingV1, WorkspaceViewV1,
+    PersistedResponseContextV1, RecoveryReportV1, RevisionAttemptItemPreconditionsV1, RevisionV1,
+    SqliteStoreOptionsV1, SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
+    StoreIdempotencyReadContractV1, StoreInvariantV1, StoreReadContractV1,
+    StoreUnavailableReasonV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
+    ValidatedWorkspaceRootV1, WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1,
 };
 
 use crate::{
@@ -2152,7 +2152,7 @@ impl WorkspaceRuntimeManagerV1 {
             reset.workspace_root(),
             reset.target_identity(marker.target_workspace_uuid().clone()),
             self.inspection_options.clone(),
-            reset_seed_request(marker),
+            reset_seed_request(reset, marker)?,
             DomainResult::WorkspaceReset {
                 workspace_id: marker.target_workspace_uuid().clone(),
                 revision: RevisionV1::ZERO,
@@ -2386,17 +2386,34 @@ impl WorkspaceRuntimeManagerV1 {
             .map_err(WorkspaceRuntimeErrorV1::StoreOptions)
     }
 }
-fn reset_seed_request(marker: &ResetMarkerV1) -> AdmitRequestV1 {
+fn reset_seed_request(
+    reset: &ResetWorkspaceResolutionV1,
+    marker: &ResetMarkerV1,
+) -> Result<AdmitRequestV1, StoreErrorV1> {
     let preconditions = RevisionAttemptItemPreconditionsV1::new(None, None, None, None)
         .expect("empty reset-all preconditions are valid");
-    AdmitRequestV1::new(
+    let request = AdmitRequestV1::new(
         podway_store::CommandV1::WorkspaceResetAll,
         marker.idempotency_key().clone(),
         marker.operation_id().clone(),
         preconditions,
         marker.request_digest().clone(),
         marker.submitted_at_ms(),
+    );
+    let Some(response_request_id) = marker.response_request_id() else {
+        return Ok(request);
+    };
+    let response_context = PersistedResponseContextV1::new(
+        response_request_id.as_str(),
+        "workspace.reset_all",
+        marker.target_workspace_uuid().clone(),
+        reset.worktree().roots().worktree_root().display().as_str(),
+        1,
     )
+    .map_err(|_| StoreErrorV1::InternalInvariantViolationV1 {
+        invariant: StoreInvariantV1::ResetSeed,
+    })?;
+    Ok(request.with_response_context(response_context))
 }
 
 fn reset_seed_requires_fixed_replacement(error: &StoreErrorV1) -> bool {

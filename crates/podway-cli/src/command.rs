@@ -976,6 +976,14 @@ impl LocalFailure {
         self
     }
 
+    fn with_not_admitted_if(mut self, mutation: bool) -> Self {
+        if mutation && self.code != "MUTATION_OUTCOME_UNKNOWN" {
+            self.details
+                .insert("admission".to_owned(), json!({"admitted": false}));
+        }
+        self
+    }
+
     fn with_correlation(mut self, command: &str, request_id: &str) -> Self {
         self.command = command.to_owned();
         self.request_id = Some(request_id.to_owned());
@@ -1010,11 +1018,15 @@ pub fn run() -> i32 {
     match Cli::try_parse_from(&arguments) {
         Ok(cli) => {
             let route = cli.command.canonical_route();
+            let mutation = cli.command.is_mutation();
             let json_output = cli.json;
             let quiet = cli.quiet;
             match execute(cli) {
                 Ok(result) => render_result(&result, json_output, quiet),
-                Err(failure) => render_local_failure(failure.with_command(route), json_output),
+                Err(failure) => render_local_failure(
+                    failure.with_command(route).with_not_admitted_if(mutation),
+                    json_output,
+                ),
             }
         }
         Err(_) => render_local_failure(
@@ -3092,10 +3104,19 @@ fn re_correlate_preflight_error(
 ) -> Result<RunResult, LocalFailure> {
     let mut envelope = serde_json::to_value(error)
         .map_err(|_| LocalFailure::response_invalid("status preflight error cannot be read"))?;
-    envelope
-        .as_object_mut()
-        .ok_or_else(|| LocalFailure::response_invalid("status preflight error is invalid"))?
-        .insert("command".to_owned(), Value::String(command.to_owned()));
+    {
+        let envelope = envelope
+            .as_object_mut()
+            .ok_or_else(|| LocalFailure::response_invalid("status preflight error is invalid"))?;
+        envelope.insert("command".to_owned(), Value::String(command.to_owned()));
+        let details = envelope
+            .get_mut("details")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| LocalFailure::response_invalid("status preflight error is invalid"))?;
+        details.remove("job_id");
+        details.remove("job_sequence");
+        details.insert("admission".to_owned(), json!({"admitted": false}));
+    }
     let error = serde_json::from_value(envelope)
         .map_err(|_| LocalFailure::response_invalid("status preflight error is invalid"))?;
     Ok(RunResult::Response(Box::new(ResponseEnvelopeV1::Error(

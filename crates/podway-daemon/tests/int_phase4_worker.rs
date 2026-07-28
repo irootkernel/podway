@@ -391,6 +391,7 @@ impl WorkerExecutionV1<FixtureContext> for FixtureBoundary {
         binding: &WorkspaceBindingV1,
         _request: &SliceRequestV1,
         _idempotency_key: IdempotencyKeyV1,
+        _response_context: Option<&podway_store::PersistedResponseContextV1>,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
         assert_eq!(
             workspace.binding(),

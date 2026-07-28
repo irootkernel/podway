@@ -63,9 +63,13 @@ pub(crate) fn write_temporary_ownership_marker_v1(
 }
 
 pub const SQLITE_SCHEMA_VERSION_V1: u32 = 1;
+pub const SQLITE_SCHEMA_VERSION_V2: u32 = 2;
+pub const SQLITE_SCHEMA_VERSION_CURRENT: u32 = SQLITE_SCHEMA_VERSION_V2;
 pub const SQLITE_INITIAL_MIGRATION_NAME_V1: &str = "schema-0-uninitialized";
+pub const SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2: &str = "schema-1-response-context";
 
 const SQLITE_V1_DDL: &str = include_str!("../../../spec/sqlite-v1.sql");
+const SQLITE_V2_DDL: &str = include_str!("../../../spec/sqlite-v2.sql");
 const CONNECTION_PRAGMA_PREAMBLE_V1: &str = concat!(
     "PRAGMA foreign_keys = ON;\n",
     "PRAGMA journal_mode = WAL;\n",
@@ -74,6 +78,7 @@ const CONNECTION_PRAGMA_PREAMBLE_V1: &str = concat!(
     "PRAGMA trusted_schema = OFF;\n\n",
 );
 const USER_VERSION_SUFFIX_V1: &str = "PRAGMA user_version = 1;\n";
+const USER_VERSION_SUFFIX_V2: &str = "PRAGMA user_version = 2;\n";
 
 /// The exact immutable bytes of the canonical v1 migration.
 pub fn sqlite_v1_ddl() -> &'static str {
@@ -91,6 +96,15 @@ pub fn sqlite_v1_ddl_checksum() -> String {
         checksum.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     checksum
+}
+
+pub fn sqlite_v2_ddl() -> &'static str {
+    SQLITE_V2_DDL
+}
+
+pub fn sqlite_v2_ddl_checksum() -> String {
+    let digest = Sha256::digest(SQLITE_V2_DDL.as_bytes());
+    format!("sha256:{digest:x}")
 }
 
 /// Opens a SQLite database only after schema v1, required pragmas, and durable identity verify.
@@ -158,11 +172,12 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
             }
             initialize_empty_schema_v1(&mut connection, root, identity, options, now)?;
         }
-        SQLITE_SCHEMA_VERSION_V1 => {}
-        found if found > SQLITE_SCHEMA_VERSION_V1 => {
+        SQLITE_SCHEMA_VERSION_V1 => migrate_schema_v2(&mut connection, now)?,
+        SQLITE_SCHEMA_VERSION_V2 => {}
+        found if found > SQLITE_SCHEMA_VERSION_CURRENT => {
             return Err(StoreErrorV1::NewerStateV1 {
                 found_schema_version: found,
-                supported_schema_version: SQLITE_SCHEMA_VERSION_V1,
+                supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
             });
         }
         _ => return Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion)),
@@ -514,7 +529,7 @@ fn apply_inspection_pragmas_v1(
 }
 
 fn verify_schema_version_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
-    if read_user_version_v1(connection)? == SQLITE_SCHEMA_VERSION_V1 {
+    if read_user_version_v1(connection)? == SQLITE_SCHEMA_VERSION_CURRENT {
         Ok(())
     } else {
         Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion))
@@ -527,6 +542,15 @@ fn verify_migration_checksum_v1(connection: &Connection) -> Result<(), StoreErro
             row.get(0)
         })
         .map_err(storage_error)?;
+    let migrations: Vec<(i64, String, String)> = {
+        let mut statement = connection
+            .prepare("SELECT version, name, checksum FROM schema_migrations ORDER BY version")
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(storage_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(storage_error)?
+    };
     let migration: Option<(String, String)> = connection
         .query_row(
             "SELECT name, checksum FROM schema_migrations WHERE version = ?1",
@@ -536,13 +560,28 @@ fn verify_migration_checksum_v1(connection: &Connection) -> Result<(), StoreErro
         .optional()
         .map_err(storage_error)?;
 
-    if migration_count != 1 {
+    if migration_count != 2 || migrations.len() != 2 {
         return Err(integrity_error(StoreIntegrityCheckV1::MigrationChecksum));
     }
     let Some((name, checksum)) = migration else {
         return Err(integrity_error(StoreIntegrityCheckV1::MigrationChecksum));
     };
     if name != SQLITE_INITIAL_MIGRATION_NAME_V1 || checksum != sqlite_v1_ddl_checksum() {
+        return Err(integrity_error(StoreIntegrityCheckV1::MigrationChecksum));
+    }
+    if migrations[0]
+        != (
+            i64::from(SQLITE_SCHEMA_VERSION_V1),
+            SQLITE_INITIAL_MIGRATION_NAME_V1.to_owned(),
+            sqlite_v1_ddl_checksum(),
+        )
+        || migrations[1]
+            != (
+                i64::from(SQLITE_SCHEMA_VERSION_V2),
+                SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2.to_owned(),
+                sqlite_v2_ddl_checksum(),
+            )
+    {
         return Err(integrity_error(StoreIntegrityCheckV1::MigrationChecksum));
     }
     Ok(())
@@ -572,6 +611,9 @@ fn expected_schema_objects_v1() -> Result<Vec<SchemaObjectV1>, StoreErrorV1> {
     let reference = Connection::open_in_memory().map_err(storage_error)?;
     reference
         .execute_batch(migration_schema_statements_v1()?)
+        .map_err(storage_error)?;
+    reference
+        .execute_batch(migration_schema_statements_v2()?)
         .map_err(storage_error)?;
     schema_objects_v1(&reference)
 }
@@ -1181,6 +1223,21 @@ fn initialize_empty_schema_v1(
         )
         .map_err(storage_error)?;
     transaction
+        .execute_batch(migration_schema_statements_v2()?)
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                i64::from(SQLITE_SCHEMA_VERSION_V2),
+                SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2,
+                sqlite_v2_ddl_checksum(),
+                now,
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
         .execute(
             "INSERT INTO workspace_state (singleton, workspace_uuid, git_common_fingerprint, \
              git_worktree_fingerprint, last_validated_root, next_workspace_sequence, created_at_ms, \
@@ -1195,7 +1252,7 @@ fn initialize_empty_schema_v1(
         )
         .map_err(storage_error)?;
     transaction
-        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V1)
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)
         .map_err(storage_error)?;
     options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
     transaction.commit().map_err(storage_error)
@@ -1258,6 +1315,39 @@ fn migration_schema_statements_v1() -> Result<&'static str, StoreErrorV1> {
         .ok_or(StoreErrorV1::InternalInvariantViolationV1 {
             invariant: crate::StoreInvariantV1::SchemaDefinition,
         })
+}
+
+fn migration_schema_statements_v2() -> Result<&'static str, StoreErrorV1> {
+    SQLITE_V2_DDL.strip_suffix(USER_VERSION_SUFFIX_V2).ok_or(
+        StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: crate::StoreInvariantV1::SchemaDefinition,
+        },
+    )
+}
+
+fn migrate_schema_v2(connection: &mut Connection, now: EpochMillisV1) -> Result<(), StoreErrorV1> {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    transaction
+        .execute_batch(migration_schema_statements_v2()?)
+        .map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                i64::from(SQLITE_SCHEMA_VERSION_V2),
+                SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2,
+                sqlite_v2_ddl_checksum(),
+                sqlite_integer_v1(now.get(), "migration timestamp")?,
+            ],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
 }
 
 fn read_user_version_v1(connection: &Connection) -> Result<u32, StoreErrorV1> {

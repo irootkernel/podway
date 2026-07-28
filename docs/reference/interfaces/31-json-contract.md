@@ -317,9 +317,12 @@ finished_at
 terminal_response
 ```
 
-`terminal_response` is the immutable terminal response projection for succeeded,
-failed, or cancelled jobs. It is `null` only for queued or running jobs. A
-cancelled job uses `{ "kind": "cancelled", "payload": { "cancelled": true } }`.
+For succeeded and failed jobs, `terminal_response` is the complete immutable
+original `podway.output/v1` or `podway.error/v1` response envelope. Its request
+ID, command, completion timestamp, workspace, job, session/result, warnings, and
+public error fields therefore survive response loss, daemon restart, and job-row
+pruning. It is `null` only for queued or running jobs. A cancelled job uses the
+closed summary `{ "kind": "cancelled", "payload": { "cancelled": true } }`.
 
 ## Artifact JSON
 

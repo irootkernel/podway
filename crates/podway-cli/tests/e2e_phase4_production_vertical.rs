@@ -842,13 +842,16 @@ fn jobs(output: &OutputEnvelopeV1) -> &[Value] {
 }
 
 fn assert_terminal_procedure_digest(terminal_response: &Value, expected: &str) {
+    let terminal_response = terminal_response
+        .get("terminal_response")
+        .unwrap_or(terminal_response);
     assert_eq!(
-        terminal_response["kind"], "success",
+        terminal_response["schema"], "podway.output/v1",
         "the start job must retain a successful terminal response"
     );
     assert_eq!(
-        terminal_response["payload"]["procedure_digest"], expected,
-        "the terminal start projection must retain its admitted Procedure digest"
+        terminal_response["result"]["procedure_digest"], expected,
+        "the terminal start envelope must retain its admitted Procedure digest"
     );
 }
 
@@ -1133,6 +1136,26 @@ fn recon_response_loss_is_recovered_by_lookup_and_exact_replay() {
     let _initialized = cli_output(&fixture, &fixture.worktree, "init", &[]);
     let jobs_before = jobs(&public_jobs(&fixture, &fixture.worktree)).len();
 
+    let rejected = fixture.run(&fixture.worktree, "set", &["goal", "value"]);
+    assert_eq!(
+        rejected.status.code(),
+        Some(1),
+        "unexpected response: {rejected:?}"
+    );
+    let rejected: Value =
+        serde_json::from_slice(&rejected.stdout).expect("pre-admission failure must emit JSON");
+    assert_error_shape(&rejected, "item.set");
+    assert_eq!(rejected["code"], "SESSION_NOT_FOUND");
+    assert_eq!(
+        rejected["details"],
+        serde_json::json!({"admission": {"admitted": false}})
+    );
+    assert_eq!(
+        jobs(&public_jobs(&fixture, &fixture.worktree)).len(),
+        jobs_before,
+        "preflight rejection must not admit a mutation"
+    );
+
     let proxy_socket = fixture.root.join("recon-loss.sock");
     let listener = UnixListener::bind(&proxy_socket).expect("response-loss relay must bind");
     fs::set_permissions(&proxy_socket, fs::Permissions::from_mode(0o600))
@@ -1229,9 +1252,12 @@ fn recon_response_loss_is_recovered_by_lookup_and_exact_replay() {
             .as_str()
             .is_some_and(|digest| digest.starts_with("sha256:"))
     );
+    let discarded_envelope = serde_json::to_value(ResponseEnvelopeV1::Output(discarded.clone()))
+        .expect("discarded response must serialize canonically");
     assert_eq!(
-        lookup.result()["job"]["terminal_response"]["kind"],
-        "success"
+        lookup.result()["job"]["terminal_response"],
+        discarded_envelope,
+        "job.lookup must reproduce the complete discarded daemon response"
     );
     let lookup_json = serde_json::to_string(lookup.result()).unwrap();
     for forbidden in [

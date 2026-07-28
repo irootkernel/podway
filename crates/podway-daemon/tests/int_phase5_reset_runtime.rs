@@ -19,7 +19,7 @@ use std::{
     process::Command,
     sync::{Arc, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use podway_config::DEFAULT_WORKSPACE_CONFIG_YAML_V1;
@@ -27,7 +27,8 @@ use podway_core::{DomainResult, UnixMillis, WorkspaceId};
 use podway_daemon::{
     production::compose_dispatcher_v1,
     runtime_workspace::{
-        ResetAllCrashBoundaryV1, WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1,
+        ResetAllCrashBoundaryV1, WorkspaceRuntimeErrorV1, WorkspaceRuntimeManagerV1,
+        WorkspaceRuntimeObservationV1,
     },
     server::RequestDispatcherV1,
     workspace::ResetMarkerV1,
@@ -713,6 +714,21 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
         terminal.job_projection(),
         Some(projection) if projection.state() == PersistedTerminalJobStateV1::Succeeded
     ));
+    assert!(matches!(
+        terminal.lookup_command(),
+        Some(podway_store::codec::PersistedDomainCommandV1::WorkspaceResetAll)
+    ));
+    let reset_response_context = terminal
+        .response_context()
+        .expect("reset receipt must retain its full response context");
+    assert_eq!(
+        reset_response_context.request_id(),
+        request.request_id().as_str()
+    );
+    assert_eq!(reset_response_context.command(), "workspace.reset_all");
+    assert_eq!(reset_response_context.workspace_uuid(), target.uuid());
+    assert_eq!(reset_response_context.workspace_root(), target.root());
+    assert_eq!(reset_response_context.workspace_sequence(), 1);
     let replay = target_context
         .store()
         .read_idempotent_outcome(
@@ -727,6 +743,52 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
         Some(AdmitOutcomeV1::Existing(
             JobReceiptOrTerminalV1::TerminalReceipt(terminal.clone())
         ))
+    );
+    let pruned = Command::new("sqlite3")
+        .arg(target_context.database_path())
+        .arg(format!(
+            "DELETE FROM jobs WHERE job_id = '{}';",
+            completed_job.id().as_str()
+        ))
+        .output()
+        .expect("sqlite3 must create the receipt-only post-pruning shape");
+    assert!(
+        pruned.status.success(),
+        "receipt-only pruning fixture must succeed: {}",
+        String::from_utf8_lossy(&pruned.stderr)
+    );
+    let target_uuid = target.uuid().clone();
+    drop(target_context);
+    drop(active_target);
+    drop(dispatcher);
+    drop(manager);
+
+    let restarted_manager = Arc::new(crate::manager(fixture.temporary_path()));
+    let restart_deadline = Instant::now() + Duration::from_secs(5);
+    let active_target = loop {
+        match restarted_manager.resolve_existing(
+            selector(fixture.main()),
+            Some(&target_uuid),
+            observation(),
+        ) {
+            Ok(scheduler) => break scheduler,
+            Err(WorkspaceRuntimeErrorV1::MaintenanceInProgress)
+                if Instant::now() < restart_deadline =>
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("receipt-only reset target must survive manager restart: {error}"),
+        }
+    };
+    let target_context = active_target.context_snapshot();
+    let target_identity = target_context.binding().identity();
+    assert!(
+        target_context
+            .store()
+            .read_job(target_identity, completed_job.id())
+            .expect("pruned reset job lookup must remain readable")
+            .is_none(),
+        "the replay below must use the receipt-only path"
     );
     let sequence_before_replay = target_context
         .store()
@@ -754,7 +816,7 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
         .recv_timeout(Duration::from_secs(5))
         .expect("reset replay must contend with an acquired scheduler lock");
     let (replay_complete, replay_result) = mpsc::channel();
-    let replay_manager = Arc::clone(&manager);
+    let replay_manager = Arc::clone(&restarted_manager);
     let replay_request = request.clone();
     let replay_slice = slice.clone();
     let replay_thread = thread::spawn(move || {
@@ -788,24 +850,24 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
     replay_thread
         .join()
         .expect("reset replay thread must not panic");
-    let (ResponseEnvelopeV1::Output(original_output), ResponseEnvelopeV1::Output(replayed_output)) =
+    let (ResponseEnvelopeV1::Output(_), ResponseEnvelopeV1::Output(_)) =
         (&response, &replay_response)
     else {
         panic!("reset replay must return a success envelope: {replay_response:?}");
     };
-    assert_eq!(replayed_output.request_id(), original_output.request_id());
-    assert_eq!(replayed_output.command(), original_output.command());
     assert_eq!(
-        replayed_output
-            .workspace()
-            .map(|workspace| (workspace.uuid(), workspace.latest_workspace_sequence(),)),
-        Some((target.uuid(), sequence_before_replay)),
-        "replay must preserve the current workspace sequence without applying another reset",
+        replay_response, response,
+        "receipt-only reset replay after restart must reproduce the complete original output envelope"
     );
-    assert_eq!(replayed_output.job(), original_output.job());
-    assert_eq!(replayed_output.session(), original_output.session());
-    assert_eq!(replayed_output.result(), original_output.result());
-    assert_eq!(replayed_output.warnings(), original_output.warnings());
+    assert_eq!(
+        target_context
+            .store()
+            .read_workspace_view(target_identity)
+            .expect("target workspace must remain readable after receipt-only replay")
+            .latest_workspace_sequence(),
+        sequence_before_replay,
+        "receipt-only reset replay must not mutate the target workspace",
+    );
 }
 
 #[cfg(unix)]

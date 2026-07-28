@@ -11,16 +11,17 @@ use podway_core::{
 };
 use podway_store::codec::{
     PersistedDomainCommandKindV1, PersistedDomainCommandV1, PersistedDomainErrorV1,
-    PersistedDomainResultV1, PersistedSessionLifecycleV1, PersistedTerminalJobProjectionV1,
-    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalResultV1,
-    PersistedTerminalSessionProjectionV1, STORE_COMMAND_SCHEMA_V1, STORE_COMMAND_SCHEMA_V2,
-    STORE_TERMINAL_SCHEMA_V0, STORE_TERMINAL_SCHEMA_V1, STORE_TERMINAL_SCHEMA_V2,
-    StoreCodecErrorV1, decode_command_v1, decode_terminal_receipt_v1, encode_command_v1,
-    encode_persisted_terminal_receipt_v1, encode_terminal_receipt_v1,
+    PersistedDomainResultV1, PersistedResponseContextV1, PersistedSessionLifecycleV1,
+    PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
+    PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1, STORE_COMMAND_SCHEMA_V1,
+    STORE_COMMAND_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V0, STORE_TERMINAL_SCHEMA_V1,
+    STORE_TERMINAL_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V3, StoreCodecErrorV1, decode_command_v1,
+    decode_terminal_receipt_v1, encode_command_v1, encode_persisted_terminal_receipt_v1,
+    encode_terminal_receipt_v1,
 };
 use podway_store::schema::{
-    SQLITE_INITIAL_MIGRATION_NAME_V1, SQLITE_SCHEMA_VERSION_V1, open_or_initialize_v1,
-    sqlite_v1_ddl, verify_connection_pragmas_v1,
+    SQLITE_INITIAL_MIGRATION_NAME_V1, SQLITE_SCHEMA_VERSION_CURRENT, SQLITE_SCHEMA_VERSION_V1,
+    open_or_initialize_v1, sqlite_v1_ddl, verify_connection_pragmas_v1,
 };
 use podway_store::{
     ClaimTokenV1, ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, JobReceiptV1,
@@ -39,6 +40,102 @@ const EXPECTED_SQLITE_V1_MIGRATION_SHA256: &str =
 fn digest(hex_digit: char) -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", hex_digit.to_string().repeat(64)))
         .expect("fixture digest must be valid")
+}
+
+#[test]
+fn terminal_v3_codec_round_trips_the_canonical_response_context_and_rejects_drift()
+-> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id();
+    let receipt = PersistedTerminalReceiptV1::new_with_projections(
+        receipt(102),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: Revision::new(4),
+            revision_after: Revision::new(5),
+            changed: true,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(30),
+            Some(UnixMillis::new(31)),
+            UnixMillis::new(32),
+        )?,
+        Some(PersistedTerminalSessionProjectionV1::new(
+            session_id,
+            "Response-loss-safe task".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::new(4),
+            Revision::new(5),
+        )?),
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::SessionComplete)?
+    .with_response_context(PersistedResponseContextV1::new(
+        "00000000-0000-4000-8000-000000000102",
+        "session.complete",
+        workspace_id(),
+        "/safe/worktree",
+        102,
+    )?)?;
+
+    let encoded = encode_persisted_terminal_receipt_v1(&receipt)?;
+    assert!(encoded.contains(STORE_TERMINAL_SCHEMA_V3));
+    assert!(encoded.contains(r#""request_id":"00000000-0000-4000-8000-000000000102""#));
+    assert_eq!(decode_terminal_receipt_v1(&encoded)?, receipt);
+
+    assert!(
+        decode_terminal_receipt_v1(&encoded.replacen(
+            r#""command":"session.complete""#,
+            r#""command":"session.start""#,
+            1,
+        ))
+        .is_err()
+    );
+    assert!(
+        decode_terminal_receipt_v1(&encoded.replacen(
+            r#""workspace_sequence":102"#,
+            r#""workspace_sequence":102,"unknown":true"#,
+            1,
+        ))
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn canonical_v1_database_migrates_once_to_v2_with_response_context_storage()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = TempDir::new()?;
+    let connection = open_temp_database(&temporary, &root(), &identity())?;
+    connection.execute_batch(
+        "ALTER TABLE jobs DROP COLUMN response_context_json;\
+         DELETE FROM schema_migrations WHERE version = 2;\
+         PRAGMA user_version = 1;",
+    )?;
+    drop(connection);
+
+    let migrated = open_temp_database(&temporary, &root(), &identity())?;
+    let version: i64 = migrated.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let migrations: i64 =
+        migrated.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    let context_column: i64 = migrated.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'response_context_json'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(version, 2);
+    assert_eq!(migrations, 2);
+    assert_eq!(context_column, 1);
+    drop(migrated);
+
+    let reopened = open_temp_database(&temporary, &root(), &identity())?;
+    let migrations: i64 =
+        reopened.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    assert_eq!(migrations, 2, "reopen must not duplicate the v2 migration");
+    Ok(())
 }
 
 fn workspace_id() -> WorkspaceId {
@@ -186,7 +283,7 @@ fn assert_schema_initialization_failpoint_recovers(
         })?;
     let identity_count: i64 =
         connection.query_row("SELECT COUNT(*) FROM workspace_state", [], |row| row.get(0))?;
-    assert_eq!(migration_count, 1);
+    assert_eq!(migration_count, 2);
     assert_eq!(identity_count, 1);
     drop(connection);
 
@@ -213,7 +310,7 @@ fn schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum()
     let busy_timeout: i64 = connection.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
     let trusted_schema: i64 =
         connection.query_row("PRAGMA trusted_schema", [], |row| row.get(0))?;
-    assert_eq!(user_version, i64::from(SQLITE_SCHEMA_VERSION_V1));
+    assert_eq!(user_version, i64::from(SQLITE_SCHEMA_VERSION_CURRENT));
     assert_eq!(foreign_keys, 1);
     assert_eq!(journal_mode, "wal");
     assert_eq!(synchronous, 2);
@@ -377,7 +474,7 @@ fn pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_wit
             APPLICATION_ID,
             PAGE_SIZE,
             AUTO_VACUUM_FULL,
-            i64::from(SQLITE_SCHEMA_VERSION_V1)
+            i64::from(SQLITE_SCHEMA_VERSION_CURRENT)
         ),
         "initialization must preserve schema-0 header metadata while advancing only user_version"
     );
@@ -399,8 +496,8 @@ fn pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_wit
             row.get(0)
         })?;
     assert_eq!(
-        migration_rows, 1,
-        "initialization must record exactly one migration"
+        migration_rows, 2,
+        "initialization must record both canonical migrations"
     );
     for table in TASK_STATE_TABLES {
         let rows: i64 =
@@ -470,8 +567,8 @@ fn pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_wit
             row.get(0)
         })?;
     assert_eq!(
-        reopened_migration_rows, 1,
-        "reopen must not append a duplicate schema migration"
+        reopened_migration_rows, 2,
+        "reopen must not append duplicate schema migrations"
     );
     let reopened_predecessor: (i64, i64, i64, i64) = reopened.query_row(
         "SELECT \
@@ -514,7 +611,7 @@ fn pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_wit
         recovered.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
             row.get(0)
         })?;
-    assert_eq!(recovered_migration_rows, 1);
+    assert_eq!(recovered_migration_rows, 2);
     drop(recovered);
     drop(reopened);
     assert_eq!(
@@ -553,14 +650,14 @@ fn pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed(
 
     let newer = TempDir::new()?;
     let raw = Connection::open(newer.path().join("state.sqlite3"))?;
-    raw.pragma_update(None, "user_version", 2)?;
+    raw.pragma_update(None, "user_version", 3)?;
     drop(raw);
     make_database_private(&newer)?;
     assert!(matches!(
         opened_error(&newer, &root(), &identity()),
         StoreErrorV1::NewerStateV1 {
-            found_schema_version: 2,
-            supported_schema_version: SQLITE_SCHEMA_VERSION_V1
+            found_schema_version: 3,
+            supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT
         }
     ));
 

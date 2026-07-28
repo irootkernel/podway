@@ -29,9 +29,10 @@ use podway_protocol::{
 };
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
-    AdmitOutcomeV1, AdmitRequestV1, CommandV1, IdempotencyKeyV1 as StoreIdempotencyKeyV1,
-    JobListQueryV1, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StoreContractV1, StoreReadContractV1, TerminalResultV1, WorkerIdV1,
+    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CommandV1,
+    IdempotencyKeyV1 as StoreIdempotencyKeyV1, JobListQueryV1, PersistedResponseContextV1,
+    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
+    StoreReadContractV1, TerminalResultV1, WorkerIdV1,
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -1179,6 +1180,21 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
     );
     let initialized = dispatch_command(&dispatcher, &initialize, "workspace.init");
     assert_eq!(initialized.job().unwrap().state(), JobStateV1::Succeeded);
+    let start = request(
+        919,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "preset": "sw-dev",
+            "task_title": "Retain reconciliation receipts across restart",
+        }),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "recon-matrix-session",
+        PreconditionsV1::default(),
+    );
+    let started = dispatch_command(&dispatcher, &start, "session.start");
+    let session_id = started.session().unwrap().id().clone();
 
     let runtime = runtime_manager
         .resolve_existing(git_selector(fixture.main()), None, observation())
@@ -1199,13 +1215,24 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
             .admit(
                 context.binding().identity(),
                 AdmitRequestV1::new(
-                    CommandV1::WorkspaceInitialize,
+                    CommandV1::SessionComplete,
                     StoreIdempotencyKeyV1::new(key).unwrap(),
                     job_id.clone(),
                     RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
                     Sha256Digest::new(format!("sha256:{}", digest_nibble.to_string().repeat(64)))
                         .unwrap(),
                     UnixMillis::new(now),
+                )
+                .with_session_identity(AdmissionSessionIdentityV1::Exact(session_id.clone()))
+                .with_response_context(
+                    PersistedResponseContextV1::new(
+                        job_id.as_str(),
+                        "session.complete",
+                        context.binding().identity().workspace_uuid().clone(),
+                        "/safe/worktree",
+                        job_number,
+                    )
+                    .unwrap(),
                 ),
             )
             .expect("reconciliation fixture admission must succeed");
@@ -1234,13 +1261,29 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
             UnixMillis::new(13),
         )
         .expect("domain failure must commit a terminal failed receipt");
+    let failed_before_pruning = request(
+        925,
+        "job.lookup",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "idempotency_key": "recon-matrix-failed",
+        }),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-query-key",
+        PreconditionsV1::default(),
+    );
+    let failed_before_pruning = dispatch_command(&dispatcher, &failed_before_pruning, "job.lookup");
+    let failed_terminal_before_pruning =
+        failed_before_pruning.result()["job"]["terminal_response"].clone();
+    assert_eq!(failed_terminal_before_pruning["schema"], "podway.error/v1");
 
     let cancelled_id = admit(922, "recon-matrix-cancelled", '2', 14);
     direct_store
         .cancel_before_claim(
             context.binding().identity(),
             cancelled_id.clone(),
-            Revision::new(3),
+            Revision::new(4),
             UnixMillis::new(15),
         )
         .expect("queued reconciliation fixture must cancel");
@@ -1286,11 +1329,41 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
         .expect("running fixture must be claimable");
     assert_eq!(running_claim.job().job_id(), &running_id);
     let queued_id = admit(924, "recon-matrix-queued", '4', 402);
+    drop(direct_store);
+    drop(context);
+    drop(runtime);
+    drop(dispatcher);
+    drop(runtime_manager);
 
-    let prune = direct_store
-        .prune_terminal_history(context.binding().identity(), UnixMillis::new(604_800_500))
-        .expect("old terminal reconciliation fixtures must prune");
-    assert_eq!(prune.deleted_terminal_jobs(), 3);
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let dispatcher = compose_dispatcher_v1(
+        Arc::clone(&runtime_manager),
+        WorkerIdV1::new("recon-matrix-restarted-dispatcher").unwrap(),
+    );
+    let runtime = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .expect("reconciliation state must survive daemon restart");
+    let context = runtime.context_snapshot();
+    let direct_store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        context.binding().identity().clone(),
+        context.store_options().clone(),
+        UnixMillis::new(500),
+    )
+    .expect("restarted manager binding must reopen for pruning");
+    let recovered_running = direct_store
+        .claim_next(
+            context.binding().identity(),
+            WorkerIdV1::new("recon-matrix-restarted-running-worker").unwrap(),
+            UnixMillis::new(501),
+        )
+        .unwrap()
+        .expect("restart recovery must make the interrupted job claimable");
+    assert_eq!(recovered_running.job().job_id(), &running_id);
+
+    // Startup recovery applies retention before accepting requests. These oldest terminal rows
+    // must already be pruned while their session-scoped idempotency receipts remain readable.
     for job_id in [&failed_id, &cancelled_id] {
         assert!(
             direct_store
@@ -1309,9 +1382,13 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
         .unwrap();
     drop(direct_store);
 
-    for (index, (key, expected_state, terminal_kind)) in [
-        ("recon-matrix-succeeded", "succeeded", Some("success")),
-        ("recon-matrix-failed", "failed", Some("error")),
+    for (index, (key, expected_state, terminal_schema)) in [
+        (
+            "recon-matrix-succeeded",
+            "succeeded",
+            Some("podway.output/v1"),
+        ),
+        ("recon-matrix-failed", "failed", Some("podway.error/v1")),
         ("recon-matrix-cancelled", "cancelled", Some("cancelled")),
         ("recon-matrix-running", "running", None),
         ("recon-matrix-queued", "queued", None),
@@ -1340,20 +1417,27 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
                 .is_some_and(|digest| digest.starts_with("sha256:")),
             "{key} must expose its canonical request digest"
         );
-        match terminal_kind {
-            Some(kind) => {
+        match terminal_schema {
+            Some(schema) => {
                 assert_eq!(
-                    lookup.result()["job"]["terminal_response"]["kind"],
-                    kind,
+                    lookup.result()["job"]["terminal_response"]
+                        .get("schema")
+                        .unwrap_or(&lookup.result()["job"]["terminal_response"]["kind"]),
+                    schema,
                     "{key}"
                 );
                 if key == "recon-matrix-failed" {
                     assert_eq!(
-                        lookup.result()["job"]["terminal_response"]["payload"]["details"]["admission"],
+                        lookup.result()["job"]["terminal_response"],
+                        failed_terminal_before_pruning,
+                        "receipt-only lookup after restart must reproduce the complete original error envelope"
+                    );
+                    assert_eq!(
+                        lookup.result()["job"]["terminal_response"]["details"]["admission"],
                         json!({
                             "admitted": true,
                             "job_id": failed_id.as_str(),
-                            "workspace_sequence": 2
+                            "workspace_sequence": 3
                         }),
                         "receipt-only failure lookup must preserve durable admission identity"
                     );

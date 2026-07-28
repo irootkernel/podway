@@ -1901,9 +1901,12 @@ fn g006_reset_preparation_replays_from_the_target_store_without_new_inputs() {
         .prepare_workspace_reset_all(&request, &target, key.clone())
         .unwrap();
     match replay {
-        ResetAllPreparationOutcomeV1::Existing(AdmitOutcomeV1::Existing(
-            JobReceiptOrTerminalV1::JobReceipt(receipt),
-        )) => assert_eq!(receipt.job_id(), &replay_job),
+        ResetAllPreparationOutcomeV1::Existing(existing) => match *existing {
+            AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt)) => {
+                assert_eq!(receipt.job_id(), &replay_job)
+            }
+            outcome => panic!("expected exact Store replay, got {outcome:?}"),
+        },
         outcome => panic!("expected exact Store replay, got {outcome:?}"),
     }
     let terminal = TerminalReceiptV1::new(
@@ -1918,12 +1921,15 @@ fn g006_reset_preparation_replays_from_the_target_store_without_new_inputs() {
         .prepare_workspace_reset_all(&request, &target, key)
         .unwrap()
     {
-        ResetAllPreparationOutcomeV1::Existing(AdmitOutcomeV1::Existing(
-            JobReceiptOrTerminalV1::TerminalReceipt(receipt),
-        )) => assert_eq!(
-            receipt,
-            PersistedTerminalReceiptV1::from_terminal_receipt(&terminal)
-        ),
+        ResetAllPreparationOutcomeV1::Existing(existing) => match *existing {
+            AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt)) => {
+                assert_eq!(
+                    receipt,
+                    PersistedTerminalReceiptV1::from_terminal_receipt(&terminal)
+                )
+            }
+            outcome => panic!("expected exact terminal Store replay, got {outcome:?}"),
+        },
         outcome => panic!("expected exact terminal Store replay, got {outcome:?}"),
     }
     assert_eq!(store.request_count(), 1, "replay must not admit a reset");

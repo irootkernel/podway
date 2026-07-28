@@ -15,7 +15,8 @@ use crate::codec::{
     PersistedDomainCommandV1, PersistedDomainResultV1, PersistedStartIdentityV1,
     PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
     PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1, decode_command_v1,
-    decode_terminal_receipt_v1, encode_command_v1, encode_persisted_terminal_receipt_v1,
+    decode_response_context_v1, decode_terminal_receipt_v1, encode_command_v1,
+    encode_persisted_terminal_receipt_v1, encode_response_context_v1,
     validate_persisted_terminal_result_for_command_v1, validate_terminal_result_for_command_v1,
 };
 use crate::schema::{
@@ -183,6 +184,13 @@ impl SqliteStoreV1 {
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
             None,
         )
+        .and_then(|receipt| {
+            receipt.with_lookup_command(PersistedDomainCommandV1::WorkspaceResetAll)
+        })
+        .and_then(|receipt| match request.response_context() {
+            Some(context) => receipt.with_response_context(context.clone()),
+            None => Ok(receipt),
+        })
         .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let terminal_response = encode_persisted_terminal_receipt_v1(&terminal)
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
@@ -422,11 +430,22 @@ impl StoreContractV1 for SqliteStoreV1 {
         let execution = request.claimed_execution();
         let canonical_request =
             encode_command_v1(&execution).map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let response_context = request
+            .response_context()
+            .map(encode_response_context_v1)
+            .transpose()
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        if let Some(context) = request.response_context()
+            && (context.command() != public_command_name_v1(request.command())
+                || context.workspace_uuid() != identity.workspace_uuid())
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
         let inserted_job = transaction
             .execute(
                 "INSERT INTO jobs (job_id, workspace_sequence, idempotency_key, request_digest, command_name, \
-                 canonical_request_json, state, session_id, submitted_at_ms) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', ?7, ?8)",
+                 canonical_request_json, state, session_id, submitted_at_ms, response_context_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', ?7, ?8, ?9)",
                 params![
                     request.job_id().as_str(),
                     sqlite_u64(sequence)?,
@@ -436,6 +455,7 @@ impl StoreContractV1 for SqliteStoreV1 {
                     canonical_request,
                     scope_session_id.as_deref(),
                     sqlite_u64(request.submitted_at().get())?,
+                    response_context,
                 ],
             )
             .map_err(storage)?;
@@ -702,7 +722,7 @@ impl StoreContractV1 for SqliteStoreV1 {
         let row: Option<RunningJobRow> = transaction
             .query_row(
                 "SELECT workspace_sequence, request_digest, command_name, canonical_request_json, \
-                 submitted_at_ms, claimed_at_ms, state FROM jobs WHERE job_id = ?1",
+                 submitted_at_ms, claimed_at_ms, state, response_context_json FROM jobs WHERE job_id = ?1",
                 [claim.job_id().as_str()],
                 |row| {
                     Ok(RunningJobRow {
@@ -713,6 +733,7 @@ impl StoreContractV1 for SqliteStoreV1 {
                         submitted_at: row.get(4)?,
                         claimed_at: row.get(5)?,
                         state: row.get(6)?,
+                        response_context: row.get(7)?,
                     })
                 },
             )
@@ -858,7 +879,7 @@ impl StoreContractV1 for SqliteStoreV1 {
                 .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let session_projection =
             terminal_session_projection(&persisted_result, post_transition_session.as_ref())?;
-        let persisted_receipt = enrich_terminal_from_execution(
+        let mut persisted_receipt = enrich_terminal_from_execution(
             PersistedTerminalReceiptV1::new_with_projections(
                 receipt.job().clone(),
                 persisted_result,
@@ -868,6 +889,14 @@ impl StoreContractV1 for SqliteStoreV1 {
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
             &execution,
         )?;
+        if let Some(response_context) = row.response_context.as_deref() {
+            persisted_receipt = persisted_receipt
+                .with_response_context(
+                    decode_response_context_v1(response_context)
+                        .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
+                )
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        }
         let encoded = encode_persisted_terminal_receipt_v1(&persisted_receipt)
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let changed = transaction
@@ -2140,8 +2169,8 @@ fn seed_reset_target(
             .execute(
                 "INSERT INTO jobs (job_id, workspace_sequence, idempotency_key, request_digest, command_name, \
                  canonical_request_json, state, session_id, submitted_at_ms, finished_at_ms, \
-                 terminal_response_json) VALUES (?1, 1, ?2, ?3, 'workspace.reset_all', ?4, \
-                 'succeeded', NULL, ?5, ?6, ?7)",
+                 terminal_response_json, response_context_json) VALUES (?1, 1, ?2, ?3, \
+                 'workspace.reset_all', ?4, 'succeeded', NULL, ?5, ?6, ?7, ?8)",
                 params![
                     context.request.job_id().as_str(),
                     context.request.idempotency_key().as_str(),
@@ -2150,6 +2179,12 @@ fn seed_reset_target(
                     sqlite_u64(context.request.submitted_at().get())?,
                     sqlite_u64(context.now.get())?,
                     context.terminal_response,
+                    context
+                        .request
+                        .response_context()
+                        .map(encode_response_context_v1)
+                        .transpose()
+                        .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
                 ],
             )
             .map_err(storage)?;
@@ -3339,4 +3374,9 @@ struct RunningJobRow {
     submitted_at: i64,
     claimed_at: Option<i64>,
     state: String,
+    response_context: Option<String>,
+}
+
+fn public_command_name_v1(command: &crate::CommandV1) -> &'static str {
+    PersistedDomainCommandV1::from_command(command).public_command_name()
 }

@@ -16,7 +16,9 @@ The worktree-local SQLite database is the authoritative state for:
 
 Podway does not use event sourcing. The journal is diagnostic and cannot be used as the only reconstruction source.
 
-Reference DDL: [`../../spec/sqlite-v1.sql`](../../spec/sqlite-v1.sql).
+Reference DDL and migrations: [`../../spec/sqlite-v1.sql`](../../spec/sqlite-v1.sql)
+followed by [`../../spec/sqlite-v2.sql`](../../spec/sqlite-v2.sql). Schema v2 adds
+the bounded admission-time response context used by durable reconciliation.
 
 ## Database location
 

@@ -1,6 +1,7 @@
 # Implementation Specifications
 
-- `sqlite-v1.sql`: reference authoritative database DDL.
+- `sqlite-v1.sql`: reference authoritative base database DDL.
+- `sqlite-v2.sql`: response-context migration for durable terminal-envelope reconstruction.
 - `launchagent.plist.template`: reference macOS user LaunchAgent.
 - `error-codes.json`: stable public error and exit-code catalog.
 - `command-catalog.yaml`: command classification, queue behavior, and preconditions.

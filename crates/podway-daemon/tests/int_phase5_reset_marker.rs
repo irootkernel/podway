@@ -17,6 +17,7 @@ use podway_daemon::workspace::{
     SqliteWorkspaceBindingInspectorV1, WorkspaceResolverV1,
 };
 use podway_git::NativeGitResolverV1;
+use podway_protocol::RequestIdV1;
 use podway_store::{CanonicalRequestDigestV1, IdempotencyKeyV1, JobIdV1, SqliteStoreOptionsV1};
 use support_phase4_workspace::{git_worktrees, selector};
 
@@ -74,6 +75,29 @@ fn marker_codec_binds_predecessor_and_rejects_old_shape() {
         ResetMarkerV1::decode_canonical(&vec![b'x'; MAX_RESET_MARKER_BYTES_V1 as usize + 1]),
         Err(ResetMarkerErrorV1::TooLarge { .. })
     ));
+}
+
+#[test]
+fn marker_v2_roundtrips_the_terminal_response_correlation() {
+    let legacy = marker();
+    let marker = ResetMarkerV1::new_with_response_request_id(
+        legacy.operation_id().clone(),
+        legacy.idempotency_key().clone(),
+        legacy.request_digest().clone(),
+        legacy.previous_workspace_uuid().clone(),
+        legacy.target_workspace_uuid().clone(),
+        legacy.submitted_at_ms(),
+        RequestIdV1::new("00000000-0000-4000-8000-000000000103")
+            .expect("fixture response request ID must be valid"),
+    );
+    let bytes = marker
+        .canonical_bytes()
+        .expect("v2 marker must encode canonically");
+    assert!(String::from_utf8_lossy(&bytes).contains("podway.reset-marker/v2"));
+    assert_eq!(
+        ResetMarkerV1::decode_canonical(&bytes).expect("v2 marker must roundtrip"),
+        marker
+    );
 }
 
 #[test]

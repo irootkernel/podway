@@ -1130,7 +1130,7 @@ fn pac_053_explicit_revision_attempt_item_revision_and_idempotency_reach_exact_w
     );
 }
 #[test]
-fn mutation_preflight_error_is_recorrelated_to_the_invoked_command() {
+fn mutation_preflight_error_is_recorrelated_and_marked_not_admitted() {
     let fixture = Fixture::new();
     let daemon = FakeDaemon::start(&fixture, vec![Reply::Error]);
 
@@ -1152,15 +1152,9 @@ fn mutation_preflight_error_is_recorrelated_to_the_invoked_command() {
     assert_eq!(response["exit_code"], 4);
     assert_eq!(response["workspace"]["uuid"], WORKSPACE_ID);
     assert_eq!(response["workspace"]["root"], "/fixture");
-    assert_eq!(response["details"]["job_id"], JOB_ID);
-    assert_eq!(response["details"]["job_sequence"], 7);
     assert_eq!(
-        response["details"]["admission"],
-        json!({
-            "admitted": true,
-            "job_id": JOB_ID,
-            "workspace_sequence": 7,
-        })
+        response["details"],
+        json!({"admission": {"admitted": false}})
     );
 
     let wires = daemon.finish();
@@ -1175,6 +1169,38 @@ fn mutation_preflight_error_is_recorrelated_to_the_invoked_command() {
         response["request_id"],
         preflight.request_id().as_str(),
         "re-correlated errors retain the response request identity"
+    );
+}
+
+#[test]
+fn mutation_local_validation_error_is_marked_not_admitted_without_transport() {
+    let fixture = Fixture::new();
+    let daemon = FakeDaemon::start(&fixture, Vec::new());
+
+    let output = fixture.run(&[
+        "--json",
+        "--worktree",
+        "/fixture",
+        "--idempotency-key",
+        "",
+        "start",
+        "--preset",
+        "sw-dev",
+        "--task",
+        "Reject an invalid mutation key",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    let response: Value =
+        serde_json::from_slice(&output.stdout).expect("local mutation failure must be JSON");
+    assert_eq!(response["command"], "session.start");
+    assert_eq!(response["code"], "REQUEST_INVALID");
+    assert_eq!(
+        response["details"],
+        json!({"admission": {"admitted": false}})
+    );
+    assert!(
+        daemon.finish().is_empty(),
+        "local mutation validation must not contact the daemon"
     );
 }
 

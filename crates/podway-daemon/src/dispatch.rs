@@ -642,9 +642,136 @@ pub enum MutationDispatchOutcomeV1 {
     Terminal {
         job: JobOutputV1,
         result: DispatcherTerminalResultV1,
+        response_context: Option<Box<TerminalResponseContextV1>>,
     },
     /// A synchronous wait elapsed after admission. The worker must not cancel the job.
     TimedOut { job: JobOutputV1 },
+}
+
+/// Immutable response metadata captured for a terminal mutation receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalResponseContextV1 {
+    request_id: podway_protocol::RequestIdV1,
+    command: podway_protocol::CommandNameV1,
+    generated_at: Rfc3339MillisV1,
+    workspace: WorkspaceOutputV1,
+}
+
+impl TerminalResponseContextV1 {
+    pub fn new(
+        request_id: podway_protocol::RequestIdV1,
+        command: podway_protocol::CommandNameV1,
+        generated_at: Rfc3339MillisV1,
+        workspace: WorkspaceOutputV1,
+    ) -> Self {
+        Self {
+            request_id,
+            command,
+            generated_at,
+            workspace,
+        }
+    }
+
+    pub fn request_id(&self) -> &podway_protocol::RequestIdV1 {
+        &self.request_id
+    }
+}
+
+/// Reconstructs the canonical terminal wire envelope from an immutable Store receipt.
+pub fn terminal_response_envelope_v1(
+    context: TerminalResponseContextV1,
+    job: JobOutputV1,
+    result: DispatcherTerminalResultV1,
+    bootstrap: bool,
+) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    terminal_response_envelope_with_mapper_v1(
+        context,
+        job,
+        result,
+        bootstrap,
+        &CatalogDispatchErrorMapperV1,
+    )
+}
+
+fn terminal_response_envelope_with_mapper_v1(
+    context: TerminalResponseContextV1,
+    job: JobOutputV1,
+    result: DispatcherTerminalResultV1,
+    bootstrap: bool,
+    errors: &impl DispatchErrorMapperV1,
+) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    match result {
+        DispatcherTerminalResultV1::Output(output) if bootstrap && output.session.is_some() => {
+            Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+        }
+        DispatcherTerminalResultV1::Output(mut output) => {
+            output
+                .result
+                .insert("admission".to_owned(), job_admission_value_v1(&job));
+            OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+                request_id: context.request_id,
+                command: context.command,
+                generated_at: context.generated_at,
+                workspace: Some(context.workspace),
+                job: Some(job),
+                session: output.session,
+                result: output.result,
+                warnings: output.warnings,
+            })
+            .map(ResponseEnvelopeV1::Output)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+        }
+        DispatcherTerminalResultV1::Error(failure) => {
+            let failure = failure.with_job(&job);
+            let presentation = errors.map_failure(&failure);
+            let workspace = serde_json::to_value(&context.workspace)
+                .ok()
+                .and_then(|value| value.as_object().cloned());
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: context.request_id,
+                command: context.command,
+                generated_at: context.generated_at,
+                code: presentation.code,
+                message: presentation.message.to_owned(),
+                retryable: presentation.retryable,
+                exit_code: presentation.exit_code,
+                workspace,
+                details: failure.into_details().into_json(true),
+            })
+            .map(ResponseEnvelopeV1::Error)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+        }
+    }
+}
+
+/// Immutable public correlation captured before durable admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MutationResponseContextV1 {
+    request_id: podway_protocol::RequestIdV1,
+    command: podway_protocol::CommandNameV1,
+    workspace: WorkspaceOutputV1,
+}
+
+impl MutationResponseContextV1 {
+    pub fn new(request: &RequestEnvelopeV1, workspace: WorkspaceOutputV1) -> Self {
+        Self {
+            request_id: request.request_id().clone(),
+            command: request.command().clone(),
+            workspace,
+        }
+    }
+
+    pub fn request_id(&self) -> &podway_protocol::RequestIdV1 {
+        &self.request_id
+    }
+
+    pub fn command(&self) -> &podway_protocol::CommandNameV1 {
+        &self.command
+    }
+
+    pub fn workspace(&self) -> &WorkspaceOutputV1 {
+        &self.workspace
+    }
 }
 
 /// Admits a mutation durably, wakes any worker, and optionally waits for its immutable terminal
@@ -655,6 +782,7 @@ pub trait MutationAdmissionWorkerV1<Workspace>: Send + Sync {
         workspace: &Workspace,
         request: &SliceRequestV1,
         idempotency_key: &IdempotencyKeyV1,
+        response_context: &MutationResponseContextV1,
         wait: MutationWaitV1,
     ) -> Result<MutationDispatchOutcomeV1, DispatchFailureV1>;
     /// Completes reset-all through the daemon maintenance state machine. This path receives no
@@ -665,6 +793,7 @@ pub trait MutationAdmissionWorkerV1<Workspace>: Send + Sync {
         selector: &WorktreeSelectorWireV1,
         request: &SliceRequestV1,
         idempotency_key: &IdempotencyKeyV1,
+        response_request_id: &podway_protocol::RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1>;
 }
 
@@ -1066,13 +1195,18 @@ where
         let idempotency_key = request
             .idempotency_key()
             .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
-        let (workspace, outcome) =
-            self.mutations
-                .reset_all(slice_request.selector(), slice_request, idempotency_key)?;
+        let (workspace, outcome) = self.mutations.reset_all(
+            slice_request.selector(),
+            slice_request,
+            idempotency_key,
+            request.request_id(),
+        )?;
         match outcome {
-            MutationDispatchOutcomeV1::Terminal { job, result } => {
-                self.terminal_response(request, workspace, job, result, false)
-            }
+            MutationDispatchOutcomeV1::Terminal {
+                job,
+                result,
+                response_context,
+            } => self.terminal_response(request, workspace, job, result, response_context, false),
             MutationDispatchOutcomeV1::Detached { .. }
             | MutationDispatchOutcomeV1::TimedOut { .. } => {
                 Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
@@ -1094,10 +1228,15 @@ where
             self.runtime.resolve_existing(slice_request.selector())?
         };
         let workspace_output = self.runtime.workspace_output(&workspace);
+        let response_context = MutationResponseContextV1::new(request, workspace_output.clone());
         let wait = MutationWaitV1::from_request(request);
-        let outcome =
-            self.mutations
-                .admit_and_wait(&workspace, slice_request, idempotency_key, wait)?;
+        let outcome = self.mutations.admit_and_wait(
+            &workspace,
+            slice_request,
+            idempotency_key,
+            &response_context,
+            wait,
+        )?;
 
         match (wait, outcome) {
             (
@@ -1107,11 +1246,29 @@ where
                     procedure_digest,
                 },
             ) => self.detached_response(request, workspace_output, job, procedure_digest.as_ref()),
-            (MutationWaitV1::Detached, MutationDispatchOutcomeV1::Terminal { job, result })
+            (
+                MutationWaitV1::Detached,
+                MutationDispatchOutcomeV1::Terminal {
+                    job,
+                    result,
+                    response_context,
+                },
+            )
             | (
                 MutationWaitV1::UntilTerminal { .. },
-                MutationDispatchOutcomeV1::Terminal { job, result },
-            ) => self.terminal_response(request, workspace_output, job, result, bootstrap),
+                MutationDispatchOutcomeV1::Terminal {
+                    job,
+                    result,
+                    response_context,
+                },
+            ) => self.terminal_response(
+                request,
+                workspace_output,
+                job,
+                result,
+                response_context,
+                bootstrap,
+            ),
             (MutationWaitV1::UntilTerminal { .. }, MutationDispatchOutcomeV1::TimedOut { job }) => {
                 Err(DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job))
             }
@@ -1152,27 +1309,21 @@ where
         workspace: WorkspaceOutputV1,
         job: JobOutputV1,
         result: DispatcherTerminalResultV1,
+        response_context: Option<Box<TerminalResponseContextV1>>,
         bootstrap: bool,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
-        match result {
-            DispatcherTerminalResultV1::Output(output) if bootstrap && output.session.is_some() => {
-                Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
-            }
-            DispatcherTerminalResultV1::Output(mut output) => {
-                output
-                    .result
-                    .insert("admission".to_owned(), job_admission_value_v1(&job));
-                self.output_response(
-                    request,
-                    Some(workspace),
-                    Some(job),
-                    output.session,
-                    output.result,
-                    output.warnings,
+        let context = response_context
+            .filter(|context| context.request_id() == request.request_id())
+            .map(|context| *context)
+            .unwrap_or_else(|| {
+                TerminalResponseContextV1::new(
+                    request.request_id().clone(),
+                    request.command().clone(),
+                    self.metadata.generated_at(),
+                    workspace,
                 )
-            }
-            DispatcherTerminalResultV1::Error(failure) => Err(failure.with_job(&job)),
-        }
+            });
+        terminal_response_envelope_with_mapper_v1(context, job, result, bootstrap, &self.errors)
     }
 
     fn output_response(

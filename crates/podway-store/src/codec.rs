@@ -23,6 +23,101 @@ pub const STORE_COMMAND_SCHEMA_V2: &str = "podway.store-command/v2";
 pub const STORE_TERMINAL_SCHEMA_V0: &str = "podway.store-terminal/v0";
 pub const STORE_TERMINAL_SCHEMA_V1: &str = "podway.store-terminal/v1";
 pub const STORE_TERMINAL_SCHEMA_V2: &str = "podway.store-terminal/v2";
+pub const STORE_TERMINAL_SCHEMA_V3: &str = "podway.store-terminal/v3";
+
+/// Minimal immutable response correlation retained independently of semantic request identity.
+///
+/// This is deliberately transport-neutral storage data. The daemon validates it against the
+/// public protocol before admission and reconstructs the public envelope after terminal commit.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedResponseContextV1 {
+    request_id: String,
+    command: String,
+    workspace_uuid: WorkspaceId,
+    workspace_root: String,
+    workspace_sequence: u64,
+}
+
+impl PersistedResponseContextV1 {
+    pub fn new(
+        request_id: impl Into<String>,
+        command: impl Into<String>,
+        workspace_uuid: WorkspaceId,
+        workspace_root: impl Into<String>,
+        workspace_sequence: u64,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let context = Self {
+            request_id: request_id.into(),
+            command: command.into(),
+            workspace_uuid,
+            workspace_root: workspace_root.into(),
+            workspace_sequence,
+        };
+        context.validate()?;
+        Ok(context)
+    }
+
+    pub fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    pub fn workspace_uuid(&self) -> &WorkspaceId {
+        &self.workspace_uuid
+    }
+
+    pub fn workspace_root(&self) -> &str {
+        &self.workspace_root
+    }
+
+    pub fn workspace_sequence(&self) -> u64 {
+        self.workspace_sequence
+    }
+
+    fn validate(&self) -> Result<(), StoreCodecErrorV1> {
+        if self.request_id.is_empty() || self.request_id.len() > 128 {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "response request ID",
+            });
+        }
+        if self.command.is_empty() || self.command.len() > 128 {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "response command",
+            });
+        }
+        if self.workspace_root.is_empty() || self.workspace_root.len() > 16 * 1024 {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "response workspace root",
+            });
+        }
+        Ok(())
+    }
+}
+
+pub fn encode_response_context_v1(
+    context: &PersistedResponseContextV1,
+) -> Result<String, StoreCodecErrorV1> {
+    context.validate()?;
+    canonical_json(context)
+}
+
+pub fn decode_response_context_v1(
+    value: &str,
+) -> Result<PersistedResponseContextV1, StoreCodecErrorV1> {
+    let context: PersistedResponseContextV1 =
+        serde_json::from_str(value).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+    context.validate()?;
+    if encode_response_context_v1(&context)? != value {
+        return Err(StoreCodecErrorV1::InvalidValue {
+            field: "canonical response context",
+        });
+    }
+    Ok(context)
+}
 
 /// Fail-closed rejection from a versioned internal store/domain envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -781,6 +876,7 @@ pub struct PersistedTerminalReceiptV1 {
     session_projection: Option<PersistedTerminalSessionProjectionV1>,
     start_identity: Option<PersistedStartIdentityV1>,
     lookup_command: Option<PersistedDomainCommandV1>,
+    response_context: Option<PersistedResponseContextV1>,
 }
 
 impl PersistedTerminalReceiptV1 {
@@ -793,6 +889,7 @@ impl PersistedTerminalReceiptV1 {
             session_projection: None,
             start_identity: None,
             lookup_command: None,
+            response_context: None,
         }
     }
 
@@ -809,6 +906,7 @@ impl PersistedTerminalReceiptV1 {
             session_projection,
             start_identity: None,
             lookup_command: None,
+            response_context: None,
         };
         receipt.validate_v1_projections()?;
         Ok(receipt)
@@ -847,6 +945,27 @@ impl PersistedTerminalReceiptV1 {
 
     pub fn lookup_command(&self) -> Option<&PersistedDomainCommandV1> {
         self.lookup_command.as_ref()
+    }
+
+    pub fn response_context(&self) -> Option<&PersistedResponseContextV1> {
+        self.response_context.as_ref()
+    }
+
+    pub fn with_response_context(
+        mut self,
+        context: PersistedResponseContextV1,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        context.validate()?;
+        if let Some(stored) = &self.response_context
+            && stored != &context
+        {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "terminal response context",
+            });
+        }
+        self.response_context = Some(context);
+        self.validate_v3_projection()?;
+        Ok(self)
     }
 
     pub fn with_lookup_command(
@@ -910,6 +1029,26 @@ impl PersistedTerminalReceiptV1 {
         receipt.with_lookup_command(lookup_command)
     }
 
+    fn from_v3_envelope(
+        job: JobReceiptV1,
+        result: PersistedTerminalResultV1,
+        job_projection: PersistedTerminalJobProjectionV1,
+        session_projection: Option<PersistedTerminalSessionProjectionV1>,
+        start_identity: Option<PersistedStartIdentityV1>,
+        lookup_command: PersistedDomainCommandV1,
+        response_context: PersistedResponseContextV1,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        Self::from_v2_envelope(
+            job,
+            result,
+            job_projection,
+            session_projection,
+            start_identity,
+            lookup_command,
+        )?
+        .with_response_context(response_context)
+    }
+
     fn validate_legacy_projections(&self) -> Result<(), StoreCodecErrorV1> {
         if let Some(start_identity) = &self.start_identity {
             start_identity.validate()?;
@@ -917,6 +1056,7 @@ impl PersistedTerminalReceiptV1 {
         if self.job_projection.is_some()
             || self.session_projection.is_some()
             || self.lookup_command.is_some()
+            || self.response_context.is_some()
         {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "terminal replay projections",
@@ -1059,6 +1199,29 @@ impl PersistedTerminalReceiptV1 {
         validate_persisted_terminal_result_for_command_v1(&command, &self.result)?;
         Ok(())
     }
+
+    fn validate_v3_projection(&self) -> Result<(), StoreCodecErrorV1> {
+        self.validate_v2_projection()?;
+        let context = self
+            .response_context
+            .as_ref()
+            .ok_or(StoreCodecErrorV1::InvalidValue {
+                field: "terminal response context",
+            })?;
+        context.validate()?;
+        let command = self
+            .lookup_command
+            .as_ref()
+            .ok_or(StoreCodecErrorV1::InvalidValue {
+                field: "terminal lookup command",
+            })?;
+        if context.command() != command.public_command_name() {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "terminal response command",
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1126,6 +1289,21 @@ struct TerminalEnvelopeV2 {
     start_identity: Option<PersistedStartIdentityV1>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalEnvelopeV3 {
+    schema: String,
+    command: PersistedDomainCommandV1,
+    job: PersistedJobReceiptV1,
+    job_projection: PersistedTerminalJobProjectionV1,
+    result: PersistedTerminalResultV1,
+    response_context: PersistedResponseContextV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_projection: Option<PersistedTerminalSessionProjectionV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_identity: Option<PersistedStartIdentityV1>,
+}
+
 /// Core terminal receipts lack the immutable projections required by terminal schema v1, so they
 /// canonically encode as legacy schema v0.
 pub fn encode_terminal_receipt_v1(
@@ -1146,8 +1324,25 @@ pub fn encode_persisted_terminal_receipt_v1(
         });
     }
 
-    match (receipt.job_projection(), receipt.lookup_command()) {
-        (Some(job_projection), Some(lookup_command)) => {
+    match (
+        receipt.job_projection(),
+        receipt.lookup_command(),
+        receipt.response_context(),
+    ) {
+        (Some(job_projection), Some(lookup_command), Some(response_context)) => {
+            receipt.validate_v3_projection()?;
+            canonical_json(&TerminalEnvelopeV3 {
+                schema: STORE_TERMINAL_SCHEMA_V3.to_owned(),
+                command: lookup_command.clone(),
+                job: receipt.job().into(),
+                job_projection: job_projection.clone(),
+                result: receipt.result().clone(),
+                response_context: response_context.clone(),
+                session_projection: receipt.session_projection().cloned(),
+                start_identity: receipt.start_identity().cloned(),
+            })
+        }
+        (Some(job_projection), Some(lookup_command), None) => {
             receipt.validate_v2_projection()?;
             canonical_json(&TerminalEnvelopeV2 {
                 schema: STORE_TERMINAL_SCHEMA_V2.to_owned(),
@@ -1159,7 +1354,7 @@ pub fn encode_persisted_terminal_receipt_v1(
                 start_identity: receipt.start_identity().cloned(),
             })
         }
-        (Some(job_projection), None) => {
+        (Some(job_projection), None, None) => {
             receipt.validate_v1_projections()?;
             canonical_json(&TerminalEnvelopeV1 {
                 schema: STORE_TERMINAL_SCHEMA_V1.to_owned(),
@@ -1170,7 +1365,7 @@ pub fn encode_persisted_terminal_receipt_v1(
                 start_identity: receipt.start_identity().cloned(),
             })
         }
-        (None, None) => {
+        (None, None, None) => {
             receipt.validate_legacy_projections()?;
             canonical_json(&TerminalEnvelopeV0 {
                 schema: STORE_TERMINAL_SCHEMA_V0.to_owned(),
@@ -1179,9 +1374,11 @@ pub fn encode_persisted_terminal_receipt_v1(
                 start_identity: receipt.start_identity().cloned(),
             })
         }
-        (None, Some(_)) => Err(StoreCodecErrorV1::InvalidValue {
-            field: "terminal lookup command",
-        }),
+        (None, Some(_), _) | (None, None, Some(_)) | (Some(_), None, Some(_)) => {
+            Err(StoreCodecErrorV1::InvalidValue {
+                field: "terminal lookup command",
+            })
+        }
     }
 }
 
@@ -1246,9 +1443,27 @@ pub fn decode_terminal_receipt_v1(
                 envelope.command,
             )?
         }
+        STORE_TERMINAL_SCHEMA_V3 => {
+            let envelope: TerminalEnvelopeV3 =
+                serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+            if envelope.job.identity_sequence == 0 {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "identity sequence",
+                });
+            }
+            PersistedTerminalReceiptV1::from_v3_envelope(
+                envelope.job.into(),
+                envelope.result,
+                envelope.job_projection,
+                envelope.session_projection,
+                envelope.start_identity,
+                envelope.command,
+                envelope.response_context,
+            )?
+        }
         found => {
             return Err(StoreCodecErrorV1::UnsupportedSchema {
-                expected: STORE_TERMINAL_SCHEMA_V2,
+                expected: STORE_TERMINAL_SCHEMA_V3,
                 found: found.to_owned(),
             });
         }

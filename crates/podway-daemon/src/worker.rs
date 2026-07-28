@@ -17,7 +17,8 @@ use std::{
 use podway_protocol::SliceRequestV1;
 use podway_store::{
     AdmitOutcomeV1, IdempotencyKeyV1, JobIdV1, JobReceiptOrTerminalV1, JobViewV1,
-    PersistedTerminalReceiptV1, StoreErrorV1, TerminalReceiptV1, WorkerIdV1, WorkspaceBindingV1,
+    PersistedResponseContextV1, PersistedTerminalReceiptV1, StoreErrorV1, TerminalReceiptV1,
+    WorkerIdV1, WorkspaceBindingV1,
 };
 
 use crate::{
@@ -129,6 +130,7 @@ where
         binding: &WorkspaceBindingV1,
         request: &SliceRequestV1,
         idempotency_key: IdempotencyKeyV1,
+        response_context: Option<&PersistedResponseContextV1>,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1>;
 
     fn execute_next(
@@ -158,13 +160,20 @@ where
         binding: &WorkspaceBindingV1,
         request: &SliceRequestV1,
         idempotency_key: IdempotencyKeyV1,
+        response_context: Option<&PersistedResponseContextV1>,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
         if workspace.binding() != binding {
             return Err(ExecutionErrorV1::InvalidPersistedExecution {
                 reason: "scheduler context binding changed during admission",
             });
         }
-        DaemonExecutionEngineV1::admit_for_workspace(self, binding, request, idempotency_key)
+        DaemonExecutionEngineV1::admit_for_workspace_with_response_context(
+            self,
+            binding,
+            request,
+            idempotency_key,
+            response_context.cloned(),
+        )
     }
 
     fn execute_next(
@@ -392,6 +401,34 @@ where
         idempotency_key: IdempotencyKeyV1,
         completion_mode: WorkerCompletionModeV1,
     ) -> Result<WorkerSubmissionV1, WorkerErrorV1> {
+        self.submit_inner(scheduler, request, idempotency_key, None, completion_mode)
+    }
+
+    pub fn submit_with_response_context(
+        &self,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+        request: &SliceRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: PersistedResponseContextV1,
+        completion_mode: WorkerCompletionModeV1,
+    ) -> Result<WorkerSubmissionV1, WorkerErrorV1> {
+        self.submit_inner(
+            scheduler,
+            request,
+            idempotency_key,
+            Some(response_context),
+            completion_mode,
+        )
+    }
+
+    fn submit_inner(
+        &self,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+        request: &SliceRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+        completion_mode: WorkerCompletionModeV1,
+    ) -> Result<WorkerSubmissionV1, WorkerErrorV1> {
         if scheduler.context_snapshot().recovery_required() {
             return Err(WorkerErrorV1::RetirementRejected);
         }
@@ -401,9 +438,13 @@ where
             }
             context
                 .with_claim_permission(|binding| {
-                    self.inner
-                        .execution
-                        .admit(context.as_ref(), binding, request, idempotency_key)
+                    self.inner.execution.admit(
+                        context.as_ref(),
+                        binding,
+                        request,
+                        idempotency_key,
+                        response_context.as_ref(),
+                    )
                 })
                 .ok_or(WorkerErrorV1::RetirementRejected)?
                 .map_err(Into::into)

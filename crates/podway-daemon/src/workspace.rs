@@ -36,6 +36,7 @@ use podway_git::{
     GitResolverContractV1, LosslessPathV1, SelectorValidationErrorV1, ValidatedWorktreeV1,
     WorkspaceIdentityStateV1, WorktreeMoveMetadataV1, WorktreeSelectorV1,
 };
+use podway_protocol::RequestIdV1;
 use podway_store::{
     CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
     DurableWorktreeIdentityV1 as StoreWorktreeIdentityV1, IdempotencyKeyV1, JobIdV1,
@@ -49,6 +50,8 @@ const STATE_DATABASE_FILE_NAME_V1: &str = "state.sqlite3";
 const STORED_ROOT_DIAGNOSTIC_V1: &str = "store-validated workspace root";
 /// The sole reset-marker schema accepted as destructive-reset recovery authority.
 pub const RESET_MARKER_SCHEMA_V1: &str = "podway.reset-marker/v1";
+/// Reset marker carrying the immutable public request correlation needed by terminal replay.
+pub const RESET_MARKER_SCHEMA_V2: &str = "podway.reset-marker/v2";
 /// Reset-marker decoding is bounded before parsing so a local corrupt file cannot amplify recovery.
 pub const MAX_RESET_MARKER_BYTES_V1: u64 = 16 * 1024;
 const RESET_MARKER_FILE_NAME_V1: &str = "reset.marker";
@@ -73,6 +76,7 @@ pub struct ResetMarkerV1 {
     previous_workspace_uuid: WorkspaceId,
     target_workspace_uuid: WorkspaceId,
     submitted_at_ms: UnixMillis,
+    response_request_id: Option<RequestIdV1>,
 }
 
 impl ResetMarkerV1 {
@@ -91,6 +95,27 @@ impl ResetMarkerV1 {
             previous_workspace_uuid,
             target_workspace_uuid,
             submitted_at_ms,
+            response_request_id: None,
+        }
+    }
+
+    pub fn new_with_response_request_id(
+        operation_id: JobIdV1,
+        idempotency_key: IdempotencyKeyV1,
+        request_digest: CanonicalRequestDigestV1,
+        previous_workspace_uuid: WorkspaceId,
+        target_workspace_uuid: WorkspaceId,
+        submitted_at_ms: UnixMillis,
+        response_request_id: RequestIdV1,
+    ) -> Self {
+        Self {
+            operation_id,
+            idempotency_key,
+            request_digest,
+            previous_workspace_uuid,
+            target_workspace_uuid,
+            submitted_at_ms,
+            response_request_id: Some(response_request_id),
         }
     }
 
@@ -117,18 +142,35 @@ impl ResetMarkerV1 {
         self.submitted_at_ms
     }
 
+    pub fn response_request_id(&self) -> Option<&RequestIdV1> {
+        self.response_request_id.as_ref()
+    }
+
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, ResetMarkerErrorV1> {
-        canonicalize_json_v1(&SerializableResetMarkerRefV1 {
-            schema: RESET_MARKER_SCHEMA_V1,
-            operation_id: self.operation_id.as_str(),
-            idempotency_key: self.idempotency_key.as_str(),
-            request_digest: self.request_digest.as_str(),
-            previous_workspace_uuid: self.previous_workspace_uuid.as_str(),
-            target_workspace_uuid: self.target_workspace_uuid.as_str(),
-            submitted_at_ms: self.submitted_at_ms.get(),
-        })
-        .map(String::into_bytes)
-        .map_err(|_| ResetMarkerErrorV1::Encode)
+        let encoded = match &self.response_request_id {
+            Some(response_request_id) => canonicalize_json_v1(&SerializableResetMarkerRefV2 {
+                schema: RESET_MARKER_SCHEMA_V2,
+                operation_id: self.operation_id.as_str(),
+                idempotency_key: self.idempotency_key.as_str(),
+                request_digest: self.request_digest.as_str(),
+                previous_workspace_uuid: self.previous_workspace_uuid.as_str(),
+                target_workspace_uuid: self.target_workspace_uuid.as_str(),
+                submitted_at_ms: self.submitted_at_ms.get(),
+                response_request_id: response_request_id.as_str(),
+            }),
+            None => canonicalize_json_v1(&SerializableResetMarkerRefV1 {
+                schema: RESET_MARKER_SCHEMA_V1,
+                operation_id: self.operation_id.as_str(),
+                idempotency_key: self.idempotency_key.as_str(),
+                request_digest: self.request_digest.as_str(),
+                previous_workspace_uuid: self.previous_workspace_uuid.as_str(),
+                target_workspace_uuid: self.target_workspace_uuid.as_str(),
+                submitted_at_ms: self.submitted_at_ms.get(),
+            }),
+        };
+        encoded
+            .map(String::into_bytes)
+            .map_err(|_| ResetMarkerErrorV1::Encode)
     }
 
     pub fn decode_canonical(bytes: &[u8]) -> Result<Self, ResetMarkerErrorV1> {
@@ -147,8 +189,16 @@ impl ResetMarkerV1 {
         }
         let serialized: SerializedResetMarkerV1 =
             serde_json::from_slice(bytes).map_err(|_| ResetMarkerErrorV1::InvalidShape)?;
-        if serialized.schema != RESET_MARKER_SCHEMA_V1 {
+        if serialized.schema != RESET_MARKER_SCHEMA_V1
+            && serialized.schema != RESET_MARKER_SCHEMA_V2
+        {
             return Err(ResetMarkerErrorV1::UnsupportedSchema);
+        }
+        if (serialized.schema == RESET_MARKER_SCHEMA_V1 && serialized.response_request_id.is_some())
+            || (serialized.schema == RESET_MARKER_SCHEMA_V2
+                && serialized.response_request_id.is_none())
+        {
+            return Err(ResetMarkerErrorV1::InvalidShape);
         }
         let marker = Self {
             operation_id: JobIdV1::new(serialized.operation_id)
@@ -162,6 +212,11 @@ impl ResetMarkerV1 {
             target_workspace_uuid: WorkspaceId::new(serialized.target_workspace_uuid)
                 .map_err(|_| ResetMarkerErrorV1::InvalidTargetWorkspaceUuid)?,
             submitted_at_ms: UnixMillis::new(serialized.submitted_at_ms),
+            response_request_id: serialized
+                .response_request_id
+                .map(RequestIdV1::new)
+                .transpose()
+                .map_err(|_| ResetMarkerErrorV1::InvalidResponseRequestId)?,
         };
         if marker.canonical_bytes()?.as_slice() != bytes {
             return Err(ResetMarkerErrorV1::NonCanonical);
@@ -182,6 +237,7 @@ pub enum ResetMarkerErrorV1 {
     InvalidIdempotencyKey,
     InvalidRequestDigest,
     InvalidTargetWorkspaceUuid,
+    InvalidResponseRequestId,
     Encode,
 }
 
@@ -211,6 +267,9 @@ impl fmt::Display for ResetMarkerErrorV1 {
             }
             Self::InvalidTargetWorkspaceUuid => {
                 formatter.write_str("reset marker has an invalid target workspace UUID")
+            }
+            Self::InvalidResponseRequestId => {
+                formatter.write_str("reset marker has an invalid response request ID")
             }
             Self::Encode => formatter.write_str("reset marker cannot be canonically encoded"),
         }
@@ -1005,6 +1064,8 @@ struct SerializedResetMarkerV1 {
     previous_workspace_uuid: String,
     target_workspace_uuid: String,
     submitted_at_ms: u64,
+    #[serde(default)]
+    response_request_id: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -1016,6 +1077,18 @@ struct SerializableResetMarkerRefV1<'a> {
     previous_workspace_uuid: &'a str,
     target_workspace_uuid: &'a str,
     submitted_at_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+struct SerializableResetMarkerRefV2<'a> {
+    schema: &'a str,
+    operation_id: &'a str,
+    idempotency_key: &'a str,
+    request_digest: &'a str,
+    previous_workspace_uuid: &'a str,
+    target_workspace_uuid: &'a str,
+    submitted_at_ms: u64,
+    response_request_id: &'a str,
 }
 
 /// Read-only access to the durable binding for one exact SQLite database path.

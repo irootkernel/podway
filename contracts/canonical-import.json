@@ -95,7 +95,7 @@
     {
       "source": "docs/spec/README.md",
       "destination": "spec/README.md",
-      "source_sha256": "4e7480e709fa2745a382477aadc3caa46122a6589568075443eb42a7b83e305e",
+      "source_sha256": "231b607727b5fd25449318ceafc347a3208723a5250d75c246f5c38280e3a813",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -136,6 +136,14 @@
       "source": "docs/spec/sqlite-v1.sql",
       "destination": "spec/sqlite-v1.sql",
       "source_sha256": "20ea04d9635b8e1632e6d3aa5f3a888eaca49307b43ade9b9991363b30607423",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/spec/sqlite-v2.sql",
+      "destination": "spec/sqlite-v2.sql",
+      "source_sha256": "3432d426ee69484e691977e336f271fcbc222f332bd05400d7166b459bcf05fc",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
