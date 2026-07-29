@@ -4,8 +4,11 @@
   "title": "Podway Job Status and Wait Result v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["job"],
-  "properties": { "job": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/terminalResponse" }] } },
+  "required": ["schema", "job"],
+  "properties": {
+    "schema": { "const": "podway.job-result/v1" },
+    "job": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/terminalResponse" }] }
+  },
   "$defs": {
     "terminalResponse": {
       "oneOf": [

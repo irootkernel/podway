@@ -4,7 +4,9 @@
   "title": "Podway Revision Conflict Details v1",
   "type": "object",
   "additionalProperties": false,
+  "required": ["schema"],
   "properties": {
+    "schema": { "const": "podway.revision-conflict-details/v1" },
     "expected_revision": { "type": "integer", "minimum": 0 },
     "current_revision": { "type": "integer", "minimum": 0 },
     "job_id": { "type": "string", "format": "uuid" },

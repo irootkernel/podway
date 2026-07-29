@@ -4,8 +4,9 @@
   "title": "Podway Version Result v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["product", "version", "target", "build_identity", "source_commit", "contract_manifest_schema", "contract_manifest_digest", "supported_ipc_ids"],
+  "required": ["schema", "product", "version", "target", "build_identity", "source_commit", "contract_manifest_schema", "contract_manifest_digest", "supported_ipc_ids"],
   "properties": {
+    "schema": { "const": "podway.version-result/v1" },
     "product": { "const": "podway" },
     "version": { "type": "string", "minLength": 1 },
     "target": { "type": "string", "minLength": 1 },

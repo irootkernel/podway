@@ -8,16 +8,31 @@ use crate::{
     JobStateV1, NextResultV1, ProtocolError, ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1,
 };
 
+/// Adds the schema identifier for a command-selected closed result family.
+pub fn ensure_command_result_schema_v1(command: &str, result: &mut Map<String, Value>) {
+    if let Some(schema) = command_result_schema_v1(command, result) {
+        result
+            .entry("schema".to_owned())
+            .or_insert_with(|| Value::String(schema.to_owned()));
+    }
+}
+
 /// Validates the closed result family selected by a public command name.
-///
-/// Commands outside AUT-JSON-001 are intentionally left to their existing contracts. Result
-/// discriminators are added by MCONT003; this validator therefore selects the v1 family from the
-/// outer command and the already-established variant fields.
 pub fn validate_command_result_v1(
     command: &str,
     result: &Map<String, Value>,
 ) -> Result<(), ProtocolError> {
-    let value = Value::Object(result.clone());
+    let Some(expected_schema) = command_result_schema_v1(command, result) else {
+        return Ok(());
+    };
+    if result.get("schema").and_then(Value::as_str) != Some(expected_schema) {
+        return Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        });
+    }
+    let mut content = result.clone();
+    content.remove("schema");
+    let value = Value::Object(content);
     let valid = if result.get("detached") == Some(&Value::Bool(true)) {
         if matches!(command, "session.start" | "session.start_replace") {
             decode::<DetachedStartResultV1>(value)
@@ -51,13 +66,13 @@ pub fn validate_command_result_v1(
             command if is_stage_transition(command) => {
                 if result.get("preview") == Some(&Value::Bool(true)) {
                     decode::<StagePreviewResultV1>(value)
-                } else if command == "session.reset" {
+                } else if command == "session.reset" && result.contains_key("reset") {
                     decode::<ResetResultV1>(value)
                 } else {
                     decode::<StageTransitionResultV1>(value)
                 }
             }
-            _ => true,
+            _ => unreachable!("schema selection and result validation use the same command set"),
         }
     };
     if valid {
@@ -66,6 +81,25 @@ pub fn validate_command_result_v1(
         Err(ProtocolError::InvalidCommandResult {
             command: command.to_owned(),
         })
+    }
+}
+
+fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Option<&'static str> {
+    if result.get("detached") == Some(&Value::Bool(true)) {
+        return Some("podway.detached-admission-result/v1");
+    }
+    match command {
+        "version" => Some("podway.version-result/v1"),
+        "daemon.status" => Some("podway.daemon-status-result/v1"),
+        "procedure.validate" => Some("podway.procedure-validation-result/v1"),
+        "session.status" => Some("podway.status-result/v1"),
+        "session.next" => Some("podway.next-result/v1"),
+        "job.status" | "job.wait" => Some("podway.job-result/v1"),
+        "job.lookup" => Some("podway.job-lookup-result/v1"),
+        "session.start" | "session.start_replace" => Some("podway.session-start-result/v1"),
+        command if is_item_mutation(command) => Some("podway.item-mutation-result/v1"),
+        command if is_stage_transition(command) => Some("podway.stage-transition-result/v1"),
+        _ => None,
     }
 }
 
@@ -117,7 +151,6 @@ struct VersionResultV1 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DaemonStatusResultV1 {
-    schema: String,
     product: String,
     daemon_version: String,
     target: String,
@@ -139,7 +172,6 @@ struct DaemonStatusResultV1 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DaemonServiceStatusResultV1 {
-    schema: String,
     status: String,
     installed: bool,
     loaded: bool,
@@ -417,6 +449,7 @@ mod tests {
     #[test]
     fn detached_admission_is_closed_and_uses_workspace_sequence() {
         let valid = object(json!({
+            "schema": "podway.detached-admission-result/v1",
             "admission": {
                 "admitted": true,
                 "job_id": JOB_ID,
@@ -428,10 +461,12 @@ mod tests {
 
         for malformed in [
             json!({
+                "schema": "podway.detached-admission-result/v1",
                 "admission": {"admitted": true, "job_id": JOB_ID, "sequence": 1},
                 "detached": true
             }),
             json!({
+                "schema": "podway.detached-admission-result/v1",
                 "admission": {
                     "admitted": true,
                     "job_id": JOB_ID,
@@ -440,6 +475,7 @@ mod tests {
                 "detached": true
             }),
             json!({
+                "schema": "podway.detached-admission-result/v1",
                 "admission": {
                     "admitted": true,
                     "job_id": JOB_ID,
@@ -456,6 +492,7 @@ mod tests {
     #[test]
     fn start_and_next_reject_missing_wrong_type_and_unknown_fields() {
         let start = object(json!({
+            "schema": "podway.detached-admission-result/v1",
             "admission": {
                 "admitted": true,
                 "job_id": JOB_ID,
@@ -470,6 +507,7 @@ mod tests {
         assert!(validate_command_result_v1("session.start", &missing).is_err());
 
         let mut next = object(json!({
+            "schema": "podway.next-result/v1",
             "stage": null,
             "missing_required_items": [],
             "blockers": [],
@@ -493,13 +531,59 @@ mod tests {
 
     #[test]
     fn job_read_requires_nullable_field_and_lookup_variants_are_exclusive() {
-        assert!(validate_command_result_v1("job.status", &object(json!({"job": null}))).is_ok());
-        assert!(validate_command_result_v1("job.status", &object(json!({}))).is_err());
-        assert!(validate_command_result_v1("job.lookup", &object(json!({"found": false}))).is_ok());
         assert!(
-            validate_command_result_v1("job.lookup", &object(json!({"found": false, "job": null})))
-                .is_err()
+            validate_command_result_v1(
+                "job.status",
+                &object(json!({"schema": "podway.job-result/v1", "job": null}))
+            )
+            .is_ok()
         );
-        assert!(validate_command_result_v1("job.lookup", &object(json!({"found": true}))).is_err());
+        assert!(
+            validate_command_result_v1(
+                "job.status",
+                &object(json!({"schema": "podway.job-result/v1"}))
+            )
+            .is_err()
+        );
+        assert!(
+            validate_command_result_v1(
+                "job.lookup",
+                &object(json!({"schema": "podway.job-lookup-result/v1", "found": false}))
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_command_result_v1(
+                "job.lookup",
+                &object(
+                    json!({"schema": "podway.job-lookup-result/v1", "found": false, "job": null})
+                )
+            )
+            .is_err()
+        );
+        assert!(
+            validate_command_result_v1(
+                "job.lookup",
+                &object(json!({"schema": "podway.job-lookup-result/v1", "found": true}))
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn result_discriminators_are_required_and_command_specific() {
+        let valid = object(json!({
+            "schema": "podway.job-lookup-result/v1",
+            "found": false
+        }));
+        assert!(validate_command_result_v1("job.lookup", &valid).is_ok());
+
+        let mut missing = valid.clone();
+        missing.remove("schema");
+        assert!(validate_command_result_v1("job.lookup", &missing).is_err());
+
+        let mut wrong = valid;
+        wrong.insert("schema".to_owned(), json!("podway.job-result/v1"));
+        assert!(validate_command_result_v1("job.lookup", &wrong).is_err());
     }
 }

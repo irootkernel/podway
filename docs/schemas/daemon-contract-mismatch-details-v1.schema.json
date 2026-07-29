@@ -4,8 +4,9 @@
   "title": "Podway Daemon Contract Mismatch Details v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["expected", "actual", "admission"],
+  "required": ["schema", "expected", "actual", "admission"],
   "properties": {
+    "schema": { "const": "podway.daemon-contract-mismatch-details/v1" },
     "expected": { "$ref": "#/$defs/identity" },
     "actual": { "$ref": "#/$defs/identity" },
     "admission": { "$ref": "#/$defs/notAdmitted" }

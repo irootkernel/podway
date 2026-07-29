@@ -2587,11 +2587,18 @@ pub struct StatusResultV1 {
 
 impl StatusResultV1 {
     pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
-        serde_json::from_value(Value::Object(result.clone()))
+        let mut result = result.clone();
+        result.remove("schema");
+        serde_json::from_value(Value::Object(result))
     }
 
     pub fn to_result_map(&self) -> Map<String, Value> {
-        result_map_from_serializable(self)
+        let mut result = result_map_from_serializable(self);
+        result.insert(
+            "schema".to_owned(),
+            Value::String("podway.status-result/v1".to_owned()),
+        );
+        result
     }
 }
 
@@ -2675,11 +2682,18 @@ pub struct NextResultV1 {
 
 impl NextResultV1 {
     pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
-        serde_json::from_value(Value::Object(result.clone()))
+        let mut result = result.clone();
+        result.remove("schema");
+        serde_json::from_value(Value::Object(result))
     }
 
     pub fn to_result_map(&self) -> Map<String, Value> {
-        result_map_from_serializable(self)
+        let mut result = result_map_from_serializable(self);
+        result.insert(
+            "schema".to_owned(),
+            Value::String("podway.next-result/v1".to_owned()),
+        );
+        result
     }
 }
 

@@ -4,8 +4,9 @@
   "title": "Podway Procedure Validation Result v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["file", "digest", "procedure", "warnings", "canonical_json"],
+  "required": ["schema", "file", "digest", "procedure", "warnings", "canonical_json"],
   "properties": {
+    "schema": { "const": "podway.procedure-validation-result/v1" },
     "file": { "type": "string", "minLength": 1 },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "procedure": { "$ref": "urn:podway:schema:procedure:v1" },

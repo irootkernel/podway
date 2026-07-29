@@ -6,8 +6,9 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["changed", "revision_before", "revision_after", "procedure_digest", "admission"],
+      "required": ["schema", "changed", "revision_before", "revision_after", "procedure_digest", "admission"],
       "properties": {
+        "schema": { "const": "podway.session-start-result/v1" },
         "changed": { "type": "boolean" },
         "revision_before": { "type": "integer", "minimum": 0 },
         "revision_after": { "type": "integer", "minimum": 1 },
@@ -18,8 +19,9 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["dry_run", "task", "source", "procedure_digest", "first_stage"],
+      "required": ["schema", "dry_run", "task", "source", "procedure_digest", "first_stage"],
       "properties": {
+        "schema": { "const": "podway.session-start-result/v1" },
         "dry_run": { "const": true },
         "task": { "type": "string", "minLength": 1 },
         "source": {

@@ -6,13 +6,17 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 0
+      "required": ["schema"],
+      "properties": {
+        "schema": { "const": "podway.endpoint-error-details/v1" }
+      }
     },
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["admission"],
+      "required": ["schema", "admission"],
       "properties": {
+        "schema": { "const": "podway.endpoint-error-details/v1" },
         "admission": {
           "type": "object",
           "additionalProperties": false,

@@ -5,6 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "schema",
     "stage",
     "missing_required_items",
     "blockers",
@@ -13,6 +14,7 @@
     "suggestions"
   ],
   "properties": {
+    "schema": { "const": "podway.next-result/v1" },
     "stage": {
       "oneOf": [
         {

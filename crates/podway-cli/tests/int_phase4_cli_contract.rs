@@ -1062,6 +1062,7 @@ fn pac_022_cursor_mutation_is_rejected_after_authoritative_active_stage_drift() 
             "exit_code": 4,
             "workspace": { "uuid": WORKSPACE_ID, "root": "/fixture" },
             "details": {
+                "schema": "podway.attempt-conflict-details/v1",
                 "expected_attempt_id": ATTEMPT_ID,
                 "job_id": JOB_ID,
                 "job_sequence": 7,
@@ -1205,7 +1206,10 @@ fn mutation_preflight_error_is_recorrelated_and_marked_not_admitted() {
     assert_eq!(response["workspace"]["root"], "/fixture");
     assert_eq!(
         response["details"],
-        json!({"admission": {"admitted": false}})
+        json!({
+            "schema": "podway.job-wait-timeout-details/v1",
+            "admission": {"admitted": false}
+        })
     );
 
     let wires = daemon.finish();
@@ -1509,7 +1513,10 @@ fn mutation_connect_failure_reports_not_admitted_daemon_unavailable() {
     assert_eq!(response["retryable"], true);
     assert_eq!(
         response["details"],
-        json!({"admission": {"admitted": false}})
+        json!({
+            "schema": "podway.endpoint-error-details/v1",
+            "admission": {"admitted": false}
+        })
     );
 }
 #[test]

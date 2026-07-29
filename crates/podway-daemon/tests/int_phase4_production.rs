@@ -304,7 +304,11 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
     );
     let missing_lookup = dispatch_command(&dispatcher, &missing_lookup, "job.lookup");
     assert_eq!(missing_lookup.result()["found"], false);
-    assert_eq!(missing_lookup.result().len(), 1);
+    assert_eq!(
+        missing_lookup.result()["schema"],
+        "podway.job-lookup-result/v1"
+    );
+    assert_eq!(missing_lookup.result().len(), 2);
     let runtime = manager
         .resolve_existing(git_selector(fixture.main()), None, observation())
         .expect("started workspace must resolve through the manager");
@@ -1520,7 +1524,13 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
     let missing = dispatch_command(&dispatcher, &missing, "job.lookup");
     assert_eq!(
         missing.result(),
-        &json!({"found": false}).as_object().unwrap().clone()
+        &json!({
+            "schema": "podway.job-lookup-result/v1",
+            "found": false
+        })
+        .as_object()
+        .unwrap()
+        .clone()
     );
 
     let jobs_after = context

@@ -6,8 +6,9 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["changed", "revision_before", "revision_after", "admission"],
+      "required": ["schema", "changed", "revision_before", "revision_after", "admission"],
       "properties": {
+        "schema": { "const": "podway.stage-transition-result/v1" },
         "changed": { "type": "boolean" },
         "revision_before": { "type": "integer", "minimum": 0 },
         "revision_after": { "type": "integer", "minimum": 0 },
@@ -17,8 +18,9 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["reset", "revision", "admission"],
+      "required": ["schema", "reset", "revision", "admission"],
       "properties": {
+        "schema": { "const": "podway.stage-transition-result/v1" },
         "reset": { "const": true },
         "revision": { "type": "integer", "minimum": 1 },
         "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" }
@@ -27,8 +29,9 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["preview", "changed", "revision_before", "revision_after", "active_before", "active_after", "destination_attempt", "affected_stages"],
+      "required": ["schema", "preview", "changed", "revision_before", "revision_after", "active_before", "active_after", "destination_attempt", "affected_stages"],
       "properties": {
+        "schema": { "const": "podway.stage-transition-result/v1" },
         "preview": { "const": true },
         "changed": { "type": "boolean" },
         "revision_before": { "type": ["integer", "null"], "minimum": 0 },

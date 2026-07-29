@@ -4,8 +4,9 @@
   "title": "Podway Idempotency Key Reused Details v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["admission"],
+  "required": ["schema", "admission"],
   "properties": {
+    "schema": { "const": "podway.idempotency-key-reused-details/v1" },
     "admission": {
       "type": "object",
       "additionalProperties": false,

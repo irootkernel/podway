@@ -204,6 +204,7 @@ fn request() -> podway_protocol::RequestEnvelopeV1 {
 fn output_payload(command: &str) -> Vec<u8> {
     let result = if command == "session.status" {
         serde_json::json!({
+            "schema": "podway.status-result/v1",
             "task": {"title": "Fixture", "procedure": {"id": "fixture", "version": "1", "name": "Fixture", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}},
             "session": {"id": "123e4567-e89b-42d3-a456-426614174010", "lifecycle": "running", "revision": 1, "created_at": "2026-07-15T12:34:56.789Z", "completed_at": null, "cancelled_at": null},
             "current": null,
@@ -214,6 +215,7 @@ fn output_payload(command: &str) -> Vec<u8> {
         })
     } else {
         serde_json::json!({
+            "schema": "podway.detached-admission-result/v1",
             "admission": {"admitted": true, "job_id": "123e4567-e89b-42d3-a456-426614174011", "workspace_sequence": 1},
             "detached": true,
             "procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -253,7 +255,7 @@ fn mutation_request() -> podway_protocol::RequestEnvelopeV1 {
 
 fn error_payload() -> Vec<u8> {
     format!(
-        r#"{{"schema":"podway.error/v1","request_id":"{REQUEST_ID}","command":"session.status","generated_at":"2026-07-15T12:34:56.789Z","code":"DAEMON_UNAVAILABLE","message":"daemon is restarting","retryable":true,"exit_code":3,"details":{{}}}}"#
+        r#"{{"schema":"podway.error/v1","request_id":"{REQUEST_ID}","command":"session.status","generated_at":"2026-07-15T12:34:56.789Z","code":"DAEMON_UNAVAILABLE","message":"daemon is restarting","retryable":true,"exit_code":3,"details":{{"schema":"podway.endpoint-error-details/v1"}}}}"#
     )
     .into_bytes()
 }

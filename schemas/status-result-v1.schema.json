@@ -5,6 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "schema",
     "task",
     "session",
     "current",
@@ -14,6 +15,7 @@
     "queue"
   ],
   "properties": {
+    "schema": { "const": "podway.status-result/v1" },
     "task": {
       "type": "object",
       "additionalProperties": false,

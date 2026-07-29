@@ -6,13 +6,17 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 0
+      "required": ["schema"],
+      "properties": {
+        "schema": { "const": "podway.job-wait-timeout-details/v1" }
+      }
     },
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["admission"],
+      "required": ["schema", "admission"],
       "properties": {
+        "schema": { "const": "podway.job-wait-timeout-details/v1" },
         "admission": {
           "type": "object",
           "additionalProperties": false,
@@ -24,8 +28,9 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["job_id", "job_sequence", "admission"],
+      "required": ["schema", "job_id", "job_sequence", "admission"],
       "properties": {
+        "schema": { "const": "podway.job-wait-timeout-details/v1" },
         "job_id": { "type": "string", "format": "uuid" },
         "job_sequence": { "type": "integer", "minimum": 1 },
         "admission": {

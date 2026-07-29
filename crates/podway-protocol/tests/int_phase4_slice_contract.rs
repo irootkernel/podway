@@ -650,6 +650,7 @@ fn mutation_identity_excludes_transport_and_selector_location_but_keeps_semantic
 #[test]
 fn status_and_next_results_round_trip_with_active_item_values_and_redo_evidence() {
     let status = json!({
+        "schema": "podway.status-result/v1",
         "task": {
             "title": "Fix duplicate login session creation",
             "procedure": {
@@ -700,6 +701,7 @@ fn status_and_next_results_round_trip_with_active_item_values_and_redo_evidence(
     );
 
     let next = json!({
+        "schema": "podway.next-result/v1",
         "stage": {
             "id": "verify",
             "title": "Verify the fix",

@@ -21,7 +21,7 @@ pub use framing::{
     write_frame_v1,
 };
 pub use identity::{BuildIdentityV1, build_identity_v1};
-pub use result_contract::validate_command_result_v1;
+pub use result_contract::{ensure_command_result_schema_v1, validate_command_result_v1};
 pub use slice::*;
 
 use serde_json::{Map, Value};
@@ -1308,9 +1308,10 @@ impl OutputEnvelopeV1 {
             workspace,
             job,
             session,
-            result,
+            mut result,
             warnings,
         } = input;
+        ensure_command_result_schema_v1(command.as_str(), &mut result);
         let output = Self {
             schema: OUTPUT_SCHEMA_V1.to_owned(),
             request_id,
@@ -1875,8 +1876,9 @@ impl ErrorEnvelopeV1 {
             retryable,
             exit_code,
             workspace,
-            details,
+            mut details,
         } = input;
+        ensure_error_details_schema_v1(code.as_str(), &mut details);
         let output = Self {
             schema: ERROR_SCHEMA_V1.to_owned(),
             request_id,
@@ -2137,7 +2139,9 @@ fn validate_closed_error_details_v1(
             validate_revision_conflict_details_v1(details)
         }
         "ATTEMPT_NOT_CURRENT" => validate_attempt_conflict_details_v1(details),
-        "IDEMPOTENCY_KEY_REUSED" => validate_not_admitted_details_v1(details),
+        "IDEMPOTENCY_KEY_REUSED" => {
+            validate_schema_and_not_admitted_v1(details, "podway.idempotency-key-reused-details/v1")
+        }
         "JOB_WAIT_TIMEOUT" => validate_wait_timeout_details_v1(details),
         _ => true,
     };
@@ -2151,18 +2155,25 @@ fn validate_closed_error_details_v1(
 }
 
 fn validate_endpoint_details_v1(details: &Map<String, Value>) -> bool {
-    details.is_empty() || validate_not_admitted_details_v1(details)
+    details.get("schema").and_then(Value::as_str) == Some("podway.endpoint-error-details/v1")
+        && (details.len() == 1
+            || validate_schema_and_not_admitted_v1(details, "podway.endpoint-error-details/v1"))
 }
 
-fn validate_not_admitted_details_v1(details: &Map<String, Value>) -> bool {
-    details.len() == 1
+fn validate_schema_and_not_admitted_v1(details: &Map<String, Value>, schema: &str) -> bool {
+    details.len() == 2
+        && details.get("schema").and_then(Value::as_str) == Some(schema)
         && details
             .get("admission")
             .is_some_and(|value| validate_admission_metadata_v1(value, true).ok() == Some(None))
 }
 
 fn validate_daemon_contract_mismatch_details_v1(details: &Map<String, Value>) -> bool {
-    if details.len() != 3 || !validate_not_admitted_value_v1(details.get("admission")) {
+    if details.len() != 4
+        || details.get("schema").and_then(Value::as_str)
+            != Some("podway.daemon-contract-mismatch-details/v1")
+        || !validate_not_admitted_value_v1(details.get("admission"))
+    {
         return false;
     }
     ["expected", "actual"].into_iter().all(|field| {
@@ -2190,8 +2201,13 @@ fn validate_revision_conflict_details_v1(details: &Map<String, Value>) -> bool {
         "job_id",
         "job_sequence",
         "admission",
+        "schema",
     ];
     if details.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return false;
+    }
+    if details.get("schema").and_then(Value::as_str) != Some("podway.revision-conflict-details/v1")
+    {
         return false;
     }
     if !details.contains_key("expected_revision") && !details.contains_key("current_revision") {
@@ -2215,8 +2231,12 @@ fn validate_attempt_conflict_details_v1(details: &Map<String, Value>) -> bool {
         "job_id",
         "job_sequence",
         "admission",
+        "schema",
     ];
     if details.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return false;
+    }
+    if details.get("schema").and_then(Value::as_str) != Some("podway.attempt-conflict-details/v1") {
         return false;
     }
     let Some(expected) = details.get("expected_attempt_id").and_then(Value::as_str) else {
@@ -2239,19 +2259,21 @@ fn validate_attempt_conflict_details_v1(details: &Map<String, Value>) -> bool {
 }
 
 fn validate_wait_timeout_details_v1(details: &Map<String, Value>) -> bool {
-    details.is_empty()
-        || validate_not_admitted_details_v1(details)
-        || (details.len() == 3
-            && validate_job_fields_v1(details)
-            && details.get("admission").is_some_and(|admission| {
-                validate_admission_metadata_v1(admission, false)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|(job_id, sequence)| {
-                        details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
-                            && details.get("job_sequence").and_then(Value::as_u64) == Some(sequence)
-                    })
-            }))
+    details.get("schema").and_then(Value::as_str) == Some("podway.job-wait-timeout-details/v1")
+        && (details.len() == 1
+            || validate_schema_and_not_admitted_v1(details, "podway.job-wait-timeout-details/v1")
+            || (details.len() == 4
+                && validate_job_fields_v1(details)
+                && details.get("admission").is_some_and(|admission| {
+                    validate_admission_metadata_v1(admission, false)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|(job_id, sequence)| {
+                            details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
+                                && details.get("job_sequence").and_then(Value::as_u64)
+                                    == Some(sequence)
+                        })
+                })))
 }
 
 fn validate_optional_job_admission_v1(details: &Map<String, Value>) -> bool {
@@ -2282,6 +2304,31 @@ fn validate_job_fields_v1(details: &Map<String, Value>) -> bool {
 
 fn validate_not_admitted_value_v1(value: Option<&Value>) -> bool {
     value.is_some_and(|value| validate_admission_metadata_v1(value, true).ok() == Some(None))
+}
+
+/// Adds a stable schema identifier to each closed public error-detail family.
+pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Value>) {
+    let schema = match code {
+        "DAEMON_NOT_INSTALLED"
+        | "DAEMON_UNAVAILABLE"
+        | "DAEMON_SHUTTING_DOWN"
+        | "DAEMON_VERSION_INCOMPATIBLE" => "podway.endpoint-error-details/v1",
+        "DAEMON_CONTRACT_MISMATCH" => "podway.daemon-contract-mismatch-details/v1",
+        "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
+            "podway.revision-conflict-details/v1"
+        }
+        "ATTEMPT_NOT_CURRENT" => "podway.attempt-conflict-details/v1",
+        "IDEMPOTENCY_KEY_REUSED" => "podway.idempotency-key-reused-details/v1",
+        "JOB_WAIT_TIMEOUT" => "podway.job-wait-timeout-details/v1",
+        "WORKSPACE_UUID_MISMATCH" => "podway.workspace-uuid-mismatch-details/v1",
+        "SESSION_ID_MISMATCH" => "podway.session-id-mismatch-details/v1",
+        "PROCEDURE_DIGEST_MISMATCH" => "podway.procedure-digest-mismatch-details/v1",
+        "MUTATION_OUTCOME_UNKNOWN" => "podway.mutation-outcome-unknown-details/v1",
+        _ => return,
+    };
+    details
+        .entry("schema".to_owned())
+        .or_insert_with(|| Value::String(schema.to_owned()));
 }
 
 impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {

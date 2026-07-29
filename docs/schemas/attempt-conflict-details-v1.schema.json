@@ -4,8 +4,9 @@
   "title": "Podway Attempt Conflict Details v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["expected_attempt_id"],
+  "required": ["schema", "expected_attempt_id"],
   "properties": {
+    "schema": { "const": "podway.attempt-conflict-details/v1" },
     "expected_attempt_id": { "type": "string", "format": "uuid" },
     "actual_attempt_id": { "type": "string", "format": "uuid" },
     "job_id": { "type": "string", "format": "uuid" },

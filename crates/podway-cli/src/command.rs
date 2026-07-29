@@ -35,7 +35,8 @@ use podway_protocol::{
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
     ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1, build_identity_v1, validate_command_result_v1,
+    WorktreeSelectorWireV1, build_identity_v1, ensure_command_result_schema_v1,
+    ensure_error_details_schema_v1, validate_command_result_v1,
 };
 use podway_service::{
     InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1,
@@ -2447,10 +2448,11 @@ fn reject_local_flags(has_flags: bool, message: &'static str) -> Result<(), Loca
 }
 
 fn local_result(command: &str, result: Value, text: String) -> RunResult {
-    let result = result
+    let mut result = result
         .as_object()
         .cloned()
         .expect("local result is always an object");
+    ensure_command_result_schema_v1(command, &mut result);
     validate_command_result_v1(command, &result)
         .expect("local command result must satisfy its closed protocol contract");
     RunResult::Local {
@@ -3553,13 +3555,14 @@ fn render_local_failure_with_clock(
 }
 
 fn render_local_failure_with_clock_and_writers(
-    failure: LocalFailure,
+    mut failure: LocalFailure,
     json_output: bool,
     clock: &impl LocalEnvelopeClock,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> i32 {
     if json_output {
+        ensure_error_details_schema_v1(failure.code, &mut failure.details);
         let generated_at = match local_generated_at(clock) {
             Ok(timestamp) => timestamp,
             Err(clock_failure) => return render_clock_failure_to(clock_failure, stderr),

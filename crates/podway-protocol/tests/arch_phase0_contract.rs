@@ -563,7 +563,7 @@ fn api_004_mutation_outcome_unknown_details_are_closed_and_reconcilable() {
     assert_round_trip(mutation_outcome_unknown_error(valid.clone()).unwrap());
 
     let mut invalid_cases = Vec::new();
-    for field in ["schema", "outcome", "idempotency_key", "reconcile"] {
+    for field in ["outcome", "idempotency_key", "reconcile"] {
         let mut details = valid.clone();
         details.remove(field);
         invalid_cases.push(details);
@@ -599,6 +599,16 @@ fn api_004_mutation_outcome_unknown_details_are_closed_and_reconcilable() {
             Err(ProtocolError::InvalidMutationOutcomeUnknownDetails)
         );
     }
+
+    let mut missing_schema = serde_json::to_value(
+        mutation_outcome_unknown_error(mutation_outcome_unknown_details("recon-key")).unwrap(),
+    )
+    .unwrap();
+    missing_schema["details"]
+        .as_object_mut()
+        .unwrap()
+        .remove("schema");
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(missing_schema).is_err());
 }
 
 fn identity_details(

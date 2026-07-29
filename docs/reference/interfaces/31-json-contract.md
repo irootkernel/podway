@@ -22,9 +22,11 @@ invalid; adding a field requires a new result/detail schema identifier or
 discriminator version. Integration-critical `result` objects now use
 command-selected closed schemas. Daemon endpoint and contract failures, identity
 and digest mismatches, revision and attempt conflicts, idempotency failures, and
-wait timeouts also use code-selected closed detail schemas. The remaining
-`MCONT` tasks add uniform discriminators, compact observation, catalog
-synchronization, and fixtures. See the
+wait timeouts also use code-selected closed detail schemas. Every closed result
+and closed error-detail object carries its own `schema` discriminator; current
+v1 decoders reject a missing, mismatched, or unknown discriminator. The
+remaining `MCONT` tasks add compact observation, catalog synchronization, and
+fixtures. See the
 [automation contract](34-automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004).
 
 ## Common success envelope
@@ -54,7 +56,17 @@ synchronization, and fixtures. See the
     "revision_before": 12,
     "revision_after": 13
   },
-  "result": {},
+  "result": {
+    "schema": "podway.stage-transition-result/v1",
+    "changed": true,
+    "revision_before": 12,
+    "revision_after": 13,
+    "admission": {
+      "admitted": true,
+      "job_id": "6b8c38e8-0051-475a-a4d0-0cb07eb8fc12",
+      "workspace_sequence": 41
+    }
+  },
   "warnings": []
 }
 ```
@@ -118,6 +130,7 @@ preserves the original correlation and key without guessing admission:
 
 ```json
 {
+  "schema": "podway.status-result/v1",
   "task": {
     "title": "fix duplicate login session creation",
     "procedure": {
@@ -194,6 +207,7 @@ For a completed or cancelled session, `current` is `null`.
 
 ```json
 {
+  "schema": "podway.next-result/v1",
   "stage": {
     "id": "verify",
     "title": "Verify the result",
@@ -240,35 +254,19 @@ A transition result uses a common shape:
 
 ```json
 {
+  "schema": "podway.stage-transition-result/v1",
   "changed": true,
   "revision_before": 12,
   "revision_after": 13,
-  "active_before": {
-    "stage_id": "implement",
-    "attempt_id": "...",
-    "attempt_number": 1
-  },
-  "affected_stages": [
-    {
-      "stage_id": "implement",
-      "before": "current",
-      "after": "done"
-    },
-    {
-      "stage_id": "verify",
-      "before": "pending",
-      "after": "current"
-    }
-  ],
-  "active_after": {
-    "stage_id": "verify",
-    "attempt_id": "...",
-    "attempt_number": 1
+  "admission": {
+    "admitted": true,
+    "job_id": "...",
+    "workspace_sequence": 42
   }
 }
 ```
 
-Command-specific fields may be added, for example the attached artifact metadata or resolved blocker IDs.
+Each command and variant selects one closed result shape; undocumented fields are rejected.
 
 ## Detached admission result
 
@@ -289,6 +287,7 @@ Command-specific fields may be added, for example the attached artifact metadata
     "finished_at": null
   },
   "result": {
+    "schema": "podway.detached-admission-result/v1",
     "admission": {
       "admitted": true,
       "job_id": "...",
@@ -310,6 +309,7 @@ top-level `job` projection.
 `job status` and `job wait` include:
 
 ```text
+schema
 id
 sequence
 command

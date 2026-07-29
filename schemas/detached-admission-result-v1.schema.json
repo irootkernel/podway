@@ -4,8 +4,9 @@
   "title": "Podway Detached Admission Result v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["admission", "detached"],
+  "required": ["schema", "admission", "detached"],
   "properties": {
+    "schema": { "const": "podway.detached-admission-result/v1" },
     "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" },
     "detached": { "const": true },
     "procedure_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }

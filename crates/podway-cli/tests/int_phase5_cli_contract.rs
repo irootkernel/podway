@@ -367,6 +367,7 @@ fn authoritative_status_result(items: Value) -> Value {
 
 fn authoritative_status_result_with_blockers(items: Value, blockers: Value) -> Value {
     serde_json::json!({
+        "schema": "podway.status-result/v1",
         "task": {
             "title": "Completion fixture",
             "procedure": {
@@ -413,6 +414,7 @@ fn authoritative_status_result_with_blockers(items: Value, blockers: Value) -> V
 
 fn authoritative_next_result() -> Value {
     serde_json::json!({
+        "schema": "podway.next-result/v1",
         "stage": {
             "id": "implement",
             "title": "Implement",
@@ -575,12 +577,16 @@ fn recording_success_result(command: &str) -> Value {
         }])),
         "session.next" => authoritative_next_result(),
         "job.list" => authoritative_job_list_result(),
-        "job.lookup" => serde_json::json!({"found": false}),
+        "job.lookup" => serde_json::json!({
+            "schema": "podway.job-lookup-result/v1",
+            "found": false
+        }),
         "workspace.init" => serde_json::json!({"initialized": true}),
         "workspace.doctor" => serde_json::json!({"deep": true, "healthy": true}),
         "workspace.show" => serde_json::json!({"workspace": "recorded"}),
         "workspace.repair" => serde_json::json!({"repaired": true}),
         "session.start" | "session.start_replace" => serde_json::json!({
+            "schema": "podway.session-start-result/v1",
             "changed": true,
             "revision_before": 1,
             "revision_after": 2,
@@ -590,6 +596,7 @@ fn recording_success_result(command: &str) -> Value {
         "session.complete" | "session.skip" | "session.retry" | "session.return"
         | "session.block" | "session.unblock" | "session.cancel" | "session.reopen" => {
             serde_json::json!({
+                "schema": "podway.stage-transition-result/v1",
                 "changed": true,
                 "revision_before": 1,
                 "revision_after": 2,
@@ -597,12 +604,14 @@ fn recording_success_result(command: &str) -> Value {
             })
         }
         "session.reset" => serde_json::json!({
+            "schema": "podway.stage-transition-result/v1",
             "reset": true,
             "revision": 2,
             "admission": admission
         }),
         "item.check" | "item.uncheck" | "item.set" | "item.add" | "item.remove" | "item.attach"
         | "item.clear" => serde_json::json!({
+            "schema": "podway.item-mutation-result/v1",
             "changed": true,
             "item_id": "item",
             "revision_before": 1,
@@ -612,7 +621,10 @@ fn recording_success_result(command: &str) -> Value {
         "workspace.reset_all" | "job.cancel" => {
             serde_json::json!({"accepted_route": command})
         }
-        "job.status" | "job.wait" => serde_json::json!({"job": null}),
+        "job.status" | "job.wait" => serde_json::json!({
+            "schema": "podway.job-result/v1",
+            "job": null
+        }),
         unknown => panic!("no recorded success envelope exists for daemon route {unknown}"),
     }
 }

@@ -6,14 +6,18 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["found"],
-      "properties": { "found": { "const": false } }
+      "required": ["schema", "found"],
+      "properties": {
+        "schema": { "const": "podway.job-lookup-result/v1" },
+        "found": { "const": false }
+      }
     },
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["found", "job"],
+      "required": ["schema", "found", "job"],
       "properties": {
+        "schema": { "const": "podway.job-lookup-result/v1" },
         "found": { "const": true },
         "job": {
           "type": "object",
