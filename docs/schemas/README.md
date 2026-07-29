@@ -15,6 +15,7 @@ These JSON Schema Draft 2020-12 files define Podway v1 structural contracts.
 - `idempotency-key-reused-details-v1.schema.json`: rejected idempotency-key reuse.
 - `job-wait-timeout-details-v1.schema.json`: query and admitted mutation wait timeouts.
 - `status-result-v1.schema.json`: `status` result object.
+- `compact-status-result-v1.schema.json`: bounded `status --wait-for-idle --compact` result object.
 - `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
 - `version-result-v1.schema.json`: static product and embedded contract identity.
 - `procedure-validation-result-v1.schema.json`: validated Procedure digest and canonical form.

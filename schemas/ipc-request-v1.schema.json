@@ -191,6 +191,32 @@
           ]
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "command": {"const": "session.status"},
+          "payload": {
+            "type": "object",
+            "properties": {"compact": {"const": true}},
+            "required": ["compact"]
+          }
+        },
+        "required": ["command", "payload"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["wait_for_idle"],
+            "properties": {
+              "wait_for_idle": {"const": true},
+              "verbose": {"const": false}
+            },
+            "not": {"required": ["after_job_id"]}
+          }
+        }
+      }
     }
   ]
 }

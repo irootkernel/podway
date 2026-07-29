@@ -1,11 +1,12 @@
 use podway_core::{ItemId, Revision, Sha256Digest, WorkspaceId};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, DAEMON_COMMAND_NAMES_V1, ErrorCodeV1, ExitCodeV1,
-    IdempotencyKeyV1, JobStateV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceCommandV1, SliceErrorV1, SliceRequestV1,
-    TerminalJobCancellationProjectionV1, TerminalJobErrorProjectionV1, TerminalJobResponseV1,
-    TerminalJobSuccessProjectionV1, TerminalJobSuccessResultV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1, canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
+    IdempotencyKeyV1, JobStateV1, OperationV1, PreconditionsV1, QueryWaitV1,
+    RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceCommandV1,
+    SliceErrorV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
+    TerminalJobErrorProjectionV1, TerminalJobResponseV1, TerminalJobSuccessProjectionV1,
+    TerminalJobSuccessResultV1, WorkspaceContextV1, WorktreeSelectorWireV1,
+    canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
     canonical_start_mutation_identity_v1,
 };
 use serde_json::{Map, Value, json};
@@ -178,6 +179,41 @@ fn casid003_rejects_mismatched_envelope_and_selector_workspace_uuids() {
             field: "workspace.expected_uuid/selector.expected_uuid",
         }),
     );
+}
+
+#[test]
+fn mcont004_compact_status_requires_idle_wait_and_forbids_verbose() {
+    let valid = SliceRequestV1::from_envelope(&envelope(
+        "session.status",
+        OperationV1::Query,
+        false,
+        json!({"selector": selector(), "wait_for_idle": true, "compact": true}),
+        PreconditionsV1::default(),
+    ))
+    .unwrap();
+    let SliceCommandV1::SessionStatus(status) = valid.command() else {
+        panic!("expected status command");
+    };
+    assert!(status.compact);
+    assert_eq!(status.wait, QueryWaitV1::Idle);
+    assert!(!status.verbose);
+
+    for payload in [
+        json!({"selector": selector(), "compact": true}),
+        json!({"selector": selector(), "after_job_id": JOB_ID, "compact": true}),
+        json!({"selector": selector(), "wait_for_idle": true, "verbose": true, "compact": true}),
+    ] {
+        assert_eq!(
+            SliceRequestV1::from_envelope(&envelope(
+                "session.status",
+                OperationV1::Query,
+                false,
+                payload,
+                PreconditionsV1::default(),
+            )),
+            Err(SliceErrorV1::InvalidValue { field: "compact" }),
+        );
+    }
 }
 
 struct RouteCase {

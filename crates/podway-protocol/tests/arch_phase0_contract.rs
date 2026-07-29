@@ -2,13 +2,13 @@ use podway_core::{JobId, Revision, SessionId, WorkspaceId};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, ERROR_SCHEMA_V1, ErrorCodeV1, ErrorEnvelopeInputV1,
     ErrorEnvelopeV1, ExitCodeV1, FRAME_LENGTH_PREFIX_BYTES_V1, IPC_PROTOCOL_V1, JobOutputV1,
-    JobStateV1, MAX_FRAME_PAYLOAD_BYTES_V1, MAX_JSON_DEPTH_V1, MAX_WORKSPACE_ROOT_SCALARS_V1,
-    MIN_FRAME_PAYLOAD_BYTES_V1, OUTPUT_SCHEMA_V1, OperationV1, OutputEnvelopeInputV1,
-    OutputEnvelopeV1, PreconditionsV1, ProtocolCompatibilityV1, ProtocolError, ProtocolVersionV1,
-    RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1,
-    Rfc3339MillisV1, SUPPORTED_ERROR_SCHEMAS_V1, SUPPORTED_OUTPUT_SCHEMAS_V1,
-    SUPPORTED_PROTOCOLS_V1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
-    build_identity_v1, decode_request_payload_v1, decode_response_payload_v1,
+    JobStateV1, MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, MAX_FRAME_PAYLOAD_BYTES_V1,
+    MAX_JSON_DEPTH_V1, MAX_WORKSPACE_ROOT_SCALARS_V1, MIN_FRAME_PAYLOAD_BYTES_V1, OUTPUT_SCHEMA_V1,
+    OperationV1, OutputEnvelopeInputV1, OutputEnvelopeV1, PreconditionsV1, ProtocolCompatibilityV1,
+    ProtocolError, ProtocolVersionV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1,
+    RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1, SUPPORTED_ERROR_SCHEMAS_V1,
+    SUPPORTED_OUTPUT_SCHEMAS_V1, SUPPORTED_PROTOCOLS_V1, SessionLifecycleV1, SessionOutputV1,
+    WorkspaceOutputV1, build_identity_v1, decode_request_payload_v1, decode_response_payload_v1,
     encode_request_payload_v1, encode_response_payload_v1, error_code_catalog_v1,
     negotiate_protocol, require_compatible_protocol, validate_frame_payload_length,
 };
@@ -286,6 +286,91 @@ fn valid_output_envelope_json() -> Value {
 
 fn valid_error_envelope_json() -> Value {
     serde_json::to_value(valid_error_envelope()).expect("error fixture must serialize")
+}
+
+fn compact_status_result(sequence: u64) -> Map<String, Value> {
+    json!({
+        "schema": "podway.compact-status-result/v1",
+        "procedure": {
+            "id": "bug-fix",
+            "version": "1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "session": {
+            "id": SESSION_ID,
+            "lifecycle": "completed",
+            "revision": 2
+        },
+        "current": null,
+        "items": [],
+        "blockers": [],
+        "queue": {
+            "pending_mutations": false,
+            "queued_count": 0,
+            "running_job_id": null,
+            "latest_workspace_sequence": sequence
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+fn compact_status_output(
+    sequence: u64,
+    workspace_sequence: Option<u64>,
+    padding: Option<String>,
+) -> Result<OutputEnvelopeV1, ProtocolError> {
+    let workspace = workspace_sequence.map(|sequence| {
+        WorkspaceOutputV1::new(
+            WorkspaceId::new(WORKSPACE_ID).unwrap(),
+            "/tmp/podway",
+            sequence,
+        )
+        .unwrap()
+    });
+    let warnings = padding
+        .map(|padding| Map::from_iter([("padding".to_owned(), Value::String(padding))]))
+        .into_iter()
+        .collect();
+    OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        command: CommandNameV1::new("session.status").unwrap(),
+        generated_at: timestamp(),
+        workspace,
+        job: None,
+        session: None,
+        result: compact_status_result(sequence),
+        warnings,
+    })
+}
+
+#[test]
+fn aut_obs_004_compact_status_requires_matching_workspace_and_exact_byte_bound() {
+    assert_eq!(
+        compact_status_output(7, None, None),
+        Err(ProtocolError::InvalidCompactStatusEnvelope)
+    );
+    assert_eq!(
+        compact_status_output(7, Some(8), None),
+        Err(ProtocolError::InvalidCompactStatusEnvelope)
+    );
+
+    let base = compact_status_output(7, Some(7), Some(String::new())).unwrap();
+    let base_length = serde_json::to_vec(&base).unwrap().len() + 1;
+    let padding_length = MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 - base_length;
+    let exact = compact_status_output(7, Some(7), Some("x".repeat(padding_length))).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&exact).unwrap().len() + 1,
+        MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1
+    );
+    assert_eq!(
+        compact_status_output(7, Some(7), Some("x".repeat(padding_length + 1))),
+        Err(ProtocolError::CompactStatusEnvelopeTooLarge {
+            length: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 + 1,
+            maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
+        })
+    );
 }
 const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("DAEMON_NOT_INSTALLED", 3, false),

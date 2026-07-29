@@ -467,6 +467,7 @@ pub enum QueryWaitV1 {
 pub struct SessionStatusV1 {
     pub wait: QueryWaitV1,
     pub verbose: bool,
+    pub compact: bool,
     pub preconditions: SessionReadPreconditionsWireV1,
 }
 
@@ -955,11 +956,16 @@ impl SliceRequestV1 {
                 require_envelope(envelope, "session.status", OperationV1::Query, false)?;
                 let preconditions = require_session_read_preconditions(envelope.preconditions())?;
                 let payload: SessionStatusPayloadV1 = parse_payload(envelope)?;
+                let wait = validated_query_wait(payload.wait_for_idle, payload.after_job_id)?;
+                if payload.compact && (!matches!(wait, QueryWaitV1::Idle) || payload.verbose) {
+                    return Err(SliceErrorV1::InvalidValue { field: "compact" });
+                }
                 (
                     payload.selector,
                     SliceCommandV1::SessionStatus(SessionStatusV1 {
-                        wait: validated_query_wait(payload.wait_for_idle, payload.after_job_id)?,
+                        wait,
                         verbose: payload.verbose,
+                        compact: payload.compact,
                         preconditions,
                     }),
                 )
@@ -1390,6 +1396,8 @@ struct SessionStatusPayloadV1 {
     after_job_id: Option<JobId>,
     #[serde(default)]
     verbose: bool,
+    #[serde(default)]
+    compact: bool,
 }
 
 #[derive(Deserialize)]
@@ -2612,6 +2620,176 @@ impl TryFrom<Map<String, Value>> for StatusResultV1 {
 
 impl From<StatusResultV1> for Map<String, Value> {
     fn from(result: StatusResultV1) -> Self {
+        result_map_from_serializable(&result)
+    }
+}
+
+pub const COMPACT_STATUS_RESULT_SCHEMA_V1: &str = "podway.compact-status-result/v1";
+
+/// Closed schema identifier for the bounded quiescent status projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CompactStatusResultSchemaV1 {
+    #[serde(rename = "podway.compact-status-result/v1")]
+    V1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactStatusProcedureV1 {
+    pub id: String,
+    pub version: String,
+    pub digest: Sha256Digest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactStatusSessionV1 {
+    pub id: SessionId,
+    pub lifecycle: SessionLifecycleV1,
+    #[serde(deserialize_with = "deserialize_nonzero_revision")]
+    pub revision: Revision,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactStatusCurrentV1 {
+    pub stage_id: StageId,
+    pub attempt_id: AttemptId,
+    #[serde(deserialize_with = "deserialize_nonzero_u32")]
+    pub attempt_number: u32,
+    pub ready_to_complete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactStatusItemV1 {
+    pub id: ItemId,
+    #[serde(rename = "type")]
+    pub item_type: ItemTypeResultV1,
+    pub required: bool,
+    pub satisfied: bool,
+    pub revision: Revision,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactBlockerStateV1 {
+    Open,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactStatusBlockerV1 {
+    pub id: BlockerId,
+    pub attempt_id: AttemptId,
+    pub state: CompactBlockerStateV1,
+}
+
+/// Closed, value-free status result emitted only after an idle queue barrier.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactStatusResultV1 {
+    pub schema: CompactStatusResultSchemaV1,
+    pub procedure: CompactStatusProcedureV1,
+    pub session: CompactStatusSessionV1,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub current: Option<CompactStatusCurrentV1>,
+    pub items: Vec<CompactStatusItemV1>,
+    pub blockers: Vec<CompactStatusBlockerV1>,
+    pub queue: QueueResultV1,
+}
+
+impl CompactStatusResultV1 {
+    pub fn from_status(status: &StatusResultV1) -> Self {
+        Self {
+            schema: CompactStatusResultSchemaV1::V1,
+            procedure: CompactStatusProcedureV1 {
+                id: status.task.procedure.id.clone(),
+                version: status.task.procedure.version.clone(),
+                digest: status.task.procedure.digest.clone(),
+            },
+            session: CompactStatusSessionV1 {
+                id: status.session.id.clone(),
+                lifecycle: status.session.lifecycle,
+                revision: status.session.revision,
+            },
+            current: status
+                .current
+                .as_ref()
+                .map(|current| CompactStatusCurrentV1 {
+                    stage_id: current.stage_id.clone(),
+                    attempt_id: current.attempt_id.clone(),
+                    attempt_number: current.attempt_number,
+                    ready_to_complete: current.ready_to_complete,
+                }),
+            items: status
+                .items
+                .iter()
+                .map(|item| CompactStatusItemV1 {
+                    id: item.id.clone(),
+                    item_type: item.item_type,
+                    required: item.required,
+                    satisfied: item.satisfied,
+                    revision: item.revision,
+                })
+                .collect(),
+            blockers: status
+                .blockers
+                .iter()
+                .map(|blocker| CompactStatusBlockerV1 {
+                    id: blocker.id.clone(),
+                    attempt_id: blocker.attempt_id.clone(),
+                    state: CompactBlockerStateV1::Open,
+                })
+                .collect(),
+            queue: status.queue.clone(),
+        }
+    }
+
+    pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
+        let compact: Self = serde_json::from_value(Value::Object(result.clone()))?;
+        if compact.procedure.id.is_empty()
+            || compact.procedure.version.is_empty()
+            || compact.items.len() > 128
+            || compact.queue.pending_mutations
+            || compact.queue.queued_count != 0
+            || compact.queue.running_job_id.is_some()
+            || compact.queue.latest_workspace_sequence == 0
+        {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "compact status requires an idle queue projection",
+            ));
+        }
+        Ok(compact)
+    }
+
+    pub fn to_result_map(&self) -> Map<String, Value> {
+        result_map_from_serializable(self)
+    }
+}
+
+impl From<&StatusResultV1> for CompactStatusResultV1 {
+    fn from(status: &StatusResultV1) -> Self {
+        Self::from_status(status)
+    }
+}
+
+impl From<StatusResultV1> for CompactStatusResultV1 {
+    fn from(status: StatusResultV1) -> Self {
+        Self::from_status(&status)
+    }
+}
+
+impl TryFrom<Map<String, Value>> for CompactStatusResultV1 {
+    type Error = serde_json::Error;
+
+    fn try_from(result: Map<String, Value>) -> Result<Self, Self::Error> {
+        Self::from_result_map(&result)
+    }
+}
+
+impl From<CompactStatusResultV1> for Map<String, Value> {
+    fn from(result: CompactStatusResultV1) -> Self {
         result_map_from_serializable(&result)
     }
 }

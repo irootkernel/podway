@@ -6,10 +6,11 @@
 
 use podway_core::{AttemptId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
 use podway_protocol::{
-    ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
-    JobStateV1, NextResultV1, OperationV1, OutputEnvelopeInputV1, OutputEnvelopeV1, QueryWaitV1,
-    RequestEnvelopeV1, ResponseEnvelopeV1, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
-    SliceRequestV1, StatusResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
+    CompactStatusResultV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
+    IdempotencyKeyV1, JobOutputV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeInputV1,
+    OutputEnvelopeV1, QueryWaitV1, RequestEnvelopeV1, ResponseEnvelopeV1, Rfc3339MillisV1,
+    SessionOutputV1, SliceCommandV1, SliceRequestV1, StatusResultV1, WorkspaceOutputV1,
+    WorktreeSelectorWireV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -954,6 +955,7 @@ where
                 slice_request,
                 &input.wait,
                 input.verbose,
+                input.compact,
                 input.preconditions.expected_session_id.clone(),
             ),
             SliceCommandV1::SessionNext(input) => self.dispatch_next(
@@ -1049,6 +1051,7 @@ where
         slice_request: &SliceRequestV1,
         query_wait: &QueryWaitV1,
         verbose: bool,
+        compact: bool,
         expected_session_id: Option<SessionId>,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
         self.require_query_options(request)?;
@@ -1064,12 +1067,19 @@ where
                 expected_session_id,
             },
         )?;
-        let result = StatusResultV1::from_result_map(&output.result)
-            .map(|result| result.to_result_map())
+        let status = StatusResultV1::from_result_map(&output.result)
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+        let mut workspace_output = self.runtime.workspace_output(&workspace);
+        let result = if compact {
+            workspace_output =
+                workspace_at_sequence(workspace_output, status.queue.latest_workspace_sequence)?;
+            CompactStatusResultV1::from_status(&status).to_result_map()
+        } else {
+            status.to_result_map()
+        };
         self.output_response(
             request,
-            Some(self.runtime.workspace_output(&workspace)),
+            Some(workspace_output),
             None,
             None,
             result,
@@ -1460,6 +1470,14 @@ fn workspace_at_least_sequence(
 ) -> Result<WorkspaceOutputV1, DispatchFailureV1> {
     let latest = workspace.latest_workspace_sequence().max(sequence);
     WorkspaceOutputV1::new(workspace.uuid().clone(), workspace.root(), latest)
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+}
+
+fn workspace_at_sequence(
+    workspace: WorkspaceOutputV1,
+    sequence: u64,
+) -> Result<WorkspaceOutputV1, DispatchFailureV1> {
+    WorkspaceOutputV1::new(workspace.uuid().clone(), workspace.root(), sequence)
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
 }
 

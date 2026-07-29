@@ -31,7 +31,7 @@ use podway_config::{
 use podway_core::{AttemptId, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId};
 use podway_presets::{PresetError, catalog_v1};
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1,
+    ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1, JobOutputV1, JobStateV1,
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
     ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
@@ -173,7 +173,7 @@ enum Command {
         command: WorkspaceCommand,
     },
     Start(StartArgs),
-    Status(ReadArgs),
+    Status(StatusArgs),
     Next(ReadArgs),
     Complete,
     Skip {
@@ -284,6 +284,19 @@ struct ReadArgs {
     wait_for_idle: bool,
     #[arg(long, value_name = "JOB_ID", conflicts_with = "wait_for_idle")]
     after_job: Option<String>,
+}
+
+#[derive(Debug, Args, Default)]
+struct StatusArgs {
+    #[command(flatten)]
+    read: ReadArgs,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        requires = "wait_for_idle",
+        conflicts_with = "verbose"
+    )]
+    compact: bool,
 }
 
 #[derive(Debug, Args)]
@@ -2863,7 +2876,13 @@ fn daemon_payload(
                 payload.insert("confirmed".to_owned(), Value::Bool(true));
             }
         }
-        Command::Status(args) | Command::Next(args) => read_payload(&mut payload, args),
+        Command::Status(args) => {
+            read_payload(&mut payload, &args.read);
+            if args.compact {
+                payload.insert("compact".to_owned(), Value::Bool(true));
+            }
+        }
+        Command::Next(args) => read_payload(&mut payload, args),
         Command::Complete => {}
         Command::Skip { reason } => {
             if let Some(reason) = reason {
@@ -3516,6 +3535,14 @@ fn validate_typed_output_result(
     output: &podway_protocol::OutputEnvelopeV1,
 ) -> Result<(), LocalFailure> {
     match output.command().as_str() {
+        "session.status"
+            if output.result().get("schema").and_then(Value::as_str)
+                == Some("podway.compact-status-result/v1") =>
+        {
+            CompactStatusResultV1::from_result_map(output.result())
+                .map(|_| ())
+                .map_err(|_| typed_result_failure(output))
+        }
         "session.status" => StatusResultV1::from_result_map(output.result())
             .map(|_| ())
             .map_err(|_| typed_result_failure(output)),
@@ -3588,10 +3615,18 @@ fn render_human_response(
     match response {
         ResponseEnvelopeV1::Output(output) => match output.command().as_str() {
             "session.status" => {
-                let status = StatusResultV1::from_result_map(output.result())
-                    .map_err(|_| typed_result_failure(output))?;
                 render_output_metadata(stdout, output)?;
-                render_status_text(stdout, &status)?;
+                if output.result().get("schema").and_then(Value::as_str)
+                    == Some("podway.compact-status-result/v1")
+                {
+                    let status = CompactStatusResultV1::from_result_map(output.result())
+                        .map_err(|_| typed_result_failure(output))?;
+                    render_compact_status_text(stdout, &status)?;
+                } else {
+                    let status = StatusResultV1::from_result_map(output.result())
+                        .map_err(|_| typed_result_failure(output))?;
+                    render_status_text(stdout, &status)?;
+                }
                 render_warnings(stdout, output.warnings())?;
             }
             "session.next" => {
@@ -3763,6 +3798,76 @@ fn render_status_text(stdout: &mut dyn Write, status: &StatusResultV1) -> Result
                 .as_ref()
                 .map(|id| id.as_str())
                 .unwrap_or("-"),
+            status.queue.latest_workspace_sequence
+        ),
+    )
+}
+
+fn render_compact_status_text(
+    stdout: &mut dyn Write,
+    status: &CompactStatusResultV1,
+) -> Result<(), LocalFailure> {
+    write_text_line(
+        stdout,
+        format_args!(
+            "procedure: {} version={} digest={}",
+            status.procedure.id,
+            status.procedure.version,
+            status.procedure.digest.as_str()
+        ),
+    )?;
+    write_text_line(
+        stdout,
+        format_args!(
+            "session: {} {:?} revision={}",
+            status.session.id.as_str(),
+            status.session.lifecycle,
+            status.session.revision.get()
+        ),
+    )?;
+    match &status.current {
+        Some(current) => write_text_line(
+            stdout,
+            format_args!(
+                "current: {} attempt={} id={} ready_to_complete={}",
+                current.stage_id.as_str(),
+                current.attempt_number,
+                current.attempt_id.as_str(),
+                current.ready_to_complete
+            ),
+        )?,
+        None => write_text_line(stdout, format_args!("current: none"))?,
+    }
+    for item in &status.items {
+        write_text_line(
+            stdout,
+            format_args!(
+                "item: {} {:?} required={} satisfied={} revision={}",
+                item.id.as_str(),
+                item.item_type,
+                item.required,
+                item.satisfied,
+                item.revision.get()
+            ),
+        )?;
+    }
+    for blocker in &status.blockers {
+        write_text_line(
+            stdout,
+            format_args!(
+                "blocker: {} attempt={} state={:?}",
+                blocker.id.as_str(),
+                blocker.attempt_id.as_str(),
+                blocker.state
+            ),
+        )?;
+    }
+    write_text_line(
+        stdout,
+        format_args!(
+            "queue: pending_mutations={} queued_count={} running_job_id=- latest_workspace_sequence={}",
+            status.queue.pending_mutations,
+            status.queue.queued_count,
             status.queue.latest_workspace_sequence
         ),
     )
@@ -4037,7 +4142,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
         }
         "session.status" => {
-            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway status --verbose"
+            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --wait-for-idle --compact"
         }
         "session.next" => {
             "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway next"

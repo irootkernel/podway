@@ -738,6 +738,8 @@ fn spurious_idle_notification_rechecks_store_before_returning() {
 
     assert!(!status.queue.pending_mutations);
     assert_eq!(status.queue.queued_count, 0);
+    assert!(status.queue.running_job_id.is_none());
+    assert_eq!(status.queue.latest_workspace_sequence, 44);
     assert!(store.workspace_reads.load(Ordering::SeqCst) >= 3);
 }
 

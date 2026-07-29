@@ -36,6 +36,7 @@ pub const SUPPORTED_ERROR_SCHEMAS_V1: &[&str] = &[ERROR_SCHEMA_V1];
 pub const FRAME_LENGTH_PREFIX_BYTES_V1: usize = 4;
 pub const MIN_FRAME_PAYLOAD_BYTES_V1: usize = 1;
 pub const MAX_FRAME_PAYLOAD_BYTES_V1: usize = 1_048_576;
+pub const MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1: usize = 262_144;
 pub const MAX_COMMAND_BYTES_V1: usize = 128;
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
 pub const MAX_CLIENT_TEXT_SCALARS_V1: usize = 64;
@@ -84,6 +85,11 @@ pub enum ProtocolError {
     InvalidAdmissionMetadata,
     InvalidCommandResult {
         command: String,
+    },
+    InvalidCompactStatusEnvelope,
+    CompactStatusEnvelopeTooLarge {
+        length: usize,
+        maximum: usize,
     },
     InvalidExitCode {
         value: u8,
@@ -178,6 +184,12 @@ impl fmt::Display for ProtocolError {
                     "result for {command} violates its closed v1 contract"
                 )
             }
+            Self::InvalidCompactStatusEnvelope => formatter
+                .write_str("compact status requires matching workspace and idle queue identity"),
+            Self::CompactStatusEnvelopeTooLarge { length, maximum } => write!(
+                formatter,
+                "compact status envelope length {length} exceeds the maximum of {maximum} bytes"
+            ),
             Self::InvalidExitCode { value } => {
                 write!(
                     formatter,
@@ -1348,6 +1360,35 @@ impl OutputEnvelopeV1 {
         }
         validate_json_map_depth(&self.result, 1)?;
         validate_command_result_v1(self.command.as_str(), &self.result)?;
+        if self.result.get("schema").and_then(Value::as_str)
+            == Some(COMPACT_STATUS_RESULT_SCHEMA_V1)
+        {
+            let compact = CompactStatusResultV1::from_result_map(&self.result)
+                .map_err(|_| ProtocolError::InvalidCompactStatusEnvelope)?;
+            let workspace = self
+                .workspace
+                .as_ref()
+                .ok_or(ProtocolError::InvalidCompactStatusEnvelope)?;
+            if compact.queue.latest_workspace_sequence == 0
+                || compact.queue.latest_workspace_sequence != workspace.latest_workspace_sequence()
+            {
+                return Err(ProtocolError::InvalidCompactStatusEnvelope);
+            }
+            let length = serde_json::to_vec(self)
+                .map_err(|_| ProtocolError::InvalidCompactStatusEnvelope)?
+                .len()
+                .checked_add(1)
+                .ok_or(ProtocolError::CompactStatusEnvelopeTooLarge {
+                    length: usize::MAX,
+                    maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
+                })?;
+            if length > MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 {
+                return Err(ProtocolError::CompactStatusEnvelopeTooLarge {
+                    length,
+                    maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
+                });
+            }
+        }
         if let Some(admission) = self.result.get("admission") {
             let (job_id, sequence) = validate_admission_metadata_v1(admission, false)?
                 .ok_or(ProtocolError::InvalidAdmissionMetadata)?;

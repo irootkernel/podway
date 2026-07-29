@@ -5,7 +5,8 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
 use crate::{
-    JobStateV1, NextResultV1, ProtocolError, ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1,
+    CompactStatusResultV1, JobStateV1, NextResultV1, ProtocolError, ResponseEnvelopeV1,
+    Rfc3339MillisV1, StatusResultV1,
 };
 
 /// Adds the schema identifier for a command-selected closed result family.
@@ -47,7 +48,13 @@ pub fn validate_command_result_v1(
                     || decode::<DaemonServiceStatusResultV1>(value)
             }
             "procedure.validate" => decode::<ProcedureValidationResultV1>(value),
-            "session.status" => decode::<StatusResultV1>(value),
+            "session.status" => {
+                if result.contains_key("procedure") {
+                    CompactStatusResultV1::from_result_map(result).is_ok()
+                } else {
+                    decode::<StatusResultV1>(value)
+                }
+            }
             "session.next" => decode::<NextResultV1>(value),
             "job.status" | "job.wait" => decode::<JobReadResultV1>(value),
             "job.lookup" => match result.get("found") {
@@ -92,6 +99,9 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
         "version" => Some("podway.version-result/v1"),
         "daemon.status" => Some("podway.daemon-status-result/v1"),
         "procedure.validate" => Some("podway.procedure-validation-result/v1"),
+        "session.status" if result.contains_key("procedure") => {
+            Some("podway.compact-status-result/v1")
+        }
         "session.status" => Some("podway.status-result/v1"),
         "session.next" => Some("podway.next-result/v1"),
         "job.status" | "job.wait" => Some("podway.job-result/v1"),

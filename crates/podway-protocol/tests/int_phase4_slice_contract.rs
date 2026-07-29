@@ -1,10 +1,11 @@
 use podway_core::{Revision, WorkspaceId};
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, MAX_WORKTREE_SELECTOR_COMPONENT_BYTES_V1,
-    NextResultV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1,
-    RequestIdV1, RequestOptionsV1, SliceRequestV1, StatusResultV1, WorktreeSelectorWireV1,
-    canonical_mutation_identity_bytes_v1, canonical_mutation_identity_v1,
-    decode_base64url_unpadded_v1, encode_base64url_unpadded_v1,
+    ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1,
+    MAX_WORKTREE_SELECTOR_COMPONENT_BYTES_V1, NextResultV1, OperationV1, PreconditionsV1,
+    RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceRequestV1,
+    StatusResultV1, WorktreeSelectorWireV1, canonical_mutation_identity_bytes_v1,
+    canonical_mutation_identity_v1, decode_base64url_unpadded_v1, encode_base64url_unpadded_v1,
+    validate_command_result_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -727,6 +728,110 @@ fn status_and_next_results_round_trip_with_active_item_values_and_redo_evidence(
             .as_str(),
         "note"
     );
+}
+
+#[test]
+fn mcont004_compact_status_projection_is_closed_discriminated_and_idle() {
+    let status = StatusResultV1::from_result_map(&payload(json!({
+        "schema": "podway.status-result/v1",
+        "task": {
+            "title": "Sensitive task title",
+            "procedure": {
+                "id": "bug-fix",
+                "version": "1",
+                "name": "Bug Fix",
+                "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            }
+        },
+        "session": {
+            "id": SESSION_ID,
+            "lifecycle": "running",
+            "revision": 17,
+            "created_at": "2026-07-13T03:00:00.000Z",
+            "completed_at": null,
+            "cancelled_at": null
+        },
+        "current": {
+            "stage_id": "verify",
+            "stage_index": 4,
+            "title": "Sensitive stage title",
+            "attempt_id": ATTEMPT_ID,
+            "attempt_number": 2,
+            "blocked": false,
+            "ready_to_complete": true
+        },
+        "stages": [],
+        "items": [{
+            "id": "note",
+            "type": "text",
+            "prompt": "Sensitive prompt",
+            "required": true,
+            "satisfied": false,
+            "revision": 0,
+            "value": "Sensitive value"
+        }],
+        "blockers": [{"id": BLOCKER_ID, "attempt_id": ATTEMPT_ID, "reason": "Sensitive reason"}],
+        "queue": {"pending_mutations": false, "queued_count": 0, "running_job_id": null, "latest_workspace_sequence": 41}
+    })))
+    .unwrap();
+    let compact = CompactStatusResultV1::from(&status);
+    let compact_map = compact.to_result_map();
+    assert_eq!(
+        Value::Object(compact_map.clone()),
+        json!({
+            "schema": "podway.compact-status-result/v1",
+            "procedure": {
+                "id": "bug-fix",
+                "version": "1",
+                "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "session": {"id": SESSION_ID, "lifecycle": "running", "revision": 17},
+            "current": {
+                "stage_id": "verify",
+                "attempt_id": ATTEMPT_ID,
+                "attempt_number": 2,
+                "ready_to_complete": true
+            },
+            "items": [{"id": "note", "type": "text", "required": true, "satisfied": false, "revision": 0}],
+            "blockers": [{"id": BLOCKER_ID, "attempt_id": ATTEMPT_ID, "state": "open"}],
+            "queue": {"pending_mutations": false, "queued_count": 0, "running_job_id": null, "latest_workspace_sequence": 41}
+        })
+    );
+    assert_eq!(
+        CompactStatusResultV1::from_result_map(&compact_map).unwrap(),
+        compact
+    );
+    assert!(validate_command_result_v1("session.status", &compact_map).is_ok());
+
+    let mut unknown = compact_map.clone();
+    unknown.insert("future".to_owned(), Value::Bool(true));
+    assert!(CompactStatusResultV1::from_result_map(&unknown).is_err());
+
+    let mut wrong_schema = compact_map.clone();
+    wrong_schema.insert(
+        "schema".to_owned(),
+        Value::String("podway.status-result/v1".to_owned()),
+    );
+    assert!(CompactStatusResultV1::from_result_map(&wrong_schema).is_err());
+
+    let mut empty_procedure_id = compact_map.clone();
+    empty_procedure_id["procedure"]["id"] = json!("");
+    assert!(CompactStatusResultV1::from_result_map(&empty_procedure_id).is_err());
+
+    let mut empty_procedure_version = compact_map.clone();
+    empty_procedure_version["procedure"]["version"] = json!("");
+    assert!(CompactStatusResultV1::from_result_map(&empty_procedure_version).is_err());
+
+    let mut too_many_items = compact_map.clone();
+    too_many_items["items"] = Value::Array(vec![compact_map["items"][0].clone(); 129]);
+    assert!(CompactStatusResultV1::from_result_map(&too_many_items).is_err());
+
+    let mut busy = compact_map;
+    busy.get_mut("queue")
+        .and_then(Value::as_object_mut)
+        .unwrap()
+        .insert("queued_count".to_owned(), json!(1));
+    assert!(CompactStatusResultV1::from_result_map(&busy).is_err());
 }
 
 #[test]

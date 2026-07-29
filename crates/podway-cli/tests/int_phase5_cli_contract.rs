@@ -412,6 +412,46 @@ fn authoritative_status_result_with_blockers(items: Value, blockers: Value) -> V
     })
 }
 
+fn authoritative_compact_status_result() -> Value {
+    serde_json::json!({
+        "schema": "podway.compact-status-result/v1",
+        "procedure": {
+            "id": "fixture",
+            "version": "1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "session": {
+            "id": "123e4567-e89b-42d3-a456-426614174004",
+            "lifecycle": "running",
+            "revision": 1
+        },
+        "current": {
+            "stage_id": "implement",
+            "attempt_id": "123e4567-e89b-42d3-a456-426614174002",
+            "attempt_number": 1,
+            "ready_to_complete": false
+        },
+        "items": [{
+            "id": "decision",
+            "type": "confirm",
+            "required": true,
+            "satisfied": false,
+            "revision": 0
+        }],
+        "blockers": [{
+            "id": "123e4567-e89b-42d3-a456-426614174006",
+            "attempt_id": "123e4567-e89b-42d3-a456-426614174002",
+            "state": "open"
+        }],
+        "queue": {
+            "pending_mutations": false,
+            "queued_count": 0,
+            "running_job_id": null,
+            "latest_workspace_sequence": 1
+        }
+    })
+}
+
 fn authoritative_next_result() -> Value {
     serde_json::json!({
         "schema": "podway.next-result/v1",
@@ -1103,6 +1143,7 @@ const STATUS_SURFACE_FLAGS: &[&str] = &[
     "--if-session-id",
     "--verbose",
     "--wait-for-idle",
+    "--compact",
     "--after-job",
 ];
 const NEXT_SURFACE_FLAGS: &[&str] = &[
@@ -1455,6 +1496,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--if-session-id",
             "--verbose",
             "--wait-for-idle",
+            "--compact",
             "--after-job",
         ],
         dynamic: None,
@@ -2468,6 +2510,81 @@ rework:
             .collect::<BTreeSet<_>>(),
         "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 45 public routes"
     );
+}
+
+#[test]
+fn mcont004_compact_status_is_idle_only_and_preserves_the_closed_wire_projection() {
+    for arguments in [
+        &["--json", "status", "--compact"][..],
+        &[
+            "--json",
+            "status",
+            "--wait-for-idle",
+            "--compact",
+            "--verbose",
+        ][..],
+        &[
+            "--json",
+            "status",
+            "--compact",
+            "--after-job",
+            RECORDING_JOB_ID,
+        ][..],
+    ] {
+        assert_eq!(run(arguments).status.code(), Some(2));
+    }
+
+    let fixture = DynamicCompletionFixture::new();
+    let daemon = RecordingDaemon::start(
+        &fixture,
+        vec![
+            RecordingReply::Output(authoritative_compact_status_result()),
+            RecordingReply::Output(authoritative_compact_status_result()),
+        ],
+    );
+    let worktree = fixture.root.to_string_lossy();
+    let json_output = fixture.run(&[
+        "--json",
+        "--worktree",
+        worktree.as_ref(),
+        "status",
+        "--wait-for-idle",
+        "--compact",
+    ]);
+    assert!(json_output.status.success(), "{json_output:?}");
+    assert!(json_output.stdout.len() <= 262_144);
+    let json = one_json(&json_output);
+    assert_eq!(json["result"]["schema"], "podway.compact-status-result/v1");
+    for omitted in ["task", "stages", "previous_attempts"] {
+        assert!(json["result"].get(omitted).is_none(), "{omitted}");
+    }
+    assert!(json["result"]["items"][0].get("prompt").is_none());
+    assert!(json["result"]["items"][0].get("value").is_none());
+    assert!(json["result"]["blockers"][0].get("reason").is_none());
+
+    let text_output = fixture.run(&[
+        "--worktree",
+        worktree.as_ref(),
+        "status",
+        "--wait-for-idle",
+        "--compact",
+    ]);
+    assert!(text_output.status.success(), "{text_output:?}");
+    let text = String::from_utf8(text_output.stdout).unwrap();
+    assert!(text.contains("procedure: fixture version=1"));
+    assert!(text.contains("item: decision"));
+    assert!(!text.contains("prompt="));
+    assert!(!text.contains("value="));
+    assert!(!text.contains("reason="));
+
+    let requests = daemon.finish();
+    for request in requests {
+        assert_eq!(request["command"], "session.status");
+        assert_eq!(request["payload"]["wait_for_idle"], true);
+        assert_eq!(request["payload"]["compact"], true);
+        assert!(request["payload"].get("verbose").is_none());
+        assert!(request["payload"].get("after_job_id").is_none());
+    }
 }
 
 #[test]

@@ -153,6 +153,10 @@ const WAIT_FOR_IDLE: Flag = Flag {
     long: "wait-for-idle",
     takes_value: false,
 };
+const COMPACT: Flag = Flag {
+    long: "compact",
+    takes_value: false,
+};
 const AFTER_JOB: Flag = Flag {
     long: "after-job",
     takes_value: true,
@@ -422,6 +426,7 @@ const ROUTES: &[Route] = &[
             &IF_SESSION_ID,
             &VERBOSE,
             &WAIT_FOR_IDLE,
+            &COMPACT,
             &AFTER_JOB,
         ],
         values: "",

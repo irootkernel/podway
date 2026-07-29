@@ -7,7 +7,7 @@
     {
       "source": "docs/schemas/README.md",
       "destination": "schemas/README.md",
-      "source_sha256": "5bb4cd5a2f308a3cfece87a21029b70763854395c8ed42e72060561c7eb530b5",
+      "source_sha256": "2f6001f2d5995d32b08b76faef4e692cc7fcffaf863f864a0c5d8622c55b2330",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -16,6 +16,14 @@
       "source": "docs/schemas/attempt-conflict-details-v1.schema.json",
       "destination": "schemas/attempt-conflict-details-v1.schema.json",
       "source_sha256": "7a79769a45b4e4c48d995db6f8fa7bab0e6235e9e61d4e34b3d1ac02a6cb0492",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/compact-status-result-v1.schema.json",
+      "destination": "schemas/compact-status-result-v1.schema.json",
+      "source_sha256": "cb03ce1be3b2f2b3ce691b9f71dfe7d592f445213f1cb616c59562267dc29d57",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -79,7 +87,7 @@
     {
       "source": "docs/schemas/ipc-request-v1.schema.json",
       "destination": "schemas/ipc-request-v1.schema.json",
-      "source_sha256": "56901c7428251194d97b2829531e110e6a08104a5b66a55f8381fa38d6f369af",
+      "source_sha256": "62d7b08ab7d4092fa14fd30f82ca05c469460b5eea457c64f490228306c36cc9",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -127,7 +135,7 @@
     {
       "source": "docs/schemas/output-v1.schema.json",
       "destination": "schemas/output-v1.schema.json",
-      "source_sha256": "d2bb1b7ea3ab58135dc821852e7c5692e1c3cece2a336da2e16038254c6ce379",
+      "source_sha256": "e73ed01984b22cf8a756e9deba08f92db35ab702cce9cb4cc2ae46a14d6299a2",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

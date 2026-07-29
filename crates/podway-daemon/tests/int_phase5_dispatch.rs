@@ -53,6 +53,7 @@ struct Calls {
     runtime: Vec<&'static str>,
     reads: Vec<(&'static str, Option<RequestReadWaitV1>)>,
     status_verbose: Vec<bool>,
+    status_workspace_sequence: Option<u64>,
     invalid_read_route: Option<&'static str>,
     controls: Vec<JobStateV1>,
     previews: usize,
@@ -202,8 +203,12 @@ impl DispatcherReadServiceV1<Workspace> for Reads {
             calls.status_verbose.push(input.verbose);
             calls.invalid_read_route == Some("status")
         };
+        let mut result = status_result();
+        if let Some(sequence) = self.0.lock().unwrap().status_workspace_sequence {
+            result["queue"]["latest_workspace_sequence"] = json!(sequence);
+        }
         Ok(DispatcherReadOutputV1::new(
-            if invalid { Map::new() } else { status_result() },
+            if invalid { Map::new() } else { result },
             Vec::new(),
         ))
     }
@@ -997,6 +1002,47 @@ fn every_g006_route_reaches_its_sole_authority() {
             call.command == "workspace.reset_all" && call.authority == MutationAuthority::Admission
         }),
         "workspace.reset_all must bypass ordinary mutation admission"
+    );
+}
+
+#[test]
+fn mcont004_compact_status_projects_the_post_idle_closed_result() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    calls.lock().unwrap().status_workspace_sequence = Some(2);
+    let dispatcher = dispatcher(Arc::clone(&calls));
+    let (request, slice) = request(
+        901,
+        "session.status",
+        json!({
+            "selector": selector(),
+            "wait_for_idle": true,
+            "compact": true
+        }),
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV1::Output(output) = dispatcher.dispatch(&request, &slice) else {
+        panic!("compact status must succeed");
+    };
+    assert_eq!(output.result()["schema"], "podway.compact-status-result/v1");
+    assert_eq!(output.result()["procedure"]["id"], "phase5");
+    assert!(output.result().get("task").is_none());
+    assert!(output.result().get("stages").is_none());
+    assert_eq!(output.result()["queue"]["pending_mutations"], false);
+    assert_eq!(output.result()["queue"]["queued_count"], 0);
+    assert!(output.result()["queue"]["running_job_id"].is_null());
+    assert_eq!(output.result()["queue"]["latest_workspace_sequence"], 2);
+    assert_eq!(
+        output.result()["queue"]["latest_workspace_sequence"],
+        output.workspace().unwrap().latest_workspace_sequence()
+    );
+    assert_eq!(
+        calls.lock().unwrap().reads,
+        vec![(
+            "status",
+            Some(RequestReadWaitV1::IdleUntil {
+                timeout_millis: 30_000
+            })
+        )]
     );
 }
 

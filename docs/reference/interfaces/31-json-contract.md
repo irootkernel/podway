@@ -203,6 +203,64 @@ preserves the original correlation and key without guessing admission:
 
 For a completed or cancelled session, `current` is `null`.
 
+## Compact idle status result
+
+`status --wait-for-idle --compact` returns a closed, value-free projection for
+automation decisions. It is available only with the idle barrier; a successful
+response always reports an idle queue from the authoritative post-barrier read.
+Workspace UUID, root, and sequence remain in the common envelope's `workspace`
+object, and its sequence must match the result queue sequence.
+
+```json
+{
+  "schema": "podway.compact-status-result/v1",
+  "procedure": {
+    "id": "bug-fix",
+    "version": "1",
+    "digest": "sha256:..."
+  },
+  "session": {
+    "id": "...",
+    "lifecycle": "running",
+    "revision": 17
+  },
+  "current": {
+    "stage_id": "verify",
+    "attempt_id": "...",
+    "attempt_number": 2,
+    "ready_to_complete": false
+  },
+  "items": [
+    {
+      "id": "relevant-checks-passed",
+      "type": "confirm",
+      "required": true,
+      "satisfied": false,
+      "revision": 0
+    }
+  ],
+  "blockers": [
+    {
+      "id": "...",
+      "attempt_id": "...",
+      "state": "open"
+    }
+  ],
+  "queue": {
+    "pending_mutations": false,
+    "queued_count": 0,
+    "running_job_id": null,
+    "latest_workspace_sequence": 41
+  }
+}
+```
+
+The compact form omits instructions, prompts, titles, item values, blocker
+reasons, stage history, and previous-attempt narratives. Only open blockers are
+listed; terminal sessions use `current: null` with empty `items` and `blockers`.
+The complete compact JSON envelope, including its trailing newline, is limited
+to 262,144 UTF-8 bytes.
+
 ## Next result
 
 ```json

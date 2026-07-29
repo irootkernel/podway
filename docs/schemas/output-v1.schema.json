@@ -68,7 +68,16 @@
     },
     {
       "if": { "properties": { "command": { "const": "session.status" } }, "required": ["command"] },
-      "then": { "properties": { "result": { "$ref": "urn:podway:schema:status-result:v1" } } }
+      "then": {
+        "properties": {
+          "result": {
+            "oneOf": [
+              {"$ref": "urn:podway:schema:status-result:v1"},
+              {"$ref": "urn:podway:schema:compact-status-result:v1"}
+            ]
+          }
+        }
+      }
     },
     {
       "if": { "properties": { "command": { "const": "session.next" } }, "required": ["command"] },

@@ -212,8 +212,8 @@ Reports:
 
 `--verbose` includes previous attempt summaries for the current session. It does not provide an audit export.
 
-`--compact` is planned target behavior. With `--wait-for-idle` it returns the
-closed, bounded authority projection defined by the automation client contract.
+`--compact` requires `--wait-for-idle` and returns the closed, bounded authority
+projection defined by the automation client contract.
 
 ### Next
 
