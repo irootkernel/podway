@@ -12,5 +12,5 @@
 - [`json/ipc-complete-request.json`](json/ipc-complete-request.json): IPC mutation request.
 - [`json/registry.json`](json/registry.json): minimal global registry.
 
-These known-answer JSON files are manifest-covered and decoder-verified. Schemas
-and specifications remain normative.
+These JSON files are manifest-covered known answers. Request and response
+examples are decoder-verified; schemas and specifications remain normative.

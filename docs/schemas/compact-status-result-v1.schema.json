@@ -61,6 +61,7 @@
     },
     "blockers": {
       "type": "array",
+      "maxItems": 1024,
       "items": {
         "type": "object",
         "additionalProperties": false,

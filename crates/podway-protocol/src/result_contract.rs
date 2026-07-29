@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use podway_core::{AttemptId, ItemId, JobId, Revision, Sha256Digest, StageId};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error as _};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -23,6 +23,17 @@ pub fn validate_command_result_v1(
     command: &str,
     result: &Map<String, Value>,
 ) -> Result<(), ProtocolError> {
+    if result
+        .get("schema")
+        .and_then(Value::as_str)
+        .is_some_and(|schema| {
+            is_known_result_schema(schema) && !schema_allows_command(schema, command)
+        })
+    {
+        return Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        });
+    }
     let Some(expected_schema) = command_result_schema_v1(command, result) else {
         return Ok(());
     };
@@ -45,12 +56,12 @@ pub fn validate_command_result_v1(
         }
     } else {
         match command {
-            "version" => decode::<VersionResultV1>(value),
+            "version" => validate_version_result(value),
             "daemon.status" => {
-                decode::<DaemonStatusResultV1>(value.clone())
-                    || decode::<DaemonServiceStatusResultV1>(value)
+                validate_daemon_status_result(value.clone())
+                    || validate_daemon_service_status_result(value)
             }
-            "procedure.validate" => decode::<ProcedureValidationResultV1>(value),
+            "procedure.validate" => validate_procedure_validation_result(value),
             "session.status" => {
                 if result.contains_key("procedure") {
                     CompactStatusResultV1::from_result_map(result).is_ok()
@@ -94,6 +105,45 @@ pub fn validate_command_result_v1(
     }
 }
 
+fn is_known_result_schema(schema: &str) -> bool {
+    matches!(
+        schema,
+        "podway.version-result/v1"
+            | "podway.daemon-status-result/v1"
+            | "podway.procedure-validation-result/v1"
+            | "podway.detached-admission-result/v1"
+            | "podway.session-start-result/v1"
+            | "podway.status-result/v1"
+            | "podway.compact-status-result/v1"
+            | "podway.next-result/v1"
+            | "podway.stage-transition-result/v1"
+            | "podway.item-mutation-result/v1"
+            | "podway.job-lookup-result/v1"
+            | "podway.job-result/v1"
+    )
+}
+
+fn schema_allows_command(schema: &str, command: &str) -> bool {
+    match schema {
+        "podway.version-result/v1" => command == "version",
+        "podway.daemon-status-result/v1" => command == "daemon.status",
+        "podway.procedure-validation-result/v1" => command == "procedure.validate",
+        "podway.detached-admission-result/v1" => supports_detached(command),
+        "podway.session-start-result/v1" => {
+            matches!(command, "session.start" | "session.start_replace")
+        }
+        "podway.status-result/v1" | "podway.compact-status-result/v1" => {
+            command == "session.status"
+        }
+        "podway.next-result/v1" => command == "session.next",
+        "podway.stage-transition-result/v1" => is_stage_transition(command),
+        "podway.item-mutation-result/v1" => is_item_mutation(command),
+        "podway.job-lookup-result/v1" => command == "job.lookup",
+        "podway.job-result/v1" => matches!(command, "job.status" | "job.wait"),
+        _ => false,
+    }
+}
+
 fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Option<&'static str> {
     if supports_detached(command)
         && (result.get("detached") == Some(&Value::Bool(true))
@@ -131,6 +181,87 @@ fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> bool {
     serde_json::from_value::<T>(value).is_ok()
 }
 
+fn non_empty(value: &str) -> bool {
+    !value.is_empty()
+}
+
+fn unique_non_empty_strings(values: &[String]) -> bool {
+    values.iter().all(|value| non_empty(value))
+        && values
+            .iter()
+            .enumerate()
+            .all(|(index, value)| !values[..index].contains(value))
+}
+
+fn validate_version_result(value: Value) -> bool {
+    serde_json::from_value::<VersionResultV1>(value).is_ok_and(|result| {
+        result.product == "podway"
+            && non_empty(&result.version)
+            && non_empty(&result.target)
+            && result.source_commit.as_deref().is_none_or(non_empty)
+            && result.contract_manifest_schema == "podway.contract-manifest/v1"
+            && unique_non_empty_strings(&result.supported_ipc_ids)
+    })
+}
+
+fn validate_daemon_status_result(value: Value) -> bool {
+    serde_json::from_value::<DaemonStatusResultV1>(value).is_ok_and(|result| {
+        result.product == "podway"
+            && non_empty(&result.daemon_version)
+            && non_empty(&result.target)
+            && result.source_commit.as_deref().is_none_or(non_empty)
+            && result.contract_manifest_schema == "podway.contract-manifest/v1"
+            && unique_non_empty_strings(&result.protocol_versions)
+            && result.pid > 0
+            && result.executable_path.starts_with('/')
+            && result.configured_socket_path.starts_with('/')
+            && result.effective_socket_path.starts_with('/')
+    })
+}
+
+fn validate_daemon_service_status_result(value: Value) -> bool {
+    serde_json::from_value::<DaemonServiceStatusResultV1>(value).is_ok_and(|result| {
+        matches!(
+            result.status.as_str(),
+            "not_installed" | "stopped" | "running"
+        ) && result.product.as_deref().is_none_or(non_empty)
+            && result.daemon_version.as_deref().is_none_or(non_empty)
+            && result.target.as_deref().is_none_or(non_empty)
+            && result.source_commit.as_deref().is_none_or(non_empty)
+            && result
+                .contract_manifest_schema
+                .as_deref()
+                .is_none_or(non_empty)
+            && unique_non_empty_strings(&result.protocol_versions)
+            && if result.reachable {
+                result.installed
+                    && result.loaded
+                    && result.pid.is_some()
+                    && result.process_id.is_some()
+                    && result.started_at.is_some()
+                    && result.uptime_ms.is_some()
+                    && result.effective_socket_path.is_some()
+            } else {
+                result.pid.is_none()
+                    && result.process_id.is_none()
+                    && result.started_at.is_none()
+                    && result.uptime_ms.is_none()
+                    && result.effective_socket_path.is_none()
+            }
+    })
+}
+
+fn validate_procedure_validation_result(value: Value) -> bool {
+    serde_json::from_value::<ProcedureValidationResultV1>(value).is_ok_and(|result| {
+        non_empty(&result.file)
+            && result.warnings.iter().all(|warning| {
+                non_empty(&warning.code) && non_empty(&warning.path) && non_empty(&warning.message)
+            })
+            && serde_json::from_str::<Value>(&result.canonical_json)
+                .is_ok_and(|canonical| canonical == Value::Object(result.procedure))
+    })
+}
+
 fn is_item_mutation(command: &str) -> bool {
     matches!(
         command,
@@ -166,6 +297,7 @@ struct VersionResultV1 {
     version: String,
     target: String,
     build_identity: Sha256Digest,
+    #[serde(deserialize_with = "deserialize_required_option")]
     source_commit: Option<String>,
     contract_manifest_schema: String,
     contract_manifest_digest: Sha256Digest,
@@ -247,15 +379,25 @@ struct ProcedureValidationResultV1 {
     file: String,
     digest: Sha256Digest,
     procedure: Map<String, Value>,
-    warnings: Vec<Value>,
+    warnings: Vec<ProcedureWarningResultV1>,
     canonical_json: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ProcedureWarningResultV1 {
+    code: String,
+    path: String,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AdmissionResultV1 {
+    #[serde(deserialize_with = "deserialize_true")]
     admitted: bool,
     job_id: JobId,
+    #[serde(deserialize_with = "deserialize_positive_u64")]
     workspace_sequence: u64,
 }
 
@@ -263,6 +405,7 @@ struct AdmissionResultV1 {
 #[serde(deny_unknown_fields)]
 struct DetachedMutationResultV1 {
     admission: AdmissionResultV1,
+    #[serde(deserialize_with = "deserialize_true")]
     detached: bool,
 }
 
@@ -270,6 +413,7 @@ struct DetachedMutationResultV1 {
 #[serde(deny_unknown_fields)]
 struct DetachedStartResultV1 {
     admission: AdmissionResultV1,
+    #[serde(deserialize_with = "deserialize_true")]
     detached: bool,
     procedure_digest: Sha256Digest,
 }
@@ -288,6 +432,7 @@ type StageTransitionResultV1 = ChangeResultV1;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResetResultV1 {
+    #[serde(deserialize_with = "deserialize_true")]
     reset: bool,
     revision: Revision,
     admission: AdmissionResultV1,
@@ -316,6 +461,7 @@ struct ItemMutationResultV1 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartDryRunResultV1 {
+    #[serde(deserialize_with = "deserialize_true")]
     dry_run: bool,
     task: String,
     source: StartSourceV1,
@@ -354,6 +500,7 @@ struct FirstStageV1 {
 struct ActiveAttemptV1 {
     stage_id: StageId,
     attempt_id: AttemptId,
+    #[serde(deserialize_with = "deserialize_positive_u32")]
     attempt_number: u32,
 }
 
@@ -361,6 +508,7 @@ struct ActiveAttemptV1 {
 #[serde(deny_unknown_fields)]
 struct StageAttemptV1 {
     attempt_id: AttemptId,
+    #[serde(deserialize_with = "deserialize_positive_u32")]
     attempt_number: u32,
 }
 
@@ -377,12 +525,18 @@ struct AffectedStageV1 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StagePreviewResultV1 {
+    #[serde(deserialize_with = "deserialize_true")]
     preview: bool,
     changed: bool,
+    #[serde(deserialize_with = "deserialize_required_option")]
     revision_before: Option<Revision>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     revision_after: Option<Revision>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     active_before: Option<ActiveAttemptV1>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     active_after: Option<ActiveAttemptV1>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     destination_attempt: Option<ActiveAttemptV1>,
     affected_stages: Vec<AffectedStageV1>,
 }
@@ -417,6 +571,7 @@ enum CancelledKindV1 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CancelledPayloadV1 {
+    #[serde(deserialize_with = "deserialize_true")]
     cancelled: bool,
 }
 
@@ -437,6 +592,7 @@ struct JobLookupFoundResultV1 {
 #[serde(deny_unknown_fields)]
 struct LookupJobV1 {
     id: JobId,
+    #[serde(deserialize_with = "deserialize_positive_u64")]
     sequence: u64,
     state: JobStateV1,
     submitted_at: Rfc3339MillisV1,
@@ -455,6 +611,36 @@ where
     T: Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer)
+}
+
+fn deserialize_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match bool::deserialize(deserializer)? {
+        true => Ok(true),
+        false => Err(D::Error::custom("field must be true")),
+    }
+}
+
+fn deserialize_positive_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match u64::deserialize(deserializer)? {
+        value if value > 0 => Ok(value),
+        _ => Err(D::Error::custom("field must be positive")),
+    }
+}
+
+fn deserialize_positive_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match u32::deserialize(deserializer)? {
+        value if value > 0 => Ok(value),
+        _ => Err(D::Error::custom("field must be positive")),
+    }
 }
 
 #[cfg(test)]

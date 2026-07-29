@@ -8,7 +8,8 @@ use std::{
 
 use jsonschema::{Retrieve, Uri};
 use podway_protocol::{
-    MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, ResponseEnvelopeV1, validate_command_result_v1,
+    MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, RequestEnvelopeV1, ResponseEnvelopeV1,
+    validate_command_result_v1,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -284,13 +285,18 @@ fn mcont006_result_fixtures_lock_catalog_schemas_and_runtime_decoders() {
                 .fixtures
                 .iter()
                 .map(|name| fixture.result_fixtures.get(name).unwrap().schema.clone())
-                .collect::<Vec<_>>();
-            assert_eq!(schemas.iter().collect::<BTreeSet<_>>().len(), schemas.len());
+                .collect::<BTreeSet<_>>();
             (binding.command.clone(), schemas)
         })
         .collect::<BTreeMap<_, _>>();
     assert_eq!(observed.len(), fixture.result_bindings.len());
-    assert_eq!(observed, parse_command_catalog());
+    assert_eq!(
+        observed,
+        parse_command_catalog()
+            .into_iter()
+            .map(|(command, schemas)| (command, schemas.into_iter().collect()))
+            .collect()
+    );
 
     let mut exercised = BTreeSet::new();
     for binding in &fixture.result_bindings {
@@ -299,21 +305,30 @@ fn mcont006_result_fixtures_lock_catalog_schemas_and_runtime_decoders() {
             let value = materialize(contract);
             assert_eq!(value["schema"], contract.schema);
             assert_schema_valid(&contract.schema_file, &value);
+            assert_schema_valid(
+                "schemas/output-v1.schema.json",
+                &json!({
+                    "schema": "podway.output/v1",
+                    "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
+                    "command": binding.command,
+                    "generated_at": "2026-07-13T03:10:04.123Z",
+                    "result": value.clone(),
+                    "warnings": []
+                }),
+            );
             validate_command_result_v1(&binding.command, &result_map(value.clone())).unwrap();
-            if exercised.insert(name) {
-                for (mutation_index, mutation) in
-                    mutations(&value, &contract.schema, &contract.type_field)
-                        .into_iter()
-                        .enumerate()
-                {
-                    assert_schema_invalid(&contract.schema_file, &mutation);
-                    assert!(
-                        validate_command_result_v1(&binding.command, &result_map(mutation))
-                            .is_err(),
-                        "runtime accepted {name} mutation {mutation_index} for {}",
-                        binding.command
-                    );
-                }
+            exercised.insert(name);
+            for (mutation_index, mutation) in
+                mutations(&value, &contract.schema, &contract.type_field)
+                    .into_iter()
+                    .enumerate()
+            {
+                assert_schema_invalid(&contract.schema_file, &mutation);
+                assert!(
+                    validate_command_result_v1(&binding.command, &result_map(mutation)).is_err(),
+                    "runtime accepted {name} mutation {mutation_index} for {}",
+                    binding.command
+                );
             }
         }
     }
@@ -326,10 +341,109 @@ fn mcont006_result_fixtures_lock_catalog_schemas_and_runtime_decoders() {
         "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
         "command": "version",
         "generated_at": "2026-07-13T03:10:04.123Z",
-        "result": detached,
+        "result": detached.clone(),
         "warnings": []
     });
     assert_schema_invalid("schemas/output-v1.schema.json", &cross_command);
+
+    let contract = fixture.result_fixtures.get("detached_mutation").unwrap();
+    for mutation in mutations(&detached, &contract.schema, &contract.type_field) {
+        let envelope = json!({
+            "schema": "podway.output/v1",
+            "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
+            "command": "workspace.init",
+            "generated_at": "2026-07-13T03:10:04.123Z",
+            "result": mutation,
+            "warnings": []
+        });
+        assert_schema_invalid("schemas/output-v1.schema.json", &envelope);
+    }
+
+    let mut start_without_digest =
+        materialize(fixture.result_fixtures.get("detached_start").unwrap());
+    start_without_digest
+        .as_object_mut()
+        .unwrap()
+        .remove("procedure_digest");
+    assert!(
+        validate_command_result_v1("session.start", &result_map(start_without_digest.clone()))
+            .is_err()
+    );
+    assert_schema_invalid(
+        "schemas/output-v1.schema.json",
+        &json!({
+            "schema": "podway.output/v1", "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
+            "command": "session.start", "generated_at": "2026-07-13T03:10:04.123Z",
+            "result": start_without_digest, "warnings": []
+        }),
+    );
+
+    let mut mutation_with_digest = detached.clone();
+    mutation_with_digest["procedure_digest"] = Value::String(format!("sha256:{}", "a".repeat(64)));
+    assert!(
+        validate_command_result_v1("item.set", &result_map(mutation_with_digest.clone())).is_err()
+    );
+    assert_schema_invalid(
+        "schemas/output-v1.schema.json",
+        &json!({
+            "schema": "podway.output/v1", "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
+            "command": "item.set", "generated_at": "2026-07-13T03:10:04.123Z",
+            "result": mutation_with_digest, "warnings": []
+        }),
+    );
+
+    let reset = materialize(fixture.result_fixtures.get("reset_transition").unwrap());
+    assert!(validate_command_result_v1("session.complete", &result_map(reset.clone())).is_err());
+    assert_schema_invalid(
+        "schemas/output-v1.schema.json",
+        &json!({
+            "schema": "podway.output/v1", "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
+            "command": "session.complete", "generated_at": "2026-07-13T03:10:04.123Z",
+            "result": reset, "warnings": []
+        }),
+    );
+
+    let version = materialize(fixture.result_fixtures.get("version").unwrap());
+    assert!(validate_command_result_v1("job.list", &result_map(version.clone())).is_err());
+    assert_schema_invalid(
+        "schemas/output-v1.schema.json",
+        &json!({
+            "schema": "podway.output/v1", "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
+            "command": "job.list", "generated_at": "2026-07-13T03:10:04.123Z",
+            "result": version, "warnings": []
+        }),
+    );
+
+    for (name, command, pointer) in [
+        ("detached_mutation", "workspace.init", "/detached"),
+        ("reset_transition", "session.reset", "/reset"),
+        ("session_start_dry_run", "session.start", "/dry_run"),
+        ("stage_preview", "session.return", "/preview"),
+        ("job_cancelled", "job.status", "/job/payload/cancelled"),
+    ] {
+        let contract = fixture.result_fixtures.get(name).unwrap();
+        let mut mutation = materialize(contract);
+        *mutation.pointer_mut(pointer).unwrap() = Value::Bool(false);
+        assert_schema_invalid(&contract.schema_file, &mutation);
+        assert!(
+            validate_command_result_v1(command, &result_map(mutation)).is_err(),
+            "runtime accepted false const at {pointer} for {name}"
+        );
+    }
+
+    let version_contract = fixture.result_fixtures.get("version").unwrap();
+    let mut version_without_source_commit = materialize(version_contract);
+    version_without_source_commit
+        .as_object_mut()
+        .unwrap()
+        .remove("source_commit");
+    assert_schema_invalid(
+        &version_contract.schema_file,
+        &version_without_source_commit,
+    );
+    assert!(
+        validate_command_result_v1("version", &result_map(version_without_source_commit)).is_err()
+    );
 }
 
 #[test]
@@ -356,6 +470,14 @@ fn mcont006_error_fixtures_lock_catalog_schemas_and_runtime_decoders() {
             .iter()
             .map(|(code, entry)| (code.clone(), entry.details_schema.clone().unwrap()))
             .collect()
+    );
+    assert_eq!(
+        fixture
+            .error_bindings
+            .iter()
+            .map(|binding| binding.fixture.as_str())
+            .collect::<BTreeSet<_>>(),
+        fixture.error_fixtures.keys().map(String::as_str).collect()
     );
 
     for binding in &fixture.error_bindings {
@@ -403,6 +525,67 @@ fn mcont006_compact_known_answer_is_closed_and_within_exact_envelope_limit() {
     ] {
         assert!(!contains_key(&compact["result"], forbidden));
     }
+
+    let mut maximum = compact;
+    maximum["result"]["items"] = Value::Array(
+        (0..128)
+            .map(|index| {
+                json!({
+                    "id": format!("item-{index:058}"), "type": "confirm", "required": true,
+                    "satisfied": false, "revision": 0
+                })
+            })
+            .collect(),
+    );
+    maximum["result"]["blockers"] = Value::Array(
+        (0..1_024)
+            .map(|index| {
+                json!({
+                    "id": format!("00000000-0000-4000-8000-{index:012x}"),
+                    "attempt_id": "6f8e7dc4-6502-4857-9d38-1a4afedb50e4", "state": "open"
+                })
+            })
+            .collect(),
+    );
+    assert_schema_valid("schemas/output-v1.schema.json", &maximum);
+    let response = serde_json::from_value::<ResponseEnvelopeV1>(maximum.clone()).unwrap();
+    assert!(serde_json::to_vec(&response).unwrap().len() < MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1);
+
+    maximum["result"]["blockers"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "00000000-0000-4000-8000-000000000400",
+            "attempt_id": "6f8e7dc4-6502-4857-9d38-1a4afedb50e4", "state": "open"
+        }));
+    assert_schema_invalid("schemas/output-v1.schema.json", &maximum);
+    assert!(serde_json::from_value::<ResponseEnvelopeV1>(maximum).is_err());
+}
+
+#[test]
+fn mcont006_published_envelope_and_registry_known_answers_validate() {
+    let request = read_json("docs/examples/json/ipc-complete-request.json");
+    assert_schema_valid("schemas/ipc-request-v1.schema.json", &request);
+    serde_json::from_value::<RequestEnvelopeV1>(request).unwrap();
+
+    for relative in [
+        "docs/examples/json/output-complete.json",
+        "docs/examples/json/error-required-items.json",
+    ] {
+        let response = read_json(relative);
+        let schema = if response["schema"] == "podway.output/v1" {
+            "schemas/output-v1.schema.json"
+        } else {
+            "schemas/error-v1.schema.json"
+        };
+        assert_schema_valid(schema, &response);
+        serde_json::from_value::<ResponseEnvelopeV1>(response).unwrap();
+    }
+
+    assert_schema_valid(
+        "schemas/registry-v1.schema.json",
+        &read_json("docs/examples/json/registry.json"),
+    );
 }
 
 fn sha256(path: &Path) -> String {

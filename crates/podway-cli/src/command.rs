@@ -2410,27 +2410,34 @@ fn map_service_error(error: ServiceErrorV1, command: &str) -> LocalFailure {
             actual_product,
             expected_manifest_digest,
             actual_manifest_digest,
-        } => LocalFailure::catalog(
-            "DAEMON_CONTRACT_MISMATCH",
-            "CLI and daemon contract identities differ.",
-            command,
-        )
-        .with_details(
-            json!({
-                "expected": {
-                    "product": expected_product,
-                    "contract_manifest_digest": expected_manifest_digest,
-                },
-                "actual": {
-                    "product": actual_product,
-                    "contract_manifest_digest": actual_manifest_digest,
-                },
-                "admission": { "admitted": false },
-            })
-            .as_object()
-            .expect("contract mismatch details are an object")
-            .clone(),
-        ),
+        } => match (actual_product, actual_manifest_digest) {
+            (Some(actual_product), Some(actual_manifest_digest)) => LocalFailure::catalog(
+                "DAEMON_CONTRACT_MISMATCH",
+                "CLI and daemon contract identities differ.",
+                command,
+            )
+            .with_details(
+                json!({
+                    "expected": {
+                        "product": expected_product,
+                        "contract_manifest_digest": expected_manifest_digest,
+                    },
+                    "actual": {
+                        "product": actual_product,
+                        "contract_manifest_digest": actual_manifest_digest,
+                    },
+                    "admission": { "admitted": false },
+                })
+                .as_object()
+                .expect("contract mismatch details are an object")
+                .clone(),
+            ),
+            _ => LocalFailure::catalog(
+                "DAEMON_VERSION_INCOMPATIBLE",
+                "daemon identity probe returned malformed output",
+                command,
+            ),
+        },
         ServiceErrorV1::InvalidExecutableV1 { message } => {
             LocalFailure::catalog("DAEMON_VERSION_INCOMPATIBLE", message, command)
         }
@@ -3598,6 +3605,27 @@ fn render_local_failure_with_clock_and_writers(
             .request_id
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let output = json!({ "schema": "podway.error/v1", "request_id": request_id, "command": failure.command, "generated_at": generated_at.as_str(), "code": failure.code, "message": failure.message, "retryable": failure.retryable, "exit_code": failure.exit_code, "details": failure.details });
+        let output = match serde_json::from_value::<ResponseEnvelopeV1>(output) {
+            Ok(output) => output,
+            Err(_) => {
+                failure = LocalFailure::response_invalid(
+                    "the local client could not construct a valid error response",
+                );
+                let fallback = json!({
+                    "schema": "podway.error/v1",
+                    "request_id": Uuid::new_v4().to_string(),
+                    "command": "cli",
+                    "generated_at": generated_at.as_str(),
+                    "code": failure.code,
+                    "message": failure.message,
+                    "retryable": failure.retryable,
+                    "exit_code": failure.exit_code,
+                    "details": {}
+                });
+                serde_json::from_value::<ResponseEnvelopeV1>(fallback)
+                    .expect("the static local fallback error is protocol-valid")
+            }
+        };
         if serde_json::to_writer(&mut *stdout, &output).is_err() || writeln!(stdout).is_err() {
             return LOCAL_CLIENT_EXIT;
         }
@@ -4748,6 +4776,32 @@ mod tests {
         assert_eq!(mismatch.details["expected"]["product"], "podway");
         assert_eq!(mismatch.details["actual"]["product"], "other");
         assert_eq!(mismatch.details["admission"]["admitted"], false);
+
+        let malformed_identity = map_service_error(
+            ServiceErrorV1::ContractMismatchV1 {
+                expected_product: "podway".to_owned(),
+                actual_product: None,
+                expected_manifest_digest: format!("sha256:{}", "a".repeat(64)),
+                actual_manifest_digest: None,
+            },
+            "daemon.install",
+        );
+        assert_eq!(malformed_identity.code, "DAEMON_VERSION_INCOMPATIBLE");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            render_local_failure_with_clock_and_writers(
+                malformed_identity,
+                true,
+                &FixedClock(UNIX_EPOCH + Duration::from_millis(12)),
+                &mut stdout,
+                &mut stderr,
+            ),
+            3
+        );
+        serde_json::from_slice::<podway_protocol::ResponseEnvelopeV1>(&stdout)
+            .expect("local malformed-identity output must remain protocol-valid");
+        assert!(stderr.is_empty());
 
         let stopped = service_status_result(
             "daemon.status",

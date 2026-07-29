@@ -1,12 +1,13 @@
 use podway_core::{
     ArtifactValueV1, AttemptId, AttemptInputV1, AttemptLifecycle, AttemptV1, BlockSessionV1,
     BlockerId, BlockerInputV1, BlockerState, BlockerV1, CommandContextV1, DomainError,
-    ItemCommonV1, ItemId, ItemSlotInputV1, ItemSlotV1, ItemSpecV1, ItemValueV1, MAX_TEXT_LENGTH,
-    ProcedureSnapshotAssemblyInputV1, ProcedureSnapshotId, ProcedureSnapshotV1,
-    ProcedureSourceLabelV1, ProcedureWarningCodeV1, RetrySessionV1, ReturnPolicyV1, Revision,
-    SessionAggregateInputV1, SessionAggregateV1, SessionCommandV1, SessionId, SessionLifecycle,
-    Sha256Digest, SkipPolicyV1, StageId, StageProgressState, StageProgressV1, StageSpecV1,
-    UnblockSessionV1, UnixMillis, apply_transition_v1, item_satisfied, required_items_satisfied,
+    ItemCommonV1, ItemId, ItemSlotInputV1, ItemSlotV1, ItemSpecV1, ItemValueV1,
+    MAX_BLOCKERS_PER_ATTEMPT_V1, MAX_TEXT_LENGTH, ProcedureSnapshotAssemblyInputV1,
+    ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1, ProcedureWarningCodeV1,
+    RetrySessionV1, ReturnPolicyV1, Revision, SessionAggregateInputV1, SessionAggregateV1,
+    SessionCommandV1, SessionId, SessionLifecycle, Sha256Digest, SkipPolicyV1, StageId,
+    StageProgressState, StageProgressV1, StageSpecV1, UnblockSessionV1, UnixMillis,
+    apply_transition_v1, item_satisfied, required_items_satisfied,
 };
 
 const UUID_A: &str = "123e4567-e89b-12d3-a456-426614174000";
@@ -994,6 +995,60 @@ fn snapshot_and_aggregate_construction_reject_duplicates_ordering_and_cursor_mis
     )
     .unwrap();
     assert!(blocker.resolve(UnixMillis::new(9)).is_err());
+}
+
+#[test]
+fn attempt_blocker_limit_bounds_compact_status_projection() {
+    let stage = StageSpecV1::new(
+        stage_id("bounded-blockers"),
+        "Bounded blockers",
+        Vec::new(),
+        Vec::new(),
+        SkipPolicyV1::not_allowed(),
+    )
+    .unwrap();
+    let session_id = SessionId::new(UUID_B).unwrap();
+    let attempt_id = AttemptId::new(UUID_C).unwrap();
+    let blockers = (0..=MAX_BLOCKERS_PER_ATTEMPT_V1)
+        .map(|index| {
+            BlockerV1::open(
+                BlockerId::new(format!("00000000-0000-4000-8000-{index:012x}")).unwrap(),
+                attempt_id.clone(),
+                "blocked",
+                UnixMillis::new(10),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        hydrated_attempt(
+            UUID_C,
+            &session_id,
+            &stage,
+            1,
+            AttemptLifecycle::Active,
+            10,
+            None,
+            None,
+            blockers[..MAX_BLOCKERS_PER_ATTEMPT_V1].to_vec(),
+        )
+        .is_ok()
+    );
+    assert_invalid_state(
+        hydrated_attempt(
+            UUID_C,
+            &session_id,
+            &stage,
+            1,
+            AttemptLifecycle::Active,
+            10,
+            None,
+            None,
+            blockers,
+        ),
+        "attempt blocker count exceeds the v1 limit",
+    );
 }
 
 #[test]

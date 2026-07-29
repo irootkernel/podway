@@ -1,8 +1,8 @@
 use std::fmt;
 
 use podway_core::{
-    AttemptId, BlockerId, ItemId, JobId, Revision, SessionId, Sha256Digest, StageId, WorkspaceId,
-    canonicalize_json_v1,
+    AttemptId, BlockerId, ItemId, JobId, MAX_BLOCKERS_PER_ATTEMPT_V1, Revision, SessionId,
+    Sha256Digest, StageId, WorkspaceId, canonicalize_json_v1,
 };
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -2751,6 +2751,7 @@ impl CompactStatusResultV1 {
         if compact.procedure.id.is_empty()
             || compact.procedure.version.is_empty()
             || compact.items.len() > 128
+            || compact.blockers.len() > MAX_BLOCKERS_PER_ATTEMPT_V1
             || compact.queue.pending_mutations
             || compact.queue.queued_count != 0
             || compact.queue.running_job_id.is_some()

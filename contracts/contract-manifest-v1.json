@@ -48,7 +48,7 @@
     {
       "kind": "schema",
       "path": "schemas/compact-status-result-v1.schema.json",
-      "sha256": "sha256:cb03ce1be3b2f2b3ce691b9f71dfe7d592f445213f1cb616c59562267dc29d57"
+      "sha256": "sha256:f84ac1189cf172b754ddcc54b0584e89c880884486b683cde46fab8441812a83"
     },
     {
       "kind": "schema",
@@ -63,7 +63,7 @@
     {
       "kind": "schema",
       "path": "schemas/daemon-status-result-v1.schema.json",
-      "sha256": "sha256:558eafb8445cafab524cd7aa65764bf29e3332de01b7a67676a2541f1ce0fd5c"
+      "sha256": "sha256:58a057a7d2fcb54ca3b58590fd14a32de2475e4ff3fa57a9a1e5cf68172d054a"
     },
     {
       "kind": "schema",
@@ -118,7 +118,7 @@
     {
       "kind": "schema",
       "path": "schemas/output-v1.schema.json",
-      "sha256": "sha256:b79fa5c7b75bf204b3ac0c1fe854dfaeece4b029a4d9365a76d43da7f16e1bec"
+      "sha256": "sha256:ca75132d772311917523413e697daafb4d8de1b2620826433956bd9486cba891"
     },
     {
       "kind": "schema",
@@ -193,10 +193,10 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/contract/discriminator-catalog-v1.json",
-      "sha256": "sha256:13ee29ca40dc02d143f1ccfc41919fd17c79db80a948a74653e7caf9842b1983"
+      "sha256": "sha256:685bd74c87e5125c0b795167f4855d6e7847efaaf31bd31044e7debfb7ffe15c"
     }
   ],
-  "digest": "sha256:3b9a094d7b032022ccb9c1711a2c7e93d49383233a147cd73bacb3680235c5b4",
+  "digest": "sha256:76182a47e3ab8b41c483bedb4e27a84199a0c7fdaa6aaa9e8e8ba08b0c5314dc",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",

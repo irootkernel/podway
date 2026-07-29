@@ -23,7 +23,7 @@
     {
       "source": "docs/schemas/compact-status-result-v1.schema.json",
       "destination": "schemas/compact-status-result-v1.schema.json",
-      "source_sha256": "cb03ce1be3b2f2b3ce691b9f71dfe7d592f445213f1cb616c59562267dc29d57",
+      "source_sha256": "f84ac1189cf172b754ddcc54b0584e89c880884486b683cde46fab8441812a83",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -47,7 +47,7 @@
     {
       "source": "docs/schemas/daemon-status-result-v1.schema.json",
       "destination": "schemas/daemon-status-result-v1.schema.json",
-      "source_sha256": "558eafb8445cafab524cd7aa65764bf29e3332de01b7a67676a2541f1ce0fd5c",
+      "source_sha256": "58a057a7d2fcb54ca3b58590fd14a32de2475e4ff3fa57a9a1e5cf68172d054a",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -135,7 +135,7 @@
     {
       "source": "docs/schemas/output-v1.schema.json",
       "destination": "schemas/output-v1.schema.json",
-      "source_sha256": "b79fa5c7b75bf204b3ac0c1fe854dfaeece4b029a4d9365a76d43da7f16e1bec",
+      "source_sha256": "ca75132d772311917523413e697daafb4d8de1b2620826433956bd9486cba891",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

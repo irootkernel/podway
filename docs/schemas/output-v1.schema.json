@@ -93,7 +93,15 @@
     },
     {
       "if": {
-        "properties": { "result": { "type": "object", "properties": { "detached": { "const": true } }, "required": ["detached"] } },
+        "properties": {
+          "result": {
+            "type": "object",
+            "anyOf": [
+              { "required": ["detached"] },
+              { "properties": { "schema": { "const": "podway.detached-admission-result/v1" } }, "required": ["schema"] }
+            ]
+          }
+        },
         "required": ["result"]
       },
       "then": {
@@ -102,7 +110,14 @@
             "enum": ["workspace.init", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.return", "session.block", "session.unblock", "session.cancel", "session.reopen", "session.reset", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"]
           },
           "result": { "$ref": "urn:podway:schema:detached-admission-result:v1" }
-        }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "command": { "enum": ["session.start", "session.start_replace"] } }, "required": ["command"] },
+            "then": { "properties": { "result": { "required": ["procedure_digest"] } } },
+            "else": { "properties": { "result": { "not": { "required": ["procedure_digest"] } } } }
+          }
+        ]
       },
       "else": {
         "allOf": [
@@ -116,8 +131,49 @@
           },
           {
             "if": { "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.return", "session.block", "session.unblock", "session.cancel", "session.reopen", "session.reset"] } }, "required": ["command"] },
-            "then": { "properties": { "result": { "$ref": "urn:podway:schema:stage-transition-result:v1" } } }
+            "then": {
+              "properties": { "result": { "$ref": "urn:podway:schema:stage-transition-result:v1" } },
+              "if": { "properties": { "command": { "const": "session.reset" } } },
+              "else": { "properties": { "result": { "not": { "required": ["reset"] } } } }
+            }
           }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "properties": {
+              "schema": {
+                "enum": [
+                  "podway.version-result/v1", "podway.daemon-status-result/v1",
+                  "podway.procedure-validation-result/v1", "podway.detached-admission-result/v1",
+                  "podway.session-start-result/v1", "podway.status-result/v1",
+                  "podway.compact-status-result/v1", "podway.next-result/v1",
+                  "podway.stage-transition-result/v1", "podway.item-mutation-result/v1",
+                  "podway.job-lookup-result/v1", "podway.job-result/v1"
+                ]
+              }
+            },
+            "required": ["schema"]
+          }
+        },
+        "required": ["result"]
+      },
+      "then": {
+        "oneOf": [
+          { "properties": { "command": { "const": "version" }, "result": { "properties": { "schema": { "const": "podway.version-result/v1" } } } } },
+          { "properties": { "command": { "const": "daemon.status" }, "result": { "properties": { "schema": { "const": "podway.daemon-status-result/v1" } } } } },
+          { "properties": { "command": { "const": "procedure.validate" }, "result": { "properties": { "schema": { "const": "podway.procedure-validation-result/v1" } } } } },
+          { "properties": { "command": { "enum": ["workspace.init", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.return", "session.block", "session.unblock", "session.cancel", "session.reopen", "session.reset", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] }, "result": { "properties": { "schema": { "const": "podway.detached-admission-result/v1" } } } } },
+          { "properties": { "command": { "enum": ["session.start", "session.start_replace"] }, "result": { "properties": { "schema": { "const": "podway.session-start-result/v1" } } } } },
+          { "properties": { "command": { "const": "session.status" }, "result": { "properties": { "schema": { "enum": ["podway.status-result/v1", "podway.compact-status-result/v1"] } } } } },
+          { "properties": { "command": { "const": "session.next" }, "result": { "properties": { "schema": { "const": "podway.next-result/v1" } } } } },
+          { "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.return", "session.block", "session.unblock", "session.cancel", "session.reopen", "session.reset"] }, "result": { "properties": { "schema": { "const": "podway.stage-transition-result/v1" } } } } },
+          { "properties": { "command": { "enum": ["item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] }, "result": { "properties": { "schema": { "const": "podway.item-mutation-result/v1" } } } } },
+          { "properties": { "command": { "const": "job.lookup" }, "result": { "properties": { "schema": { "const": "podway.job-lookup-result/v1" } } } } },
+          { "properties": { "command": { "enum": ["job.status", "job.wait"] }, "result": { "properties": { "schema": { "const": "podway.job-result/v1" } } } } }
         ]
       }
     }

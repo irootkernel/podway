@@ -258,6 +258,8 @@ object, and its sequence must match the result queue sequence.
 The compact form omits instructions, prompts, titles, item values, blocker
 reasons, stage history, and previous-attempt narratives. Only open blockers are
 listed; terminal sessions use `current: null` with empty `items` and `blockers`.
+An attempt may contain at most 1,024 blockers, which keeps every reachable
+maximum-size compact projection within the wire-size budget.
 The complete compact JSON envelope, including its trailing newline, is limited
 to 262,144 UTF-8 bytes.
 

@@ -4,14 +4,50 @@
   "title": "Podway Daemon Status Result v1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema", "status", "installed", "loaded", "reachable", "product",
-    "daemon_version", "target", "build_identity", "source_commit",
-    "contract_manifest_schema", "contract_manifest_digest", "protocol_versions",
-    "pid", "process_id", "executable_path", "started_at", "uptime_ms",
-    "socket_path", "configured_socket_path", "effective_socket_path",
-    "registered_worktree_count", "active_scheduler_count", "queued_job_count",
-    "running_job_count"
+  "oneOf": [
+    {
+      "required": [
+        "schema", "product", "daemon_version", "target", "build_identity",
+        "source_commit", "contract_manifest_schema", "contract_manifest_digest",
+        "protocol_versions", "pid", "process_id", "executable_path", "started_at",
+        "uptime_ms", "configured_socket_path", "effective_socket_path"
+      ],
+      "properties": {
+        "product": { "type": "string" },
+        "daemon_version": { "type": "string" },
+        "target": { "type": "string" },
+        "build_identity": { "type": "string" },
+        "contract_manifest_schema": { "type": "string" },
+        "contract_manifest_digest": { "type": "string" },
+        "pid": { "type": "integer" },
+        "process_id": { "type": "string" },
+        "executable_path": { "type": "string" },
+        "started_at": { "type": "string" },
+        "uptime_ms": { "type": "integer" },
+        "configured_socket_path": { "type": "string" },
+        "effective_socket_path": { "type": "string" },
+        "status": false,
+        "installed": false,
+        "loaded": false,
+        "reachable": false,
+        "socket_path": false,
+        "registered_worktree_count": false,
+        "active_scheduler_count": false,
+        "queued_job_count": false,
+        "running_job_count": false
+      }
+    },
+    {
+      "required": [
+        "schema", "status", "installed", "loaded", "reachable", "product",
+        "daemon_version", "target", "build_identity", "source_commit",
+        "contract_manifest_schema", "contract_manifest_digest", "protocol_versions",
+        "pid", "process_id", "executable_path", "started_at", "uptime_ms",
+        "socket_path", "configured_socket_path", "effective_socket_path",
+        "registered_worktree_count", "active_scheduler_count", "queued_job_count",
+        "running_job_count"
+      ]
+    }
   ],
   "properties": {
     "schema": { "const": "podway.daemon-status-result/v1" },
@@ -46,20 +82,23 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "reachable": { "const": true } }, "required": ["reachable"] },
+      "if": { "required": ["reachable"] },
       "then": {
-        "properties": {
-          "installed": { "const": true }, "loaded": { "const": true },
-          "pid": { "type": "integer" }, "process_id": { "type": "string" },
-          "started_at": { "type": "string" }, "uptime_ms": { "type": "integer" },
-          "effective_socket_path": { "type": "string" }
-        }
-      },
-      "else": {
-        "properties": {
-          "pid": { "type": "null" }, "process_id": { "type": "null" },
-          "started_at": { "type": "null" }, "uptime_ms": { "type": "null" },
-          "effective_socket_path": { "type": "null" }
+        "if": { "properties": { "reachable": { "const": true } } },
+        "then": {
+          "properties": {
+            "installed": { "const": true }, "loaded": { "const": true },
+            "pid": { "type": "integer" }, "process_id": { "type": "string" },
+            "started_at": { "type": "string" }, "uptime_ms": { "type": "integer" },
+            "effective_socket_path": { "type": "string" }
+          }
+        },
+        "else": {
+          "properties": {
+            "pid": { "type": "null" }, "process_id": { "type": "null" },
+            "started_at": { "type": "null" }, "uptime_ms": { "type": "null" },
+            "effective_socket_path": { "type": "null" }
+          }
         }
       }
     }
