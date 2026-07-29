@@ -551,9 +551,9 @@ pub trait DispatcherReadServiceV1<Workspace>: Send + Sync {
 
     fn job_lookup(
         &self,
-        workspace: &Workspace,
+        selector: &WorktreeSelectorWireV1,
         idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1>;
 
     fn job_status(
         &self,
@@ -1096,16 +1096,10 @@ where
         idempotency_key: &IdempotencyKeyV1,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
         self.require_query_options(request)?;
-        let workspace = self.runtime.resolve_existing(slice_request.selector())?;
-        let output = self.reads.job_lookup(&workspace, idempotency_key)?;
-        self.output_response(
-            request,
-            Some(self.runtime.workspace_output(&workspace)),
-            None,
-            None,
-            output.result,
-            output.warnings,
-        )
+        let output = self
+            .reads
+            .job_lookup(slice_request.selector(), idempotency_key)?;
+        self.workspace_output_response(request, output)
     }
 
     fn dispatch_job_status(

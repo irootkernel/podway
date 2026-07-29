@@ -29,8 +29,9 @@ use podway_store::{
     PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, RevisionAttemptItemPreconditionsV1,
     SqliteStoreOptionsV1, SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
     StoreFailpointV1, StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreInvariantV1,
-    StoreReadContractV1, StoreRecordKindV1, StoreUnavailableReasonV1, TerminalReceiptV1,
-    TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    StoreReadContractV1, StoreReconciliationReadContractV1, StoreRecordKindV1,
+    StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
+    WorkerIdV1,
 };
 use tempfile::TempDir;
 
@@ -153,6 +154,38 @@ fn admit(store: &SqliteStoreV1, job_id: JobId, key: &str, digest_nibble: char, n
         digest_nibble,
         now,
     );
+}
+
+#[test]
+fn reconciliation_snapshot_is_coherent_and_disposable_inspection_is_non_mutating() {
+    let temporary = TempDir::new().unwrap();
+    let store = store(&temporary);
+    let job_id = job(90);
+    admit(&store, job_id.clone(), "reconciliation-snapshot", '9', 2);
+    let key = IdempotencyKeyV1::new("reconciliation-snapshot").unwrap();
+
+    let active = store
+        .read_reconciliation_snapshot(&identity(), &key)
+        .expect("active reconciliation snapshot must read");
+    assert_eq!(active.lookup().unwrap().job_id(), &job_id);
+    assert_eq!(active.job().unwrap().job().job_id(), &job_id);
+    assert_eq!(
+        active.latest_workspace_sequence(),
+        active.job().unwrap().job().identity_sequence()
+    );
+
+    let database_path = temporary.path().join("state.sqlite3");
+    let before = snapshot_database_artifacts(&database_path).unwrap();
+    let inspected = SqliteStoreV1::inspect_reconciliation_snapshot(
+        &database_path,
+        &identity(),
+        &SqliteStoreOptionsV1::new(8).unwrap(),
+        &key,
+        UnixMillis::new(3),
+    )
+    .expect("disposable reconciliation snapshot must read");
+    assert_eq!(inspected, active);
+    assert_eq!(snapshot_database_artifacts(&database_path).unwrap(), before);
 }
 
 fn reset_seed_request(number: u8) -> AdmitRequestV1 {

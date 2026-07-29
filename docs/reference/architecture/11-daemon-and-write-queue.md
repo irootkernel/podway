@@ -176,6 +176,10 @@ A client waiting synchronously may disconnect. The job continues. Retrying with 
 
 The daemon provides read-only worktree-scoped `job lookup --idempotency-key` for
 queued, running, and retained job rows without submitting or replaying a mutation.
+Lookup resolves the existing binding without activating a scheduler or refreshing
+registry metadata. If no scheduler is active, it reads a disposable SQLite/WAL/SHM
+snapshot; startup recovery, retention pruning, workspace timestamps, and the
+authoritative database files remain unchanged.
 Receipt v3 adds bounded original response correlation and workspace presentation
 metadata to the v2 command discriminator and immutable terminal projections. The
 daemon reconstructs the complete original output/error envelope after restart and

@@ -21,11 +21,12 @@ use std::{
 
 use podway_protocol::{
     CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
-    FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, OperationV1, OutputEnvelopeInputV1,
-    OutputEnvelopeV1, PayloadCodecErrorV1, ProtocolError, RequestEnvelopeV1, RequestIdV1,
-    ResponseEnvelopeV1, Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceRequestV1, build_identity_v1,
-    decode_request_payload_v1, decode_single_frame_v1, encode_response_payload_v1,
-    read_single_frame_v1, validate_frame_payload_length, write_frame_v1,
+    FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, IdempotencyKeyV1, OperationV1,
+    OutputEnvelopeInputV1, OutputEnvelopeV1, PayloadCodecErrorV1, ProtocolError, RequestEnvelopeV1,
+    RequestIdV1, ResponseEnvelopeV1, Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceRequestV1,
+    build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
+    encode_response_payload_v1, read_single_frame_v1, validate_frame_payload_length,
+    write_frame_v1,
 };
 use serde_json::{Map, Value};
 
@@ -726,10 +727,8 @@ where
             EventOperationV1::ServiceDispatch,
             EventOutcomeV1::Failed,
         );
-        let response = self.transport_error_response(
-            Some(RequestContextV1::from_request(&request)),
-            TransportErrorKindV1::Internal,
-        )?;
+        let response =
+            self.invalid_dispatcher_response(RequestContextV1::from_request(&request))?;
         self.write_response(&mut connection, &response)?;
         Err(ServerConnectionErrorV1::InvalidDispatcherResponse)
     }
@@ -833,19 +832,29 @@ where
         context: Option<RequestContextV1>,
         kind: TransportErrorKindV1,
     ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
-        let (request_id, command, request_id_recovered) = match context {
-            Some(context) => (context.request_id, context.command, true),
+        let (request_id, command, operation, request_id_recovered) = match context {
+            Some(context) => (context.request_id, context.command, context.operation, true),
             None => (
                 self.metadata
                     .try_next_request_id()
                     .map_err(ServerConnectionErrorV1::ResponseMetadata)?,
                 fallback_command(),
+                None,
                 false,
             ),
         };
         let mut details = Map::new();
         if !request_id_recovered {
             details.insert("request_id_recovered".to_owned(), Value::Bool(false));
+        }
+        if matches!(
+            operation,
+            Some(OperationV1::Mutate | OperationV1::Bootstrap)
+        ) {
+            details.insert(
+                "admission".to_owned(),
+                serde_json::json!({ "admitted": false }),
+            );
         }
         if kind == TransportErrorKindV1::UnsupportedProtocol {
             details.insert(
@@ -902,6 +911,50 @@ where
         ))
     }
 
+    fn invalid_dispatcher_response(
+        &self,
+        context: RequestContextV1,
+    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+        let Some(idempotency_key) = context.idempotency_key.as_ref().filter(|_| {
+            matches!(
+                context.operation,
+                Some(OperationV1::Mutate | OperationV1::Bootstrap)
+            )
+        }) else {
+            return self.transport_error_response(Some(context), TransportErrorKindV1::Internal);
+        };
+        let details = serde_json::json!({
+            "schema": "podway.mutation-outcome-unknown-details/v1",
+            "outcome": "unknown",
+            "idempotency_key": idempotency_key.as_str(),
+            "reconcile": {
+                "command": "job.lookup",
+                "idempotency_key": idempotency_key.as_str(),
+            },
+        })
+        .as_object()
+        .expect("mutation outcome details are an object")
+        .clone();
+        Ok(ResponseEnvelopeV1::Error(
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: context.request_id,
+                command: context.command,
+                generated_at: self
+                    .metadata
+                    .try_generated_at()
+                    .map_err(ServerConnectionErrorV1::ResponseMetadata)?,
+                code: ErrorCodeV1::new("MUTATION_OUTCOME_UNKNOWN")
+                    .expect("the mutation outcome code is catalog-defined"),
+                message: "Mutation outcome is unknown; reconcile by idempotency key.".to_owned(),
+                retryable: true,
+                exit_code: ExitCodeV1::new(4).expect("daemon exit code is valid"),
+                workspace: None,
+                details,
+            })
+            .expect("the daemon constructs protocol-valid mutation outcome details"),
+        ))
+    }
+
     fn write_response(
         &self,
         connection: &mut UnixStream,
@@ -930,6 +983,8 @@ where
 struct RequestContextV1 {
     request_id: RequestIdV1,
     command: CommandNameV1,
+    operation: Option<OperationV1>,
+    idempotency_key: Option<IdempotencyKeyV1>,
 }
 
 impl RequestContextV1 {
@@ -937,6 +992,8 @@ impl RequestContextV1 {
         Self {
             request_id: request.request_id().clone(),
             command: request.command().clone(),
+            operation: Some(request.operation()),
+            idempotency_key: request.idempotency_key().cloned(),
         }
     }
 }
@@ -993,6 +1050,8 @@ fn recover_request_context(payload: &[u8]) -> Option<RequestContextV1> {
     Some(RequestContextV1 {
         request_id,
         command,
+        operation: None,
+        idempotency_key: None,
     })
 }
 

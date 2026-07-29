@@ -1487,3 +1487,76 @@ fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
         podway_store::JobStateV1::Queued
     );
 }
+
+#[test]
+fn job_lookup_on_inactive_workspace_leaves_store_registry_and_scheduler_unchanged() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let first_manager = Arc::new(manager(fixture.temporary_path()));
+    let first_dispatcher = compose_dispatcher_v1(
+        Arc::clone(&first_manager),
+        WorkerIdV1::new("inactive-recon-initializer").unwrap(),
+    );
+    let workspace_selector = selector(fixture.main());
+    let initialize = request(
+        941,
+        "workspace.init",
+        &workspace_selector,
+        json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "inactive-recon-key",
+        PreconditionsV1::default(),
+    );
+    let initialized = dispatch_command(&first_dispatcher, &initialize, "workspace.init");
+    assert_eq!(initialized.job().unwrap().state(), JobStateV1::Succeeded);
+    drop(first_dispatcher);
+    drop(first_manager);
+
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let before_resolution = runtime_manager
+        .resolve_existing_readonly(git_selector(fixture.main()), None)
+        .expect("inactive workspace must resolve without activation");
+    assert!(before_resolution.active_scheduler().is_none());
+    let database_path = before_resolution.database_path().to_path_buf();
+    let registry_path = runtime_manager.registry().registry_path().to_path_buf();
+    let observed_paths = [
+        database_path.clone(),
+        PathBuf::from(format!("{}-wal", database_path.display())),
+        PathBuf::from(format!("{}-shm", database_path.display())),
+        registry_path,
+    ];
+    let snapshot = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .map(|path| (path.clone(), fs::read(path).ok()))
+            .collect::<Vec<_>>()
+    };
+    let before = snapshot(&observed_paths);
+    let dispatcher = compose_dispatcher_v1(
+        Arc::clone(&runtime_manager),
+        WorkerIdV1::new("inactive-recon-reader").unwrap(),
+    );
+    let lookup = request(
+        942,
+        "job.lookup",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "idempotency_key": "inactive-recon-key",
+        }),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-query-key",
+        PreconditionsV1::default(),
+    );
+    let lookup = dispatch_command(&dispatcher, &lookup, "job.lookup");
+    assert_eq!(lookup.result()["found"], true);
+    assert_eq!(lookup.result()["job"]["state"], "succeeded");
+    assert_eq!(snapshot(&observed_paths), before);
+    let after_resolution = runtime_manager
+        .resolve_existing_readonly(git_selector(fixture.main()), None)
+        .expect("lookup must leave the workspace resolvable");
+    assert!(
+        after_resolution.active_scheduler().is_none(),
+        "read-only reconciliation must not create a scheduler"
+    );
+}

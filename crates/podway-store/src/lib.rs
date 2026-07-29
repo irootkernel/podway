@@ -777,6 +777,49 @@ pub trait StoreIdempotencyReadContractV1: StoreContractV1 {
     ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1>;
 }
 
+/// One transactionally coherent view used to reconcile an idempotency key without admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationSnapshotV1 {
+    latest_workspace_sequence: u64,
+    lookup: Option<IdempotencyLookupV1>,
+    job: Option<JobViewV1>,
+}
+
+impl ReconciliationSnapshotV1 {
+    pub fn new(
+        latest_workspace_sequence: u64,
+        lookup: Option<IdempotencyLookupV1>,
+        job: Option<JobViewV1>,
+    ) -> Self {
+        Self {
+            latest_workspace_sequence,
+            lookup,
+            job,
+        }
+    }
+
+    pub const fn latest_workspace_sequence(&self) -> u64 {
+        self.latest_workspace_sequence
+    }
+
+    pub fn lookup(&self) -> Option<&IdempotencyLookupV1> {
+        self.lookup.as_ref()
+    }
+
+    pub fn job(&self) -> Option<&JobViewV1> {
+        self.job.as_ref()
+    }
+}
+
+/// Additive coherent read used by `job.lookup` reconciliation.
+pub trait StoreReconciliationReadContractV1: StoreContractV1 {
+    fn read_reconciliation_snapshot(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<ReconciliationSnapshotV1, StoreErrorV1>;
+}
+
 /// Minimal read-only binding exposed to idempotency reconciliation callers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IdempotencyLookupV1 {
@@ -964,6 +1007,19 @@ where
         idempotency_key: &IdempotencyKeyV1,
     ) -> Result<Option<IdempotentExecutionV1>, StoreErrorV1> {
         (**self).read_idempotent_execution(identity, idempotency_key)
+    }
+}
+
+impl<Store> StoreReconciliationReadContractV1 for Arc<Store>
+where
+    Store: StoreReconciliationReadContractV1 + ?Sized,
+{
+    fn read_reconciliation_snapshot(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<ReconciliationSnapshotV1, StoreErrorV1> {
+        (**self).read_reconciliation_snapshot(identity, idempotency_key)
     }
 }
 

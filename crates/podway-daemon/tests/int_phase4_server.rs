@@ -33,11 +33,11 @@ use podway_daemon::{
 };
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
-    FrameIoPhaseV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1, OutputEnvelopeInputV1,
-    OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1,
-    RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1, build_identity_v1, decode_response_payload_v1, encode_frame_v1,
-    encode_request_payload_v1, read_single_frame_v1,
+    FrameIoPhaseV1, IdempotencyKeyV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1,
+    OutputEnvelopeInputV1, OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1,
+    SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
+    decode_response_payload_v1, encode_frame_v1, encode_request_payload_v1, read_single_frame_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -247,6 +247,26 @@ fn request_with_client(client: ClientInfoV1) -> RequestEnvelopeV1 {
         payload,
     })
     .expect("fixture request is valid")
+}
+
+fn mutation_request(command: &str, payload: Map<String, Value>) -> RequestEnvelopeV1 {
+    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).expect("fixture request ID is valid"),
+        client: ClientInfoV1::new("podway-test", "1.0.0", 42).expect("fixture client is valid"),
+        operation: OperationV1::Mutate,
+        command: CommandNameV1::new(command).expect("fixture command is valid"),
+        workspace: Some(
+            WorkspaceContextV1::new("/tmp/podway-worktree", None)
+                .expect("fixture workspace context is valid"),
+        ),
+        idempotency_key: Some(
+            IdempotencyKeyV1::new("server-admission-key").expect("fixture key is valid"),
+        ),
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(true, 0).expect("fixture options are valid"),
+        payload,
+    })
+    .expect("mutation fixture is structurally valid")
 }
 
 fn daemon_status_request(wait_timeout_ms: u64) -> RequestEnvelopeV1 {
@@ -735,6 +755,82 @@ fn invalid_dispatcher_response_is_sanitized_and_retains_categorical_evidence() {
     assert_eq!(error.command().as_str(), "session.status");
     assert_eq!(error.message(), "An unexpected internal error occurred.");
     assert!(error.details().is_empty());
+    assert!(matches!(
+        handler.join().expect("handler must not panic"),
+        Err(ServerConnectionErrorV1::InvalidDispatcherResponse)
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn decoded_invalid_mutation_is_rejected_with_negative_admission_evidence() {
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        EXPECTED_UID,
+        ServerTransportTimeoutsV1::default(),
+    );
+    let request = mutation_request(
+        "session.status",
+        json!({ "selector": WorktreeSelectorWireV1::new(
+            b"/tmp/podway-worktree",
+            "/tmp/podway-worktree",
+            None,
+        ).unwrap() })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &request_frame(&request));
+    let error = assert_error_code(read_response(&mut client), "REQUEST_INVALID");
+    assert_eq!(
+        error.details(),
+        &json!({ "admission": { "admitted": false } })
+            .as_object()
+            .unwrap()
+            .clone()
+    );
+    assert!(handler.join().expect("handler must not panic").is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn invalid_dispatcher_mutation_response_reports_unknown_outcome_for_reconciliation() {
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport(
+        TestDispatcher::new(DispatcherOutcome::InvalidResponse, Arc::clone(&calls)),
+        EXPECTED_UID,
+        ServerTransportTimeoutsV1::default(),
+    );
+    let selector =
+        WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None).unwrap();
+    let request = mutation_request(
+        "session.start",
+        json!({ "selector": selector, "preset": "sw-dev", "task_title": "Task" })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &request_frame(&request));
+    let error = assert_error_code(read_response(&mut client), "MUTATION_OUTCOME_UNKNOWN");
+    assert_eq!(error.details()["outcome"], "unknown");
+    assert_eq!(error.details()["idempotency_key"], "server-admission-key");
+    assert_eq!(error.details()["reconcile"]["command"], "job.lookup");
+    assert!(error.details().get("admission").is_none());
     assert!(matches!(
         handler.join().expect("handler must not panic"),
         Err(ServerConnectionErrorV1::InvalidDispatcherResponse)

@@ -170,6 +170,11 @@ error, which makes no admission claim and directs the caller to read-only
 `job.lookup` reconciliation with the original idempotency key. Neither case
 cancels the job.
 
+A decoded mutation rejected before dispatch returns `admission.admitted=false`.
+If dispatch ran but its response cannot be validated, the daemon cannot safely
+claim non-admission and instead returns `MUTATION_OUTCOME_UNKNOWN` with the
+original idempotency key and closed `job.lookup` reconciliation instruction.
+
 ## Compatibility
 
 The current daemon compares the request protocol identifier before command

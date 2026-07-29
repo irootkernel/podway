@@ -235,11 +235,17 @@ impl DispatcherReadServiceV1<Workspace> for Reads {
 
     fn job_lookup(
         &self,
-        _workspace: &Workspace,
+        selector: &WorktreeSelectorWireV1,
         _idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
         self.0.lock().unwrap().reads.push(("job.lookup", None));
-        Ok(DispatcherReadOutputV1::new(
+        Ok(DispatcherWorkspaceOutputV1::new(
+            WorkspaceOutputV1::new(
+                WorkspaceId::new(WORKSPACE_ID).unwrap(),
+                selector.display(),
+                9,
+            )
+            .unwrap(),
             Map::from_iter([("found".to_owned(), Value::Bool(false))]),
             Vec::new(),
         ))

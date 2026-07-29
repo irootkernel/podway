@@ -24,11 +24,11 @@ use podway_protocol::{
 };
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
-    IdempotencyKeyV1 as StoreIdempotencyKeyV1, JobListQueryV1, JobReceiptOrTerminalV1,
-    JobStateV1 as StoreJobStateV1, JobViewV1, PersistedTerminalJobStateV1,
+    EpochMillisV1, IdempotencyKeyV1 as StoreIdempotencyKeyV1, JobListQueryV1,
+    JobReceiptOrTerminalV1, JobStateV1 as StoreJobStateV1, JobViewV1, PersistedTerminalJobStateV1,
     PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1, SqliteStoreOptionsV1,
-    StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1, StoreReadContractV1, WorkerIdV1,
-    WorkspaceBindingV1,
+    SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1,
+    StoreReadContractV1, StoreReconciliationReadContractV1, WorkerIdV1, WorkspaceBindingV1,
     codec::{
         PersistedDomainCommandV1, PersistedDomainErrorV1, PersistedDomainResultV1,
         PersistedSessionLifecycleV1, PersistedTerminalResultV1,
@@ -557,12 +557,16 @@ impl ReadNotificationV1 for SchedulerReadNotificationV1 {
 /// Concrete authoritative status/next adapter bound to one production scheduler context.
 #[derive(Clone)]
 pub struct ProductionReadServiceV1 {
+    manager: Arc<WorkspaceRuntimeManagerV1>,
     clock: Arc<NativeProductionClockV1>,
 }
 
 impl ProductionReadServiceV1 {
-    pub fn new(clock: Arc<NativeProductionClockV1>) -> Self {
-        Self { clock }
+    pub fn new(
+        manager: Arc<WorkspaceRuntimeManagerV1>,
+        clock: Arc<NativeProductionClockV1>,
+    ) -> Self {
+        Self { manager, clock }
     }
 
     fn wait(&self, wait: RequestReadWaitV1) -> Result<ReadWaitV1, DispatchFailureV1> {
@@ -664,43 +668,57 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
 
     fn job_lookup(
         &self,
-        workspace: &ProductionWorkspaceV1,
+        selector: &WorktreeSelectorWireV1,
         idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
-        let context = workspace.scheduler.context_snapshot();
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
+        let expected_workspace_id = selector.expected_uuid();
+        let selector = selector_from_wire(selector)?;
+        let resolution = self
+            .manager
+            .resolve_existing_readonly(selector, expected_workspace_id)
+            .map_err(map_runtime_error)?;
         let key = StoreIdempotencyKeyV1::new(idempotency_key.as_str().to_owned())
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
-        let Some(mut binding) = context
-            .store()
-            .read_idempotency_lookup(context.binding().identity(), &key)
+        let snapshot = if let Some(scheduler) = resolution.active_scheduler() {
+            let context = scheduler.context_snapshot();
+            context
+                .store()
+                .read_reconciliation_snapshot(resolution.binding().identity(), &key)
+                .map_err(map_store_error)?
+        } else {
+            SqliteStoreV1::inspect_reconciliation_snapshot(
+                resolution.database_path(),
+                resolution.binding().identity(),
+                resolution.store_options(),
+                &key,
+                EpochMillisV1::new(self.clock.now().get()),
+            )
             .map_err(map_store_error)?
-        else {
-            return Ok(DispatcherReadOutputV1::new(
+        };
+        let workspace = WorkspaceOutputV1::new(
+            resolution.binding().identity().workspace_uuid().clone(),
+            resolution
+                .worktree()
+                .roots()
+                .worktree_root()
+                .display()
+                .as_str(),
+            snapshot.latest_workspace_sequence(),
+        )
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+        let Some(binding) = snapshot.lookup() else {
+            return Ok(DispatcherWorkspaceOutputV1::new(
+                workspace,
                 Map::from_iter([("found".to_owned(), Value::Bool(false))]),
                 Vec::new(),
             ));
         };
-        let view = context
-            .store()
-            .read_job(context.binding().identity(), binding.job_id())
-            .map_err(map_store_error)?;
-        let mut job = if let Some(view) = view {
+        let mut job = if let Some(view) = snapshot.job() {
             if view.job().request_digest() != binding.request_digest() {
                 return Err(terminal_replay_integrity_failure());
             }
-            job_result_value(&view)?
+            job_result_value(view)?
         } else {
-            if binding.terminal_receipt().is_none() {
-                binding = context
-                    .store()
-                    .read_idempotency_lookup(context.binding().identity(), &key)
-                    .map_err(map_store_error)?
-                    .filter(|current| {
-                        current.job_id() == binding.job_id()
-                            && current.request_digest() == binding.request_digest()
-                    })
-                    .ok_or_else(terminal_replay_integrity_failure)?;
-            }
             receipt_only_job_result_value(
                 binding
                     .terminal_receipt()
@@ -715,7 +733,8 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             "request_digest".to_owned(),
             Value::String(binding.request_digest().as_str().to_owned()),
         );
-        Ok(DispatcherReadOutputV1::new(
+        Ok(DispatcherWorkspaceOutputV1::new(
+            workspace,
             Map::from_iter([
                 ("found".to_owned(), Value::Bool(true)),
                 ("job".to_owned(), Value::Object(job.clone())),
@@ -1272,8 +1291,8 @@ pub fn compose_dispatcher_with_worker_and_observability_v1(
         observability,
     );
     let dispatcher = RequestDispatcherV1Adapter::new(
-        ProductionWorkspaceRuntimeV1::new(manager, Arc::clone(&clock)),
-        ProductionReadServiceV1::new(Arc::clone(&clock)),
+        ProductionWorkspaceRuntimeV1::new(Arc::clone(&manager), Arc::clone(&clock)),
+        ProductionReadServiceV1::new(manager, Arc::clone(&clock)),
         ProductionControlServiceV1::new(Arc::clone(&clock)),
         ProductionPreviewServiceV1::new(Arc::clone(&clock)),
         worker.clone(),

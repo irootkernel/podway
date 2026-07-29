@@ -243,10 +243,16 @@ impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
 
     fn job_lookup(
         &self,
-        _workspace: &FakeWorkspace,
+        selector: &WorktreeSelectorWireV1,
         _idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
-        Ok(DispatcherReadOutputV1::new(
+    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
+        Ok(DispatcherWorkspaceOutputV1::new(
+            WorkspaceOutputV1::new(
+                WorkspaceId::new(WORKSPACE_ID).unwrap(),
+                selector.display(),
+                9,
+            )
+            .unwrap(),
             map(json!({"found": false})),
             Vec::new(),
         ))

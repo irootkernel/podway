@@ -36,12 +36,12 @@ use crate::{
     ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, EpochMillisV1,
     IdempotentExecutionV1, IntegrityModeV1, JobIdV1, JobListQueryV1, JobReceiptOrTerminalV1,
     JobReceiptV1, JobStateV1, JobViewV1, PersistedSessionMutationV1, PruneReportV1,
-    RecoveryReportV1, RevisionV1, RusqliteErrorContextV1, SqliteStoreOptionsV1, StateTransitionV1,
-    StoreContractV1, StoreErrorV1, StoreFailpointV1, StoreIdempotencyReadContractV1,
-    StoreIntegrityCheckV1, StoreInvariantV1, StoreReadContractV1, StoreRecordKindV1,
-    StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
-    WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1, command_is_session_scoped_v1, command_name_v1,
-    map_rusqlite_error_v1,
+    ReconciliationSnapshotV1, RecoveryReportV1, RevisionV1, RusqliteErrorContextV1,
+    SqliteStoreOptionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1, StoreFailpointV1,
+    StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreReadContractV1,
+    StoreReconciliationReadContractV1, StoreRecordKindV1, StoreUnavailableReasonV1,
+    TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1, WorkspaceBindingV1,
+    WorkspaceViewV1, command_is_session_scoped_v1, command_name_v1, map_rusqlite_error_v1,
 };
 
 /// One process-local, synchronous SQLite v1 workspace store.
@@ -142,6 +142,27 @@ impl SqliteStoreV1 {
                 Ok(WorkspaceBindingV1::new(identity, last_validated_root))
             })?;
         Ok(Some(binding))
+    }
+
+    /// Reads reconciliation state from a disposable snapshot without touching authoritative files.
+    pub fn inspect_reconciliation_snapshot(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+        idempotency_key: &crate::IdempotencyKeyV1,
+        checked_at: EpochMillisV1,
+    ) -> Result<ReconciliationSnapshotV1, StoreErrorV1> {
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
+            verify_inspection_integrity_connection_v1(
+                connection,
+                expected_identity,
+                options,
+                IntegrityModeV1::Fast,
+                checked_at,
+            )?;
+            read_reconciliation_snapshot_connection(connection, idempotency_key)
+        })
     }
 
     /// Checkpoints and closes the sole SQLite connection before daemon-owned maintenance.
@@ -1092,6 +1113,18 @@ impl StoreIdempotencyReadContractV1 for SqliteStoreV1 {
             retained_start_identity,
             AdmitOutcomeV1::Existing(outcome),
         )))
+    }
+}
+
+impl StoreReconciliationReadContractV1 for SqliteStoreV1 {
+    fn read_reconciliation_snapshot(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        idempotency_key: &crate::IdempotencyKeyV1,
+    ) -> Result<ReconciliationSnapshotV1, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        read_reconciliation_snapshot_connection(&mut connection, idempotency_key)
     }
 }
 impl StoreReadContractV1 for SqliteStoreV1 {
@@ -2591,6 +2624,61 @@ fn validate_owned_temporary_file(
         }
     }
     Ok(())
+}
+
+fn read_reconciliation_snapshot_connection(
+    connection: &mut Connection,
+    idempotency_key: &crate::IdempotencyKeyV1,
+) -> Result<ReconciliationSnapshotV1, StoreErrorV1> {
+    let transaction = connection.transaction().map_err(storage)?;
+    let latest_workspace_sequence = workspace_sequence_upper_bound(&transaction)?;
+    let existing: Option<(String, String, Option<String>)> = transaction
+        .query_row(
+            "SELECT request_digest, job_id, terminal_response_json FROM idempotency_records \
+             WHERE idempotency_key = ?1",
+            [idempotency_key.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|error| storage_record(error, StoreRecordKindV1::IdempotencyRecord))?;
+    let Some((stored_digest, stored_job_id, terminal)) = existing else {
+        transaction.commit().map_err(storage)?;
+        return Ok(ReconciliationSnapshotV1::new(
+            latest_workspace_sequence,
+            None,
+            None,
+        ));
+    };
+    let stored_digest = digest(stored_digest)?;
+    let outcome = replay_for_idempotency(&transaction, &stored_job_id, &stored_digest, terminal)?;
+    let terminal_receipt = match outcome {
+        JobReceiptOrTerminalV1::TerminalReceipt(receipt) => Some(receipt),
+        JobReceiptOrTerminalV1::JobReceipt(_) => None,
+    };
+    let lookup = crate::IdempotencyLookupV1::new_with_terminal_receipt(
+        job_id(stored_job_id.clone())?,
+        stored_digest,
+        terminal_receipt,
+    );
+    let row = transaction
+        .query_row(
+            "SELECT job_id, workspace_sequence, request_digest, command_name, canonical_request_json, \
+             state, session_id, submitted_at_ms, claimed_at_ms, finished_at_ms, terminal_response_json \
+             FROM jobs WHERE job_id = ?1",
+            [stored_job_id],
+            JobViewRowV1::from_row,
+        )
+        .optional()
+        .map_err(|error| storage_record(error, StoreRecordKindV1::Job))?;
+    let job = row
+        .map(|row| decode_job_view_v1(&transaction, row))
+        .transpose()?;
+    transaction.commit().map_err(storage)?;
+    Ok(ReconciliationSnapshotV1::new(
+        latest_workspace_sequence,
+        Some(lookup),
+        job,
+    ))
 }
 
 fn workspace_sequence_upper_bound(transaction: &Transaction<'_>) -> Result<u64, StoreErrorV1> {
