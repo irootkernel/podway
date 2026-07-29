@@ -6,10 +6,10 @@ use podway_daemon::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
         DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
         DispatcherJobOutputV1, DispatcherNextRequestV1, DispatcherPreviewServiceV1,
-        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherStatusRequestV1,
-        DispatcherTerminalOutputV1, DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1,
-        MutationAdmissionWorkerV1, MutationDispatchOutcomeV1, MutationWaitV1,
-        RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
+        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherReconciliationOutputV1,
+        DispatcherStatusRequestV1, DispatcherTerminalOutputV1, DispatcherTerminalResultV1,
+        DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, MutationDispatchOutcomeV1,
+        MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
     },
     server::RequestDispatcherV1,
 };
@@ -237,15 +237,17 @@ impl DispatcherReadServiceV1<Workspace> for Reads {
         &self,
         selector: &WorktreeSelectorWireV1,
         _idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
+    ) -> Result<DispatcherReconciliationOutputV1, DispatchFailureV1> {
         self.0.lock().unwrap().reads.push(("job.lookup", None));
-        Ok(DispatcherWorkspaceOutputV1::new(
-            WorkspaceOutputV1::new(
-                WorkspaceId::new(WORKSPACE_ID).unwrap(),
-                selector.display(),
-                9,
-            )
-            .unwrap(),
+        Ok(DispatcherReconciliationOutputV1::new(
+            Some(
+                WorkspaceOutputV1::new(
+                    WorkspaceId::new(WORKSPACE_ID).unwrap(),
+                    selector.display(),
+                    9,
+                )
+                .unwrap(),
+            ),
             Map::from_iter([("found".to_owned(), Value::Bool(false))]),
             Vec::new(),
         ))

@@ -443,6 +443,31 @@ impl DispatcherWorkspaceOutputV1 {
     }
 }
 
+/// A read-only idempotency reconciliation result.
+///
+/// Reconciliation must represent a mutation that was never admitted before the workspace had a
+/// durable UUID. In that case `workspace` is absent and `result.found` is false.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispatcherReconciliationOutputV1 {
+    workspace: Option<WorkspaceOutputV1>,
+    result: Map<String, Value>,
+    warnings: Vec<Map<String, Value>>,
+}
+
+impl DispatcherReconciliationOutputV1 {
+    pub fn new(
+        workspace: Option<WorkspaceOutputV1>,
+        result: Map<String, Value>,
+        warnings: Vec<Map<String, Value>>,
+    ) -> Self {
+        Self {
+            workspace,
+            result,
+            warnings,
+        }
+    }
+}
+
 /// An opaque workspace-routing authority.
 ///
 /// Implementations must resolve the selector through Store UUID plus Git common-directory and
@@ -586,7 +611,7 @@ pub trait DispatcherReadServiceV1<Workspace>: Send + Sync {
         &self,
         selector: &WorktreeSelectorWireV1,
         idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1>;
+    ) -> Result<DispatcherReconciliationOutputV1, DispatchFailureV1>;
 
     fn job_status(
         &self,
@@ -1132,7 +1157,14 @@ where
         let output = self
             .reads
             .job_lookup(slice_request.selector(), idempotency_key)?;
-        self.workspace_output_response(request, output)
+        self.output_response(
+            request,
+            output.workspace,
+            None,
+            None,
+            output.result,
+            output.warnings,
+        )
     }
 
     fn dispatch_job_status(

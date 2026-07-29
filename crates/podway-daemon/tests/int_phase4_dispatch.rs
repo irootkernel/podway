@@ -6,10 +6,10 @@ use podway_daemon::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
         DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
         DispatcherJobOutputV1, DispatcherNextRequestV1, DispatcherPreviewServiceV1,
-        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherStatusRequestV1,
-        DispatcherTerminalOutputV1, DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1,
-        MutationAdmissionWorkerV1, MutationDispatchOutcomeV1, MutationWaitV1,
-        RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
+        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherReconciliationOutputV1,
+        DispatcherStatusRequestV1, DispatcherTerminalOutputV1, DispatcherTerminalResultV1,
+        DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, MutationDispatchOutcomeV1,
+        MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
     },
     server::RequestDispatcherV1,
 };
@@ -245,14 +245,16 @@ impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
         &self,
         selector: &WorktreeSelectorWireV1,
         _idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
-        Ok(DispatcherWorkspaceOutputV1::new(
-            WorkspaceOutputV1::new(
-                WorkspaceId::new(WORKSPACE_ID).unwrap(),
-                selector.display(),
-                9,
-            )
-            .unwrap(),
+    ) -> Result<DispatcherReconciliationOutputV1, DispatchFailureV1> {
+        Ok(DispatcherReconciliationOutputV1::new(
+            Some(
+                WorkspaceOutputV1::new(
+                    WorkspaceId::new(WORKSPACE_ID).unwrap(),
+                    selector.display(),
+                    9,
+                )
+                .unwrap(),
+            ),
             map(json!({"found": false})),
             Vec::new(),
         ))

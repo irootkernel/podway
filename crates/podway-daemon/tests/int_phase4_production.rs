@@ -1175,6 +1175,46 @@ fn job_cancel_public_route_projects_committed_cancellation() {
 }
 
 #[test]
+fn aut_t_recon_missing_lookup_before_workspace_init_is_read_only_and_returns_not_found() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let dispatcher = compose_dispatcher_v1(
+        Arc::clone(&runtime_manager),
+        WorkerIdV1::new("recon-uninitialized-lookup").unwrap(),
+    );
+    let workspace_selector = selector(fixture.main());
+    let runtime_directory = fixture.main().join(".podway/runtime");
+    let entries_before = fs::read_dir(&runtime_directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+
+    let lookup = request(
+        918,
+        "job.lookup",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "idempotency_key": "workspace-init-response-never-admitted",
+        }),
+        RequestOptionsV1::new(false, 0).unwrap(),
+        "unused-query-key",
+        PreconditionsV1::default(),
+    );
+    let lookup = dispatch_command(&dispatcher, &lookup, "job.lookup");
+
+    assert_eq!(lookup.result()["found"], false);
+    assert!(lookup.workspace().is_none());
+    assert!(!runtime_directory.join("state.sqlite3").exists());
+    let entries_after = fs::read_dir(&runtime_directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(entries_after, entries_before);
+}
+
+#[test]
 fn aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue() {
     let fixture = git_worktrees();
     make_runtime_private(fixture.main());

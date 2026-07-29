@@ -43,11 +43,11 @@ use crate::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
         DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
         DispatcherJobOutputV1, DispatcherNextRequestV1, DispatcherPreviewServiceV1,
-        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherStatusRequestV1,
-        DispatcherTerminalOutputV1, DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1,
-        MutationAdmissionWorkerV1, MutationDispatchOutcomeV1, MutationResponseContextV1,
-        MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1, TerminalResponseContextV1,
-        WorkspaceRuntimeV1, terminal_response_envelope_v1,
+        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherReconciliationOutputV1,
+        DispatcherStatusRequestV1, DispatcherTerminalOutputV1, DispatcherTerminalResultV1,
+        DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, MutationDispatchOutcomeV1,
+        MutationResponseContextV1, MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1,
+        TerminalResponseContextV1, WorkspaceRuntimeV1, terminal_response_envelope_v1,
     },
     execution::{
         DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1, ProcedureProviderV1,
@@ -64,8 +64,8 @@ use crate::{
         ReadWaitV1,
     },
     runtime_workspace::{
-        ResetSourceAuthorityV1, WorkspaceRuntimeErrorV1, WorkspaceRuntimeManagerV1,
-        WorkspaceRuntimeObservationV1, WorkspaceSchedulerContextV1,
+        ReadonlyReconciliationResolutionV1, ResetSourceAuthorityV1, WorkspaceRuntimeErrorV1,
+        WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1, WorkspaceSchedulerContextV1,
         WorkspaceSchedulerRevalidationV1, WorkspaceStoreReadFacadeV1, WorkspaceStoreSlotV1,
     },
     scheduler::WorkspaceSchedulerV1,
@@ -671,15 +671,71 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         &self,
         selector: &WorktreeSelectorWireV1,
         idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
+    ) -> Result<DispatcherReconciliationOutputV1, DispatchFailureV1> {
         let expected_workspace_id = selector.expected_uuid();
         let selector = selector_from_wire(selector)?;
         let resolution = self
             .manager
-            .resolve_existing_readonly(selector, expected_workspace_id)
+            .resolve_reconciliation_readonly(selector, expected_workspace_id)
             .map_err(map_runtime_error)?;
         let key = StoreIdempotencyKeyV1::new(idempotency_key.as_str().to_owned())
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+        let resolution = match resolution {
+            ReadonlyReconciliationResolutionV1::Missing => {
+                return Ok(DispatcherReconciliationOutputV1::new(
+                    None,
+                    Map::from_iter([("found".to_owned(), Value::Bool(false))]),
+                    Vec::new(),
+                ));
+            }
+            ReadonlyReconciliationResolutionV1::ResetMarker { marker, worktree } => {
+                if marker.idempotency_key() != &key {
+                    return Ok(DispatcherReconciliationOutputV1::new(
+                        None,
+                        Map::from_iter([("found".to_owned(), Value::Bool(false))]),
+                        Vec::new(),
+                    ));
+                }
+                let workspace = WorkspaceOutputV1::new(
+                    marker.target_workspace_uuid().clone(),
+                    worktree.roots().worktree_root().display().as_str(),
+                    1,
+                )
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+                let job = JobOutputV1::new(
+                    marker.operation_id().clone(),
+                    1,
+                    JobStateV1::Running,
+                    rfc3339_millis(marker.submitted_at_ms())?,
+                    None,
+                    None,
+                )
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+                let mut job = serde_json::to_value(job)
+                    .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+                let job = job
+                    .as_object_mut()
+                    .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+                job.insert(
+                    "command".to_owned(),
+                    Value::String("workspace.reset_all".to_owned()),
+                );
+                job.insert(
+                    "request_digest".to_owned(),
+                    Value::String(marker.request_digest().as_str().to_owned()),
+                );
+                job.insert("terminal_response".to_owned(), Value::Null);
+                return Ok(DispatcherReconciliationOutputV1::new(
+                    Some(workspace),
+                    Map::from_iter([
+                        ("found".to_owned(), Value::Bool(true)),
+                        ("job".to_owned(), Value::Object(job.clone())),
+                    ]),
+                    Vec::new(),
+                ));
+            }
+            ReadonlyReconciliationResolutionV1::Store(resolution) => resolution,
+        };
         let snapshot = if let Some(scheduler) = resolution.active_scheduler() {
             let context = scheduler.context_snapshot();
             context
@@ -708,8 +764,8 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         )
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
         let Some(binding) = snapshot.lookup() else {
-            return Ok(DispatcherWorkspaceOutputV1::new(
-                workspace,
+            return Ok(DispatcherReconciliationOutputV1::new(
+                Some(workspace),
                 Map::from_iter([("found".to_owned(), Value::Bool(false))]),
                 Vec::new(),
             ));
@@ -734,8 +790,8 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             "request_digest".to_owned(),
             Value::String(binding.request_digest().as_str().to_owned()),
         );
-        Ok(DispatcherWorkspaceOutputV1::new(
-            workspace,
+        Ok(DispatcherReconciliationOutputV1::new(
+            Some(workspace),
             Map::from_iter([
                 ("found".to_owned(), Value::Bool(true)),
                 ("job".to_owned(), Value::Object(job.clone())),
@@ -1086,12 +1142,14 @@ impl ProductionMutationWorkerV1 {
     fn resume_reset_marker(
         &self,
         transaction: &crate::runtime_workspace::WorkspaceResetMaintenanceV1<'_>,
+        marker: &crate::workspace::ResetMarkerV1,
         idempotency_key: &StoreIdempotencyKeyV1,
         request_digest: &CanonicalRequestDigestV1,
         active: Option<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>>,
         request: &SliceRequestV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1> {
-        self.retire_reset_scheduler(active)?;
+        self.retire_reset_scheduler(active)
+            .map_err(|failure| failure.with_admission_identity(marker.operation_id().clone(), 1))?;
         let observation =
             WorkspaceRuntimeObservationV1::new(self.clock.now(), self.clock.generated_at());
         let completion = transaction
@@ -1210,13 +1268,14 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
         let existing_marker = transaction.discover_marker().map_err(map_runtime_error)?;
         let mut active = transaction.active_old_scheduler();
-        if existing_marker.is_some() {
+        if let Some(marker) = existing_marker {
             let digest = reset_all_digest(request, &source_identity)?;
             transaction
                 .validate_resume_request(&store_idempotency_key, &digest)
                 .map_err(map_runtime_error)?;
             return self.resume_reset_marker(
                 &transaction,
+                &marker,
                 &store_idempotency_key,
                 &digest,
                 active,
@@ -2454,6 +2513,17 @@ fn map_read_error(error: ReadServiceErrorV1) -> DispatchFailureV1 {
 
 fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
     match error {
+        WorkspaceRuntimeErrorV1::ResetAdmissionOutcomeUnknown {
+            idempotency_key, ..
+        } => DispatchFailureV1::new(DispatchFailureKindV1::MutationOutcomeUnknown).with_details(
+            DispatchErrorDetailsV1::default().with_unknown_outcome(
+                IdempotencyKeyV1::new(idempotency_key.as_str())
+                    .expect("Store idempotency keys satisfy the protocol bound"),
+            ),
+        ),
+        WorkspaceRuntimeErrorV1::ResetAdmitted { marker, source } => {
+            map_runtime_error(*source).with_admission_identity(marker.operation_id().clone(), 1)
+        }
         WorkspaceRuntimeErrorV1::Resolution(error) => map_resolution_error(error),
         WorkspaceRuntimeErrorV1::Layout(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceInitConflict)
@@ -2829,6 +2899,46 @@ mod tests {
             .as_object()
             .unwrap()
             .clone()
+        );
+    }
+
+    #[test]
+    fn reset_marker_failures_preserve_unknown_and_admitted_public_evidence() {
+        let key = StoreIdempotencyKeyV1::new("reset-admission-boundary").unwrap();
+        let marker = crate::workspace::ResetMarkerV1::new(
+            JobId::new("00000000-0000-4000-8000-000000000071").unwrap(),
+            key.clone(),
+            CanonicalRequestDigestV1::new(format!("sha256:{}", "7".repeat(64))).unwrap(),
+            WorkspaceId::new("00000000-0000-4000-8000-000000000072").unwrap(),
+            WorkspaceId::new("00000000-0000-4000-8000-000000000073").unwrap(),
+            UnixMillis::new(1_700_000_000_123),
+        );
+        let admitted = map_runtime_error(WorkspaceRuntimeErrorV1::ResetAdmitted {
+            marker: Box::new(marker.clone()),
+            source: Box::new(WorkspaceRuntimeErrorV1::RuntimeDirectory(
+                crate::workspace::ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform,
+            )),
+        });
+        assert_eq!(
+            admitted.into_details().into_json(true)["admission"],
+            json!({
+                "admitted": true,
+                "job_id": marker.operation_id().as_str(),
+                "workspace_sequence": 1,
+            })
+        );
+
+        let unknown = map_runtime_error(WorkspaceRuntimeErrorV1::ResetAdmissionOutcomeUnknown {
+            idempotency_key: key,
+            source: crate::workspace::ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform,
+        });
+        assert_eq!(
+            unknown.kind(),
+            DispatchFailureKindV1::MutationOutcomeUnknown
+        );
+        assert_eq!(
+            unknown.into_details().into_json(true)["idempotency_key"],
+            "reset-admission-boundary"
         );
     }
 

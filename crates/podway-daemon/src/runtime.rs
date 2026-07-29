@@ -672,6 +672,8 @@ fn unavailable_reason_from_runtime_error(
             WorkspaceRecoveryUnavailableReasonV1::WorkspaceStateUnreadable
         }
         WorkspaceRuntimeErrorV1::MaintenanceInProgress
+        | WorkspaceRuntimeErrorV1::ResetAdmissionOutcomeUnknown { .. }
+        | WorkspaceRuntimeErrorV1::ResetAdmitted { .. }
         | WorkspaceRuntimeErrorV1::ResetSchedulerRetirement
         | WorkspaceRuntimeErrorV1::ResetMarkerConflict
         | WorkspaceRuntimeErrorV1::ResetIdempotencyConflict { .. }

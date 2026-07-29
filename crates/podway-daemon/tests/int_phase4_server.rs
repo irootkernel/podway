@@ -802,6 +802,57 @@ fn decoded_invalid_mutation_is_rejected_with_negative_admission_evidence() {
 }
 
 #[test]
+fn malformed_mutation_envelope_recovers_operation_and_reports_not_admitted() {
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        EXPECTED_UID,
+        ServerTransportTimeoutsV1::default(),
+    );
+    let mut malformed = serde_json::to_value(mutation_request(
+        "session.start",
+        json!({
+            "selector": WorktreeSelectorWireV1::new(
+                b"/tmp/podway-worktree",
+                "/tmp/podway-worktree",
+                None,
+            ).unwrap(),
+            "preset": "sw-dev",
+            "task_title": "Task",
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ))
+    .expect("mutation request must serialize");
+    malformed["client"] = Value::String("not-a-client-object".to_owned());
+    let frame = encode_frame_v1(
+        &serde_json::to_vec(&malformed).expect("malformed request fixture must serialize"),
+    )
+    .expect("malformed request frame must encode");
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &frame);
+    let error = assert_error_code(read_response(&mut client), "REQUEST_INVALID");
+    assert_eq!(error.request_id().as_str(), REQUEST_ID);
+    assert_eq!(error.command().as_str(), "session.start");
+    assert_eq!(
+        error.details(),
+        &json!({ "admission": { "admitted": false } })
+            .as_object()
+            .unwrap()
+            .clone()
+    );
+    assert!(handler.join().expect("handler must not panic").is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn invalid_dispatcher_mutation_response_reports_unknown_outcome_for_reconciliation() {
     let (mut client, server) =
         UnixStream::pair().expect("Unix stream fixture pair must be created");
@@ -888,7 +939,16 @@ fn disconnected_client_before_a_complete_frame_never_reaches_dispatch() {
         thread::spawn(move || transport.handle_connection(server))
     };
 
-    let frame = request_frame(&request());
+    let selector =
+        WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None).unwrap();
+    let mutation = mutation_request(
+        "session.start",
+        json!({ "selector": selector, "preset": "sw-dev", "task_title": "Task" })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let frame = request_frame(&mutation);
     client
         .write_all(&frame[..6])
         .expect("partial request frame must reach the accepted connection");
@@ -927,7 +987,16 @@ fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
         thread::spawn(move || transport.handle_connection(server))
     };
 
-    send_and_half_close(&mut client, &request_frame(&request()));
+    let selector =
+        WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None).unwrap();
+    let mutation = mutation_request(
+        "session.start",
+        json!({ "selector": selector, "preset": "sw-dev", "task_title": "Task" })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    send_and_half_close(&mut client, &request_frame(&mutation));
     wait_for_dispatcher_entry(&gate);
     drop(client);
     release_dispatcher(&gate);

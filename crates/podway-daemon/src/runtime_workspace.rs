@@ -43,10 +43,11 @@ use crate::{
     registry::{RegistryErrorV1, RegistryStoreV1, WorkspaceRegistryEntryV1, WorkspaceRegistryV1},
     scheduler::{WorkspaceSchedulerKeyV1, WorkspaceSchedulerRegistryV1, WorkspaceSchedulerV1},
     workspace::{
-        ResetMaintenanceFilesystemTokenV1, ResetMarkerV1, ResetWorkspaceResolutionV1,
-        ResolvedWorkspaceV1, SqliteWorkspaceBindingInspectorV1, ValidatedRuntimeDirectoryErrorV1,
-        ValidatedRuntimeDirectoryV1, WorkspaceBindingInspectionErrorV1, WorkspaceGitObservationV1,
-        WorkspaceResolutionErrorV1, WorkspaceResolverV1,
+        ResetMaintenanceFilesystemTokenV1, ResetMarkerPublicationErrorV1, ResetMarkerV1,
+        ResetWorkspaceResolutionV1, ResolvedWorkspaceV1, SqliteWorkspaceBindingInspectorV1,
+        ValidatedRuntimeDirectoryErrorV1, ValidatedRuntimeDirectoryV1,
+        WorkspaceBindingInspectionErrorV1, WorkspaceGitObservationV1, WorkspaceResolutionErrorV1,
+        WorkspaceResolverV1,
     },
 };
 
@@ -775,6 +776,14 @@ pub enum WorkspaceRuntimeErrorV1 {
         runtime_directory_path: PathBuf,
     },
     RuntimeDirectory(ValidatedRuntimeDirectoryErrorV1),
+    ResetAdmissionOutcomeUnknown {
+        idempotency_key: IdempotencyKeyV1,
+        source: ValidatedRuntimeDirectoryErrorV1,
+    },
+    ResetAdmitted {
+        marker: Box<ResetMarkerV1>,
+        source: Box<WorkspaceRuntimeErrorV1>,
+    },
     MaintenanceInProgress,
     ResetMarkerConflict,
     ResetIdempotencyConflict {
@@ -790,6 +799,18 @@ pub enum WorkspaceRuntimeErrorV1 {
         expected: Box<WorkspaceSchedulerKeyV1>,
         actual: Box<WorkspaceSchedulerKeyV1>,
     },
+}
+
+impl WorkspaceRuntimeErrorV1 {
+    fn with_reset_admission(self, marker: &ResetMarkerV1) -> Self {
+        match self {
+            Self::ResetAdmitted { .. } | Self::ResetAdmissionOutcomeUnknown { .. } => self,
+            source => Self::ResetAdmitted {
+                marker: Box::new(marker.clone()),
+                source: Box::new(source),
+            },
+        }
+    }
 }
 
 impl fmt::Display for WorkspaceRuntimeErrorV1 {
@@ -833,6 +854,10 @@ impl fmt::Display for WorkspaceRuntimeErrorV1 {
             Self::RuntimeDirectory(_) => {
                 formatter.write_str("validated reset runtime-directory operation failed")
             }
+            Self::ResetAdmissionOutcomeUnknown { .. } => {
+                formatter.write_str("reset marker publication outcome is unknown")
+            }
+            Self::ResetAdmitted { .. } => formatter.write_str("admitted reset maintenance failed"),
             Self::MaintenanceInProgress => {
                 formatter.write_str("workspace maintenance is already in progress")
             }
@@ -869,6 +894,8 @@ impl Error for WorkspaceRuntimeErrorV1 {
             Self::Store(source) => Some(source),
             Self::Registry(source) => Some(source),
             Self::RuntimeDirectory(source) => Some(source),
+            Self::ResetAdmissionOutcomeUnknown { source, .. } => Some(source),
+            Self::ResetAdmitted { source, .. } => Some(source.as_ref()),
             Self::ConfigRead { source, .. } => Some(source),
             Self::ConfigAdmission(source) => Some(source),
             Self::StoreOptions(source) => Some(source),
@@ -936,6 +963,18 @@ impl ReadonlyWorkspaceResolutionV1 {
         self.active_scheduler.as_ref()
     }
 }
+
+/// Read-only durable evidence available to idempotency reconciliation.
+#[derive(Clone)]
+pub enum ReadonlyReconciliationResolutionV1 {
+    Store(ReadonlyWorkspaceResolutionV1),
+    ResetMarker {
+        marker: ResetMarkerV1,
+        worktree: podway_git::ValidatedWorktreeV1,
+    },
+    Missing,
+}
+
 /// The exclusive reset-maintenance key for one Git worktree. It intentionally excludes the
 /// workspace UUID and every filesystem path, so an old identity and its reset target share a
 /// single lease.
@@ -1348,6 +1387,7 @@ impl WorkspaceResetMaintenanceV1<'_> {
         }
         self.manager
             .revalidate_reset_registry_predecessor(&self.reset, &self.authority)
+            .map_err(|error| error.with_reset_admission(&marker))
     }
 
     pub(crate) fn active_old_scheduler(
@@ -1413,6 +1453,9 @@ impl WorkspaceResetMaintenanceV1<'_> {
         expected_digest: &CanonicalRequestDigestV1,
         observation: WorkspaceRuntimeObservationV1,
     ) -> Result<ResetAllCompletionV1, WorkspaceRuntimeErrorV1> {
+        let marker = self
+            .discover_marker()?
+            .ok_or(WorkspaceRuntimeErrorV1::ResetMarkerConflict)?;
         self.manager
             .complete_reset_all_authorized(ResetAllCompletionInputV1 {
                 selector: &self.selector,
@@ -1425,6 +1468,7 @@ impl WorkspaceResetMaintenanceV1<'_> {
                 lease: &self.lease,
                 filesystem_authority: &self.filesystem_authority,
             })
+            .map_err(|error| error.with_reset_admission(&marker))
     }
 }
 
@@ -1824,9 +1868,27 @@ impl WorkspaceRuntimeManagerV1 {
                 if prepared.marker().target_workspace_uuid() == registered_workspace_uuid {
                     return Err(WorkspaceRuntimeErrorV1::ResetMarkerConflict);
                 }
-                runtime_directory
-                    .publish_reset_marker(filesystem_authority, prepared.marker())
-                    .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
+                if let Err(error) =
+                    runtime_directory.publish_reset_marker(filesystem_authority, prepared.marker())
+                {
+                    return Err(match error {
+                        ResetMarkerPublicationErrorV1::NotPublished(source) => {
+                            WorkspaceRuntimeErrorV1::RuntimeDirectory(source)
+                        }
+                        ResetMarkerPublicationErrorV1::OutcomeUnknown(source) => {
+                            WorkspaceRuntimeErrorV1::ResetAdmissionOutcomeUnknown {
+                                idempotency_key: prepared.marker().idempotency_key().clone(),
+                                source,
+                            }
+                        }
+                        ResetMarkerPublicationErrorV1::Published(source) => {
+                            WorkspaceRuntimeErrorV1::ResetAdmitted {
+                                marker: Box::new(prepared.marker().clone()),
+                                source: Box::new(WorkspaceRuntimeErrorV1::RuntimeDirectory(source)),
+                            }
+                        }
+                    });
+                }
                 self.reset_crash_injection
                     .abort_at(ResetAllCrashBoundaryV1::MarkerCreated);
                 prepared.marker().clone()
@@ -1834,78 +1896,95 @@ impl WorkspaceRuntimeManagerV1 {
             (None, None, _) => return Err(WorkspaceRuntimeErrorV1::ResetMarkerConflict),
         };
         if !marker_matches_registry_generation(&marker, registered_workspace_uuid) {
-            return Err(WorkspaceRuntimeErrorV1::ResetMarkerConflict);
-        }
-        if marker_was_present {
-            self.require_scheduler_retired_for_reset(
-                reset,
-                marker.previous_workspace_uuid(),
-                (marker.previous_workspace_uuid() == registered_workspace_uuid)
-                    .then_some(authority.persisted_identity())
-                    .flatten(),
-            )?;
-        }
-
-        let receipt = if !marker_was_present {
-            self.revalidate_reset_registry_predecessor(reset, authority)?;
-            runtime_directory
-                .remove_reset_database_files(filesystem_authority, &marker)
-                .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
-            self.reset_crash_injection
-                .abort_at(ResetAllCrashBoundaryV1::OldDatabaseDeleted);
-            let receipt = self
-                .seed_reset_target(reset, &marker, observation.store_now())
-                .map_err(WorkspaceRuntimeErrorV1::Store)?;
-            self.reset_crash_injection
-                .abort_at(ResetAllCrashBoundaryV1::NewTargetDatabaseCreated);
-            receipt
-        } else {
-            // A resumed marker verifies its exact target first. It is never recreated merely from
-            // marker-derived receipt data, and a predecessor-bound target remains fail-closed.
-            self.revalidate_reset_registry_predecessor(reset, authority)?;
-            match self.seed_reset_target(reset, &marker, observation.store_now()) {
-                Ok(receipt) => receipt,
-                Err(error) if reset_seed_requires_fixed_replacement(&error) => {
-                    self.revalidate_reset_registry_predecessor(reset, authority)?;
-                    runtime_directory
-                        .remove_reset_database_files(filesystem_authority, &marker)
-                        .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
-                    self.reset_crash_injection
-                        .abort_at(ResetAllCrashBoundaryV1::OldDatabaseDeleted);
-                    let receipt = self
-                        .seed_reset_target(reset, &marker, observation.store_now())
-                        .map_err(WorkspaceRuntimeErrorV1::Store)?;
-                    self.reset_crash_injection
-                        .abort_at(ResetAllCrashBoundaryV1::NewTargetDatabaseCreated);
-                    receipt
+            let source = WorkspaceRuntimeErrorV1::ResetMarkerConflict;
+            return Err(if marker_was_present {
+                source
+            } else {
+                WorkspaceRuntimeErrorV1::ResetAdmitted {
+                    marker: Box::new(marker),
+                    source: Box::new(source),
                 }
-                Err(error) => return Err(WorkspaceRuntimeErrorV1::Store(error)),
-            }
-        };
-        self.revalidate_reset_registry_predecessor(reset, authority)?;
-        if registered_workspace_uuid == marker.previous_workspace_uuid() {
-            self.registry
-                .replace_for_reset(
-                    marker.previous_workspace_uuid(),
-                    marker.target_workspace_uuid().clone(),
-                    reset.workspace_root().clone(),
-                    observation.registry_seen_at().clone(),
-                )
-                .map_err(WorkspaceRuntimeErrorV1::Registry)?;
+            });
         }
-        runtime_directory
-            .remove_reset_marker(filesystem_authority, &marker)
-            .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
-        let resolved = self
-            .resolver
-            .resolve_existing(selector.clone(), Some(marker.target_workspace_uuid()))
-            .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
-        let scheduler = self.activate_existing_resolved_during_maintenance(
-            resolved,
-            observation,
-            maintenance_key,
-            lease,
-        )?;
+        let admitted = (|| {
+            if marker_was_present {
+                self.require_scheduler_retired_for_reset(
+                    reset,
+                    marker.previous_workspace_uuid(),
+                    (marker.previous_workspace_uuid() == registered_workspace_uuid)
+                        .then_some(authority.persisted_identity())
+                        .flatten(),
+                )?;
+            }
+
+            let receipt = if !marker_was_present {
+                self.revalidate_reset_registry_predecessor(reset, authority)?;
+                runtime_directory
+                    .remove_reset_database_files(filesystem_authority, &marker)
+                    .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
+                self.reset_crash_injection
+                    .abort_at(ResetAllCrashBoundaryV1::OldDatabaseDeleted);
+                let receipt = self
+                    .seed_reset_target(reset, &marker, observation.store_now())
+                    .map_err(WorkspaceRuntimeErrorV1::Store)?;
+                self.reset_crash_injection
+                    .abort_at(ResetAllCrashBoundaryV1::NewTargetDatabaseCreated);
+                receipt
+            } else {
+                // A resumed marker verifies its exact target first. It is never recreated merely
+                // from marker-derived receipt data, and a predecessor-bound target remains
+                // fail-closed.
+                self.revalidate_reset_registry_predecessor(reset, authority)?;
+                match self.seed_reset_target(reset, &marker, observation.store_now()) {
+                    Ok(receipt) => receipt,
+                    Err(error) if reset_seed_requires_fixed_replacement(&error) => {
+                        self.revalidate_reset_registry_predecessor(reset, authority)?;
+                        runtime_directory
+                            .remove_reset_database_files(filesystem_authority, &marker)
+                            .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
+                        self.reset_crash_injection
+                            .abort_at(ResetAllCrashBoundaryV1::OldDatabaseDeleted);
+                        let receipt = self
+                            .seed_reset_target(reset, &marker, observation.store_now())
+                            .map_err(WorkspaceRuntimeErrorV1::Store)?;
+                        self.reset_crash_injection
+                            .abort_at(ResetAllCrashBoundaryV1::NewTargetDatabaseCreated);
+                        receipt
+                    }
+                    Err(error) => return Err(WorkspaceRuntimeErrorV1::Store(error)),
+                }
+            };
+            self.revalidate_reset_registry_predecessor(reset, authority)?;
+            if registered_workspace_uuid == marker.previous_workspace_uuid() {
+                self.registry
+                    .replace_for_reset(
+                        marker.previous_workspace_uuid(),
+                        marker.target_workspace_uuid().clone(),
+                        reset.workspace_root().clone(),
+                        observation.registry_seen_at().clone(),
+                    )
+                    .map_err(WorkspaceRuntimeErrorV1::Registry)?;
+            }
+            runtime_directory
+                .remove_reset_marker(filesystem_authority, &marker)
+                .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
+            let resolved = self
+                .resolver
+                .resolve_existing(selector.clone(), Some(marker.target_workspace_uuid()))
+                .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+            let scheduler = self.activate_existing_resolved_during_maintenance(
+                resolved,
+                observation,
+                maintenance_key,
+                lease,
+            )?;
+            Ok((scheduler, receipt))
+        })();
+        let (scheduler, receipt) =
+            admitted.map_err(|source| WorkspaceRuntimeErrorV1::ResetAdmitted {
+                marker: Box::new(marker.clone()),
+                source: Box::new(source),
+            })?;
         Ok(ResetAllCompletionV1 {
             scheduler,
             receipt,
@@ -2031,6 +2110,74 @@ impl WorkspaceRuntimeManagerV1 {
             worktree: resolved.worktree().clone(),
             active_scheduler,
         })
+    }
+
+    /// Resolves reconciliation evidence without creating a scheduler, writing registry metadata,
+    /// or opening SQLite for mutation. A missing Store and runtime directory is a successful
+    /// `Missing` observation, not a workspace initialization error.
+    pub fn resolve_reconciliation_readonly(
+        &self,
+        selector: WorktreeSelectorV1,
+        expected_workspace_id: Option<&WorkspaceId>,
+    ) -> Result<ReadonlyReconciliationResolutionV1, WorkspaceRuntimeErrorV1> {
+        let reset = self
+            .resolver
+            .resolve_for_reset(selector.clone())
+            .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        let runtime_directory = match reset.open_runtime_directory() {
+            Ok(runtime_directory) => runtime_directory,
+            Err(error) if error.is_missing_directory() => {
+                return Ok(ReadonlyReconciliationResolutionV1::Missing);
+            }
+            Err(error) => return Err(WorkspaceRuntimeErrorV1::RuntimeDirectory(error)),
+        };
+        let marker = runtime_directory
+            .read_reset_marker()
+            .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
+        if let Some(marker) = marker {
+            if let Some(expected) = expected_workspace_id
+                && expected != marker.previous_workspace_uuid()
+                && expected != marker.target_workspace_uuid()
+            {
+                return Err(WorkspaceRuntimeErrorV1::Resolution(
+                    WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
+                        expected: expected.clone(),
+                        actual: marker.target_workspace_uuid().clone(),
+                    },
+                ));
+            }
+
+            return match self
+                .resolve_existing_readonly(selector, Some(marker.target_workspace_uuid()))
+            {
+                Ok(resolution) => Ok(ReadonlyReconciliationResolutionV1::Store(resolution)),
+                Err(WorkspaceRuntimeErrorV1::Resolution(
+                    WorkspaceResolutionErrorV1::ExistingBindingMissing,
+                )) => Ok(ReadonlyReconciliationResolutionV1::ResetMarker {
+                    marker,
+                    worktree: reset.worktree().clone(),
+                }),
+                Err(WorkspaceRuntimeErrorV1::Resolution(
+                    WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch { expected, actual },
+                )) if expected == *marker.target_workspace_uuid()
+                    && actual == *marker.previous_workspace_uuid() =>
+                {
+                    Ok(ReadonlyReconciliationResolutionV1::ResetMarker {
+                        marker,
+                        worktree: reset.worktree().clone(),
+                    })
+                }
+                Err(error) => Err(error),
+            };
+        }
+
+        match self.resolve_existing_readonly(selector, expected_workspace_id) {
+            Ok(resolution) => Ok(ReadonlyReconciliationResolutionV1::Store(resolution)),
+            Err(WorkspaceRuntimeErrorV1::Resolution(
+                WorkspaceResolutionErrorV1::ExistingBindingMissing,
+            )) => Ok(ReadonlyReconciliationResolutionV1::Missing),
+            Err(error) => Err(error),
+        }
     }
 
     /// Revalidates the Git/Store evidence held by an active scheduler without treating registry

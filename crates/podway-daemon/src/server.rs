@@ -1047,10 +1047,13 @@ fn recover_request_context(payload: &[u8]) -> Option<RequestContextV1> {
         .and_then(Value::as_str)
         .and_then(|command| CommandNameV1::new(command).ok())
         .unwrap_or_else(fallback_command);
+    let operation = object
+        .get("operation")
+        .and_then(|operation| serde_json::from_value::<OperationV1>(operation.clone()).ok());
     Some(RequestContextV1 {
         request_id,
         command,
-        operation: None,
+        operation,
         idempotency_key: None,
     })
 }

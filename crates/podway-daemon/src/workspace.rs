@@ -332,6 +332,26 @@ impl ResetMaintenanceFilesystemTokenV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResetMarkerPublicationFailpointV1 {
     BeforeLinkAndTemporaryCleanup,
+    AfterLinkBeforeDirectorySync,
+    AfterDirectorySyncBeforeCleanup,
+}
+
+/// The strongest admission conclusion available when reset-marker publication fails.
+#[derive(Debug)]
+pub enum ResetMarkerPublicationErrorV1 {
+    NotPublished(ValidatedRuntimeDirectoryErrorV1),
+    OutcomeUnknown(ValidatedRuntimeDirectoryErrorV1),
+    Published(ValidatedRuntimeDirectoryErrorV1),
+}
+
+impl ResetMarkerPublicationErrorV1 {
+    pub fn into_source(self) -> ValidatedRuntimeDirectoryErrorV1 {
+        match self {
+            Self::NotPublished(source) | Self::OutcomeUnknown(source) | Self::Published(source) => {
+                source
+            }
+        }
+    }
 }
 
 /// Fail-closed descriptor-relative reset-marker and fixed-file maintenance errors.
@@ -374,6 +394,21 @@ pub enum ValidatedRuntimeDirectoryErrorV1 {
     Failpoint {
         point: ResetMarkerPublicationFailpointV1,
     },
+}
+
+impl ValidatedRuntimeDirectoryErrorV1 {
+    /// Returns true only when opening the validated runtime directory proved it does not exist.
+    /// Other path errors remain fail-closed.
+    pub(crate) fn is_missing_directory(&self) -> bool {
+        matches!(
+            self,
+            Self::Path {
+                operation: "open runtime directory",
+                source,
+                ..
+            } if source.kind() == io::ErrorKind::NotFound
+        )
+    }
 }
 
 impl fmt::Display for ValidatedRuntimeDirectoryErrorV1 {
@@ -509,7 +544,7 @@ impl ValidatedRuntimeDirectoryV1 {
         &self,
         _authority: &ResetMaintenanceFilesystemTokenV1,
         marker: &ResetMarkerV1,
-    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+    ) -> Result<(), ResetMarkerPublicationErrorV1> {
         self.publish_reset_marker_with_optional_failpoint(marker, None)
     }
 
@@ -520,7 +555,7 @@ impl ValidatedRuntimeDirectoryV1 {
         _authority: &ResetMaintenanceFilesystemTokenV1,
         marker: &ResetMarkerV1,
         failpoint: ResetMarkerPublicationFailpointV1,
-    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+    ) -> Result<(), ResetMarkerPublicationErrorV1> {
         self.publish_reset_marker_with_optional_failpoint(marker, Some(failpoint))
     }
 
@@ -528,7 +563,7 @@ impl ValidatedRuntimeDirectoryV1 {
         &self,
         marker: &ResetMarkerV1,
         failpoint: Option<ResetMarkerPublicationFailpointV1>,
-    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+    ) -> Result<(), ResetMarkerPublicationErrorV1> {
         #[cfg(unix)]
         {
             self.publish_reset_marker_unix(marker, failpoint)
@@ -536,7 +571,9 @@ impl ValidatedRuntimeDirectoryV1 {
         #[cfg(not(unix))]
         {
             let _ = (marker, failpoint);
-            Err(ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform)
+            Err(ResetMarkerPublicationErrorV1::NotPublished(
+                ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform,
+            ))
         }
     }
 
@@ -706,12 +743,14 @@ impl ValidatedRuntimeDirectoryV1 {
         &self,
         marker: &ResetMarkerV1,
         failpoint: Option<ResetMarkerPublicationFailpointV1>,
-    ) -> Result<(), ValidatedRuntimeDirectoryErrorV1> {
+    ) -> Result<(), ResetMarkerPublicationErrorV1> {
         let bytes = marker
             .canonical_bytes()
-            .map_err(ValidatedRuntimeDirectoryErrorV1::Marker)?;
-        let (temporary_name, temporary_path, mut temporary, identity) =
-            self.create_marker_temporary()?;
+            .map_err(ValidatedRuntimeDirectoryErrorV1::Marker)
+            .map_err(ResetMarkerPublicationErrorV1::NotPublished)?;
+        let (temporary_name, temporary_path, mut temporary, identity) = self
+            .create_marker_temporary()
+            .map_err(ResetMarkerPublicationErrorV1::NotPublished)?;
         if let Err(source) = temporary.write_all(&bytes) {
             drop(temporary);
             let publication = runtime_path_error(
@@ -719,12 +758,14 @@ impl ValidatedRuntimeDirectoryV1 {
                 temporary_path.clone(),
                 source,
             );
-            return Err(self.publication_failure_with_temporary_cleanup(
-                &temporary_name,
-                &temporary_path,
-                identity,
-                publication,
-                None,
+            return Err(ResetMarkerPublicationErrorV1::NotPublished(
+                self.publication_failure_with_temporary_cleanup(
+                    &temporary_name,
+                    &temporary_path,
+                    identity,
+                    publication,
+                    None,
+                ),
             ));
         }
         if let Err(source) = temporary.sync_all() {
@@ -734,22 +775,28 @@ impl ValidatedRuntimeDirectoryV1 {
                 temporary_path.clone(),
                 source,
             );
-            return Err(self.publication_failure_with_temporary_cleanup(
-                &temporary_name,
-                &temporary_path,
-                identity,
-                publication,
-                None,
+            return Err(ResetMarkerPublicationErrorV1::NotPublished(
+                self.publication_failure_with_temporary_cleanup(
+                    &temporary_name,
+                    &temporary_path,
+                    identity,
+                    publication,
+                    None,
+                ),
             ));
         }
         drop(temporary);
-        if let Some(point) = failpoint {
-            return Err(self.publication_failure_with_temporary_cleanup(
-                &temporary_name,
-                &temporary_path,
-                identity,
-                ValidatedRuntimeDirectoryErrorV1::Failpoint { point },
-                Some(point),
+        if failpoint == Some(ResetMarkerPublicationFailpointV1::BeforeLinkAndTemporaryCleanup) {
+            return Err(ResetMarkerPublicationErrorV1::NotPublished(
+                self.publication_failure_with_temporary_cleanup(
+                    &temporary_name,
+                    &temporary_path,
+                    identity,
+                    ValidatedRuntimeDirectoryErrorV1::Failpoint {
+                        point: ResetMarkerPublicationFailpointV1::BeforeLinkAndTemporaryCleanup,
+                    },
+                    Some(ResetMarkerPublicationFailpointV1::BeforeLinkAndTemporaryCleanup),
+                ),
             ));
         }
         match linkat(
@@ -761,12 +808,14 @@ impl ValidatedRuntimeDirectoryV1 {
         ) {
             Ok(()) => {}
             Err(Errno::EEXIST) => {
-                return Err(self.publication_failure_with_temporary_cleanup(
-                    &temporary_name,
-                    &temporary_path,
-                    identity,
-                    ValidatedRuntimeDirectoryErrorV1::MarkerAlreadyExists,
-                    None,
+                return Err(ResetMarkerPublicationErrorV1::NotPublished(
+                    self.publication_failure_with_temporary_cleanup(
+                        &temporary_name,
+                        &temporary_path,
+                        identity,
+                        ValidatedRuntimeDirectoryErrorV1::MarkerAlreadyExists,
+                        None,
+                    ),
                 ));
             }
             Err(source) => {
@@ -775,26 +824,46 @@ impl ValidatedRuntimeDirectoryV1 {
                     self.path.join(RESET_MARKER_FILE_NAME_V1),
                     source.into(),
                 );
-                return Err(self.publication_failure_with_temporary_cleanup(
+                return Err(ResetMarkerPublicationErrorV1::NotPublished(
+                    self.publication_failure_with_temporary_cleanup(
+                        &temporary_name,
+                        &temporary_path,
+                        identity,
+                        publication,
+                        None,
+                    ),
+                ));
+            }
+        }
+        if failpoint == Some(ResetMarkerPublicationFailpointV1::AfterLinkBeforeDirectorySync) {
+            return Err(ResetMarkerPublicationErrorV1::OutcomeUnknown(
+                ValidatedRuntimeDirectoryErrorV1::Failpoint {
+                    point: ResetMarkerPublicationFailpointV1::AfterLinkBeforeDirectorySync,
+                },
+            ));
+        }
+        if let Err(publication) = self.sync_directory() {
+            return Err(ResetMarkerPublicationErrorV1::OutcomeUnknown(
+                self.publication_failure_with_temporary_cleanup(
                     &temporary_name,
                     &temporary_path,
                     identity,
                     publication,
                     None,
-                ));
-            }
-        }
-        if let Err(publication) = self.sync_directory() {
-            return Err(self.publication_failure_with_temporary_cleanup(
-                &temporary_name,
-                &temporary_path,
-                identity,
-                publication,
-                None,
+                ),
             ));
         }
-        self.cleanup_marker_temporary(&temporary_name, &temporary_path, identity, None)?;
+        if failpoint == Some(ResetMarkerPublicationFailpointV1::AfterDirectorySyncBeforeCleanup) {
+            return Err(ResetMarkerPublicationErrorV1::Published(
+                ValidatedRuntimeDirectoryErrorV1::Failpoint {
+                    point: ResetMarkerPublicationFailpointV1::AfterDirectorySyncBeforeCleanup,
+                },
+            ));
+        }
+        self.cleanup_marker_temporary(&temporary_name, &temporary_path, identity, None)
+            .map_err(ResetMarkerPublicationErrorV1::Published)?;
         self.sync_directory()
+            .map_err(ResetMarkerPublicationErrorV1::Published)
     }
 
     #[cfg(unix)]
@@ -1820,7 +1889,9 @@ fn d01_reset_marker_publication_interrupted_before_link_publishes_no_marker() {
         .expect_err("an interrupted publication must retain its failure evidence");
     assert!(matches!(
         error,
-        ValidatedRuntimeDirectoryErrorV1::PublicationAndTemporaryCleanup { .. }
+        ResetMarkerPublicationErrorV1::NotPublished(
+            ValidatedRuntimeDirectoryErrorV1::PublicationAndTemporaryCleanup { .. }
+        )
     ));
     assert!(
         !path.join(RESET_MARKER_FILE_NAME_V1).exists(),
@@ -1861,8 +1932,9 @@ mod tests {
     use podway_store::{CanonicalRequestDigestV1, IdempotencyKeyV1, JobIdV1};
 
     use super::{
-        ResetMaintenanceFilesystemTokenV1, ResetMarkerPublicationFailpointV1, ResetMarkerV1,
-        ValidatedRuntimeDirectoryErrorV1, ValidatedRuntimeDirectoryV1,
+        ResetMaintenanceFilesystemTokenV1, ResetMarkerPublicationErrorV1,
+        ResetMarkerPublicationFailpointV1, ResetMarkerV1, ValidatedRuntimeDirectoryErrorV1,
+        ValidatedRuntimeDirectoryV1,
     };
 
     static RUNTIME_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -1944,8 +2016,45 @@ mod tests {
             .expect_err("injected publication failure must be retained");
         assert!(matches!(
             error,
-            ValidatedRuntimeDirectoryErrorV1::PublicationAndTemporaryCleanup { .. }
+            ResetMarkerPublicationErrorV1::NotPublished(
+                ValidatedRuntimeDirectoryErrorV1::PublicationAndTemporaryCleanup { .. }
+            )
         ));
         fs::remove_dir_all(path).expect("fixture runtime directory must be removed");
+    }
+
+    #[test]
+    fn marker_publication_failures_preserve_unknown_and_durable_admission_boundaries() {
+        for (failpoint, expected_durable) in [
+            (
+                ResetMarkerPublicationFailpointV1::AfterLinkBeforeDirectorySync,
+                false,
+            ),
+            (
+                ResetMarkerPublicationFailpointV1::AfterDirectorySyncBeforeCleanup,
+                true,
+            ),
+        ] {
+            let (path, runtime) = runtime_directory();
+            let authority = ResetMaintenanceFilesystemTokenV1::issue();
+            let expected_marker = marker();
+            let error = runtime
+                .publish_reset_marker_with_failpoint(&authority, &expected_marker, failpoint)
+                .expect_err("injected post-link publication failure must be reported");
+            assert!(
+                if expected_durable {
+                    matches!(error, ResetMarkerPublicationErrorV1::Published(_))
+                } else {
+                    matches!(error, ResetMarkerPublicationErrorV1::OutcomeUnknown(_))
+                },
+                "publication phase must retain its strongest admission conclusion"
+            );
+            assert_eq!(
+                runtime.read_reset_marker().unwrap(),
+                Some(expected_marker),
+                "both post-link boundaries must leave the exact reconciliation marker visible"
+            );
+            fs::remove_dir_all(path).expect("fixture runtime directory must be removed");
+        }
     }
 }

@@ -177,6 +177,49 @@ fn reset_request_with_key(
     let slice = SliceRequestV1::from_envelope(&envelope).expect("fixture reset request must slice");
     (envelope, slice)
 }
+
+#[cfg(unix)]
+fn reset_lookup_request(
+    root: &Path,
+    expected_workspace_uuid: &WorkspaceId,
+    marker: &ResetMarkerV1,
+) -> (RequestEnvelopeV1, SliceRequestV1) {
+    #[cfg(unix)]
+    let canonical_root = fs::canonicalize(root).expect("fixture worktree root must canonicalize");
+    let selector = WorktreeSelectorWireV1::new(
+        canonical_root.as_os_str().as_bytes(),
+        "reset reconciliation fixture",
+        Some(expected_workspace_uuid.clone()),
+    )
+    .expect("fixture selector must be valid");
+    let payload = json!({
+        "selector": selector,
+        "idempotency_key": marker.idempotency_key().as_str(),
+    });
+    let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new("00000000-0000-4000-8000-000000005019")
+            .expect("fixture request ID must be valid"),
+        client: ClientInfoV1::new("phase5-reset-runtime", "1", 1)
+            .expect("fixture client must be valid"),
+        operation: OperationV1::Query,
+        command: CommandNameV1::new("job.lookup").expect("fixture command must be valid"),
+        workspace: Some(
+            WorkspaceContextV1::new("/client/diagnostic", Some(expected_workspace_uuid.clone()))
+                .expect("fixture workspace context must be valid"),
+        ),
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, 0).expect("query options must be valid"),
+        payload: payload
+            .as_object()
+            .expect("fixture payload must be an object")
+            .clone(),
+    })
+    .expect("fixture envelope must be valid");
+    let slice = SliceRequestV1::from_envelope(&envelope).expect("fixture lookup must slice");
+    (envelope, slice)
+}
+
 fn workspace_mutation_request(
     root: &Path,
     workspace_uuid: &WorkspaceId,
@@ -1484,6 +1527,46 @@ fn reset_all_crash_boundaries_resume_once_without_duplicate_effects() {
             Arc::clone(&runtime_manager),
             WorkerIdV1::new(format!("phase5-reset-recovery-{id}"))
                 .expect("fixture worker ID must be valid"),
+        );
+        let (lookup_request, lookup_slice) =
+            reset_lookup_request(&workspace_root, &previous_workspace_uuid, &marker);
+        let lookup = dispatcher.dispatch(&lookup_request, &lookup_slice);
+        let ResponseEnvelopeV1::Output(lookup) = lookup else {
+            panic!("{id} marker-bound lookup must remain reconcilable: {lookup:?}");
+        };
+        assert_eq!(lookup.result()["found"], true, "{id}");
+        assert_eq!(
+            lookup.result()["job"]["id"],
+            marker.operation_id().as_str(),
+            "{id}"
+        );
+        assert_eq!(lookup.result()["job"]["sequence"], 1, "{id}");
+        assert_eq!(
+            lookup.result()["job"]["command"],
+            "workspace.reset_all",
+            "{id}"
+        );
+        assert_eq!(
+            lookup.result()["job"]["request_digest"],
+            marker.request_digest().as_str(),
+            "{id}"
+        );
+        assert_eq!(
+            lookup.result()["job"]["state"],
+            if boundary == ResetAllCrashBoundaryV1::NewTargetDatabaseCreated {
+                "succeeded"
+            } else {
+                "running"
+            },
+            "{id} target Store terminal receipt must win over marker-only projection"
+        );
+        assert_eq!(
+            lookup
+                .workspace()
+                .expect("marker lookup must project target workspace")
+                .uuid(),
+            marker.target_workspace_uuid(),
+            "{id}"
         );
         let (request, slice) = reset_request(&workspace_root, &previous_workspace_uuid);
         let recovered = dispatcher.dispatch(&request, &slice);
