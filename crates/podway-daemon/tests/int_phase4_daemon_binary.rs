@@ -1,4 +1,4 @@
-//! Process-level proof that `podwayd` binds the production endpoint and shuts down cleanly.
+//! Component-level proof that `podwayd` binds the production endpoint and shuts down cleanly.
 
 #![forbid(unsafe_code)]
 

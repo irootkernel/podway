@@ -1,7 +1,6 @@
 //! Phase 4 daemon-owned workspace runtime composition contracts.
 
-#[path = "support/phase4_workspace.rs"]
-mod support_phase4_workspace;
+use crate::support_phase4_workspace;
 
 use std::{
     fs,

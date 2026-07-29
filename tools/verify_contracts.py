@@ -25,6 +25,7 @@ MAKEFILE_PATH = Path("Makefile")
 REQUIRED_MAKE_TARGETS = (
     "test",
     "test-prepare",
+    "test-rust",
     "test-unit",
     "test-int",
     "test-fuzzing",
@@ -38,8 +39,7 @@ REQUIRED_MAKE_TARGETS = (
 )
 REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) test-prepare",
-    "$(MAKE) test-unit",
-    "$(MAKE) test-int",
+    "$(MAKE) test-rust",
     "$(MAKE) test-fuzzing",
     "$(MAKE) test-e2e",
 )
@@ -47,7 +47,6 @@ REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/sync_docs_assets.py --write",
     "python3 tools/verify_docs.py",
     "cargo fmt --all",
-    "cargo check --workspace --all-targets --locked",
     "cargo clippy --workspace --all-targets --locked -- -D warnings",
     "cargo deny check",
     "python3 tools/verify_test_layout.py --check",

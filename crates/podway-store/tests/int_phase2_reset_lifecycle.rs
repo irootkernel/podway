@@ -112,8 +112,7 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
 }
 const RESET_CRASH_CHILD_PATH_ENV: &str = "PODWAY_RESET_CRASH_CHILD_PATH";
 const RESET_CRASH_CASE_ENV: &str = "PODWAY_RESET_CRASH_CASE";
-const RESET_CRASH_CHILD_TEST_NAME: &str =
-    "pac_030_interrupted_reset_all_publication_recovers_and_retries_idempotently";
+const RESET_CRASH_CHILD_TEST_NAME: &str = "int_phase2_reset_lifecycle::pac_030_interrupted_reset_all_publication_recovers_and_retries_idempotently";
 const RESET_CRASH_CASES: &[(u8, StoreFailpointV1, bool)] = &[
     (10, StoreFailpointV1::ResetBeforeSeedCommit, false),
     (

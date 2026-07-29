@@ -61,10 +61,11 @@ catalog also requires documentation, embedded-catalog, schema, and end-to-end wo
 
 ```bash
 make test-prepare   # sync, format, static checks, contracts, architecture
-make test-unit      # library, binary, and documentation tests
-make test-int       # component integration with fixtures and doubles
+make test-rust      # complete unit, architecture, and integration suite in one Cargo run
+make test-unit      # focused library and binary tests
+make test-int       # focused component integration, including binary-with-double tests
 make test-fuzzing   # bounded deterministic protocol fuzzing
-make test-e2e       # real podway and podwayd scenarios
+make test-e2e       # real user journeys through product binaries, shells, and archives
 make test           # complete release-readiness gate
 ```
 
@@ -72,12 +73,19 @@ Run the narrowest relevant layer while iterating and `make test` before treating
 revision as release-ready. `test-prepare` synchronizes assets and runs `rustfmt`, so
 review its resulting diff before committing.
 
+Cargo integration sources are modules of each crate's `int_suite`; run one exact
+test with `cargo test -p PACKAGE --test int_suite SOURCE_STEM::FUNCTION -- --exact`.
+CLI E2E sources use `e2e_suite` and the same qualified-name convention. The layout
+checker rejects any source that is omitted from or duplicated across suites.
+The repository gate serializes Rust tests within each aggregate process so tests
+that exercise process-global transport and crash boundaries remain isolated.
+
 ### Optional focused tools
 
 These tools are manual diagnostics and are not additional release gates:
 
 - `python3 tools/run_g005_vertical.py` builds the daemon and runs the ignored G005 lifecycle, recovery, replay, and conflict vertical directly; use it when changing the production command path.
-- `python3 tools/run_g008_dogfood.py` builds the daemon and runs the four-preset retry/return dogfood scenario directly; use it when changing presets or end-to-end workflow behavior.
+- `python3 tools/run_g008_dogfood.py` builds the daemon and runs the four-preset product-binary start/status/next smoke directly; use it when changing presets or end-to-end workflow behavior.
 - `cargo +nightly-2026-07-17 fuzz run canonical_json` exercises canonical JSON after serialization or digest changes.
 - `cargo +nightly-2026-07-17 fuzz run selector` exercises selector and worktree-path parsing after Git/filesystem changes.
 - `cargo +nightly-2026-07-17 fuzz run response_additive` exercises additive response compatibility after protocol projection changes.

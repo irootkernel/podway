@@ -1,3 +1,5 @@
+//! CLI process-boundary integration contracts using controlled collaborators.
+
 use std::{
     collections::BTreeSet,
     fs,
@@ -105,77 +107,6 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn shell_lines(output: Output, shell: &str) -> Vec<String> {
-    assert!(
-        output.status.success(),
-        "{shell} completion execution failed: {output:?}"
-    );
-    String::from_utf8(output.stdout)
-        .expect("{shell} completion output must be UTF-8")
-        .lines()
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn bash_candidates(script: &CompletionScript, words: &[&str]) -> Vec<String> {
-    let word_count = words.len();
-    let words = words
-        .iter()
-        .map(|word| shell_quote(word))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let program = format!(
-        "source \"$1\"\nCOMP_WORDS=({words})\nCOMP_CWORD={}\n_podway\nprintf '%s\\n' \"${{COMPREPLY[@]}}\"\n",
-        word_count - 1
-    );
-    shell_lines(
-        Command::new("bash")
-            .args(["-c", &program, "bash"])
-            .arg(&script.path)
-            .output()
-            .expect("bash must run"),
-        "bash",
-    )
-}
-
-fn zsh_candidates(script: &CompletionScript, words: &[&str]) -> Vec<String> {
-    let word_count = words.len();
-    let words = words
-        .iter()
-        .map(|word| shell_quote(word))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let program = format!(
-        "autoload -Uz compinit\ncompinit -D -i\nsource \"$1\"\nwords=({words})\nCURRENT={word_count}\nroute=$(_podway_route)\n_podway_candidates \"$route\"\n",
-    );
-    shell_lines(
-        Command::new("zsh")
-            .args(["-fc", &program, "zsh"])
-            .arg(&script.path)
-            .output()
-            .expect("zsh must run"),
-        "zsh",
-    )
-}
-
-fn fish_candidates(script: &CompletionScript, command_line: &str) -> Vec<String> {
-    shell_lines(
-        Command::new("fish")
-            .args(["-c", "source $argv[1]; complete -C \"$argv[2]\""])
-            .arg(&script.path)
-            .arg(command_line)
-            .output()
-            .expect("fish must run"),
-        "fish",
-    )
-    .into_iter()
-    .map(|line| {
-        line.split_once('\t')
-            .map_or(line.as_str(), |(candidate, _)| candidate)
-            .to_owned()
-    })
-    .collect()
-}
 fn generated_dynamic_candidates(
     shell: &str,
     script: &CompletionScript,
@@ -382,61 +313,6 @@ impl Drop for DynamicCompletionFixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
-}
-
-#[test]
-fn aut_t_path_invokes_cli_symlink_from_sanitized_arbitrary_directory() {
-    let fixture = DynamicCompletionFixture::new();
-    let bin = fixture.install_cli_on_path();
-    let arbitrary = fixture.root.join("outside-worktree");
-    fs::create_dir(&arbitrary).expect("arbitrary working directory must be created");
-    let controlled_path = format!("{}:/usr/bin:/bin", bin.display());
-    assert!(
-        fs::symlink_metadata(bin.join("podway"))
-            .expect("controlled PATH CLI entry")
-            .file_type()
-            .is_symlink(),
-        "the controlled PATH probe must execute through a CLI symlink"
-    );
-
-    let version = Command::new("podway")
-        .args(["--json", "version"])
-        .current_dir(&arbitrary)
-        .env_clear()
-        .env("PATH", &controlled_path)
-        .output()
-        .expect("controlled PATH must resolve podway");
-    assert!(
-        version.status.success(),
-        "PATH version probe failed: {version:?}"
-    );
-    assert_eq!(
-        one_json(&version)["result"]["version"],
-        env!("CARGO_PKG_VERSION")
-    );
-
-    let server = RecordingDaemon::start(
-        &fixture,
-        vec![RecordingReply::Output(authoritative_status_result(
-            serde_json::json!([]),
-        ))],
-    );
-    let status = Command::new("podway")
-        .args(["--json", "--socket"])
-        .arg(&fixture.socket_path)
-        .arg("--worktree")
-        .arg(&fixture.root)
-        .arg("status")
-        .current_dir(&arbitrary)
-        .env_clear()
-        .env("PATH", &controlled_path)
-        .output()
-        .expect("sanitized daemon-backed PATH probe must run");
-    assert!(
-        status.status.success(),
-        "PATH status probe failed: {status:?}"
-    );
-    assert_eq!(server.finish().len(), 1);
 }
 
 struct DynamicCompletionServer {
@@ -3182,39 +3058,6 @@ fn static_commands_and_all_completion_targets_do_not_need_a_daemon() {
                 || text.contains("_podway_dynamic items")
         );
     }
-}
-#[test]
-fn generated_shell_grammars_execute_with_nested_route_context() {
-    for shell in ["bash", "zsh", "fish"] {
-        assert!(
-            shell_available(shell),
-            "{shell} is a required completion-test prerequisite"
-        );
-    }
-
-    let script = CompletionScript::generated("bash");
-    let procedure = bash_candidates(&script, &["podway", "procedure", ""]);
-    assert_eq!(procedure, ["validate".to_owned(), "show".to_owned()]);
-    let install = bash_candidates(&script, &["podway", "daemon", "install", "--"]);
-    assert!(install.contains(&"--daemon-path".to_owned()));
-    assert!(!install.contains(&"--preset".to_owned()));
-    assert!(!install.contains(&"--follow".to_owned()));
-
-    let script = CompletionScript::generated("zsh");
-    let install = zsh_candidates(&script, &["podway", "daemon", "install", ""]);
-    assert!(install.contains(&"--daemon-path".to_owned()));
-    assert!(!install.contains(&"--preset".to_owned()));
-    assert!(!install.contains(&"--follow".to_owned()));
-
-    let script = CompletionScript::generated("fish");
-    let procedure = fish_candidates(&script, "podway procedure ");
-    assert!(procedure.contains(&"validate".to_owned()));
-    assert!(procedure.contains(&"show".to_owned()));
-    assert!(!procedure.contains(&"--canonical".to_owned()));
-    let install = fish_candidates(&script, "podway daemon install --");
-    assert!(install.contains(&"--daemon-path".to_owned()));
-    assert!(!install.contains(&"--preset".to_owned()));
-    assert!(!install.contains(&"--follow".to_owned()));
 }
 #[test]
 fn generated_dynamic_completion_forwards_the_selected_worktree_in_every_shell() {

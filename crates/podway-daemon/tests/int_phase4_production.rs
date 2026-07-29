@@ -1,7 +1,6 @@
 //! Real-Git/SQLite coverage for the G005 production composition.
 
-#[path = "support/phase4_workspace.rs"]
-mod support_phase4_workspace;
+use crate::support_phase4_workspace;
 
 use std::{
     fs,
@@ -714,7 +713,7 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
         PreconditionsV1::default(),
     );
     let reopened_dispatcher = compose_dispatcher_v1(
-        Arc::new(crate::manager(fixture.temporary_path())),
+        Arc::new(self::manager(fixture.temporary_path())),
         WorkerIdV1::new("production-replay-after-reopen-test").unwrap(),
     );
     let replayed = dispatch_command(&reopened_dispatcher, &replay, "session.start");

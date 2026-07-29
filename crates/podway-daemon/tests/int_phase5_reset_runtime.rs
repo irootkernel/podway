@@ -2,16 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-#[path = "../src/observability.rs"]
-#[allow(dead_code)]
-mod observability;
-#[allow(dead_code)]
-#[path = "support/phase4_workspace.rs"]
-mod support_phase4_workspace;
-
-#[path = "../src/registry.rs"]
-#[allow(dead_code)]
-mod registry_under_test;
+use crate::{registry_under_test, support_phase4_workspace};
 
 use std::{
     fs,
@@ -308,7 +299,7 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
     let workspace_uuid_output = fixture.temporary_path().join("pac044-workspace-uuid");
     let seed_output = Command::new(std::env::current_exe().expect("current test binary"))
         .arg("--exact")
-        .arg("pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_idempotently")
+        .arg("int_phase5_reset_runtime::pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_idempotently")
         .arg("--nocapture")
         .env(
             "PODWAY_PAC044_SEED_RUNTIME_ROOT",
@@ -763,7 +754,7 @@ fn pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_
     drop(dispatcher);
     drop(manager);
 
-    let restarted_manager = Arc::new(crate::manager(fixture.temporary_path()));
+    let restarted_manager = Arc::new(self::manager(fixture.temporary_path()));
     let restart_deadline = Instant::now() + Duration::from_secs(5);
     let active_target = loop {
         match restarted_manager.resolve_existing(
@@ -1284,7 +1275,8 @@ fn crash_after_target_seed_resumes_from_the_marker_without_recreating_the_target
 #[cfg(unix)]
 const RESET_CRASH_REPORT_ENV: &str = "PODWAY_PHASE5_RESET_CRASH_REPORT";
 #[cfg(unix)]
-const RESET_CRASH_CHILD_TEST: &str = "reset_all_crash_child_aborts_at_configured_boundary";
+const RESET_CRASH_CHILD_TEST: &str =
+    "int_phase5_reset_runtime::reset_all_crash_child_aborts_at_configured_boundary";
 #[cfg(unix)]
 const RESET_CRASH_BOUNDARY_ENV: &str = "PODWAY_PHASE5_RESET_CRASH_BOUNDARY";
 

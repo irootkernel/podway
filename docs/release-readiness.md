@@ -27,11 +27,12 @@ formatted tree, not from stale pre-format bytes.
 
 | Target | Scope |
 |---|---|
-| `make test-prepare` | canonical asset synchronization, formatting, vet, lint, dependency policy, architecture, product-acceptance mapping, crash-boundary mapping, and contract checks |
-| `make test-unit` | Narrow library, binary, and documentation tests |
-| `make test-int` | Multi-component scenarios using fixtures and test doubles without product binaries |
+| `make test-prepare` | canonical asset synchronization, formatting, lint, dependency policy, architecture guardrails, product-acceptance mapping, crash-boundary mapping, and contract checks |
+| `make test-rust` | Unit and architecture targets plus one integration suite per crate in one Cargo invocation |
+| `make test-unit` | Focused library and binary tests for iteration |
+| `make test-int` | Focused component integration, including a product component with controlled doubles |
 | `make test-fuzzing` | Fixed-run, fixed-seed frame-decoder and request-envelope fuzzing in disposable corpora |
-| `make test-e2e` | User scenarios using the actual `podway` and `podwayd` binaries |
+| `make test-e2e` | User journeys using actual product binaries, shells, and release archives |
 
 The architecture portion also exercises the contributor-only preset tooling against
 the real Podway validator. `make preset-create` and `make preset-import` prepare

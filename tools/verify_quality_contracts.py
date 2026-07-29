@@ -67,14 +67,23 @@ def require_test_member(member: Any, criterion_id: str, source_files: set[str]) 
     source = path.read_text(encoding="utf-8")
     if re.search(FUNCTION_RE_TEMPLATE.format(name=re.escape(function)), source) is None:
         fail(f"{criterion_id} proof function is missing from {relative}: {function}")
-    target = path.stem
-    required_tokens = ("cargo test ", f"--test {target} ", function, "--exact")
+    source_target = path.stem
+    if source_target.startswith("int_"):
+        cargo_target = "int_suite"
+        test_name = f"{source_target}::{function}"
+    elif source_target.startswith("e2e_"):
+        cargo_target = "e2e_suite"
+        test_name = f"{source_target}::{function}"
+    else:
+        cargo_target = source_target
+        test_name = function
+    required_tokens = ("cargo test ", f"--test {cargo_target} ", test_name, "--exact")
     direct_cargo_test = all(token in command for token in required_tokens)
     parts = Path(relative).parts
     package = parts[1] if len(parts) >= 4 and parts[0] == "crates" and parts[2] == "tests" else None
     exact_e2e_wrapper = (
-        f"python3 tools/run_e2e.py --exact-test {package}::{target}::{function}"
-        if package is not None and target.startswith("e2e_")
+        f"python3 tools/run_e2e.py --exact-test {package}::e2e_suite::{test_name}"
+        if package is not None and source_target.startswith("e2e_")
         else None
     )
     if not direct_cargo_test and command != exact_e2e_wrapper:

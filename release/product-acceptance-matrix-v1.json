@@ -4,8 +4,8 @@
       "id": "PAC-001",
       "line": 7,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_phase4_production_vertical pac_001_public_init_on_a_valid_git_worktree_creates_no_task_session --locked -- --exact --ignored",
-        "function": "pac_001_public_init_on_a_valid_git_worktree_creates_no_task_session",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_phase4_production_vertical::public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict --locked -- --exact --ignored",
+        "function": "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs"
       },
@@ -16,7 +16,7 @@
       "id": "PAC-002",
       "line": 8,
       "proof": {
-        "command": "cargo test -p podway-daemon --test int_phase4_native_execution g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal --locked -- --exact",
+        "command": "cargo test -p podway-daemon --test int_suite int_phase4_native_execution::g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal --locked -- --exact",
         "function": "g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal",
         "kind": "cargo-test",
         "path": "crates/podway-daemon/tests/int_phase4_native_execution.rs"
@@ -28,8 +28,8 @@
       "id": "PAC-003",
       "line": 9,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_phase4_production_vertical pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history --locked -- --exact --ignored",
-        "function": "pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_phase4_production_vertical::public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict --locked -- --exact --ignored",
+        "function": "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs"
       },
@@ -40,8 +40,8 @@
       "id": "PAC-004",
       "line": 10,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_phase4_production_vertical pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history --locked -- --exact --ignored",
-        "function": "pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_phase4_production_vertical::public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict --locked -- --exact --ignored",
+        "function": "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs"
       },
@@ -56,7 +56,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-core --test int_phase1_transitions completion_rechecks_required_local_artifact_metadata_field_by_field --locked -- --exact",
+            "command": "cargo test -p podway-core --test int_suite int_phase1_transitions::completion_rechecks_required_local_artifact_metadata_field_by_field --locked -- --exact",
             "criterion_id": "PAC-005",
             "function": "completion_rechecks_required_local_artifact_metadata_field_by_field",
             "obligation_ids": [
@@ -67,7 +67,7 @@
             "path": "crates/podway-core/tests/int_phase1_transitions.rs"
           },
           {
-            "command": "cargo test -p podway-core --test int_phase1_transitions complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history --locked -- --exact",
+            "command": "cargo test -p podway-core --test int_suite int_phase1_transitions::complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history --locked -- --exact",
             "criterion_id": "PAC-005",
             "function": "complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history",
             "obligation_ids": [
@@ -84,8 +84,8 @@
       "id": "PAC-006",
       "line": 12,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_phase4_production_vertical pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history --locked -- --exact --ignored",
-        "function": "pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_phase4_production_vertical::public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict --locked -- --exact --ignored",
+        "function": "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs"
       },
@@ -96,7 +96,7 @@
       "id": "PAC-007",
       "line": 16,
       "proof": {
-        "command": "cargo test -p podway-config --test int_procedure_v1 pac_011_016_custom_procedure_validates_snapshots_and_starts_with_all_item_constraints --locked -- --exact",
+        "command": "cargo test -p podway-config --test int_suite int_procedure_v1::pac_011_016_custom_procedure_validates_snapshots_and_starts_with_all_item_constraints --locked -- --exact",
         "function": "pac_011_016_custom_procedure_validates_snapshots_and_starts_with_all_item_constraints",
         "kind": "cargo-test",
         "path": "crates/podway-config/tests/int_procedure_v1.rs"
@@ -108,7 +108,7 @@
       "id": "PAC-008",
       "line": 17,
       "proof": {
-        "command": "cargo test -p podway-core --test int_phase1_transitions custom_ordered_procedure_advances_in_declared_order_with_immutable_snapshot --locked -- --exact",
+        "command": "cargo test -p podway-core --test int_suite int_phase1_transitions::custom_ordered_procedure_advances_in_declared_order_with_immutable_snapshot --locked -- --exact",
         "function": "custom_ordered_procedure_advances_in_declared_order_with_immutable_snapshot",
         "kind": "cargo-test",
         "path": "crates/podway-core/tests/int_phase1_transitions.rs"
@@ -120,7 +120,7 @@
       "id": "PAC-009",
       "line": 18,
       "proof": {
-        "command": "cargo test -p podway-config --test int_procedure_v1 pac_011_016_custom_procedure_validates_snapshots_and_starts_with_all_item_constraints --locked -- --exact",
+        "command": "cargo test -p podway-config --test int_suite int_procedure_v1::pac_011_016_custom_procedure_validates_snapshots_and_starts_with_all_item_constraints --locked -- --exact",
         "function": "pac_011_016_custom_procedure_validates_snapshots_and_starts_with_all_item_constraints",
         "kind": "cargo-test",
         "path": "crates/podway-config/tests/int_procedure_v1.rs"
@@ -136,7 +136,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-core --test int_phase1_transitions complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history --locked -- --exact",
+            "command": "cargo test -p podway-core --test int_suite int_phase1_transitions::complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history --locked -- --exact",
             "criterion_id": "PAC-010",
             "function": "complete_skip_retry_return_block_unblock_and_cancel_preserve_attempt_history",
             "obligation_ids": [
@@ -155,7 +155,7 @@
       "id": "PAC-011",
       "line": 20,
       "proof": {
-        "command": "cargo test -p podway-core --test int_phase1_state_matrix pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
+        "command": "cargo test -p podway-core --test int_suite int_phase1_state_matrix::pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
         "function": "pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history",
         "kind": "cargo-test",
         "path": "crates/podway-core/tests/int_phase1_state_matrix.rs"
@@ -167,7 +167,7 @@
       "id": "PAC-012",
       "line": 21,
       "proof": {
-        "command": "cargo test -p podway-core --test int_phase1_state_matrix pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
+        "command": "cargo test -p podway-core --test int_suite int_phase1_state_matrix::pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
         "function": "pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history",
         "kind": "cargo-test",
         "path": "crates/podway-core/tests/int_phase1_state_matrix.rs"
@@ -179,7 +179,7 @@
       "id": "PAC-013",
       "line": 22,
       "proof": {
-        "command": "cargo test -p podway-core --test int_phase1_state_matrix pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
+        "command": "cargo test -p podway-core --test int_suite int_phase1_state_matrix::pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
         "function": "pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history",
         "kind": "cargo-test",
         "path": "crates/podway-core/tests/int_phase1_state_matrix.rs"
@@ -191,7 +191,7 @@
       "id": "PAC-014",
       "line": 23,
       "proof": {
-        "command": "cargo test -p podway-core --test int_phase1_state_matrix pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
+        "command": "cargo test -p podway-core --test int_suite int_phase1_state_matrix::pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
         "function": "pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history",
         "kind": "cargo-test",
         "path": "crates/podway-core/tests/int_phase1_state_matrix.rs"
@@ -203,7 +203,7 @@
       "id": "PAC-015",
       "line": 24,
       "proof": {
-        "command": "cargo test -p podway-core --test int_phase1_state_matrix pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
+        "command": "cargo test -p podway-core --test int_suite int_phase1_state_matrix::pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
         "function": "pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history",
         "kind": "cargo-test",
         "path": "crates/podway-core/tests/int_phase1_state_matrix.rs"
@@ -215,7 +215,7 @@
       "id": "PAC-016",
       "line": 25,
       "proof": {
-        "command": "cargo test -p podway-core --test int_phase1_state_matrix pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
+        "command": "cargo test -p podway-core --test int_suite int_phase1_state_matrix::pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history --locked -- --exact",
         "function": "pac_066_retry_return_and_reopen_leave_exactly_one_active_attempt_and_reset_deletes_session_history",
         "kind": "cargo-test",
         "path": "crates/podway-core/tests/int_phase1_state_matrix.rs"
@@ -231,7 +231,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_daemon_runtime pac017_daemon_is_the_sole_normal_store_writer --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_daemon_runtime::pac017_daemon_is_the_sole_normal_store_writer --locked -- --exact",
             "criterion_id": "PAC-017",
             "function": "pac017_daemon_is_the_sole_normal_store_writer",
             "obligation_ids": [
@@ -254,7 +254,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-store --test int_phase4_store_transactions pac_018_admission_acknowledgement_survives_independent_reopen_with_receipt_and_fifo_state --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::pac_018_admission_acknowledgement_survives_independent_reopen_with_receipt_and_fifo_state --locked -- --exact",
             "criterion_id": "PAC-018",
             "function": "pac_018_admission_acknowledgement_survives_independent_reopen_with_receipt_and_fifo_state",
             "obligation_ids": [
@@ -273,7 +273,7 @@
       "id": "PAC-019",
       "line": 31,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase4_store_transactions independent_sqlite_handles_claim_the_fifo_head_once --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::independent_sqlite_handles_claim_the_fifo_head_once --locked -- --exact",
         "function": "independent_sqlite_handles_claim_the_fifo_head_once",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase4_store_transactions.rs"
@@ -285,7 +285,7 @@
       "id": "PAC-020",
       "line": 32,
       "proof": {
-        "command": "cargo test -p podway-daemon --test int_phase4_scheduler same_key_serializes_while_different_keys_overlap --locked -- --exact",
+        "command": "cargo test -p podway-daemon --test int_suite int_phase4_scheduler::same_key_serializes_while_different_keys_overlap --locked -- --exact",
         "function": "same_key_serializes_while_different_keys_overlap",
         "kind": "cargo-test",
         "path": "crates/podway-daemon/tests/int_phase4_scheduler.rs"
@@ -297,7 +297,7 @@
       "id": "PAC-021",
       "line": 33,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase4_store_transactions concurrent_same_item_updates_reject_the_stale_revision_and_preserve_the_winning_durable_state --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::concurrent_same_item_updates_reject_the_stale_revision_and_preserve_the_winning_durable_state --locked -- --exact",
         "function": "concurrent_same_item_updates_reject_the_stale_revision_and_preserve_the_winning_durable_state",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase4_store_transactions.rs"
@@ -313,16 +313,16 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-cli --test e2e_phase4_commands pac_022_cursor_mutation_is_rejected_after_authoritative_active_stage_drift --locked -- --exact",
+            "command": "cargo test -p podway-cli --test int_suite int_phase4_cli_contract::pac_022_cursor_mutation_is_rejected_after_authoritative_active_stage_drift --locked -- --exact",
             "criterion_id": "PAC-022",
             "function": "pac_022_cursor_mutation_is_rejected_after_authoritative_active_stage_drift",
             "obligation_ids": [
               "cursor-precondition-transmitted"
             ],
-            "path": "crates/podway-cli/tests/e2e_phase4_commands.rs"
+            "path": "crates/podway-cli/tests/int_phase4_cli_contract.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase5_execution g006_stale_uncheck_is_terminal_and_does_not_partially_mutate --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase5_execution::g006_stale_uncheck_is_terminal_and_does_not_partially_mutate --locked -- --exact",
             "criterion_id": "PAC-022",
             "function": "g006_stale_uncheck_is_terminal_and_does_not_partially_mutate",
             "obligation_ids": [
@@ -340,7 +340,7 @@
       "id": "PAC-023",
       "line": 35,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase4_store_transactions lost_response_retry_replays_one_durable_admission_receipt_after_reopen --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::lost_response_retry_replays_one_durable_admission_receipt_after_reopen --locked -- --exact",
         "function": "lost_response_retry_replays_one_durable_admission_receipt_after_reopen",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase4_store_transactions.rs"
@@ -356,7 +356,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-store --test int_phase4_store_transactions pac_024_daemon_equivalent_reopen_recovers_running_and_keeps_queued_jobs_discoverable --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::pac_024_daemon_equivalent_reopen_recovers_running_and_keeps_queued_jobs_discoverable --locked -- --exact",
             "criterion_id": "PAC-024",
             "function": "pac_024_daemon_equivalent_reopen_recovers_running_and_keeps_queued_jobs_discoverable",
             "obligation_ids": [
@@ -375,7 +375,7 @@
       "id": "PAC-025",
       "line": 37,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase4_store_transactions cancellation_is_terminal_only_before_claim_and_running_job_is_unchanged --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::cancellation_is_terminal_only_before_claim_and_running_job_is_unchanged --locked -- --exact",
         "function": "cancellation_is_terminal_only_before_claim_and_running_job_is_unchanged",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase4_store_transactions.rs"
@@ -391,7 +391,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-store --test int_phase2_crash_matrix crash_registry_has_exact_unique_store_owned_failpoint_coverage --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase2_crash_matrix::crash_registry_has_exact_unique_store_owned_failpoint_coverage --locked -- --exact",
             "criterion_id": "PAC-026",
             "function": "crash_registry_has_exact_unique_store_owned_failpoint_coverage",
             "obligation_ids": [
@@ -401,7 +401,7 @@
             "path": "crates/podway-store/tests/int_phase2_crash_matrix.rs"
           },
           {
-            "command": "cargo test -p podway-store --test int_phase2_crash_matrix store_owned_crash_matrix_aborts_children_then_recovers_exactly_once --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase2_crash_matrix::store_owned_crash_matrix_aborts_children_then_recovers_exactly_once --locked -- --exact",
             "criterion_id": "PAC-026",
             "function": "store_owned_crash_matrix_aborts_children_then_recovers_exactly_once",
             "obligation_ids": [
@@ -423,7 +423,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-store --test int_phase4_store_transactions pac_027_terminal_state_and_result_roll_back_or_commit_together --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::pac_027_terminal_state_and_result_roll_back_or_commit_together --locked -- --exact",
             "criterion_id": "PAC-027",
             "function": "pac_027_terminal_state_and_result_roll_back_or_commit_together",
             "obligation_ids": [
@@ -443,7 +443,7 @@
       "id": "PAC-028",
       "line": 43,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase4_store_transactions terminal_failure_replays_exactly_without_mutating_a_current_session --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::terminal_failure_replays_exactly_without_mutating_a_current_session --locked -- --exact",
         "function": "terminal_failure_replays_exactly_without_mutating_a_current_session",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase4_store_transactions.rs"
@@ -455,7 +455,7 @@
       "id": "PAC-029",
       "line": 44,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase4_store_transactions pac_024_daemon_equivalent_reopen_recovers_running_and_keeps_queued_jobs_discoverable --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::pac_024_daemon_equivalent_reopen_recovers_running_and_keeps_queued_jobs_discoverable --locked -- --exact",
         "function": "pac_024_daemon_equivalent_reopen_recovers_running_and_keeps_queued_jobs_discoverable",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase4_store_transactions.rs"
@@ -471,7 +471,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-store --test int_phase2_reset_lifecycle pac_030_interrupted_reset_all_publication_recovers_and_retries_idempotently --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase2_reset_lifecycle::pac_030_interrupted_reset_all_publication_recovers_and_retries_idempotently --locked -- --exact",
             "criterion_id": "PAC-030",
             "function": "pac_030_interrupted_reset_all_publication_recovers_and_retries_idempotently",
             "obligation_ids": [
@@ -491,7 +491,7 @@
       "id": "PAC-031",
       "line": 49,
       "proof": {
-        "command": "cargo test -p podway-git --test int_phase3_resolver arbitrary_empty_partial_bare_malformed_and_symlinked_layouts_fail_closed --locked -- --exact",
+        "command": "cargo test -p podway-git --test int_suite int_phase3_resolver::arbitrary_empty_partial_bare_malformed_and_symlinked_layouts_fail_closed --locked -- --exact",
         "function": "arbitrary_empty_partial_bare_malformed_and_symlinked_layouts_fail_closed",
         "kind": "cargo-test",
         "path": "crates/podway-git/tests/int_phase3_resolver.rs"
@@ -503,7 +503,7 @@
       "id": "PAC-032",
       "line": 50,
       "proof": {
-        "command": "cargo test -p podway-git --test int_phase3_resolver realistic_main_linked_nested_and_nearest_layouts_are_discovered --locked -- --exact",
+        "command": "cargo test -p podway-git --test int_suite int_phase3_resolver::realistic_main_linked_nested_and_nearest_layouts_are_discovered --locked -- --exact",
         "function": "realistic_main_linked_nested_and_nearest_layouts_are_discovered",
         "kind": "cargo-test",
         "path": "crates/podway-git/tests/int_phase3_resolver.rs"
@@ -515,7 +515,7 @@
       "id": "PAC-033",
       "line": 51,
       "proof": {
-        "command": "cargo test -p podway-git --test int_phase3_resolver artifacts_reject_final_and_intermediate_symlinks_and_preserve_non_utf8_bytes --locked -- --exact",
+        "command": "cargo test -p podway-git --test int_suite int_phase3_resolver::artifacts_reject_final_and_intermediate_symlinks_and_preserve_non_utf8_bytes --locked -- --exact",
         "function": "artifacts_reject_final_and_intermediate_symlinks_and_preserve_non_utf8_bytes",
         "kind": "cargo-test",
         "path": "crates/podway-git/tests/int_phase3_resolver.rs"
@@ -527,7 +527,7 @@
       "id": "PAC-034",
       "line": 52,
       "proof": {
-        "command": "cargo test -p podway-daemon --test int_phase4_runtime_workspace copied_workspace_uuid_conflict_never_adopts_or_mutates_the_copy --locked -- --exact",
+        "command": "cargo test -p podway-daemon --test int_suite int_phase4_runtime_workspace::copied_workspace_uuid_conflict_never_adopts_or_mutates_the_copy --locked -- --exact",
         "function": "copied_workspace_uuid_conflict_never_adopts_or_mutates_the_copy",
         "kind": "cargo-test",
         "path": "crates/podway-daemon/tests/int_phase4_runtime_workspace.rs"
@@ -539,7 +539,7 @@
       "id": "PAC-035",
       "line": 53,
       "proof": {
-        "command": "cargo test -p podway-git --test int_phase3_resolver durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replacement --locked -- --exact",
+        "command": "cargo test -p podway-git --test int_suite int_phase3_resolver::durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replacement --locked -- --exact",
         "function": "durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replacement",
         "kind": "cargo-test",
         "path": "crates/podway-git/tests/int_phase3_resolver.rs"
@@ -555,7 +555,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-git --test int_phase4_init_layout pac036_runtime_is_confined_to_podway_and_ignored_by_the_exact_rule --locked -- --exact",
+            "command": "cargo test -p podway-git --test int_suite int_phase4_init_layout::pac036_runtime_is_confined_to_podway_and_ignored_by_the_exact_rule --locked -- --exact",
             "criterion_id": "PAC-036",
             "function": "pac036_runtime_is_confined_to_podway_and_ignored_by_the_exact_rule",
             "obligation_ids": [
@@ -578,7 +578,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_daemon_runtime pac037_deleted_registered_worktree_is_unavailable_without_adoption --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_daemon_runtime::pac037_deleted_registered_worktree_is_unavailable_without_adoption --locked -- --exact",
             "criterion_id": "PAC-037",
             "function": "pac037_deleted_registered_worktree_is_unavailable_without_adoption",
             "obligation_ids": [
@@ -598,7 +598,7 @@
       "id": "PAC-038",
       "line": 59,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase2_schema_codec schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum --locked -- --exact",
         "function": "schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase2_schema_codec.rs"
@@ -610,7 +610,7 @@
       "id": "PAC-039",
       "line": 60,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase2_schema_codec schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum --locked -- --exact",
         "function": "schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase2_schema_codec.rs"
@@ -626,7 +626,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-store --test int_phase2_schema_codec pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation --locked -- --exact",
             "criterion_id": "PAC-040",
             "function": "pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation",
             "obligation_ids": [
@@ -650,7 +650,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-store --test int_phase2_schema_codec pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed --locked -- --exact",
             "criterion_id": "PAC-041",
             "function": "pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed",
             "obligation_ids": [
@@ -670,7 +670,7 @@
       "id": "PAC-042",
       "line": 63,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase2_schema_codec pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed --locked -- --exact",
         "function": "pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase2_schema_codec.rs"
@@ -682,7 +682,7 @@
       "id": "PAC-043",
       "line": 64,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase2_schema_codec pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed --locked -- --exact",
         "function": "pac_041_migration_checksum_validation_and_transactional_rollback_fail_closed",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase2_schema_codec.rs"
@@ -698,7 +698,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-daemon --test int_phase5_reset_runtime pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_idempotently --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase5_reset_runtime::pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_idempotently --locked -- --exact",
             "criterion_id": "PAC-044",
             "function": "pac_044_reset_all_destroys_history_recreates_a_mutable_workspace_and_replays_idempotently",
             "obligation_ids": [
@@ -722,7 +722,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-store --test int_phase4_store_transactions pac_045_pruning_bounds_terminal_and_idempotency_retention_with_oldest_replay --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::pac_045_pruning_bounds_terminal_and_idempotency_retention_with_oldest_replay --locked -- --exact",
             "criterion_id": "PAC-045",
             "function": "pac_045_pruning_bounds_terminal_and_idempotency_retention_with_oldest_replay",
             "obligation_ids": [
@@ -742,7 +742,7 @@
       "id": "PAC-046",
       "line": 67,
       "proof": {
-        "command": "cargo test -p podway-daemon --test int_phase4_runtime_workspace registry_remains_metadata_only_and_never_contains_workspace_task_state --locked -- --exact",
+        "command": "cargo test -p podway-daemon --test int_suite int_phase4_runtime_workspace::registry_remains_metadata_only_and_never_contains_workspace_task_state --locked -- --exact",
         "function": "registry_remains_metadata_only_and_never_contains_workspace_task_state",
         "kind": "cargo-test",
         "path": "crates/podway-daemon/tests/int_phase4_runtime_workspace.rs"
@@ -754,10 +754,10 @@
       "id": "PAC-047",
       "line": 71,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_phase5_cli public_route_surface_table_keeps_parser_help_and_completion_in_lockstep --locked -- --exact",
+        "command": "cargo test -p podway-cli --test int_suite int_phase5_cli_contract::public_route_surface_table_keeps_parser_help_and_completion_in_lockstep --locked -- --exact",
         "function": "public_route_surface_table_keeps_parser_help_and_completion_in_lockstep",
         "kind": "cargo-test",
-        "path": "crates/podway-cli/tests/e2e_phase5_cli.rs"
+        "path": "crates/podway-cli/tests/int_phase5_cli_contract.rs"
       },
       "status": "automated",
       "text": "Every public command has complete help."
@@ -770,7 +770,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-cli --test e2e_phase5_cli pac_048_recording_daemon_contract_table_validates_successful_versioned_json_output_for_every_route --locked -- --exact",
+            "command": "cargo test -p podway-cli --test int_suite int_phase5_cli_contract::pac_048_recording_daemon_contract_table_validates_successful_versioned_json_output_for_every_route --locked -- --exact",
             "criterion_id": "PAC-048",
             "function": "pac_048_recording_daemon_contract_table_validates_successful_versioned_json_output_for_every_route",
             "obligation_ids": [
@@ -779,7 +779,7 @@
               "json-command-and-result-match-route",
               "json-errors-are-versioned-envelopes"
             ],
-            "path": "crates/podway-cli/tests/e2e_phase5_cli.rs"
+            "path": "crates/podway-cli/tests/int_phase5_cli_contract.rs"
           }
         ]
       },
@@ -806,7 +806,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-cli --test e2e_phase5_cli pac_050_status_text_and_json_render_the_same_typed_state_semantics --locked -- --exact",
+            "command": "cargo test -p podway-cli --test int_suite int_phase5_cli_contract::pac_050_status_text_and_json_render_the_same_typed_state_semantics --locked -- --exact",
             "criterion_id": "PAC-050",
             "function": "pac_050_status_text_and_json_render_the_same_typed_state_semantics",
             "obligation_ids": [
@@ -814,7 +814,7 @@
               "semantic-state-projections-equal",
               "same-daemon-contract-in-both-modes"
             ],
-            "path": "crates/podway-cli/tests/e2e_phase5_cli.rs"
+            "path": "crates/podway-cli/tests/int_phase5_cli_contract.rs"
           }
         ]
       },
@@ -825,10 +825,10 @@
       "id": "PAC-051",
       "line": 75,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_phase5_cli public_route_surface_table_keeps_parser_help_and_completion_in_lockstep --locked -- --exact",
+        "command": "cargo test -p podway-cli --test int_suite int_phase5_cli_contract::public_route_surface_table_keeps_parser_help_and_completion_in_lockstep --locked -- --exact",
         "function": "public_route_surface_table_keeps_parser_help_and_completion_in_lockstep",
         "kind": "cargo-test",
-        "path": "crates/podway-cli/tests/e2e_phase5_cli.rs"
+        "path": "crates/podway-cli/tests/int_phase5_cli_contract.rs"
       },
       "status": "automated",
       "text": "zsh, bash, and fish completion are shipped and tested."
@@ -837,7 +837,7 @@
       "id": "PAC-052",
       "line": 76,
       "proof": {
-        "command": "cargo test -p podway-protocol --test int_phase4_framing framing_rejects_malformed_and_catalog_invalid_errors --locked -- --exact",
+        "command": "cargo test -p podway-protocol --test int_suite int_phase4_framing::framing_rejects_malformed_and_catalog_invalid_errors --locked -- --exact",
         "function": "framing_rejects_malformed_and_catalog_invalid_errors",
         "kind": "cargo-test",
         "path": "crates/podway-protocol/tests/int_phase4_framing.rs"
@@ -853,7 +853,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-cli --test e2e_phase4_commands pac_053_explicit_revision_attempt_item_revision_and_idempotency_reach_exact_wire_fields --locked -- --exact",
+            "command": "cargo test -p podway-cli --test int_suite int_phase4_cli_contract::pac_053_explicit_revision_attempt_item_revision_and_idempotency_reach_exact_wire_fields --locked -- --exact",
             "criterion_id": "PAC-053",
             "function": "pac_053_explicit_revision_attempt_item_revision_and_idempotency_reach_exact_wire_fields",
             "obligation_ids": [
@@ -862,7 +862,7 @@
               "explicit-item-revision-reaches-wire",
               "explicit-idempotency-key-reaches-wire"
             ],
-            "path": "crates/podway-cli/tests/e2e_phase4_commands.rs"
+            "path": "crates/podway-cli/tests/int_phase4_cli_contract.rs"
           }
         ]
       },
@@ -873,7 +873,7 @@
       "id": "PAC-054",
       "line": 81,
       "proof": {
-        "command": "cargo test -p podway-service --test int_phase6_native_service production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
+        "command": "cargo test -p podway-service --test int_suite int_phase6_native_service::production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
         "function": "production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl",
         "kind": "cargo-test",
         "path": "crates/podway-service/tests/int_phase6_native_service.rs"
@@ -885,7 +885,7 @@
       "id": "PAC-055",
       "line": 82,
       "proof": {
-        "command": "cargo test -p podway-service --test int_phase6_native_service production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
+        "command": "cargo test -p podway-service --test int_suite int_phase6_native_service::production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
         "function": "production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl",
         "kind": "cargo-test",
         "path": "crates/podway-service/tests/int_phase6_native_service.rs"
@@ -897,7 +897,7 @@
       "id": "PAC-056",
       "line": 83,
       "proof": {
-        "command": "cargo test -p podway-service --test int_phase6_native_service production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
+        "command": "cargo test -p podway-service --test int_suite int_phase6_native_service::production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
         "function": "production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl",
         "kind": "cargo-test",
         "path": "crates/podway-service/tests/int_phase6_native_service.rs"
@@ -909,7 +909,7 @@
       "id": "PAC-057",
       "line": 84,
       "proof": {
-        "command": "cargo test -p podway-service --test int_phase6_native_service production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
+        "command": "cargo test -p podway-service --test int_suite int_phase6_native_service::production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
         "function": "production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl",
         "kind": "cargo-test",
         "path": "crates/podway-service/tests/int_phase6_native_service.rs"
@@ -921,7 +921,7 @@
       "id": "PAC-058",
       "line": 85,
       "proof": {
-        "command": "cargo test -p podway-service --test int_phase6_native_service production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
+        "command": "cargo test -p podway-service --test int_suite int_phase6_native_service::production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
         "function": "production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl",
         "kind": "cargo-test",
         "path": "crates/podway-service/tests/int_phase6_native_service.rs"
@@ -933,7 +933,7 @@
       "id": "PAC-059",
       "line": 86,
       "proof": {
-        "command": "cargo test -p podway-service --test int_phase6_native_service production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
+        "command": "cargo test -p podway-service --test int_suite int_phase6_native_service::production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
         "function": "production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl",
         "kind": "cargo-test",
         "path": "crates/podway-service/tests/int_phase6_native_service.rs"
@@ -945,7 +945,7 @@
       "id": "PAC-060",
       "line": 87,
       "proof": {
-        "command": "cargo test -p podway-service --test int_phase6_native_service production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
+        "command": "cargo test -p podway-service --test int_suite int_phase6_native_service::production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl --locked -- --exact",
         "function": "production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl",
         "kind": "cargo-test",
         "path": "crates/podway-service/tests/int_phase6_native_service.rs"
@@ -957,7 +957,7 @@
       "id": "PAC-061",
       "line": 91,
       "proof": {
-        "command": "cargo test -p podway-daemon --test int_phase4_native_execution g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal --locked -- --exact",
+        "command": "cargo test -p podway-daemon --test int_suite int_phase4_native_execution::g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal --locked -- --exact",
         "function": "g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal",
         "kind": "cargo-test",
         "path": "crates/podway-daemon/tests/int_phase4_native_execution.rs"
@@ -973,7 +973,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-git --test int_phase4_init_layout pac062_layout_api_preserves_real_main_and_linked_worktree_metadata --locked -- --exact",
+            "command": "cargo test -p podway-git --test int_suite int_phase4_init_layout::pac062_layout_api_preserves_real_main_and_linked_worktree_metadata --locked -- --exact",
             "criterion_id": "PAC-062",
             "function": "pac062_layout_api_preserves_real_main_and_linked_worktree_metadata",
             "obligation_ids": [
@@ -996,7 +996,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_endpoint pac063_daemon_exposes_only_a_private_unix_endpoint_and_no_network_surface --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_endpoint::pac063_daemon_exposes_only_a_private_unix_endpoint_and_no_network_surface --locked -- --exact",
             "criterion_id": "PAC-063",
             "function": "pac063_daemon_exposes_only_a_private_unix_endpoint_and_no_network_surface",
             "obligation_ids": [
@@ -1020,7 +1020,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-daemon --test int_phase5_execution pac064_local_artifact_content_never_enters_durable_request_session_or_event_data --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase5_execution::pac064_local_artifact_content_never_enters_durable_request_session_or_event_data --locked -- --exact",
             "criterion_id": "PAC-064",
             "function": "pac064_local_artifact_content_never_enters_durable_request_session_or_event_data",
             "obligation_ids": [
@@ -1040,7 +1040,7 @@
       "id": "PAC-065",
       "line": 95,
       "proof": {
-        "command": "cargo test -p podway-daemon --test int_phase8_observability event_records_are_closed_bounded_and_private --locked -- --exact",
+        "command": "cargo test -p podway-daemon --test int_suite int_phase8_observability::event_records_are_closed_bounded_and_private --locked -- --exact",
         "function": "event_records_are_closed_bounded_and_private",
         "kind": "cargo-test",
         "path": "crates/podway-daemon/tests/int_phase8_observability.rs"
@@ -1052,10 +1052,10 @@
       "id": "PAC-066",
       "line": 96,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_phase5_cli pac_003_help_states_the_same_user_local_socket_trust_boundary --locked -- --exact",
+        "command": "cargo test -p podway-cli --test int_suite int_phase5_cli_contract::pac_003_help_states_the_same_user_local_socket_trust_boundary --locked -- --exact",
         "function": "pac_003_help_states_the_same_user_local_socket_trust_boundary",
         "kind": "cargo-test",
-        "path": "crates/podway-cli/tests/e2e_phase5_cli.rs"
+        "path": "crates/podway-cli/tests/int_phase5_cli_contract.rs"
       },
       "status": "automated",
       "text": "Same-user trust limitations are documented in help and release documentation."
@@ -1064,10 +1064,10 @@
       "id": "PAC-067",
       "line": 97,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_phase5_cli pac_067_public_surface_has_no_authentication_or_workspace_access_key --locked -- --exact",
+        "command": "cargo test -p podway-cli --test int_suite int_phase5_cli_contract::pac_067_public_surface_has_no_authentication_or_workspace_access_key --locked -- --exact",
         "function": "pac_067_public_surface_has_no_authentication_or_workspace_access_key",
         "kind": "cargo-test",
-        "path": "crates/podway-cli/tests/e2e_phase5_cli.rs"
+        "path": "crates/podway-cli/tests/int_phase5_cli_contract.rs"
       },
       "status": "automated",
       "text": "No workspace access key or misleading authentication claim exists."
@@ -1076,7 +1076,7 @@
       "id": "PAC-068",
       "line": 101,
       "proof": {
-        "command": "cargo test -p podway-presets --test int_phase1_presets pac_068_071_built_in_preset_table_conformance --locked -- --exact",
+        "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
         "function": "pac_068_071_built_in_preset_table_conformance",
         "kind": "cargo-test",
         "path": "crates/podway-presets/tests/int_phase1_presets.rs"
@@ -1088,7 +1088,7 @@
       "id": "PAC-069",
       "line": 102,
       "proof": {
-        "command": "cargo test -p podway-presets --test int_phase1_presets pac_068_071_built_in_preset_table_conformance --locked -- --exact",
+        "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
         "function": "pac_068_071_built_in_preset_table_conformance",
         "kind": "cargo-test",
         "path": "crates/podway-presets/tests/int_phase1_presets.rs"
@@ -1100,7 +1100,7 @@
       "id": "PAC-070",
       "line": 103,
       "proof": {
-        "command": "cargo test -p podway-presets --test int_phase1_presets pac_068_071_built_in_preset_table_conformance --locked -- --exact",
+        "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
         "function": "pac_068_071_built_in_preset_table_conformance",
         "kind": "cargo-test",
         "path": "crates/podway-presets/tests/int_phase1_presets.rs"
@@ -1112,7 +1112,7 @@
       "id": "PAC-071",
       "line": 104,
       "proof": {
-        "command": "cargo test -p podway-presets --test int_phase1_presets pac_068_071_built_in_preset_table_conformance --locked -- --exact",
+        "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
         "function": "pac_068_071_built_in_preset_table_conformance",
         "kind": "cargo-test",
         "path": "crates/podway-presets/tests/int_phase1_presets.rs"
@@ -1124,7 +1124,7 @@
       "id": "PAC-072",
       "line": 108,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
         "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
@@ -1136,7 +1136,7 @@
       "id": "PAC-073",
       "line": 109,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
         "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
@@ -1148,7 +1148,7 @@
       "id": "PAC-074",
       "line": 110,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
         "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
@@ -1160,7 +1160,7 @@
       "id": "PAC-075",
       "line": 111,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
         "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
@@ -1172,7 +1172,7 @@
       "id": "PAC-076",
       "line": 112,
       "proof": {
-        "command": "cargo test -p podway-store --test int_phase2_schema_codec pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation --locked -- --exact",
+        "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation --locked -- --exact",
         "function": "pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase2_schema_codec.rs"
@@ -1184,7 +1184,7 @@
       "id": "PAC-077",
       "line": 113,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_release_archive pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
         "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
@@ -1200,7 +1200,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "cargo test -p podway-daemon --test int_phase5_execution pstrt001_digest_mismatch_is_rejected_before_durable_admission --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase5_execution::pstrt001_digest_mismatch_is_rejected_before_durable_admission --locked -- --exact",
             "criterion_id": "PAC-078",
             "function": "pstrt001_digest_mismatch_is_rejected_before_durable_admission",
             "obligation_ids": [
@@ -1209,7 +1209,7 @@
             "path": "crates/podway-daemon/tests/int_phase5_execution.rs"
           },
           {
-            "command": "cargo test -p podway-store --test int_phase4_store_transactions pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen --locked -- --exact",
+            "command": "cargo test -p podway-store --test int_suite int_phase4_store_transactions::pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen --locked -- --exact",
             "criterion_id": "PAC-078",
             "function": "pstrt002_start_snapshot_commits_atomically_with_admission_and_survives_reopen",
             "obligation_ids": [
@@ -1218,7 +1218,7 @@
             "path": "crates/podway-store/tests/int_phase4_store_transactions.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase5_execution pstrt_v1_start_replay_survives_sqlite_prune_reopen_and_source_deletion --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase5_execution::pstrt_v1_start_replay_survives_sqlite_prune_reopen_and_source_deletion --locked -- --exact",
             "criterion_id": "PAC-078",
             "function": "pstrt_v1_start_replay_survives_sqlite_prune_reopen_and_source_deletion",
             "obligation_ids": [
@@ -1227,14 +1227,14 @@
             "path": "crates/podway-daemon/tests/int_phase5_execution.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase5_execution pstrt_v0_start_replay_survives_sqlite_prune_reopen_and_source_deletion --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase5_execution::pstrt_v0_start_replay_survives_sqlite_prune_reopen_and_source_deletion --locked -- --exact",
             "criterion_id": "PAC-078",
             "function": "pstrt_v0_start_replay_survives_sqlite_prune_reopen_and_source_deletion",
             "obligation_ids": [],
             "path": "crates/podway-daemon/tests/int_phase5_execution.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_execution pstrt003_guarded_start_replays_by_digest_and_conflicts_on_a_different_digest --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_execution::pstrt003_guarded_start_replays_by_digest_and_conflicts_on_a_different_digest --locked -- --exact",
             "criterion_id": "PAC-078",
             "function": "pstrt003_guarded_start_replays_by_digest_and_conflicts_on_a_different_digest",
             "obligation_ids": [
@@ -1243,7 +1243,7 @@
             "path": "crates/podway-daemon/tests/int_phase4_execution.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase5_execution pstrt005_admitted_custom_procedure_survives_source_drift_worker_delay_and_engine_restart --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase5_execution::pstrt005_admitted_custom_procedure_survives_source_drift_worker_delay_and_engine_restart --locked -- --exact",
             "criterion_id": "PAC-078",
             "function": "pstrt005_admitted_custom_procedure_survives_source_drift_worker_delay_and_engine_restart",
             "obligation_ids": [
@@ -1252,25 +1252,11 @@
             "path": "crates/podway-daemon/tests/int_phase5_execution.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_native_execution g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_native_execution::g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal --locked -- --exact",
             "criterion_id": "PAC-078",
             "function": "g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_traversal",
             "obligation_ids": [],
             "path": "crates/podway-daemon/tests/int_phase4_native_execution.rs"
-          },
-          {
-            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_phase4_production_vertical::pstrt_production_vertical_binds_guard_replay_status_and_terminal_job_digest",
-            "criterion_id": "PAC-078",
-            "function": "pstrt_production_vertical_binds_guard_replay_status_and_terminal_job_digest",
-            "obligation_ids": [],
-            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs"
-          },
-          {
-            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_phase4_production_vertical::pstrt_start_replace_production_vertical_matches_start_integrity_and_exact_replay",
-            "criterion_id": "PAC-078",
-            "function": "pstrt_start_replace_production_vertical_matches_start_integrity_and_exact_replay",
-            "obligation_ids": [],
-            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs"
           }
         ]
       },
@@ -1285,7 +1271,7 @@
         "kind": "cargo-test-set",
         "members": [
           {
-            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_phase4_production_vertical::recon_response_loss_is_recovered_by_lookup_and_exact_replay",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::recon_response_loss_is_recovered_by_lookup_and_exact_replay",
             "criterion_id": "PAC-079",
             "function": "recon_response_loss_is_recovered_by_lookup_and_exact_replay",
             "obligation_ids": [
@@ -1294,35 +1280,35 @@
             "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_production aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_production::aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue --locked -- --exact",
             "criterion_id": "PAC-079",
             "function": "aut_t_recon_job_lookup_projects_every_state_without_mutating_the_queue",
             "obligation_ids": [],
             "path": "crates/podway-daemon/tests/int_phase4_production.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_server disconnected_client_before_a_complete_frame_never_reaches_dispatch --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_server::disconnected_client_before_a_complete_frame_never_reaches_dispatch --locked -- --exact",
             "criterion_id": "PAC-079",
             "function": "disconnected_client_before_a_complete_frame_never_reaches_dispatch",
             "obligation_ids": [],
             "path": "crates/podway-daemon/tests/int_phase4_server.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_server disconnected_client_response_failure_is_emitted_or_explicitly_accounted --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_server::disconnected_client_response_failure_is_emitted_or_explicitly_accounted --locked -- --exact",
             "criterion_id": "PAC-079",
             "function": "disconnected_client_response_failure_is_emitted_or_explicitly_accounted",
             "obligation_ids": [],
             "path": "crates/podway-daemon/tests/int_phase4_server.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_dispatch synchronous_timeout_reports_the_admitted_job_without_cancellation --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_dispatch::synchronous_timeout_reports_the_admitted_job_without_cancellation --locked -- --exact",
             "criterion_id": "PAC-079",
             "function": "synchronous_timeout_reports_the_admitted_job_without_cancellation",
             "obligation_ids": [],
             "path": "crates/podway-daemon/tests/int_phase4_dispatch.rs"
           },
           {
-            "command": "cargo test -p podway-daemon --test int_phase4_worker deadline_rechecks_store_without_cancelling_work --locked -- --exact",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_worker::deadline_rechecks_store_without_cancelling_work --locked -- --exact",
             "criterion_id": "PAC-079",
             "function": "deadline_rechecks_store_without_cancelling_work",
             "obligation_ids": [],
@@ -1805,25 +1791,25 @@
     "path": "docs/reference/quality/61-product-acceptance.md"
   },
   "source_files": {
+    "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "3f189578f0e8a5a785ffaa961d8984f74dcd710e2aced3f241ed10ff2dffdae3",
     "crates/podway-cli/tests/e2e_release_archive.rs": "b27c53548d301d39769880f18f0ec8da14bc7c95b22b1da9ff9da321da1c2555",
-    "crates/podway-cli/tests/e2e_phase4_commands.rs": "a302a0cb7f8895ac9fa03a5befa6fe4393b00b14dd216734c304613c9253d50c",
-    "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "9745bd1da36894a3080763908a8514ba76f9b5bcb0ecd9b4b7216592038260c8",
-    "crates/podway-cli/tests/e2e_phase5_cli.rs": "32b69a8c77ee7792c22d48665b3d1174212b98bd37b7d1eb4a0a013fb20f1034",
+    "crates/podway-cli/tests/int_phase4_cli_contract.rs": "15de7c3f9f6590d5b360e6906e8b3dc9a8c0117383d5f9a1b58d4e248d291627",
+    "crates/podway-cli/tests/int_phase5_cli_contract.rs": "f0fa2c58e73121426c45fc6e7b022cde5e6537d7ec9ecd3075d0ae6716d1d59c",
     "crates/podway-config/tests/int_procedure_v1.rs": "3d7e2b41ba761fc46a5719bbf433b72d6a2f19275eaa4941f2ac4f8f0847132f",
     "crates/podway-core/tests/int_phase1_state_matrix.rs": "32eb5ce27feb9fdb1da91947af68fc5dfb06248806b6ed857672bf37485c8a5b",
     "crates/podway-core/tests/int_phase1_transitions.rs": "3415506bf37a332e8588ee9b42db4c35d7e8e02ea19b27adee22c488935f4a7d",
-    "crates/podway-daemon/tests/int_phase4_daemon_runtime.rs": "ffa11c7c3fe6e5f2df971ff8852fb2af743d799402fcae56ab2dcfe39c782a3c",
+    "crates/podway-daemon/tests/int_phase4_daemon_runtime.rs": "bf42d645eae7e06d318d04560ef1165b4953c3bfc136906887b7c11464aa3f13",
     "crates/podway-daemon/tests/int_phase4_dispatch.rs": "38d59bf8adcee4c41a8281f8d8c0911eff4393c33ac7b4277deed8200913b58f",
     "crates/podway-daemon/tests/int_phase4_endpoint.rs": "e5ccba4339798d547a3c5aac2b291afc4bac1f306bd6f42a4266289973756bd2",
     "crates/podway-daemon/tests/int_phase4_execution.rs": "9062b76911f92d09d10c700d909ca36c41c0adb1bf6398db3a355d3d05d102b2",
     "crates/podway-daemon/tests/int_phase4_native_execution.rs": "bb38b40e5303b1afa46b8b326d8d66c9d39aaf94558f42e01c1f566d3cb11726",
-    "crates/podway-daemon/tests/int_phase4_production.rs": "756205ba2d5439a546ed2279659b938129c7b8c2bc79c454cee1e3618fcf545a",
-    "crates/podway-daemon/tests/int_phase4_runtime_workspace.rs": "f2f4768077f41d72efff7281e2de5698728a84e36901371334ecc840624280d5",
+    "crates/podway-daemon/tests/int_phase4_production.rs": "9f91881a5cad8800703d63547125508cb923aff2d299cb7754b2172445a19049",
+    "crates/podway-daemon/tests/int_phase4_runtime_workspace.rs": "147df31f57f6efcf2c7ff04d87bb4e7113df0c02fdd3ecb08907cab6521705f3",
     "crates/podway-daemon/tests/int_phase4_scheduler.rs": "8a56672fc59d975e1c50f6737b656b92843eb11ab28351e11c324e3f12915ea0",
     "crates/podway-daemon/tests/int_phase4_server.rs": "e71ca6a484c097e9811e83e14ce21e9de600e1cd2ed802a914a1842d655a6527",
-    "crates/podway-daemon/tests/int_phase4_worker.rs": "32fbc21a8ad1ad517953800a4f972bf3547ec73a5aaa16c33bca25834c3b2ff8",
-    "crates/podway-daemon/tests/int_phase5_execution.rs": "530cc61fc7615c617ead9b9cb001dfa14c661527b23f2d1a021f446a09555c84",
-    "crates/podway-daemon/tests/int_phase5_reset_runtime.rs": "fa676c7979e9a270b36a80e8b98be29ca4c43c6792f17480cd5140d63b63ad08",
+    "crates/podway-daemon/tests/int_phase4_worker.rs": "93b285fe02fd4db2833b532beabd147661a0ec8c91b8a7cd19fd8f1bbf6e634e",
+    "crates/podway-daemon/tests/int_phase5_execution.rs": "73e64c7f7e9b5ff7ebe676e611b2ff255a9c503fdbddf4c32d04b3ddc11850fe",
+    "crates/podway-daemon/tests/int_phase5_reset_runtime.rs": "0e84de126710eb7d3698b0f940698c40e5889c0f958300c8d472e26ed4bbbbf7",
     "crates/podway-daemon/tests/int_phase8_observability.rs": "12161b83b37c5ca6e91708452953a62eebc1dbbc73c40ad5b016b6f35a07bdb9",
     "crates/podway-git/tests/int_phase3_resolver.rs": "6a45015a7dca7f309615e2dcdc966f129dbc88c543930a8128669aae37cc9739",
     "crates/podway-git/tests/int_phase4_init_layout.rs": "f748291d2c4a329cf3717b4a3ffeeb806712309b3826d746a3b49a6849d90cd1",
@@ -1831,8 +1817,8 @@
     "crates/podway-protocol/tests/arch_phase0_contract.rs": "c09a0000e4dae059f100f02ed2d82509daf6bb5b7bcbf07606d74cc658879196",
     "crates/podway-protocol/tests/int_phase4_framing.rs": "c934041aa2b5bb48458d66979f6eab5af6fc7365a1775999c26f88216ce5f02f",
     "crates/podway-service/tests/int_phase6_native_service.rs": "af961855e60b3e3571a94089e180fe1359a2bcbbdf2ecf4a7b5405c16badc575",
-    "crates/podway-store/tests/int_phase2_crash_matrix.rs": "a15f9274eb2c9ff7766e80f3b184c16986938d5026fa31cc45b74475370feede",
-    "crates/podway-store/tests/int_phase2_reset_lifecycle.rs": "d0a219de03a87271f430dc22d40beed70499c64e5e6d52d22afe1d84b15de0ae",
+    "crates/podway-store/tests/int_phase2_crash_matrix.rs": "afe5bb32c279ed38277aa1aaac2d0060594b0bba29cbe6b88c4339a072ffd135",
+    "crates/podway-store/tests/int_phase2_reset_lifecycle.rs": "60ea36b9a3037089b7af98248401dd9d9b826e5efe802a017452844fcf77546f",
     "crates/podway-store/tests/int_phase2_schema_codec.rs": "f5d9b312b16b4e28b41896c7b30eba066259206e2c3a204002b28009aa5356e4",
     "crates/podway-store/tests/int_phase4_store_transactions.rs": "97364f282f04ee1d2ac2b6af4d81bd8d65ed4c5eac56e335cbf2e1790f3360c4"
   },

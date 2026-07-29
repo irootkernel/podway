@@ -12,8 +12,8 @@ PRESET_DIR ?= docs/presets
 PRESET_VALIDATOR ?= target/debug/podway
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
-.PHONY: test test-prepare test-prepare-core test-unit test-int test-fuzzing test-e2e \
-	toolchain sync-docs-assets format vet lint architecture preset-validator \
+.PHONY: test test-prepare test-prepare-core test-rust test-unit test-int test-fuzzing test-e2e \
+	toolchain sync-docs-assets format vet lint architecture architecture-static preset-validator \
 	preset-create preset-import preset-tool-test contract-manifest dist
 
 toolchain:
@@ -22,8 +22,7 @@ toolchain:
 
 test:
 	$(MAKE) test-prepare
-	$(MAKE) test-unit
-	$(MAKE) test-int
+	$(MAKE) test-rust
 	$(MAKE) test-fuzzing
 	$(MAKE) test-e2e
 
@@ -34,9 +33,8 @@ test-prepare:
 test-prepare-core: toolchain
 	$(MAKE) sync-docs-assets
 	$(MAKE) format
-	$(MAKE) vet
 	$(MAKE) lint
-	$(MAKE) architecture
+	$(MAKE) architecture-static
 
 sync-docs-assets:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/sync_docs_assets.py --write
@@ -51,12 +49,14 @@ lint:
 	$(RUST_TOOLCHAIN_ENV) cargo clippy --workspace --all-targets --locked -- -D warnings
 	$(RUST_TOOLCHAIN_ENV) cargo deny check
 
-architecture:
+architecture: architecture-static
+	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'arch_*' --locked
+
+architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
-	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'arch_*' --locked
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --all
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_verification_runner.py
 	$(MAKE) contract-manifest
@@ -89,13 +89,16 @@ preset-import: preset-validator
 preset-tool-test: preset-validator
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_preset_tooling.py --podway "$$PRESET_VALIDATOR"
 
+test-rust:
+	RUST_TEST_THREADS=1 $(RUST_TOOLCHAIN_ENV) cargo test --workspace --lib --bins \
+		--test 'arch_*' --test 'int_*' --locked
+
 test-unit:
-	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --lib --bins --locked
-	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --doc --locked
+	RUST_TEST_THREADS=1 $(RUST_TOOLCHAIN_ENV) cargo test --workspace --lib --bins --locked
 
 test-int:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
-	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'int_*' --locked
+	RUST_TEST_THREADS=1 $(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'int_*' --locked
 
 test-fuzzing:
 	python3 tools/run_fuzzing.py

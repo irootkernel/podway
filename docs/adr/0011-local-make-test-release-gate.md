@@ -14,8 +14,8 @@ depend on infrastructure and identities the project does not operate.
 ## Decision
 
 The repository-root `make test` command is the sole required release-readiness
-gate. It runs `test-prepare`, `test-unit`, `test-int`, `test-fuzzing`, and
-`test-e2e` sequentially. The fuzzing target uses a pinned nightly toolchain only
+gate. It runs `test-prepare`, one combined `test-rust` invocation, `test-fuzzing`,
+and `test-e2e` sequentially. The fuzzing target uses a pinned nightly toolchain only
 for bounded protocol-input fuzzing. The end-to-end target builds and executes the
 real `podway` and `podwayd` binaries with the product's pinned stable toolchain.
 
@@ -37,7 +37,8 @@ release-readiness gate.
 
 - Contributors have one reproducible command for the complete gate.
 - Unit, integration, bounded fuzzing, and actual-binary scenarios retain distinct
-  test targets.
+  test layers. Integration sources are registered in one Cargo suite per crate,
+  and the CLI's actual-binary sources share one E2E suite.
 - Product-acceptance and crash-boundary mappings remain machine-validated as part
   of `test-prepare`.
 - The former `REL-007` detached-approval and quorum requirement is retired. Its

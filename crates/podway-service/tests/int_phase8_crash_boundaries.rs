@@ -635,7 +635,7 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
                 let child = Command::new(std::env::current_exe().expect("test executable"))
                     .args([
                         "--exact",
-                        "atomic_service_publication_crash_child_leaves_no_partial_state",
+                        "int_phase8_crash_boundaries::atomic_service_publication_crash_child_leaves_no_partial_state",
                         "--nocapture",
                     ])
                     .env("PODWAY_SERVICE_CRASH_CHILD_ROOT", &root)
@@ -772,7 +772,7 @@ fn service_removal_crash_child_preserves_complete_prior_state() {
     let child = Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
-            "service_removal_crash_child_preserves_complete_prior_state",
+            "int_phase8_crash_boundaries::service_removal_crash_child_preserves_complete_prior_state",
             "--nocapture",
         ])
         .env("PODWAY_SERVICE_REMOVAL_CRASH_CHILD_ROOT", &root)
@@ -851,7 +851,7 @@ fn bootstrap_side_effect_crash_child_reconciles_to_one_installed_state() {
     let child = Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
-            "bootstrap_side_effect_crash_child_reconciles_to_one_installed_state",
+            "int_phase8_crash_boundaries::bootstrap_side_effect_crash_child_reconciles_to_one_installed_state",
             "--nocapture",
         ])
         .env("PODWAY_SERVICE_BOOTSTRAP_CRASH_CHILD_ROOT", &root)

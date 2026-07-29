@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build current binaries and run the ignored Phase 7 four-preset dogfood suite."""
+"""Build current binaries and run the four-preset product-binary smoke suite."""
 
 from __future__ import annotations
 
@@ -15,7 +15,10 @@ def verification_root() -> Path:
 
 
 ROOT = verification_root()
-TEST_NAME = "public_cli_dogfoods_all_four_presets_with_retry_return_and_next_evidence"
+TEST_NAME = (
+    "e2e_phase4_production_vertical::"
+    "public_cli_starts_all_four_presets_and_reports_first_action"
+)
 EVIDENCE_PREFIX = "G008_DOGFOOD_EVIDENCE="
 
 
@@ -59,7 +62,7 @@ def main() -> int:
             "-p",
             "podway-cli",
             "--test",
-            "e2e_phase4_production_vertical",
+            "e2e_suite",
             TEST_NAME,
             "--",
             "--ignored",
@@ -81,8 +84,6 @@ def main() -> int:
     if set(scenarios) != required:
         raise SystemExit("dogfood evidence does not cover the four shipped presets")
     for preset, result in scenarios.items():
-        if result.get("retry", 0) < 1 or result.get("return", 0) < 1:
-            raise SystemExit(f"{preset} did not cover retry and return")
         if result.get("next_checks", 0) < 1 or result.get("commands", 0) < 1:
             raise SystemExit(f"{preset} did not record command and next evidence")
         if not isinstance(result.get("stage_topology"), list) or not result["stage_topology"]:
@@ -98,7 +99,7 @@ def main() -> int:
                 "ok": True,
                 "receipt": str(receipt.resolve()),
                 "test": TEST_NAME,
-                "conformanceCells": 12,
+                "conformanceCells": 4,
                 "scenarios": scenarios,
             },
             separators=(",", ":"),

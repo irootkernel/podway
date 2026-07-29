@@ -15,7 +15,8 @@ from run_g005_vertical import cargo_target_directory, produce_daemon_build_recei
 
 ROOT = verification_root()
 EXACT_TEST_RE = re.compile(
-    r"^(?P<package>[A-Za-z0-9_-]+)::(?P<target>e2e_[A-Za-z0-9_]+)::(?P<function>[A-Za-z0-9_]+)$"
+    r"^(?P<package>[A-Za-z0-9_-]+)::(?P<target>e2e_[A-Za-z0-9_]+)::"
+    r"(?P<function>[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)$"
 )
 
 
@@ -29,7 +30,7 @@ def parse_exact_test(value: str) -> tuple[str, str, str]:
     match = EXACT_TEST_RE.fullmatch(value)
     if match is None:
         raise argparse.ArgumentTypeError(
-            "exact test must be PACKAGE::e2e_TARGET::FUNCTION using Cargo/Rust identifiers"
+            "exact test must be PACKAGE::e2e_TARGET::QUALIFIED_FUNCTION using Cargo/Rust identifiers"
         )
     return match.group("package"), match.group("target"), match.group("function")
 

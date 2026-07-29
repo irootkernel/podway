@@ -298,15 +298,24 @@ optimization work but are not a release-readiness gate.
 ## Local release gate
 
 The repository-root `make test` command is the only required gate and runs these
-targets sequentially:
+stages sequentially:
 
-- `test-prepare`: generated-source synchronization, formatting, vet, lint,
+- `test-prepare`: generated-source synchronization, formatting, lint,
   dependency checks, architecture guardrails, quality mappings, and contracts;
-- `test-unit`: narrow library, binary, and documentation tests;
-- `test-int`: multi-component fixture scenarios without product binaries;
+- `test-rust`: unit and architecture targets plus one integration suite per crate
+  in one Cargo invocation;
 - `test-fuzzing`: fixed-run, fixed-seed frame decoder and request schema
   deserializer fuzzing in disposable corpora;
-- `test-e2e`: real `podway` and `podwayd` binary scenarios, including all four presets.
+- `test-e2e`: user journeys through real product binaries, shells, and release
+  archives, including a start/status/next smoke for all four presets.
+
+Focused `test-unit`, `test-int`, and `architecture` targets remain available while
+iterating. Integration tests may execute one product component against controlled
+collaborators; end-to-end tests are reserved for user-observable product journeys.
+The suite registry preserves every layer source as a separately named Rust module
+while avoiding one operating-system process per source file. Tests within those
+aggregate processes run serially to preserve the isolation formerly provided by
+separate Cargo targets.
 
 `test-fuzzing` uses `nightly-2026-07-17` and `cargo-fuzz 0.13.2` only for
 sanitizer and coverage instrumentation. Product compilation and all non-fuzz test

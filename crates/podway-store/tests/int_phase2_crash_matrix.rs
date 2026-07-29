@@ -36,7 +36,8 @@ use podway_store::{
     },
 };
 
-const CHILD_TEST_NAME: &str = "phase2_crash_child_aborts_at_configured_failpoint";
+const CHILD_TEST_NAME: &str =
+    "int_phase2_crash_matrix::phase2_crash_child_aborts_at_configured_failpoint";
 const CRASH_CASE_ENV: &str = "PODWAY_PHASE2_CRASH_CASE";
 const PRUNE_CALLER_ENV: &str = "PODWAY_PHASE2_PRUNE_CALLER";
 const PUBLICATION_CALLER_ENV: &str = "PODWAY_PHASE2_PUBLICATION_CALLER";

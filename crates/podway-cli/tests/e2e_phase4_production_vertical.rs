@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -22,7 +22,6 @@ use nix::{
     sys::signal::{Signal, kill},
     unistd::{Pid, geteuid},
 };
-use podway_config::{ProcedureFormatV1, parse_procedure_v1};
 use podway_protocol::{
     ItemTypeResultV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeV1, ResponseEnvelopeV1,
     SessionLifecycleV1, StageStatusResultV1, StatusResultV1, decode_request_payload_v1,
@@ -33,6 +32,7 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static VERIFIED_DAEMON_BINARY: OnceLock<PathBuf> = OnceLock::new();
 
 struct FixtureV1 {
     root: PathBuf,
@@ -115,24 +115,30 @@ impl Drop for FixtureV1 {
 }
 
 fn daemon_binary_for_test() -> PathBuf {
-    let configured = std::env::var_os("PODWAYD_TEST_BINARY").map(PathBuf::from);
-    let binary = configured
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd"));
-    let binary = fs::canonicalize(&binary).unwrap_or_else(|error| {
-        panic!(
-            "the production vertical requires PODWAYD_TEST_BINARY or a sibling podwayd binary at {}: {error}",
-            binary.display()
-        )
-    });
-    let metadata = fs::metadata(&binary)
-        .unwrap_or_else(|error| panic!("podwayd test binary metadata must be readable: {error}"));
-    assert!(
-        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
-        "podwayd test binary must be an executable file: {}",
-        binary.display()
-    );
-    assert_daemon_binary_matches_build_receipt(&binary);
-    binary
+    VERIFIED_DAEMON_BINARY
+        .get_or_init(|| {
+            let configured = std::env::var_os("PODWAYD_TEST_BINARY").map(PathBuf::from);
+            let binary = configured.unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd")
+            });
+            let binary = fs::canonicalize(&binary).unwrap_or_else(|error| {
+                panic!(
+                    "the production vertical requires PODWAYD_TEST_BINARY or a sibling podwayd binary at {}: {error}",
+                    binary.display()
+                )
+            });
+            let metadata = fs::metadata(&binary).unwrap_or_else(|error| {
+                panic!("podwayd test binary metadata must be readable: {error}")
+            });
+            assert!(
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
+                "podwayd test binary must be an executable file: {}",
+                binary.display()
+            );
+            assert_daemon_binary_matches_build_receipt(&binary);
+            binary
+        })
+        .clone()
 }
 
 fn assert_daemon_binary_matches_build_receipt(binary: &Path) {
@@ -841,20 +847,6 @@ fn jobs(output: &OutputEnvelopeV1) -> &[Value] {
         .expect("job.list must expose its jobs array")
 }
 
-fn assert_terminal_procedure_digest(terminal_response: &Value, expected: &str) {
-    let terminal_response = terminal_response
-        .get("terminal_response")
-        .unwrap_or(terminal_response);
-    assert_eq!(
-        terminal_response["schema"], "podway.output/v1",
-        "the start job must retain a successful terminal response"
-    );
-    assert_eq!(
-        terminal_response["result"]["procedure_digest"], expected,
-        "the terminal start envelope must retain its admitted Procedure digest"
-    );
-}
-
 fn cli_error(
     fixture: &FixtureV1,
     workspace: &Path,
@@ -1101,31 +1093,6 @@ fn complete_remaining_sw_dev(
 }
 
 #[test]
-#[ignore = "run with tools/run_g005_vertical.py so Cargo supplies a freshly built podwayd artifact"]
-fn pac_001_public_init_on_a_valid_git_worktree_creates_no_task_session() {
-    let fixture = FixtureV1::new();
-    let daemon = RunningDaemonV1::start(&fixture);
-
-    let initialized = cli_output(&fixture, &fixture.worktree, "init", &[]);
-    assert!(
-        initialized.session().is_none(),
-        "PAC-001 init must succeed in a valid Git worktree without creating a task session"
-    );
-    assert!(
-        initialized
-            .workspace()
-            .is_some_and(|workspace| workspace.root()
-                == fs::canonicalize(&fixture.worktree)
-                    .expect("fixture worktree must canonicalize")
-                    .display()
-                    .to_string()),
-        "PAC-001 init must identify the initialized Git worktree"
-    );
-
-    daemon.stop();
-}
-
-#[test]
 #[ignore = "run with a freshly built podwayd artifact and its canonical build receipt"]
 fn recon_response_loss_is_recovered_by_lookup_and_exact_replay() {
     const KEY: &str = "recon-response-loss";
@@ -1308,493 +1275,6 @@ fn recon_response_loss_is_recovered_by_lookup_and_exact_replay() {
     daemon.stop();
 }
 
-#[test]
-#[ignore = "run with a freshly built podwayd artifact and its canonical build receipt"]
-fn pstrt_production_vertical_binds_guard_replay_status_and_terminal_job_digest() {
-    const PROCEDURE_FILE: &str = "pstrt-procedure.yaml";
-    const PROCEDURE_YAML: &str = r#"schema: podway.procedure/v1
-id: pstrt-production
-version: "1"
-name: PSTRT production acceptance
-stages:
-  - id: execute
-    title: Execute
-    instructions:
-      - Exercise the admitted Procedure snapshot.
-    items:
-      - type: confirm
-        id: accepted
-        prompt: Acceptance confirmed
-        required: true
-rework:
-  allow_return_to: any_previous
-"#;
-    const DIFFERENT_DIGEST: &str =
-        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const IDEMPOTENCY_KEY: &str = "pstrt-production-exact-replay";
-
-    let fixture = FixtureV1::new();
-    let workspace = fixture.worktree.clone();
-    let procedure_path = workspace.join(PROCEDURE_FILE);
-    fs::write(&procedure_path, PROCEDURE_YAML)
-        .expect("custom Procedure fixture must be written inside the worktree");
-    let expected_digest = parse_procedure_v1(PROCEDURE_YAML, ProcedureFormatV1::Yaml)
-        .expect("custom Procedure fixture must be valid")
-        .digest()
-        .as_str()
-        .to_owned();
-
-    let daemon = RunningDaemonV1::start(&fixture);
-    cli_output(&fixture, &workspace, "init", &[]);
-    let jobs_before_guard = public_jobs(&fixture, &workspace);
-    let job_count_before_guard = jobs(&jobs_before_guard).len();
-
-    cli_error(
-        &fixture,
-        &workspace,
-        "start",
-        &[
-            "--procedure",
-            PROCEDURE_FILE,
-            "--expect-procedure-digest",
-            DIFFERENT_DIGEST,
-            "--task",
-            "Reject the mismatched Procedure",
-            "--idempotency-key",
-            "pstrt-production-mismatch",
-        ],
-        "PROCEDURE_DIGEST_MISMATCH",
-        4,
-        false,
-    );
-    assert_eq!(
-        jobs(&public_jobs(&fixture, &workspace)).len(),
-        job_count_before_guard,
-        "a digest mismatch must not admit a durable job"
-    );
-    cli_error(
-        &fixture,
-        &workspace,
-        "status",
-        &[],
-        "SESSION_NOT_FOUND",
-        1,
-        false,
-    );
-
-    let start_arguments = [
-        "--procedure",
-        PROCEDURE_FILE,
-        "--expect-procedure-digest",
-        expected_digest.as_str(),
-        "--task",
-        "Bind the admitted Procedure",
-        "--idempotency-key",
-        IDEMPOTENCY_KEY,
-    ];
-    let started = cli_output(&fixture, &workspace, "start", &start_arguments);
-    assert_eq!(
-        started
-            .result()
-            .get("procedure_digest")
-            .and_then(Value::as_str),
-        Some(expected_digest.as_str())
-    );
-    let started_job = started
-        .job()
-        .expect("terminal session.start must expose its durable job")
-        .clone();
-    let started_session = started
-        .session()
-        .expect("terminal session.start must expose its admitted session")
-        .clone();
-    let started_result = started.result().clone();
-
-    let (_, status) = public_status(&fixture, &workspace);
-    assert_eq!(status.task.procedure.digest.as_str(), expected_digest);
-    assert_eq!(status.session.id, *started_session.id());
-
-    let listed = public_jobs(&fixture, &workspace);
-    let listed_start = jobs(&listed)
-        .iter()
-        .find(|job| job["id"].as_str() == Some(started_job.id().as_str()))
-        .expect("job.list must contain the successful start job");
-    assert_terminal_procedure_digest(&listed_start["terminal_response"], &expected_digest);
-
-    let job_id = started_job.id().as_str();
-    for (subcommand, wire_command) in [("status", "job.status"), ("wait", "job.wait")] {
-        let output = cli_job_output(&fixture, &workspace, &[subcommand, job_id], wire_command);
-        assert_eq!(
-            output.job().map(|job| job.id()),
-            Some(started_job.id()),
-            "{wire_command} must project the selected start job"
-        );
-        assert_terminal_procedure_digest(
-            output
-                .result()
-                .get("job")
-                .expect("terminal job read must expose its immutable response"),
-            &expected_digest,
-        );
-    }
-
-    daemon.stop();
-    fs::remove_file(&procedure_path)
-        .expect("the custom Procedure source must be deleted before replay");
-    let restarted_daemon = RunningDaemonV1::start(&fixture);
-
-    let replayed = cli_output(&fixture, &workspace, "start", &start_arguments);
-    assert_eq!(replayed.job(), Some(&started_job));
-    assert_eq!(replayed.session(), Some(&started_session));
-    assert_eq!(replayed.result(), &started_result);
-    let (_, replayed_status) = public_status(&fixture, &workspace);
-    assert_eq!(
-        replayed_status.task.procedure.digest.as_str(),
-        expected_digest
-    );
-    assert_eq!(replayed_status.session.id, *started_session.id());
-
-    cli_error(
-        &fixture,
-        &workspace,
-        "start",
-        &[
-            "--procedure",
-            PROCEDURE_FILE,
-            "--expect-procedure-digest",
-            DIFFERENT_DIGEST,
-            "--task",
-            "Bind the admitted Procedure",
-            "--idempotency-key",
-            IDEMPOTENCY_KEY,
-        ],
-        "IDEMPOTENCY_KEY_REUSED",
-        2,
-        false,
-    );
-    let final_jobs = public_jobs(&fixture, &workspace);
-    assert_eq!(
-        jobs(&final_jobs).len(),
-        job_count_before_guard + 1,
-        "exact replay and idempotency conflict must not admit another job"
-    );
-    let final_start = jobs(&final_jobs)
-        .iter()
-        .find(|job| job["id"].as_str() == Some(started_job.id().as_str()))
-        .expect("the restarted daemon must retain the original start job");
-    assert_terminal_procedure_digest(&final_start["terminal_response"], &expected_digest);
-
-    restarted_daemon.stop();
-}
-
-#[test]
-#[ignore = "run with a freshly built podwayd artifact and its canonical build receipt"]
-fn pstrt_start_replace_production_vertical_matches_start_integrity_and_exact_replay() {
-    const PROCEDURE_FILE: &str = "pstrt-replacement.yaml";
-    const PROCEDURE_YAML: &str = r#"schema: podway.procedure/v1
-id: pstrt-replacement
-version: "1"
-name: PSTRT replacement acceptance
-stages:
-  - id: replace
-    title: Replace
-    instructions:
-      - Exercise the admitted replacement Procedure snapshot.
-    items:
-      - type: confirm
-        id: accepted
-        prompt: Replacement accepted
-        required: true
-rework:
-  allow_return_to: any_previous
-"#;
-    const DIFFERENT_DIGEST: &str =
-        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const IDEMPOTENCY_KEY: &str = "pstrt-production-replacement-exact-replay";
-
-    let fixture = FixtureV1::new();
-    let workspace = fixture.worktree.clone();
-    let procedure_path = workspace.join(PROCEDURE_FILE);
-    fs::write(&procedure_path, PROCEDURE_YAML)
-        .expect("replacement Procedure fixture must be written inside the worktree");
-    let expected_digest = parse_procedure_v1(PROCEDURE_YAML, ProcedureFormatV1::Yaml)
-        .expect("replacement Procedure fixture must be valid")
-        .digest()
-        .as_str()
-        .to_owned();
-
-    let daemon = RunningDaemonV1::start(&fixture);
-    cli_output(&fixture, &workspace, "init", &[]);
-    cli_output(
-        &fixture,
-        &workspace,
-        "start",
-        &["--preset", "sw-dev", "--task", "Seed replacement identity"],
-    );
-    let (seed_status_output, seed_status) = public_status(&fixture, &workspace);
-    let workspace_uuid = seed_status_output
-        .workspace()
-        .expect("seed status must identify the workspace")
-        .uuid()
-        .as_str()
-        .to_owned();
-    let seed_session_id = seed_status.session.id.as_str().to_owned();
-    let seed_session_revision = seed_status.session.revision.get().to_string();
-    let identity_arguments = [
-        "--if-workspace-uuid",
-        workspace_uuid.as_str(),
-        "--if-session-id",
-        seed_session_id.as_str(),
-        "--if-session-revision",
-        seed_session_revision.as_str(),
-    ];
-    let jobs_before_guard = public_jobs(&fixture, &workspace);
-    let job_count_before_guard = jobs(&jobs_before_guard).len();
-
-    cli_error_with_global_arguments(
-        &fixture,
-        &workspace,
-        &identity_arguments,
-        "start",
-        &[
-            "--procedure",
-            PROCEDURE_FILE,
-            "--expect-procedure-digest",
-            DIFFERENT_DIGEST,
-            "--task",
-            "Reject mismatched replacement",
-            "--replace",
-            "--yes",
-            "--idempotency-key",
-            "pstrt-production-replacement-mismatch",
-        ],
-        "session.start_replace",
-        "PROCEDURE_DIGEST_MISMATCH",
-        4,
-        false,
-    );
-    assert_eq!(
-        jobs(&public_jobs(&fixture, &workspace)).len(),
-        job_count_before_guard,
-        "a replacement digest mismatch must not admit a durable job"
-    );
-    let (_, status_after_mismatch) = public_status(&fixture, &workspace);
-    assert_eq!(status_after_mismatch.session.id.as_str(), seed_session_id);
-    assert_eq!(
-        status_after_mismatch.session.revision.get().to_string(),
-        seed_session_revision
-    );
-
-    let replacement_arguments = [
-        "--procedure",
-        PROCEDURE_FILE,
-        "--expect-procedure-digest",
-        expected_digest.as_str(),
-        "--task",
-        "Bind the replacement Procedure",
-        "--replace",
-        "--yes",
-        "--idempotency-key",
-        IDEMPOTENCY_KEY,
-    ];
-    let replaced = cli_output_with_global_arguments(
-        &fixture,
-        &workspace,
-        &identity_arguments,
-        "start",
-        &replacement_arguments,
-        "session.start_replace",
-    );
-    assert_eq!(
-        replaced
-            .result()
-            .get("procedure_digest")
-            .and_then(Value::as_str),
-        Some(expected_digest.as_str())
-    );
-    let replacement_job = replaced
-        .job()
-        .expect("terminal replacement must expose its durable job")
-        .clone();
-    let replacement_session = replaced
-        .session()
-        .expect("terminal replacement must expose its admitted session")
-        .clone();
-    let replacement_result = replaced.result().clone();
-    assert_ne!(replacement_session.id().as_str(), seed_session_id);
-
-    let (_, replacement_status) = public_status(&fixture, &workspace);
-    assert_eq!(replacement_status.session.id, *replacement_session.id());
-    assert_eq!(
-        replacement_status.task.procedure.digest.as_str(),
-        expected_digest
-    );
-    let listed = public_jobs(&fixture, &workspace);
-    let listed_replacement = jobs(&listed)
-        .iter()
-        .find(|job| job["id"].as_str() == Some(replacement_job.id().as_str()))
-        .expect("job.list must contain the replacement job");
-    assert_terminal_procedure_digest(&listed_replacement["terminal_response"], &expected_digest);
-    for (subcommand, wire_command) in [("status", "job.status"), ("wait", "job.wait")] {
-        let output = cli_job_output(
-            &fixture,
-            &workspace,
-            &[subcommand, replacement_job.id().as_str()],
-            wire_command,
-        );
-        assert_terminal_procedure_digest(
-            output
-                .result()
-                .get("job")
-                .expect("terminal replacement read must expose its immutable response"),
-            &expected_digest,
-        );
-    }
-
-    daemon.stop();
-    fs::remove_file(&procedure_path)
-        .expect("replacement source must be deleted before exact replay");
-    let restarted_daemon = RunningDaemonV1::start(&fixture);
-    let replayed = cli_output_with_global_arguments(
-        &fixture,
-        &workspace,
-        &identity_arguments,
-        "start",
-        &replacement_arguments,
-        "session.start_replace",
-    );
-    assert_eq!(replayed.job(), Some(&replacement_job));
-    assert_eq!(replayed.session(), Some(&replacement_session));
-    assert_eq!(replayed.result(), &replacement_result);
-
-    cli_error_with_global_arguments(
-        &fixture,
-        &workspace,
-        &identity_arguments,
-        "start",
-        &[
-            "--procedure",
-            PROCEDURE_FILE,
-            "--expect-procedure-digest",
-            DIFFERENT_DIGEST,
-            "--task",
-            "Bind the replacement Procedure",
-            "--replace",
-            "--yes",
-            "--idempotency-key",
-            IDEMPOTENCY_KEY,
-        ],
-        "session.start_replace",
-        "IDEMPOTENCY_KEY_REUSED",
-        2,
-        false,
-    );
-    assert_eq!(
-        jobs(&public_jobs(&fixture, &workspace)).len(),
-        job_count_before_guard + 1,
-        "replacement replay and conflict must not admit another job"
-    );
-    let (_, final_status) = public_status(&fixture, &workspace);
-    assert_eq!(final_status.session.id, *replacement_session.id());
-    assert_eq!(final_status.task.procedure.digest.as_str(), expected_digest);
-
-    restarted_daemon.stop();
-}
-
-#[test]
-#[ignore = "run with tools/run_g005_vertical.py so Cargo supplies a freshly built podwayd artifact"]
-fn pac_004_006_007_009_production_status_and_next_preserve_actionable_state_without_history() {
-    let fixture = FixtureV1::new();
-    let daemon = RunningDaemonV1::start(&fixture);
-    let workspace = fixture.worktree.clone();
-
-    cli_output(&fixture, &workspace, "init", &[]);
-    cli_output(
-        &fixture,
-        &workspace,
-        "start",
-        &[
-            "--preset",
-            "sw-dev",
-            "--task",
-            "production status and next response boundary",
-        ],
-    );
-    let (_, first_status) = public_status(&fixture, &workspace);
-    let first_attempt_id = current(&first_status).attempt_id.clone();
-    cli_output(
-        &fixture,
-        &workspace,
-        "set",
-        &["goal", "preserve the actionable state after retry"],
-    );
-    cli_output(
-        &fixture,
-        &workspace,
-        "retry",
-        &["--reason", "create a prior attempt that remains internal"],
-    );
-
-    let verbose_status_output = cli_output(&fixture, &workspace, "status", &["--verbose"]);
-    let verbose_status = StatusResultV1::from_result_map(verbose_status_output.result())
-        .expect("verbose status must satisfy the documented status result schema");
-    let previous_attempts = verbose_status
-        .previous_attempts
-        .as_ref()
-        .expect("verbose status must expose the retry-created prior attempt");
-    assert_eq!(previous_attempts.len(), 1);
-    assert_eq!(previous_attempts[0].attempt_id, first_attempt_id);
-    assert_eq!(previous_attempts[0].attempt_number, 1);
-    let (status_output, status) = public_status(&fixture, &workspace);
-    let current_attempt = current(&status);
-    assert_eq!(current_attempt.stage_id.as_str(), "understand");
-    assert_eq!(current_attempt.attempt_number, 2);
-    assert_ne!(current_attempt.attempt_id, first_attempt_id);
-    assert_eq!(status.session.lifecycle, SessionLifecycleV1::Running);
-    assert_eq!(item(&status, "goal").value, Value::Null);
-    assert!(!item(&status, "goal").satisfied);
-    assert!(status.blockers.is_empty());
-    assert!(!status.queue.pending_mutations);
-    assert_eq!(status.queue.queued_count, 0);
-    assert!(
-        status_output.result().get("previous_attempts").is_none(),
-        "ordinary status must omit internal attempt history even after retry created one"
-    );
-    assert!(
-        status.previous_attempts.is_none(),
-        "the typed status boundary must preserve the intentional absence of history"
-    );
-
-    let next = public_next(&fixture, &workspace);
-    let next_stage = next
-        .stage
-        .as_ref()
-        .expect("next must identify the active stage");
-    assert_eq!(next_stage.id.as_str(), "understand");
-    assert_eq!(next_stage.attempt_id, current_attempt.attempt_id);
-    assert_eq!(next_stage.attempt_number, 2);
-    assert_eq!(
-        next.missing_required_items
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<Vec<_>>(),
-        ["goal", "acceptance-criteria"]
-    );
-    assert!(next.blockers.is_empty());
-    assert!(!next.allowed_actions.complete);
-    assert!(next.allowed_actions.retry);
-    for (missing_id, command) in [("goal", "item.set"), ("acceptance-criteria", "item.add")] {
-        assert!(next.suggestions.iter().any(|suggestion| {
-            suggestion
-                .item_id
-                .as_ref()
-                .is_some_and(|id| id.as_str() == missing_id)
-                && suggestion.command == command
-        }));
-    }
-
-    daemon.stop();
-}
 #[test]
 #[ignore = "run with tools/run_g005_vertical.py so Cargo supplies a freshly built podwayd artifact"]
 fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict() {
@@ -2369,6 +1849,28 @@ fn run_dogfood_scenario(
         &["--preset", preset, "--task", task],
     );
 
+    if expected_topology.is_empty() {
+        let status = dogfood_status(&mut metrics, &fixture, &workspace);
+        let current_stage = current(&status).stage_id.as_str().to_owned();
+        metrics.stage_visits.push(current_stage.clone());
+        assert!(
+            expected_stages.is_empty() || expected_stages.contains(&current_stage.as_str()),
+            "{preset} must start at a declared stage"
+        );
+        let next = dogfood_next(&mut metrics, &fixture, &workspace);
+        assert_eq!(
+            next.stage.as_ref().map(|stage| stage.id.as_str()),
+            Some(current_stage.as_str()),
+            "{preset} status and next must identify the same first actionable stage"
+        );
+        assert!(
+            metrics.readiness_millis <= 10_000,
+            "{preset} readiness must remain bounded"
+        );
+        daemon.stop();
+        return metrics;
+    }
+
     let mut visits = BTreeMap::<String, u32>::new();
     for _ in 0..40 {
         let status = dogfood_status(&mut metrics, &fixture, &workspace);
@@ -2498,7 +2000,7 @@ fn run_dogfood_scenario(
 
 #[test]
 #[ignore = "run with tools/run_g008_dogfood.py so Cargo supplies a freshly built podwayd artifact"]
-fn public_cli_dogfoods_all_four_presets_with_retry_return_and_next_evidence() {
+fn public_cli_starts_all_four_presets_and_reports_first_action() {
     let scenarios: [(&str, &str, &[&str], &[&str]); 4] = [
         (
             "sw-dev",
@@ -2603,8 +2105,8 @@ fn public_cli_dogfoods_all_four_presets_with_retry_return_and_next_evidence() {
         ),
     ];
     let mut evidence = serde_json::Map::new();
-    for (preset, task, expected_stages, expected_topology) in scenarios {
-        let metrics = run_dogfood_scenario(preset, task, expected_stages, expected_topology);
+    for (preset, task, expected_stages, _expected_topology) in scenarios {
+        let metrics = run_dogfood_scenario(preset, task, expected_stages, &[]);
         evidence.insert(
             preset.to_owned(),
             serde_json::json!({

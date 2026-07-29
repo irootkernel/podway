@@ -17,7 +17,10 @@ def verification_root() -> Path:
 
 
 ROOT = verification_root()
-TEST_NAME = "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict"
+TEST_NAME = (
+    "e2e_phase4_production_vertical::"
+    "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict"
+)
 
 
 def run(argv: list[str], *, env: dict[str, str] | None = None) -> None:
@@ -123,7 +126,7 @@ def main() -> int:
     environment["PODWAYD_BUILD_RECEIPT"] = str(receipt.resolve())
     run(
         [
-            "cargo", "test", "-p", "podway-cli", "--test", "e2e_phase4_production_vertical",
+            "cargo", "test", "-p", "podway-cli", "--test", "e2e_suite",
             TEST_NAME, "--", "--ignored", "--nocapture",
         ],
         env=environment,

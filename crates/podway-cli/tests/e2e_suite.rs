@@ -1,0 +1,8 @@
+#[path = "e2e_contract_identity.rs"]
+mod e2e_contract_identity;
+#[path = "e2e_phase4_production_vertical.rs"]
+mod e2e_phase4_production_vertical;
+#[path = "e2e_phase5_user_environment.rs"]
+mod e2e_phase5_user_environment;
+#[path = "e2e_release_archive.rs"]
+mod e2e_release_archive;

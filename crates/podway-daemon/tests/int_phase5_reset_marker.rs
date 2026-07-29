@@ -2,9 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-#[allow(dead_code)]
-#[path = "support/phase4_workspace.rs"]
-mod support_phase4_workspace;
+use crate::support_phase4_workspace;
 
 use std::{
     fs,

@@ -17,13 +17,8 @@ use std::{
     thread,
 };
 
+use crate::registry_under_test;
 use podway_core::WorkspaceId;
-#[path = "../src/observability.rs"]
-#[allow(dead_code)]
-mod observability;
-#[path = "../src/registry.rs"]
-#[allow(dead_code)]
-mod registry_under_test;
 use podway_protocol::Rfc3339MillisV1;
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::ValidatedWorkspaceRootV1;
@@ -35,7 +30,8 @@ use registry_under_test::{
 };
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-const REGISTRY_CRASH_CHILD_TEST_NAME: &str = "registry_crash_child_aborts_at_configured_boundary";
+const REGISTRY_CRASH_CHILD_TEST_NAME: &str =
+    "int_phase4_registry::registry_crash_child_aborts_at_configured_boundary";
 const REGISTRY_CRASH_ROOT_ENV: &str = "PODWAY_PHASE4_REGISTRY_CRASH_ROOT";
 const REGISTRY_CRASH_FAILPOINT_ENV: &str = "PODWAY_PHASE4_REGISTRY_CRASH_FAILPOINT";
 const REGISTRY_CRASH_BEFORE_RENAME: &str = "before-rename";

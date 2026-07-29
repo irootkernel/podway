@@ -965,7 +965,7 @@ fn detached_execution_panic_marks_recovery_and_blocks_claims_until_restart_recov
 
     boundary.recover_running_to_queued();
     let restarted_registry = FixtureRegistry::new();
-    let restarted_scheduler = crate::scheduler(&restarted_registry, Arc::clone(&boundary), binding);
+    let restarted_scheduler = self::scheduler(&restarted_registry, Arc::clone(&boundary), binding);
     let reports = worker.drain_recovered_queues([restarted_scheduler]);
     assert_eq!(reports[0].as_ref().unwrap().terminal_job_count(), 2);
     assert_eq!(boundary.job_state(&first), JobStateV1::Failed);

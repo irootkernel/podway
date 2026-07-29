@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 from typing import Any
 
@@ -17,6 +18,7 @@ PRODUCT_BINARY_MARKERS = (
     "CARGO_BIN_EXE_podwayd",
     "PODWAYD_TEST_BINARY",
 )
+PATH_ATTRIBUTE_RE = re.compile(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]')
 
 
 class LayoutError(Exception):
@@ -31,8 +33,8 @@ def classify(name: str, source: str) -> str:
     uses_product_binary = any(marker in source for marker in PRODUCT_BINARY_MARKERS)
     if layer == "e2e" and not uses_product_binary:
         raise LayoutError(f"e2e target does not use a Podway product binary: {name}")
-    if layer != "e2e" and uses_product_binary:
-        raise LayoutError(f"{layer} target uses a Podway product binary and must be e2e: {name}")
+    if layer == "arch" and uses_product_binary:
+        raise LayoutError(f"architecture target must not execute a Podway product binary: {name}")
     return layer
 
 
@@ -55,29 +57,99 @@ def cargo_test_targets() -> list[tuple[str, Path]]:
     return sorted(targets, key=lambda item: (item[0], item[1].as_posix()))
 
 
-def verify() -> dict[str, int]:
-    counts = {"arch": 0, "int": 0, "e2e": 0}
+def target_sources(root: Path) -> dict[Path, str]:
+    pending = [root.resolve()]
+    sources: dict[Path, str] = {}
+    while pending:
+        path = pending.pop()
+        if path in sources:
+            continue
+        if not path.is_relative_to(ROOT) or path.is_symlink() or not path.is_file():
+            raise LayoutError(f"test target references an unsafe or missing source: {path}")
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise LayoutError(f"cannot read test target source {path}: {error}") from error
+        sources[path] = source
+        for relative in PATH_ATTRIBUTE_RE.findall(source):
+            pending.append((path.parent / relative).resolve())
+    return sources
+
+
+def source_layer(path: Path) -> str | None:
+    if path.stem.endswith("_suite"):
+        return None
+    layers = [prefix.removesuffix("_") for prefix in PREFIXES if path.name.startswith(prefix)]
+    if not layers:
+        return None
+    if len(layers) != 1:
+        raise LayoutError(f"test source has an ambiguous layer prefix: {path}")
+    return layers[0]
+
+
+def expected_test_sources() -> dict[Path, str]:
+    expected: dict[Path, str] = {}
+    for tests in sorted(ROOT.glob("crates/*/tests")):
+        for path in sorted(tests.glob("*.rs")):
+            layer = source_layer(path)
+            if layer is not None:
+                expected[path.resolve()] = layer
+    return expected
+
+
+def validate_registrations(
+    expected: dict[Path, str],
+    registrations: dict[Path, list[tuple[str, str]]],
+) -> None:
+    missing = sorted(path for path in expected if path not in registrations)
+    duplicates = sorted(path for path, owners in registrations.items() if len(owners) != 1)
+    mismatches = sorted(
+        path
+        for path, owners in registrations.items()
+        if path in expected and any(layer != expected[path] for layer, _target in owners)
+    )
+    unexpected = sorted(path for path in registrations if path not in expected)
+    if missing or duplicates or mismatches or unexpected:
+        details = {
+            "missing": [path.as_posix() for path in missing],
+            "duplicates": [path.as_posix() for path in duplicates],
+            "mismatches": [path.as_posix() for path in mismatches],
+            "unexpected": [path.as_posix() for path in unexpected],
+        }
+        raise LayoutError(f"test source registration is incomplete or ambiguous: {details}")
+
+
+def verify() -> dict[str, dict[str, int]]:
+    target_counts = {"arch": 0, "int": 0, "e2e": 0}
+    source_counts = {"arch": 0, "int": 0, "e2e": 0}
+    expected = expected_test_sources()
+    registrations: dict[Path, list[tuple[str, str]]] = {}
     targets = cargo_test_targets()
     if not targets:
         raise LayoutError("workspace contains no Cargo integration-test targets")
     for name, path in targets:
-        try:
-            source = path.read_text(encoding="utf-8")
-        except OSError as error:
-            raise LayoutError(f"cannot read integration-test target {path}: {error}") from error
-        counts[classify(name, source)] += 1
-    if any(count == 0 for count in counts.values()):
-        raise LayoutError(f"every test layer must contain at least one target: {counts}")
-    return counts
+        sources = target_sources(path)
+        layer = classify(name, "\n".join(sources.values()))
+        target_counts[layer] += 1
+        for source_path in sources:
+            if source_path in expected:
+                registrations.setdefault(source_path, []).append((layer, name))
+    validate_registrations(expected, registrations)
+    for layer in expected.values():
+        source_counts[layer] += 1
+    if any(count == 0 for count in target_counts.values()):
+        raise LayoutError(f"every test layer must contain at least one target: {target_counts}")
+    return {"targets": target_counts, "sources": source_counts}
 
 
 def self_test() -> None:
     assert classify("arch_contract", "fn main() {}") == "arch"
     assert classify("int_scenario", "fn main() {}") == "int"
+    assert classify("int_cli", 'env!("CARGO_BIN_EXE_podway")') == "int"
     assert classify("e2e_cli", 'env!("CARGO_BIN_EXE_podway")') == "e2e"
     invalid = (
         ("scenario", "fn main() {}"),
-        ("int_cli", 'env!("CARGO_BIN_EXE_podway")'),
+        ("arch_cli", 'env!("CARGO_BIN_EXE_podway")'),
         ("e2e_fake", "fn main() {}"),
     )
     for name, source in invalid:
@@ -86,6 +158,24 @@ def self_test() -> None:
         except LayoutError:
             continue
         raise LayoutError(f"self-test sentinel unexpectedly passed: {name}")
+    expected = {Path("int_a.rs"): "int", Path("int_b.rs"): "int"}
+    invalid_registrations = (
+        {Path("int_a.rs"): [("int", "int_suite")]},
+        {
+            Path("int_a.rs"): [("int", "int_suite"), ("int", "int_other")],
+            Path("int_b.rs"): [("int", "int_suite")],
+        },
+        {
+            Path("int_a.rs"): [("e2e", "e2e_suite")],
+            Path("int_b.rs"): [("int", "int_suite")],
+        },
+    )
+    for registrations in invalid_registrations:
+        try:
+            validate_registrations(expected, registrations)
+        except LayoutError:
+            continue
+        raise LayoutError("self-test source-registration sentinel unexpectedly passed")
 
 
 def receipt(mode: str, ok: bool, **details: Any) -> None:
@@ -101,10 +191,10 @@ def main() -> int:
     selected = "check" if arguments.check else "self-test"
     try:
         if arguments.check:
-            receipt(selected, True, targets=verify())
+            receipt(selected, True, **verify())
         else:
             self_test()
-            receipt(selected, True, sentinels=3)
+            receipt(selected, True, sentinels=6)
         return 0
     except (LayoutError, json.JSONDecodeError, KeyError, OSError, TypeError) as error:
         receipt(selected, False, error=str(error))

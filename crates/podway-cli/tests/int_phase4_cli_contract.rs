@@ -1,3 +1,5 @@
+//! CLI process-boundary integration contracts using controlled daemon doubles.
+
 use std::{
     fs,
     io::{self, Read, Write},

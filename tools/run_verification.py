@@ -161,9 +161,15 @@ GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("06-cargo-deny", ("cargo", "deny", "check")),
     ("06-quality-contracts", ("python3", "tools/verify_quality_contracts.py")),
     ("07-architecture", ("cargo", "test", "--workspace", "--test", "arch_*", "--locked")),
-    ("08-unit", ("cargo", "test", "--workspace", "--lib", "--bins", "--locked")),
+    (
+        "08-unit",
+        ("cargo", "test", "--workspace", "--lib", "--bins", "--locked", "--", "--test-threads=1"),
+    ),
     ("09-doc", ("cargo", "test", "--workspace", "--doc", "--locked")),
-    ("10-integration", ("cargo", "test", "--workspace", "--test", "int_*", "--locked")),
+    (
+        "10-integration",
+        ("cargo", "test", "--workspace", "--test", "int_*", "--locked", "--", "--test-threads=1"),
+    ),
     ("11-fuzzing", ("python3", "tools/run_fuzzing.py")),
     ("12-e2e", ("python3", "tools/run_e2e.py")),
     ("13-verify-contracts", ("python3", "tools/verify_contracts.py", "--all")),

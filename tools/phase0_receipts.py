@@ -1253,8 +1253,18 @@ def run_sentinels(
                 expect_known_failure(sentinel["expected_error"], lambda: validate_canonical_import(fixture_root))
             elif identifier == "forbidden_crate_edge":
                 manifest = fixture_root / "crates/podway-core/Cargo.toml"
-                with manifest.open("a", encoding="utf-8") as handle:
-                    handle.write("\npodway-config = { path = \"../podway-config\" }\n")
+                manifest_text = manifest.read_text(encoding="utf-8")
+                dependency_header = "[dependencies]\n"
+                if dependency_header not in manifest_text:
+                    fail("sentinel_fixture_drift", "forbidden crate edge sentinel dependency table is unavailable")
+                manifest.write_text(
+                    manifest_text.replace(
+                        dependency_header,
+                        dependency_header + 'podway-config = { path = "../podway-config" }\n',
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
                 expect_known_failure(sentinel["expected_error"], lambda: validate_cargo_dag(fixture_root, reference))
             elif identifier == "route_bypass":
                 route_path = fixture_root / ROUTES_PATH

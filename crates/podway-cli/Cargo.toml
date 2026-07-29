@@ -6,6 +6,7 @@ license = "MIT"
 publish = false
 
 autobins = false
+autotests = false
 
 [dependencies]
 podway-core = { path = "../podway-core" }
@@ -24,3 +25,15 @@ sha2 = { workspace = true }
 [[bin]]
 name = "podway"
 path = "src/main.rs"
+
+[[test]]
+name = "arch_phase0_contract"
+path = "tests/arch_phase0_contract.rs"
+
+[[test]]
+name = "int_suite"
+path = "tests/int_suite.rs"
+
+[[test]]
+name = "e2e_suite"
+path = "tests/e2e_suite.rs"
