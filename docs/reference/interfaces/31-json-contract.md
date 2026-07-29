@@ -19,9 +19,10 @@ All JSON is UTF-8 and emitted as one object followed by a newline.
 The accepted v0.1.0 automation target introduces discriminated, command-specific
 closed result and error-detail schemas. Unknown fields in those closed objects are
 invalid; adding a field requires a new result/detail schema identifier or
-discriminator version. The current generic `result` and `details` objects remain
-the implemented machine schema until the `MCONT` epic updates schemas, catalogs,
-fixtures, and binaries together. See the
+discriminator version. Integration-critical `result` objects now use
+command-selected closed schemas; the generic `details` object remains the
+implemented error shape until the remaining `MCONT` tasks update details,
+discriminators, catalogs, and fixtures. See the
 [automation contract](34-automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004).
 
 ## Common success envelope

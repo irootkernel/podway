@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:stage-transition-result:v1",
+  "title": "Podway Stage Transition Result v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["changed", "revision_before", "revision_after", "admission"],
+      "properties": {
+        "changed": { "type": "boolean" },
+        "revision_before": { "type": "integer", "minimum": 0 },
+        "revision_after": { "type": "integer", "minimum": 0 },
+        "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reset", "revision", "admission"],
+      "properties": {
+        "reset": { "const": true },
+        "revision": { "type": "integer", "minimum": 1 },
+        "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preview", "changed", "revision_before", "revision_after", "active_before", "active_after", "destination_attempt", "affected_stages"],
+      "properties": {
+        "preview": { "const": true },
+        "changed": { "type": "boolean" },
+        "revision_before": { "type": ["integer", "null"], "minimum": 0 },
+        "revision_after": { "type": ["integer", "null"], "minimum": 0 },
+        "active_before": { "$ref": "#/$defs/optionalActive" },
+        "active_after": { "$ref": "#/$defs/optionalActive" },
+        "destination_attempt": { "$ref": "#/$defs/optionalActive" },
+        "affected_stages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["stage_id", "before", "after", "before_attempt", "after_attempt"],
+            "properties": {
+              "stage_id": { "type": "string", "minLength": 1 },
+              "before": { "type": ["string", "null"] },
+              "after": { "type": ["string", "null"] },
+              "before_attempt": { "$ref": "#/$defs/optionalAttempt" },
+              "after_attempt": { "$ref": "#/$defs/optionalAttempt" }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_id", "attempt_number"],
+      "properties": { "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1 } }
+    },
+    "optionalAttempt": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/attempt" }] },
+    "active": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage_id", "attempt_id", "attempt_number"],
+      "properties": { "stage_id": { "type": "string", "minLength": 1 }, "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1 } }
+    },
+    "optionalActive": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/active" }] }
+  }
+}

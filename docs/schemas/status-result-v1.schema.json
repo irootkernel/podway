@@ -27,7 +27,7 @@
         },
         "procedure": {
           "type": "object",
-          "additionalProperties": false,
+        "additionalProperties": false,
           "required": [
             "id",
             "version",
@@ -244,7 +244,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": true,
+          "additionalProperties": false,
         "required": [
           "id",
           "type",
@@ -288,7 +288,14 @@
     "blockers": {
       "type": "array",
       "items": {
-        "type": "object"
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "attempt_id", "reason"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "attempt_id": { "type": "string", "format": "uuid" },
+          "reason": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "queue": {

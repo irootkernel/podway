@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 mod codec;
 mod framing;
 mod identity;
+mod result_contract;
 mod slice;
 
 pub use codec::{
@@ -20,6 +21,7 @@ pub use framing::{
     write_frame_v1,
 };
 pub use identity::{BuildIdentityV1, build_identity_v1};
+pub use result_contract::validate_command_result_v1;
 pub use slice::*;
 
 use serde_json::{Map, Value};
@@ -77,6 +79,9 @@ pub enum ProtocolError {
     InvalidProcedureDigestMismatchDetails,
     InvalidMutationOutcomeUnknownDetails,
     InvalidAdmissionMetadata,
+    InvalidCommandResult {
+        command: String,
+    },
     InvalidExitCode {
         value: u8,
     },
@@ -157,6 +162,12 @@ impl fmt::Display for ProtocolError {
                 .write_str("mutation outcome unknown details violate their closed v1 schema"),
             Self::InvalidAdmissionMetadata => {
                 formatter.write_str("admission metadata violates its closed v1 schema")
+            }
+            Self::InvalidCommandResult { command } => {
+                write!(
+                    formatter,
+                    "result for {command} violates its closed v1 contract"
+                )
             }
             Self::InvalidExitCode { value } => {
                 write!(
@@ -1326,6 +1337,7 @@ impl OutputEnvelopeV1 {
             session.validate()?;
         }
         validate_json_map_depth(&self.result, 1)?;
+        validate_command_result_v1(self.command.as_str(), &self.result)?;
         if let Some(admission) = self.result.get("admission") {
             let (job_id, sequence) = validate_admission_metadata_v1(admission, false)?
                 .ok_or(ProtocolError::InvalidAdmissionMetadata)?;

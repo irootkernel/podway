@@ -516,19 +516,33 @@ impl RecordingDaemon {
 
 fn recording_response(request: &RequestEnvelopeV1, reply: RecordingReply) -> Value {
     match reply {
-        RecordingReply::Output(result) => serde_json::json!({
-            "schema": "podway.output/v1",
-            "request_id": request.request_id().as_str(),
-            "command": request.command().as_str(),
-            "generated_at": "2026-07-16T12:34:56.789Z",
-            "workspace": {
-                "uuid": RECORDING_WORKSPACE_ID,
-                "root": request.workspace().expect("recorded request must select a workspace").root(),
-                "latest_workspace_sequence": 1
-            },
-            "result": result,
-            "warnings": []
-        }),
+        RecordingReply::Output(result) => {
+            let admitted = result.get("admission").is_some();
+            let mut envelope = serde_json::json!({
+                "schema": "podway.output/v1",
+                "request_id": request.request_id().as_str(),
+                "command": request.command().as_str(),
+                "generated_at": "2026-07-16T12:34:56.789Z",
+                "workspace": {
+                    "uuid": RECORDING_WORKSPACE_ID,
+                    "root": request.workspace().expect("recorded request must select a workspace").root(),
+                    "latest_workspace_sequence": 1
+                },
+                "result": result,
+                "warnings": []
+            });
+            if admitted {
+                envelope["job"] = serde_json::json!({
+                    "id": RECORDING_JOB_ID,
+                    "sequence": 1,
+                    "state": "succeeded",
+                    "submitted_at": "2026-07-16T12:34:56.789Z",
+                    "claimed_at": "2026-07-16T12:34:56.789Z",
+                    "finished_at": "2026-07-16T12:34:56.789Z"
+                });
+            }
+            envelope
+        }
         RecordingReply::Error => serde_json::json!({
             "schema": "podway.error/v1",
             "request_id": request.request_id().as_str(),
@@ -544,6 +558,11 @@ fn recording_response(request: &RequestEnvelopeV1, reply: RecordingReply) -> Val
 }
 
 fn recording_success_result(command: &str) -> Value {
+    let admission = serde_json::json!({
+        "admitted": true,
+        "job_id": RECORDING_JOB_ID,
+        "workspace_sequence": 1
+    });
     match command {
         "session.status" => authoritative_status_result(serde_json::json!([{
             "id": "item",
@@ -561,30 +580,39 @@ fn recording_success_result(command: &str) -> Value {
         "workspace.doctor" => serde_json::json!({"deep": true, "healthy": true}),
         "workspace.show" => serde_json::json!({"workspace": "recorded"}),
         "workspace.repair" => serde_json::json!({"repaired": true}),
-        "session.start"
-        | "session.start_replace"
-        | "session.complete"
-        | "session.skip"
-        | "session.retry"
-        | "session.return"
-        | "session.block"
-        | "session.unblock"
-        | "session.cancel"
-        | "session.reopen"
-        | "session.reset"
-        | "workspace.reset_all"
-        | "item.check"
-        | "item.uncheck"
-        | "item.set"
-        | "item.add"
-        | "item.remove"
-        | "item.attach"
-        | "item.clear"
-        | "job.cancel" => {
+        "session.start" | "session.start_replace" => serde_json::json!({
+            "changed": true,
+            "revision_before": 1,
+            "revision_after": 2,
+            "procedure_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "admission": admission
+        }),
+        "session.complete" | "session.skip" | "session.retry" | "session.return"
+        | "session.block" | "session.unblock" | "session.cancel" | "session.reopen" => {
+            serde_json::json!({
+                "changed": true,
+                "revision_before": 1,
+                "revision_after": 2,
+                "admission": admission
+            })
+        }
+        "session.reset" => serde_json::json!({
+            "reset": true,
+            "revision": 2,
+            "admission": admission
+        }),
+        "item.check" | "item.uncheck" | "item.set" | "item.add" | "item.remove" | "item.attach"
+        | "item.clear" => serde_json::json!({
+            "changed": true,
+            "item_id": "item",
+            "revision_before": 1,
+            "revision_after": 2,
+            "admission": admission
+        }),
+        "workspace.reset_all" | "job.cancel" => {
             serde_json::json!({"accepted_route": command})
         }
-        "job.status" => serde_json::json!({"job": RECORDING_JOB_ID}),
-        "job.wait" => serde_json::json!({"job": RECORDING_JOB_ID, "waited": true}),
+        "job.status" | "job.wait" => serde_json::json!({"job": null}),
         unknown => panic!("no recorded success envelope exists for daemon route {unknown}"),
     }
 }

@@ -7,7 +7,7 @@
     {
       "source": "docs/schemas/README.md",
       "destination": "schemas/README.md",
-      "source_sha256": "8bcb464410d0885a13eee3c9897fcbcd41ed0f75caaee36bd3da5a78f02cc470",
+      "source_sha256": "8f808e4b2dcafeb7e0a58bc31a86d45be79ae8155976d4d40a725df53cd4161a",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -29,6 +29,14 @@
       "generator_version": "docs-assets-v1"
     },
     {
+      "source": "docs/schemas/detached-admission-result-v1.schema.json",
+      "destination": "schemas/detached-admission-result-v1.schema.json",
+      "source_sha256": "ed7a21e8d186e120607af41fb869df3109e6cae4b5e399d82e5f4b714535258f",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
       "source": "docs/schemas/error-v1.schema.json",
       "destination": "schemas/error-v1.schema.json",
       "source_sha256": "756a31d6c97e6ee3aee3a4193b5b542d7d5bba140b20d599bf655cf93eace0a9",
@@ -45,9 +53,33 @@
       "generator_version": "docs-assets-v1"
     },
     {
+      "source": "docs/schemas/item-mutation-result-v1.schema.json",
+      "destination": "schemas/item-mutation-result-v1.schema.json",
+      "source_sha256": "1c02ba559d75e9ce761337df96a6f5835f86a48ca02e985696a62f00bbe89e97",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/job-lookup-result-v1.schema.json",
+      "destination": "schemas/job-lookup-result-v1.schema.json",
+      "source_sha256": "a3eb47d0676d726a353e7e023db7796536573f7e35564e7cb6606aff8f900e61",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/job-result-v1.schema.json",
+      "destination": "schemas/job-result-v1.schema.json",
+      "source_sha256": "6264ae37344183f8df6c8c89430d93feafc6838134b9a35c3bf0a89c44ba0168",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
       "source": "docs/schemas/next-result-v1.schema.json",
       "destination": "schemas/next-result-v1.schema.json",
-      "source_sha256": "986f55e085ad54fabbc231c651007f0c81f33db940f5ef2979dbef86a6004781",
+      "source_sha256": "0ffd504801a3069a5cc1cf078e604c584465950fe0fd1603af7d20eb5c9ff1d3",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -55,7 +87,7 @@
     {
       "source": "docs/schemas/output-v1.schema.json",
       "destination": "schemas/output-v1.schema.json",
-      "source_sha256": "1915a5ee39786185527b3ac6898e85076ee1a2ad3cd34c53048c366903607cc6",
+      "source_sha256": "d2bb1b7ea3ab58135dc821852e7c5692e1c3cece2a336da2e16038254c6ce379",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -69,6 +101,14 @@
       "generator_version": "docs-assets-v1"
     },
     {
+      "source": "docs/schemas/procedure-validation-result-v1.schema.json",
+      "destination": "schemas/procedure-validation-result-v1.schema.json",
+      "source_sha256": "8e21c5f36664b2f6a17a1b0a5c6efa4f3a628ed2b2ab2d12a464e6d722faf9f4",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
       "source": "docs/schemas/registry-v1.schema.json",
       "destination": "schemas/registry-v1.schema.json",
       "source_sha256": "ae259c2fb9d5e285c8450a55b2f9133ab4758e32041905475fb0d1fd8ff3f2ad",
@@ -77,9 +117,33 @@
       "generator_version": "docs-assets-v1"
     },
     {
+      "source": "docs/schemas/session-start-result-v1.schema.json",
+      "destination": "schemas/session-start-result-v1.schema.json",
+      "source_sha256": "1dfb47e865ebed156314e9d19e72481ada5a6a605a23435814c74389662e2122",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/stage-transition-result-v1.schema.json",
+      "destination": "schemas/stage-transition-result-v1.schema.json",
+      "source_sha256": "e62df5ed9754b452f68563c1b7919e876ec92d97080fd6c3e89469516a7ccac3",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
       "source": "docs/schemas/status-result-v1.schema.json",
       "destination": "schemas/status-result-v1.schema.json",
-      "source_sha256": "6601cbc14fd96bc363fbddc0da8a058866a6a734b533884282e09f0a6156ae2a",
+      "source_sha256": "f2d034a1605448d4d853372cd581cfe8900c0c9470075d2aae06e8a532651d6d",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/version-result-v1.schema.json",
+      "destination": "schemas/version-result-v1.schema.json",
+      "source_sha256": "e19abce86f8a1864435798622f92e3792ee9efda7324a2b1408a5ae44f51b666",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

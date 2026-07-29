@@ -262,7 +262,7 @@ impl DispatcherReadServiceV1<Workspace> for Reads {
         self.0.lock().unwrap().reads.push(("job", Some(wait)));
         Ok(DispatcherJobOutputV1::new(
             queued_job(),
-            Map::new(),
+            Map::from_iter([("job".to_owned(), Value::Null)]),
             Vec::new(),
         ))
     }
@@ -286,7 +286,7 @@ impl DispatcherControlServiceV1<Workspace> for Controls {
         }
         Ok(DispatcherJobOutputV1::new(
             queued_job(),
-            Map::new(),
+            Map::from_iter([("job".to_owned(), Value::Null)]),
             Vec::new(),
         ))
     }
@@ -299,11 +299,11 @@ impl DispatcherPreviewServiceV1<Workspace> for Previews {
     fn preview(
         &self,
         _workspace: &Workspace,
-        _request: &SliceRequestV1,
+        request: &SliceRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
         self.0.lock().unwrap().previews += 1;
         Ok(DispatcherReadOutputV1::new(
-            Map::from_iter([("preview".to_owned(), Value::Bool(true))]),
+            preview_result(request.command().command_name()),
             Vec::new(),
         ))
     }
@@ -331,7 +331,11 @@ impl MutationAdmissionWorkerV1<Workspace> for Mutations {
             idempotency_key: idempotency_key.as_str().to_owned(),
             wait: Some(wait),
         });
-        self.outcome.clone()
+        if self.outcome == terminal_success() {
+            terminal_success_for(request.command().command_name())
+        } else {
+            self.outcome.clone()
+        }
     }
 
     fn reset_all(
@@ -559,15 +563,57 @@ fn failed_job() -> JobOutputV1 {
 }
 
 fn terminal_success() -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
+    terminal_success_for("session.complete")
+}
+
+fn terminal_success_for(command: &str) -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
+    let result = if matches!(command, "session.start" | "session.start_replace") {
+        json!({
+            "changed": true,
+            "revision_before": 1,
+            "revision_after": 2,
+            "procedure_digest": PROCEDURE_DIGEST
+        })
+    } else if command.starts_with("item.") {
+        json!({"changed": true, "item_id": "item", "revision_before": 1, "revision_after": 2})
+    } else if command == "session.reset" {
+        json!({"reset": true, "revision": 2})
+    } else {
+        json!({"changed": true, "revision_before": 1, "revision_after": 2})
+    };
     Ok(MutationDispatchOutcomeV1::Terminal {
         job: terminal_job(),
         result: DispatcherTerminalResultV1::Output(DispatcherTerminalOutputV1::new(
             None,
-            Map::from_iter([("changed".to_owned(), Value::Bool(true))]),
+            result.as_object().unwrap().clone(),
             Vec::new(),
         )),
         response_context: None,
     })
+}
+
+fn preview_result(command: &str) -> Map<String, Value> {
+    let value = if matches!(command, "session.start" | "session.start_replace") {
+        json!({
+            "dry_run": true,
+            "task": "Task",
+            "source": {"preset": "sw-dev"},
+            "procedure_digest": PROCEDURE_DIGEST,
+            "first_stage": {"id": "implement", "title": "Implement"}
+        })
+    } else {
+        json!({
+            "preview": true,
+            "changed": true,
+            "revision_before": 1,
+            "revision_after": 2,
+            "active_before": null,
+            "active_after": null,
+            "destination_attempt": null,
+            "affected_stages": []
+        })
+    };
+    value.as_object().unwrap().clone()
 }
 
 #[test]
@@ -1011,7 +1057,12 @@ fn dry_run_variants_use_the_readonly_preview_seam_without_mutation() {
         let response = dispatcher.dispatch(&request, &slice);
         match response {
             ResponseEnvelopeV1::Output(output) => {
-                assert_eq!(output.result()["preview"], Value::Bool(true));
+                let preview_flag = if matches!(command, "session.start" | "session.start_replace") {
+                    "dry_run"
+                } else {
+                    "preview"
+                };
+                assert_eq!(output.result()[preview_flag], Value::Bool(true));
                 assert!(output.job().is_none());
             }
             ResponseEnvelopeV1::Error(error) => panic!("preview failed: {error:?}"),
@@ -1331,10 +1382,15 @@ fn detached_terminal_replay_preserves_the_immutable_job_and_result() {
             job: terminal_job(),
             result: DispatcherTerminalResultV1::Output(DispatcherTerminalOutputV1::new(
                 None,
-                Map::from_iter([(
-                    "replay".to_owned(),
-                    Value::String("immutable-terminal-result".to_owned()),
-                )]),
+                json!({
+                    "changed": true,
+                    "revision_before": 1,
+                    "revision_after": 2,
+                    "procedure_digest": PROCEDURE_DIGEST
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
                 Vec::new(),
             )),
             response_context: None,
@@ -1371,10 +1427,7 @@ fn detached_terminal_replay_preserves_the_immutable_job_and_result() {
                 "workspace_sequence": 1,
             })
         );
-        assert_eq!(
-            output.result()["replay"],
-            Value::String("immutable-terminal-result".to_owned())
-        );
+        assert_eq!(output.result()["procedure_digest"], PROCEDURE_DIGEST);
     }
     assert_eq!(first.job(), second.job());
     assert_eq!(first.result(), second.result());

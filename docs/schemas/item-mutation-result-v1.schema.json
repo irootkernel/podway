@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:item-mutation-result:v1",
+  "title": "Podway Item Mutation Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["changed", "item_id", "revision_before", "revision_after", "admission"],
+  "properties": {
+    "changed": { "type": "boolean" },
+    "item_id": { "type": "string", "minLength": 1 },
+    "revision_before": { "type": "integer", "minimum": 0 },
+    "revision_after": { "type": "integer", "minimum": 0 },
+    "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" }
+  }
+}

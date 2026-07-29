@@ -520,7 +520,7 @@ fn terminal_success() -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
         job: terminal_job(),
         result: DispatcherTerminalResultV1::Output(DispatcherTerminalOutputV1::new(
             None,
-            map(json!({"changed": true})),
+            map(json!({"changed": true, "revision_before": 1, "revision_after": 2})),
             Vec::new(),
         )),
         response_context: None,
@@ -738,7 +738,12 @@ fn detached_mutation_returns_a_durable_receipt_without_waiting() {
     let reads = FakeReads::new();
     let worker = FakeWorker::new(Ok(MutationDispatchOutcomeV1::Detached {
         job: queued_job(),
-        procedure_digest: None,
+        procedure_digest: Some(
+            podway_core::Sha256Digest::new(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+        ),
     }));
     let dispatcher = dispatcher(runtime, reads, worker.clone());
     let (request, slice) = request_and_slice(
@@ -842,7 +847,12 @@ fn idempotent_replay_preserves_the_original_job_identity() {
     let reads = FakeReads::new();
     let worker = FakeWorker::new(Ok(MutationDispatchOutcomeV1::Detached {
         job: queued_job(),
-        procedure_digest: None,
+        procedure_digest: Some(
+            podway_core::Sha256Digest::new(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+        ),
     }));
     let dispatcher = dispatcher(runtime, reads, worker.clone());
     let (request, slice) = request_and_slice(

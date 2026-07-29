@@ -728,7 +728,7 @@ fn status_and_next_results_round_trip_with_active_item_values_and_redo_evidence(
 }
 
 #[test]
-fn int_response_additive_fields_tolerated() {
+fn int_closed_status_and_next_results_reject_additive_fields() {
     let mut status = json!({
         "task": {"title": "Task", "procedure": {"id": "p", "version": "1", "name": "P", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}},
         "session": {"id": SESSION_ID, "lifecycle": "running", "revision": 1, "created_at": "2026-07-13T03:00:00.000Z", "completed_at": null, "cancelled_at": null},
@@ -741,19 +741,18 @@ fn int_response_additive_fields_tolerated() {
     });
     status["items"][0]["future_item_field"] = json!({"nested": true});
 
-    let mut expected = status.clone();
-    expected
-        .as_object_mut()
-        .unwrap()
-        .remove("future_root_field");
-    expected["items"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("future_item_field");
+    assert!(StatusResultV1::from_result_map(&payload(status)).is_err());
 
-    let parsed = StatusResultV1::from_result_map(&payload(status)).unwrap();
-    assert_eq!(parsed.to_result_map(), payload(expected));
-    assert_eq!(parsed.items[0].id.as_str(), "note");
+    let mut next = json!({
+        "stage": null,
+        "missing_required_items": [],
+        "blockers": [],
+        "allowed_actions": {"complete": false, "skip": false, "retry": false, "return_to": [], "cancel": true},
+        "next_stage_after_completion": null,
+        "suggestions": []
+    });
+    next["allowed_actions"]["future_action"] = json!(true);
+    assert!(NextResultV1::from_result_map(&payload(next)).is_err());
 }
 
 #[test]

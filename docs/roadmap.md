@@ -178,7 +178,7 @@ all later epics are release-blocking work that is not yet implemented.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `MCONT001` | Add command-specific result schemas | Planned | Replace integration-critical generic result objects with versioned closed schemas. | [AUT-JSON-001](reference/interfaces/34-automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004) |
+| `MCONT001` | Add command-specific result schemas | Completed | Replace integration-critical generic result objects with versioned closed schemas. | [AUT-JSON-001](reference/interfaces/34-automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004) |
 | `MCONT002` | Add error-detail schemas | Planned | Define closed details for endpoint, identity, digest, conflict, idempotency, and timeout errors. | [AUT-JSON-002](reference/interfaces/34-automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004), [AUT-ERR-001](reference/interfaces/34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002) |
 | `MCONT003` | Add result and details discriminators | Planned | Make every automation result and error detail shape unambiguous. | [AUT-JSON-003–004](reference/interfaces/34-automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004) |
 | `MCONT004` | Add the compact status contract | Planned | Implement a closed, bounded, quiescent state view for automation decisions. | [AUT-OBS-001](reference/interfaces/34-automation-client-contract.md#19-quiescent-observation-aut-obs-001), [AUT-OBS-002–004](reference/interfaces/34-automation-client-contract.md#20-compact-status-contract-aut-obs-002004) |

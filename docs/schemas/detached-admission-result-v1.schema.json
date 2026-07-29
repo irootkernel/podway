@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:detached-admission-result:v1",
+  "title": "Podway Detached Admission Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["admission", "detached"],
+  "properties": {
+    "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" },
+    "detached": { "const": true },
+    "procedure_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

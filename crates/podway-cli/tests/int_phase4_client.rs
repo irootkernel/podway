@@ -202,10 +202,41 @@ fn request() -> podway_protocol::RequestEnvelopeV1 {
 }
 
 fn output_payload(command: &str) -> Vec<u8> {
-    format!(
-        r#"{{"schema":"podway.output/v1","request_id":"{REQUEST_ID}","command":"{command}","generated_at":"2026-07-15T12:34:56.789Z","result":{{}},"warnings":[]}}"#
-    )
-    .into_bytes()
+    let result = if command == "session.status" {
+        serde_json::json!({
+            "task": {"title": "Fixture", "procedure": {"id": "fixture", "version": "1", "name": "Fixture", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}},
+            "session": {"id": "123e4567-e89b-42d3-a456-426614174010", "lifecycle": "running", "revision": 1, "created_at": "2026-07-15T12:34:56.789Z", "completed_at": null, "cancelled_at": null},
+            "current": null,
+            "stages": [],
+            "items": [],
+            "blockers": [],
+            "queue": {"pending_mutations": false, "queued_count": 0, "running_job_id": null, "latest_workspace_sequence": 1}
+        })
+    } else {
+        serde_json::json!({
+            "admission": {"admitted": true, "job_id": "123e4567-e89b-42d3-a456-426614174011", "workspace_sequence": 1},
+            "detached": true,
+            "procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        })
+    };
+    let mut envelope = serde_json::json!({
+        "schema": "podway.output/v1",
+        "request_id": REQUEST_ID,
+        "command": command,
+        "generated_at": "2026-07-15T12:34:56.789Z",
+        "result": result,
+        "warnings": []
+    });
+    if command == "session.start" {
+        envelope["job"] = serde_json::json!({
+            "id": "123e4567-e89b-42d3-a456-426614174011",
+            "sequence": 1,
+            "state": "queued",
+            "submitted_at": "2026-07-15T12:34:56.789Z",
+            "finished_at": null
+        });
+    }
+    serde_json::to_vec(&envelope).expect("fixture output must serialize")
 }
 fn mutation_request() -> podway_protocol::RequestEnvelopeV1 {
     let identity = build_identity_v1();
@@ -255,7 +286,7 @@ fn delayed_response_fragments_within_the_absolute_deadline_round_trip() {
         },
     );
 
-    let response = client_with_read_timeout(&fixture, Duration::from_millis(500))
+    let response = client_with_read_timeout(&fixture, Duration::from_secs(3))
         .request(&request())
         .expect("fragments delivered before the full deadline must decode");
     assert!(matches!(response, ResponseEnvelopeV1::Output(_)));

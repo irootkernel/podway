@@ -53,6 +53,59 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "command": { "const": "version" } }, "required": ["command"] },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:version-result:v1" } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "daemon.status" } }, "required": ["command"] },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:daemon-status-result:v1" } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "procedure.validate" } }, "required": ["command"] },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:procedure-validation-result:v1" } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "session.status" } }, "required": ["command"] },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:status-result:v1" } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "session.next" } }, "required": ["command"] },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:next-result:v1" } } }
+    },
+    {
+      "if": { "properties": { "command": { "enum": ["job.status", "job.wait"] } }, "required": ["command"] },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:job-result:v1" } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "job.lookup" } }, "required": ["command"] },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:job-lookup-result:v1" } } }
+    },
+    {
+      "if": {
+        "properties": { "result": { "type": "object", "properties": { "detached": { "const": true } }, "required": ["detached"] } },
+        "required": ["result"]
+      },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:detached-admission-result:v1" } } },
+      "else": {
+        "allOf": [
+          {
+            "if": { "properties": { "command": { "enum": ["session.start", "session.start_replace"] } }, "required": ["command"] },
+            "then": { "properties": { "result": { "$ref": "urn:podway:schema:session-start-result:v1" } } }
+          },
+          {
+            "if": { "properties": { "command": { "enum": ["item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] } }, "required": ["command"] },
+            "then": { "properties": { "result": { "$ref": "urn:podway:schema:item-mutation-result:v1" } } }
+          },
+          {
+            "if": { "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.return", "session.block", "session.unblock", "session.cancel", "session.reopen", "session.reset"] } }, "required": ["command"] },
+            "then": { "properties": { "result": { "$ref": "urn:podway:schema:stage-transition-result:v1" } } }
+          }
+        ]
+      }
+    }
+  ],
   "$defs": {
     "admitted": {
       "type": "object",

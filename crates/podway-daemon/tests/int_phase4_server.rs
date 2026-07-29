@@ -1496,7 +1496,7 @@ fn success_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
         workspace: None,
         job: None,
         session: None,
-        result: Map::new(),
+        result: fixture_result(request.command().as_str()),
         warnings: Vec::new(),
     })
     .expect("fixture output is valid");
@@ -1516,11 +1516,39 @@ fn invalid_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
             workspace: None,
             job: None,
             session: None,
-            result: Map::new(),
+            result: fixture_result(request.command().as_str()),
             warnings: Vec::new(),
         })
         .expect("fixture output is valid"),
     )
+}
+
+fn fixture_result(command: &str) -> Map<String, Value> {
+    let value = if command == "session.status" {
+        json!({
+            "task": {"title": "Fixture", "procedure": {"id": "fixture", "version": "1", "name": "Fixture", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}},
+            "session": {"id": "00000000-0000-4000-8000-000000000104", "lifecycle": "running", "revision": 1, "created_at": "2026-07-15T12:34:56.789Z", "completed_at": null, "cancelled_at": null},
+            "current": null,
+            "stages": [],
+            "items": [],
+            "blockers": [],
+            "queue": {"pending_mutations": false, "queued_count": 0, "running_job_id": null, "latest_workspace_sequence": 1}
+        })
+    } else if matches!(command, "session.start" | "session.start_replace") {
+        json!({
+            "dry_run": true,
+            "task": "Fixture",
+            "source": {"preset": "sw-dev"},
+            "procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "first_stage": {"id": "implement", "title": "Implement"}
+        })
+    } else {
+        json!({})
+    };
+    value
+        .as_object()
+        .expect("fixture result must be an object")
+        .clone()
 }
 
 fn wait_for_dispatcher_entry(gate: &Arc<(Mutex<GateState>, Condvar)>) {

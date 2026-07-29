@@ -172,6 +172,23 @@ impl FakeDaemon {
                         encode_frame_v1(br#"{"schema":"podway.output/v1","invalid":true}"#)
                             .map_err(|error| io::Error::other(error.to_string()))?
                     }
+                    Reply::MalformedStatusResult | Reply::MalformedNextResult => {
+                        let payload = serde_json::to_vec(&json!({
+                            "schema": "podway.output/v1",
+                            "request_id": request.request_id().as_str(),
+                            "command": request.command().as_str(),
+                            "generated_at": "2026-07-15T12:34:56.789Z",
+                            "workspace": {
+                                "uuid": WORKSPACE_ID,
+                                "root": "/fixture",
+                                "latest_workspace_sequence": 9
+                            },
+                            "result": {"invalid": true},
+                            "warnings": []
+                        }))?;
+                        encode_frame_v1(&payload)
+                            .map_err(|error| io::Error::other(error.to_string()))?
+                    }
                     _ => {
                         let response = reply.response_for(&request)?;
                         let payload = encode_response_payload_v1(&response)
@@ -288,39 +305,9 @@ impl Reply {
     fn response_for(self, request: &RequestEnvelopeV1) -> io::Result<ResponseEnvelopeV1> {
         match self {
             Self::Status => output_response(request, status_result(), None),
-            Self::Output => output_response(
-                request,
-                Map::from_iter([(
-                    "admission".to_owned(),
-                    json!({
-                        "admitted": true,
-                        "job_id": JOB_ID,
-                        "workspace_sequence": 7,
-                    }),
-                )]),
-                Some(job()),
-            ),
-            Self::StartOutput => output_response(
-                request,
-                Map::from_iter([
-                    (
-                        "admission".to_owned(),
-                        json!({
-                            "admitted": true,
-                            "job_id": JOB_ID,
-                            "workspace_sequence": 7,
-                        }),
-                    ),
-                    (
-                        "procedure_digest".to_owned(),
-                        Value::String(
-                            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                                .to_owned(),
-                        ),
-                    ),
-                ]),
-                Some(job()),
-            ),
+            Self::Output | Self::StartOutput => {
+                output_response(request, successful_mutation_result(request), Some(job()))
+            }
             Self::Error => error_response(request),
             Self::IdentityError => identity_error_response(request),
             Self::ContractMismatch => contract_mismatch_response(request),
@@ -338,13 +325,67 @@ impl Reply {
             Self::MalformedFramedResponse => Err(io::Error::other(
                 "malformed framed response does not have an envelope",
             )),
-            Self::MalformedStatusResult | Self::MalformedNextResult => output_response(
-                request,
-                Map::from_iter([("invalid".to_owned(), Value::Bool(true))]),
-                None,
-            ),
+            Self::MalformedStatusResult | Self::MalformedNextResult => Err(io::Error::other(
+                "malformed result fixtures are emitted as raw response frames",
+            )),
         }
     }
+}
+
+fn successful_mutation_result(request: &RequestEnvelopeV1) -> Map<String, Value> {
+    let command = request.command().as_str();
+    let admission = json!({
+        "admitted": true,
+        "job_id": JOB_ID,
+        "workspace_sequence": 7,
+    });
+    if request.options().detach() {
+        let mut result = Map::from_iter([
+            ("admission".to_owned(), admission),
+            ("detached".to_owned(), Value::Bool(true)),
+        ]);
+        if matches!(command, "session.start" | "session.start_replace") {
+            result.insert(
+                "procedure_digest".to_owned(),
+                json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            );
+        }
+        return result;
+    }
+    if matches!(command, "session.start" | "session.start_replace") {
+        return Map::from_iter([
+            ("changed".to_owned(), Value::Bool(true)),
+            ("revision_before".to_owned(), Value::from(0)),
+            ("revision_after".to_owned(), Value::from(1)),
+            (
+                "procedure_digest".to_owned(),
+                json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            ),
+            ("admission".to_owned(), admission),
+        ]);
+    }
+    if command.starts_with("item.") {
+        return Map::from_iter([
+            ("changed".to_owned(), Value::Bool(true)),
+            ("item_id".to_owned(), Value::String("item".to_owned())),
+            ("revision_before".to_owned(), Value::from(1)),
+            ("revision_after".to_owned(), Value::from(2)),
+            ("admission".to_owned(), admission),
+        ]);
+    }
+    if command == "session.reset" {
+        return Map::from_iter([
+            ("reset".to_owned(), Value::Bool(true)),
+            ("revision".to_owned(), Value::from(2)),
+            ("admission".to_owned(), admission),
+        ]);
+    }
+    Map::from_iter([
+        ("changed".to_owned(), Value::Bool(true)),
+        ("revision_before".to_owned(), Value::from(1)),
+        ("revision_after".to_owned(), Value::from(2)),
+        ("admission".to_owned(), admission),
+    ])
 }
 
 fn timestamp() -> Rfc3339MillisV1 {
@@ -1502,7 +1543,7 @@ fn malformed_typed_read_results_fail_closed_in_json_and_text() {
         );
         let stderr = String::from_utf8(text_output.stderr).expect("stderr must be UTF-8");
         assert!(
-            stderr.contains(&format!("invalid {command} result")),
+            stderr.contains("the daemon returned an invalid response"),
             "{command} text failure must report malformed typed output: {stderr}",
         );
         assert_eq!(text_daemon.finish().len(), 1);

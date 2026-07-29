@@ -35,7 +35,7 @@ use podway_protocol::{
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
     ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1, build_identity_v1,
+    WorktreeSelectorWireV1, build_identity_v1, validate_command_result_v1,
 };
 use podway_service::{
     InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1,
@@ -2451,6 +2451,8 @@ fn local_result(command: &str, result: Value, text: String) -> RunResult {
         .as_object()
         .cloned()
         .expect("local result is always an object");
+    validate_command_result_v1(command, &result)
+        .expect("local command result must satisfy its closed protocol contract");
     RunResult::Local {
         command: command.to_owned(),
         result,
