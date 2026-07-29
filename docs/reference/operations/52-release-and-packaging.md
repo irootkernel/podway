@@ -59,9 +59,10 @@ podway-<version>-<target>/
     podway/
       presets/
       schemas/
-      specs/
-      canonicalization-fixtures/
-      contract-manifest.json
+      spec/
+      docs/examples/json/
+      tests/fixtures/contract/
+      contracts/contract-manifest-v1.json
   LICENSE
   README.md
   RELEASE_NOTES.md
@@ -70,9 +71,8 @@ Each Apple Silicon archive contains both executables, `podway` and `podwayd`; th
 
 Presets are embedded in the binary for runtime availability. Source copies are shipped for inspection and customization.
 
-The additional specs, fixtures, and contract manifest are accepted target archive
-contents and enter the package with `CONID`, `MCONT`, and `REL10`. The current
-archive builder does not yet make the target artifact release-ready.
+The specs, fixtures, and contract manifest are packaged with the schemas so a
+consumer can inspect and pin the same contract identity as the binaries.
 
 ### Local archive construction
 
@@ -83,9 +83,10 @@ builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
 version mismatches, incomplete archive contents, a Rust toolchain other than 1.97.1,
 and any dirty tracked or untracked source state.
 
-The provenance document records the source commit, Rust toolchain identifier,
-Cargo.lock digest, target architecture, both binary digests, archive digest,
-successful local-gate result, and signing/notarization status. `make test` exercises
+The provenance document records the shared binary build identity, source commit,
+Rust toolchain identifier, Cargo.lock digest, contract manifest identity, target
+architecture, both binary digests, archive digest, successful local-gate result,
+and signing/notarization status. `make test` exercises
 the same archive builder with real binaries in disposable directories and verifies
 that repeated construction produces the same archive digest; it does not publish a
 distribution artifact.

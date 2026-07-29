@@ -52,6 +52,7 @@ struct MatrixRow {
     session_revision_change: String,
     attempt_effect: String,
     stage_or_workspace_effect: String,
+    result_schema: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,7 +82,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.start",
         cli_form: "podway start",
         allowed_session_state: "no session",
-        required_preconditions: "valid procedure and nonempty task title",
+        required_preconditions: "workspace UUID file-source expected Procedure digest valid procedure and nonempty task title",
         session_revision_change: "create revision 1",
         attempt_effect: "create first active attempt",
         stage_or_workspace_effect: "first stage current and later stages pending",
@@ -91,7 +92,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.start_replace",
         cli_form: "podway start --replace",
         allowed_session_state: "any existing session",
-        required_preconditions: "confirmation plus existing session identity and revision",
+        required_preconditions: "workspace UUID file-source expected Procedure digest confirmation session identity and revision",
         session_revision_change: "replace with revision 1",
         attempt_effect: "delete old session then create first active attempt",
         stage_or_workspace_effect: "exclusive barrier replaces current task",
@@ -101,7 +102,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "item.check",
         cli_form: "podway check",
         allowed_session_state: "running",
-        required_preconditions: "active attempt and item revision",
+        required_preconditions: "workspace UUID session ID active attempt and item revision",
         session_revision_change: "+1 when changed",
         attempt_effect: "set confirm true",
         stage_or_workspace_effect: "current stage unchanged",
@@ -111,7 +112,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "item.uncheck",
         cli_form: "podway uncheck",
         allowed_session_state: "running",
-        required_preconditions: "active attempt and item revision",
+        required_preconditions: "workspace UUID session ID active attempt and item revision",
         session_revision_change: "+1 when changed",
         attempt_effect: "clear confirm value",
         stage_or_workspace_effect: "current stage unchanged",
@@ -121,7 +122,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "item.set",
         cli_form: "podway set",
         allowed_session_state: "running",
-        required_preconditions: "active attempt item revision and type-valid value",
+        required_preconditions: "workspace UUID session ID active attempt item revision and type-valid value",
         session_revision_change: "+1 when changed",
         attempt_effect: "set scalar item value",
         stage_or_workspace_effect: "current stage unchanged",
@@ -131,7 +132,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "item.add",
         cli_form: "podway add",
         allowed_session_state: "running",
-        required_preconditions: "active attempt item revision and list constraints",
+        required_preconditions: "workspace UUID session ID active attempt item revision and list constraints",
         session_revision_change: "+1 when changed",
         attempt_effect: "append list value",
         stage_or_workspace_effect: "current stage unchanged",
@@ -141,7 +142,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "item.remove",
         cli_form: "podway remove",
         allowed_session_state: "running",
-        required_preconditions: "active attempt item revision and existing value unless ignored",
+        required_preconditions: "workspace UUID session ID active attempt item revision and existing value unless ignored",
         session_revision_change: "+1 when changed",
         attempt_effect: "remove list value",
         stage_or_workspace_effect: "current stage unchanged",
@@ -151,7 +152,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "item.attach",
         cli_form: "podway attach",
         allowed_session_state: "running",
-        required_preconditions: "active attempt item revision and valid artifact metadata",
+        required_preconditions: "workspace UUID session ID active attempt item revision and valid artifact metadata",
         session_revision_change: "+1 when changed",
         attempt_effect: "set artifact metadata",
         stage_or_workspace_effect: "current stage unchanged",
@@ -161,7 +162,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "item.clear",
         cli_form: "podway clear",
         allowed_session_state: "running",
-        required_preconditions: "active attempt and item revision",
+        required_preconditions: "workspace UUID session ID active attempt and item revision",
         session_revision_change: "+1 when changed",
         attempt_effect: "clear item value",
         stage_or_workspace_effect: "current stage unchanged",
@@ -171,7 +172,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.complete",
         cli_form: "podway complete",
         allowed_session_state: "running",
-        required_preconditions: "session revision active attempt all required items and no blockers",
+        required_preconditions: "workspace UUID session ID session revision active attempt all required items and no blockers",
         session_revision_change: "+1",
         attempt_effect: "complete current and create next unless final",
         stage_or_workspace_effect: "current done and next current or session completed",
@@ -181,7 +182,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.skip",
         cli_form: "podway skip",
         allowed_session_state: "running",
-        required_preconditions: "session revision active attempt skip policy and reason",
+        required_preconditions: "workspace UUID session ID session revision active attempt skip policy and reason",
         session_revision_change: "+1",
         attempt_effect: "skip current and create next",
         stage_or_workspace_effect: "current skipped and next current or session completed",
@@ -191,7 +192,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.retry",
         cli_form: "podway retry",
         allowed_session_state: "running",
-        required_preconditions: "session revision active attempt and reason",
+        required_preconditions: "workspace UUID session ID session revision active attempt and reason",
         session_revision_change: "+1",
         attempt_effect: "abandon current and create same-stage next attempt",
         stage_or_workspace_effect: "current stage remains current",
@@ -201,7 +202,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.return",
         cli_form: "podway return",
         allowed_session_state: "running",
-        required_preconditions: "session revision active attempt allowed earlier stage and reason",
+        required_preconditions: "workspace UUID session ID session revision active attempt allowed earlier stage and reason",
         session_revision_change: "+1",
         attempt_effect: "abandon current and create destination attempt",
         stage_or_workspace_effect: "destination current and reached downstream redo",
@@ -211,7 +212,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.block",
         cli_form: "podway block",
         allowed_session_state: "running",
-        required_preconditions: "session revision active attempt and reason",
+        required_preconditions: "workspace UUID session ID session revision active attempt and reason",
         session_revision_change: "+1",
         attempt_effect: "add open blocker",
         stage_or_workspace_effect: "current stage derives blocked",
@@ -221,7 +222,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.unblock",
         cli_form: "podway unblock",
         allowed_session_state: "running",
-        required_preconditions: "session revision active attempt and current blocker",
+        required_preconditions: "workspace UUID session ID session revision active attempt and current blocker",
         session_revision_change: "+1",
         attempt_effect: "resolve one or all current blockers",
         stage_or_workspace_effect: "current or blocked derived state updates",
@@ -231,7 +232,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.cancel",
         cli_form: "podway cancel",
         allowed_session_state: "running",
-        required_preconditions: "session revision active attempt and reason",
+        required_preconditions: "workspace UUID session ID session revision active attempt and reason",
         session_revision_change: "+1",
         attempt_effect: "abandon active",
         stage_or_workspace_effect: "current stage abandoned and session cancelled",
@@ -241,7 +242,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.reopen",
         cli_form: "podway reopen",
         allowed_session_state: "completed",
-        required_preconditions: "session revision allowed destination and reason",
+        required_preconditions: "workspace UUID session ID session revision allowed destination and reason",
         session_revision_change: "+1",
         attempt_effect: "create destination active attempt",
         stage_or_workspace_effect: "destination current and later reached stages redo",
@@ -251,7 +252,7 @@ const MATRIX_EXPECTATIONS: [MatrixExpectation; 20] = [
         command: "session.reset",
         cli_form: "podway reset",
         allowed_session_state: "any existing session",
-        required_preconditions: "confirmation session identity and revision",
+        required_preconditions: "workspace UUID confirmation session identity and revision",
         session_revision_change: "n/a because session deleted",
         attempt_effect: "delete all session attempts and values",
         stage_or_workspace_effect: "preserve workspace initialization",
@@ -274,7 +275,7 @@ fn parse_matrix() -> Vec<MatrixRow> {
     assert_eq!(
         lines.next(),
         Some(
-            "command,cli_form,allowed_session_state,required_preconditions,session_revision_change,attempt_effect,stage_or_workspace_effect"
+            "command,cli_form,allowed_session_state,required_preconditions,session_revision_change,attempt_effect,stage_or_workspace_effect,result_schema"
         )
     );
 
@@ -284,8 +285,8 @@ fn parse_matrix() -> Vec<MatrixRow> {
             let columns = line.split(',').collect::<Vec<_>>();
             assert_eq!(
                 columns.len(),
-                7,
-                "matrix row {} has seven columns",
+                8,
+                "matrix row {} has eight columns",
                 index + 2
             );
             assert!(
@@ -301,6 +302,7 @@ fn parse_matrix() -> Vec<MatrixRow> {
                 session_revision_change: columns[4].to_owned(),
                 attempt_effect: columns[5].to_owned(),
                 stage_or_workspace_effect: columns[6].to_owned(),
+                result_schema: columns[7].to_owned(),
             }
         })
         .collect()
@@ -320,6 +322,17 @@ fn assert_matrix_row(row: &MatrixRow, expected: MatrixExpectation) {
         row.stage_or_workspace_effect,
         expected.stage_or_workspace_effect
     );
+    assert_eq!(row.result_schema, expected_result_schema(expected.command));
+}
+
+fn expected_result_schema(command: &str) -> &'static str {
+    match command {
+        "workspace.init" | "workspace.reset_all" => "none",
+        "session.start" | "session.start_replace" => "podway.session-start-result/v1",
+        "item.check" | "item.uncheck" | "item.set" | "item.add" | "item.remove" | "item.attach"
+        | "item.clear" => "podway.item-mutation-result/v1",
+        _ => "podway.stage-transition-result/v1",
+    }
 }
 
 impl ConformanceCase {

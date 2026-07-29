@@ -1,4 +1,5 @@
 {
+  "schema": "podway.next-result/v1",
   "stage": {
     "id": "verify",
     "title": "Verify the fix",

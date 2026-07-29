@@ -1,4 +1,5 @@
 {
+  "schema": "podway.status-result/v1",
   "task": {
     "title": "fix duplicate login session creation",
     "procedure": {

@@ -84,6 +84,22 @@ fn pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented
             .filter_map(Value::as_str)
             .any(|entry| entry.contains("/share/podway/schemas/"))
     );
+    for required in [
+        "/share/podway/spec/command-catalog.yaml",
+        "/share/podway/spec/error-codes.json",
+        "/share/podway/spec/state-transition-matrix.csv",
+        "/share/podway/tests/fixtures/contract/canonicalization-v1.json",
+        "/share/podway/docs/examples/json/status-result.json",
+        "/share/podway/contracts/contract-manifest-v1.json",
+    ] {
+        assert!(
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|entry| entry.ends_with(required)),
+            "release archive omits {required}"
+        );
+    }
 
     let provenance_path = first_receipt["provenance"]
         .as_str()
@@ -94,6 +110,22 @@ fn pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented
     assert_eq!(provenance["schema"], "podway.release-provenance/v1");
     assert_eq!(provenance["target"], "aarch64-apple-darwin");
     assert_eq!(provenance["version"], "0.1.0");
+    assert!(
+        provenance["build_identity"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:") && value.len() == 71)
+    );
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(repository.join("contracts/contract-manifest-v1.json"))
+            .expect("contract manifest must be readable"),
+    )
+    .expect("contract manifest must be JSON");
+    assert_eq!(
+        provenance["contract_manifest_schema"],
+        manifest["schema_version"]
+    );
+    assert_eq!(provenance["contract_manifest_digest"], manifest["digest"]);
     assert_eq!(provenance["release_status"]["signing"], "unsigned");
     assert_eq!(
         provenance["release_status"]["notarization"],

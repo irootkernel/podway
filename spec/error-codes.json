@@ -12,30 +12,35 @@
   "errors": [
     {
       "code": "DAEMON_NOT_INSTALLED",
+      "details_schema": "podway.endpoint-error-details/v1",
       "exit_code": 3,
       "retryable": false,
       "summary": "User service is not installed."
     },
     {
       "code": "DAEMON_UNAVAILABLE",
+      "details_schema": "podway.endpoint-error-details/v1",
       "exit_code": 3,
       "retryable": true,
       "summary": "Daemon socket cannot be reached."
     },
     {
       "code": "DAEMON_SHUTTING_DOWN",
+      "details_schema": "podway.endpoint-error-details/v1",
       "exit_code": 3,
       "retryable": true,
       "summary": "Daemon is draining and not accepting work."
     },
     {
       "code": "DAEMON_VERSION_INCOMPATIBLE",
+      "details_schema": "podway.endpoint-error-details/v1",
       "exit_code": 3,
       "retryable": false,
       "summary": "CLI and daemon are not contract-compatible."
     },
     {
       "code": "DAEMON_CONTRACT_MISMATCH",
+      "details_schema": "podway.daemon-contract-mismatch-details/v1",
       "exit_code": 3,
       "retryable": false,
       "summary": "CLI and daemon product or contract manifest identity differs."
@@ -102,6 +107,7 @@
     },
     {
       "code": "WORKSPACE_UUID_MISMATCH",
+      "details_schema": "podway.workspace-uuid-mismatch-details/v1",
       "exit_code": 4,
       "retryable": false,
       "summary": "The workspace UUID differs from the expected identity."
@@ -174,6 +180,7 @@
     },
     {
       "code": "PROCEDURE_DIGEST_MISMATCH",
+      "details_schema": "podway.procedure-digest-mismatch-details/v1",
       "exit_code": 4,
       "retryable": false,
       "summary": "The canonical Procedure digest differs from the expected digest."
@@ -192,6 +199,7 @@
     },
     {
       "code": "SESSION_ID_MISMATCH",
+      "details_schema": "podway.session-id-mismatch-details/v1",
       "exit_code": 4,
       "retryable": false,
       "summary": "The session ID differs from the expected identity."
@@ -222,12 +230,14 @@
     },
     {
       "code": "SESSION_REVISION_CONFLICT",
+      "details_schema": "podway.revision-conflict-details/v1",
       "exit_code": 4,
       "retryable": true,
       "summary": "The session changed after it was observed."
     },
     {
       "code": "ATTEMPT_NOT_CURRENT",
+      "details_schema": "podway.attempt-conflict-details/v1",
       "exit_code": 4,
       "retryable": true,
       "summary": "The target attempt is no longer active."
@@ -288,6 +298,7 @@
     },
     {
       "code": "ITEM_REVISION_CONFLICT",
+      "details_schema": "podway.revision-conflict-details/v1",
       "exit_code": 4,
       "retryable": true,
       "summary": "The item changed after it was observed."
@@ -348,6 +359,7 @@
     },
     {
       "code": "IDEMPOTENCY_KEY_REUSED",
+      "details_schema": "podway.idempotency-key-reused-details/v1",
       "exit_code": 2,
       "retryable": false,
       "summary": "The idempotency key is bound to another request."
@@ -366,12 +378,14 @@
     },
     {
       "code": "JOB_WAIT_TIMEOUT",
+      "details_schema": "podway.job-wait-timeout-details/v1",
       "exit_code": 4,
       "retryable": true,
       "summary": "The wait expired; the admitted job may continue."
     },
     {
       "code": "MUTATION_OUTCOME_UNKNOWN",
+      "details_schema": "podway.mutation-outcome-unknown-details/v1",
       "exit_code": 4,
       "retryable": true,
       "summary": "The mutation may have been admitted; reconcile by idempotency key."

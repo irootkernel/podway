@@ -18,12 +18,12 @@
     {
       "kind": "known_answer_fixture",
       "path": "docs/examples/json/next-result.json",
-      "sha256": "sha256:eb5592f84f97409948bbe08826cd4fd6fabe6879f479813583d2934e8de4e8d5"
+      "sha256": "sha256:3659c7333a0f4a54ddf0f5b8d99f74e09729f57570ed1841acfb587d435228b4"
     },
     {
       "kind": "known_answer_fixture",
       "path": "docs/examples/json/output-complete.json",
-      "sha256": "sha256:14a0dac6e5bd18b41bfe8bf13e99040e929ee7a328282716d056c50011f95b25"
+      "sha256": "sha256:c17484b08f73a571fef8ed11253fa2eb9b29f72be6af94397aee68dd9dd3951f"
     },
     {
       "kind": "known_answer_fixture",
@@ -33,7 +33,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "docs/examples/json/status-result.json",
-      "sha256": "sha256:e31f3a9b336ea89b1062b4d63e12ae768d04788d94af82f1265e8c9156342ea3"
+      "sha256": "sha256:571233588f6c14ba13ef03d9cc381642e09a1566cb47fe85a47427a94b1cbeb3"
     },
     {
       "kind": "schema",
@@ -168,17 +168,17 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:3633d0c220e0d8f283db6d85528c536e21d69e6c40b0d75fa54923aa6fca29c5"
+      "sha256": "sha256:c49a891daa88744efb8ecd84e4e9e56c6af2619c7e3e24b060d6bf8fc73b3ad8"
     },
     {
       "kind": "catalog",
       "path": "spec/error-codes.json",
-      "sha256": "sha256:92414147b1d9cc725de82f423245af2723a2d75333c5e464c71a0eafabad4cc0"
+      "sha256": "sha256:994525338c8bdbbf72cabf414d8507ea961b285faf545f6bf366b13ec2cc7a5a"
     },
     {
       "kind": "transition_matrix",
       "path": "spec/state-transition-matrix.csv",
-      "sha256": "sha256:665e83e720084efcd9f7b62fa9606da1135c5a7e195e78f3ecf834018458b860"
+      "sha256": "sha256:7f4767e1f8d537f47a122e2609d1dc61e8415ed050bbdf7feb0e063333bffb0f"
     },
     {
       "kind": "known_answer_fixture",
@@ -186,7 +186,7 @@
       "sha256": "sha256:fa6e02fb564a739ac0d007cedbeed8d003312647db331084407aa32394dcb538"
     }
   ],
-  "digest": "sha256:91f90d016ec8dbaee131d2b6fb65ac016c2bafff4d550b50f2bf77d70e73f010",
+  "digest": "sha256:c435bc31ed6405f58812830ca77cb39d303784e827fb6d0af4871b95fe874c58",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",

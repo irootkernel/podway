@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -85,6 +86,44 @@ def require_native_binary(path: Path, expected_name: str) -> Path:
     return path
 
 
+def verify_binary_contract_identity(
+    path: Path,
+    expected_name: str,
+    manifest_schema: str,
+    manifest_digest: str,
+    source_commit: str,
+) -> dict[str, Any]:
+    payload = run([str(path), "--json", "version"], label=f"{expected_name} identity probe")
+    try:
+        document = json.loads(payload)
+    except json.JSONDecodeError as error:
+        fail(f"{expected_name} identity probe did not return JSON: {error}")
+    if not isinstance(document, dict):
+        fail(f"{expected_name} identity probe must return a JSON object")
+    identity = document.get("result", document)
+    if not isinstance(identity, dict):
+        fail(f"{expected_name} identity result must be a JSON object")
+    expected = {
+        "product": "podway",
+        "version": PRODUCT_VERSION,
+        "target": TARGET,
+        "contract_manifest_schema": manifest_schema,
+        "contract_manifest_digest": manifest_digest,
+        "source_commit": source_commit,
+    }
+    mismatches = {
+        field: {"expected": value, "actual": identity.get(field)}
+        for field, value in expected.items()
+        if identity.get(field) != value
+    }
+    if mismatches:
+        fail(f"{expected_name} contract identity mismatch: {mismatches}")
+    build_identity = identity.get("build_identity")
+    if not isinstance(build_identity, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", build_identity) is None:
+        fail(f"{expected_name} has an invalid build identity")
+    return identity
+
+
 def require_native_host() -> None:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         fail("release archives require a native arm64 macOS host")
@@ -146,6 +185,19 @@ def copy_release_inputs(staging: Path, podway: Path, podwayd: Path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_file, target)
 
+    for relative in contract_manifest_asset_paths():
+        source = require_regular_file(ROOT / relative, f"contract asset {relative.as_posix()}")
+        target = staging / "share/podway" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+    manifest = require_regular_file(
+        ROOT / "contracts/contract-manifest-v1.json", "contract manifest"
+    )
+    manifest_target = staging / "share/podway/contracts/contract-manifest-v1.json"
+    manifest_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(manifest, manifest_target)
+
     for name in ("LICENSE", "README.md", "RELEASE_NOTES.md"):
         source = require_regular_file(ROOT / name, name)
         shutil.copyfile(source, staging / name)
@@ -176,7 +228,52 @@ def expected_archive_files() -> set[str]:
             f"{ARCHIVE_ROOT}/share/podway/{name}/{item.relative_to(source).as_posix()}"
             for item in source_files(source, name)
         )
+    expected.update(
+        f"{ARCHIVE_ROOT}/share/podway/{relative.as_posix()}"
+        for relative in contract_manifest_asset_paths()
+    )
+    expected.add(
+        f"{ARCHIVE_ROOT}/share/podway/contracts/contract-manifest-v1.json"
+    )
     return expected
+
+
+def contract_manifest_document() -> dict[str, Any]:
+    path = require_regular_file(
+        ROOT / "contracts/contract-manifest-v1.json", "contract manifest"
+    )
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        fail(f"contract manifest is not valid JSON: {error}")
+    if not isinstance(manifest, dict):
+        fail("contract manifest must be a JSON object")
+    schema = manifest.get("schema_version")
+    digest = manifest.get("digest")
+    if schema != "podway.contract-manifest/v1":
+        fail("contract manifest has an unsupported schema identity")
+    if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+        fail("contract manifest has an invalid digest identity")
+    assets = manifest.get("assets")
+    if not isinstance(assets, list) or not assets:
+        fail("contract manifest must contain a non-empty asset list")
+    for asset in assets:
+        if not isinstance(asset, dict) or not isinstance(asset.get("path"), str):
+            fail("contract manifest assets must contain string paths")
+        relative = PurePosixPath(asset["path"])
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            fail(f"contract manifest contains an unsafe asset path: {asset['path']}")
+    return manifest
+
+
+def contract_manifest_identity() -> tuple[str, str]:
+    manifest = contract_manifest_document()
+    return manifest["schema_version"], manifest["digest"]
+
+
+def contract_manifest_asset_paths() -> list[Path]:
+    manifest = contract_manifest_document()
+    return [Path(asset["path"]) for asset in manifest["assets"]]
 
 
 def add_directory(archive: tarfile.TarFile, name: str) -> None:
@@ -276,8 +373,18 @@ def write_json(path: Path, value: Any) -> None:
 def package(arguments: argparse.Namespace) -> dict[str, Any]:
     require_native_host()
     dirty = require_clean_tree(arguments.allow_dirty)
+    manifest_schema, manifest_digest = contract_manifest_identity()
+    source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
     podway = require_native_binary(arguments.podway, "podway")
     podwayd = require_native_binary(arguments.podwayd, "podwayd")
+    podway_identity = verify_binary_contract_identity(
+        podway, "podway", manifest_schema, manifest_digest, source_commit
+    )
+    podwayd_identity = verify_binary_contract_identity(
+        podwayd, "podwayd", manifest_schema, manifest_digest, source_commit
+    )
+    if podway_identity["build_identity"] != podwayd_identity["build_identity"]:
+        fail("podway and podwayd build identities do not match")
     output_directory = arguments.output_dir
     if output_directory.exists() and (output_directory.is_symlink() or not output_directory.is_dir()):
         fail("release output must be a regular directory")
@@ -298,11 +405,14 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
     provenance = {
         "archive": {"name": archive_path.name, "sha256": archive_digest},
         "binaries": {"podway": sha256_file(podway), "podwayd": sha256_file(podwayd)},
+        "build_identity": podway_identity["build_identity"],
         "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
+        "contract_manifest_digest": manifest_digest,
+        "contract_manifest_schema": manifest_schema,
         "release_gate": "test-fixture" if arguments.allow_dirty else "make test: passed",
         "release_status": release_status(),
         "schema": "podway.release-provenance/v1",
-        "source_commit": run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip(),
+        "source_commit": source_commit,
         "source_dirty": dirty,
         "target": TARGET,
         "toolchain": rust_toolchain(),

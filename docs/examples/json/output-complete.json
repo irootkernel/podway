@@ -24,12 +24,15 @@
     "revision_after": 18
   },
   "result": {
+    "schema": "podway.stage-transition-result/v1",
     "changed": true,
     "revision_before": 17,
     "revision_after": 18,
-    "completed_stage": "verify",
-    "active_stage": "review",
-    "active_attempt_number": 2
+    "admission": {
+      "admitted": true,
+      "job_id": "6b8c38e8-0051-475a-a4d0-0cb07eb8fc12",
+      "workspace_sequence": 42
+    }
   },
   "warnings": []
 }

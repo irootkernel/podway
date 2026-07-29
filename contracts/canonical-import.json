@@ -215,7 +215,7 @@
     {
       "source": "docs/spec/README.md",
       "destination": "spec/README.md",
-      "source_sha256": "231b607727b5fd25449318ceafc347a3208723a5250d75c246f5c38280e3a813",
+      "source_sha256": "41c6ebc94e2b65100eaec395ca69644c69fece2e52a4d608413a4af6ea61ad0a",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -231,7 +231,7 @@
     {
       "source": "docs/spec/command-catalog.yaml",
       "destination": "spec/command-catalog.yaml",
-      "source_sha256": "3633d0c220e0d8f283db6d85528c536e21d69e6c40b0d75fa54923aa6fca29c5",
+      "source_sha256": "c49a891daa88744efb8ecd84e4e9e56c6af2619c7e3e24b060d6bf8fc73b3ad8",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -239,7 +239,7 @@
     {
       "source": "docs/spec/error-codes.json",
       "destination": "spec/error-codes.json",
-      "source_sha256": "92414147b1d9cc725de82f423245af2723a2d75333c5e464c71a0eafabad4cc0",
+      "source_sha256": "994525338c8bdbbf72cabf414d8507ea961b285faf545f6bf366b13ec2cc7a5a",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -271,7 +271,7 @@
     {
       "source": "docs/spec/state-transition-matrix.csv",
       "destination": "spec/state-transition-matrix.csv",
-      "source_sha256": "665e83e720084efcd9f7b62fa9606da1135c5a7e195e78f3ecf834018458b860",
+      "source_sha256": "7f4767e1f8d537f47a122e2609d1dc61e8415ed050bbdf7feb0e063333bffb0f",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

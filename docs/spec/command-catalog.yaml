@@ -16,6 +16,8 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.version-result/v1
 - name: completions
   cli:
   - completions
@@ -33,6 +35,8 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-validation-result/v1
 - name: procedure.show
   cli:
   - procedure
@@ -123,6 +127,8 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.daemon-status-result/v1
 - name: daemon.logs
   cli:
   - daemon
@@ -141,6 +147,8 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   idempotency_scope: workspace
+  result_schemas:
+  - podway.detached-admission-result/v1
 - name: workspace.doctor
   cli:
   - doctor
@@ -175,8 +183,14 @@ commands:
   durable_job: true
   session_mutation: true
   destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - procedure_digest_file_source_only
   idempotency_scope: workspace
   maintenance_barrier: false
+  result_schemas:
+  - podway.session-start-result/v1
+  - podway.detached-admission-result/v1
 - name: session.start_replace
   cli:
   - start
@@ -188,9 +202,14 @@ commands:
   destructive_confirmation: true
   maintenance_barrier: true
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
+  - procedure_digest_file_source_only
   idempotency_scope: workspace
+  result_schemas:
+  - podway.session-start-result/v1
+  - podway.detached-admission-result/v1
 - name: session.status
   cli:
   - status
@@ -201,6 +220,9 @@ commands:
   destructive_confirmation: false
   preconditions:
   - session_id_optional
+  result_schemas:
+  - podway.status-result/v1
+  - podway.compact-status-result/v1
 - name: session.next
   cli:
   - next
@@ -211,6 +233,8 @@ commands:
   destructive_confirmation: false
   preconditions:
   - session_id_optional
+  result_schemas:
+  - podway.next-result/v1
 - name: session.complete
   cli:
   - complete
@@ -220,10 +244,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: session.skip
   cli:
   - skip
@@ -233,10 +261,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: session.retry
   cli:
   - retry
@@ -246,10 +278,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: session.return
   cli:
   - return
@@ -259,10 +295,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: session.block
   cli:
   - block
@@ -272,10 +312,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: session.unblock
   cli:
   - unblock
@@ -285,10 +329,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: session.cancel
   cli:
   - cancel
@@ -298,10 +346,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   - attempt_id
   idempotency_scope: session
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: session.reopen
   cli:
   - reopen
@@ -311,9 +363,13 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   idempotency_scope: session
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: session.reset
   cli:
   - reset
@@ -323,10 +379,14 @@ commands:
   session_mutation: true
   destructive_confirmation: true
   preconditions:
+  - workspace_uuid
   - session_id
   - session_revision
   idempotency_scope: workspace
   maintenance_barrier: true
+  result_schemas:
+  - podway.stage-transition-result/v1
+  - podway.detached-admission-result/v1
 - name: workspace.reset_all
   cli:
   - reset
@@ -349,10 +409,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
+  result_schemas:
+  - podway.item-mutation-result/v1
+  - podway.detached-admission-result/v1
 - name: item.uncheck
   cli:
   - uncheck
@@ -362,10 +426,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
+  result_schemas:
+  - podway.item-mutation-result/v1
+  - podway.detached-admission-result/v1
 - name: item.set
   cli:
   - set
@@ -375,10 +443,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
+  result_schemas:
+  - podway.item-mutation-result/v1
+  - podway.detached-admission-result/v1
 - name: item.add
   cli:
   - add
@@ -388,10 +460,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
+  result_schemas:
+  - podway.item-mutation-result/v1
+  - podway.detached-admission-result/v1
 - name: item.remove
   cli:
   - remove
@@ -401,10 +477,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
+  result_schemas:
+  - podway.item-mutation-result/v1
+  - podway.detached-admission-result/v1
 - name: item.attach
   cli:
   - attach
@@ -414,10 +494,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
+  result_schemas:
+  - podway.item-mutation-result/v1
+  - podway.detached-admission-result/v1
 - name: item.clear
   cli:
   - clear
@@ -427,10 +511,14 @@ commands:
   session_mutation: true
   destructive_confirmation: false
   preconditions:
+  - workspace_uuid
   - session_id
   - attempt_id
   - item_revision
   idempotency_scope: session
+  result_schemas:
+  - podway.item-mutation-result/v1
+  - podway.detached-admission-result/v1
 - name: job.list
   cli:
   - job
@@ -449,6 +537,8 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.job-lookup-result/v1
 - name: job.status
   cli:
   - job
@@ -458,6 +548,8 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.job-result/v1
 - name: job.wait
   cli:
   - job
@@ -467,6 +559,8 @@ commands:
   durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.job-result/v1
 - name: job.cancel
   cli:
   - job
