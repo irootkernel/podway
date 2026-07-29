@@ -1599,9 +1599,13 @@ fn post_commit_admission_and_claim_failpoints_are_retryable() {
     );
     assert!(matches!(
         admission_store.admit(&identity(), admission_request.clone()),
-        Err(StoreErrorV1::StorageUnavailableV1 {
-            reason: StoreUnavailableReasonV1::Recovery,
-        })
+        Err(StoreErrorV1::AdmissionCommittedV1 {
+            receipt,
+            source,
+        }) if receipt == JobReceiptV1::new(1, job(15), digest('a'))
+            && matches!(*source, StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::Recovery,
+            })
     ));
     drop(admission_store);
     let admission_retry = store_with_options(

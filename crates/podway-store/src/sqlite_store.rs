@@ -193,7 +193,7 @@ impl SqliteStoreV1 {
         let receipt = reset_terminal_receipt(&request, result);
         let canonical_request = encode_command_v1(&request.claimed_execution())
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        let terminal = PersistedTerminalReceiptV1::new_with_projections(
+        let mut terminal = PersistedTerminalReceiptV1::new_with_projections(
             receipt.job().clone(),
             PersistedTerminalResultV1::from_terminal_result(receipt.result()),
             PersistedTerminalJobProjectionV1::new(
@@ -213,6 +213,16 @@ impl SqliteStoreV1 {
             None => Ok(receipt),
         })
         .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        if terminal
+            .response_context()
+            .is_some_and(|context| context.freezes_public_terminal_envelope())
+            && let Some(seal) = crate::terminal_envelope_sealer_v1()
+        {
+            let envelope = seal(&terminal)?;
+            terminal = terminal
+                .with_public_terminal_envelope(envelope)
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        }
         let terminal_response = encode_persisted_terminal_receipt_v1(&terminal)
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let context = ResetSeedContextV1 {
@@ -453,6 +463,9 @@ impl StoreContractV1 for SqliteStoreV1 {
             encode_command_v1(&execution).map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let response_context = request
             .response_context()
+            .cloned()
+            .map(|context| context.with_workspace_sequence(sequence))
+            .as_ref()
             .map(encode_response_context_v1)
             .transpose()
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
@@ -506,8 +519,18 @@ impl StoreContractV1 for SqliteStoreV1 {
             request.request_digest().clone(),
         );
         self.trigger_failpoint(StoreFailpointV1::AdmissionAfterDurableRowsBeforeCommit)?;
-        transaction.commit().map_err(storage)?;
-        self.trigger_failpoint(StoreFailpointV1::AdmissionAfterCommit)?;
+        let outcome_unknown_key = request.idempotency_key().clone();
+        if transaction.commit().is_err() {
+            return Err(StoreErrorV1::AdmissionOutcomeUnknownV1 {
+                idempotency_key: outcome_unknown_key,
+            });
+        }
+        if let Err(source) = self.trigger_failpoint(StoreFailpointV1::AdmissionAfterCommit) {
+            return Err(StoreErrorV1::AdmissionCommittedV1 {
+                receipt,
+                source: Box::new(source),
+            });
+        }
         Ok(AdmitOutcomeV1::New(receipt))
     }
 
@@ -916,6 +939,16 @@ impl StoreContractV1 for SqliteStoreV1 {
                     decode_response_context_v1(response_context)
                         .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
                 )
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        }
+        if persisted_receipt
+            .response_context()
+            .is_some_and(|context| context.freezes_public_terminal_envelope())
+            && let Some(seal) = crate::terminal_envelope_sealer_v1()
+        {
+            let envelope = seal(&persisted_receipt)?;
+            persisted_receipt = persisted_receipt
+                .with_public_terminal_envelope(envelope)
                 .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         }
         let encoded = encode_persisted_terminal_receipt_v1(&persisted_receipt)

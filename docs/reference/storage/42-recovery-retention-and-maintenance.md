@@ -124,13 +124,15 @@ Default pruning:
 - reset and replace receipts are workspace-scoped and survive deletion of the old session;
 - workspace bootstrap and maintenance records retain the newest 100 or 30 days, whichever is smaller after the minimum set;
 - terminal response JSON remains after its job row is pruned;
-- receipt v3 retains the v2 command discriminator and public terminal projections,
-  plus bounded request ID, public command, workspace UUID/root/sequence response
-  context required to reproduce the full terminal wire envelope;
+- receipt v4 retains the v3 command, projections, and bounded response context plus
+  the complete canonical public terminal envelope sealed atomically with terminal state;
+- v4 lookup returns the stored public envelope without reapplying the current catalog
+  or result renderer;
 - canonical requests, selectors, preconditions, idempotency keys, and submitted
   values are not copied into the retained response context;
 - v0-v2 succeeded/failed receipt-only lookup fails closed when a complete envelope
-  cannot be reconstructed, while legacy receipts remain decodable for compatibility.
+  cannot be reconstructed; v3 remains decodable through its golden-tested legacy
+  projection path for compatibility.
 
 ### Operational journal
 

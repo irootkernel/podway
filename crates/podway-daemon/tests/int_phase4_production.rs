@@ -224,6 +224,14 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
             .is_some(),
         "workspace.init must return a terminal job"
     );
+    assert!(
+        initialized
+            .workspace()
+            .expect("workspace.init must return workspace metadata")
+            .latest_workspace_sequence()
+            >= initialized.job().unwrap().sequence(),
+        "terminal workspace metadata must include its own admission sequence"
+    );
 
     let preset = request(
         2,
@@ -242,6 +250,14 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
     assert!(
         started.session().is_some(),
         "session.start terminal output must project the persisted session"
+    );
+    assert!(
+        started
+            .workspace()
+            .expect("session.start must return workspace metadata")
+            .latest_workspace_sequence()
+            >= started.job().unwrap().sequence(),
+        "terminal workspace metadata must include its own admission sequence"
     );
     let lookup = request(
         2_000,

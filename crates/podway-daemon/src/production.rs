@@ -25,10 +25,11 @@ use podway_protocol::{
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
     EpochMillisV1, IdempotencyKeyV1 as StoreIdempotencyKeyV1, JobListQueryV1,
-    JobReceiptOrTerminalV1, JobStateV1 as StoreJobStateV1, JobViewV1, PersistedTerminalJobStateV1,
-    PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1, SqliteStoreOptionsV1,
-    SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1,
-    StoreReadContractV1, StoreReconciliationReadContractV1, WorkerIdV1, WorkspaceBindingV1,
+    JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1 as StoreJobStateV1, JobViewV1,
+    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
+    SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1,
+    StoreIdempotencyReadContractV1, StoreReadContractV1, StoreReconciliationReadContractV1,
+    WorkerIdV1, WorkspaceBindingV1,
     codec::{
         PersistedDomainCommandV1, PersistedDomainErrorV1, PersistedDomainResultV1,
         PersistedSessionLifecycleV1, PersistedTerminalResultV1,
@@ -948,6 +949,7 @@ impl ProductionMutationWorkerV1 {
         manager: Arc<WorkspaceRuntimeManagerV1>,
         observability: Option<ObservabilityEmitterV1>,
     ) -> Self {
+        podway_store::install_terminal_envelope_sealer_v1(seal_terminal_receipt_v1);
         Self {
             worker: DaemonWorkerV1::new_with_observability(
                 Arc::new(NativeContextExecutionV1::new(observability.clone())),
@@ -1145,43 +1147,51 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     response_context.workspace().root(),
                     response_context.workspace().latest_workspace_sequence(),
                 )
-                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?,
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?
+                .with_frozen_public_terminal_envelope(),
                 self.completion_mode(wait)?,
             )
             .map_err(|error| map_mutation_worker_error(request, error))?;
-        let terminal =
-            terminal_replay(submission.admission()).or_else(|| match submission.completion() {
-                Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
-                Some(WorkerWaitResultV1::TimedOut(_)) | None => None,
-            });
-        if let Some(receipt) = terminal {
-            return Ok(MutationDispatchOutcomeV1::Terminal {
-                job: job_output_from_terminal_receipt(receipt)?,
-                result: terminal_result(receipt, request.command())?,
-                response_context: terminal_response_context(receipt)?.map(Box::new),
-            });
-        }
+        let admission = admission_receipt(submission.admission()).clone();
+        let outcome = (|| {
+            let terminal =
+                terminal_replay(submission.admission()).or_else(|| match submission.completion() {
+                    Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
+                    Some(WorkerWaitResultV1::TimedOut(_)) | None => None,
+                });
+            if let Some(receipt) = terminal {
+                return Ok(MutationDispatchOutcomeV1::Terminal {
+                    job: job_output_from_terminal_receipt(receipt)?,
+                    result: terminal_result(receipt, request.command())?,
+                    response_context: terminal_response_context(receipt)?.map(Box::new),
+                });
+            }
 
-        let (job, procedure_digest) = match submission.completion() {
-            Some(WorkerWaitResultV1::TimedOut(view)) => (
-                job_output(view)?,
-                admitted_start_procedure_digest_v1(view.execution().canonical_execution())
-                    .map_err(|_| terminal_replay_integrity_failure())?,
-            ),
-            _ => job_output_from_context(&workspace.scheduler, submission.admission())?,
-        };
-        match submission.completion() {
-            Some(WorkerWaitResultV1::TimedOut(_)) => {
-                Ok(MutationDispatchOutcomeV1::TimedOut { job })
+            let (job, procedure_digest) = match submission.completion() {
+                Some(WorkerWaitResultV1::TimedOut(view)) => (
+                    job_output(view)?,
+                    admitted_start_procedure_digest_v1(view.execution().canonical_execution())
+                        .map_err(|_| terminal_replay_integrity_failure())?,
+                ),
+                _ => job_output_from_context(&workspace.scheduler, submission.admission())?,
+            };
+            match submission.completion() {
+                Some(WorkerWaitResultV1::TimedOut(_)) => {
+                    Ok(MutationDispatchOutcomeV1::TimedOut { job })
+                }
+                Some(WorkerWaitResultV1::Terminal(_)) => {
+                    Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+                }
+                None => Ok(MutationDispatchOutcomeV1::Detached {
+                    job,
+                    procedure_digest,
+                }),
             }
-            Some(WorkerWaitResultV1::Terminal(_)) => {
-                Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
-            }
-            None => Ok(MutationDispatchOutcomeV1::Detached {
-                job,
-                procedure_digest,
-            }),
-        }
+        })();
+        outcome.map_err(|failure| {
+            failure
+                .with_admission_identity(admission.job_id().clone(), admission.identity_sequence())
+        })
     }
     fn reset_all(
         &self,
@@ -1946,6 +1956,10 @@ fn terminal_job_response(
     command: TerminalCommandKindV1,
 ) -> Result<Value, DispatchFailureV1> {
     validate_terminal_receipt_projection(receipt, command)?;
+    if let Some(envelope) = receipt.public_terminal_envelope() {
+        validate_frozen_terminal_envelope(receipt, envelope)?;
+        return Ok(envelope.clone());
+    }
     if matches!(receipt.result(), PersistedTerminalResultV1::Cancelled) {
         return serde_json::to_value(TerminalJobResponseV1::Cancelled(
             TerminalJobCancellationProjectionV1 { cancelled: true },
@@ -1962,6 +1976,78 @@ fn terminal_job_response(
     )?;
     serde_json::to_value(envelope)
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+}
+
+fn validate_frozen_terminal_envelope(
+    receipt: &PersistedTerminalReceiptV1,
+    envelope: &Value,
+) -> Result<(), DispatchFailureV1> {
+    let object = envelope
+        .as_object()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let context = receipt
+        .response_context()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let schema = object.get("schema").and_then(Value::as_str);
+    if !matches!(schema, Some("podway.output/v1" | "podway.error/v1"))
+        || object.get("request_id").and_then(Value::as_str) != Some(context.request_id())
+        || object.get("command").and_then(Value::as_str) != Some(context.command())
+    {
+        return Err(terminal_replay_integrity_failure());
+    }
+    let expected_workspace = json!({
+        "uuid": context.workspace_uuid(),
+        "root": context.workspace_root(),
+        "latest_workspace_sequence": context.workspace_sequence(),
+    });
+    if object.get("workspace") != Some(&expected_workspace) {
+        return Err(terminal_replay_integrity_failure());
+    }
+    let job = job_output_from_terminal_receipt(receipt)?;
+    match schema {
+        Some("podway.output/v1") => {
+            if object.get("job")
+                != Some(
+                    &serde_json::to_value(job)
+                        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?,
+                )
+            {
+                return Err(terminal_replay_integrity_failure());
+            }
+        }
+        Some("podway.error/v1") => {
+            let admission = object
+                .get("details")
+                .and_then(Value::as_object)
+                .and_then(|details| details.get("admission"));
+            if admission
+                != Some(&json!({
+                    "admitted": true,
+                    "job_id": job.id(),
+                    "workspace_sequence": job.sequence(),
+                }))
+            {
+                return Err(terminal_replay_integrity_failure());
+            }
+        }
+        _ => return Err(terminal_replay_integrity_failure()),
+    }
+    Ok(())
+}
+
+pub(crate) fn seal_terminal_receipt_v1(
+    receipt: &PersistedTerminalReceiptV1,
+) -> Result<Value, StoreErrorV1> {
+    let command = receipt
+        .lookup_command()
+        .ok_or(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: podway_store::StoreInvariantV1::TransitionMutationShape,
+        })?;
+    terminal_job_response(receipt, terminal_command_kind_from_lookup(command)).map_err(|_| {
+        StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: podway_store::StoreInvariantV1::TransitionMutationShape,
+        }
+    })
 }
 
 fn terminal_job_success_result(result: &PersistedDomainResultV1) -> TerminalJobSuccessResultV1 {
@@ -2300,6 +2386,11 @@ fn map_mutation_worker_error(request: &SliceRequestV1, error: WorkerErrorV1) -> 
 }
 fn map_worker_error(error: WorkerErrorV1) -> DispatchFailureV1 {
     match error {
+        WorkerErrorV1::AfterAdmission { admission, source } => {
+            let receipt = admission_receipt(&admission);
+            map_worker_error(*source)
+                .with_admission_identity(receipt.job_id().clone(), receipt.identity_sequence())
+        }
         WorkerErrorV1::Store(error) => map_store_error(error),
         WorkerErrorV1::Execution(error) => match error {
             crate::execution::ExecutionErrorV1::Store(error) => map_store_error(error),
@@ -2479,6 +2570,16 @@ fn map_resolution_error(error: WorkspaceResolutionErrorV1) -> DispatchFailureV1 
 
 fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
     match error {
+        StoreErrorV1::AdmissionCommittedV1 { receipt, source } => map_store_error(*source)
+            .with_admission_identity(receipt.job_id().clone(), receipt.identity_sequence()),
+        StoreErrorV1::AdmissionOutcomeUnknownV1 { idempotency_key } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::MutationOutcomeUnknown).with_details(
+                DispatchErrorDetailsV1::default().with_unknown_outcome(
+                    IdempotencyKeyV1::new(idempotency_key.as_str())
+                        .expect("Store idempotency keys satisfy the protocol bound"),
+                ),
+            )
+        }
         StoreErrorV1::IdempotencyDigestConflictV1 { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::IdempotencyKeyReused)
         }
@@ -2524,6 +2625,14 @@ fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
         | StoreErrorV1::StorageIntegrityV1 { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
         }
+    }
+}
+
+fn admission_receipt(admission: &AdmitOutcomeV1) -> &JobReceiptV1 {
+    match admission {
+        AdmitOutcomeV1::New(receipt)
+        | AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt)) => receipt,
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt)) => receipt.job(),
     }
 }
 
@@ -2682,6 +2791,44 @@ mod tests {
         assert_eq!(
             start_conflict.kind(),
             DispatchFailureKindV1::SessionAlreadyExists
+        );
+    }
+
+    #[test]
+    fn recon002_post_commit_store_errors_preserve_admission_identity() {
+        let failure = map_store_error(StoreErrorV1::AdmissionCommittedV1 {
+            receipt: fixture_job(7),
+            source: Box::new(StoreErrorV1::StorageUnavailableV1 {
+                reason: podway_store::StoreUnavailableReasonV1::Recovery,
+            }),
+        });
+
+        assert_eq!(
+            failure.into_details().into_json(true)["admission"],
+            json!({
+                "admitted": true,
+                "job_id": "00000000-0000-4000-8000-000000000007",
+                "workspace_sequence": 7,
+            })
+        );
+
+        let unknown = map_store_error(StoreErrorV1::AdmissionOutcomeUnknownV1 {
+            idempotency_key: StoreIdempotencyKeyV1::new("unknown-admission").unwrap(),
+        });
+        assert_eq!(
+            unknown.into_details().into_json(true),
+            json!({
+                "schema": "podway.mutation-outcome-unknown-details/v1",
+                "outcome": "unknown",
+                "idempotency_key": "unknown-admission",
+                "reconcile": {
+                    "command": "job.lookup",
+                    "idempotency_key": "unknown-admission",
+                },
+            })
+            .as_object()
+            .unwrap()
+            .clone()
         );
     }
 
@@ -3117,6 +3264,42 @@ mod tests {
         let output = terminal_job_response(&receipt, TerminalCommandKindV1::Start).unwrap();
         assert_eq!(output["schema"], "podway.output/v1");
         assert_eq!(output["result"]["procedure_digest"], json!(digest));
+    }
+    #[test]
+    fn recon003_terminal_replay_prefers_the_frozen_public_envelope() {
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(19),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::WorkspaceInitialized {
+                workspace_id: WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+                revision: Revision::ZERO,
+            }),
+            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+            None,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::WorkspaceInitialize)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                "00000000-0000-4000-8000-000000000019",
+                "workspace.init",
+                WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+                "/safe/worktree",
+                19,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut frozen = terminal_job_response(&receipt, TerminalCommandKindV1::Other).unwrap();
+        frozen["warnings"] = json!([{"code": "frozen-renderer"}]);
+        let receipt = receipt
+            .with_public_terminal_envelope(frozen.clone())
+            .unwrap();
+
+        assert_eq!(
+            terminal_job_response(&receipt, TerminalCommandKindV1::Other).unwrap(),
+            frozen
+        );
     }
     #[test]
     fn projectionless_terminal_replay_fails_closed() {

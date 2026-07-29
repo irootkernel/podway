@@ -39,6 +39,7 @@ pub struct DispatchErrorDetailsV1 {
     attempt_mismatch: Option<Box<AttemptMismatchDetailsV1>>,
     identity_conflict: Option<Box<IdentityConflictDetailsV1>>,
     procedure_digest_mismatch: Option<Box<ProcedureDigestMismatchDetailsV1>>,
+    outcome_unknown_key: Option<Box<IdempotencyKeyV1>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,6 +67,17 @@ struct ProcedureDigestMismatchDetailsV1 {
 }
 
 impl DispatchErrorDetailsV1 {
+    pub fn with_unknown_outcome(mut self, idempotency_key: IdempotencyKeyV1) -> Self {
+        self.outcome_unknown_key = Some(Box::new(idempotency_key));
+        self
+    }
+
+    pub fn with_admission_identity(mut self, job_id: JobId, job_sequence: u64) -> Self {
+        self.job_id = Some(job_id);
+        self.job_sequence = Some(job_sequence);
+        self
+    }
+
     pub fn with_job(mut self, job: &JobOutputV1) -> Self {
         self.job_id = Some(job.id().clone());
         self.job_sequence = Some(job.sequence());
@@ -124,6 +136,20 @@ impl DispatchErrorDetailsV1 {
     }
 
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
+        if let Some(idempotency_key) = self.outcome_unknown_key {
+            return json!({
+                "schema": "podway.mutation-outcome-unknown-details/v1",
+                "outcome": "unknown",
+                "idempotency_key": idempotency_key.as_str(),
+                "reconcile": {
+                    "command": "job.lookup",
+                    "idempotency_key": idempotency_key.as_str(),
+                },
+            })
+            .as_object()
+            .expect("unknown-outcome details are an object")
+            .clone();
+        }
         if let Some(mismatch) = self.procedure_digest_mismatch {
             return Map::from_iter([
                 (
@@ -291,6 +317,7 @@ pub enum DispatchFailureKindV1 {
     BlockerNotFound,
     BlockerNotCurrent,
     IdempotencyKeyReused,
+    MutationOutcomeUnknown,
     JobNotFound,
     JobNotCancellable,
     JobWaitTimeout,
@@ -318,6 +345,7 @@ impl DispatchFailureV1 {
                 attempt_mismatch: None,
                 identity_conflict: None,
                 procedure_digest_mismatch: None,
+                outcome_unknown_key: None,
             },
         }
     }
@@ -329,6 +357,11 @@ impl DispatchFailureV1 {
 
     pub fn with_job(mut self, job: &JobOutputV1) -> Self {
         self.details = self.details.with_job(job);
+        self
+    }
+
+    pub fn with_admission_identity(mut self, job_id: JobId, job_sequence: u64) -> Self {
+        self.details = self.details.with_admission_identity(job_id, job_sequence);
         self
     }
 
@@ -1239,7 +1272,11 @@ where
                     job,
                     procedure_digest,
                 },
-            ) => self.detached_response(request, workspace_output, job, procedure_digest.as_ref()),
+            ) => {
+                let workspace_output =
+                    workspace_at_least_sequence(workspace_output, job.sequence())?;
+                self.detached_response(request, workspace_output, job, procedure_digest.as_ref())
+            }
             (
                 MutationWaitV1::Detached,
                 MutationDispatchOutcomeV1::Terminal {
@@ -1383,6 +1420,15 @@ where
         });
         ResponseEnvelopeV1::Error(envelope)
     }
+}
+
+fn workspace_at_least_sequence(
+    workspace: WorkspaceOutputV1,
+    sequence: u64,
+) -> Result<WorkspaceOutputV1, DispatchFailureV1> {
+    let latest = workspace.latest_workspace_sequence().max(sequence);
+    WorkspaceOutputV1::new(workspace.uuid().clone(), workspace.root(), latest)
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
 }
 
 impl<Runtime, Reads, Controls, Previews, Mutations, Metadata, Errors> RequestDispatcherV1
@@ -1699,6 +1745,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "The idempotency key is bound to another request.",
             false,
             2,
+        ),
+        DispatchFailureKindV1::MutationOutcomeUnknown => (
+            "MUTATION_OUTCOME_UNKNOWN",
+            "Mutation outcome is unknown; reconcile by idempotency key.",
+            true,
+            4,
         ),
         DispatchFailureKindV1::JobNotFound => (
             "JOB_NOT_FOUND",

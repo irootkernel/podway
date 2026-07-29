@@ -750,6 +750,9 @@ fn unavailable_reason_from_worker_error(
     error: WorkerErrorV1,
 ) -> WorkspaceRecoveryUnavailableReasonV1 {
     match error {
+        WorkerErrorV1::AfterAdmission { source, .. } => {
+            unavailable_reason_from_worker_error(*source)
+        }
         WorkerErrorV1::Store(_) | WorkerErrorV1::Execution(_) | WorkerErrorV1::RecoveryRequired => {
             WorkspaceRecoveryUnavailableReasonV1::WorkspaceStateUnreadable
         }

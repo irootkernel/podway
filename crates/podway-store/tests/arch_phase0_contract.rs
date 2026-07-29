@@ -403,6 +403,19 @@ fn store_v1_constructs_every_typed_error_variant() {
     ));
 
     let errors = vec![
+        StoreErrorV1::AdmissionCommittedV1 {
+            receipt: JobReceiptV1::new(
+                1,
+                job_id("00000000-0000-4000-8000-000000000003"),
+                digest('c'),
+            ),
+            source: Box::new(StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::Recovery,
+            }),
+        },
+        StoreErrorV1::AdmissionOutcomeUnknownV1 {
+            idempotency_key: IdempotencyKeyV1::new("unknown-admission").unwrap(),
+        },
         StoreErrorV1::AlreadyClaimedV1 {
             job_id: job_id("00000000-0000-4000-8000-000000000003"),
         },
@@ -458,6 +471,18 @@ fn store_v1_constructs_every_typed_error_variant() {
 
     for error in errors {
         match error {
+            StoreErrorV1::AdmissionCommittedV1 { receipt, source } => {
+                assert_eq!(receipt.identity_sequence(), 1);
+                assert!(matches!(
+                    *source,
+                    StoreErrorV1::StorageUnavailableV1 {
+                        reason: StoreUnavailableReasonV1::Recovery
+                    }
+                ));
+            }
+            StoreErrorV1::AdmissionOutcomeUnknownV1 { idempotency_key } => {
+                assert_eq!(idempotency_key.as_str(), "unknown-admission");
+            }
             StoreErrorV1::AlreadyClaimedV1 { job_id } => {
                 assert_eq!(job_id.as_str(), "00000000-0000-4000-8000-000000000003");
             }

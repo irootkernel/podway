@@ -102,6 +102,51 @@ fn terminal_v3_codec_round_trips_the_canonical_response_context_and_rejects_drif
 }
 
 #[test]
+fn terminal_v4_codec_round_trips_the_frozen_public_envelope()
+-> Result<(), Box<dyn std::error::Error>> {
+    let receipt = PersistedTerminalReceiptV1::new_with_projections(
+        receipt(103),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::WorkspaceInitialized {
+            workspace_id: workspace_id(),
+            revision: Revision::ZERO,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(30),
+            Some(UnixMillis::new(31)),
+            UnixMillis::new(32),
+        )?,
+        None,
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::WorkspaceInitialize)?
+    .with_response_context(PersistedResponseContextV1::new(
+        "00000000-0000-4000-8000-000000000103",
+        "workspace.init",
+        workspace_id(),
+        "/safe/worktree",
+        103,
+    )?)?
+    .with_public_terminal_envelope(serde_json::json!({
+        "schema": "podway.output/v1",
+        "request_id": "00000000-0000-4000-8000-000000000103",
+        "command": "workspace.init"
+    }))?;
+
+    let encoded = encode_persisted_terminal_receipt_v1(&receipt)?;
+    assert!(encoded.contains("podway.store-terminal/v4"));
+    assert_eq!(decode_terminal_receipt_v1(&encoded)?, receipt);
+    assert!(
+        decode_terminal_receipt_v1(&encoded.replacen(
+            r#""schema":"podway.output/v1""#,
+            r#""schema":"podway.unknown/v1""#,
+            1,
+        ))
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn canonical_v1_database_migrates_once_to_v2_with_response_context_storage()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = TempDir::new()?;

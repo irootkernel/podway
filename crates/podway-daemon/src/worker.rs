@@ -240,6 +240,10 @@ impl WorkerSubmissionV1 {
 /// not worker errors.
 #[derive(Debug)]
 pub enum WorkerErrorV1 {
+    AfterAdmission {
+        admission: Box<AdmitOutcomeV1>,
+        source: Box<WorkerErrorV1>,
+    },
     Store(StoreErrorV1),
     Execution(ExecutionErrorV1),
     Progress(WorkspaceSchedulerProgressErrorV1),
@@ -252,6 +256,7 @@ pub enum WorkerErrorV1 {
 impl fmt::Display for WorkerErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AfterAdmission { source, .. } => source.fmt(formatter),
             Self::Store(source) => source.fmt(formatter),
             Self::Execution(source) => source.fmt(formatter),
             Self::Progress(source) => source.fmt(formatter),
@@ -270,6 +275,7 @@ impl fmt::Display for WorkerErrorV1 {
 impl Error for WorkerErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::AfterAdmission { source, .. } => Some(source.as_ref()),
             Self::Store(source) => Some(source),
             Self::Execution(source) => Some(source),
             Self::Progress(source) => Some(source),
@@ -462,12 +468,19 @@ where
         };
         let notification = self.notify_authoritative_change(scheduler);
         let _drain = self.drain_workspace_detached(Arc::clone(scheduler));
-        notification?;
+        notification.map_err(|source| WorkerErrorV1::AfterAdmission {
+            admission: Box::new(outcome.clone()),
+            source: Box::new(source),
+        })?;
         let completion = match completion_mode {
             WorkerCompletionModeV1::Detached => None,
-            WorkerCompletionModeV1::WaitUntil(deadline) => {
-                Some(self.wait_for_terminal(scheduler, job, deadline)?)
-            }
+            WorkerCompletionModeV1::WaitUntil(deadline) => Some(
+                self.wait_for_terminal(scheduler, job, deadline)
+                    .map_err(|source| WorkerErrorV1::AfterAdmission {
+                        admission: Box::new(outcome.clone()),
+                        source: Box::new(source),
+                    })?,
+            ),
         };
         Ok(WorkerSubmissionV1 {
             admission: outcome,

@@ -2434,7 +2434,8 @@ fn reset_seed_request(
     )
     .map_err(|_| StoreErrorV1::InternalInvariantViolationV1 {
         invariant: StoreInvariantV1::ResetSeed,
-    })?;
+    })?
+    .with_frozen_public_terminal_envelope();
     Ok(request.with_response_context(response_context))
 }
 
@@ -2443,7 +2444,9 @@ fn reset_seed_requires_fixed_replacement(error: &StoreErrorV1) -> bool {
         StoreErrorV1::CorruptStateV1 { .. }
         | StoreErrorV1::StorageIntegrityV1 { .. }
         | StoreErrorV1::NewerStateV1 { .. } => true,
-        StoreErrorV1::PrimaryOperationAndCleanupFailureV1 { .. } => false,
+        StoreErrorV1::AdmissionCommittedV1 { .. }
+        | StoreErrorV1::AdmissionOutcomeUnknownV1 { .. }
+        | StoreErrorV1::PrimaryOperationAndCleanupFailureV1 { .. } => false,
         StoreErrorV1::AlreadyClaimedV1 { .. }
         | StoreErrorV1::CancellationLostV1 { .. }
         | StoreErrorV1::ClaimStaleV1 { .. }

@@ -9,7 +9,7 @@ use std::fmt;
 use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -18,6 +18,7 @@ use podway_core::{
     AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, ProcedureSnapshotV1,
     Revision, SessionAggregateV1, SessionId, Sha256Digest, UnixMillis, WorkspaceId, WorkspaceState,
 };
+use serde_json::Value;
 
 pub mod codec;
 pub mod schema;
@@ -43,6 +44,18 @@ pub type CanonicalRequestDigestV1 = Sha256Digest;
 pub type CommandV1 = DomainCommand;
 pub type EpochMillisV1 = UnixMillis;
 pub type GitIdentityV1 = Sha256Digest;
+pub type TerminalEnvelopeSealerV1 = fn(&PersistedTerminalReceiptV1) -> Result<Value, StoreErrorV1>;
+
+static TERMINAL_ENVELOPE_SEALER_V1: OnceLock<TerminalEnvelopeSealerV1> = OnceLock::new();
+
+/// Installs the daemon-owned pure renderer used inside terminal Store transactions.
+pub fn install_terminal_envelope_sealer_v1(sealer: TerminalEnvelopeSealerV1) {
+    let _ = TERMINAL_ENVELOPE_SEALER_V1.set(sealer);
+}
+
+pub(crate) fn terminal_envelope_sealer_v1() -> Option<TerminalEnvelopeSealerV1> {
+    TERMINAL_ENVELOPE_SEALER_V1.get().copied()
+}
 pub type JobIdV1 = JobId;
 pub type RevisionV1 = Revision;
 pub type WorkspaceUuidV1 = WorkspaceId;
@@ -1840,6 +1853,15 @@ pub enum StoreValueErrorV1 {
 /// Typed storage failures. None of these variants is a public protocol envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StoreErrorV1 {
+    /// Admission rows committed, but a later acknowledgement step failed.
+    AdmissionCommittedV1 {
+        receipt: JobReceiptV1,
+        source: Box<StoreErrorV1>,
+    },
+    /// SQLite could not prove whether the admission commit became durable.
+    AdmissionOutcomeUnknownV1 {
+        idempotency_key: IdempotencyKeyV1,
+    },
     AlreadyClaimedV1 {
         job_id: JobIdV1,
     },
@@ -2062,7 +2084,10 @@ impl fmt::Display for StoreErrorV1 {
 impl std::error::Error for StoreErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::PrimaryOperationAndCleanupFailureV1 { primary, .. } => Some(primary.as_ref()),
+            Self::AdmissionCommittedV1 { source, .. }
+            | Self::PrimaryOperationAndCleanupFailureV1 {
+                primary: source, ..
+            } => Some(source.as_ref()),
             _ => None,
         }
     }
