@@ -246,7 +246,7 @@ fn valid_output_envelope() -> OutputEnvelopeV1 {
 
     OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
         request_id: RequestIdV1::new(REQUEST_ID).expect("request id fixture must be valid"),
-        command: CommandNameV1::new("session.status").expect("command fixture must be valid"),
+        command: CommandNameV1::new("workspace.show").expect("command fixture must be valid"),
         generated_at: timestamp(),
         workspace: Some(workspace),
         job: Some(job),
@@ -261,8 +261,10 @@ fn valid_error_envelope() -> ErrorEnvelopeV1 {
     let mut workspace = Map::new();
     workspace.insert("uuid".to_owned(), json!(WORKSPACE_ID));
 
-    let mut details = Map::new();
-    details.insert("reason".to_owned(), json!("precondition"));
+    let details = Map::from_iter([
+        ("expected_revision".to_owned(), json!(3)),
+        ("current_revision".to_owned(), json!(4)),
+    ]);
 
     ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
         request_id: RequestIdV1::new(REQUEST_ID).expect("request id fixture must be valid"),
@@ -396,6 +398,30 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 ("admission".to_owned(), json!({"admitted": false})),
             ]),
             "MUTATION_OUTCOME_UNKNOWN" => mutation_outcome_unknown_details("recon-key"),
+            "DAEMON_CONTRACT_MISMATCH" => json!({
+                "expected": {
+                    "product": "podway",
+                    "contract_manifest_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                },
+                "actual": {
+                    "product": "podway",
+                    "contract_manifest_digest": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+                },
+                "admission": {"admitted": false}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
+                Map::from_iter([("expected_revision".to_owned(), json!(1))])
+            }
+            "ATTEMPT_NOT_CURRENT" => Map::from_iter([(
+                "expected_attempt_id".to_owned(),
+                json!("00000000-0000-4000-8000-000000000019"),
+            )]),
+            "IDEMPOTENCY_KEY_REUSED" => {
+                Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
+            }
             _ => Map::new(),
         };
         let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
@@ -448,6 +474,52 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             })
             .is_err()
         );
+    }
+}
+
+#[test]
+fn api_004_automation_error_details_reject_unknown_fields() {
+    let cases = [
+        ("DAEMON_UNAVAILABLE", 3, true, Map::new()),
+        (
+            "SESSION_REVISION_CONFLICT",
+            4,
+            true,
+            Map::from_iter([("expected_revision".to_owned(), json!(1))]),
+        ),
+        (
+            "ATTEMPT_NOT_CURRENT",
+            4,
+            true,
+            Map::from_iter([(
+                "expected_attempt_id".to_owned(),
+                json!("00000000-0000-4000-8000-000000000019"),
+            )]),
+        ),
+        (
+            "IDEMPOTENCY_KEY_REUSED",
+            2,
+            false,
+            Map::from_iter([("admission".to_owned(), json!({"admitted": false}))]),
+        ),
+        ("JOB_WAIT_TIMEOUT", 4, true, Map::new()),
+    ];
+    for (code, exit_code, retryable, mut details) in cases {
+        details.insert("unexpected".to_owned(), json!(true));
+        assert!(matches!(
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+                command: CommandNameV1::new("status").unwrap(),
+                generated_at: timestamp(),
+                code: ErrorCodeV1::new(code).unwrap(),
+                message: "closed detail test".to_owned(),
+                retryable,
+                exit_code: ExitCodeV1::new(exit_code).unwrap(),
+                workspace: None,
+                details,
+            }),
+            Err(ProtocolError::InvalidErrorDetails { .. })
+        ));
     }
 }
 
@@ -721,7 +793,7 @@ fn api_004_response_wire_surface_is_executable_and_round_trips() {
     let output = valid_output_envelope();
     let output_value = serde_json::to_value(&output).expect("output fixture must serialize");
     assert_eq!(output_value["schema"], OUTPUT_SCHEMA_V1);
-    assert_eq!(output_value["command"], "session.status");
+    assert_eq!(output_value["command"], "workspace.show");
     assert_round_trip(output.clone());
     assert_round_trip(ResponseEnvelopeV1::Output(output));
 
@@ -771,7 +843,12 @@ fn api_004_admission_metadata_is_closed_and_matches_the_output_job() {
 
     for admission in [json!({"admitted": false}), admitted] {
         let mut error = valid_error_envelope_json();
+        let is_admitted = admission["admitted"] == json!(true);
         error["details"]["admission"] = admission;
+        if is_admitted {
+            error["details"]["job_id"] = json!(JOB_ID);
+            error["details"]["job_sequence"] = json!(1);
+        }
         assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_ok());
     }
 
@@ -1087,7 +1164,7 @@ fn api_004_component_depth_matches_the_full_envelope_boundary() {
     warning.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 3));
     let output = OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
-        command: CommandNameV1::new("session.status").unwrap(),
+        command: CommandNameV1::new("workspace.show").unwrap(),
         generated_at: timestamp(),
         workspace: None,
         job: None,
@@ -1106,10 +1183,10 @@ fn api_004_component_depth_matches_the_full_envelope_boundary() {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new("session.status").unwrap(),
         generated_at: timestamp(),
-        code: ErrorCodeV1::new("ITEM_REVISION_CONFLICT").unwrap(),
+        code: ErrorCodeV1::new("INTERNAL_ERROR").unwrap(),
         message: "failed".to_owned(),
-        retryable: true,
-        exit_code: ExitCodeV1::new(4).unwrap(),
+        retryable: false,
+        exit_code: ExitCodeV1::new(6).unwrap(),
         workspace: None,
         details,
     })

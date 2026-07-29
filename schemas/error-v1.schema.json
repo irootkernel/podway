@@ -208,6 +208,85 @@
           "details": { "$ref": "#/$defs/mutationOutcomeUnknownDetails" }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "enum": [
+              "DAEMON_NOT_INSTALLED",
+              "DAEMON_UNAVAILABLE",
+              "DAEMON_SHUTTING_DOWN",
+              "DAEMON_VERSION_INCOMPATIBLE"
+            ]
+          }
+        },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "endpoint-error-details-v1.schema.json" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "DAEMON_CONTRACT_MISMATCH" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "daemon-contract-mismatch-details-v1.schema.json" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "enum": ["SESSION_REVISION_CONFLICT", "ITEM_REVISION_CONFLICT"]
+          }
+        },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "revision-conflict-details-v1.schema.json" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "ATTEMPT_NOT_CURRENT" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "attempt-conflict-details-v1.schema.json" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "IDEMPOTENCY_KEY_REUSED" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "idempotency-key-reused-details-v1.schema.json" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "JOB_WAIT_TIMEOUT" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "job-wait-timeout-details-v1.schema.json" }
+        }
+      }
     }
   ]
 }

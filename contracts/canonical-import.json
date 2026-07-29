@@ -7,7 +7,15 @@
     {
       "source": "docs/schemas/README.md",
       "destination": "schemas/README.md",
-      "source_sha256": "8f808e4b2dcafeb7e0a58bc31a86d45be79ae8155976d4d40a725df53cd4161a",
+      "source_sha256": "5bb4cd5a2f308a3cfece87a21029b70763854395c8ed42e72060561c7eb530b5",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/attempt-conflict-details-v1.schema.json",
+      "destination": "schemas/attempt-conflict-details-v1.schema.json",
+      "source_sha256": "857ad25b7de62f08ef01c0dd14f791a6b93c69086c6a8cd60572c737de87854e",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -16,6 +24,14 @@
       "source": "docs/schemas/contract-manifest-v1.schema.json",
       "destination": "schemas/contract-manifest-v1.schema.json",
       "source_sha256": "df1abac74845a7e3eea91ff39f7e95d64a01152b187d00bc8987be8a8302526a",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/daemon-contract-mismatch-details-v1.schema.json",
+      "destination": "schemas/daemon-contract-mismatch-details-v1.schema.json",
+      "source_sha256": "083bcc6466d756ac9f9513a27b0af0d0822a8cddc13366303f43724a29d28c69",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -37,9 +53,25 @@
       "generator_version": "docs-assets-v1"
     },
     {
+      "source": "docs/schemas/endpoint-error-details-v1.schema.json",
+      "destination": "schemas/endpoint-error-details-v1.schema.json",
+      "source_sha256": "6b14b60e901785af1267cca4d9cf1b3105d0531fe2fa97e97937226df5e36a6d",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
       "source": "docs/schemas/error-v1.schema.json",
       "destination": "schemas/error-v1.schema.json",
-      "source_sha256": "756a31d6c97e6ee3aee3a4193b5b542d7d5bba140b20d599bf655cf93eace0a9",
+      "source_sha256": "1f35b4e0bf59d869688aa3f29325e123638b8f2719ca5e113b2aa13ab287e284",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/idempotency-key-reused-details-v1.schema.json",
+      "destination": "schemas/idempotency-key-reused-details-v1.schema.json",
+      "source_sha256": "75ed989eb57bb05480c9bf3817a51e0c64e2c2b93a984994c38f1d477a099c1a",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -56,6 +88,14 @@
       "source": "docs/schemas/item-mutation-result-v1.schema.json",
       "destination": "schemas/item-mutation-result-v1.schema.json",
       "source_sha256": "1c02ba559d75e9ce761337df96a6f5835f86a48ca02e985696a62f00bbe89e97",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/job-wait-timeout-details-v1.schema.json",
+      "destination": "schemas/job-wait-timeout-details-v1.schema.json",
+      "source_sha256": "3022f942ea8eee226a1941901840f4acef67b2e43d667c7104a7a05df70ba232",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -112,6 +152,14 @@
       "source": "docs/schemas/registry-v1.schema.json",
       "destination": "schemas/registry-v1.schema.json",
       "source_sha256": "ae259c2fb9d5e285c8450a55b2f9133ab4758e32041905475fb0d1fd8ff3f2ad",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/revision-conflict-details-v1.schema.json",
+      "destination": "schemas/revision-conflict-details-v1.schema.json",
+      "source_sha256": "c6082117201e83fb5e4d79a355a13ecf3e0855f22a73784ec5940513c2a28d28",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

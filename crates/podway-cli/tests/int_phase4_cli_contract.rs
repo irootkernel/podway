@@ -506,6 +506,28 @@ fn error_response_with(
     retryable: bool,
     admitted: bool,
 ) -> io::Result<ResponseEnvelopeV1> {
+    let mut details = if admitted {
+        Map::from_iter([
+            ("job_id".to_owned(), Value::String(JOB_ID.to_owned())),
+            ("job_sequence".to_owned(), Value::from(7_u64)),
+            (
+                "admission".to_owned(),
+                json!({
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 7,
+                }),
+            ),
+        ])
+    } else {
+        Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
+    };
+    if code == "ATTEMPT_NOT_CURRENT" {
+        details.insert(
+            "expected_attempt_id".to_owned(),
+            Value::String(ATTEMPT_ID.to_owned()),
+        );
+    }
     podway_protocol::ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
         request_id: request.request_id().clone(),
         command: request.command().clone(),
@@ -518,22 +540,7 @@ fn error_response_with(
             ("uuid".to_owned(), Value::String(WORKSPACE_ID.to_owned())),
             ("root".to_owned(), Value::String("/fixture".to_owned())),
         ])),
-        details: if admitted {
-            Map::from_iter([
-                ("job_id".to_owned(), Value::String(JOB_ID.to_owned())),
-                ("job_sequence".to_owned(), Value::from(7_u64)),
-                (
-                    "admission".to_owned(),
-                    json!({
-                        "admitted": true,
-                        "job_id": JOB_ID,
-                        "workspace_sequence": 7,
-                    }),
-                ),
-            ])
-        } else {
-            Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
-        },
+        details,
     })
     .map(ResponseEnvelopeV1::Error)
     .map_err(|error| io::Error::other(error.to_string()))
@@ -1055,6 +1062,7 @@ fn pac_022_cursor_mutation_is_rejected_after_authoritative_active_stage_drift() 
             "exit_code": 4,
             "workspace": { "uuid": WORKSPACE_ID, "root": "/fixture" },
             "details": {
+                "expected_attempt_id": ATTEMPT_ID,
                 "job_id": JOB_ID,
                 "job_sequence": 7,
                 "admission": {

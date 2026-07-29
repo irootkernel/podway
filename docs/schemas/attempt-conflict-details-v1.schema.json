@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:attempt-conflict-details:v1",
+  "title": "Podway Attempt Conflict Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["expected_attempt_id"],
+  "properties": {
+    "expected_attempt_id": { "type": "string", "format": "uuid" },
+    "actual_attempt_id": { "type": "string", "format": "uuid" },
+    "job_id": { "type": "string", "format": "uuid" },
+    "job_sequence": { "type": "integer", "minimum": 1 },
+    "admission": {
+      "oneOf": [
+        { "$ref": "#/$defs/notAdmitted" },
+        { "$ref": "#/$defs/admitted" }
+      ]
+    }
+  },
+  "$defs": {
+    "notAdmitted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admitted"],
+      "properties": { "admitted": { "const": false } }
+    },
+    "admitted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admitted", "job_id", "workspace_sequence"],
+      "properties": {
+        "admitted": { "const": true },
+        "job_id": { "type": "string", "format": "uuid" },
+        "workspace_sequence": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

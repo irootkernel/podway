@@ -78,6 +78,9 @@ pub enum ProtocolError {
     InvalidIdentityConflictDetails,
     InvalidProcedureDigestMismatchDetails,
     InvalidMutationOutcomeUnknownDetails,
+    InvalidErrorDetails {
+        code: String,
+    },
     InvalidAdmissionMetadata,
     InvalidCommandResult {
         command: String,
@@ -160,6 +163,12 @@ impl fmt::Display for ProtocolError {
                 .write_str("Procedure digest mismatch details violate their closed v1 schema"),
             Self::InvalidMutationOutcomeUnknownDetails => formatter
                 .write_str("mutation outcome unknown details violate their closed v1 schema"),
+            Self::InvalidErrorDetails { code } => {
+                write!(
+                    formatter,
+                    "error details for {code} violate their closed v1 schema"
+                )
+            }
             Self::InvalidAdmissionMetadata => {
                 formatter.write_str("admission metadata violates its closed v1 schema")
             }
@@ -1917,6 +1926,7 @@ impl ErrorEnvelopeV1 {
         validate_identity_conflict_details_v1(self.code.as_str(), &self.details)?;
         validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
         validate_mutation_outcome_unknown_details_v1(self.code.as_str(), &self.details)?;
+        validate_closed_error_details_v1(self.code.as_str(), &self.details)?;
         if let Some(workspace) = &self.workspace {
             validate_json_map_depth(workspace, 1)?;
         }
@@ -2112,6 +2122,168 @@ fn validate_mutation_outcome_unknown_details_v1(
     }
     Ok(())
 }
+
+fn validate_closed_error_details_v1(
+    code: &str,
+    details: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    let valid = match code {
+        "DAEMON_NOT_INSTALLED"
+        | "DAEMON_UNAVAILABLE"
+        | "DAEMON_SHUTTING_DOWN"
+        | "DAEMON_VERSION_INCOMPATIBLE" => validate_endpoint_details_v1(details),
+        "DAEMON_CONTRACT_MISMATCH" => validate_daemon_contract_mismatch_details_v1(details),
+        "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
+            validate_revision_conflict_details_v1(details)
+        }
+        "ATTEMPT_NOT_CURRENT" => validate_attempt_conflict_details_v1(details),
+        "IDEMPOTENCY_KEY_REUSED" => validate_not_admitted_details_v1(details),
+        "JOB_WAIT_TIMEOUT" => validate_wait_timeout_details_v1(details),
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidErrorDetails {
+            code: code.to_owned(),
+        })
+    }
+}
+
+fn validate_endpoint_details_v1(details: &Map<String, Value>) -> bool {
+    details.is_empty() || validate_not_admitted_details_v1(details)
+}
+
+fn validate_not_admitted_details_v1(details: &Map<String, Value>) -> bool {
+    details.len() == 1
+        && details
+            .get("admission")
+            .is_some_and(|value| validate_admission_metadata_v1(value, true).ok() == Some(None))
+}
+
+fn validate_daemon_contract_mismatch_details_v1(details: &Map<String, Value>) -> bool {
+    if details.len() != 3 || !validate_not_admitted_value_v1(details.get("admission")) {
+        return false;
+    }
+    ["expected", "actual"].into_iter().all(|field| {
+        details
+            .get(field)
+            .and_then(Value::as_object)
+            .is_some_and(|identity| {
+                identity.len() == 2
+                    && identity
+                        .get("product")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.is_empty() && value.chars().count() <= 128)
+                    && identity
+                        .get("contract_manifest_digest")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| Sha256Digest::new(value).is_ok())
+            })
+    })
+}
+
+fn validate_revision_conflict_details_v1(details: &Map<String, Value>) -> bool {
+    const ALLOWED: &[&str] = &[
+        "expected_revision",
+        "current_revision",
+        "job_id",
+        "job_sequence",
+        "admission",
+    ];
+    if details.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return false;
+    }
+    if !details.contains_key("expected_revision") && !details.contains_key("current_revision") {
+        return false;
+    }
+    for field in ["expected_revision", "current_revision"] {
+        if details
+            .get(field)
+            .is_some_and(|value| value.as_u64().is_none())
+        {
+            return false;
+        }
+    }
+    validate_optional_job_admission_v1(details)
+}
+
+fn validate_attempt_conflict_details_v1(details: &Map<String, Value>) -> bool {
+    const ALLOWED: &[&str] = &[
+        "expected_attempt_id",
+        "actual_attempt_id",
+        "job_id",
+        "job_sequence",
+        "admission",
+    ];
+    if details.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return false;
+    }
+    let Some(expected) = details.get("expected_attempt_id").and_then(Value::as_str) else {
+        return false;
+    };
+    if AttemptId::new(expected).is_err()
+        || details
+            .get("actual_attempt_id")
+            .and_then(Value::as_str)
+            .is_some_and(|actual| AttemptId::new(actual).is_err())
+        || details.contains_key("actual_attempt_id")
+            && details
+                .get("actual_attempt_id")
+                .and_then(Value::as_str)
+                .is_none()
+    {
+        return false;
+    }
+    validate_optional_job_admission_v1(details)
+}
+
+fn validate_wait_timeout_details_v1(details: &Map<String, Value>) -> bool {
+    details.is_empty()
+        || validate_not_admitted_details_v1(details)
+        || (details.len() == 3
+            && validate_job_fields_v1(details)
+            && details.get("admission").is_some_and(|admission| {
+                validate_admission_metadata_v1(admission, false)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(job_id, sequence)| {
+                        details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
+                            && details.get("job_sequence").and_then(Value::as_u64) == Some(sequence)
+                    })
+            }))
+}
+
+fn validate_optional_job_admission_v1(details: &Map<String, Value>) -> bool {
+    match details.get("admission") {
+        None => !details.contains_key("job_id") && !details.contains_key("job_sequence"),
+        Some(admission) => match validate_admission_metadata_v1(admission, true) {
+            Ok(None) => !details.contains_key("job_id") && !details.contains_key("job_sequence"),
+            Ok(Some((job_id, sequence))) => {
+                validate_job_fields_v1(details)
+                    && details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
+                    && details.get("job_sequence").and_then(Value::as_u64) == Some(sequence)
+            }
+            Err(_) => false,
+        },
+    }
+}
+
+fn validate_job_fields_v1(details: &Map<String, Value>) -> bool {
+    details
+        .get("job_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| JobId::new(value).is_ok())
+        && details
+            .get("job_sequence")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0)
+}
+
+fn validate_not_admitted_value_v1(value: Option<&Value>) -> bool {
+    value.is_some_and(|value| validate_admission_metadata_v1(value, true).ok() == Some(None))
+}
+
 impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

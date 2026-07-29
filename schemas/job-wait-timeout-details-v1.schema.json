@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:job-wait-timeout-details:v1",
+  "title": "Podway Job Wait Timeout Details v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admission"],
+      "properties": {
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["admitted"],
+          "properties": { "admitted": { "const": false } }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "job_sequence", "admission"],
+      "properties": {
+        "job_id": { "type": "string", "format": "uuid" },
+        "job_sequence": { "type": "integer", "minimum": 1 },
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["admitted", "job_id", "workspace_sequence"],
+          "properties": {
+            "admitted": { "const": true },
+            "job_id": { "type": "string", "format": "uuid" },
+            "workspace_sequence": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
+  ]
+}

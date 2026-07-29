@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:idempotency-key-reused-details:v1",
+  "title": "Podway Idempotency Key Reused Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["admission"],
+  "properties": {
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admitted"],
+      "properties": { "admitted": { "const": false } }
+    }
+  }
+}

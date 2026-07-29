@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:endpoint-error-details:v1",
+  "title": "Podway Endpoint Error Details v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admission"],
+      "properties": {
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["admitted"],
+          "properties": { "admitted": { "const": false } }
+        }
+      }
+    }
+  ]
+}

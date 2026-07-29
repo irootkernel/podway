@@ -8,6 +8,12 @@ These JSON Schema Draft 2020-12 files define Podway v1 structural contracts.
 - `ipc-request-v1.schema.json`: framed daemon request payload.
 - `output-v1.schema.json`: success envelope.
 - `error-v1.schema.json`: error envelope.
+- `endpoint-error-details-v1.schema.json`: daemon endpoint and availability failures.
+- `daemon-contract-mismatch-details-v1.schema.json`: CLI/daemon contract identity mismatch.
+- `revision-conflict-details-v1.schema.json`: session and item revision conflicts.
+- `attempt-conflict-details-v1.schema.json`: stale current-attempt conflicts.
+- `idempotency-key-reused-details-v1.schema.json`: rejected idempotency-key reuse.
+- `job-wait-timeout-details-v1.schema.json`: query and admitted mutation wait timeouts.
 - `status-result-v1.schema.json`: `status` result object.
 - `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
 - `version-result-v1.schema.json`: static product and embedded contract identity.

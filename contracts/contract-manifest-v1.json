@@ -37,8 +37,18 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/attempt-conflict-details-v1.schema.json",
+      "sha256": "sha256:857ad25b7de62f08ef01c0dd14f791a6b93c69086c6a8cd60572c737de87854e"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/contract-manifest-v1.schema.json",
       "sha256": "sha256:df1abac74845a7e3eea91ff39f7e95d64a01152b187d00bc8987be8a8302526a"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/daemon-contract-mismatch-details-v1.schema.json",
+      "sha256": "sha256:083bcc6466d756ac9f9513a27b0af0d0822a8cddc13366303f43724a29d28c69"
     },
     {
       "kind": "schema",
@@ -52,8 +62,18 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/endpoint-error-details-v1.schema.json",
+      "sha256": "sha256:6b14b60e901785af1267cca4d9cf1b3105d0531fe2fa97e97937226df5e36a6d"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/error-v1.schema.json",
-      "sha256": "sha256:756a31d6c97e6ee3aee3a4193b5b542d7d5bba140b20d599bf655cf93eace0a9"
+      "sha256": "sha256:1f35b4e0bf59d869688aa3f29325e123638b8f2719ca5e113b2aa13ab287e284"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/idempotency-key-reused-details-v1.schema.json",
+      "sha256": "sha256:75ed989eb57bb05480c9bf3817a51e0c64e2c2b93a984994c38f1d477a099c1a"
     },
     {
       "kind": "schema",
@@ -74,6 +94,11 @@
       "kind": "schema",
       "path": "schemas/job-result-v1.schema.json",
       "sha256": "sha256:6264ae37344183f8df6c8c89430d93feafc6838134b9a35c3bf0a89c44ba0168"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/job-wait-timeout-details-v1.schema.json",
+      "sha256": "sha256:3022f942ea8eee226a1941901840f4acef67b2e43d667c7104a7a05df70ba232"
     },
     {
       "kind": "schema",
@@ -99,6 +124,11 @@
       "kind": "schema",
       "path": "schemas/registry-v1.schema.json",
       "sha256": "sha256:ae259c2fb9d5e285c8450a55b2f9133ab4758e32041905475fb0d1fd8ff3f2ad"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/revision-conflict-details-v1.schema.json",
+      "sha256": "sha256:c6082117201e83fb5e4d79a355a13ecf3e0855f22a73784ec5940513c2a28d28"
     },
     {
       "kind": "schema",
@@ -151,7 +181,7 @@
       "sha256": "sha256:fa6e02fb564a739ac0d007cedbeed8d003312647db331084407aa32394dcb538"
     }
   ],
-  "digest": "sha256:930e6ba8b9b17d4671a80b1433616fa21467da384e7b258591a673963ce83982",
+  "digest": "sha256:8be7d9b3cb9cd27d2e23cf14013c1091677e94f287dae2c8a396c7bd9d2e3b1b",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",
