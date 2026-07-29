@@ -225,7 +225,7 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "endpoint-error-details-v1.schema.json" }
+          "details": { "$ref": "urn:podway:schema:endpoint-error-details:v1" }
         }
       }
     },
@@ -236,7 +236,7 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "daemon-contract-mismatch-details-v1.schema.json" }
+          "details": { "$ref": "urn:podway:schema:daemon-contract-mismatch-details:v1" }
         }
       }
     },
@@ -251,7 +251,7 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "revision-conflict-details-v1.schema.json" }
+          "details": { "$ref": "urn:podway:schema:revision-conflict-details:v1" }
         }
       }
     },
@@ -262,7 +262,7 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "attempt-conflict-details-v1.schema.json" }
+          "details": { "$ref": "urn:podway:schema:attempt-conflict-details:v1" }
         }
       }
     },
@@ -273,7 +273,7 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "idempotency-key-reused-details-v1.schema.json" }
+          "details": { "$ref": "urn:podway:schema:idempotency-key-reused-details:v1" }
         }
       }
     },
@@ -284,7 +284,7 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "job-wait-timeout-details-v1.schema.json" }
+          "details": { "$ref": "urn:podway:schema:job-wait-timeout-details:v1" }
         }
       }
     }

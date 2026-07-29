@@ -24,4 +24,5 @@ name = "int_suite"
 path = "tests/int_suite.rs"
 
 [dev-dependencies]
+jsonschema = { version = "0.49.2", default-features = false }
 sha2.workspace = true

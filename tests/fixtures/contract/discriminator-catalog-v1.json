@@ -1,0 +1,139 @@
+{
+  "schema_version": "podway.discriminator-catalog-known-answers/v1",
+  "result_fixtures": {
+    "version": {
+      "schema": "podway.version-result/v1",
+      "schema_file": "schemas/version-result-v1.schema.json",
+      "type_field": "/version",
+      "value": {
+        "schema": "podway.version-result/v1", "product": "podway", "version": "0.1.0",
+        "target": "aarch64-apple-darwin",
+        "build_identity": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "source_commit": null, "contract_manifest_schema": "podway.contract-manifest/v1",
+        "contract_manifest_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "supported_ipc_ids": ["podway.ipc/v1"]
+      }
+    },
+    "procedure_validation": {
+      "schema": "podway.procedure-validation-result/v1",
+      "schema_file": "schemas/procedure-validation-result-v1.schema.json",
+      "type_field": "/file",
+      "value": {
+        "schema": "podway.procedure-validation-result/v1", "file": "procedure.json",
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "procedure": {"schema": "podway.procedure/v1", "id": "fixture", "version": "1", "name": "Fixture", "stages": [{"id": "work", "title": "Work"}], "rework": {"allow_return_to": "any_previous"}},
+        "warnings": [], "canonical_json": "{}"
+      }
+    },
+    "daemon_status": {
+      "schema": "podway.daemon-status-result/v1", "schema_file": "schemas/daemon-status-result-v1.schema.json",
+      "type_field": "/status", "source": "docs/examples/json/daemon-status-result.json"
+    },
+    "detached_mutation": {
+      "schema": "podway.detached-admission-result/v1", "schema_file": "schemas/detached-admission-result-v1.schema.json",
+      "type_field": "/detached",
+      "value": {"schema": "podway.detached-admission-result/v1", "admission": {"admitted": true, "job_id": "00000000-0000-4000-8000-000000000504", "workspace_sequence": 7}, "detached": true}
+    },
+    "detached_start": {
+      "schema": "podway.detached-admission-result/v1", "schema_file": "schemas/detached-admission-result-v1.schema.json",
+      "type_field": "/detached",
+      "value": {"schema": "podway.detached-admission-result/v1", "admission": {"admitted": true, "job_id": "00000000-0000-4000-8000-000000000505", "workspace_sequence": 8}, "detached": true, "procedure_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"}
+    },
+    "session_start": {
+      "schema": "podway.session-start-result/v1", "schema_file": "schemas/session-start-result-v1.schema.json",
+      "type_field": "/changed",
+      "value": {"schema": "podway.session-start-result/v1", "changed": true, "revision_before": 0, "revision_after": 1, "procedure_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444", "admission": {"admitted": true, "job_id": "00000000-0000-4000-8000-000000000506", "workspace_sequence": 9}}
+    },
+    "status": {
+      "schema": "podway.status-result/v1", "schema_file": "schemas/status-result-v1.schema.json",
+      "type_field": "/session/revision", "source": "docs/examples/json/status-result.json"
+    },
+    "compact_status": {
+      "schema": "podway.compact-status-result/v1", "schema_file": "schemas/compact-status-result-v1.schema.json",
+      "type_field": "/queue/queued_count", "source": "docs/examples/json/compact-status-output.json", "pointer": "/result"
+    },
+    "next": {
+      "schema": "podway.next-result/v1", "schema_file": "schemas/next-result-v1.schema.json",
+      "type_field": "/missing_required_items", "source": "docs/examples/json/next-result.json"
+    },
+    "stage_transition": {
+      "schema": "podway.stage-transition-result/v1", "schema_file": "schemas/stage-transition-result-v1.schema.json",
+      "type_field": "/changed", "source": "docs/examples/json/output-complete.json", "pointer": "/result"
+    },
+    "reset_transition": {
+      "schema": "podway.stage-transition-result/v1", "schema_file": "schemas/stage-transition-result-v1.schema.json",
+      "type_field": "/revision",
+      "value": {"schema": "podway.stage-transition-result/v1", "reset": true, "revision": 2, "admission": {"admitted": true, "job_id": "00000000-0000-4000-8000-000000000507", "workspace_sequence": 10}}
+    },
+    "item_mutation": {
+      "schema": "podway.item-mutation-result/v1", "schema_file": "schemas/item-mutation-result-v1.schema.json",
+      "type_field": "/changed",
+      "value": {"schema": "podway.item-mutation-result/v1", "changed": true, "item_id": "evidence", "revision_before": 2, "revision_after": 3, "admission": {"admitted": true, "job_id": "00000000-0000-4000-8000-000000000508", "workspace_sequence": 11}}
+    },
+    "job_lookup": {
+      "schema": "podway.job-lookup-result/v1", "schema_file": "schemas/job-lookup-result-v1.schema.json",
+      "type_field": "/found", "value": {"schema": "podway.job-lookup-result/v1", "found": false}
+    },
+    "job_result": {
+      "schema": "podway.job-result/v1", "schema_file": "schemas/job-result-v1.schema.json",
+      "type_field": "/job", "value": {"schema": "podway.job-result/v1", "job": null}
+    }
+  },
+  "result_bindings": [
+    {"command": "version", "fixtures": ["version"]},
+    {"command": "procedure.validate", "fixtures": ["procedure_validation"]},
+    {"command": "daemon.status", "fixtures": ["daemon_status"]},
+    {"command": "workspace.init", "fixtures": ["detached_mutation"]},
+    {"command": "session.start", "fixtures": ["session_start", "detached_start"]},
+    {"command": "session.start_replace", "fixtures": ["session_start", "detached_start"]},
+    {"command": "session.status", "fixtures": ["status", "compact_status"]},
+    {"command": "session.next", "fixtures": ["next"]},
+    {"command": "session.complete", "fixtures": ["stage_transition", "detached_mutation"]},
+    {"command": "session.skip", "fixtures": ["stage_transition", "detached_mutation"]},
+    {"command": "session.retry", "fixtures": ["stage_transition", "detached_mutation"]},
+    {"command": "session.return", "fixtures": ["stage_transition", "detached_mutation"]},
+    {"command": "session.block", "fixtures": ["stage_transition", "detached_mutation"]},
+    {"command": "session.unblock", "fixtures": ["stage_transition", "detached_mutation"]},
+    {"command": "session.cancel", "fixtures": ["stage_transition", "detached_mutation"]},
+    {"command": "session.reopen", "fixtures": ["stage_transition", "detached_mutation"]},
+    {"command": "session.reset", "fixtures": ["reset_transition", "detached_mutation"]},
+    {"command": "item.check", "fixtures": ["item_mutation", "detached_mutation"]},
+    {"command": "item.uncheck", "fixtures": ["item_mutation", "detached_mutation"]},
+    {"command": "item.set", "fixtures": ["item_mutation", "detached_mutation"]},
+    {"command": "item.add", "fixtures": ["item_mutation", "detached_mutation"]},
+    {"command": "item.remove", "fixtures": ["item_mutation", "detached_mutation"]},
+    {"command": "item.attach", "fixtures": ["item_mutation", "detached_mutation"]},
+    {"command": "item.clear", "fixtures": ["item_mutation", "detached_mutation"]},
+    {"command": "job.lookup", "fixtures": ["job_lookup"]},
+    {"command": "job.status", "fixtures": ["job_result"]},
+    {"command": "job.wait", "fixtures": ["job_result"]}
+  ],
+  "error_fixtures": {
+    "endpoint": {"schema": "podway.endpoint-error-details/v1", "schema_file": "schemas/endpoint-error-details-v1.schema.json", "type_field": "/schema", "details": {"schema": "podway.endpoint-error-details/v1"}},
+    "daemon_contract": {"schema": "podway.daemon-contract-mismatch-details/v1", "schema_file": "schemas/daemon-contract-mismatch-details-v1.schema.json", "type_field": "/expected/product", "details": {"schema": "podway.daemon-contract-mismatch-details/v1", "expected": {"product": "podway", "contract_manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}, "actual": {"product": "podway", "contract_manifest_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"}, "admission": {"admitted": false}}},
+    "workspace_uuid": {"schema": "podway.workspace-uuid-mismatch-details/v1", "schema_file": "schemas/error-v1.schema.json", "type_field": "/expected_workspace_uuid", "details": {"schema": "podway.workspace-uuid-mismatch-details/v1", "expected_workspace_uuid": "00000000-0000-4000-8000-000000000601", "actual_workspace_uuid": "00000000-0000-4000-8000-000000000602", "admission": {"admitted": false}}},
+    "procedure_digest": {"schema": "podway.procedure-digest-mismatch-details/v1", "schema_file": "schemas/error-v1.schema.json", "type_field": "/expected_procedure_digest", "details": {"schema": "podway.procedure-digest-mismatch-details/v1", "expected_procedure_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "actual_procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "admission": {"admitted": false}}},
+    "session_id": {"schema": "podway.session-id-mismatch-details/v1", "schema_file": "schemas/error-v1.schema.json", "type_field": "/expected_session_id", "details": {"schema": "podway.session-id-mismatch-details/v1", "expected_session_id": "00000000-0000-4000-8000-000000000603", "actual_session_id": null, "admission": {"admitted": false}}},
+    "revision": {"schema": "podway.revision-conflict-details/v1", "schema_file": "schemas/revision-conflict-details-v1.schema.json", "type_field": "/expected_revision", "details": {"schema": "podway.revision-conflict-details/v1", "expected_revision": 4, "current_revision": 5}},
+    "attempt": {"schema": "podway.attempt-conflict-details/v1", "schema_file": "schemas/attempt-conflict-details-v1.schema.json", "type_field": "/expected_attempt_id", "details": {"schema": "podway.attempt-conflict-details/v1", "expected_attempt_id": "00000000-0000-4000-8000-000000000604", "actual_attempt_id": "00000000-0000-4000-8000-000000000605"}},
+    "idempotency": {"schema": "podway.idempotency-key-reused-details/v1", "schema_file": "schemas/idempotency-key-reused-details-v1.schema.json", "type_field": "/admission/admitted", "details": {"schema": "podway.idempotency-key-reused-details/v1", "admission": {"admitted": false}}},
+    "wait_timeout": {"schema": "podway.job-wait-timeout-details/v1", "schema_file": "schemas/job-wait-timeout-details-v1.schema.json", "type_field": "/schema", "details": {"schema": "podway.job-wait-timeout-details/v1"}},
+    "outcome_unknown": {"schema": "podway.mutation-outcome-unknown-details/v1", "schema_file": "schemas/error-v1.schema.json", "type_field": "/outcome", "details": {"schema": "podway.mutation-outcome-unknown-details/v1", "outcome": "unknown", "idempotency_key": "fixture-key", "reconcile": {"command": "job.lookup", "idempotency_key": "fixture-key"}}}
+  },
+  "error_bindings": [
+    {"code": "DAEMON_NOT_INSTALLED", "fixture": "endpoint"},
+    {"code": "DAEMON_UNAVAILABLE", "fixture": "endpoint"},
+    {"code": "DAEMON_SHUTTING_DOWN", "fixture": "endpoint"},
+    {"code": "DAEMON_VERSION_INCOMPATIBLE", "fixture": "endpoint"},
+    {"code": "DAEMON_CONTRACT_MISMATCH", "fixture": "daemon_contract"},
+    {"code": "WORKSPACE_UUID_MISMATCH", "fixture": "workspace_uuid"},
+    {"code": "PROCEDURE_DIGEST_MISMATCH", "fixture": "procedure_digest"},
+    {"code": "SESSION_ID_MISMATCH", "fixture": "session_id"},
+    {"code": "SESSION_REVISION_CONFLICT", "fixture": "revision"},
+    {"code": "ATTEMPT_NOT_CURRENT", "fixture": "attempt"},
+    {"code": "ITEM_REVISION_CONFLICT", "fixture": "revision"},
+    {"code": "IDEMPOTENCY_KEY_REUSED", "fixture": "idempotency"},
+    {"code": "JOB_WAIT_TIMEOUT", "fixture": "wait_timeout"},
+    {"code": "MUTATION_OUTCOME_UNKNOWN", "fixture": "outcome_unknown"}
+  ]
+}

@@ -24,7 +24,6 @@ STATIC_ASSETS = {
     "spec/error-codes.json": "catalog",
     "spec/state-transition-matrix.csv": "transition_matrix",
     "spec/canonicalization-v1.json": "canonicalization_rules",
-    "tests/fixtures/contract/canonicalization-v1.json": "known_answer_fixture",
 }
 
 
@@ -96,15 +95,31 @@ def checked_file(root: Path, relative: Path, label: str) -> Path:
 
 
 def matching_files(root: Path, directory: str, suffix: str) -> list[str]:
-    base = root / directory
-    if not base.is_dir() or base.is_symlink():
-        fail(f"asset directory is missing or invalid: {directory}")
-    paths = []
-    for path in base.iterdir():
-        if path.is_symlink():
-            fail(f"asset directory contains a symlink: {path.relative_to(root).as_posix()}")
-        if path.is_file() and path.name.endswith(suffix):
-            paths.append(path.relative_to(root).as_posix())
+    relative = normalized_path(directory, "asset directory")
+    base = root
+    for part in relative.parts:
+        base /= part
+        if base.is_symlink() or not base.is_dir():
+            fail(f"asset directory is missing or invalid: {directory}")
+
+    paths: list[str] = []
+
+    def visit(current: Path) -> None:
+        with os.scandir(current) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                path = Path(entry.path)
+                displayed = path.relative_to(root).as_posix()
+                if entry.is_symlink():
+                    fail(f"asset directory contains a symlink: {displayed}")
+                if entry.is_dir(follow_symlinks=False):
+                    visit(path)
+                elif entry.is_file(follow_symlinks=False):
+                    if entry.name.endswith(suffix):
+                        paths.append(displayed)
+                else:
+                    fail(f"asset directory contains a non-regular entry: {displayed}")
+
+    visit(base)
     if not paths:
         fail(f"asset directory contains no {suffix} files: {directory}")
     return sorted(paths)
@@ -115,6 +130,8 @@ def expected_asset_kinds(root: Path) -> dict[str, str]:
     for path in matching_files(root, "schemas", "-v1.schema.json"):
         assets[path] = "schema"
     for path in matching_files(root, "docs/examples/json", ".json"):
+        assets[path] = "known_answer_fixture"
+    for path in matching_files(root, "tests/fixtures/contract", ".json"):
         assets[path] = "known_answer_fixture"
     return assets
 
@@ -276,6 +293,39 @@ def self_test(root: Path = ROOT) -> list[str]:
         write(fixture)
         check(fixture)
         completed.append("deterministic_generation")
+
+        nested_examples = fixture / "docs/examples/json/nested/example.json"
+        nested_contract = fixture / "tests/fixtures/contract/nested/fixture.json"
+        for path in (nested_examples, nested_contract):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}\n", encoding="utf-8")
+        nested_assets = expected_asset_kinds(fixture)
+        if not all(path.relative_to(fixture).as_posix() in nested_assets for path in (nested_examples, nested_contract)):
+            fail("nested known-answer discovery sentinel did not pass")
+        completed.append("nested_known_answers")
+
+        file_link = fixture / "docs/examples/json/fixture-link"
+        file_link.symlink_to(nested_examples)
+        try:
+            expected_asset_kinds(fixture)
+        except ManifestError:
+            completed.append("file_symlink_rejected")
+        else:
+            fail("known-answer file symlink sentinel did not fail")
+        file_link.unlink()
+
+        directory_link = fixture / "tests/fixtures/contract/directory-link"
+        directory_link.symlink_to(nested_contract.parent, target_is_directory=True)
+        try:
+            expected_asset_kinds(fixture)
+        except ManifestError:
+            completed.append("directory_symlink_rejected")
+        else:
+            fail("known-answer directory symlink sentinel did not fail")
+        directory_link.unlink()
+
+        write(fixture)
+        check(fixture)
 
         first_asset = fixture / sorted(expected_asset_kinds(fixture))[0]
         first_asset.write_bytes(first_asset.read_bytes() + b"\n")

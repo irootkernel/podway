@@ -60,6 +60,15 @@ A reference model independent of the production transition implementation SHOULD
 - invalid constraints produce stable diagnostics;
 - canonical bytes are deterministic on the Apple Silicon (`aarch64-apple-darwin`) release target.
 
+## Machine-contract drift tests
+
+- command result and error-detail bindings match the generated catalogs exactly;
+- every binding resolves to a Draft 2020-12 schema containing its discriminator;
+- known-answer requests and responses pass the production Rust decoders;
+- missing, unknown, mistyped, mismatched, and cross-command compact fields fail closed;
+- every JSON known answer is manifest-covered with its exact SHA-256 digest;
+- the complete compact envelope boundary is tested at 262,144 bytes and one byte over.
+
 ## SQLite tests
 
 - reference DDL creates an empty valid database;

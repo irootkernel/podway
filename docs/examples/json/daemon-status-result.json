@@ -7,7 +7,7 @@
   "product": "podway",
   "daemon_version": "0.1.0",
   "target": "aarch64-apple-darwin",
-  "build_identity": "podway/0.1.0+aarch64-apple-darwin",
+  "build_identity": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
   "source_commit": null,
   "contract_manifest_schema": "podway.contract-manifest/v1",
   "contract_manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",

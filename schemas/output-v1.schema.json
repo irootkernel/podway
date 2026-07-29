@@ -96,7 +96,14 @@
         "properties": { "result": { "type": "object", "properties": { "detached": { "const": true } }, "required": ["detached"] } },
         "required": ["result"]
       },
-      "then": { "properties": { "result": { "$ref": "urn:podway:schema:detached-admission-result:v1" } } },
+      "then": {
+        "properties": {
+          "command": {
+            "enum": ["workspace.init", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.return", "session.block", "session.unblock", "session.cancel", "session.reopen", "session.reset", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"]
+          },
+          "result": { "$ref": "urn:podway:schema:detached-admission-result:v1" }
+        }
+      },
       "else": {
         "allOf": [
           {

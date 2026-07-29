@@ -1,0 +1,53 @@
+{
+  "schema": "podway.output/v1",
+  "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
+  "command": "session.status",
+  "generated_at": "2026-07-13T03:10:04.123Z",
+  "workspace": {
+    "uuid": "83f9fbaa-3df8-4c23-8253-f94098b0af63",
+    "root": "/Users/example/src/project-wt",
+    "latest_workspace_sequence": 41
+  },
+  "result": {
+    "schema": "podway.compact-status-result/v1",
+    "procedure": {
+      "id": "bug-fix",
+      "version": "1",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "session": {
+      "id": "c1ddd90d-5b6b-40a9-a814-885c6215b916",
+      "lifecycle": "running",
+      "revision": 17
+    },
+    "current": {
+      "stage_id": "verify",
+      "attempt_id": "6f8e7dc4-6502-4857-9d38-1a4afedb50e4",
+      "attempt_number": 2,
+      "ready_to_complete": false
+    },
+    "items": [
+      {
+        "id": "regression-check-passed",
+        "type": "confirm",
+        "required": true,
+        "satisfied": false,
+        "revision": 0
+      }
+    ],
+    "blockers": [
+      {
+        "id": "3c58847c-0f4e-4ec1-a694-e910852bd3f3",
+        "attempt_id": "6f8e7dc4-6502-4857-9d38-1a4afedb50e4",
+        "state": "open"
+      }
+    ],
+    "queue": {
+      "pending_mutations": false,
+      "queued_count": 0,
+      "running_job_id": null,
+      "latest_workspace_sequence": 41
+    }
+  },
+  "warnings": []
+}

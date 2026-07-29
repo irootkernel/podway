@@ -34,7 +34,10 @@ pub fn validate_command_result_v1(
     let mut content = result.clone();
     content.remove("schema");
     let value = Value::Object(content);
-    let valid = if result.get("detached") == Some(&Value::Bool(true)) {
+    let valid = if result.get("detached") == Some(&Value::Bool(true))
+        || result.get("schema").and_then(Value::as_str)
+            == Some("podway.detached-admission-result/v1")
+    {
         if matches!(command, "session.start" | "session.start_replace") {
             decode::<DetachedStartResultV1>(value)
         } else {
@@ -92,7 +95,11 @@ pub fn validate_command_result_v1(
 }
 
 fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Option<&'static str> {
-    if result.get("detached") == Some(&Value::Bool(true)) {
+    if supports_detached(command)
+        && (result.get("detached") == Some(&Value::Bool(true))
+            || result.get("schema").and_then(Value::as_str)
+                == Some("podway.detached-admission-result/v1"))
+    {
         return Some("podway.detached-admission-result/v1");
     }
     match command {
@@ -111,6 +118,13 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
         command if is_stage_transition(command) => Some("podway.stage-transition-result/v1"),
         _ => None,
     }
+}
+
+fn supports_detached(command: &str) -> bool {
+    command == "workspace.init"
+        || matches!(command, "session.start" | "session.start_replace")
+        || is_item_mutation(command)
+        || is_stage_transition(command)
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> bool {

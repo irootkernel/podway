@@ -24,9 +24,9 @@ command-selected closed schemas. Daemon endpoint and contract failures, identity
 and digest mismatches, revision and attempt conflicts, idempotency failures, and
 wait timeouts also use code-selected closed detail schemas. Every closed result
 and closed error-detail object carries its own `schema` discriminator; current
-v1 decoders reject a missing, mismatched, or unknown discriminator. The
-remaining `MCONT` tasks add compact observation, catalog synchronization, and
-fixtures. See the
+v1 decoders reject a missing, mismatched, or unknown discriminator. Manifest-
+covered known-answer fixtures lock the catalogs, schemas, runtime decoders,
+canonical digests, and compact envelope boundary together. See the
 [automation contract](34-automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004).
 
 ## Common success envelope
