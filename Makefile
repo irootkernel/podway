@@ -12,7 +12,7 @@ PRESET_DIR ?= docs/presets
 PRESET_VALIDATOR ?= target/debug/podway
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
-.PHONY: test test-prepare test-prepare-core test-rust test-unit test-int test-fuzzing test-e2e \
+.PHONY: test test-prepare test-rust test-unit test-int test-fuzzing test-e2e \
 	toolchain sync-docs-assets format vet lint architecture architecture-static preset-validator \
 	preset-create preset-import preset-tool-test contract-manifest dist
 
@@ -26,11 +26,7 @@ test:
 	$(MAKE) test-fuzzing
 	$(MAKE) test-e2e
 
-test-prepare:
-	$(MAKE) test-prepare-core
-	$(RUST_TOOLCHAIN_ENV) python3 tools/phase0_receipts.py --check
-
-test-prepare-core: toolchain
+test-prepare: toolchain
 	$(MAKE) sync-docs-assets
 	$(MAKE) format
 	$(MAKE) lint
@@ -58,7 +54,6 @@ architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --all
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_verification_runner.py
 	$(MAKE) contract-manifest
 	$(MAKE) preset-tool-test
 

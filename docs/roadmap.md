@@ -28,7 +28,7 @@ all later epics are release-blocking work that is not yet implemented.
 | `FOUND001` | Bootstrap the Rust workspace | Completed | Establish the pinned Rust workspace, application lockfile, binaries, and crate skeletons. | [Workspace map](structure.md#workspace-map), [Prerequisites](contributing.md#prerequisites) |
 | `FOUND002` | Define dependency boundaries | Completed | Enforce pure-core and acyclic infrastructure dependency direction. | [Dependency direction](structure.md#dependency-direction) |
 | `FOUND003` | Establish canonical assets | Completed | Make schemas, specifications, and presets reviewable and reproducibly mirrored. | [Canonical and generated assets](structure.md#canonical-and-generated-assets) |
-| `FOUND004` | Lock executable contracts | Completed | Record command routes, crate adjacency, handoffs, fixtures, and validation sentinels. | [Workspace map](structure.md#workspace-map), [Tests](structure.md#tests) |
+| `FOUND004` | Lock executable contracts | Completed | Record canonical imports, command routes, crate adjacency, contract manifests, and validation sentinels. | [Workspace map](structure.md#workspace-map), [Tests](structure.md#tests) |
 | `FOUND005` | Establish local verification | Completed | Provide ordered preparation, unit, integration, fuzz, and end-to-end entry points. | [Verification layers](contributing.md#verification-layers) |
 
 ## COREX — Domain and Procedure Engine

@@ -60,15 +60,12 @@ digests, so unreviewed drift fails closed.
 The detailed crate and runtime rules are in the
 [Rust codebase reference](reference/architecture/14-rust-codebase.md).
 
-## Contracts and verification artifacts
+## Executable repository contracts
 
-`contracts/` is not a documentation mirror. It contains versioned inputs that
-repository tools execute, content-addressed Phase 0 locks and handoffs, and the
-minimal host-neutral attestations referenced by those handoffs. Stable evidence
-belongs under `contracts/evidence/`; no tracked contract may depend on an ignored
-file.
+`contracts/` is not a documentation mirror. It contains the versioned canonical
+import, dependency, command-route, manifest, requirement-evidence, and internal
+interface inputs executed by repository verification tools.
 
 `artifacts/` contains mutable reports, raw logs, fuzzing output, and other
-machine-specific results. The entire directory is ignored. A passed current report
-may be reduced explicitly with `python3 tools/run_verification.py --attest`; the
-resulting content-addressed attestation contains no runtime paths or raw logs.
+machine-specific results. The entire directory is ignored and is not a release
+input. Release readiness is decided only by `make test` on the current tree.

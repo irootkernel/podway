@@ -53,7 +53,6 @@ REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_quality_contracts.py",
     "python3 tools/verify_contracts.py --all",
     "python3 tools/verify_preset_tooling.py --podway",
-    "python3 tools/phase0_receipts.py --check",
     "python3 tools/contract_manifest.py --check",
 )
 CRATE_ORDER = (

@@ -66,10 +66,3 @@ client contract is accepted target behavior, but its `RPATH` through `DOLGI`
 implementation and conformance tasks remain planned. `REL10005` is therefore
 blocked regardless of whether the unchanged baseline currently passes `make test`.
 Generated reports from superseded qualification systems are not release inputs.
-
-Raw verification reports and logs are host-local files under ignored `artifacts/`.
-They must never be referenced directly by a tracked contract. When a Phase 0
-handoff requires durable proof, `python3 tools/run_verification.py --attest`
-publishes a host-neutral, content-addressed summary under `contracts/evidence/`;
-the handoff binds that stable file by digest. A fresh source tree must validate
-all tracked receipts without any pre-existing `artifacts/` directory.
