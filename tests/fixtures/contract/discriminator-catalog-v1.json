@@ -94,7 +94,7 @@
     "stage_preview": {
       "schema": "podway.stage-transition-result/v1", "schema_file": "schemas/stage-transition-result-v1.schema.json",
       "malformed_type_pointer": "/preview",
-      "value": {"schema": "podway.stage-transition-result/v1", "preview": true, "changed": false, "revision_before": null, "revision_after": null, "active_before": null, "active_after": null, "destination_attempt": null, "affected_stages": []}
+      "value": {"schema": "podway.stage-transition-result/v1", "preview": true, "changed": false, "revision_before": null, "revision_after": null, "active_before": null, "active_after": null, "destination_attempt": null, "affected_stages": [{"stage_id": "work", "before": null, "after": null, "before_attempt": null, "after_attempt": null}]}
     },
     "item_mutation": {
       "schema": "podway.item-mutation-result/v1", "schema_file": "schemas/item-mutation-result-v1.schema.json",

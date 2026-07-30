@@ -97,18 +97,18 @@ pub fn validate_command_result_v1(
                     StatusResultV1::from_result_map(result).is_ok()
                 }
             }
-            "session.next" => decode::<NextResultV1>(value),
+            "session.next" => NextResultV1::from_result_map(result).is_ok(),
             "job.status" | "job.wait" => decode::<JobReadResultV1>(value),
             "job.lookup" => match result.get("found") {
                 Some(Value::Bool(false)) => decode::<JobLookupMissingResultV1>(value),
-                Some(Value::Bool(true)) => decode::<JobLookupFoundResultV1>(value),
+                Some(Value::Bool(true)) => validate_job_lookup_found_result(value),
                 _ => false,
             },
             "session.start" | "session.start_replace" => {
                 if result.contains_key("dry_run") {
-                    decode::<StartDryRunResultV1>(value)
+                    validate_start_dry_run_result(value)
                 } else {
-                    decode::<StartTerminalResultV1>(value)
+                    validate_start_terminal_result(value)
                 }
             }
             command if is_item_mutation(command) => decode::<ItemMutationResultV1>(value),
@@ -116,7 +116,7 @@ pub fn validate_command_result_v1(
                 if result.get("preview") == Some(&Value::Bool(true)) {
                     decode::<StagePreviewResultV1>(value)
                 } else if command == "session.reset" && result.contains_key("reset") {
-                    decode::<ResetResultV1>(value)
+                    validate_reset_result(value)
                 } else {
                     decode::<StageTransitionResultV1>(value)
                 }
@@ -199,6 +199,10 @@ fn non_empty(value: &str) -> bool {
     !value.is_empty()
 }
 
+fn optional_absolute_path(path: &Option<String>) -> bool {
+    path.as_deref().is_none_or(|path| path.starts_with('/'))
+}
+
 fn unique_non_empty_strings(values: &[String]) -> bool {
     values.iter().all(|value| non_empty(value))
         && values
@@ -214,6 +218,7 @@ fn validate_version_result(value: Value) -> bool {
             && non_empty(&result.target)
             && result.source_commit.as_deref().is_none_or(non_empty)
             && result.contract_manifest_schema == "podway.contract-manifest/v1"
+            && !result.supported_ipc_ids.is_empty()
             && unique_non_empty_strings(&result.supported_ipc_ids)
     })
 }
@@ -247,6 +252,11 @@ fn validate_daemon_service_status_result(value: Value) -> bool {
                 .as_deref()
                 .is_none_or(non_empty)
             && unique_non_empty_strings(&result.protocol_versions)
+            && result.pid.is_none_or(|pid| pid > 0)
+            && optional_absolute_path(&result.executable_path)
+            && optional_absolute_path(&result.socket_path)
+            && optional_absolute_path(&result.configured_socket_path)
+            && optional_absolute_path(&result.effective_socket_path)
             && if result.reachable {
                 result.installed
                     && result.loaded
@@ -278,6 +288,32 @@ fn validate_procedure_validation_result(value: Value) -> bool {
             && serde_json::from_str::<Value>(canonical_json.as_str())
                 .is_ok_and(|canonical| canonical == Value::Object(result.procedure))
     })
+}
+
+fn validate_start_terminal_result(value: Value) -> bool {
+    serde_json::from_value::<StartTerminalResultV1>(value)
+        .is_ok_and(|result| result.revision_after != Revision::ZERO)
+}
+
+fn validate_start_dry_run_result(value: Value) -> bool {
+    serde_json::from_value::<StartDryRunResultV1>(value).is_ok_and(|result| {
+        non_empty(&result.task)
+            && match result.source {
+                StartSourceV1::Preset(source) => non_empty(&source.preset),
+                StartSourceV1::Procedure(source) => non_empty(&source.procedure),
+            }
+            && non_empty(&result.first_stage.title)
+    })
+}
+
+fn validate_reset_result(value: Value) -> bool {
+    serde_json::from_value::<ResetResultV1>(value)
+        .is_ok_and(|result| result.revision != Revision::ZERO)
+}
+
+fn validate_job_lookup_found_result(value: Value) -> bool {
+    serde_json::from_value::<JobLookupFoundResultV1>(value)
+        .is_ok_and(|result| non_empty(&result.job.command))
 }
 
 fn is_item_mutation(command: &str) -> bool {
@@ -543,9 +579,13 @@ struct StageAttemptV1 {
 #[serde(deny_unknown_fields)]
 struct AffectedStageV1 {
     stage_id: StageId,
+    #[serde(deserialize_with = "deserialize_required_option")]
     before: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     after: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     before_attempt: Option<StageAttemptV1>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     after_attempt: Option<StageAttemptV1>,
 }
 

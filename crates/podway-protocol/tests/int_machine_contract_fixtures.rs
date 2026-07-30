@@ -137,6 +137,14 @@ fn result_map(value: Value) -> Map<String, Value> {
     value.as_object().unwrap().clone()
 }
 
+fn assert_result_invalid(contract: &ContractFixture, command: &str, value: Value) {
+    assert_schema_invalid(&contract.schema_file, &value);
+    assert!(
+        validate_command_result_v1(command, &result_map(value)).is_err(),
+        "runtime accepted a schema-invalid {command} result"
+    );
+}
+
 fn contains_const(value: &Value, expected: &str) -> bool {
     match value {
         Value::Object(object) => {
@@ -541,6 +549,117 @@ fn mcont006_procedure_validation_rejects_nested_drift_noncanonical_bytes_and_bad
     assert!(
         validate_command_result_v1("procedure.validate", &result_map(mismatched_document)).is_err()
     );
+}
+
+#[test]
+fn mcont006_runtime_rejects_all_closed_result_boundary_drift() {
+    let fixture = fixture();
+    let mut cases = Vec::new();
+
+    let mut version = materialize(fixture.result_fixtures.get("version").unwrap());
+    version["supported_ipc_ids"] = json!([]);
+    cases.push(("version", "version", version));
+
+    for pointer in [
+        "/pid",
+        "/executable_path",
+        "/socket_path",
+        "/configured_socket_path",
+        "/effective_socket_path",
+    ] {
+        let mut daemon = materialize(fixture.result_fixtures.get("daemon_status").unwrap());
+        *daemon.pointer_mut(pointer).unwrap() = if pointer == "/pid" {
+            json!(0)
+        } else {
+            json!("relative/path")
+        };
+        cases.push(("daemon_status", "daemon.status", daemon));
+    }
+
+    let mut start = materialize(fixture.result_fixtures.get("session_start").unwrap());
+    start["revision_after"] = json!(0);
+    cases.push(("session_start", "session.start", start));
+
+    for pointer in ["/task", "/source/preset", "/first_stage/title"] {
+        let mut dry_run = materialize(
+            fixture
+                .result_fixtures
+                .get("session_start_dry_run")
+                .unwrap(),
+        );
+        *dry_run.pointer_mut(pointer).unwrap() = json!("");
+        cases.push(("session_start_dry_run", "session.start", dry_run));
+    }
+
+    let mut reset = materialize(fixture.result_fixtures.get("reset_transition").unwrap());
+    reset["revision"] = json!(0);
+    cases.push(("reset_transition", "session.reset", reset));
+
+    let mut status = materialize(fixture.result_fixtures.get("status").unwrap());
+    status["blockers"] = json!([{
+        "id": "00000000-0000-4000-8000-000000000801",
+        "attempt_id": "6f8e7dc4-6502-4857-9d38-1a4afedb50e4",
+        "reason": ""
+    }]);
+    cases.push(("status", "session.status", status));
+
+    for pointer in ["/items/0/value/location", "/items/0/value/media_type"] {
+        let mut status = materialize(fixture.result_fixtures.get("status").unwrap());
+        status["items"] = json!([{
+            "id": "artifact", "type": "artifact", "prompt": "Artifact",
+            "required": true, "satisfied": true, "revision": 1,
+            "value": {
+                "location_type": "path", "location": "artifact.txt",
+                "sha256_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "size_bytes": 1, "media_type": "text/plain"
+            }
+        }]);
+        *status.pointer_mut(pointer).unwrap() = json!("");
+        cases.push(("status", "session.status", status));
+    }
+
+    for pointer in ["/stage/title", "/next_stage_after_completion/title"] {
+        let mut next = materialize(fixture.result_fixtures.get("next").unwrap());
+        *next.pointer_mut(pointer).unwrap() = json!("");
+        cases.push(("next", "session.next", next));
+    }
+    let mut next = materialize(fixture.result_fixtures.get("next").unwrap());
+    next["blockers"] = json!([{
+        "id": "00000000-0000-4000-8000-000000000802",
+        "attempt_id": "6f8e7dc4-6502-4857-9d38-1a4afedb50e4",
+        "reason": ""
+    }]);
+    cases.push(("next", "session.next", next));
+
+    let mut lookup = materialize(fixture.result_fixtures.get("job_lookup_found").unwrap());
+    lookup["job"]["command"] = json!("");
+    cases.push(("job_lookup_found", "job.lookup", lookup));
+
+    for (fixture_name, command, value) in cases {
+        assert_result_invalid(
+            fixture.result_fixtures.get(fixture_name).unwrap(),
+            command,
+            value,
+        );
+    }
+}
+
+#[test]
+fn mcont006_stage_preview_requires_present_nullable_affected_stage_fields() {
+    let fixture = fixture();
+    let contract = fixture.result_fixtures.get("stage_preview").unwrap();
+    let valid = materialize(contract);
+    assert_schema_valid(&contract.schema_file, &valid);
+    validate_command_result_v1("session.return", &result_map(valid.clone())).unwrap();
+
+    for field in ["before", "after", "before_attempt", "after_attempt"] {
+        let mut missing = valid.clone();
+        missing["affected_stages"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert_result_invalid(contract, "session.return", missing);
+    }
 }
 
 #[test]

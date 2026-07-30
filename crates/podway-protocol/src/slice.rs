@@ -2628,7 +2628,12 @@ impl StatusResultV1 {
         let mut result = result.clone();
         result.remove("schema");
         let status: Self = serde_json::from_value(Value::Object(result))?;
-        if status.items.iter().all(status_item_value_matches_type) {
+        if status.items.iter().all(status_item_value_matches_type)
+            && status
+                .blockers
+                .iter()
+                .all(|blocker| !blocker.reason.is_empty())
+        {
             Ok(status)
         } else {
             Err(<serde_json::Error as serde::de::Error>::custom(
@@ -2648,27 +2653,17 @@ impl StatusResultV1 {
 }
 
 fn status_item_value_matches_type(item: &StatusItemResultV1) -> bool {
-    matches!(
-        (item.item_type, item.value.as_ref()),
+    match (item.item_type, item.value.as_ref()) {
         (_, None)
-            | (
-                ItemTypeResultV1::Confirm,
-                Some(StatusItemValueV1::Confirm(true))
-            )
-            | (
-                ItemTypeResultV1::Text | ItemTypeResultV1::Choice,
-                Some(StatusItemValueV1::Text(_))
-            )
-            | (
-                ItemTypeResultV1::Integer,
-                Some(StatusItemValueV1::Integer(_))
-            )
-            | (ItemTypeResultV1::List, Some(StatusItemValueV1::List(_)))
-            | (
-                ItemTypeResultV1::Artifact,
-                Some(StatusItemValueV1::Artifact(_))
-            )
-    )
+        | (ItemTypeResultV1::Confirm, Some(StatusItemValueV1::Confirm(true)))
+        | (ItemTypeResultV1::Text | ItemTypeResultV1::Choice, Some(StatusItemValueV1::Text(_)))
+        | (ItemTypeResultV1::Integer, Some(StatusItemValueV1::Integer(_)))
+        | (ItemTypeResultV1::List, Some(StatusItemValueV1::List(_))) => true,
+        (ItemTypeResultV1::Artifact, Some(StatusItemValueV1::Artifact(artifact))) => {
+            !artifact.location.is_empty() && !artifact.media_type.is_empty()
+        }
+        _ => false,
+    }
 }
 
 impl TryFrom<Map<String, Value>> for StatusResultV1 {
@@ -2938,7 +2933,27 @@ impl NextResultV1 {
     pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
         let mut result = result.clone();
         result.remove("schema");
-        serde_json::from_value(Value::Object(result))
+        let next: Self = serde_json::from_value(Value::Object(result))?;
+        let stage_titles_are_valid = next
+            .stage
+            .as_ref()
+            .is_none_or(|stage| !stage.title.is_empty())
+            && next
+                .next_stage_after_completion
+                .as_ref()
+                .is_none_or(|stage| !stage.title.is_empty());
+        if stage_titles_are_valid
+            && next
+                .blockers
+                .iter()
+                .all(|blocker| !blocker.reason.is_empty())
+        {
+            Ok(next)
+        } else {
+            Err(<serde_json::Error as serde::de::Error>::custom(
+                "next result violates non-empty string constraints",
+            ))
+        }
     }
 
     pub fn to_result_map(&self) -> Map<String, Value> {
