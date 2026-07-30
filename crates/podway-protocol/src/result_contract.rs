@@ -230,6 +230,7 @@ fn validate_daemon_status_result(value: Value) -> bool {
             && non_empty(&result.target)
             && result.source_commit.as_deref().is_none_or(non_empty)
             && result.contract_manifest_schema == "podway.contract-manifest/v1"
+            && !result.protocol_versions.is_empty()
             && unique_non_empty_strings(&result.protocol_versions)
             && result.pid > 0
             && result.executable_path.starts_with('/')
@@ -243,14 +244,17 @@ fn validate_daemon_service_status_result(value: Value) -> bool {
         matches!(
             result.status.as_str(),
             "not_installed" | "stopped" | "running"
-        ) && result.product.as_deref().is_none_or(non_empty)
+        ) && result
+            .product
+            .as_deref()
+            .is_none_or(|value| value == "podway")
             && result.daemon_version.as_deref().is_none_or(non_empty)
             && result.target.as_deref().is_none_or(non_empty)
             && result.source_commit.as_deref().is_none_or(non_empty)
             && result
                 .contract_manifest_schema
                 .as_deref()
-                .is_none_or(non_empty)
+                .is_none_or(|value| value == "podway.contract-manifest/v1")
             && unique_non_empty_strings(&result.protocol_versions)
             && result.pid.is_none_or(|pid| pid > 0)
             && optional_absolute_path(&result.executable_path)
@@ -260,10 +264,20 @@ fn validate_daemon_service_status_result(value: Value) -> bool {
             && if result.reachable {
                 result.installed
                     && result.loaded
+                    && result.product.is_some()
+                    && result.daemon_version.is_some()
+                    && result.target.is_some()
+                    && result.build_identity.is_some()
+                    && result.contract_manifest_schema.is_some()
+                    && result.contract_manifest_digest.is_some()
+                    && !result.protocol_versions.is_empty()
                     && result.pid.is_some()
                     && result.process_id.is_some()
+                    && result.executable_path.is_some()
                     && result.started_at.is_some()
                     && result.uptime_ms.is_some()
+                    && result.socket_path.is_some()
+                    && result.configured_socket_path.is_some()
                     && result.effective_socket_path.is_some()
             } else {
                 result.pid.is_none()

@@ -576,6 +576,74 @@ fn mcont006_runtime_rejects_all_closed_result_boundary_drift() {
         cases.push(("daemon_status", "daemon.status", daemon));
     }
 
+    for (pointer, value) in [
+        ("/product", json!("another-product")),
+        ("/build_identity", json!("not-a-digest")),
+        (
+            "/contract_manifest_schema",
+            json!("podway.contract-manifest/future"),
+        ),
+        ("/protocol_versions", json!([])),
+    ] {
+        let mut daemon = materialize(fixture.result_fixtures.get("daemon_direct_status").unwrap());
+        *daemon.pointer_mut(pointer).unwrap() = value;
+        cases.push(("daemon_direct_status", "daemon.status", daemon));
+    }
+
+    for pointer in [
+        "/product",
+        "/daemon_version",
+        "/target",
+        "/build_identity",
+        "/contract_manifest_schema",
+        "/contract_manifest_digest",
+        "/executable_path",
+        "/socket_path",
+        "/configured_socket_path",
+    ] {
+        let mut daemon = materialize(fixture.result_fixtures.get("daemon_status").unwrap());
+        *daemon.pointer_mut(pointer).unwrap() = Value::Null;
+        cases.push(("daemon_status", "daemon.status", daemon));
+    }
+
+    for (pointer, value) in [
+        ("/product", json!("another-product")),
+        ("/build_identity", json!("not-a-digest")),
+        (
+            "/contract_manifest_schema",
+            json!("podway.contract-manifest/future"),
+        ),
+    ] {
+        let mut daemon = materialize(fixture.result_fixtures.get("daemon_status").unwrap());
+        *daemon.pointer_mut(pointer).unwrap() = value;
+        cases.push(("daemon_status", "daemon.status", daemon));
+    }
+
+    let mut unreachable = materialize(fixture.result_fixtures.get("daemon_status").unwrap());
+    unreachable["reachable"] = Value::Bool(false);
+    unreachable["protocol_versions"] = json!([]);
+    for pointer in [
+        "/product",
+        "/daemon_version",
+        "/target",
+        "/build_identity",
+        "/source_commit",
+        "/contract_manifest_schema",
+        "/contract_manifest_digest",
+        "/pid",
+        "/process_id",
+        "/executable_path",
+        "/started_at",
+        "/uptime_ms",
+        "/socket_path",
+        "/configured_socket_path",
+        "/effective_socket_path",
+    ] {
+        *unreachable.pointer_mut(pointer).unwrap() = Value::Null;
+    }
+    assert_schema_valid("schemas/daemon-status-result-v1.schema.json", &unreachable);
+    validate_command_result_v1("daemon.status", &result_map(unreachable)).unwrap();
+
     let mut start = materialize(fixture.result_fixtures.get("session_start").unwrap());
     start["revision_after"] = json!(0);
     cases.push(("session_start", "session.start", start));

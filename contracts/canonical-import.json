@@ -55,7 +55,7 @@
     {
       "source": "docs/schemas/daemon-status-result-v1.schema.json",
       "destination": "schemas/daemon-status-result-v1.schema.json",
-      "source_sha256": "58a057a7d2fcb54ca3b58590fd14a32de2475e4ff3fa57a9a1e5cf68172d054a",
+      "source_sha256": "998d14853d3d86b226d9a67f239ee6f0d3e90590ecbd7eaa15c1c91952552486",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

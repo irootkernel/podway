@@ -19,6 +19,7 @@
         "build_identity": { "type": "string" },
         "contract_manifest_schema": { "type": "string" },
         "contract_manifest_digest": { "type": "string" },
+        "protocol_versions": { "minItems": 1 },
         "pid": { "type": "integer" },
         "process_id": { "type": "string" },
         "executable_path": { "type": "string" },
@@ -55,12 +56,12 @@
     "installed": { "type": "boolean" },
     "loaded": { "type": "boolean" },
     "reachable": { "type": "boolean" },
-    "product": { "type": ["string", "null"], "minLength": 1 },
+    "product": { "enum": ["podway", null] },
     "daemon_version": { "type": ["string", "null"], "minLength": 1 },
     "target": { "type": ["string", "null"], "minLength": 1 },
-    "build_identity": { "type": ["string", "null"], "minLength": 1 },
+    "build_identity": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
     "source_commit": { "type": ["string", "null"], "minLength": 1 },
-    "contract_manifest_schema": { "type": ["string", "null"], "minLength": 1 },
+    "contract_manifest_schema": { "enum": ["podway.contract-manifest/v1", null] },
     "contract_manifest_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
     "protocol_versions": {
       "type": "array",
@@ -88,8 +89,17 @@
         "then": {
           "properties": {
             "installed": { "const": true }, "loaded": { "const": true },
+            "product": { "const": "podway" },
+            "daemon_version": { "type": "string" }, "target": { "type": "string" },
+            "build_identity": { "type": "string" },
+            "contract_manifest_schema": { "const": "podway.contract-manifest/v1" },
+            "contract_manifest_digest": { "type": "string" },
+            "protocol_versions": { "minItems": 1 },
             "pid": { "type": "integer" }, "process_id": { "type": "string" },
+            "executable_path": { "type": "string" },
             "started_at": { "type": "string" }, "uptime_ms": { "type": "integer" },
+            "socket_path": { "type": "string" },
+            "configured_socket_path": { "type": "string" },
             "effective_socket_path": { "type": "string" }
           }
         },

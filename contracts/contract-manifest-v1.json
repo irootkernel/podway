@@ -68,7 +68,7 @@
     {
       "kind": "schema",
       "path": "schemas/daemon-status-result-v1.schema.json",
-      "sha256": "sha256:58a057a7d2fcb54ca3b58590fd14a32de2475e4ff3fa57a9a1e5cf68172d054a"
+      "sha256": "sha256:998d14853d3d86b226d9a67f239ee6f0d3e90590ecbd7eaa15c1c91952552486"
     },
     {
       "kind": "schema",
@@ -211,7 +211,7 @@
       "sha256": "sha256:33f0aba1e4dc4aaf6454b70f627ad451b0fcf8ae5b92d469083a68b6949c08ce"
     }
   ],
-  "digest": "sha256:df287c5fdd4c9e05b278115f8757ebddfdf8919fd2812d6c93af3bcf42d7116d",
+  "digest": "sha256:7dd0c562bb45e2798ca2284e6d380fc2c96b69e6fea459d4da506e2c154f2699",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",
