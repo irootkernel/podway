@@ -22,6 +22,7 @@ define_result_schemas_v1! {
     VERSION_RESULT_SCHEMA_V1 = "podway.version-result/v1";
     DAEMON_STATUS_RESULT_SCHEMA_V1 = "podway.daemon-status-result/v1";
     PROCEDURE_VALIDATION_RESULT_SCHEMA_V1 = "podway.procedure-validation-result/v1";
+    WORKSPACE_INIT_RESULT_SCHEMA_V1 = "podway.workspace-init-result/v1";
     DETACHED_ADMISSION_RESULT_SCHEMA_V1 = "podway.detached-admission-result/v1";
     SESSION_START_RESULT_SCHEMA_V1 = "podway.session-start-result/v1";
     STATUS_RESULT_SCHEMA_V1 = "podway.status-result/v1";
@@ -85,6 +86,7 @@ pub fn validate_command_result_v1(
                     || validate_daemon_service_status_result(value)
             }
             "procedure.validate" => validate_procedure_validation_result(value),
+            "workspace.init" => decode::<WorkspaceInitResultV1>(value),
             "session.status" => {
                 if result.contains_key("procedure") {
                     CompactStatusResultV1::from_result_map(result).is_ok()
@@ -137,6 +139,7 @@ fn schema_allows_command(schema: &str, command: &str) -> bool {
         VERSION_RESULT_SCHEMA_V1 => command == "version",
         DAEMON_STATUS_RESULT_SCHEMA_V1 => command == "daemon.status",
         PROCEDURE_VALIDATION_RESULT_SCHEMA_V1 => command == "procedure.validate",
+        WORKSPACE_INIT_RESULT_SCHEMA_V1 => command == "workspace.init",
         DETACHED_ADMISSION_RESULT_SCHEMA_V1 => supports_detached(command),
         SESSION_START_RESULT_SCHEMA_V1 => {
             matches!(command, "session.start" | "session.start_replace")
@@ -163,6 +166,7 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
         "version" => Some(VERSION_RESULT_SCHEMA_V1),
         "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
         "procedure.validate" => Some(PROCEDURE_VALIDATION_RESULT_SCHEMA_V1),
+        "workspace.init" => Some(WORKSPACE_INIT_RESULT_SCHEMA_V1),
         "session.status" if result.contains_key("procedure") => {
             Some(COMPACT_STATUS_RESULT_SCHEMA_V1)
         }
@@ -406,6 +410,15 @@ struct AdmissionResultV1 {
     job_id: JobId,
     #[serde(deserialize_with = "deserialize_positive_u64")]
     workspace_sequence: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceInitResultV1 {
+    #[serde(deserialize_with = "deserialize_true")]
+    initialized: bool,
+    revision: Revision,
+    admission: AdmissionResultV1,
 }
 
 #[derive(Deserialize)]

@@ -588,6 +588,9 @@ pub enum PersistedDomainErrorV1 {
     },
     RequiredItemsMissing,
     BlockersPresent,
+    BlockerLimitReached {
+        maximum_open_blockers: u64,
+    },
     ArtifactChanged,
     InvalidTransition {
         command: PersistedDomainCommandKindV1,
@@ -641,6 +644,12 @@ impl PersistedDomainErrorV1 {
             },
             DomainError::RequiredItemsMissing => Self::RequiredItemsMissing,
             DomainError::BlockersPresent => Self::BlockersPresent,
+            DomainError::BlockerLimitReached {
+                maximum_open_blockers,
+            } => Self::BlockerLimitReached {
+                maximum_open_blockers: u64::try_from(*maximum_open_blockers)
+                    .expect("usize fits in u64"),
+            },
             DomainError::ArtifactChanged => Self::ArtifactChanged,
             DomainError::InvalidTransition { command, state } => Self::InvalidTransition {
                 command: (*command).into(),

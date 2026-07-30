@@ -12,6 +12,7 @@ These JSON Schema Draft 2020-12 files define Podway v1 structural contracts.
 - `daemon-contract-mismatch-details-v1.schema.json`: CLI/daemon contract identity mismatch.
 - `revision-conflict-details-v1.schema.json`: session and item revision conflicts.
 - `attempt-conflict-details-v1.schema.json`: stale current-attempt conflicts.
+- `blocker-limit-details-v1.schema.json`: active-attempt open-blocker limit failures.
 - `idempotency-key-reused-details-v1.schema.json`: rejected idempotency-key reuse.
 - `job-wait-timeout-details-v1.schema.json`: query and admitted mutation wait timeouts.
 - `status-result-v1.schema.json`: `status` result object.
@@ -24,6 +25,7 @@ These JSON Schema Draft 2020-12 files define Podway v1 structural contracts.
 - `item-mutation-result-v1.schema.json`: terminal item mutation outcome.
 - `stage-transition-result-v1.schema.json`: terminal stage transition outcome.
 - `detached-admission-result-v1.schema.json`: durable detached mutation admission.
+- `workspace-init-result-v1.schema.json`: terminal workspace initialization outcome.
 - `job-result-v1.schema.json`: `job status` and `job wait` result object.
 - `job-lookup-result-v1.schema.json`: idempotency-key reconciliation result.
 - `contract-manifest-v1.schema.json`: deterministic integration contract inventory.

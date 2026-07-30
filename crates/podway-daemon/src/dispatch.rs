@@ -41,6 +41,7 @@ pub struct DispatchErrorDetailsV1 {
     identity_conflict: Option<Box<IdentityConflictDetailsV1>>,
     procedure_digest_mismatch: Option<Box<ProcedureDigestMismatchDetailsV1>>,
     outcome_unknown_key: Option<Box<IdempotencyKeyV1>>,
+    maximum_open_blockers: Option<Box<usize>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -133,6 +134,11 @@ impl DispatchErrorDetailsV1 {
             expected,
             actual,
         }));
+        self
+    }
+
+    pub fn with_blocker_limit(mut self, maximum_open_blockers: usize) -> Self {
+        self.maximum_open_blockers = Some(Box::new(maximum_open_blockers));
         self
     }
 
@@ -236,6 +242,12 @@ impl DispatchErrorDetailsV1 {
                 );
             }
         }
+        if let Some(maximum_open_blockers) = self.maximum_open_blockers {
+            details.insert(
+                "maximum_open_blockers".to_owned(),
+                Value::from(u64::try_from(*maximum_open_blockers).expect("usize fits in u64")),
+            );
+        }
         if let Some(admission) = admission {
             details.insert("admission".to_owned(), admission);
         }
@@ -304,6 +316,7 @@ pub enum DispatchFailureKindV1 {
     ReopenNotAllowed,
     RequiredItemsMissing,
     BlockersPresent,
+    BlockerLimitReached,
     ItemNotFound,
     ItemTypeMismatch,
     ItemConstraintFailed,
@@ -347,6 +360,7 @@ impl DispatchFailureV1 {
                 identity_conflict: None,
                 procedure_digest_mismatch: None,
                 outcome_unknown_key: None,
+                maximum_open_blockers: None,
             },
         }
     }
@@ -1712,6 +1726,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::BlockersPresent => (
             "BLOCKERS_PRESENT",
             "Open blockers prevent completion.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::BlockerLimitReached => (
+            "BLOCKER_LIMIT_REACHED",
+            "The active attempt reached the open blocker limit.",
             false,
             1,
         ),

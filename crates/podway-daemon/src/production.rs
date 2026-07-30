@@ -1695,6 +1695,11 @@ fn map_preview_domain_error(error: DomainError, command: &SliceCommandV1) -> Dis
         DomainError::BlockersPresent => {
             DispatchFailureV1::new(DispatchFailureKindV1::BlockersPresent)
         }
+        DomainError::BlockerLimitReached {
+            maximum_open_blockers,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::BlockerLimitReached).with_details(
+            DispatchErrorDetailsV1::default().with_blocker_limit(maximum_open_blockers),
+        ),
         DomainError::ItemNotFound { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)
         }
@@ -2402,6 +2407,15 @@ fn map_terminal_domain_error(
         PersistedDomainErrorV1::BlockersPresent => {
             DispatchFailureV1::new(DispatchFailureKindV1::BlockersPresent)
         }
+        PersistedDomainErrorV1::BlockerLimitReached {
+            maximum_open_blockers,
+        } => usize::try_from(*maximum_open_blockers).map_or_else(
+            |_| DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+            |maximum| {
+                DispatchFailureV1::new(DispatchFailureKindV1::BlockerLimitReached)
+                    .with_details(DispatchErrorDetailsV1::default().with_blocker_limit(maximum))
+            },
+        ),
         PersistedDomainErrorV1::ArtifactChanged => {
             DispatchFailureV1::new(DispatchFailureKindV1::ArtifactChanged)
         }
@@ -2785,6 +2799,38 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn blocker_limit_domain_errors_preserve_the_public_limit() {
+        let command =
+            SliceCommandV1::WorkspaceInit(podway_protocol::WorkspaceInitV1 { repair: false });
+        let preview = map_preview_domain_error(
+            DomainError::BlockerLimitReached {
+                maximum_open_blockers: 1_024,
+            },
+            &command,
+        );
+        assert_eq!(preview.kind(), DispatchFailureKindV1::BlockerLimitReached);
+        assert_eq!(
+            preview.into_details().into_json(true),
+            Map::from_iter([
+                ("maximum_open_blockers".to_owned(), json!(1024)),
+                ("admission".to_owned(), json!({"admitted": false})),
+            ])
+        );
+
+        let terminal = map_terminal_domain_error(
+            &PersistedDomainErrorV1::BlockerLimitReached {
+                maximum_open_blockers: 1_024,
+            },
+            TerminalCommandKindV1::Other,
+        );
+        assert_eq!(terminal.kind(), DispatchFailureKindV1::BlockerLimitReached);
+        assert_eq!(
+            terminal.into_details().into_json(false),
+            Map::from_iter([("maximum_open_blockers".to_owned(), json!(1024))])
+        );
     }
 
     fn terminal_job_projection(

@@ -2,7 +2,7 @@ use podway_core::{
     ArtifactValueV1, AttemptId, AttemptInputV1, AttemptLifecycle, AttemptV1, BlockSessionV1,
     BlockerId, BlockerInputV1, BlockerState, BlockerV1, CommandContextV1, DomainError,
     ItemCommonV1, ItemId, ItemSlotInputV1, ItemSlotV1, ItemSpecV1, ItemValueV1,
-    MAX_BLOCKERS_PER_ATTEMPT_V1, MAX_TEXT_LENGTH, ProcedureSnapshotAssemblyInputV1,
+    MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, MAX_TEXT_LENGTH, ProcedureSnapshotAssemblyInputV1,
     ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1, ProcedureWarningCodeV1,
     RetrySessionV1, ReturnPolicyV1, Revision, SessionAggregateInputV1, SessionAggregateV1,
     SessionCommandV1, SessionId, SessionLifecycle, Sha256Digest, SkipPolicyV1, StageId,
@@ -1009,7 +1009,7 @@ fn attempt_blocker_limit_bounds_compact_status_projection() {
     .unwrap();
     let session_id = SessionId::new(UUID_B).unwrap();
     let attempt_id = AttemptId::new(UUID_C).unwrap();
-    let blockers = (0..=MAX_BLOCKERS_PER_ATTEMPT_V1)
+    let blockers = (0..=MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1)
         .map(|index| {
             BlockerV1::open(
                 BlockerId::new(format!("00000000-0000-4000-8000-{index:012x}")).unwrap(),
@@ -1031,11 +1031,11 @@ fn attempt_blocker_limit_bounds_compact_status_projection() {
             10,
             None,
             None,
-            blockers[..MAX_BLOCKERS_PER_ATTEMPT_V1].to_vec(),
+            blockers[..MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1].to_vec(),
         )
         .is_ok()
     );
-    assert_invalid_state(
+    assert_eq!(
         hydrated_attempt(
             UUID_C,
             &session_id,
@@ -1045,9 +1045,37 @@ fn attempt_blocker_limit_bounds_compact_status_projection() {
             10,
             None,
             None,
-            blockers,
+            blockers.clone(),
         ),
-        "attempt blocker count exceeds the v1 limit",
+        Err(DomainError::BlockerLimitReached {
+            maximum_open_blockers: MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1,
+        }),
+    );
+
+    let resolved = BlockerV1::open(
+        BlockerId::new("00000000-0000-4000-8000-ffffffffffff").unwrap(),
+        attempt_id,
+        "resolved",
+        UnixMillis::new(10),
+    )
+    .unwrap()
+    .resolve(UnixMillis::new(11))
+    .unwrap();
+    let mut bounded_with_history = blockers[..MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1].to_vec();
+    bounded_with_history.push(resolved);
+    assert!(
+        hydrated_attempt(
+            UUID_C,
+            &session_id,
+            &stage,
+            1,
+            AttemptLifecycle::Active,
+            10,
+            None,
+            None,
+            bounded_with_history,
+        )
+        .is_ok()
     );
 }
 

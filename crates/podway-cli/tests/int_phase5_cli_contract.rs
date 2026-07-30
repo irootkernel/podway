@@ -621,7 +621,12 @@ fn recording_success_result(command: &str) -> Value {
             "schema": "podway.job-lookup-result/v1",
             "found": false
         }),
-        "workspace.init" => serde_json::json!({"initialized": true}),
+        "workspace.init" => serde_json::json!({
+            "schema": "podway.workspace-init-result/v1",
+            "initialized": true,
+            "revision": 0,
+            "admission": admission
+        }),
         "workspace.doctor" => serde_json::json!({"deep": true, "healthy": true}),
         "workspace.show" => serde_json::json!({"workspace": "recorded"}),
         "workspace.repair" => serde_json::json!({"repaired": true}),

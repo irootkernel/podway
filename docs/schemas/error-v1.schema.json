@@ -3,7 +3,7 @@
   "$id": "urn:podway:schema:error:v1",
   "title": "Podway Error Output v1",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "$defs": {
     "notAdmitted": {
       "type": "object",
@@ -285,6 +285,17 @@
       "then": {
         "properties": {
           "details": { "$ref": "urn:podway:schema:job-wait-timeout-details:v1" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "BLOCKER_LIMIT_REACHED" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:blocker-limit-details:v1" }
         }
       }
     }

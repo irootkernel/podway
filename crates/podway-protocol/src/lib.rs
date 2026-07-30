@@ -4,7 +4,10 @@
 
 use std::fmt;
 
-use podway_core::{AttemptId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
+use podway_core::{
+    AttemptId, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, Revision, SessionId, Sha256Digest,
+    WorkspaceId,
+};
 use serde::{Deserialize, Deserializer, Serialize, de};
 mod codec;
 mod framing;
@@ -1704,6 +1707,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "BLOCKER_LIMIT_REACHED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "ITEM_NOT_FOUND",
         exit_code: 1,
         retryable: false,
@@ -2186,6 +2194,7 @@ fn validate_closed_error_details_v1(
             validate_schema_and_not_admitted_v1(details, "podway.idempotency-key-reused-details/v1")
         }
         "JOB_WAIT_TIMEOUT" => validate_wait_timeout_details_v1(details),
+        "BLOCKER_LIMIT_REACHED" => validate_blocker_limit_details_v1(details),
         _ => true,
     };
     if valid {
@@ -2319,6 +2328,28 @@ fn validate_wait_timeout_details_v1(details: &Map<String, Value>) -> bool {
                 })))
 }
 
+fn validate_blocker_limit_details_v1(details: &Map<String, Value>) -> bool {
+    if details.get("schema").and_then(Value::as_str) != Some("podway.blocker-limit-details/v1")
+        || details.get("maximum_open_blockers").and_then(Value::as_u64)
+            != u64::try_from(MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1).ok()
+    {
+        return false;
+    }
+    match details.get("admission") {
+        None => details.len() == 2,
+        Some(admission) => match validate_admission_metadata_v1(admission, true) {
+            Ok(None) => details.len() == 3,
+            Ok(Some((job_id, sequence))) => {
+                details.len() == 5
+                    && validate_job_fields_v1(details)
+                    && details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
+                    && details.get("job_sequence").and_then(Value::as_u64) == Some(sequence)
+            }
+            Err(_) => false,
+        },
+    }
+}
+
 fn validate_optional_job_admission_v1(details: &Map<String, Value>) -> bool {
     match details.get("admission") {
         None => !details.contains_key("job_id") && !details.contains_key("job_sequence"),
@@ -2363,6 +2394,7 @@ pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Valu
         "ATTEMPT_NOT_CURRENT" => "podway.attempt-conflict-details/v1",
         "IDEMPOTENCY_KEY_REUSED" => "podway.idempotency-key-reused-details/v1",
         "JOB_WAIT_TIMEOUT" => "podway.job-wait-timeout-details/v1",
+        "BLOCKER_LIMIT_REACHED" => "podway.blocker-limit-details/v1",
         "WORKSPACE_UUID_MISMATCH" => "podway.workspace-uuid-mismatch-details/v1",
         "SESSION_ID_MISMATCH" => "podway.session-id-mismatch-details/v1",
         "PROCEDURE_DIGEST_MISMATCH" => "podway.procedure-digest-mismatch-details/v1",

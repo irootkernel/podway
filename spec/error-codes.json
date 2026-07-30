@@ -279,6 +279,13 @@
       "summary": "Open blockers prevent completion."
     },
     {
+      "code": "BLOCKER_LIMIT_REACHED",
+      "details_schema": "podway.blocker-limit-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The active attempt already has the maximum number of open blockers."
+    },
+    {
       "code": "ITEM_NOT_FOUND",
       "exit_code": 1,
       "retryable": false,

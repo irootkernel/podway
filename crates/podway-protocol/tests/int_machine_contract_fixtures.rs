@@ -520,6 +520,83 @@ fn mcont006_error_fixtures_lock_catalog_schemas_and_runtime_decoders() {
     }
 }
 
+#[test]
+fn mcont006_envelopes_are_additive_while_conflict_details_stay_coupled() {
+    let mut output = read_json("docs/examples/json/output-complete.json");
+    output["future_envelope_field"] = json!({"enabled": true});
+    for field in ["workspace", "job", "session"] {
+        output[field]["future_field"] = json!(true);
+    }
+    assert_schema_valid("schemas/output-v1.schema.json", &output);
+    serde_json::from_value::<ResponseEnvelopeV1>(output).unwrap();
+
+    let catalog = parse_error_catalog();
+    let blocker_entry = catalog.get("BLOCKER_LIMIT_REACHED").unwrap();
+    let mut error = error_envelope(
+        "BLOCKER_LIMIT_REACHED",
+        blocker_entry,
+        json!({
+            "schema": "podway.blocker-limit-details/v1",
+            "maximum_open_blockers": 1024,
+            "admission": {"admitted": false}
+        }),
+    );
+    error["future_envelope_field"] = json!({"enabled": true});
+    assert_schema_valid("schemas/error-v1.schema.json", &error);
+    serde_json::from_value::<ResponseEnvelopeV1>(error).unwrap();
+
+    let revision_entry = catalog.get("SESSION_REVISION_CONFLICT").unwrap();
+    let uncoupled_revision = error_envelope(
+        "SESSION_REVISION_CONFLICT",
+        revision_entry,
+        json!({
+            "schema": "podway.revision-conflict-details/v1",
+            "expected_revision": 4,
+            "current_revision": 5,
+            "admission": {
+                "admitted": true,
+                "job_id": "00000000-0000-4000-8000-000000000701",
+                "workspace_sequence": 7
+            }
+        }),
+    );
+    assert_schema_invalid("schemas/error-v1.schema.json", &uncoupled_revision);
+    assert!(serde_json::from_value::<ResponseEnvelopeV1>(uncoupled_revision).is_err());
+
+    let attempt_entry = catalog.get("ATTEMPT_NOT_CURRENT").unwrap();
+    let uncoupled_attempt = error_envelope(
+        "ATTEMPT_NOT_CURRENT",
+        attempt_entry,
+        json!({
+            "schema": "podway.attempt-conflict-details/v1",
+            "expected_attempt_id": "00000000-0000-4000-8000-000000000702",
+            "job_id": "00000000-0000-4000-8000-000000000701",
+            "job_sequence": 7
+        }),
+    );
+    assert_schema_invalid("schemas/error-v1.schema.json", &uncoupled_attempt);
+    assert!(serde_json::from_value::<ResponseEnvelopeV1>(uncoupled_attempt).is_err());
+
+    let mismatched_revision = error_envelope(
+        "SESSION_REVISION_CONFLICT",
+        revision_entry,
+        json!({
+            "schema": "podway.revision-conflict-details/v1",
+            "expected_revision": 4,
+            "current_revision": 5,
+            "job_id": "00000000-0000-4000-8000-000000000701",
+            "job_sequence": 8,
+            "admission": {
+                "admitted": true,
+                "job_id": "00000000-0000-4000-8000-000000000701",
+                "workspace_sequence": 7
+            }
+        }),
+    );
+    assert_schema_valid("schemas/error-v1.schema.json", &mismatched_revision);
+    assert!(serde_json::from_value::<ResponseEnvelopeV1>(mismatched_revision).is_err());
+}
+
 fn contains_key(value: &Value, expected: &str) -> bool {
     match value {
         Value::Object(object) => {

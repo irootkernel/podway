@@ -1055,6 +1055,7 @@ fn assert_persisted_error_variant_coverage(error: &PersistedDomainErrorV1) {
         PersistedDomainErrorV1::InvalidState { .. } => {}
         PersistedDomainErrorV1::RequiredItemsMissing => {}
         PersistedDomainErrorV1::BlockersPresent => {}
+        PersistedDomainErrorV1::BlockerLimitReached { .. } => {}
         PersistedDomainErrorV1::ArtifactChanged => {}
         PersistedDomainErrorV1::InvalidTransition { .. } => {}
         PersistedDomainErrorV1::PreconditionFailed { .. } => {}
@@ -1241,6 +1242,17 @@ fn assert_failure_fields(actual: &PersistedDomainErrorV1, expected: &DomainError
         DomainError::BlockersPresent => {
             assert!(matches!(actual, PersistedDomainErrorV1::BlockersPresent));
         }
+        DomainError::BlockerLimitReached {
+            maximum_open_blockers,
+        } => match actual {
+            PersistedDomainErrorV1::BlockerLimitReached {
+                maximum_open_blockers: actual_maximum,
+            } => assert_eq!(
+                *actual_maximum,
+                u64::try_from(*maximum_open_blockers).unwrap()
+            ),
+            _ => panic!("decoded error kind differs from the literal golden"),
+        },
         DomainError::ArtifactChanged => {
             assert!(matches!(actual, PersistedDomainErrorV1::ArtifactChanged));
         }
@@ -1407,6 +1419,9 @@ fn failure_golden_v1(error: &DomainError) -> &'static str {
         }
         DomainError::AttemptNotCurrent { .. } => {
             r#"{"job":{"identity_sequence":25,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"actual":"00000000-0000-4000-8000-000000000007","expected":"00000000-0000-4000-8000-000000000006","kind":"attempt_not_current"}},"schema":"podway.store-terminal/v1"}"#
+        }
+        DomainError::BlockerLimitReached { .. } => {
+            r#"{"job":{"identity_sequence":26,"job_id":"00000000-0000-4000-8000-000000000003","request_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"result":{"kind":"failure","payload":{"kind":"blocker_limit_reached","maximum_open_blockers":1024}},"schema":"podway.store-terminal/v1"}"#
         }
     }
 }
@@ -1657,6 +1672,9 @@ fn terminal_codec_matches_independent_literal_goldens_for_results_errors_and_can
         DomainError::AttemptNotCurrent {
             expected: AttemptId::new("00000000-0000-4000-8000-000000000006")?,
             actual: Some(AttemptId::new("00000000-0000-4000-8000-000000000007")?),
+        },
+        DomainError::BlockerLimitReached {
+            maximum_open_blockers: 1_024,
         },
     ];
     for (index, error) in errors.into_iter().enumerate() {

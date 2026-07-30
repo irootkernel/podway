@@ -416,6 +416,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("REOPEN_NOT_ALLOWED", 1, false),
     ("REQUIRED_ITEMS_MISSING", 1, false),
     ("BLOCKERS_PRESENT", 1, false),
+    ("BLOCKER_LIMIT_REACHED", 1, false),
     ("ITEM_NOT_FOUND", 1, false),
     ("ITEM_TYPE_MISMATCH", 1, false),
     ("ITEM_CONSTRAINT_FAILED", 1, false),
@@ -504,6 +505,9 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 "expected_attempt_id".to_owned(),
                 json!("00000000-0000-4000-8000-000000000019"),
             )]),
+            "BLOCKER_LIMIT_REACHED" => {
+                Map::from_iter([("maximum_open_blockers".to_owned(), json!(1024))])
+            }
             "IDEMPOTENCY_KEY_REUSED" => {
                 Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
             }
@@ -586,6 +590,12 @@ fn api_004_automation_error_details_reject_unknown_fields() {
             2,
             false,
             Map::from_iter([("admission".to_owned(), json!({"admitted": false}))]),
+        ),
+        (
+            "BLOCKER_LIMIT_REACHED",
+            1,
+            false,
+            Map::from_iter([("maximum_open_blockers".to_owned(), json!(1024))]),
         ),
         ("JOB_WAIT_TIMEOUT", 4, true, Map::new()),
     ];

@@ -50,6 +50,9 @@ pub enum DomainError {
     },
     RequiredItemsMissing,
     BlockersPresent,
+    BlockerLimitReached {
+        maximum_open_blockers: usize,
+    },
     ArtifactChanged,
     InvalidTransition {
         command: DomainCommandKind,
@@ -112,6 +115,12 @@ impl fmt::Display for DomainError {
             Self::BlockersPresent => {
                 formatter.write_str("the active attempt still has open blockers")
             }
+            Self::BlockerLimitReached {
+                maximum_open_blockers,
+            } => write!(
+                formatter,
+                "the active attempt cannot contain more than {maximum_open_blockers} open blockers"
+            ),
             Self::ArtifactChanged => {
                 formatter.write_str("the local artifact changed since it was attached")
             }

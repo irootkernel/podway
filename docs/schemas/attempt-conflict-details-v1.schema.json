@@ -18,6 +18,37 @@
       ]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "admission": {
+            "properties": { "admitted": { "const": true } },
+            "required": ["admitted"]
+          }
+        },
+        "required": ["admission"]
+      },
+      "then": { "required": ["job_id", "job_sequence"] }
+    },
+    {
+      "if": {
+        "anyOf": [
+          { "required": ["job_id"] },
+          { "required": ["job_sequence"] }
+        ]
+      },
+      "then": {
+        "required": ["admission", "job_id", "job_sequence"],
+        "properties": {
+          "admission": {
+            "properties": { "admitted": { "const": true } },
+            "required": ["admitted"]
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "notAdmitted": {
       "type": "object",

@@ -9,8 +9,8 @@ use crate::{
     SessionLifecycle, Sha256Digest, StageId, StageProgressState, UnixMillis,
 };
 
-/// Maximum blocker records retained by one attempt, bounding compact status output.
-pub const MAX_BLOCKERS_PER_ATTEMPT_V1: usize = 1_024;
+/// Maximum simultaneously open blockers retained by one attempt, bounding compact status output.
+pub const MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1: usize = 1_024;
 
 /// The location mode of stored artifact metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1593,8 +1593,15 @@ fn validate_blockers(
     lifecycle: AttemptLifecycle,
     blockers: &[BlockerV1],
 ) -> Result<(), DomainError> {
-    if blockers.len() > MAX_BLOCKERS_PER_ATTEMPT_V1 {
-        return Err(invalid("attempt blocker count exceeds the v1 limit"));
+    if blockers
+        .iter()
+        .filter(|blocker| blocker.state() == BlockerState::Open)
+        .count()
+        > MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1
+    {
+        return Err(DomainError::BlockerLimitReached {
+            maximum_open_blockers: MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1,
+        });
     }
     let mut ids = BTreeSet::new();
     for blocker in blockers {

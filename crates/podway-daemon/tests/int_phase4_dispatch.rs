@@ -663,7 +663,7 @@ fn workspace_init_bootstraps_without_starting_a_task() {
         job: terminal_job(),
         result: DispatcherTerminalResultV1::Output(DispatcherTerminalOutputV1::new(
             None,
-            map(json!({"initialized": true})),
+            map(json!({"initialized": true, "revision": 0})),
             Vec::new(),
         )),
         response_context: None,
@@ -915,6 +915,48 @@ fn stale_terminal_conditions_are_retryable_and_include_only_safe_revisions() {
         response.details()["job_id"],
         Value::String(JOB_ID.to_owned())
     );
+    assert_eq!(
+        response.details()["admission"],
+        json!({
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 41,
+        })
+    );
+}
+
+#[test]
+fn terminal_blocker_limit_is_typed_and_carries_admission_identity() {
+    let runtime = FakeRuntime::new();
+    let reads = FakeReads::new();
+    let worker = FakeWorker::new(Ok(MutationDispatchOutcomeV1::Terminal {
+        job: terminal_job(),
+        result: DispatcherTerminalResultV1::Error(
+            DispatchFailureV1::new(DispatchFailureKindV1::BlockerLimitReached)
+                .with_details(DispatchErrorDetailsV1::default().with_blocker_limit(1_024)),
+        ),
+        response_context: None,
+    }));
+    let dispatcher = dispatcher(runtime, reads, worker);
+    let (request, slice) = request_and_slice(
+        "session.block",
+        json!({
+            "selector": selector("/safe/worktree"),
+            "reason": "blocked"
+        }),
+        session_preconditions(),
+        false,
+        100,
+        37,
+    );
+
+    let response = error(dispatcher.dispatch(&request, &slice));
+    assert_eq!(response.code().as_str(), "BLOCKER_LIMIT_REACHED");
+    assert!(!response.retryable());
+    assert_eq!(response.exit_code().get(), 1);
+    assert_eq!(response.details()["maximum_open_blockers"], json!(1024));
+    assert_eq!(response.details()["job_id"], json!(JOB_ID));
+    assert_eq!(response.details()["job_sequence"], json!(41));
     assert_eq!(
         response.details()["admission"],
         json!({

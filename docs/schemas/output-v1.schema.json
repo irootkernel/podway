@@ -3,7 +3,7 @@
   "$id": "urn:podway:schema:output:v1",
   "title": "Podway Success Output v1",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": [
     "schema",
     "request_id",
@@ -65,6 +65,16 @@
     {
       "if": { "properties": { "command": { "const": "procedure.validate" } }, "required": ["command"] },
       "then": { "properties": { "result": { "$ref": "urn:podway:schema:procedure-validation-result:v1" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "command": { "const": "workspace.init" },
+          "result": { "not": { "required": ["detached"] } }
+        },
+        "required": ["command", "result"]
+      },
+      "then": { "properties": { "result": { "$ref": "urn:podway:schema:workspace-init-result:v1" } } }
     },
     {
       "if": { "properties": { "command": { "const": "session.status" } }, "required": ["command"] },
@@ -148,7 +158,8 @@
               "schema": {
                 "enum": [
                   "podway.version-result/v1", "podway.daemon-status-result/v1",
-                  "podway.procedure-validation-result/v1", "podway.detached-admission-result/v1",
+                  "podway.procedure-validation-result/v1", "podway.workspace-init-result/v1",
+                  "podway.detached-admission-result/v1",
                   "podway.session-start-result/v1", "podway.status-result/v1",
                   "podway.compact-status-result/v1", "podway.next-result/v1",
                   "podway.stage-transition-result/v1", "podway.item-mutation-result/v1",
@@ -166,6 +177,7 @@
           { "properties": { "command": { "const": "version" }, "result": { "properties": { "schema": { "const": "podway.version-result/v1" } } } } },
           { "properties": { "command": { "const": "daemon.status" }, "result": { "properties": { "schema": { "const": "podway.daemon-status-result/v1" } } } } },
           { "properties": { "command": { "const": "procedure.validate" }, "result": { "properties": { "schema": { "const": "podway.procedure-validation-result/v1" } } } } },
+          { "properties": { "command": { "const": "workspace.init" }, "result": { "properties": { "schema": { "const": "podway.workspace-init-result/v1" } } } } },
           { "properties": { "command": { "enum": ["workspace.init", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.return", "session.block", "session.unblock", "session.cancel", "session.reopen", "session.reset", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] }, "result": { "properties": { "schema": { "const": "podway.detached-admission-result/v1" } } } } },
           { "properties": { "command": { "enum": ["session.start", "session.start_replace"] }, "result": { "properties": { "schema": { "const": "podway.session-start-result/v1" } } } } },
           { "properties": { "command": { "const": "session.status" }, "result": { "properties": { "schema": { "enum": ["podway.status-result/v1", "podway.compact-status-result/v1"] } } } } },
@@ -203,7 +215,7 @@
     },
     "workspace": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": [
         "uuid",
         "root",
@@ -226,7 +238,7 @@
     },
     "job": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": [
         "id",
         "sequence",
@@ -274,7 +286,7 @@
     },
     "session": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": [
         "id",
         "title",

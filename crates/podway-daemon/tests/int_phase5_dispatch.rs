@@ -572,7 +572,9 @@ fn terminal_success() -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
 }
 
 fn terminal_success_for(command: &str) -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
-    let result = if matches!(command, "session.start" | "session.start_replace") {
+    let result = if command == "workspace.init" {
+        json!({"initialized": true, "revision": 0})
+    } else if matches!(command, "session.start" | "session.start_replace") {
         json!({
             "changed": true,
             "revision_before": 1,

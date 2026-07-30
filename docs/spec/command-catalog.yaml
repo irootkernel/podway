@@ -148,6 +148,7 @@ commands:
   destructive_confirmation: false
   idempotency_scope: workspace
   result_schemas:
+  - podway.workspace-init-result/v1
   - podway.detached-admission-result/v1
 - name: workspace.doctor
   cli:

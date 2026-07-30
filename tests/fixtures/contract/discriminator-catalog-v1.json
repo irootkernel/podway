@@ -45,6 +45,11 @@
         "effective_socket_path": "/Users/example/.podway/run/podwayd.sock"
       }
     },
+    "workspace_init": {
+      "schema": "podway.workspace-init-result/v1", "schema_file": "schemas/workspace-init-result-v1.schema.json",
+      "malformed_type_pointer": "/revision",
+      "value": {"schema": "podway.workspace-init-result/v1", "initialized": true, "revision": 0, "admission": {"admitted": true, "job_id": "00000000-0000-4000-8000-000000000503", "workspace_sequence": 6}}
+    },
     "detached_mutation": {
       "schema": "podway.detached-admission-result/v1", "schema_file": "schemas/detached-admission-result-v1.schema.json",
       "malformed_type_pointer": "/detached",
@@ -118,7 +123,7 @@
     {"command": "version", "fixtures": ["version"]},
     {"command": "procedure.validate", "fixtures": ["procedure_validation"]},
     {"command": "daemon.status", "fixtures": ["daemon_status", "daemon_direct_status"]},
-    {"command": "workspace.init", "fixtures": ["detached_mutation"]},
+    {"command": "workspace.init", "fixtures": ["workspace_init", "detached_mutation"]},
     {"command": "session.start", "fixtures": ["session_start", "session_start_dry_run", "detached_start"]},
     {"command": "session.start_replace", "fixtures": ["session_start", "session_start_dry_run", "detached_start"]},
     {"command": "session.status", "fixtures": ["status", "compact_status"]},
@@ -151,6 +156,7 @@
     "session_id": {"schema": "podway.session-id-mismatch-details/v1", "schema_file": "schemas/error-v1.schema.json", "malformed_type_pointer": "/expected_session_id", "details": {"schema": "podway.session-id-mismatch-details/v1", "expected_session_id": "00000000-0000-4000-8000-000000000603", "actual_session_id": null, "admission": {"admitted": false}}},
     "revision": {"schema": "podway.revision-conflict-details/v1", "schema_file": "schemas/revision-conflict-details-v1.schema.json", "malformed_type_pointer": "/expected_revision", "details": {"schema": "podway.revision-conflict-details/v1", "expected_revision": 4, "current_revision": 5}},
     "attempt": {"schema": "podway.attempt-conflict-details/v1", "schema_file": "schemas/attempt-conflict-details-v1.schema.json", "malformed_type_pointer": "/expected_attempt_id", "details": {"schema": "podway.attempt-conflict-details/v1", "expected_attempt_id": "00000000-0000-4000-8000-000000000604", "actual_attempt_id": "00000000-0000-4000-8000-000000000605"}},
+    "blocker_limit": {"schema": "podway.blocker-limit-details/v1", "schema_file": "schemas/blocker-limit-details-v1.schema.json", "malformed_type_pointer": "/maximum_open_blockers", "details": {"schema": "podway.blocker-limit-details/v1", "maximum_open_blockers": 1024, "admission": {"admitted": false}}},
     "idempotency": {"schema": "podway.idempotency-key-reused-details/v1", "schema_file": "schemas/idempotency-key-reused-details-v1.schema.json", "malformed_type_pointer": "/admission/admitted", "details": {"schema": "podway.idempotency-key-reused-details/v1", "admission": {"admitted": false}}},
     "wait_timeout": {"schema": "podway.job-wait-timeout-details/v1", "schema_file": "schemas/job-wait-timeout-details-v1.schema.json", "malformed_type_pointer": "/schema", "details": {"schema": "podway.job-wait-timeout-details/v1"}},
     "outcome_unknown": {"schema": "podway.mutation-outcome-unknown-details/v1", "schema_file": "schemas/error-v1.schema.json", "malformed_type_pointer": "/outcome", "details": {"schema": "podway.mutation-outcome-unknown-details/v1", "outcome": "unknown", "idempotency_key": "fixture-key", "reconcile": {"command": "job.lookup", "idempotency_key": "fixture-key"}}}
@@ -166,6 +172,7 @@
     {"code": "SESSION_ID_MISMATCH", "fixture": "session_id"},
     {"code": "SESSION_REVISION_CONFLICT", "fixture": "revision"},
     {"code": "ATTEMPT_NOT_CURRENT", "fixture": "attempt"},
+    {"code": "BLOCKER_LIMIT_REACHED", "fixture": "blocker_limit"},
     {"code": "ITEM_REVISION_CONFLICT", "fixture": "revision"},
     {"code": "IDEMPOTENCY_KEY_REUSED", "fixture": "idempotency"},
     {"code": "JOB_WAIT_TIMEOUT", "fixture": "wait_timeout"},

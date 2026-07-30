@@ -106,6 +106,7 @@ tasks update the catalog, closed detail schemas, generated mirrors, and tests.
 |---|---:|---:|---|
 | `BLOCKER_NOT_FOUND` | 1 | no | Blocker ID does not exist |
 | `BLOCKER_NOT_CURRENT` | 4 | yes | Blocker belongs to an old attempt |
+| `BLOCKER_LIMIT_REACHED` | 1 | no | Active attempt already has 1,024 open blockers |
 
 ## Job and idempotency errors
 
@@ -166,6 +167,11 @@ errors use exactly `{ "admitted": false }`; terminal errors and
 `JOB_WAIT_TIMEOUT` use `{ "admitted": true, "job_id": "<uuid>",
 "workspace_sequence": <positive integer> }`. The normative target is the
 [automation error contract](34-automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
+
+`BLOCKER_LIMIT_REACHED` uses the closed
+`podway.blocker-limit-details/v1` object. `maximum_open_blockers` is `1024`.
+Its `admission` follows the same pre-admission or terminal form above; terminal
+details also carry the matching top-level `job_id` and `job_sequence` fields.
 
 ## Mutation outcome unknown details
 

@@ -43,7 +43,12 @@
     {
       "kind": "schema",
       "path": "schemas/attempt-conflict-details-v1.schema.json",
-      "sha256": "sha256:7a79769a45b4e4c48d995db6f8fa7bab0e6235e9e61d4e34b3d1ac02a6cb0492"
+      "sha256": "sha256:865829b0bea4977601d07466abeaf2e505011eb72ee0c789e56ec99427b121a2"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/blocker-limit-details-v1.schema.json",
+      "sha256": "sha256:943ef3d0dabc9bfeac6d134ba45feb752abb23f03ee7a31d9920353abf66bf05"
     },
     {
       "kind": "schema",
@@ -78,7 +83,7 @@
     {
       "kind": "schema",
       "path": "schemas/error-v1.schema.json",
-      "sha256": "sha256:62ce2e36e2df2289496bc1f0f4094a0dbaf1db2db0b2f13013aaa79c08898637"
+      "sha256": "sha256:cee8b0844f65f6ac316962e9e2b89c24498e00fcba3c940a2f2b7fefe840b717"
     },
     {
       "kind": "schema",
@@ -118,7 +123,7 @@
     {
       "kind": "schema",
       "path": "schemas/output-v1.schema.json",
-      "sha256": "sha256:ca75132d772311917523413e697daafb4d8de1b2620826433956bd9486cba891"
+      "sha256": "sha256:19355e4f256fba8b17a4813f332006603b4e103fd747786f5e13d6447c2c55cd"
     },
     {
       "kind": "schema",
@@ -138,7 +143,7 @@
     {
       "kind": "schema",
       "path": "schemas/revision-conflict-details-v1.schema.json",
-      "sha256": "sha256:2fb5bdbaa5c4252be424c6bb350bf1c4cc19479dc6ebea2793bfbe630ea15a08"
+      "sha256": "sha256:63572df5acaada406783daca68535c642fa14924d41cd8c44741d9977af13dbc"
     },
     {
       "kind": "schema",
@@ -162,6 +167,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/workspace-init-result-v1.schema.json",
+      "sha256": "sha256:51e68c2f017a576b036d25329e1d86be5ff12c16af5504640ab521eaa396bbc7"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/workspace-v1.schema.json",
       "sha256": "sha256:97ef41946030151af10573ec05ad324ab4f44147d4e1e857851b186381be94cc"
     },
@@ -173,12 +183,12 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:c49a891daa88744efb8ecd84e4e9e56c6af2619c7e3e24b060d6bf8fc73b3ad8"
+      "sha256": "sha256:5a0fe6c45d179310f990a48671ae0fe2c63c82349d5425f5ab1c6aa6f19a5397"
     },
     {
       "kind": "catalog",
       "path": "spec/error-codes.json",
-      "sha256": "sha256:994525338c8bdbbf72cabf414d8507ea961b285faf545f6bf366b13ec2cc7a5a"
+      "sha256": "sha256:7da0102093ce4e388559936b04b5e7b31320bf5429f3476791a2f6e9871be746"
     },
     {
       "kind": "transition_matrix",
@@ -193,10 +203,10 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/contract/discriminator-catalog-v1.json",
-      "sha256": "sha256:d2be3ae6c3b263256d2c3067964ca1c26a65647fe368a1f80d7434fd6cb0ed86"
+      "sha256": "sha256:062da6c6abb1f69a0dea48c499feac9398356a0f39f54bc32f281d744f561318"
     }
   ],
-  "digest": "sha256:79597599b61623efa3dd223364a5f399980ff208bd261f9a034cae52435a5c53",
+  "digest": "sha256:7cbea82575c2a5aff9a917d1a24750af83d975d5c74bf8df31b95cae8ae196e2",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",

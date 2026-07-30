@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-init-result:v1",
+  "title": "Podway Workspace Initialization Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "initialized", "revision", "admission"],
+  "properties": {
+    "schema": { "const": "podway.workspace-init-result/v1" },
+    "initialized": { "const": true },
+    "revision": { "type": "integer", "minimum": 0 },
+    "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" }
+  }
+}
