@@ -24,8 +24,8 @@ use nix::{
 };
 use podway_protocol::{
     ItemTypeResultV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeV1, ResponseEnvelopeV1,
-    SessionLifecycleV1, StageStatusResultV1, StatusResultV1, decode_request_payload_v1,
-    decode_response_payload_v1, decode_single_frame_v1,
+    SessionLifecycleV1, StageStatusResultV1, StatusArtifactLocationTypeV1, StatusItemValueV1,
+    StatusResultV1, decode_request_payload_v1, decode_response_payload_v1, decode_single_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
@@ -1018,31 +1018,22 @@ fn complete_remaining_sw_dev(
         ],
     );
     let (_, verification_status) = public_status(fixture, workspace);
-    let artifact = item(&verification_status, "verification-reference")
-        .value
-        .as_object()
-        .expect("public status must expose attached artifact metadata");
-    assert_eq!(
-        artifact.get("location_type").and_then(Value::as_str),
-        Some("path")
-    );
-    assert_eq!(
-        artifact.get("location").and_then(Value::as_str),
-        Some(verification_artifact)
-    );
-    assert_eq!(
-        artifact.get("media_type").and_then(Value::as_str),
-        Some("text/plain")
-    );
-    assert_eq!(
-        artifact.get("size_bytes").and_then(Value::as_u64),
-        Some(verification_content.len() as u64)
-    );
+    let Some(StatusItemValueV1::Artifact(artifact)) =
+        item(&verification_status, "verification-reference")
+            .value
+            .as_ref()
+    else {
+        panic!("public status must expose attached artifact metadata");
+    };
+    assert_eq!(artifact.location_type, StatusArtifactLocationTypeV1::Path);
+    assert_eq!(artifact.location, verification_artifact);
+    assert_eq!(artifact.media_type, "text/plain");
+    assert_eq!(artifact.size_bytes, verification_content.len() as u64);
     let artifact_path = workspace.join(verification_artifact);
     let expected_digest = format!("sha256:{}", sha256_file(&artifact_path));
     assert_eq!(
-        artifact.get("sha256_digest").and_then(Value::as_str),
-        Some(expected_digest.as_str()),
+        artifact.sha256_digest.as_str(),
+        expected_digest,
         "public status must expose the exact SHA-256 digest of the attached artifact bytes"
     );
 
@@ -1388,7 +1379,9 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
     let (_, seeded_status) = public_status(&fixture, &workspace);
     assert_eq!(
         item(&seeded_status, "goal").value,
-        Value::String("discard this distinctive value on clean retry".to_owned())
+        Some(StatusItemValueV1::Text(
+            "discard this distinctive value on clean retry".to_owned()
+        ))
     );
     cli_output(
         &fixture,
@@ -1408,7 +1401,7 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
     );
     assert_eq!(
         item(&retried_status, "goal").value,
-        Value::Null,
+        None,
         "[FIRST-CORRECTNESS-RETRY] clean retry must not copy prior item values"
     );
 
@@ -1459,7 +1452,7 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
     let (_, concurrent_status) = public_status(&fixture, &workspace);
     assert_eq!(
         item(&concurrent_status, "goal").value,
-        Value::String("concurrent-left".to_owned()),
+        Some(StatusItemValueV1::Text("concurrent-left".to_owned())),
         "the authoritative public status must retain the successful explicit-precondition mutation"
     );
     let immutable_attempt = current(&concurrent_status).attempt_id.as_str().to_owned();
@@ -1583,7 +1576,7 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
     );
     assert_eq!(
         item(&returned_status, "goal").value,
-        Value::Null,
+        None,
         "[FIRST-CORRECTNESS-RETURN] return must start the destination with clean item values"
     );
 

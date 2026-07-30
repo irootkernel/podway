@@ -3,9 +3,9 @@ use podway_protocol::{
     ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1,
     MAX_WORKTREE_SELECTOR_COMPONENT_BYTES_V1, NextResultV1, OperationV1, PreconditionsV1,
     RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceRequestV1,
-    StatusResultV1, WorktreeSelectorWireV1, canonical_mutation_identity_bytes_v1,
-    canonical_mutation_identity_v1, decode_base64url_unpadded_v1, encode_base64url_unpadded_v1,
-    validate_command_result_v1,
+    StatusItemValueV1, StatusResultV1, WorktreeSelectorWireV1,
+    canonical_mutation_identity_bytes_v1, canonical_mutation_identity_v1,
+    decode_base64url_unpadded_v1, encode_base64url_unpadded_v1, validate_command_result_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -693,7 +693,10 @@ fn status_and_next_results_round_trip_with_active_item_values_and_redo_evidence(
     let parsed_status = StatusResultV1::from_result_map(&status_map).unwrap();
     assert_eq!(parsed_status.to_result_map(), status_map);
     assert!(parsed_status.current.is_some());
-    assert_eq!(parsed_status.items[0].value, json!(true));
+    assert_eq!(
+        parsed_status.items[0].value,
+        Some(StatusItemValueV1::Confirm(true))
+    );
     assert!(
         parsed_status
             .stages

@@ -2527,7 +2527,37 @@ pub struct StatusItemResultV1 {
     pub required: bool,
     pub satisfied: bool,
     pub revision: Revision,
-    pub value: Value,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub value: Option<StatusItemValueV1>,
+}
+
+/// The closed value family rendered by one status item.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StatusItemValueV1 {
+    Confirm(bool),
+    Text(String),
+    Integer(i64),
+    List(Vec<String>),
+    Artifact(StatusArtifactValueV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusArtifactLocationTypeV1 {
+    Path,
+    Reference,
+}
+
+/// Closed artifact metadata rendered as an item value.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusArtifactValueV1 {
+    pub location_type: StatusArtifactLocationTypeV1,
+    pub location: String,
+    pub sha256_digest: Sha256Digest,
+    pub size_bytes: u64,
+    pub media_type: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2597,7 +2627,14 @@ impl StatusResultV1 {
     pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
         let mut result = result.clone();
         result.remove("schema");
-        serde_json::from_value(Value::Object(result))
+        let status: Self = serde_json::from_value(Value::Object(result))?;
+        if status.items.iter().all(status_item_value_matches_type) {
+            Ok(status)
+        } else {
+            Err(<serde_json::Error as serde::de::Error>::custom(
+                "status item value does not match its item type",
+            ))
+        }
     }
 
     pub fn to_result_map(&self) -> Map<String, Value> {
@@ -2608,6 +2645,30 @@ impl StatusResultV1 {
         );
         result
     }
+}
+
+fn status_item_value_matches_type(item: &StatusItemResultV1) -> bool {
+    matches!(
+        (item.item_type, item.value.as_ref()),
+        (_, None)
+            | (
+                ItemTypeResultV1::Confirm,
+                Some(StatusItemValueV1::Confirm(true))
+            )
+            | (
+                ItemTypeResultV1::Text | ItemTypeResultV1::Choice,
+                Some(StatusItemValueV1::Text(_))
+            )
+            | (
+                ItemTypeResultV1::Integer,
+                Some(StatusItemValueV1::Integer(_))
+            )
+            | (ItemTypeResultV1::List, Some(StatusItemValueV1::List(_)))
+            | (
+                ItemTypeResultV1::Artifact,
+                Some(StatusItemValueV1::Artifact(_))
+            )
+    )
 }
 
 impl TryFrom<Map<String, Value>> for StatusResultV1 {

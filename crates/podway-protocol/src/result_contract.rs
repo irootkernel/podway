@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 
-use podway_core::{AttemptId, ItemId, JobId, Revision, Sha256Digest, StageId};
+use podway_core::{
+    AttemptId, CanonicalProcedureJsonV1, ItemId, JobId, Revision, Sha256Digest, StageId,
+    verify_canonical_procedure_document_v1,
+};
 use serde::{Deserialize, Deserializer, de::Error as _};
 use serde_json::{Map, Value};
 
@@ -91,7 +94,7 @@ pub fn validate_command_result_v1(
                 if result.contains_key("procedure") {
                     CompactStatusResultV1::from_result_map(result).is_ok()
                 } else {
-                    decode::<StatusResultV1>(value)
+                    StatusResultV1::from_result_map(result).is_ok()
                 }
             }
             "session.next" => decode::<NextResultV1>(value),
@@ -264,11 +267,15 @@ fn validate_daemon_service_status_result(value: Value) -> bool {
 
 fn validate_procedure_validation_result(value: Value) -> bool {
     serde_json::from_value::<ProcedureValidationResultV1>(value).is_ok_and(|result| {
+        let Ok(canonical_json) = CanonicalProcedureJsonV1::new(result.canonical_json) else {
+            return false;
+        };
         non_empty(&result.file)
             && result.warnings.iter().all(|warning| {
                 non_empty(&warning.code) && non_empty(&warning.path) && non_empty(&warning.message)
             })
-            && serde_json::from_str::<Value>(&result.canonical_json)
+            && verify_canonical_procedure_document_v1(&canonical_json, &result.digest).is_ok()
+            && serde_json::from_str::<Value>(canonical_json.as_str())
                 .is_ok_and(|canonical| canonical == Value::Object(result.procedure))
     })
 }

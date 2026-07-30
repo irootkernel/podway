@@ -1075,6 +1075,23 @@ fn canonical_procedure_digest(
     .map_err(|_| invalid("failed to calculate canonical procedure digest"))
 }
 
+/// Verifies one exact canonical Procedure document and its advertised digest.
+///
+/// This is the runtime-neutral validation boundary for public contracts that carry an already
+/// canonicalized Procedure. It applies the same closed DTO, semantic checks, canonical byte rules,
+/// and digest calculation used when persisted snapshots are rehydrated.
+pub fn verify_canonical_procedure_document_v1(
+    canonical_json: &CanonicalProcedureJsonV1,
+    digest: &Sha256Digest,
+) -> Result<(), DomainError> {
+    if &canonical_procedure_digest(canonical_json)? != digest {
+        return Err(invalid(
+            "procedure digest does not match canonical procedure JSON",
+        ));
+    }
+    decode_canonical_procedure(canonical_json).map(|_| ())
+}
+
 fn serialize_canonical_procedure(
     procedure_id: &str,
     procedure_version: &str,

@@ -381,6 +381,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("PROTOCOL_VERSION_UNSUPPORTED", 3, false),
     ("REQUEST_TOO_LARGE", 2, false),
     ("REQUEST_INVALID", 2, false),
+    ("SOCKET_ENDPOINT_INVALID", 2, false),
     ("NOT_A_GIT_WORKTREE", 5, false),
     ("BARE_GIT_REPOSITORY", 5, false),
     ("WORKTREE_GONE", 5, false),
@@ -498,6 +499,10 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             .as_object()
             .unwrap()
             .clone(),
+            "SOCKET_ENDPOINT_INVALID" => Map::from_iter([(
+                "reason".to_owned(),
+                json!("relative"),
+            )]),
             "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
                 Map::from_iter([("expected_revision".to_owned(), json!(1))])
             }

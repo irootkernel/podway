@@ -7,7 +7,7 @@
     {
       "source": "docs/schemas/README.md",
       "destination": "schemas/README.md",
-      "source_sha256": "a787a6b03b46e7b42b67aa6fb7b89bc89448282b9c41a376e42a53d5213f5df5",
+      "source_sha256": "530e9e92837d0bf519bc662f7ed5b8efceb9399cdd3b3d14b6a33bdd00e71fcf",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -79,7 +79,7 @@
     {
       "source": "docs/schemas/error-v1.schema.json",
       "destination": "schemas/error-v1.schema.json",
-      "source_sha256": "cee8b0844f65f6ac316962e9e2b89c24498e00fcba3c940a2f2b7fefe840b717",
+      "source_sha256": "371ccd1e07a0f503bc70a5a4b167ff43a0dfbe9ed8e5b78533cd9a7848d06bf8",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -189,6 +189,14 @@
       "generator_version": "docs-assets-v1"
     },
     {
+      "source": "docs/schemas/socket-endpoint-error-details-v1.schema.json",
+      "destination": "schemas/socket-endpoint-error-details-v1.schema.json",
+      "source_sha256": "cdca0c3c6ae8d1528a7566766e93ebd1b2792c434e1fe6b9039485b013010571",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
       "source": "docs/schemas/stage-transition-result-v1.schema.json",
       "destination": "schemas/stage-transition-result-v1.schema.json",
       "source_sha256": "228ef46d296b34034dfe779d4bd86f2b858aea414234f7f92d29627bf5e4b0ab",
@@ -199,7 +207,7 @@
     {
       "source": "docs/schemas/status-result-v1.schema.json",
       "destination": "schemas/status-result-v1.schema.json",
-      "source_sha256": "640b30dd94f7b11df362aefe9e8d26bdfab76cefe77b04b8d524720184653a38",
+      "source_sha256": "50e8a1da908dee02751bd70a19b820460925e40b2cb16ee8f6dc749725102032",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -255,7 +263,7 @@
     {
       "source": "docs/spec/error-codes.json",
       "destination": "spec/error-codes.json",
-      "source_sha256": "7da0102093ce4e388559936b04b5e7b31320bf5429f3476791a2f6e9871be746",
+      "source_sha256": "c6600fbbd22ba2d069f8c478d5a118c6253b00e44012a1ba38421f20acc66547",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

@@ -283,8 +283,91 @@
             "type": "integer",
             "minimum": 0
           },
-          "value": {}
-        }
+          "value": {
+            "oneOf": [
+              { "type": "null" },
+              { "const": true },
+              { "type": "string" },
+              { "type": "integer" },
+              {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "location_type",
+                  "location",
+                  "sha256_digest",
+                  "size_bytes",
+                  "media_type"
+                ],
+                "properties": {
+                  "location_type": { "enum": ["path", "reference"] },
+                  "location": { "type": "string", "minLength": 1 },
+                  "sha256_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "size_bytes": { "type": "integer", "minimum": 0 },
+                  "media_type": { "type": "string", "minLength": 1 }
+                }
+              }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "type": { "const": "confirm" } }, "required": ["type"] },
+            "then": { "properties": { "value": { "oneOf": [{ "type": "null" }, { "const": true }] } } }
+          },
+          {
+            "if": { "properties": { "type": { "enum": ["text", "choice"] } }, "required": ["type"] },
+            "then": { "properties": { "value": { "type": ["string", "null"] } } }
+          },
+          {
+            "if": { "properties": { "type": { "const": "integer" } }, "required": ["type"] },
+            "then": { "properties": { "value": { "type": ["integer", "null"] } } }
+          },
+          {
+            "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] },
+            "then": {
+              "properties": {
+                "value": {
+                  "oneOf": [
+                    { "type": "null" },
+                    { "type": "array", "items": { "type": "string" } }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "artifact" } }, "required": ["type"] },
+            "then": {
+              "properties": {
+                "value": {
+                  "oneOf": [
+                    { "type": "null" },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["location_type", "location", "sha256_digest", "size_bytes", "media_type"],
+                      "properties": {
+                        "location_type": { "enum": ["path", "reference"] },
+                        "location": { "type": "string", "minLength": 1 },
+                        "sha256_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                        "size_bytes": { "type": "integer", "minimum": 0 },
+                        "media_type": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "blockers": {

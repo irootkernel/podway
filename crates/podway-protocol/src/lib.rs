@@ -1532,6 +1532,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "SOCKET_ENDPOINT_INVALID",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "NOT_A_GIT_WORKTREE",
         exit_code: 5,
         retryable: false,
@@ -2186,6 +2191,7 @@ fn validate_closed_error_details_v1(
         | "DAEMON_SHUTTING_DOWN"
         | "DAEMON_VERSION_INCOMPATIBLE" => validate_endpoint_details_v1(details),
         "DAEMON_CONTRACT_MISMATCH" => validate_daemon_contract_mismatch_details_v1(details),
+        "SOCKET_ENDPOINT_INVALID" => validate_socket_endpoint_details_v1(details),
         "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
             validate_revision_conflict_details_v1(details)
         }
@@ -2210,6 +2216,29 @@ fn validate_endpoint_details_v1(details: &Map<String, Value>) -> bool {
     details.get("schema").and_then(Value::as_str) == Some("podway.endpoint-error-details/v1")
         && (details.len() == 1
             || validate_schema_and_not_admitted_v1(details, "podway.endpoint-error-details/v1"))
+}
+
+fn validate_socket_endpoint_details_v1(details: &Map<String, Value>) -> bool {
+    const REASONS: &[&str] = &[
+        "empty",
+        "relative",
+        "unnormalized",
+        "workspace_local",
+        "path_too_long",
+        "effective_user_unavailable",
+    ];
+    details.get("schema").and_then(Value::as_str) == Some("podway.socket-endpoint-error-details/v1")
+        && details
+            .get("reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| REASONS.contains(&reason))
+        && match details.get("admission") {
+            None => details.len() == 2,
+            Some(admission) => {
+                details.len() == 3
+                    && validate_admission_metadata_v1(admission, true).ok() == Some(None)
+            }
+        }
 }
 
 fn validate_schema_and_not_admitted_v1(details: &Map<String, Value>, schema: &str) -> bool {
@@ -2388,6 +2417,7 @@ pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Valu
         | "DAEMON_SHUTTING_DOWN"
         | "DAEMON_VERSION_INCOMPATIBLE" => "podway.endpoint-error-details/v1",
         "DAEMON_CONTRACT_MISMATCH" => "podway.daemon-contract-mismatch-details/v1",
+        "SOCKET_ENDPOINT_INVALID" => "podway.socket-endpoint-error-details/v1",
         "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
             "podway.revision-conflict-details/v1"
         }

@@ -242,6 +242,17 @@
     },
     {
       "if": {
+        "properties": { "code": { "const": "SOCKET_ENDPOINT_INVALID" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:socket-endpoint-error-details:v1" }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": {
           "code": {
             "enum": ["SESSION_REVISION_CONFLICT", "ITEM_REVISION_CONFLICT"]

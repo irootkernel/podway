@@ -256,6 +256,12 @@ fn mutations(value: &Value, discriminator: &str, malformed_type_pointer: &str) -
     vec![unknown, missing, wrong_discriminator, wrong_type]
 }
 
+fn refresh_procedure_canonical_fields(value: &mut Value) {
+    let canonical = podway_core::canonicalize_json_v1(&value["procedure"]).unwrap();
+    value["digest"] = Value::String(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())));
+    value["canonical_json"] = Value::String(canonical);
+}
+
 fn error_envelope(code: &str, entry: &ErrorCatalogEntry, details: Value) -> Value {
     json!({
         "schema": "podway.error/v1",
@@ -460,6 +466,79 @@ fn mcont006_result_fixtures_lock_catalog_schemas_and_runtime_decoders() {
     );
     assert!(
         validate_command_result_v1("version", &result_map(version_without_source_commit)).is_err()
+    );
+}
+
+#[test]
+fn mcont006_status_item_values_are_closed_and_coupled_to_item_types() {
+    let fixture = fixture();
+    let contract = fixture.result_fixtures.get("status").unwrap();
+    let mut status = materialize(contract);
+    status["items"] = json!([
+        {"id":"confirm","type":"confirm","prompt":"Confirm","required":true,"satisfied":true,"revision":1,"value":true},
+        {"id":"text","type":"text","prompt":"Text","required":true,"satisfied":true,"revision":1,"value":"done"},
+        {"id":"choice","type":"choice","prompt":"Choice","required":true,"satisfied":true,"revision":1,"value":"first"},
+        {"id":"integer","type":"integer","prompt":"Integer","required":true,"satisfied":true,"revision":1,"value":7},
+        {"id":"list","type":"list","prompt":"List","required":true,"satisfied":true,"revision":1,"value":["one","two"]},
+        {"id":"artifact","type":"artifact","prompt":"Artifact","required":true,"satisfied":true,"revision":1,"value":{
+            "location_type":"path","location":"reports/result.txt",
+            "sha256_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size_bytes":42,"media_type":"text/plain"
+        }}
+    ]);
+    assert_schema_valid(&contract.schema_file, &status);
+    validate_command_result_v1("session.status", &result_map(status.clone())).unwrap();
+
+    let mut false_confirm = status.clone();
+    false_confirm["items"][0]["value"] = Value::Bool(false);
+    assert_schema_invalid(&contract.schema_file, &false_confirm);
+    assert!(validate_command_result_v1("session.status", &result_map(false_confirm)).is_err());
+
+    let mut mismatched_type = status.clone();
+    mismatched_type["items"][3]["value"] = Value::String("7".to_owned());
+    assert_schema_invalid(&contract.schema_file, &mismatched_type);
+    assert!(validate_command_result_v1("session.status", &result_map(mismatched_type)).is_err());
+
+    let mut nested_drift = status;
+    nested_drift["items"][5]["value"]["future"] = Value::Bool(true);
+    assert_schema_invalid(&contract.schema_file, &nested_drift);
+    assert!(validate_command_result_v1("session.status", &result_map(nested_drift)).is_err());
+}
+
+#[test]
+fn mcont006_procedure_validation_rejects_nested_drift_noncanonical_bytes_and_bad_digest() {
+    let fixture = fixture();
+    let contract = fixture.result_fixtures.get("procedure_validation").unwrap();
+    let valid = materialize(contract);
+    assert_schema_valid(&contract.schema_file, &valid);
+    validate_command_result_v1("procedure.validate", &result_map(valid.clone())).unwrap();
+
+    let mut nested_drift = valid.clone();
+    nested_drift["procedure"]["stages"][0]["future"] = Value::Bool(true);
+    refresh_procedure_canonical_fields(&mut nested_drift);
+    assert_schema_invalid(&contract.schema_file, &nested_drift);
+    assert!(validate_command_result_v1("procedure.validate", &result_map(nested_drift)).is_err());
+
+    let mut noncanonical = valid.clone();
+    let noncanonical_json = format!(" {}", noncanonical["canonical_json"].as_str().unwrap());
+    noncanonical["canonical_json"] = Value::String(noncanonical_json.clone());
+    noncanonical["digest"] = Value::String(format!(
+        "sha256:{:x}",
+        Sha256::digest(noncanonical_json.as_bytes())
+    ));
+    assert_schema_valid(&contract.schema_file, &noncanonical);
+    assert!(validate_command_result_v1("procedure.validate", &result_map(noncanonical)).is_err());
+
+    let mut bad_digest = valid.clone();
+    bad_digest["digest"] = Value::String(format!("sha256:{}", "0".repeat(64)));
+    assert_schema_valid(&contract.schema_file, &bad_digest);
+    assert!(validate_command_result_v1("procedure.validate", &result_map(bad_digest)).is_err());
+
+    let mut mismatched_document = valid;
+    mismatched_document["procedure"]["name"] = Value::String("Different".to_owned());
+    assert_schema_valid(&contract.schema_file, &mismatched_document);
+    assert!(
+        validate_command_result_v1("procedure.validate", &result_map(mismatched_document)).is_err()
     );
 }
 

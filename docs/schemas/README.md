@@ -9,6 +9,7 @@ These JSON Schema Draft 2020-12 files define Podway v1 structural contracts.
 - `output-v1.schema.json`: success envelope.
 - `error-v1.schema.json`: error envelope.
 - `endpoint-error-details-v1.schema.json`: daemon endpoint and availability failures.
+- `socket-endpoint-error-details-v1.schema.json`: invalid explicit Unix socket paths.
 - `daemon-contract-mismatch-details-v1.schema.json`: CLI/daemon contract identity mismatch.
 - `revision-conflict-details-v1.schema.json`: session and item revision conflicts.
 - `attempt-conflict-details-v1.schema.json`: stale current-attempt conflicts.

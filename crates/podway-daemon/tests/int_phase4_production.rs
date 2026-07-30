@@ -24,7 +24,7 @@ use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobStateV1, NextResultV1, OperationV1,
     OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1,
     RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1, SliceRequestV1, StageStatusResultV1,
-    StatusResultV1, WorkspaceContextV1, WorktreeSelectorWireV1,
+    StatusItemValueV1, StatusResultV1, WorkspaceContextV1, WorktreeSelectorWireV1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
@@ -505,7 +505,9 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
             .find(|item| item.id.as_str() == "goal")
             .expect("status must include the goal item")
             .value,
-        json!("discard this value on clean retry")
+        Some(StatusItemValueV1::Text(
+            "discard this value on clean retry".to_owned()
+        ))
     );
 
     let retry = request(
@@ -559,7 +561,7 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
             .find(|item| item.id.as_str() == "goal")
             .expect("retried status must include the goal item")
             .value,
-        Value::Null,
+        None,
         "[FIRST-CORRECTNESS-RETRY] fresh retry must not copy prior item values"
     );
 
@@ -716,7 +718,7 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
             .find(|item| item.id.as_str() == "goal")
             .expect("returned status must include destination items")
             .value,
-        Value::Null,
+        None,
         "[FIRST-CORRECTNESS-RETURN] return must start the destination with clean item values"
     );
     let replay = request(

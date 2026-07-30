@@ -64,6 +64,13 @@
       "summary": "Request is malformed or violates schema."
     },
     {
+      "code": "SOCKET_ENDPOINT_INVALID",
+      "details_schema": "podway.socket-endpoint-error-details/v1",
+      "exit_code": 2,
+      "retryable": false,
+      "summary": "The explicit daemon socket path is invalid."
+    },
+    {
       "code": "NOT_A_GIT_WORKTREE",
       "exit_code": 5,
       "retryable": false,

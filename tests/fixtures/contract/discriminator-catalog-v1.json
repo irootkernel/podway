@@ -20,9 +20,9 @@
       "malformed_type_pointer": "/file",
       "value": {
         "schema": "podway.procedure-validation-result/v1", "file": "procedure.json",
-        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-        "procedure": {"schema": "podway.procedure/v1", "id": "fixture", "version": "1", "name": "Fixture", "stages": [{"id": "work", "title": "Work"}], "rework": {"allow_return_to": "any_previous"}},
-        "warnings": [], "canonical_json": "{\"id\":\"fixture\",\"name\":\"Fixture\",\"rework\":{\"allow_return_to\":\"any_previous\"},\"schema\":\"podway.procedure/v1\",\"stages\":[{\"id\":\"work\",\"title\":\"Work\"}],\"version\":\"1\"}"
+        "digest": "sha256:210cd27ac262930493380d67a4be5cf7d135b1f6c7abaa48306f200f66ea987b",
+        "procedure": {"schema": "podway.procedure/v1", "id": "fixture", "version": "1", "name": "Fixture", "stages": [{"id": "work", "title": "Work", "instructions": [], "items": []}], "rework": {"allow_return_to": "any_previous"}},
+        "warnings": [], "canonical_json": "{\"id\":\"fixture\",\"name\":\"Fixture\",\"rework\":{\"allow_return_to\":\"any_previous\"},\"schema\":\"podway.procedure/v1\",\"stages\":[{\"id\":\"work\",\"instructions\":[],\"items\":[],\"title\":\"Work\"}],\"version\":\"1\"}"
       }
     },
     "daemon_status": {
@@ -150,6 +150,7 @@
   ],
   "error_fixtures": {
     "endpoint": {"schema": "podway.endpoint-error-details/v1", "schema_file": "schemas/endpoint-error-details-v1.schema.json", "malformed_type_pointer": "/schema", "details": {"schema": "podway.endpoint-error-details/v1"}},
+    "socket_endpoint": {"schema": "podway.socket-endpoint-error-details/v1", "schema_file": "schemas/socket-endpoint-error-details-v1.schema.json", "malformed_type_pointer": "/reason", "details": {"schema": "podway.socket-endpoint-error-details/v1", "reason": "relative"}},
     "daemon_contract": {"schema": "podway.daemon-contract-mismatch-details/v1", "schema_file": "schemas/daemon-contract-mismatch-details-v1.schema.json", "malformed_type_pointer": "/expected/product", "details": {"schema": "podway.daemon-contract-mismatch-details/v1", "expected": {"product": "podway", "contract_manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}, "actual": {"product": "podway", "contract_manifest_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"}, "admission": {"admitted": false}}},
     "workspace_uuid": {"schema": "podway.workspace-uuid-mismatch-details/v1", "schema_file": "schemas/error-v1.schema.json", "malformed_type_pointer": "/expected_workspace_uuid", "details": {"schema": "podway.workspace-uuid-mismatch-details/v1", "expected_workspace_uuid": "00000000-0000-4000-8000-000000000601", "actual_workspace_uuid": "00000000-0000-4000-8000-000000000602", "admission": {"admitted": false}}},
     "procedure_digest": {"schema": "podway.procedure-digest-mismatch-details/v1", "schema_file": "schemas/error-v1.schema.json", "malformed_type_pointer": "/expected_procedure_digest", "details": {"schema": "podway.procedure-digest-mismatch-details/v1", "expected_procedure_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "actual_procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "admission": {"admitted": false}}},
@@ -167,6 +168,7 @@
     {"code": "DAEMON_SHUTTING_DOWN", "fixture": "endpoint"},
     {"code": "DAEMON_VERSION_INCOMPATIBLE", "fixture": "endpoint"},
     {"code": "DAEMON_CONTRACT_MISMATCH", "fixture": "daemon_contract"},
+    {"code": "SOCKET_ENDPOINT_INVALID", "fixture": "socket_endpoint"},
     {"code": "WORKSPACE_UUID_MISMATCH", "fixture": "workspace_uuid"},
     {"code": "PROCEDURE_DIGEST_MISMATCH", "fixture": "procedure_digest"},
     {"code": "SESSION_ID_MISMATCH", "fixture": "session_id"},

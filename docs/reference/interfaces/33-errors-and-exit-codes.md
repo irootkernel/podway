@@ -34,6 +34,13 @@ tasks update the catalog, closed detail schemas, generated mirrors, and tests.
 | `PROTOCOL_VERSION_UNSUPPORTED` | 3 | no | Requested IPC protocol is unsupported |
 | `REQUEST_TOO_LARGE` | 2 | no | IPC frame exceeds limits |
 | `REQUEST_INVALID` | 2 | no | Request is malformed or violates schema |
+| `SOCKET_ENDPOINT_INVALID` | 2 | no | An explicit Unix socket path is invalid or cannot be safely resolved |
+
+`SOCKET_ENDPOINT_INVALID.details` uses
+`podway.socket-endpoint-error-details/v1`. Its stable `reason` is one of
+`empty`, `relative`, `unnormalized`, `workspace_local`, `path_too_long`, or
+`effective_user_unavailable`. Mutation failures also include
+`admission: {"admitted": false}`.
 
 ## Worktree and workspace errors
 

@@ -15,14 +15,14 @@ use podway_protocol::{
     AllowedActionsResultV1, AttemptLifecycleResultV1, BlockerResultV1, CommandSuggestionResultV1,
     CurrentAttemptResultV1, ItemTypeResultV1, NextItemResultV1, NextResultV1,
     NextStageAfterCompletionResultV1, NextStageResultV1, PreviousAttemptResultV1, QueueResultV1,
-    Rfc3339MillisV1, SessionLifecycleV1, StageStatusResultV1, StatusItemResultV1,
-    StatusProcedureV1, StatusResultV1, StatusSessionV1, StatusStageResultV1, StatusTaskV1,
+    Rfc3339MillisV1, SessionLifecycleV1, StageStatusResultV1, StatusArtifactLocationTypeV1,
+    StatusArtifactValueV1, StatusItemResultV1, StatusItemValueV1, StatusProcedureV1,
+    StatusResultV1, StatusSessionV1, StatusStageResultV1, StatusTaskV1,
 };
 use podway_store::{
     DurableWorktreeIdentityV1, JobIdV1, JobListQueryV1, JobStateV1, JobViewV1, StoreErrorV1,
     StoreReadContractV1, WorkspaceViewV1,
 };
-use serde_json::{Value, json};
 
 /// A monotonic millisecond deadline supplied by the daemon runtime.
 ///
@@ -789,33 +789,35 @@ fn status_item(
     })
 }
 
-fn item_value(value: Option<&podway_core::ItemValueV1>) -> Result<Value, ReadServiceErrorV1> {
+fn item_value(
+    value: Option<&podway_core::ItemValueV1>,
+) -> Result<Option<StatusItemValueV1>, ReadServiceErrorV1> {
     let Some(value) = value else {
-        return Ok(Value::Null);
+        return Ok(None);
     };
     match value.value_type() {
-        ItemValueTypeV1::Confirm => Ok(Value::Bool(true)),
+        ItemValueTypeV1::Confirm => Ok(Some(StatusItemValueV1::Confirm(true))),
         ItemValueTypeV1::Text => value
             .as_text()
-            .map(|text| Value::String(text.to_owned()))
+            .map(|text| Some(StatusItemValueV1::Text(text.to_owned())))
             .ok_or(ReadServiceErrorV1::InconsistentState {
                 reason: "text item has a non-text value",
             }),
         ItemValueTypeV1::Choice => value
             .as_choice()
-            .map(|choice| Value::String(choice.to_owned()))
+            .map(|choice| Some(StatusItemValueV1::Text(choice.to_owned())))
             .ok_or(ReadServiceErrorV1::InconsistentState {
                 reason: "choice item has a non-choice value",
             }),
         ItemValueTypeV1::Integer => value
             .as_integer()
-            .map(|integer| Value::Number(integer.into()))
+            .map(|integer| Some(StatusItemValueV1::Integer(integer)))
             .ok_or(ReadServiceErrorV1::InconsistentState {
                 reason: "integer item has a non-integer value",
             }),
         ItemValueTypeV1::List => value
             .as_list()
-            .map(|items| Value::Array(items.iter().cloned().map(Value::String).collect::<Vec<_>>()))
+            .map(|items| Some(StatusItemValueV1::List(items.to_vec())))
             .ok_or(ReadServiceErrorV1::InconsistentState {
                 reason: "list item has a non-list value",
             }),
@@ -826,16 +828,18 @@ fn item_value(value: Option<&podway_core::ItemValueV1>) -> Result<Value, ReadSer
                     reason: "artifact item has a non-artifact value",
                 })?;
             let location_type = match artifact.location_kind() {
-                ArtifactLocationKindV1::LocalPath => "path",
-                ArtifactLocationKindV1::ExternalReference => "reference",
+                ArtifactLocationKindV1::LocalPath => StatusArtifactLocationTypeV1::Path,
+                ArtifactLocationKindV1::ExternalReference => {
+                    StatusArtifactLocationTypeV1::Reference
+                }
             };
-            Ok(json!({
-                "location_type": location_type,
-                "location": artifact.location(),
-                "sha256_digest": artifact.digest().as_str(),
-                "size_bytes": artifact.size_bytes(),
-                "media_type": artifact.media_type(),
-            }))
+            Ok(Some(StatusItemValueV1::Artifact(StatusArtifactValueV1 {
+                location_type,
+                location: artifact.location().to_owned(),
+                sha256_digest: artifact.digest().clone(),
+                size_bytes: artifact.size_bytes(),
+                media_type: artifact.media_type().to_owned(),
+            })))
         }
     }
 }

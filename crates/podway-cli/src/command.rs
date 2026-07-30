@@ -874,9 +874,10 @@ struct LocalFailure {
 impl LocalFailure {
     fn catalog(code: &'static str, message: impl Into<String>, command: impl Into<String>) -> Self {
         let (exit_code, retryable) = match code {
-            "REQUEST_INVALID" | "REQUEST_TOO_LARGE" | "CONFIRMATION_REQUIRED" => {
-                (LOCAL_USAGE_EXIT, false)
-            }
+            "REQUEST_INVALID"
+            | "REQUEST_TOO_LARGE"
+            | "SOCKET_ENDPOINT_INVALID"
+            | "CONFIRMATION_REQUIRED" => (LOCAL_USAGE_EXIT, false),
             "DAEMON_NOT_INSTALLED" | "DAEMON_VERSION_INCOMPATIBLE" | "DAEMON_CONTRACT_MISMATCH" => {
                 (LOCAL_DAEMON_EXIT, false)
             }
@@ -1780,24 +1781,33 @@ fn execute_service_lifecycle_with_manager(
 }
 
 fn socket_path_failure(error: ServicePathErrorV1) -> LocalFailure {
-    let message = match error {
-        ServicePathErrorV1::Empty { .. } | ServicePathErrorV1::Relative { .. } => {
-            "socket path must be absolute"
-        }
-        ServicePathErrorV1::Unnormalized { .. } => {
-            "socket path must be normalized and contain valid path characters"
-        }
-        ServicePathErrorV1::WorkspaceLocal { .. } => {
-            "socket path must not point into workspace-local Podway state"
-        }
-        ServicePathErrorV1::SocketPathTooLong { .. } => {
-            "socket path exceeds the macOS Unix socket path limit"
-        }
+    let (reason, message) = match error {
+        ServicePathErrorV1::Empty { .. } => ("empty", "socket path must not be empty"),
+        ServicePathErrorV1::Relative { .. } => ("relative", "socket path must be absolute"),
+        ServicePathErrorV1::Unnormalized { .. } => (
+            "unnormalized",
+            "socket path must be normalized and contain valid path characters",
+        ),
+        ServicePathErrorV1::WorkspaceLocal { .. } => (
+            "workspace_local",
+            "socket path must not point into workspace-local Podway state",
+        ),
+        ServicePathErrorV1::SocketPathTooLong { .. } => (
+            "path_too_long",
+            "socket path exceeds the macOS Unix socket path limit",
+        ),
         ServicePathErrorV1::EffectiveUserLookup { .. }
         | ServicePathErrorV1::EffectiveUserNotFound { .. }
-        | ServicePathErrorV1::RootUser => "socket path could not be validated",
+        | ServicePathErrorV1::RootUser => (
+            "effective_user_unavailable",
+            "socket path could not be validated",
+        ),
     };
-    LocalFailure::request_invalid(message)
+    let mut failure = LocalFailure::catalog("SOCKET_ENDPOINT_INVALID", message, "cli");
+    failure
+        .details
+        .insert("reason".to_owned(), Value::String(reason.to_owned()));
+    failure
 }
 
 fn service_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {

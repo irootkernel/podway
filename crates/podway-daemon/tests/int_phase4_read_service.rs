@@ -586,7 +586,12 @@ fn status_projects_one_current_attempt_and_typed_item_value() {
     assert_eq!(status.items.len(), 1);
     assert_eq!(status.items[0].revision, Revision::new(1));
     assert!(status.items[0].satisfied);
-    assert_eq!(status.items[0].value, serde_json::json!("recorded"));
+    assert_eq!(
+        status.items[0].value,
+        Some(podway_protocol::StatusItemValueV1::Text(
+            "recorded".to_owned()
+        ))
+    );
     assert_eq!(status.blockers.len(), 1);
     assert_eq!(status.blockers[0].reason, "review required");
     assert_eq!(
@@ -662,7 +667,7 @@ fn retry_clears_active_item_projection_and_return_marks_reached_stage_redo() {
         Some(3)
     );
     assert_eq!(status.items[0].revision, Revision::ZERO);
-    assert_eq!(status.items[0].value, serde_json::Value::Null);
+    assert_eq!(status.items[0].value, None);
     assert_eq!(status.stages[1].status, StageStatusResultV1::Redo);
     assert_eq!(
         next.stage.as_ref().map(|stage| stage.id.as_str()),

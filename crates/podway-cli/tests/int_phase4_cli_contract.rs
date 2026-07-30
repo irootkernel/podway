@@ -254,20 +254,35 @@ fn explicit_socket_selects_the_exact_daemon_endpoint_and_rejects_non_absolute_pa
         io::ErrorKind::WouldBlock,
     );
 
-    for (invalid, message) in [
-        ("relative.sock", "socket path must be absolute"),
-        ("~/podwayd.sock", "socket path must be absolute"),
+    for (invalid, reason, message) in [
+        ("relative.sock", "relative", "socket path must be absolute"),
+        ("~/podwayd.sock", "relative", "socket path must be absolute"),
         (
             "/tmp/../podwayd.sock",
+            "unnormalized",
             "socket path must be normalized and contain valid path characters",
         ),
     ] {
         let output = fixture.run(&["--json", "--socket", invalid, "status"]);
         assert_eq!(output.status.code(), Some(2), "{invalid}: {output:?}");
         let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
-        assert_eq!(response["code"], "REQUEST_INVALID");
+        assert_eq!(response["code"], "SOCKET_ENDPOINT_INVALID");
+        assert_eq!(
+            response["details"]["schema"],
+            "podway.socket-endpoint-error-details/v1"
+        );
+        assert_eq!(response["details"]["reason"], reason);
         assert_eq!(response["message"], message);
     }
+
+    let mutation = fixture.run(&["--json", "--socket", "relative.sock", "complete"]);
+    assert_eq!(mutation.status.code(), Some(2), "{mutation:?}");
+    let response: Value =
+        serde_json::from_slice(&mutation.stdout).expect("typed JSON mutation failure");
+    assert_eq!(response["code"], "SOCKET_ENDPOINT_INVALID");
+    assert_eq!(response["command"], "session.complete");
+    assert_eq!(response["details"]["reason"], "relative");
+    assert_eq!(response["details"]["admission"]["admitted"], false);
 
     let local = fixture.run(&["--json", "--socket", &explicit_socket_text, "version"]);
     assert_eq!(local.status.code(), Some(2));
@@ -280,22 +295,29 @@ fn daemon_install_rejects_invalid_explicit_socket_before_resolving_the_daemon() 
     let fixture = Fixture::new();
     let overlong = format!("/tmp/{}.sock", "x".repeat(104));
 
-    for (invalid, message) in [
-        ("relative.sock", "socket path must be absolute"),
-        ("~/podwayd.sock", "socket path must be absolute"),
+    for (invalid, reason, message) in [
+        ("relative.sock", "relative", "socket path must be absolute"),
+        ("~/podwayd.sock", "relative", "socket path must be absolute"),
         (
             "/tmp/../podwayd.sock",
+            "unnormalized",
             "socket path must be normalized and contain valid path characters",
         ),
         (
             overlong.as_str(),
+            "path_too_long",
             "socket path exceeds the macOS Unix socket path limit",
         ),
     ] {
         let output = fixture.run(&["--json", "--socket", invalid, "daemon", "install"]);
         assert_eq!(output.status.code(), Some(2), "{invalid}: {output:?}");
         let response: Value = serde_json::from_slice(&output.stdout).expect("typed JSON failure");
-        assert_eq!(response["code"], "REQUEST_INVALID");
+        assert_eq!(response["code"], "SOCKET_ENDPOINT_INVALID");
+        assert_eq!(
+            response["details"]["schema"],
+            "podway.socket-endpoint-error-details/v1"
+        );
+        assert_eq!(response["details"]["reason"], reason);
         assert_eq!(response["command"], "daemon.install");
         assert_eq!(response["message"], message);
     }
