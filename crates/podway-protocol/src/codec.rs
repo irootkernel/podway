@@ -3,7 +3,8 @@ use std::{fmt, str};
 use serde_json::Value;
 
 use crate::{
-    ERROR_SCHEMA_V1, ErrorEnvelopeV1, OUTPUT_SCHEMA_V1, OutputEnvelopeV1, ProtocolError,
+    COMPACT_STATUS_RESULT_SCHEMA_V1, ERROR_SCHEMA_V1, ErrorEnvelopeV1,
+    MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, OUTPUT_SCHEMA_V1, OutputEnvelopeV1, ProtocolError,
     RequestEnvelopeV1, ResponseEnvelopeV1, validate_frame_payload_length,
     validate_json_document_depth,
 };
@@ -104,6 +105,11 @@ pub fn encode_response_payload_v1(
         .map_err(PayloadCodecErrorV1::JsonContract)?;
     let payload = serde_json::to_vec(response).map_err(PayloadCodecErrorV1::Serialize)?;
     validate_frame_payload_length(payload.len()).map_err(PayloadCodecErrorV1::InvalidLength)?;
+    if matches!(response, ResponseEnvelopeV1::Output(output) if is_compact_status_result(output.result()))
+    {
+        validate_compact_status_payload_length(payload.len())
+            .map_err(PayloadCodecErrorV1::JsonContract)?;
+    }
     Ok(payload)
 }
 
@@ -119,9 +125,19 @@ pub fn decode_response_payload_v1(
 
     let schema = top_level_discriminator(&value, "schema")?.to_owned();
     match schema.as_str() {
-        OUTPUT_SCHEMA_V1 => serde_json::from_value::<OutputEnvelopeV1>(value)
-            .map(ResponseEnvelopeV1::Output)
-            .map_err(PayloadCodecErrorV1::InvalidEnvelope),
+        OUTPUT_SCHEMA_V1 => {
+            if value
+                .get("result")
+                .and_then(Value::as_object)
+                .is_some_and(is_compact_status_result)
+            {
+                validate_compact_status_payload_length(payload.len())
+                    .map_err(PayloadCodecErrorV1::JsonContract)?;
+            }
+            serde_json::from_value::<OutputEnvelopeV1>(value)
+                .map(ResponseEnvelopeV1::Output)
+                .map_err(PayloadCodecErrorV1::InvalidEnvelope)
+        }
         ERROR_SCHEMA_V1 => serde_json::from_value::<ErrorEnvelopeV1>(value)
             .map(ResponseEnvelopeV1::Error)
             .map_err(PayloadCodecErrorV1::InvalidEnvelope),
@@ -130,6 +146,26 @@ pub fn decode_response_payload_v1(
             supported: SUPPORTED_RESPONSE_SCHEMAS_V1,
         }),
     }
+}
+
+fn is_compact_status_result(result: &serde_json::Map<String, Value>) -> bool {
+    result.get("schema").and_then(Value::as_str) == Some(COMPACT_STATUS_RESULT_SCHEMA_V1)
+}
+
+fn validate_compact_status_payload_length(length: usize) -> Result<(), ProtocolError> {
+    let length = length
+        .checked_add(1)
+        .ok_or(ProtocolError::CompactStatusEnvelopeTooLarge {
+            length: usize::MAX,
+            maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
+        })?;
+    if length > MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 {
+        return Err(ProtocolError::CompactStatusEnvelopeTooLarge {
+            length,
+            maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
+        });
+    }
+    Ok(())
 }
 
 fn top_level_discriminator<'a>(

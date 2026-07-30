@@ -84,5 +84,27 @@
         "latest_workspace_sequence": {"type": "integer", "minimum": 1}
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"session": {"properties": {"lifecycle": {"const": "running"}}}},
+        "required": ["session"]
+      },
+      "then": {"properties": {"current": {"type": "object"}}}
+    },
+    {
+      "if": {
+        "properties": {"session": {"properties": {"lifecycle": {"enum": ["completed", "cancelled"]}}}},
+        "required": ["session"]
+      },
+      "then": {
+        "properties": {
+          "current": {"type": "null"},
+          "items": {"maxItems": 0},
+          "blockers": {"maxItems": 0}
+        }
+      }
+    }
+  ]
 }

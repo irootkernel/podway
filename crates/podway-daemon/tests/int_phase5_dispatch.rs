@@ -156,7 +156,15 @@ fn status_result() -> Map<String, Value> {
             "completed_at": null,
             "cancelled_at": null
         },
-        "current": null,
+        "current": {
+            "stage_id": "phase5",
+            "stage_index": 0,
+            "title": "Phase 5",
+            "attempt_id": ATTEMPT_ID,
+            "attempt_number": 1,
+            "blocked": false,
+            "ready_to_complete": false
+        },
         "stages": [],
         "items": [],
         "blockers": [],

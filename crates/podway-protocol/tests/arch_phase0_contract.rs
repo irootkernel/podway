@@ -4,13 +4,14 @@ use podway_protocol::{
     ErrorEnvelopeV1, ExitCodeV1, FRAME_LENGTH_PREFIX_BYTES_V1, IPC_PROTOCOL_V1, JobOutputV1,
     JobStateV1, MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, MAX_FRAME_PAYLOAD_BYTES_V1,
     MAX_JSON_DEPTH_V1, MAX_WORKSPACE_ROOT_SCALARS_V1, MIN_FRAME_PAYLOAD_BYTES_V1, OUTPUT_SCHEMA_V1,
-    OperationV1, OutputEnvelopeInputV1, OutputEnvelopeV1, PreconditionsV1, ProtocolCompatibilityV1,
-    ProtocolError, ProtocolVersionV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1,
-    RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1, SUPPORTED_ERROR_SCHEMAS_V1,
-    SUPPORTED_OUTPUT_SCHEMAS_V1, SUPPORTED_PROTOCOLS_V1, SessionLifecycleV1, SessionOutputV1,
-    WorkspaceOutputV1, build_identity_v1, decode_request_payload_v1, decode_response_payload_v1,
-    encode_request_payload_v1, encode_response_payload_v1, error_code_catalog_v1,
-    negotiate_protocol, require_compatible_protocol, validate_frame_payload_length,
+    OperationV1, OutputEnvelopeInputV1, OutputEnvelopeV1, PayloadCodecErrorV1, PreconditionsV1,
+    ProtocolCompatibilityV1, ProtocolError, ProtocolVersionV1, RequestEnvelopeInputV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1,
+    SUPPORTED_ERROR_SCHEMAS_V1, SUPPORTED_OUTPUT_SCHEMAS_V1, SUPPORTED_PROTOCOLS_V1,
+    SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1, build_identity_v1,
+    decode_request_payload_v1, decode_response_payload_v1, encode_request_payload_v1,
+    encode_response_payload_v1, error_code_catalog_v1, negotiate_protocol,
+    require_compatible_protocol, validate_frame_payload_length,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -371,6 +372,35 @@ fn aut_obs_004_compact_status_requires_matching_workspace_and_exact_byte_bound()
             maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
         })
     );
+}
+
+#[test]
+fn aut_obs_004_compact_status_decode_counts_open_envelope_fields() {
+    let expected = compact_status_output(7, Some(7), None).unwrap();
+    let mut document = serde_json::to_value(&expected).unwrap();
+    document["future_padding"] = json!("");
+    let base_length = serde_json::to_vec(&document).unwrap().len() + 1;
+    let padding_length = MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 - base_length;
+    document["future_padding"] = json!("x".repeat(padding_length));
+
+    let exact = serde_json::to_vec(&document).unwrap();
+    assert_eq!(exact.len() + 1, MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1);
+    assert_eq!(
+        decode_response_payload_v1(&exact).unwrap(),
+        ResponseEnvelopeV1::Output(expected)
+    );
+
+    document["future_padding"] = json!("x".repeat(padding_length + 1));
+    let oversized = serde_json::to_vec(&document).unwrap();
+    assert!(matches!(
+        decode_response_payload_v1(&oversized),
+        Err(PayloadCodecErrorV1::JsonContract(
+            ProtocolError::CompactStatusEnvelopeTooLarge {
+                length,
+                maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
+            }
+        )) if length == MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 + 1
+    ));
 }
 const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("DAEMON_NOT_INSTALLED", 3, false),

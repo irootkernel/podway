@@ -1,8 +1,8 @@
 use std::fmt;
 
 use podway_core::{
-    AttemptId, BlockerId, ItemId, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, Revision, SessionId,
-    Sha256Digest, StageId, WorkspaceId, canonicalize_json_v1,
+    AttemptId, BlockerId, ItemId, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, MAX_STAGE_ITEMS,
+    Revision, SessionId, Sha256Digest, StageId, WorkspaceId, canonicalize_json_v1,
 };
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -2809,10 +2809,24 @@ impl CompactStatusResultV1 {
 
     pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
         let compact: Self = serde_json::from_value(Value::Object(result.clone()))?;
+        let lifecycle_is_consistent = match compact.session.lifecycle {
+            SessionLifecycleV1::Running => compact.current.is_some(),
+            SessionLifecycleV1::Completed | SessionLifecycleV1::Cancelled => {
+                compact.current.is_none() && compact.items.is_empty() && compact.blockers.is_empty()
+            }
+        };
+        let blockers_match_current_attempt = compact.current.as_ref().is_none_or(|current| {
+            compact
+                .blockers
+                .iter()
+                .all(|blocker| blocker.attempt_id == current.attempt_id)
+        });
         if compact.procedure.id.is_empty()
             || compact.procedure.version.is_empty()
-            || compact.items.len() > 128
+            || compact.items.len() > MAX_STAGE_ITEMS
             || compact.blockers.len() > MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1
+            || !lifecycle_is_consistent
+            || !blockers_match_current_attempt
             || compact.queue.pending_mutations
             || compact.queue.queued_count != 0
             || compact.queue.running_job_id.is_some()

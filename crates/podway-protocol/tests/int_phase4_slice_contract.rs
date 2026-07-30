@@ -1,4 +1,4 @@
-use podway_core::{Revision, WorkspaceId};
+use podway_core::{MAX_STAGE_ITEMS, Revision, WorkspaceId};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1,
     MAX_WORKTREE_SELECTOR_COMPONENT_BYTES_V1, NextResultV1, OperationV1, PreconditionsV1,
@@ -826,8 +826,28 @@ fn mcont004_compact_status_projection_is_closed_discriminated_and_idle() {
     assert!(CompactStatusResultV1::from_result_map(&empty_procedure_version).is_err());
 
     let mut too_many_items = compact_map.clone();
-    too_many_items["items"] = Value::Array(vec![compact_map["items"][0].clone(); 129]);
+    too_many_items["items"] =
+        Value::Array(vec![compact_map["items"][0].clone(); MAX_STAGE_ITEMS + 1]);
     assert!(CompactStatusResultV1::from_result_map(&too_many_items).is_err());
+
+    let mut running_without_current = compact_map.clone();
+    running_without_current["current"] = Value::Null;
+    assert!(CompactStatusResultV1::from_result_map(&running_without_current).is_err());
+
+    let mut terminal_with_current = compact_map.clone();
+    terminal_with_current["session"]["lifecycle"] = json!("completed");
+    assert!(CompactStatusResultV1::from_result_map(&terminal_with_current).is_err());
+
+    let mut terminal_with_items = compact_map.clone();
+    terminal_with_items["session"]["lifecycle"] = json!("cancelled");
+    terminal_with_items["current"] = Value::Null;
+    terminal_with_items["blockers"] = json!([]);
+    assert!(CompactStatusResultV1::from_result_map(&terminal_with_items).is_err());
+
+    let mut mismatched_blocker_attempt = compact_map.clone();
+    mismatched_blocker_attempt["blockers"][0]["attempt_id"] =
+        json!("77777777-7777-4777-8777-777777777777");
+    assert!(CompactStatusResultV1::from_result_map(&mismatched_blocker_attempt).is_err());
 
     let mut busy = compact_map;
     busy.get_mut("queue")

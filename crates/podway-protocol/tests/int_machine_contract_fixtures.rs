@@ -7,6 +7,7 @@ use std::{
 };
 
 use jsonschema::{Retrieve, Uri};
+use podway_core::{MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, MAX_STAGE_ITEMS};
 use podway_protocol::{
     MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, RequestEnvelopeV1, ResponseEnvelopeV1,
     SUPPORTED_RESULT_SCHEMAS_V1, validate_command_result_v1,
@@ -705,7 +706,7 @@ fn mcont006_compact_known_answer_is_closed_and_within_exact_envelope_limit() {
 
     let mut maximum = compact;
     maximum["result"]["items"] = Value::Array(
-        (0..128)
+        (0..MAX_STAGE_ITEMS)
             .map(|index| {
                 json!({
                     "id": format!("item-{index:058}"), "type": "confirm", "required": true,
@@ -715,7 +716,7 @@ fn mcont006_compact_known_answer_is_closed_and_within_exact_envelope_limit() {
             .collect(),
     );
     maximum["result"]["blockers"] = Value::Array(
-        (0..1_024)
+        (0..MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1)
             .map(|index| {
                 json!({
                     "id": format!("00000000-0000-4000-8000-{index:012x}"),
@@ -737,6 +738,50 @@ fn mcont006_compact_known_answer_is_closed_and_within_exact_envelope_limit() {
         }));
     assert_schema_invalid("schemas/output-v1.schema.json", &maximum);
     assert!(serde_json::from_value::<ResponseEnvelopeV1>(maximum).is_err());
+}
+
+#[test]
+fn mcont006_compact_limits_track_domain_limits_and_lifecycle_invariants() {
+    let compact_schema = read_json("schemas/compact-status-result-v1.schema.json");
+    let procedure_schema = read_json("schemas/procedure-v1.schema.json");
+    assert_eq!(
+        compact_schema["properties"]["items"]["maxItems"].as_u64(),
+        u64::try_from(MAX_STAGE_ITEMS).ok()
+    );
+    assert_eq!(
+        compact_schema["properties"]["blockers"]["maxItems"].as_u64(),
+        u64::try_from(MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1).ok()
+    );
+    assert_eq!(
+        procedure_schema["$defs"]["stage"]["properties"]["items"]["maxItems"].as_u64(),
+        u64::try_from(MAX_STAGE_ITEMS).ok()
+    );
+
+    let fixture = fixture();
+    let contract = fixture.result_fixtures.get("compact_status").unwrap();
+    let compact = materialize(contract);
+    for mutation in [
+        {
+            let mut value = compact.clone();
+            value["current"] = Value::Null;
+            value
+        },
+        {
+            let mut value = compact.clone();
+            value["session"]["lifecycle"] = json!("completed");
+            value
+        },
+        {
+            let mut value = compact;
+            value["session"]["lifecycle"] = json!("cancelled");
+            value["current"] = Value::Null;
+            value["blockers"] = json!([]);
+            value
+        },
+    ] {
+        assert_schema_invalid(&contract.schema_file, &mutation);
+        assert!(validate_command_result_v1("session.status", &result_map(mutation)).is_err());
+    }
 }
 
 #[test]

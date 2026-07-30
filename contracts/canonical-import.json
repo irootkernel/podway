@@ -31,7 +31,7 @@
     {
       "source": "docs/schemas/compact-status-result-v1.schema.json",
       "destination": "schemas/compact-status-result-v1.schema.json",
-      "source_sha256": "f84ac1189cf172b754ddcc54b0584e89c880884486b683cde46fab8441812a83",
+      "source_sha256": "2cded139839dafcc20308f85dd9faea720dee9b6e985ead3b0ba05ea0b6aed57",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
