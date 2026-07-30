@@ -9,6 +9,30 @@ use crate::{
     Rfc3339MillisV1, StatusResultV1,
 };
 
+macro_rules! define_result_schemas_v1 {
+    ($($name:ident = $value:literal;)+) => {
+        $(const $name: &str = $value;)+
+
+        /// Closed result schema identifiers understood by the v1 runtime decoder.
+        pub const SUPPORTED_RESULT_SCHEMAS_V1: &[&str] = &[$($name),+];
+    };
+}
+
+define_result_schemas_v1! {
+    VERSION_RESULT_SCHEMA_V1 = "podway.version-result/v1";
+    DAEMON_STATUS_RESULT_SCHEMA_V1 = "podway.daemon-status-result/v1";
+    PROCEDURE_VALIDATION_RESULT_SCHEMA_V1 = "podway.procedure-validation-result/v1";
+    DETACHED_ADMISSION_RESULT_SCHEMA_V1 = "podway.detached-admission-result/v1";
+    SESSION_START_RESULT_SCHEMA_V1 = "podway.session-start-result/v1";
+    STATUS_RESULT_SCHEMA_V1 = "podway.status-result/v1";
+    COMPACT_STATUS_RESULT_SCHEMA_V1 = "podway.compact-status-result/v1";
+    NEXT_RESULT_SCHEMA_V1 = "podway.next-result/v1";
+    STAGE_TRANSITION_RESULT_SCHEMA_V1 = "podway.stage-transition-result/v1";
+    ITEM_MUTATION_RESULT_SCHEMA_V1 = "podway.item-mutation-result/v1";
+    JOB_LOOKUP_RESULT_SCHEMA_V1 = "podway.job-lookup-result/v1";
+    JOB_RESULT_SCHEMA_V1 = "podway.job-result/v1";
+}
+
 /// Adds the schema identifier for a command-selected closed result family.
 pub fn ensure_command_result_schema_v1(command: &str, result: &mut Map<String, Value>) {
     if let Some(schema) = command_result_schema_v1(command, result) {
@@ -46,8 +70,7 @@ pub fn validate_command_result_v1(
     content.remove("schema");
     let value = Value::Object(content);
     let valid = if result.get("detached") == Some(&Value::Bool(true))
-        || result.get("schema").and_then(Value::as_str)
-            == Some("podway.detached-admission-result/v1")
+        || result.get("schema").and_then(Value::as_str) == Some(DETACHED_ADMISSION_RESULT_SCHEMA_V1)
     {
         if matches!(command, "session.start" | "session.start_replace") {
             decode::<DetachedStartResultV1>(value)
@@ -106,40 +129,24 @@ pub fn validate_command_result_v1(
 }
 
 fn is_known_result_schema(schema: &str) -> bool {
-    matches!(
-        schema,
-        "podway.version-result/v1"
-            | "podway.daemon-status-result/v1"
-            | "podway.procedure-validation-result/v1"
-            | "podway.detached-admission-result/v1"
-            | "podway.session-start-result/v1"
-            | "podway.status-result/v1"
-            | "podway.compact-status-result/v1"
-            | "podway.next-result/v1"
-            | "podway.stage-transition-result/v1"
-            | "podway.item-mutation-result/v1"
-            | "podway.job-lookup-result/v1"
-            | "podway.job-result/v1"
-    )
+    SUPPORTED_RESULT_SCHEMAS_V1.contains(&schema)
 }
 
 fn schema_allows_command(schema: &str, command: &str) -> bool {
     match schema {
-        "podway.version-result/v1" => command == "version",
-        "podway.daemon-status-result/v1" => command == "daemon.status",
-        "podway.procedure-validation-result/v1" => command == "procedure.validate",
-        "podway.detached-admission-result/v1" => supports_detached(command),
-        "podway.session-start-result/v1" => {
+        VERSION_RESULT_SCHEMA_V1 => command == "version",
+        DAEMON_STATUS_RESULT_SCHEMA_V1 => command == "daemon.status",
+        PROCEDURE_VALIDATION_RESULT_SCHEMA_V1 => command == "procedure.validate",
+        DETACHED_ADMISSION_RESULT_SCHEMA_V1 => supports_detached(command),
+        SESSION_START_RESULT_SCHEMA_V1 => {
             matches!(command, "session.start" | "session.start_replace")
         }
-        "podway.status-result/v1" | "podway.compact-status-result/v1" => {
-            command == "session.status"
-        }
-        "podway.next-result/v1" => command == "session.next",
-        "podway.stage-transition-result/v1" => is_stage_transition(command),
-        "podway.item-mutation-result/v1" => is_item_mutation(command),
-        "podway.job-lookup-result/v1" => command == "job.lookup",
-        "podway.job-result/v1" => matches!(command, "job.status" | "job.wait"),
+        STATUS_RESULT_SCHEMA_V1 | COMPACT_STATUS_RESULT_SCHEMA_V1 => command == "session.status",
+        NEXT_RESULT_SCHEMA_V1 => command == "session.next",
+        STAGE_TRANSITION_RESULT_SCHEMA_V1 => is_stage_transition(command),
+        ITEM_MUTATION_RESULT_SCHEMA_V1 => is_item_mutation(command),
+        JOB_LOOKUP_RESULT_SCHEMA_V1 => command == "job.lookup",
+        JOB_RESULT_SCHEMA_V1 => matches!(command, "job.status" | "job.wait"),
         _ => false,
     }
 }
@@ -148,24 +155,24 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
     if supports_detached(command)
         && (result.get("detached") == Some(&Value::Bool(true))
             || result.get("schema").and_then(Value::as_str)
-                == Some("podway.detached-admission-result/v1"))
+                == Some(DETACHED_ADMISSION_RESULT_SCHEMA_V1))
     {
-        return Some("podway.detached-admission-result/v1");
+        return Some(DETACHED_ADMISSION_RESULT_SCHEMA_V1);
     }
     match command {
-        "version" => Some("podway.version-result/v1"),
-        "daemon.status" => Some("podway.daemon-status-result/v1"),
-        "procedure.validate" => Some("podway.procedure-validation-result/v1"),
+        "version" => Some(VERSION_RESULT_SCHEMA_V1),
+        "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
+        "procedure.validate" => Some(PROCEDURE_VALIDATION_RESULT_SCHEMA_V1),
         "session.status" if result.contains_key("procedure") => {
-            Some("podway.compact-status-result/v1")
+            Some(COMPACT_STATUS_RESULT_SCHEMA_V1)
         }
-        "session.status" => Some("podway.status-result/v1"),
-        "session.next" => Some("podway.next-result/v1"),
-        "job.status" | "job.wait" => Some("podway.job-result/v1"),
-        "job.lookup" => Some("podway.job-lookup-result/v1"),
-        "session.start" | "session.start_replace" => Some("podway.session-start-result/v1"),
-        command if is_item_mutation(command) => Some("podway.item-mutation-result/v1"),
-        command if is_stage_transition(command) => Some("podway.stage-transition-result/v1"),
+        "session.status" => Some(STATUS_RESULT_SCHEMA_V1),
+        "session.next" => Some(NEXT_RESULT_SCHEMA_V1),
+        "job.status" | "job.wait" => Some(JOB_RESULT_SCHEMA_V1),
+        "job.lookup" => Some(JOB_LOOKUP_RESULT_SCHEMA_V1),
+        "session.start" | "session.start_replace" => Some(SESSION_START_RESULT_SCHEMA_V1),
+        command if is_item_mutation(command) => Some(ITEM_MUTATION_RESULT_SCHEMA_V1),
+        command if is_stage_transition(command) => Some(STAGE_TRANSITION_RESULT_SCHEMA_V1),
         _ => None,
     }
 }

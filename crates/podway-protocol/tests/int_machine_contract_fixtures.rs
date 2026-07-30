@@ -9,7 +9,7 @@ use std::{
 use jsonschema::{Retrieve, Uri};
 use podway_protocol::{
     MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, RequestEnvelopeV1, ResponseEnvelopeV1,
-    validate_command_result_v1,
+    SUPPORTED_RESULT_SCHEMAS_V1, validate_command_result_v1,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -32,7 +32,7 @@ struct DiscriminatorFixture {
 struct ContractFixture {
     schema: String,
     schema_file: String,
-    type_field: String,
+    malformed_type_pointer: String,
     value: Option<Value>,
     source: Option<String>,
     pointer: Option<String>,
@@ -43,7 +43,7 @@ struct ContractFixture {
 struct ErrorFixture {
     schema: String,
     schema_file: String,
-    type_field: String,
+    malformed_type_pointer: String,
     details: Value,
 }
 
@@ -244,7 +244,7 @@ fn assert_schema_invalid(relative: &str, instance: &Value) {
     );
 }
 
-fn mutations(value: &Value, discriminator: &str, type_field: &str) -> Vec<Value> {
+fn mutations(value: &Value, discriminator: &str, malformed_type_pointer: &str) -> Vec<Value> {
     let mut unknown = value.clone();
     unknown["unknown_contract_field"] = Value::Bool(true);
     let mut missing = value.clone();
@@ -252,7 +252,7 @@ fn mutations(value: &Value, discriminator: &str, type_field: &str) -> Vec<Value>
     let mut wrong_discriminator = value.clone();
     wrong_discriminator["schema"] = Value::String(format!("{discriminator}.future"));
     let mut wrong_type = value.clone();
-    *wrong_type.pointer_mut(type_field).unwrap() = json!({"wrong": "type"});
+    *wrong_type.pointer_mut(malformed_type_pointer).unwrap() = json!({"wrong": "type"});
     vec![unknown, missing, wrong_discriminator, wrong_type]
 }
 
@@ -276,6 +276,19 @@ fn mcont006_result_fixtures_lock_catalog_schemas_and_runtime_decoders() {
     assert_eq!(
         fixture.schema_version,
         "podway.discriminator-catalog-known-answers/v1"
+    );
+    let runtime_schemas = SUPPORTED_RESULT_SCHEMAS_V1
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(runtime_schemas.len(), SUPPORTED_RESULT_SCHEMAS_V1.len());
+    assert_eq!(
+        runtime_schemas,
+        fixture
+            .result_fixtures
+            .values()
+            .map(|fixture| fixture.schema.as_str())
+            .collect()
     );
     let observed = fixture
         .result_bindings
@@ -319,7 +332,7 @@ fn mcont006_result_fixtures_lock_catalog_schemas_and_runtime_decoders() {
             validate_command_result_v1(&binding.command, &result_map(value.clone())).unwrap();
             exercised.insert(name);
             for (mutation_index, mutation) in
-                mutations(&value, &contract.schema, &contract.type_field)
+                mutations(&value, &contract.schema, &contract.malformed_type_pointer)
                     .into_iter()
                     .enumerate()
             {
@@ -347,7 +360,11 @@ fn mcont006_result_fixtures_lock_catalog_schemas_and_runtime_decoders() {
     assert_schema_invalid("schemas/output-v1.schema.json", &cross_command);
 
     let contract = fixture.result_fixtures.get("detached_mutation").unwrap();
-    for mutation in mutations(&detached, &contract.schema, &contract.type_field) {
+    for mutation in mutations(
+        &detached,
+        &contract.schema,
+        &contract.malformed_type_pointer,
+    ) {
         let envelope = json!({
             "schema": "podway.output/v1",
             "request_id": "2037d76d-6ea8-42c2-a11f-883248bb8774",
@@ -491,7 +508,11 @@ fn mcont006_error_fixtures_lock_catalog_schemas_and_runtime_decoders() {
         let envelope = error_envelope(&binding.code, entry, contract.details.clone());
         assert_schema_valid("schemas/error-v1.schema.json", &envelope);
         serde_json::from_value::<ResponseEnvelopeV1>(envelope).unwrap();
-        for details in mutations(&contract.details, &contract.schema, &contract.type_field) {
+        for details in mutations(
+            &contract.details,
+            &contract.schema,
+            &contract.malformed_type_pointer,
+        ) {
             let mutation = error_envelope(&binding.code, entry, details);
             assert_schema_invalid("schemas/error-v1.schema.json", &mutation);
             assert!(serde_json::from_value::<ResponseEnvelopeV1>(mutation).is_err());

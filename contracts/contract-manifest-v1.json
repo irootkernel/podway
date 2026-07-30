@@ -193,10 +193,10 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/contract/discriminator-catalog-v1.json",
-      "sha256": "sha256:685bd74c87e5125c0b795167f4855d6e7847efaaf31bd31044e7debfb7ffe15c"
+      "sha256": "sha256:d2be3ae6c3b263256d2c3067964ca1c26a65647fe368a1f80d7434fd6cb0ed86"
     }
   ],
-  "digest": "sha256:76182a47e3ab8b41c483bedb4e27a84199a0c7fdaa6aaa9e8e8ba08b0c5314dc",
+  "digest": "sha256:79597599b61623efa3dd223364a5f399980ff208bd261f9a034cae52435a5c53",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",
