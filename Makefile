@@ -53,6 +53,7 @@ architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
+	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --all
 	$(MAKE) contract-manifest
 	$(MAKE) preset-tool-test

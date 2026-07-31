@@ -92,7 +92,9 @@ debug-only isolation capability before service mutation, and verifies that repea
 construction produces the same archive digest; it does not publish a distribution
 artifact. Release packaging rejects that capability. The extracted release-profile
 archive is qualified later under a disposable macOS account with an isolated launchd
-user domain rather than with the debug fixture override.
+user domain rather than with the debug fixture override. The test-only
+`--allow-dirty` switch is invalid for `artifact_class=distribution`; distribution
+construction always requires a clean tree.
 
 ## Installation
 

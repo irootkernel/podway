@@ -16,7 +16,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,8 +144,17 @@ def supports_test_isolation(path: Path) -> bool:
     )
 
 
-def verify_artifact_class(paths: list[Path], artifact_class: str) -> None:
-    capabilities = {path.name: supports_test_isolation(path) for path in paths}
+def validate_package_mode(artifact_class: str, allow_dirty: bool) -> None:
+    if artifact_class == "distribution" and allow_dirty:
+        fail("distribution archives cannot use --allow-dirty")
+
+
+def verify_artifact_class(
+    binaries: dict[str, Path],
+    artifact_class: str,
+    capability_probe: Callable[[Path], bool] = supports_test_isolation,
+) -> None:
+    capabilities = {role: capability_probe(path) for role, path in binaries.items()}
     expected = artifact_class == "test-fixture"
     mismatches = {
         name: {"expected_test_isolation": expected, "actual": actual}
@@ -154,6 +163,33 @@ def verify_artifact_class(paths: list[Path], artifact_class: str) -> None:
     }
     if mismatches:
         fail(f"binary isolation does not match --artifact-class {artifact_class}: {mismatches}")
+
+
+def self_test() -> dict[str, Any]:
+    same_name_cli = Path("/fixture/cli/product")
+    same_name_daemon = Path("/fixture/daemon/product")
+    try:
+        verify_artifact_class(
+            {"podway": same_name_cli, "podwayd": same_name_daemon},
+            "test-fixture",
+            lambda path: path == same_name_cli,
+        )
+    except ReleaseError as error:
+        if "podwayd" not in str(error):
+            fail("artifact-class self-test did not preserve binary roles")
+    else:
+        fail("artifact-class self-test accepted a missing daemon isolation capability")
+
+    try:
+        validate_package_mode("distribution", True)
+    except ReleaseError:
+        pass
+    else:
+        fail("package-mode self-test accepted a dirty distribution")
+
+    validate_package_mode("distribution", False)
+    validate_package_mode("test-fixture", True)
+    return {"mode": "self-test", "ok": True, "sentinels": 4}
 
 
 def require_native_host() -> None:
@@ -403,13 +439,14 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def package(arguments: argparse.Namespace) -> dict[str, Any]:
+    validate_package_mode(arguments.artifact_class, arguments.allow_dirty)
     require_native_host()
     dirty = require_clean_tree(arguments.allow_dirty)
     manifest_schema, manifest_digest = contract_manifest_identity()
     source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
     podway = require_native_binary(arguments.podway, "podway")
     podwayd = require_native_binary(arguments.podwayd, "podwayd")
-    verify_artifact_class([podway, podwayd], arguments.artifact_class)
+    verify_artifact_class({"podway": podway, "podwayd": podwayd}, arguments.artifact_class)
     podway_identity = verify_binary_contract_identity(
         podway, "podway", manifest_schema, manifest_digest, source_commit
     )
@@ -443,7 +480,9 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
         "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
         "contract_manifest_digest": manifest_digest,
         "contract_manifest_schema": manifest_schema,
-        "release_gate": "test-fixture" if arguments.allow_dirty else "make test: passed",
+        "release_gate": (
+            "test-fixture" if arguments.artifact_class == "test-fixture" else "make test: passed"
+        ),
         "release_status": release_status(),
         "schema": "podway.release-provenance/v1",
         "source_commit": source_commit,
@@ -475,9 +514,10 @@ def main() -> int:
     )
     package_parser.add_argument("--output-dir", type=Path, required=True)
     package_parser.add_argument("--allow-dirty", action="store_true", help="test-only: package an uncommitted tree")
+    subparsers.add_parser("self-test", help="run isolated artifact-class sentinels")
     arguments = parser.parse_args()
     try:
-        result = package(arguments)
+        result = self_test() if arguments.command == "self-test" else package(arguments)
     except (OSError, ReleaseError, tarfile.TarError, UnicodeError, json.JSONDecodeError) as error:
         print(json.dumps({"error": str(error), "mode": arguments.command, "ok": False}, sort_keys=True, separators=(",", ":")))
         return 1

@@ -1124,8 +1124,8 @@
       "id": "PAC-072",
       "line": 108,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
-        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
       },
@@ -1136,8 +1136,8 @@
       "id": "PAC-073",
       "line": 109,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
-        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
       },
@@ -1148,8 +1148,8 @@
       "id": "PAC-074",
       "line": 110,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
-        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
       },
@@ -1160,8 +1160,8 @@
       "id": "PAC-075",
       "line": 111,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
-        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
       },
@@ -1184,8 +1184,8 @@
       "id": "PAC-077",
       "line": 113,
       "proof": {
-        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented --locked -- --exact",
-        "function": "pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented",
+        "command": "cargo test -p podway-cli --test e2e_suite e2e_release_archive::pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented --locked -- --exact",
+        "function": "pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
         "kind": "cargo-test",
         "path": "crates/podway-cli/tests/e2e_release_archive.rs"
       },
@@ -1820,7 +1820,7 @@
   },
   "source_files": {
     "crates/podway-cli/tests/e2e_phase4_production_vertical.rs": "1b7e8760d6f2ab02caeefdcd658172cd8ec6a2a4896922b26ab285b052b3a3b6",
-    "crates/podway-cli/tests/e2e_release_archive.rs": "8fea2b72744d1d157dd20b3c09615043a0b72812e3dd4caa5e779838ff895c62",
+    "crates/podway-cli/tests/e2e_release_archive.rs": "3fe316aa389ba36f27437ad4c336bb6c5e405b80d0d6409a4a95c9c94b8d1455",
     "crates/podway-cli/tests/int_phase4_cli_contract.rs": "efb71f7826594c378b15d84d531e0c3194cb8eb63d7e2ecca3a22114f0955e3c",
     "crates/podway-cli/tests/int_phase5_cli_contract.rs": "d0bd63a45d595b2d3fd77c833ffb5464382372c2607c59a9c4791a7aebf6b406",
     "crates/podway-config/tests/int_procedure_v1.rs": "3d7e2b41ba761fc46a5719bbf433b72d6a2f19275eaa4941f2ac4f8f0847132f",

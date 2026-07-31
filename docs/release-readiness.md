@@ -60,7 +60,8 @@ directories, records `artifact_class=test-fixture` and `release_gate=test-fixtur
 both binaries to expose debug-only isolation before any service mutation, and proves
 that repeated construction produces the same archive digest. `make dist` instead
 requires `artifact_class=distribution` and rejects binaries that expose that isolation
-capability. Final packaged release conformance runs only under a disposable macOS
+capability. It also rejects `--allow-dirty`, which is reserved for test fixtures.
+Final packaged release conformance runs only under a disposable macOS
 account with an isolated launchd user domain; it must not reuse the debug fixture
 override against a real user account.
 Rebuild the archive whenever history is rewritten after packaging; published

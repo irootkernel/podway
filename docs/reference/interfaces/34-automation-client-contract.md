@@ -231,6 +231,10 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
 | `AUT-T-DIST` | native debug test-fixture archive on controlled PATH passes the complete suite with fail-closed isolation; the actual release-profile archive repeats packaged lifecycle, conflict, timeout, reconciliation, and identity checks only under a disposable macOS account and isolated launchd user domain | `DOLGI005`, `REL10001`–`REL10004` |
 
+The test-fixture slice supersedes DOLGI's earlier release-profile wording. It is
+local executable evidence for the packaged client contract, not evidence that the
+release-profile archive has passed its `REL10003` qualification.
+
 ## 25. Requirements-to-roadmap traceability
 
 | Requirements | Implemented by | Planned evidence |

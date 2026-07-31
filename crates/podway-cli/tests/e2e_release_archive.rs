@@ -1,4 +1,4 @@
-//! Distribution acceptance for the real Podway binaries and archive builder.
+//! Archive-builder acceptance for native Podway test-fixture binaries.
 
 #![forbid(unsafe_code)]
 
@@ -48,7 +48,7 @@ fn package(output_directory: &Path) -> Value {
 }
 
 #[test]
-fn pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented() {
+fn pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented() {
     let root = std::env::temp_dir().join(format!("podway-release-e2e-{}", std::process::id()));
     let first = root.join("first");
     let second = root.join("second");
@@ -63,7 +63,7 @@ fn pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented
     assert!(
         rejected_receipt["error"]
             .as_str()
-            .is_some_and(|error| error.contains("binary isolation does not match"))
+            .is_some_and(|error| error.contains("distribution archives cannot use --allow-dirty"))
     );
     assert!(!rejected_directory.exists());
 

@@ -196,6 +196,11 @@ and the remaining `REL10` tasks are release-blocking.
 | `DOLGI004` | Verify conflict and reconciliation paths | Completed | Exercise stale identity, digest and daemon mismatch, timeout, response loss, and lookup. | [AUT-T-ID](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix), [AUT-T-RECON](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix) |
 | `DOLGI005` | Verify the packaged test-fixture archive | Completed | Run the complete contract suite using a native arm64 archive built from debug binaries, require explicit test-fixture provenance, and fail closed unless both packaged binaries expose debug-only isolation. | [AUT-REL-001–003](reference/interfaces/34-automation-client-contract.md#23-release-artifact-and-installation-aut-rel-001004), [AUT-T-DIST](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix) |
 
+`DOLGI005` supersedes the earlier unsafe requirement to exercise release-profile
+binaries through debug-only account and launchctl overrides. The actual distribution
+repeats packaged conformance under a disposable account and isolated launchd domain
+in `REL10003`; the test-fixture result is not release-profile qualification.
+
 ## REL10 — Podway v0.1.0 Release
 
 | id | title | status | goal | references |
