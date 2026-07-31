@@ -86,10 +86,13 @@ and any dirty tracked or untracked source state.
 The provenance document records the shared binary build identity, source commit,
 Rust toolchain identifier, Cargo.lock digest, contract manifest identity, target
 architecture, both binary digests, archive digest, successful local-gate result,
-and signing/notarization status. `make test` exercises
-the same archive builder with real binaries in disposable directories and verifies
-that repeated construction produces the same archive digest; it does not publish a
-distribution artifact.
+artifact class, and signing/notarization status. `make test` exercises the same
+archive builder with debug binaries in disposable directories, requires their
+debug-only isolation capability before service mutation, and verifies that repeated
+construction produces the same archive digest; it does not publish a distribution
+artifact. Release packaging rejects that capability. The extracted release-profile
+archive is qualified later under a disposable macOS account with an isolated launchd
+user domain rather than with the debug fixture override.
 
 ## Installation
 

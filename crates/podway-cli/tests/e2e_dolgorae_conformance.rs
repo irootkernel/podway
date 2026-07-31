@@ -1619,7 +1619,7 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
 }
 
 #[test]
-fn aut_t_dist_extracted_native_archive_runs_the_complete_dolgorae_suite() {
+fn aut_t_dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite() {
     const CHILD_MARKER: &str = "PODWAY_DOLGI_DIST_CHILD";
     if std::env::var_os(CHILD_MARKER).is_some() {
         return;
@@ -1631,7 +1631,13 @@ fn aut_t_dist_extracted_native_archive_runs_the_complete_dolgorae_suite() {
     let output_directory = root.join("dist");
     let package = Command::new("/usr/bin/python3")
         .arg(repository.join("tools/release_archive.py"))
-        .args(["package", "--allow-dirty", "--podway"])
+        .args([
+            "package",
+            "--allow-dirty",
+            "--artifact-class",
+            "test-fixture",
+            "--podway",
+        ])
         .arg(cli_binary())
         .arg("--podwayd")
         .arg(daemon_binary())
@@ -1659,6 +1665,8 @@ fn aut_t_dist_extracted_native_archive_runs_the_complete_dolgorae_suite() {
     )
     .expect("archive provenance must be JSON");
     assert_eq!(provenance["target"], "aarch64-apple-darwin");
+    assert_eq!(provenance["artifact_class"], "test-fixture");
+    assert_eq!(provenance["release_gate"], "test-fixture");
     assert_eq!(provenance["archive"]["sha256"], receipt["archive_sha256"]);
 
     let extraction = root.join("extracted");
@@ -1734,10 +1742,18 @@ fn aut_t_dist_extracted_native_archive_runs_the_complete_dolgorae_suite() {
         String::from_utf8_lossy(&child.stderr)
     );
     let child_stdout = String::from_utf8(child.stdout).expect("child output must be UTF-8");
-    assert!(
-        child_stdout.contains("6 passed"),
-        "child output={child_stdout}"
-    );
+    for required_test in [
+        "aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_directory",
+        "aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_socket",
+        "aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle",
+        "aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout",
+        "aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay",
+    ] {
+        assert!(
+            child_stdout.contains(required_test),
+            "packaged child suite omitted {required_test}: {child_stdout}"
+        );
+    }
 
     fs::remove_dir_all(root).expect("distribution fixture cleanup must succeed");
 }

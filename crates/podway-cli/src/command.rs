@@ -1147,6 +1147,20 @@ fn nested_parse_failure_context(
 
 /// Runs the CLI and returns its process exit code.
 pub fn run() -> i32 {
+    #[cfg(debug_assertions)]
+    {
+        const PROBE_ARGUMENT: &str = "--podway-test-isolation-probe";
+        const PROBE_TOKEN: &str = "podway-test-isolation-v1";
+        if env::args_os().nth(1).as_deref() == Some(OsStr::new(PROBE_ARGUMENT))
+            && env::args_os().nth(2).is_none()
+            && env::var_os("PODWAY_TEST_ISOLATION_PROBE").as_deref()
+                == Some(OsStr::new(PROBE_TOKEN))
+        {
+            println!("{PROBE_TOKEN}");
+            return 0;
+        }
+    }
+
     let arguments: Vec<OsString> = env::args_os().collect();
     let json_requested = arguments
         .iter()

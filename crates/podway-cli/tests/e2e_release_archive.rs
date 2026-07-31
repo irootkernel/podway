@@ -5,7 +5,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
 };
 
 use serde_json::Value;
@@ -16,11 +16,17 @@ fn daemon_binary() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd"))
 }
 
-fn package(output_directory: &Path) -> Value {
+fn package_with_artifact_class(output_directory: &Path, artifact_class: &str) -> Output {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    Command::new("python3")
         .arg(root.join("tools/release_archive.py"))
-        .args(["package", "--allow-dirty", "--podway"])
+        .args([
+            "package",
+            "--allow-dirty",
+            "--artifact-class",
+            artifact_class,
+            "--podway",
+        ])
         .arg(env!("CARGO_BIN_EXE_podway"))
         .arg("--podwayd")
         .arg(daemon_binary())
@@ -28,7 +34,11 @@ fn package(output_directory: &Path) -> Value {
         .arg(output_directory)
         .current_dir(&root)
         .output()
-        .expect("release archive builder must run");
+        .expect("release archive builder must run")
+}
+
+fn package(output_directory: &Path) -> Value {
+    let output = package_with_artifact_class(output_directory, "test-fixture");
     assert!(
         output.status.success(),
         "release archive builder failed: {}",
@@ -44,6 +54,18 @@ fn pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented
     let second = root.join("second");
     let first_receipt = package(&first);
     let second_receipt = package(&second);
+    let rejected_directory = root.join("rejected-distribution");
+    let rejected = package_with_artifact_class(&rejected_directory, "distribution");
+    assert!(!rejected.status.success());
+    let rejected_receipt: Value =
+        serde_json::from_slice(&rejected.stdout).expect("rejection receipt must be JSON");
+    assert_eq!(rejected_receipt["ok"], false);
+    assert!(
+        rejected_receipt["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("binary isolation does not match"))
+    );
+    assert!(!rejected_directory.exists());
 
     assert_eq!(first_receipt["ok"], true);
     assert_eq!(first_receipt["mode"], "package");
@@ -108,6 +130,8 @@ fn pac_072_075_077_distribution_archive_is_complete_deterministic_and_documented
         serde_json::from_slice(&fs::read(provenance_path).expect("provenance must be readable"))
             .expect("provenance must be JSON");
     assert_eq!(provenance["schema"], "podway.release-provenance/v1");
+    assert_eq!(provenance["artifact_class"], "test-fixture");
+    assert_eq!(provenance["release_gate"], "test-fixture");
     assert_eq!(provenance["target"], "aarch64-apple-darwin");
     assert_eq!(provenance["version"], "0.1.0");
     assert!(

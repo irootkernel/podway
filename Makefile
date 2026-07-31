@@ -107,6 +107,7 @@ dist:
 	$(RUST_TOOLCHAIN_ENV) cargo build --release --locked \
 		-p podway-cli --bin podway -p podway-daemon --bin podwayd
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
+		--artifact-class distribution \
 		--podway target/release/podway \
 		--podwayd target/release/podwayd \
 		--output-dir $(DIST_DIR)

@@ -32,6 +32,20 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(debug_assertions)]
+    {
+        const PROBE_ARGUMENT: &str = "--podway-test-isolation-probe";
+        const PROBE_TOKEN: &str = "podway-test-isolation-v1";
+        let probe_arguments = env::args_os().skip(1).collect::<Vec<_>>();
+        if probe_arguments.as_slice() == [PROBE_ARGUMENT]
+            && env::var_os("PODWAY_TEST_ISOLATION_PROBE").as_deref()
+                == Some(std::ffi::OsStr::new(PROBE_TOKEN))
+        {
+            println!("{PROBE_TOKEN}");
+            return Ok(());
+        }
+    }
+
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
     let socket_path = match arguments.as_slice() {
         [argument] if argument == "--version" => {

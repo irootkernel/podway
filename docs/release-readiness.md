@@ -56,7 +56,13 @@ the complete `make test` gate, builds thin arm64 release binaries, and creates:
 The archive builder rejects non-arm64 Mach-O binaries, incomplete layouts, stale
 binary versions, a non-1.97.1 Rust toolchain, and a dirty tracked or untracked tree.
 The local gate exercises the same builder with real debug binaries in temporary
-directories and proves that repeated construction produces the same archive digest.
+directories, records `artifact_class=test-fixture` and `release_gate=test-fixture`, requires
+both binaries to expose debug-only isolation before any service mutation, and proves
+that repeated construction produces the same archive digest. `make dist` instead
+requires `artifact_class=distribution` and rejects binaries that expose that isolation
+capability. Final packaged release conformance runs only under a disposable macOS
+account with an isolated launchd user domain; it must not reuse the debug fixture
+override against a real user account.
 Rebuild the archive whenever history is rewritten after packaging; published
 provenance `source_commit` must equal the exact release-tag commit.
 

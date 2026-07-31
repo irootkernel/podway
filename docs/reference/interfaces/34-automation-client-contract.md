@@ -229,7 +229,7 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |
 | `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
 | `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
-| `AUT-T-DIST` | actual arm64 archive on controlled PATH installs daemon and passes lifecycle, conflict, timeout, reconciliation, and identity checks | `DOLGI005`, `REL10001`–`REL10004` |
+| `AUT-T-DIST` | native debug test-fixture archive on controlled PATH passes the complete suite with fail-closed isolation; the actual release-profile archive repeats packaged lifecycle, conflict, timeout, reconciliation, and identity checks only under a disposable macOS account and isolated launchd user domain | `DOLGI005`, `REL10001`–`REL10004` |
 
 ## 25. Requirements-to-roadmap traceability
 

@@ -30,6 +30,8 @@ COMPLETION_NAMES = {
     "fish": "podway.fish",
     "zsh": "podway.zsh",
 }
+ISOLATION_PROBE_ENV = "PODWAY_TEST_ISOLATION_PROBE"
+ISOLATION_PROBE_TOKEN = "podway-test-isolation-v1"
 
 
 class ReleaseError(RuntimeError):
@@ -122,6 +124,36 @@ def verify_binary_contract_identity(
     if not isinstance(build_identity, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", build_identity) is None:
         fail(f"{expected_name} has an invalid build identity")
     return identity
+
+
+def supports_test_isolation(path: Path) -> bool:
+    environment = os.environ.copy()
+    environment[ISOLATION_PROBE_ENV] = ISOLATION_PROBE_TOKEN
+    completed = subprocess.run(
+        [str(path), "--podway-test-isolation-probe"],
+        cwd=ROOT,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return (
+        completed.returncode == 0
+        and completed.stdout == f"{ISOLATION_PROBE_TOKEN}\n".encode()
+        and completed.stderr == b""
+    )
+
+
+def verify_artifact_class(paths: list[Path], artifact_class: str) -> None:
+    capabilities = {path.name: supports_test_isolation(path) for path in paths}
+    expected = artifact_class == "test-fixture"
+    mismatches = {
+        name: {"expected_test_isolation": expected, "actual": actual}
+        for name, actual in capabilities.items()
+        if actual != expected
+    }
+    if mismatches:
+        fail(f"binary isolation does not match --artifact-class {artifact_class}: {mismatches}")
 
 
 def require_native_host() -> None:
@@ -377,6 +409,7 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
     source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
     podway = require_native_binary(arguments.podway, "podway")
     podwayd = require_native_binary(arguments.podwayd, "podwayd")
+    verify_artifact_class([podway, podwayd], arguments.artifact_class)
     podway_identity = verify_binary_contract_identity(
         podway, "podway", manifest_schema, manifest_digest, source_commit
     )
@@ -406,6 +439,7 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
         "archive": {"name": archive_path.name, "sha256": archive_digest},
         "binaries": {"podway": sha256_file(podway), "podwayd": sha256_file(podwayd)},
         "build_identity": podway_identity["build_identity"],
+        "artifact_class": arguments.artifact_class,
         "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
         "contract_manifest_digest": manifest_digest,
         "contract_manifest_schema": manifest_schema,
@@ -436,6 +470,9 @@ def main() -> int:
     package_parser = subparsers.add_parser("package", help="build and inspect a release archive")
     package_parser.add_argument("--podway", type=Path, required=True)
     package_parser.add_argument("--podwayd", type=Path, required=True)
+    package_parser.add_argument(
+        "--artifact-class", choices=("test-fixture", "distribution"), required=True
+    )
     package_parser.add_argument("--output-dir", type=Path, required=True)
     package_parser.add_argument("--allow-dirty", action="store_true", help="test-only: package an uncommitted tree")
     arguments = parser.parse_args()
