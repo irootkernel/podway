@@ -310,7 +310,7 @@ fn install_sibling_release(fixture: &ControlledPathFixtureV1, label: &str) -> (S
     let release_cli = release_bin.join("podway");
     let release_daemon = release_bin.join("podwayd");
     let controlled_bin = fixture.root.join(label).join("controlled-bin");
-    copy_executable(Path::new(env!("CARGO_BIN_EXE_podway")), &release_cli);
+    copy_executable(&cli_binary(), &release_cli);
     copy_executable(&daemon_binary(), &release_daemon);
     fs::create_dir_all(&controlled_bin).expect("controlled bin must be created");
     symlink(&release_cli, controlled_bin.join("podway"))
@@ -376,6 +376,12 @@ fn daemon_binary() -> PathBuf {
     std::env::var_os("PODWAYD_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd"))
+}
+
+fn cli_binary() -> PathBuf {
+    std::env::var_os("PODWAY_TEST_CLI_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_podway")))
 }
 
 const DOLGI_PROCEDURE: &str = r#"schema: podway.procedure/v1
@@ -586,13 +592,13 @@ fn terminal_lookup(
 #[test]
 fn aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_directory() {
     let fixture = ControlledPathFixtureV1::new();
-    let source_cli = Path::new(env!("CARGO_BIN_EXE_podway"));
+    let source_cli = cli_binary();
     let source_daemon = daemon_binary();
 
     let explicit_cli = fixture.root.join("explicit/cli/podway-real");
     let explicit_daemon = fixture.root.join("explicit/daemon/podwayd-real");
     let explicit_bin = fixture.root.join("explicit/bin");
-    copy_executable(source_cli, &explicit_cli);
+    copy_executable(&source_cli, &explicit_cli);
     copy_executable(&source_daemon, &explicit_daemon);
     fs::create_dir_all(&explicit_bin).expect("explicit controlled bin must be created");
     symlink(&explicit_cli, explicit_bin.join("podway"))
@@ -617,7 +623,7 @@ fn aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_direct
     let sibling_cli = sibling_directory.join("podway");
     let sibling_daemon = sibling_directory.join("podwayd");
     let sibling_bin = fixture.root.join("sibling/path");
-    copy_executable(source_cli, &sibling_cli);
+    copy_executable(&source_cli, &sibling_cli);
     copy_executable(&source_daemon, &sibling_daemon);
     fs::create_dir_all(&sibling_bin).expect("sibling controlled bin must be created");
     symlink(&sibling_cli, sibling_bin.join("podway")).expect("sibling CLI symlink must be created");
@@ -632,7 +638,7 @@ fn aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_direct
     let path_cli = fixture.root.join("path/cli-only/podway");
     let path_daemon = fixture.root.join("path/daemon-bin/podwayd");
     let path_bin = fixture.root.join("path/controlled-bin");
-    copy_executable(source_cli, &path_cli);
+    copy_executable(&source_cli, &path_cli);
     copy_executable(&source_daemon, &path_daemon);
     fs::create_dir_all(&path_bin).expect("PATH controlled bin must be created");
     symlink(&path_cli, path_bin.join("podway")).expect("PATH CLI symlink must be created");
@@ -659,7 +665,7 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
     let release_cli = release_bin.join("podway");
     let release_daemon = release_bin.join("podwayd");
     let controlled_bin = fixture.root.join("observation/controlled-bin");
-    copy_executable(Path::new(env!("CARGO_BIN_EXE_podway")), &release_cli);
+    copy_executable(&cli_binary(), &release_cli);
     copy_executable(&daemon_binary(), &release_daemon);
     fs::create_dir_all(&controlled_bin).expect("observation controlled bin must be created");
     symlink(&release_cli, controlled_bin.join("podway"))
@@ -1554,4 +1560,128 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
     assert_eq!(reused["retryable"], false);
 
     fixture.uninstall(&controlled_path);
+}
+
+#[test]
+fn aut_t_dist_extracted_native_archive_runs_the_complete_dolgorae_suite() {
+    const CHILD_MARKER: &str = "PODWAY_DOLGI_DIST_CHILD";
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        return;
+    }
+
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = PathBuf::from(format!("/tmp/pwdgd-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let output_directory = root.join("dist");
+    let package = Command::new("/usr/bin/python3")
+        .arg(repository.join("tools/release_archive.py"))
+        .args(["package", "--allow-dirty", "--podway"])
+        .arg(cli_binary())
+        .arg("--podwayd")
+        .arg(daemon_binary())
+        .arg("--output-dir")
+        .arg(&output_directory)
+        .current_dir(&repository)
+        .output()
+        .expect("native archive builder must execute");
+    assert!(
+        package.status.success(),
+        "native archive build failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&package.stdout),
+        String::from_utf8_lossy(&package.stderr)
+    );
+    let receipt: Value =
+        serde_json::from_slice(&package.stdout).expect("archive receipt must be JSON");
+    assert_eq!(receipt["ok"], true);
+    let archive = PathBuf::from(required_text(&receipt["archive"], "archive path"));
+    let provenance: Value = serde_json::from_slice(
+        &fs::read(PathBuf::from(required_text(
+            &receipt["provenance"],
+            "provenance path",
+        )))
+        .expect("archive provenance must be readable"),
+    )
+    .expect("archive provenance must be JSON");
+    assert_eq!(provenance["target"], "aarch64-apple-darwin");
+    assert_eq!(provenance["archive"]["sha256"], receipt["archive_sha256"]);
+
+    let extraction = root.join("extracted");
+    fs::create_dir_all(&extraction).expect("archive extraction directory must be created");
+    let extracted = Command::new("/usr/bin/tar")
+        .args(["-xzf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&extraction)
+        .output()
+        .expect("native archive must extract");
+    assert!(
+        extracted.status.success(),
+        "native archive extraction failed: {}",
+        String::from_utf8_lossy(&extracted.stderr)
+    );
+    let archive_root = extraction.join("podway-0.1.0-aarch64-apple-darwin");
+    let packaged_cli = archive_root.join("bin/podway");
+    let packaged_daemon = archive_root.join("bin/podwayd");
+    for binary in [&packaged_cli, &packaged_daemon] {
+        let metadata = fs::symlink_metadata(binary).expect("packaged binary must exist");
+        assert!(metadata.file_type().is_file());
+        assert!(!metadata.file_type().is_symlink());
+        assert_ne!(metadata.permissions().mode() & 0o111, 0);
+    }
+
+    let cli_identity = assert_json_success(
+        Command::new(&packaged_cli)
+            .args(["--json", "version"])
+            .output()
+            .expect("packaged CLI identity probe must execute"),
+        ["--json", "version"],
+    );
+    let daemon_probe = Command::new(&packaged_daemon)
+        .args(["--json", "version"])
+        .output()
+        .expect("packaged daemon identity probe must execute");
+    assert!(daemon_probe.status.success());
+    assert!(daemon_probe.stderr.is_empty());
+    let daemon_identity: Value = serde_json::from_slice(&daemon_probe.stdout)
+        .expect("packaged daemon identity must be JSON");
+    for field in [
+        "build_identity",
+        "contract_manifest_digest",
+        "source_commit",
+        "target",
+        "version",
+    ] {
+        assert_eq!(cli_identity["result"][field], daemon_identity[field]);
+    }
+    assert_eq!(cli_identity["result"]["target"], "aarch64-apple-darwin");
+    assert_eq!(
+        cli_identity["result"]["contract_manifest_digest"],
+        provenance["contract_manifest_digest"]
+    );
+    assert_eq!(
+        cli_identity["result"]["source_commit"],
+        provenance["source_commit"]
+    );
+
+    let child = Command::new(std::env::current_exe().expect("E2E test binary path"))
+        .arg("e2e_dolgorae_conformance::aut_t_")
+        .args(["--nocapture", "--test-threads=1"])
+        .env(CHILD_MARKER, "1")
+        .env("PODWAY_TEST_CLI_BINARY", &packaged_cli)
+        .env("PODWAYD_TEST_BINARY", &packaged_daemon)
+        .output()
+        .expect("packaged Dolgorae child suite must execute");
+    assert!(
+        child.status.success(),
+        "packaged Dolgorae suite failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    let child_stdout = String::from_utf8(child.stdout).expect("child output must be UTF-8");
+    assert!(
+        child_stdout.contains("6 passed"),
+        "child output={child_stdout}"
+    );
+
+    fs::remove_dir_all(root).expect("distribution fixture cleanup must succeed");
 }

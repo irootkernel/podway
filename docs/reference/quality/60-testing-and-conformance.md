@@ -366,4 +366,8 @@ requirement. The product-acceptance verifier binds every mandatory bullet in the
 acceptance source exactly once; adding an unmapped bullet fails `test-prepare`.
 Distribution acceptance constructs the deterministic archive twice from real
 binaries in disposable directories and compares their digests without publishing
-either artifact.
+either artifact. The packaged Dolgorae acceptance flow additionally extracts one
+native arm64 archive, verifies that CLI, daemon, manifest, source, target, and
+provenance identities agree, and reruns the complete controlled-PATH service,
+lifecycle, conflict, timeout, and reconciliation suite with binary selection
+restricted to that archive's `podway` and `podwayd`.
