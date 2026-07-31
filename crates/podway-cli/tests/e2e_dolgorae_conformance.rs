@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeSet,
     fs,
     os::unix::fs::{PermissionsExt, symlink},
     path::{Path, PathBuf},
@@ -58,6 +59,19 @@ impl ControlledPathFixtureV1 {
     fn run(&self, path: &str, arguments: &[&str]) -> Output {
         Command::new("podway")
             .args(arguments)
+            .current_dir(&self.arbitrary)
+            .env_clear()
+            .env("PATH", path)
+            .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
+            .env("PODWAY_TEST_LAUNCHCTL", &self.launchctl)
+            .env("PODWAY_TEST_LAUNCHCTL_STATE", &self.launchctl_state)
+            .output()
+            .expect("controlled PATH must invoke podway")
+    }
+
+    fn run_owned(&self, path: &str, arguments: &[String]) -> Output {
+        Command::new("podway")
+            .args(arguments.iter().map(String::as_str))
             .current_dir(&self.arbitrary)
             .env_clear()
             .env("PATH", path)
@@ -157,6 +171,11 @@ impl ControlledPathFixtureV1 {
         assert!(output.stderr.is_empty());
         serde_json::from_slice(&output.stdout).expect("successful Podway output must be JSON")
     }
+
+    fn run_json_success_owned(&self, path: &str, arguments: &[String]) -> Value {
+        let output = self.run_owned(path, arguments);
+        assert_json_success(output, arguments.iter().map(String::as_str))
+    }
 }
 
 impl Drop for ControlledPathFixtureV1 {
@@ -249,6 +268,37 @@ fn copy_executable(source: &Path, destination: &Path) {
         .expect("copied product executable must be executable");
 }
 
+fn assert_json_success<'a>(output: Output, arguments: impl IntoIterator<Item = &'a str>) -> Value {
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
+    assert!(
+        output.status.success(),
+        "Podway command failed: args={arguments:?} stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    serde_json::from_slice(&output.stdout).expect("successful Podway output must be JSON")
+}
+
+fn install_sibling_release(fixture: &ControlledPathFixtureV1, label: &str) -> (String, PathBuf) {
+    let release_bin = fixture.root.join(label).join("release/bin");
+    let release_cli = release_bin.join("podway");
+    let release_daemon = release_bin.join("podwayd");
+    let controlled_bin = fixture.root.join(label).join("controlled-bin");
+    copy_executable(Path::new(env!("CARGO_BIN_EXE_podway")), &release_cli);
+    copy_executable(&daemon_binary(), &release_daemon);
+    fs::create_dir_all(&controlled_bin).expect("controlled bin must be created");
+    symlink(&release_cli, controlled_bin.join("podway"))
+        .expect("controlled CLI symlink must be created");
+    let controlled_path = format!("{}:/usr/bin:/bin", controlled_bin.display());
+    fixture.assert_install(
+        &controlled_path,
+        &["--json", "daemon", "install"],
+        &release_daemon,
+    );
+    (controlled_path, release_daemon)
+}
+
 fn create_non_bare_worktree(path: &Path) {
     run_git(
         Command::new("/usr/bin/git")
@@ -301,6 +351,170 @@ fn daemon_binary() -> PathBuf {
     std::env::var_os("PODWAYD_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd"))
+}
+
+const DOLGI_PROCEDURE: &str = r#"schema: podway.procedure/v1
+id: dolgorae-conformance
+version: "1"
+name: Dolgorae Conformance
+description: Exercise fenced consumer mutations against an immutable snapshot.
+stages:
+  - id: execute
+    title: Execute the fenced lifecycle
+    instructions:
+      - Populate every supported item shape before completing.
+    items:
+      - id: confirmed
+        type: confirm
+        prompt: Confirm the lifecycle.
+        required: true
+      - id: note
+        type: text
+        prompt: Record the lifecycle note.
+        required: true
+        min_length: 1
+      - id: risk
+        type: choice
+        prompt: Select the risk.
+        required: true
+        choices: [low, high]
+      - id: count
+        type: integer
+        prompt: Record the count.
+        required: true
+        minimum: 1
+        maximum: 10
+      - id: checks
+        type: list
+        prompt: List completed checks.
+        required: true
+        min_items: 1
+        max_items: 10
+      - id: evidence
+        type: artifact
+        prompt: Attach lifecycle evidence.
+        required: true
+rework:
+  allow_return_to: any_previous
+"#;
+
+#[derive(Clone, Debug)]
+struct FencedStatusV1 {
+    raw: Value,
+    workspace_id: String,
+    session_id: String,
+    session_revision: String,
+    attempt_id: Option<String>,
+}
+
+impl FencedStatusV1 {
+    fn from_compact(raw: Value) -> Self {
+        Self {
+            workspace_id: required_text(&raw["workspace"]["uuid"], "workspace UUID"),
+            session_id: required_text(&raw["result"]["session"]["id"], "session ID"),
+            session_revision: required_u64(
+                &raw["result"]["session"]["revision"],
+                "session revision",
+            )
+            .to_string(),
+            attempt_id: raw["result"]["current"]["attempt_id"]
+                .as_str()
+                .map(str::to_owned),
+            raw,
+        }
+    }
+
+    fn item_revision(&self, item_id: &str) -> String {
+        let item = self.raw["result"]["items"]
+            .as_array()
+            .expect("compact items must be an array")
+            .iter()
+            .find(|item| item["id"] == item_id)
+            .unwrap_or_else(|| panic!("compact status must contain item {item_id}"));
+        required_u64(&item["revision"], "item revision").to_string()
+    }
+}
+
+fn required_text(value: &Value, label: &str) -> String {
+    value
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| panic!("{label} must be non-empty text"))
+        .to_owned()
+}
+
+fn required_u64(value: &Value, label: &str) -> u64 {
+    value
+        .as_u64()
+        .unwrap_or_else(|| panic!("{label} must be an unsigned integer"))
+}
+
+fn compact_status(
+    fixture: &ControlledPathFixtureV1,
+    path: &str,
+    socket: &str,
+    worktree: &str,
+    guard: Option<(&str, &str)>,
+) -> FencedStatusV1 {
+    let mut arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        socket.to_owned(),
+        "--worktree".to_owned(),
+        worktree.to_owned(),
+        "--timeout".to_owned(),
+        "25s".to_owned(),
+    ];
+    if let Some((workspace_id, session_id)) = guard {
+        arguments.extend([
+            "--if-workspace-uuid".to_owned(),
+            workspace_id.to_owned(),
+            "--if-session-id".to_owned(),
+            session_id.to_owned(),
+        ]);
+    }
+    arguments.extend([
+        "status".to_owned(),
+        "--wait-for-idle".to_owned(),
+        "--compact".to_owned(),
+    ]);
+    FencedStatusV1::from_compact(fixture.run_json_success_owned(path, &arguments))
+}
+
+fn fenced_item_mutation(
+    fixture: &ControlledPathFixtureV1,
+    path: &str,
+    socket: &str,
+    worktree: &str,
+    status: &FencedStatusV1,
+    mutation: (&str, &str, &[&str]),
+) -> Value {
+    let (item_id, idempotency_key, command) = mutation;
+    let attempt_id = status
+        .attempt_id
+        .as_deref()
+        .expect("running status must contain an attempt");
+    let mut arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        socket.to_owned(),
+        "--worktree".to_owned(),
+        worktree.to_owned(),
+        "--timeout".to_owned(),
+        "25s".to_owned(),
+        "--idempotency-key".to_owned(),
+        idempotency_key.to_owned(),
+        "--if-workspace-uuid".to_owned(),
+        status.workspace_id.clone(),
+        "--if-session-id".to_owned(),
+        status.session_id.clone(),
+        "--if-attempt".to_owned(),
+        attempt_id.to_owned(),
+        "--if-item-revision".to_owned(),
+        status.item_revision(item_id),
+    ];
+    arguments.extend(command.iter().map(|argument| (*argument).to_owned()));
+    fixture.run_json_success_owned(path, &arguments)
 }
 
 #[test]
@@ -469,11 +683,8 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
         .as_object()
         .expect("compact status result must be an object");
     assert_eq!(
-        result
-            .keys()
-            .map(String::as_str)
-            .collect::<std::collections::BTreeSet<_>>(),
-        std::collections::BTreeSet::from([
+        result.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from([
             "blockers",
             "current",
             "items",
@@ -508,6 +719,315 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
     ] {
         assert!(!encoded_text.contains(forbidden));
     }
+
+    fixture.uninstall(&controlled_path);
+}
+
+#[test]
+fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle() {
+    let fixture = ControlledPathFixtureV1::new();
+    let (controlled_path, _) = install_sibling_release(&fixture, "lifecycle");
+    let socket = fixture.home.join(".podway/run/podwayd.sock");
+    let worktree = fixture.root.join("lifecycle/worktree");
+    create_non_bare_worktree(&worktree);
+    let procedure_path = worktree.join("dolgorae-procedure.yaml");
+    let artifact_path = worktree.join("evidence.txt");
+    fs::write(&procedure_path, DOLGI_PROCEDURE).expect("custom Procedure must be written");
+    fs::write(&artifact_path, "Dolgorae lifecycle evidence\n")
+        .expect("lifecycle evidence must be written");
+
+    let socket_text = socket.to_str().expect("fixture socket path must be UTF-8");
+    let worktree_text = worktree
+        .to_str()
+        .expect("fixture worktree path must be UTF-8");
+    let procedure_text = procedure_path
+        .to_str()
+        .expect("fixture Procedure path must be UTF-8");
+    let initialized = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "init",
+        ],
+    );
+    let workspace_id = required_text(&initialized["workspace"]["uuid"], "workspace UUID");
+
+    let validated = fixture.run_json_success(
+        &controlled_path,
+        &["--json", "procedure", "validate", procedure_text],
+    );
+    let procedure_digest = required_text(&validated["result"]["digest"], "Procedure digest");
+    let started = fixture.run_json_success_owned(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "33333333-0000-4000-8000-000000000001",
+            "--if-workspace-uuid",
+            &workspace_id,
+            "start",
+            "--procedure",
+            "dolgorae-procedure.yaml",
+            "--expect-procedure-digest",
+            &procedure_digest,
+            "--task",
+            "Exercise the fenced Dolgorae lifecycle",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+    assert_eq!(started["command"], "session.start");
+    assert_eq!(started["result"]["procedure_digest"], procedure_digest);
+
+    let initial = compact_status(&fixture, &controlled_path, socket_text, worktree_text, None);
+    assert_eq!(initial.workspace_id, workspace_id);
+    assert_eq!(
+        initial.raw["result"]["procedure"]["digest"],
+        procedure_digest
+    );
+
+    fs::remove_file(&procedure_path).expect("Procedure source must be removable after start");
+    let restarted = fixture.run_json_success(&controlled_path, &["--json", "daemon", "restart"]);
+    assert_eq!(restarted["command"], "daemon.restart");
+    let recovered = compact_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        Some((&initial.workspace_id, &initial.session_id)),
+    );
+    assert_eq!(recovered.session_id, initial.session_id);
+    assert_eq!(
+        recovered.raw["result"]["procedure"]["digest"],
+        procedure_digest
+    );
+
+    let mutations: [(&str, &str, &[&str]); 6] = [
+        (
+            "confirmed",
+            "33333333-0000-4000-8000-000000000002",
+            &["check", "confirmed"],
+        ),
+        (
+            "note",
+            "33333333-0000-4000-8000-000000000003",
+            &["set", "note", "snapshot survived restart"],
+        ),
+        (
+            "risk",
+            "33333333-0000-4000-8000-000000000004",
+            &["set", "risk", "low"],
+        ),
+        (
+            "count",
+            "33333333-0000-4000-8000-000000000005",
+            &["set", "count", "3"],
+        ),
+        (
+            "checks",
+            "33333333-0000-4000-8000-000000000006",
+            &["add", "checks", "identity fences"],
+        ),
+        (
+            "evidence",
+            "33333333-0000-4000-8000-000000000007",
+            &[
+                "attach",
+                "evidence",
+                "evidence.txt",
+                "--media-type",
+                "text/plain",
+            ],
+        ),
+    ];
+    for (item_id, idempotency_key, command) in mutations {
+        let status = compact_status(
+            &fixture,
+            &controlled_path,
+            socket_text,
+            worktree_text,
+            Some((&recovered.workspace_id, &recovered.session_id)),
+        );
+        let output = fenced_item_mutation(
+            &fixture,
+            &controlled_path,
+            socket_text,
+            worktree_text,
+            &status,
+            (item_id, idempotency_key, command),
+        );
+        assert!(output["job"]["finished_at"].is_string());
+    }
+
+    let ready = compact_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        Some((&recovered.workspace_id, &recovered.session_id)),
+    );
+    let completed = fixture.run_json_success_owned(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "33333333-0000-4000-8000-000000000008",
+            "--if-workspace-uuid",
+            &ready.workspace_id,
+            "--if-session-id",
+            &ready.session_id,
+            "--if-session-revision",
+            &ready.session_revision,
+            "--if-attempt",
+            ready.attempt_id.as_deref().expect("ready attempt"),
+            "complete",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+    assert_eq!(completed["command"], "session.complete");
+
+    let terminal = compact_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        Some((&ready.workspace_id, &ready.session_id)),
+    );
+    assert_eq!(terminal.raw["result"]["session"]["lifecycle"], "completed");
+    assert!(terminal.raw["result"]["current"].is_null());
+    assert_eq!(
+        terminal.raw["result"]["procedure"]["digest"],
+        procedure_digest
+    );
+
+    let reopened = fixture.run_json_success_owned(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "33333333-0000-4000-8000-000000000009",
+            "--if-workspace-uuid",
+            &terminal.workspace_id,
+            "--if-session-id",
+            &terminal.session_id,
+            "--if-session-revision",
+            &terminal.session_revision,
+            "reopen",
+            "--to",
+            "execute",
+            "--reason",
+            "verify the reopen transition",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+    assert_eq!(reopened["command"], "session.reopen");
+    let reopened_status = compact_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        Some((&terminal.workspace_id, &terminal.session_id)),
+    );
+    assert_eq!(
+        reopened_status.raw["result"]["session"]["lifecycle"],
+        "running"
+    );
+    assert!(reopened_status.attempt_id.is_some());
+
+    fs::write(&procedure_path, DOLGI_PROCEDURE).expect("Procedure source must be restored");
+    let replacement = fixture.run_json_success_owned(
+        &controlled_path,
+        &[
+            "--json",
+            "--yes",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "33333333-0000-4000-8000-000000000010",
+            "--if-workspace-uuid",
+            &reopened_status.workspace_id,
+            "--if-session-id",
+            &reopened_status.session_id,
+            "--if-session-revision",
+            &reopened_status.session_revision,
+            "start",
+            "--replace",
+            "--procedure",
+            "dolgorae-procedure.yaml",
+            "--expect-procedure-digest",
+            &procedure_digest,
+            "--task",
+            "Replace the reopened Dolgorae session",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+    assert_eq!(replacement["command"], "session.start_replace");
+    assert_eq!(replacement["result"]["procedure_digest"], procedure_digest);
+    let replacement_status =
+        compact_status(&fixture, &controlled_path, socket_text, worktree_text, None);
+    assert_ne!(replacement_status.session_id, reopened_status.session_id);
+
+    let reset = fixture.run_json_success_owned(
+        &controlled_path,
+        &[
+            "--json",
+            "--yes",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "33333333-0000-4000-8000-000000000011",
+            "--if-workspace-uuid",
+            &replacement_status.workspace_id,
+            "--if-session-id",
+            &replacement_status.session_id,
+            "--if-session-revision",
+            &replacement_status.session_revision,
+            "reset",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+    assert_eq!(reset["command"], "session.reset");
+    assert_eq!(reset["result"]["changed"], true);
+    assert_eq!(reset["result"]["revision_after"], 0);
 
     fixture.uninstall(&controlled_path);
 }

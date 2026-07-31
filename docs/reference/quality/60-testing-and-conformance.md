@@ -210,6 +210,13 @@ duplicate daemon, initializes through an explicit endpoint in a sanitized
 environment, and requires a closed, bounded compact result whose queue sequence
 matches the post-barrier workspace sequence with no pending or running work.
 
+The Dolgorae fenced-lifecycle E2E flow validates a custom Procedure digest,
+starts it through the installed service, removes the source, and resumes from
+the immutable snapshot after daemon restart. It supplies fresh workspace,
+session, revision, attempt, and item fences while populating every item shape,
+then covers completion, reopen, replacement, and reset with the same explicit
+consumer identity discipline.
+
 Automation conformance scenarios are defined in the
 [automation acceptance matrix](../interfaces/34-automation-client-contract.md#24-acceptance-matrix).
 Their evidence may span implementation and integration tasks. A scenario enters
