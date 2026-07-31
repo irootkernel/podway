@@ -234,6 +234,13 @@ has supplied the required executable evidence. The product acceptance matrix
 remains the machine-readable binding for `PAC-*` criteria; it does not accept
 `AUT-*` evidence rows.
 
+The separate
+[`podway.dolgorae-acceptance-matrix/v1`](../../../release/dolgorae-acceptance-matrix-v1.json)
+binds every completed `DOLGI` task to its exact `AUT-T-*` evidence commands and
+proof-source digests. The repository-local quality verifier rejects missing,
+reordered, duplicated, stale, or non-exact DOLGI evidence independently of the
+`PAC-*` matrix.
+
 `AUT-T-CONTRACT` is implemented by the binary identity, daemon ingress, CLI
 error-propagation, native service, and daemon-process E2E suites. Together they
 cover matching peers, stale manifests across version combinations, pre-publication

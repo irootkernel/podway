@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -12,9 +13,18 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MATRIX_PATH = ROOT / "release/product-acceptance-matrix-v1.json"
+DOLGI_MATRIX_PATH = ROOT / "release/dolgorae-acceptance-matrix-v1.json"
 CRASH_PATH = ROOT / "quality/crash-boundaries-v1.json"
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 FUNCTION_RE_TEMPLATE = r"\bfn\s+{name}\s*(?:<[^>]*>)?\s*\("
+PYTHON_FUNCTION_RE_TEMPLATE = r"^def\s+{name}\s*\("
+DOLGI_TASKS = {
+    "DOLGI001": ("Build the controlled-PATH integration harness", ["AUT-T-PATH"]),
+    "DOLGI002": ("Verify service and quiescent observation", ["AUT-T-OBS"]),
+    "DOLGI003": ("Verify session and item operations", ["AUT-T-ID", "AUT-T-START"]),
+    "DOLGI004": ("Verify conflict and reconciliation paths", ["AUT-T-ID", "AUT-T-RECON"]),
+    "DOLGI005": ("Verify the packaged test-fixture archive", ["AUT-T-DIST"]),
+}
 
 
 class ContractError(RuntimeError):
@@ -198,6 +208,151 @@ def validate_acceptance_matrix() -> tuple[int, int]:
     return len(criteria), len(proof_source_files)
 
 
+def roadmap_dolgi_tasks() -> dict[str, tuple[str, str]]:
+    lines = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8").splitlines()
+    try:
+        start = lines.index("## DOLGI — Dolgorae Integration Conformance")
+    except ValueError:
+        fail("roadmap omits the DOLGI epic")
+    tasks: dict[str, tuple[str, str]] = {}
+    for line in lines[start + 1 :]:
+        if line.startswith("## "):
+            break
+        if not line.startswith("| `DOLGI"):
+            continue
+        columns = [column.strip() for column in line.strip().strip("|").split("|")]
+        if len(columns) != 5:
+            fail(f"roadmap has a malformed DOLGI task row: {line}")
+        task_id = columns[0].strip("`")
+        if task_id in tasks:
+            fail(f"roadmap repeats DOLGI task {task_id}")
+        tasks[task_id] = (columns[1], columns[2])
+    return tasks
+
+
+def validate_dolgi_proof(member: Any, task_id: str, source_files: set[str]) -> None:
+    if not isinstance(member, dict) or set(member) != {"command", "function", "kind", "path"}:
+        fail(f"{task_id} proof must contain exactly command, function, kind, and path")
+    relative = member["path"]
+    function = member["function"]
+    command = member["command"]
+    kind = member["kind"]
+    if not all(isinstance(value, str) and value for value in (relative, function, command, kind)):
+        fail(f"{task_id} proof fields must be non-empty strings")
+    path = repository_file(relative, f"{task_id} proof path")
+    source = path.read_text(encoding="utf-8")
+    if kind == "cargo-test":
+        if re.search(FUNCTION_RE_TEMPLATE.format(name=re.escape(function)), source) is None:
+            fail(f"{task_id} proof function is missing from {relative}: {function}")
+        parts = Path(relative).parts
+        if len(parts) < 4 or parts[0] != "crates" or parts[2] != "tests":
+            fail(f"{task_id} cargo proof is outside a crate test directory")
+        package = parts[1]
+        source_target = path.stem
+        cargo_target = "e2e_suite" if source_target.startswith("e2e_") else source_target
+        test_name = f"{source_target}::{function}" if cargo_target == "e2e_suite" else function
+        expected = (
+            f"python3 tools/run_e2e.py --exact-test {package}::{cargo_target}::{test_name}"
+            if cargo_target == "e2e_suite"
+            else f"cargo test -p {package} --test {cargo_target} {test_name} --locked -- --exact"
+        )
+    elif kind == "python-self-test":
+        if re.search(
+            PYTHON_FUNCTION_RE_TEMPLATE.format(name=re.escape(function)),
+            source,
+            re.MULTILINE,
+        ) is None:
+            fail(f"{task_id} Python proof function is missing from {relative}: {function}")
+        expected = f"python3 {relative} self-test"
+    else:
+        fail(f"{task_id} has unsupported proof kind: {kind}")
+    if command != expected:
+        fail(f"{task_id} proof command is not exact: expected={expected}, actual={command}")
+    source_files.add(relative)
+
+
+def validate_dolgorae_acceptance_matrix(
+    matrix_override: dict[str, Any] | None = None,
+) -> tuple[int, int]:
+    matrix = load_object(DOLGI_MATRIX_PATH) if matrix_override is None else matrix_override
+    if matrix.get("schema") != "podway.dolgorae-acceptance-matrix/v1" or matrix.get("version") != 1:
+        fail("DOLGI acceptance matrix schema or version is unsupported")
+    tasks = matrix.get("tasks")
+    if not isinstance(tasks, list):
+        fail("DOLGI acceptance matrix tasks must be a list")
+    roadmap_tasks = roadmap_dolgi_tasks()
+    if roadmap_tasks != {
+        task_id: (title, "Completed") for task_id, (title, _evidence) in DOLGI_TASKS.items()
+    }:
+        fail("roadmap DOLGI tasks do not match the completed acceptance inventory")
+    if [task.get("id") for task in tasks if isinstance(task, dict)] != list(DOLGI_TASKS):
+        fail("DOLGI acceptance tasks must be complete, unique, and ordered")
+
+    proof_source_files: set[str] = set()
+    for task in tasks:
+        task_id = task["id"]
+        title, expected_evidence = DOLGI_TASKS[task_id]
+        if set(task) != {"evidence_ids", "id", "proofs", "status", "title"}:
+            fail(f"{task_id} has unexpected or missing fields")
+        if task["title"] != title or task["status"] != "Completed":
+            fail(f"{task_id} title or completion status does not match the roadmap")
+        if task["evidence_ids"] != expected_evidence:
+            fail(f"{task_id} evidence IDs do not match the accepted inventory")
+        proofs = task["proofs"]
+        if not isinstance(proofs, list) or not proofs:
+            fail(f"{task_id} must have at least one executable proof")
+        seen_proofs: set[tuple[Any, Any]] = set()
+        for proof in proofs:
+            identity = (proof.get("path"), proof.get("function")) if isinstance(proof, dict) else (None, None)
+            if identity in seen_proofs:
+                fail(f"{task_id} repeats proof {identity}")
+            seen_proofs.add(identity)
+            validate_dolgi_proof(proof, task_id, proof_source_files)
+
+    source_files = matrix.get("source_files")
+    if not isinstance(source_files, dict) or set(source_files) != proof_source_files:
+        fail("DOLGI source_files must equal the exact proof-path set")
+    for relative, expected_digest in source_files.items():
+        if not isinstance(expected_digest, str) or DIGEST_RE.fullmatch(expected_digest) is None:
+            fail(f"DOLGI proof source digest is malformed: {relative}")
+        if sha256_file(repository_file(relative, "DOLGI proof source file")) != expected_digest:
+            fail(f"DOLGI proof source file is stale: {relative}")
+    return len(tasks), len(proof_source_files)
+
+
+def self_test_dolgorae_acceptance_matrix() -> int:
+    baseline = load_object(DOLGI_MATRIX_PATH)
+
+    def expect_failure(matrix: dict[str, Any], expected: str) -> None:
+        try:
+            validate_dolgorae_acceptance_matrix(matrix)
+        except ContractError as error:
+            if expected not in str(error):
+                fail(f"DOLGI matrix self-test failed for {expected}: {error}")
+        else:
+            fail(f"DOLGI matrix self-test unexpectedly accepted {expected}")
+
+    missing_task = copy.deepcopy(baseline)
+    missing_task["tasks"].pop()
+    expect_failure(missing_task, "complete, unique, and ordered")
+
+    duplicate_proof = copy.deepcopy(baseline)
+    duplicate_proof["tasks"][3]["proofs"].append(
+        copy.deepcopy(duplicate_proof["tasks"][3]["proofs"][0])
+    )
+    expect_failure(duplicate_proof, "repeats proof")
+
+    wrong_evidence = copy.deepcopy(baseline)
+    wrong_evidence["tasks"][0]["evidence_ids"] = ["AUT-T-OBS"]
+    expect_failure(wrong_evidence, "evidence IDs")
+
+    stale_digest = copy.deepcopy(baseline)
+    first_source = next(iter(stale_digest["source_files"]))
+    stale_digest["source_files"][first_source] = "0" * 64
+    expect_failure(stale_digest, "proof source file is stale")
+    return 4
+
+
 def locator_parts(locator: Any, label: str) -> tuple[Path, str]:
     if not isinstance(locator, str) or "::" not in locator:
         fail(f"{label} must be PATH::SYMBOL")
@@ -242,13 +397,17 @@ def validate_crash_registry() -> int:
 def main() -> int:
     try:
         criteria, proof_files = validate_acceptance_matrix()
+        dolgi_sentinels = self_test_dolgorae_acceptance_matrix()
+        dolgi_tasks, dolgi_proof_files = validate_dolgorae_acceptance_matrix()
         crash_windows = validate_crash_registry()
     except ContractError as error:
         print(f"quality contract verification failed: {error}")
         return 1
     print(
         f"quality contracts verified: {criteria} acceptance criteria, "
-        f"{proof_files} proof files, {crash_windows} crash windows"
+        f"{proof_files} proof files, {dolgi_tasks} DOLGI tasks, "
+        f"{dolgi_proof_files} DOLGI proof files, {dolgi_sentinels} DOLGI sentinels, "
+        f"{crash_windows} crash windows"
     )
     return 0
 

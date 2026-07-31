@@ -168,17 +168,44 @@ def verify_artifact_class(
 def self_test() -> dict[str, Any]:
     same_name_cli = Path("/fixture/cli/product")
     same_name_daemon = Path("/fixture/daemon/product")
-    try:
-        verify_artifact_class(
-            {"podway": same_name_cli, "podwayd": same_name_daemon},
-            "test-fixture",
-            lambda path: path == same_name_cli,
-        )
-    except ReleaseError as error:
-        if "podwayd" not in str(error):
-            fail("artifact-class self-test did not preserve binary roles")
-    else:
-        fail("artifact-class self-test accepted a missing daemon isolation capability")
+
+    def probe(enabled: set[Path]) -> Callable[[Path], bool]:
+        return lambda path: path in enabled
+
+    def expect_artifact_class_rejection(
+        artifact_class: str,
+        enabled: set[Path],
+        expected_role: str,
+    ) -> None:
+        try:
+            verify_artifact_class(
+                {"podway": same_name_cli, "podwayd": same_name_daemon},
+                artifact_class,
+                probe(enabled),
+            )
+        except ReleaseError as error:
+            if expected_role not in str(error):
+                fail(f"artifact-class self-test did not preserve binary role {expected_role}")
+        else:
+            fail(
+                "artifact-class self-test accepted mismatched isolation for "
+                f"{artifact_class} role {expected_role}"
+            )
+
+    verify_artifact_class(
+        {"podway": same_name_cli, "podwayd": same_name_daemon},
+        "test-fixture",
+        probe({same_name_cli, same_name_daemon}),
+    )
+    verify_artifact_class(
+        {"podway": same_name_cli, "podwayd": same_name_daemon},
+        "distribution",
+        probe(set()),
+    )
+    expect_artifact_class_rejection("test-fixture", {same_name_daemon}, "podway")
+    expect_artifact_class_rejection("test-fixture", {same_name_cli}, "podwayd")
+    expect_artifact_class_rejection("distribution", {same_name_cli}, "podway")
+    expect_artifact_class_rejection("distribution", {same_name_daemon}, "podwayd")
 
     try:
         validate_package_mode("distribution", True)
@@ -189,7 +216,7 @@ def self_test() -> dict[str, Any]:
 
     validate_package_mode("distribution", False)
     validate_package_mode("test-fixture", True)
-    return {"mode": "self-test", "ok": True, "sentinels": 4}
+    return {"mode": "self-test", "ok": True, "sentinels": 9}
 
 
 def require_native_host() -> None:

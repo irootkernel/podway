@@ -1,0 +1,111 @@
+{
+  "schema": "podway.dolgorae-acceptance-matrix/v1",
+  "source_files": {
+    "crates/podway-cli/tests/e2e_dolgorae_conformance.rs": "b88755ba80d1e372e8e62f04a099ded614e4e4a100637d233069f84c3dea107c",
+    "crates/podway-cli/tests/e2e_release_archive.rs": "3fe316aa389ba36f27437ad4c336bb6c5e405b80d0d6409a4a95c9c94b8d1455",
+    "tools/release_archive.py": "d09e170579976d8fede0ef69bfb2a2e87a3aa271214b196f8bbfa20370084c76"
+  },
+  "tasks": [
+    {
+      "evidence_ids": [
+        "AUT-T-PATH"
+      ],
+      "id": "DOLGI001",
+      "proofs": [
+        {
+          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_directory",
+          "function": "aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_directory",
+          "kind": "cargo-test",
+          "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs"
+        }
+      ],
+      "status": "Completed",
+      "title": "Build the controlled-PATH integration harness"
+    },
+    {
+      "evidence_ids": [
+        "AUT-T-OBS"
+      ],
+      "id": "DOLGI002",
+      "proofs": [
+        {
+          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_socket",
+          "function": "aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_socket",
+          "kind": "cargo-test",
+          "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs"
+        }
+      ],
+      "status": "Completed",
+      "title": "Verify service and quiescent observation"
+    },
+    {
+      "evidence_ids": [
+        "AUT-T-ID",
+        "AUT-T-START"
+      ],
+      "id": "DOLGI003",
+      "proofs": [
+        {
+          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle",
+          "function": "aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle",
+          "kind": "cargo-test",
+          "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs"
+        }
+      ],
+      "status": "Completed",
+      "title": "Verify session and item operations"
+    },
+    {
+      "evidence_ids": [
+        "AUT-T-ID",
+        "AUT-T-RECON"
+      ],
+      "id": "DOLGI004",
+      "proofs": [
+        {
+          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout",
+          "function": "aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout",
+          "kind": "cargo-test",
+          "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs"
+        },
+        {
+          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay",
+          "function": "aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay",
+          "kind": "cargo-test",
+          "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs"
+        }
+      ],
+      "status": "Completed",
+      "title": "Verify conflict and reconciliation paths"
+    },
+    {
+      "evidence_ids": [
+        "AUT-T-DIST"
+      ],
+      "id": "DOLGI005",
+      "proofs": [
+        {
+          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite",
+          "function": "aut_t_dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite",
+          "kind": "cargo-test",
+          "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs"
+        },
+        {
+          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_release_archive::pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
+          "function": "pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
+          "kind": "cargo-test",
+          "path": "crates/podway-cli/tests/e2e_release_archive.rs"
+        },
+        {
+          "command": "python3 tools/release_archive.py self-test",
+          "function": "self_test",
+          "kind": "python-self-test",
+          "path": "tools/release_archive.py"
+        }
+      ],
+      "status": "Completed",
+      "title": "Verify the packaged test-fixture archive"
+    }
+  ],
+  "version": 1
+}
