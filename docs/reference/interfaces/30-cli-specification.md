@@ -4,9 +4,8 @@
 
 The public command is `podway`. The daemon binary is `podwayd` and is normally managed through `podway daemon ...`.
 
-This document describes the currently implemented grammar. The accepted v0.1.0
-automation additions below remain target behavior until their roadmap tasks are
-completed.
+This document describes the implemented v0.1.0 grammar, including its automation
+options and result surfaces.
 
 ## Global options
 

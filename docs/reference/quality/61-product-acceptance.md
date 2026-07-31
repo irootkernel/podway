@@ -1,6 +1,6 @@
 # Product Acceptance Criteria
 
-The criteria below describe the implemented baseline bound to the current `make test`; v0.1.0 remains unreleasable until the planned automation requirements and tests are added and every roadmap task through `REL10005` is completed.
+The criteria below describe the implemented baseline bound to the current `make test`; v0.1.0 remains unreleasable until every remaining `REL10` roadmap task through `REL10005` is completed.
 
 ## Product purpose
 
@@ -125,7 +125,7 @@ qualification archives, and attestation bundles are not acceptance criteria.
 Signing and notarization status must be documented when artifacts are distributed,
 but neither changes the source revision's release-readiness result.
 
-The planned automation acceptance scenarios are tracked separately in the
+The implemented automation acceptance scenarios are tracked separately in the
 [automation client contract](../interfaces/34-automation-client-contract.md#24-acceptance-matrix).
-They are added to this mandatory list and its machine matrix only when matching
-production behavior and executable evidence land together.
+They remain `AUT-*` evidence rather than `PAC-*` rows in this mandatory product
+matrix; both inventories are enforced by the repository-local gate.

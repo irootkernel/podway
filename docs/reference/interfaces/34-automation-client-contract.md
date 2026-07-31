@@ -2,10 +2,10 @@
 
 ## 1. Status and target release
 
-This document defines the accepted local automation boundary targeted by Podway
-v0.1.0. It is implementation-ready but not an assertion that the current binaries
-already provide every behavior. Readiness is tracked by the incomplete epics in
-the [roadmap](../../roadmap.md).
+This document defines the implemented local automation boundary targeted by Podway
+v0.1.0. Runtime, identity, conformance, and packaged-fixture work through `DOLGI`
+is complete; final release readiness remains tracked by the incomplete `REL10`
+epic in the [roadmap](../../roadmap.md).
 
 The requirement IDs in this document are stable. A requirement becomes satisfied
 only when its roadmap task is completed and its planned executable evidence is in

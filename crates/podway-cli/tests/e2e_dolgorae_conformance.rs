@@ -1071,6 +1071,41 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
     let replacement_status =
         compact_status(&fixture, &controlled_path, socket_text, worktree_text, None);
     assert_ne!(replacement_status.session_id, reopened_status.session_id);
+    let stale_session = assert_json_error(
+        fixture.run_owned(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "--timeout",
+                "25s",
+                "--if-workspace-uuid",
+                &replacement_status.workspace_id,
+                "--if-session-id",
+                &reopened_status.session_id,
+                "status",
+                "--wait-for-idle",
+                "--compact",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+        ),
+        "SESSION_ID_MISMATCH",
+        4,
+    );
+    assert_eq!(
+        stale_session["details"]["expected_session_id"],
+        reopened_status.session_id
+    );
+    assert_eq!(
+        stale_session["details"]["actual_session_id"],
+        replacement_status.session_id
+    );
+    assert_eq!(stale_session["details"]["admission"]["admitted"], false);
 
     let reset = fixture.run_json_success_owned(
         &controlled_path,
@@ -1423,12 +1458,33 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
     let listener = UnixListener::bind(&proxy_socket).expect("response-loss relay must bind");
     fs::set_permissions(&proxy_socket, fs::Permissions::from_mode(0o600))
         .expect("response-loss relay socket must be private");
+    listener
+        .set_nonblocking(true)
+        .expect("response-loss relay must become nonblocking");
     let daemon_socket = socket.clone();
     let relay = thread::spawn(move || {
-        let (mut downstream, _) = listener.accept()?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut downstream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "response-loss relay accept timed out",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        downstream.set_read_timeout(Some(Duration::from_secs(10)))?;
         let mut request_wire = Vec::new();
         downstream.read_to_end(&mut request_wire)?;
         let mut upstream = UnixStream::connect(daemon_socket)?;
+        upstream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        upstream.set_write_timeout(Some(Duration::from_secs(10)))?;
         upstream.write_all(&request_wire)?;
         upstream.shutdown(Shutdown::Write)?;
         let mut response_wire = Vec::new();

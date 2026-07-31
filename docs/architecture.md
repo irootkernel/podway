@@ -57,12 +57,10 @@ versioned closed schemas.
 
 ## macOS service and observability
 
-The CLI installs `podwayd` as a per-user LaunchAgent. The accepted target uses the
+The CLI installs `podwayd` as a per-user LaunchAgent. The implementation uses the
 OS-account-derived `~/.podway` root, a fixed per-user lock, an explicit no-fallback
-socket option, and the verified daemon's actual absolute path. The current
-implementation still uses legacy environment-derived service paths until the
-`RPATH` roadmap epic lands. Structured logging remains local and bounded. Podway
-emits no telemetry and performs no network I/O.
+socket option, and the verified daemon's actual absolute path. Structured logging
+remains local and bounded. Podway emits no telemetry and performs no network I/O.
 
 Detailed contracts are available for the
 [system](reference/architecture/10-system-architecture.md),

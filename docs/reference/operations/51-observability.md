@@ -23,8 +23,8 @@ Default macOS directory:
 <effective-user-home>/.podway/logs/
 ```
 
-This is accepted target behavior; the current implementation retains the legacy
-user-log directory until the runtime-path epic lands.
+The directory is derived from the effective OS account and does not use ambient
+home-directory environment variables.
 
 Each record is one structured line with exactly three fields:
 

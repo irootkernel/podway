@@ -4,9 +4,10 @@ Podway uses one executable release gate: run `make test` locally from the reposi
 root. That command is authoritative only for requirements and evidence already
 registered in the tested tree. Podway v0.1.0 is not release-ready while any
 release-blocking task in the [roadmap](roadmap.md) remains incomplete; a current
-successful run proves the implemented baseline, not the planned automation target.
+successful run proves the implemented tree, not completion of the remaining
+release tasks.
 
-Once all target requirements and tests are included, the final clean-tree
+Once all release tasks are complete, the final clean-tree
 `make test` run is the sole executable source-readiness decision. It runs generated
 source checks, unit and integration tests, bounded fuzzing, and real-binary E2E.
 
@@ -61,8 +62,8 @@ provenance `source_commit` must equal the exact release-tag commit.
 
 ## Current implementation state
 
-The completed historical baseline is represented in the local gate. The automation
-client contract is accepted target behavior, but its `RPATH` through `DOLGI`
-implementation and conformance tasks remain planned. `REL10005` is therefore
-blocked regardless of whether the unchanged baseline currently passes `make test`.
-Generated reports from superseded qualification systems are not release inputs.
+The historical baseline and the automation client work through `DOLGI` are
+represented in the local gate. The `REL10` tasks remain incomplete, so
+`REL10005` stays blocked until contract freeze, the final clean-tree gate,
+distribution construction, and compatibility handoff are complete. Generated
+reports from superseded qualification systems are not release inputs.

@@ -10,7 +10,8 @@ start only when every earlier task in its epic is `Completed`, and an epic may s
 only when every task in every preceding epic is `Completed`. Valid states are
 `Planned`, `In Progress`, `Blocked`, and `Completed`. The first ten epics preserve
 the completed historical baseline. `AUTOM` records the accepted planning change;
-all later epics are release-blocking work that is not yet implemented.
+`RPATH` through `DOLGI` record the completed automation-readiness implementation,
+and the remaining `REL10` tasks are release-blocking.
 
 ## DESGN — Design Baseline
 
@@ -189,7 +190,7 @@ all later epics are release-blocking work that is not yet implemented.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `DOLGI001` | Build the controlled-PATH integration harness | Completed | Complete AUT-T-PATH by installing through a controlled PATH from a sanitized arbitrary directory and verifying sibling, explicit, and PATH daemon resolution plus the canonical absolute plist path. | [AUT-PATH-001](reference/interfaces/34-automation-client-contract.md#6-path-based-cli-invocation-aut-path-001003), [AUT-T-PATH](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix) |
+| `DOLGI001` | Build the controlled-PATH integration harness | Completed | Complete AUT-T-PATH by installing through a controlled PATH from a sanitized arbitrary directory and verifying sibling, explicit, and PATH daemon resolution plus the canonical absolute plist path. | [AUT-PATH-001–003](reference/interfaces/34-automation-client-contract.md#6-path-based-cli-invocation-aut-path-001003), [AUT-DAEMON-001–003](reference/interfaces/34-automation-client-contract.md#7-daemon-discovery-and-launchagent-execution-aut-daemon-001003), [AUT-T-PATH](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix) |
 | `DOLGI002` | Verify service and quiescent observation | Completed | Install the daemon, connect through an explicit socket, initialize a worktree, and obtain compact idle status. | [AUT-SOCK-001–004](reference/interfaces/34-automation-client-contract.md#10-explicit-socket-resolution-aut-sock-001004), [AUT-SOCK-005](reference/interfaces/34-automation-client-contract.md#12-one-daemon-per-user-invariant-aut-sock-005), [AUT-OBS-001](reference/interfaces/34-automation-client-contract.md#19-quiescent-observation-aut-obs-001), [AUT-OBS-002–004](reference/interfaces/34-automation-client-contract.md#20-compact-status-contract-aut-obs-002004) |
 | `DOLGI003` | Verify session and item operations | Completed | Exercise the full lifecycle with explicit identity fences. | [AUT-ID-001–007](reference/interfaces/34-automation-client-contract.md#14-workspace-and-session-identity-preconditions-aut-id-001007), [AUT-START-001–004](reference/interfaces/34-automation-client-contract.md#15-procedure-start-integrity-aut-start-001004) |
 | `DOLGI004` | Verify conflict and reconciliation paths | Completed | Exercise stale identity, digest and daemon mismatch, timeout, response loss, and lookup. | [AUT-T-ID](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix), [AUT-T-RECON](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix) |

@@ -6,9 +6,8 @@ Public failures use stable uppercase error codes. Human messages may improve wit
 
 The machine-readable catalog is [`../../spec/error-codes.json`](../../spec/error-codes.json).
 
-The tables below are the implemented catalog. Planned automation errors are not
-machine contracts until their `CASID`, `PSTRT`, `CONID`, `RPATH`, and `MCONT`
-tasks update the catalog, closed detail schemas, generated mirrors, and tests.
+The tables below are the implemented machine contract. Automation errors have
+closed detail schemas, generated mirrors, and executable contract tests.
 
 ## Exit codes
 
