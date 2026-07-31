@@ -1680,8 +1680,7 @@ fn execute_service_lifecycle(
 ) -> Result<RunResult, LocalFailure> {
     let command_name = daemon_command_name(command);
     let mut paths = if socket_path.is_some() {
-        ServiceRuntimePathsV1::for_effective_user()
-            .map_err(|_| LocalFailure::daemon_unavailable(command_name))?
+        effective_service_paths(command_name)?
     } else {
         service_runtime_paths(command_name)?
     };
@@ -1693,7 +1692,7 @@ fn execute_service_lifecycle(
     let clock = system_service_clock(SystemTime::now(), command_name)?;
     let runner = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,
-        SystemLaunchctlRunnerV1::default(),
+        system_launchctl_runner(),
         clock,
         geteuid().as_raw(),
     )
@@ -1811,9 +1810,26 @@ fn socket_path_failure(error: ServicePathErrorV1) -> LocalFailure {
 }
 
 fn service_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
-    let paths = ServiceRuntimePathsV1::for_effective_user()
-        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    let paths = effective_service_paths(command)?;
     resolve_installed_service_endpoint(paths, command)
+}
+
+fn effective_service_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
+    #[cfg(debug_assertions)]
+    if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
+        return ServiceRuntimePathsV1::for_account_home(account_root, geteuid().as_raw())
+            .map_err(|_| LocalFailure::daemon_unavailable(command));
+    }
+    ServiceRuntimePathsV1::for_effective_user()
+        .map_err(|_| LocalFailure::daemon_unavailable(command))
+}
+
+fn system_launchctl_runner() -> SystemLaunchctlRunnerV1 {
+    #[cfg(debug_assertions)]
+    if let Some(executable) = env::var_os("PODWAY_TEST_LAUNCHCTL") {
+        return SystemLaunchctlRunnerV1::new(executable);
+    }
+    SystemLaunchctlRunnerV1::default()
 }
 
 fn resolve_installed_service_endpoint(
@@ -3110,8 +3126,7 @@ fn daemon_client(
     wait_timeout_ms: u64,
     socket_path: Option<&Path>,
 ) -> Result<DaemonClientV1, LocalFailure> {
-    let paths = ServiceRuntimePathsV1::for_effective_user()
-        .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
+    let paths = effective_service_paths("cli")?;
     let paths = if socket_path.is_some() {
         paths
     } else {

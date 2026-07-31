@@ -198,6 +198,12 @@ Target `podway daemon install` MUST resolve and validate the actual `podwayd`
 binary without staging or copying it. The LaunchAgent records that canonical
 absolute path and does not support a wrapper or ambient `PATH` lookup.
 
+`AUT-T-PATH` is implemented by the sanitized user-environment and Dolgorae
+consumer E2E suites. They invoke a CLI symlink by command name outside a
+worktree, exercise explicit, resolved-CLI-sibling, and controlled-`PATH` daemon
+selection through the real installer, and require the canonical daemon path in
+both service metadata and the absolute LaunchAgent plist.
+
 Automation conformance scenarios are defined in the
 [automation acceptance matrix](../interfaces/34-automation-client-contract.md#24-acceptance-matrix).
 Their evidence may span implementation and integration tasks. A scenario enters
