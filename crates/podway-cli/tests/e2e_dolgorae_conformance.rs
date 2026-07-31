@@ -145,6 +145,18 @@ impl ControlledPathFixtureV1 {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+
+    fn run_json_success(&self, path: &str, arguments: &[&str]) -> Value {
+        let output = self.run(path, arguments);
+        assert!(
+            output.status.success(),
+            "Podway command failed: args={arguments:?} stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice(&output.stdout).expect("successful Podway output must be JSON")
+    }
 }
 
 impl Drop for ControlledPathFixtureV1 {
@@ -237,6 +249,54 @@ fn copy_executable(source: &Path, destination: &Path) {
         .expect("copied product executable must be executable");
 }
 
+fn create_non_bare_worktree(path: &Path) {
+    run_git(
+        Command::new("/usr/bin/git")
+            .arg("init")
+            .arg("--quiet")
+            .arg(path),
+        "initialize the Dolgorae worktree",
+    );
+    run_git(
+        Command::new("/usr/bin/git").arg("-C").arg(path).args([
+            "config",
+            "user.email",
+            "dolgorae@example.invalid",
+        ]),
+        "configure the Dolgorae fixture email",
+    );
+    run_git(
+        Command::new("/usr/bin/git").arg("-C").arg(path).args([
+            "config",
+            "user.name",
+            "Dolgorae Conformance",
+        ]),
+        "configure the Dolgorae fixture author",
+    );
+    run_git(
+        Command::new("/usr/bin/git").arg("-C").arg(path).args([
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ]),
+        "create the Dolgorae fixture commit",
+    );
+}
+
+fn run_git(command: &mut Command, action: &str) {
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("Git must be available to {action}: {error}"));
+    assert!(
+        output.status.success(),
+        "Git must {action}: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn daemon_binary() -> PathBuf {
     std::env::var_os("PODWAYD_TEST_BINARY")
         .map(PathBuf::from)
@@ -309,5 +369,145 @@ fn aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_direct
         &["--json", "daemon", "install"],
         &path_daemon,
     );
+    fixture.uninstall(&controlled_path);
+}
+
+#[test]
+fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_socket() {
+    let fixture = ControlledPathFixtureV1::new();
+    let release_bin = fixture.root.join("observation/release/bin");
+    let release_cli = release_bin.join("podway");
+    let release_daemon = release_bin.join("podwayd");
+    let controlled_bin = fixture.root.join("observation/controlled-bin");
+    copy_executable(Path::new(env!("CARGO_BIN_EXE_podway")), &release_cli);
+    copy_executable(&daemon_binary(), &release_daemon);
+    fs::create_dir_all(&controlled_bin).expect("observation controlled bin must be created");
+    symlink(&release_cli, controlled_bin.join("podway"))
+        .expect("observation CLI symlink must be created");
+    let controlled_path = format!("{}:/usr/bin:/bin", controlled_bin.display());
+    fixture.assert_install(
+        &controlled_path,
+        &["--json", "daemon", "install"],
+        &release_daemon,
+    );
+
+    let socket = fixture.home.join(".podway/run/podwayd.sock");
+    let alternate_socket = fixture.home.join(".podway/run/alternate.sock");
+    let duplicate = Command::new(&release_daemon)
+        .args(["--service", "--socket"])
+        .arg(&alternate_socket)
+        .env_clear()
+        .env("PODWAY_TEST_ACCOUNT_ROOT", &fixture.home)
+        .output()
+        .expect("duplicate daemon probe must execute");
+    assert!(!duplicate.status.success());
+    assert!(
+        String::from_utf8_lossy(&duplicate.stderr).contains("cannot acquire daemon endpoint"),
+        "duplicate daemon stderr={}",
+        String::from_utf8_lossy(&duplicate.stderr)
+    );
+    assert!(!alternate_socket.exists());
+
+    let worktree = fixture.root.join("observation/worktree");
+    create_non_bare_worktree(&worktree);
+    let socket_text = socket.to_str().expect("fixture socket path must be UTF-8");
+    let worktree_text = worktree
+        .to_str()
+        .expect("fixture worktree path must be UTF-8");
+    let init = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "init",
+        ],
+    );
+    assert_eq!(init["command"], "workspace.init");
+    assert_eq!(init["result"]["initialized"], true);
+
+    let start = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "11111111-1111-4111-8111-111111111111",
+            "start",
+            "--preset",
+            "analysis",
+            "--task",
+            "Observe compact idle status",
+        ],
+    );
+    assert_eq!(start["command"], "session.start");
+
+    let compact = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "status",
+            "--wait-for-idle",
+            "--compact",
+        ],
+    );
+    assert_eq!(compact["command"], "session.status");
+    let result = compact["result"]
+        .as_object()
+        .expect("compact status result must be an object");
+    assert_eq!(
+        result
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "blockers",
+            "current",
+            "items",
+            "procedure",
+            "queue",
+            "schema",
+            "session",
+        ])
+    );
+    assert_eq!(result["schema"], "podway.compact-status-result/v1");
+    assert_eq!(result["queue"]["pending_mutations"], false);
+    assert_eq!(result["queue"]["queued_count"], 0);
+    assert!(result["queue"]["running_job_id"].is_null());
+    assert_eq!(
+        result["queue"]["latest_workspace_sequence"],
+        compact["workspace"]["latest_workspace_sequence"]
+    );
+    assert!(
+        result["queue"]["latest_workspace_sequence"]
+            .as_u64()
+            .is_some_and(|sequence| sequence >= 1)
+    );
+    let encoded = serde_json::to_vec(&compact).expect("compact status must serialize");
+    assert!(encoded.len() < 262_144);
+    let encoded_text = String::from_utf8(encoded).expect("compact status must be UTF-8");
+    for forbidden in [
+        "\"instructions\"",
+        "\"prompt\"",
+        "\"task\"",
+        "\"title\"",
+        "\"value\"",
+    ] {
+        assert!(!encoded_text.contains(forbidden));
+    }
+
     fixture.uninstall(&controlled_path);
 }

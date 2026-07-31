@@ -204,6 +204,12 @@ worktree, exercise explicit, resolved-CLI-sibling, and controlled-`PATH` daemon
 selection through the real installer, and require the canonical daemon path in
 both service metadata and the absolute LaunchAgent plist.
 
+`AUT-T-OBS` is implemented by the compact-status protocol bounds and the
+Dolgorae installed-service E2E flow. The latter rejects a different-socket
+duplicate daemon, initializes through an explicit endpoint in a sanitized
+environment, and requires a closed, bounded compact result whose queue sequence
+matches the post-barrier workspace sequence with no pending or running work.
+
 Automation conformance scenarios are defined in the
 [automation acceptance matrix](../interfaces/34-automation-client-contract.md#24-acceptance-matrix).
 Their evidence may span implementation and integration tasks. A scenario enters
