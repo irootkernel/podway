@@ -5,17 +5,25 @@
 use std::{
     collections::BTreeSet,
     fs,
-    os::unix::fs::{PermissionsExt, symlink},
+    io::{Read, Write},
+    net::Shutdown,
+    os::unix::{
+        fs::{PermissionsExt, symlink},
+        net::{UnixListener, UnixStream},
+    },
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
+    thread,
+    time::{Duration, Instant},
 };
 
 use nix::unistd::geteuid;
 use podway_cli::client::DaemonClientV1;
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1,
+    decode_request_payload_v1, decode_response_payload_v1, decode_single_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
@@ -280,6 +288,23 @@ fn assert_json_success<'a>(output: Output, arguments: impl IntoIterator<Item = &
     serde_json::from_slice(&output.stdout).expect("successful Podway output must be JSON")
 }
 
+fn assert_json_error(output: Output, code: &str, exit_code: i32) -> Value {
+    assert_eq!(
+        output.status.code(),
+        Some(exit_code),
+        "unexpected failure: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let error: Value =
+        serde_json::from_slice(&output.stdout).expect("failed Podway output must be JSON");
+    assert_eq!(error["schema"], "podway.error/v1");
+    assert_eq!(error["code"], code);
+    assert_eq!(error["exit_code"], exit_code);
+    error
+}
+
 fn install_sibling_release(fixture: &ControlledPathFixtureV1, label: &str) -> (String, PathBuf) {
     let release_bin = fixture.root.join(label).join("release/bin");
     let release_cli = release_bin.join("podway");
@@ -515,6 +540,47 @@ fn fenced_item_mutation(
     ];
     arguments.extend(command.iter().map(|argument| (*argument).to_owned()));
     fixture.run_json_success_owned(path, &arguments)
+}
+
+fn terminal_lookup(
+    fixture: &ControlledPathFixtureV1,
+    path: &str,
+    socket: &str,
+    worktree: &str,
+    idempotency_key: &str,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let lookup = fixture.run_json_success(
+            path,
+            &[
+                "--json",
+                "--socket",
+                socket,
+                "--worktree",
+                worktree,
+                "--timeout",
+                "25s",
+                "job",
+                "lookup",
+                "--idempotency-key",
+                idempotency_key,
+            ],
+        );
+        if lookup["result"]["found"] == true
+            && matches!(
+                lookup["result"]["job"]["state"].as_str(),
+                Some("succeeded" | "failed" | "cancelled")
+            )
+        {
+            return lookup;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "job lookup did not become terminal"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -1028,6 +1094,464 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
     assert_eq!(reset["command"], "session.reset");
     assert_eq!(reset["result"]["changed"], true);
     assert_eq!(reset["result"]["revision_after"], 0);
+
+    fixture.uninstall(&controlled_path);
+}
+
+#[test]
+fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
+    const TIMEOUT_KEY: &str = "44444444-0000-4000-8000-000000000001";
+    const BAD_DIGEST: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+    let fixture = ControlledPathFixtureV1::new();
+    let (controlled_path, _) = install_sibling_release(&fixture, "conflicts");
+    let socket = fixture.home.join(".podway/run/podwayd.sock");
+    let worktree = fixture.root.join("conflicts/worktree");
+    create_non_bare_worktree(&worktree);
+    let procedure_path = worktree.join("dolgorae-procedure.yaml");
+    fs::write(&procedure_path, DOLGI_PROCEDURE).expect("conflict Procedure must be written");
+    let socket_text = socket.to_str().expect("fixture socket path must be UTF-8");
+    let worktree_text = worktree
+        .to_str()
+        .expect("fixture worktree path must be UTF-8");
+    let procedure_text = procedure_path
+        .to_str()
+        .expect("fixture Procedure path must be UTF-8");
+
+    let paths = ServiceRuntimePathsV1::for_account_home(&fixture.home, geteuid().as_raw())
+        .expect("mismatch service paths must resolve");
+    let mismatch_request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new("44444444-0000-4000-8000-000000000097")
+            .expect("mismatch request ID"),
+        client: ClientInfoV1::new_with_contract_identity(
+            "dolgorae-mismatch",
+            env!("CARGO_PKG_VERSION"),
+            std::process::id(),
+            "podway",
+            BAD_DIGEST,
+        )
+        .expect("mismatch client identity"),
+        command: CommandNameV1::new("daemon.status").expect("mismatch status command"),
+        operation: OperationV1::Control,
+        workspace: None,
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, 0).expect("mismatch request options"),
+        payload: serde_json::Map::new(),
+    })
+    .expect("mismatch request");
+    let ResponseEnvelopeV1::Error(mismatch) = DaemonClientV1::new(paths)
+        .daemon_status(&mismatch_request)
+        .expect("mismatch daemon exchange must complete")
+    else {
+        panic!("mismatched client identity must be rejected");
+    };
+    assert_eq!(mismatch.code().as_str(), "DAEMON_CONTRACT_MISMATCH");
+    assert_eq!(mismatch.exit_code().get(), 3);
+    assert!(!mismatch.retryable());
+    assert_eq!(
+        mismatch.details()["actual"]["contract_manifest_digest"],
+        BAD_DIGEST
+    );
+    assert_eq!(mismatch.details()["admission"]["admitted"], false);
+
+    let initialized = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "init",
+        ],
+    );
+    let workspace_id = required_text(&initialized["workspace"]["uuid"], "workspace UUID");
+    let validated = fixture.run_json_success(
+        &controlled_path,
+        &["--json", "procedure", "validate", procedure_text],
+    );
+    let procedure_digest = required_text(&validated["result"]["digest"], "Procedure digest");
+
+    let missing = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "job",
+            "lookup",
+            "--idempotency-key",
+            "44444444-0000-4000-8000-000000000000",
+        ],
+    );
+    assert_eq!(missing["result"]["found"], false);
+    assert_eq!(missing["result"]["schema"], "podway.job-lookup-result/v1");
+
+    let digest_mismatch = assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "--if-workspace-uuid",
+                &workspace_id,
+                "start",
+                "--procedure",
+                "dolgorae-procedure.yaml",
+                "--expect-procedure-digest",
+                BAD_DIGEST,
+                "--task",
+                "Reject a stale Procedure digest",
+            ],
+        ),
+        "PROCEDURE_DIGEST_MISMATCH",
+        4,
+    );
+    assert_eq!(digest_mismatch["retryable"], false);
+    assert_eq!(
+        digest_mismatch["details"]["actual_procedure_digest"],
+        procedure_digest
+    );
+    assert_eq!(digest_mismatch["details"]["admission"]["admitted"], false);
+
+    let timeout = assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "--timeout",
+                "0ms",
+                "--idempotency-key",
+                TIMEOUT_KEY,
+                "--if-workspace-uuid",
+                &workspace_id,
+                "start",
+                "--procedure",
+                "dolgorae-procedure.yaml",
+                "--expect-procedure-digest",
+                &procedure_digest,
+                "--task",
+                "Recover an admitted timeout",
+            ],
+        ),
+        "JOB_WAIT_TIMEOUT",
+        4,
+    );
+    assert_eq!(timeout["retryable"], true);
+    assert_eq!(timeout["details"]["admission"]["admitted"], true);
+    assert!(timeout["details"]["admission"]["job_id"].is_string());
+    let timeout_lookup = terminal_lookup(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        TIMEOUT_KEY,
+    );
+    assert_eq!(timeout_lookup["result"]["job"]["state"], "succeeded");
+    assert_eq!(
+        timeout_lookup["result"]["job"]["id"],
+        timeout["details"]["admission"]["job_id"]
+    );
+    assert_eq!(
+        timeout_lookup["result"]["job"]["terminal_response"]["command"],
+        "session.start"
+    );
+
+    let current = compact_status(&fixture, &controlled_path, socket_text, worktree_text, None);
+    let wrong_workspace = "44444444-0000-4000-8000-000000000099";
+    let workspace_conflict = assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "--if-workspace-uuid",
+                wrong_workspace,
+                "status",
+                "--wait-for-idle",
+                "--compact",
+            ],
+        ),
+        "WORKSPACE_UUID_MISMATCH",
+        4,
+    );
+    assert_eq!(
+        workspace_conflict["details"]["actual_workspace_uuid"],
+        current.workspace_id
+    );
+    assert_eq!(
+        workspace_conflict["details"]["admission"]["admitted"],
+        false
+    );
+
+    let wrong_session = "44444444-0000-4000-8000-000000000098";
+    let session_conflict = assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "--if-workspace-uuid",
+                &current.workspace_id,
+                "--if-session-id",
+                wrong_session,
+                "status",
+                "--wait-for-idle",
+                "--compact",
+            ],
+        ),
+        "SESSION_ID_MISMATCH",
+        4,
+    );
+    assert_eq!(
+        session_conflict["details"]["actual_session_id"],
+        current.session_id
+    );
+    assert_eq!(session_conflict["details"]["admission"]["admitted"], false);
+
+    let stale_revision = current.session_revision.clone();
+    fenced_item_mutation(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &current,
+        (
+            "confirmed",
+            "44444444-0000-4000-8000-000000000002",
+            &["check", "confirmed"],
+        ),
+    );
+    let advanced = compact_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        Some((&current.workspace_id, &current.session_id)),
+    );
+    assert_ne!(advanced.session_revision, stale_revision);
+    let revision_conflict = assert_json_error(
+        fixture.run_owned(
+            &controlled_path,
+            &[
+                "--json",
+                "--yes",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "--timeout",
+                "25s",
+                "--idempotency-key",
+                "44444444-0000-4000-8000-000000000003",
+                "--if-workspace-uuid",
+                &advanced.workspace_id,
+                "--if-session-id",
+                &advanced.session_id,
+                "--if-session-revision",
+                &stale_revision,
+                "start",
+                "--replace",
+                "--procedure",
+                "dolgorae-procedure.yaml",
+                "--expect-procedure-digest",
+                &procedure_digest,
+                "--task",
+                "Reject a stale replacement revision",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+        ),
+        "SESSION_REVISION_CONFLICT",
+        4,
+    );
+    assert_eq!(revision_conflict["details"]["admission"]["admitted"], true);
+
+    fixture.uninstall(&controlled_path);
+}
+
+#[test]
+fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
+    const RESPONSE_LOSS_KEY: &str = "44444444-0000-4000-8000-000000000010";
+
+    let fixture = ControlledPathFixtureV1::new();
+    let (controlled_path, _) = install_sibling_release(&fixture, "response-loss");
+    let socket = fixture.home.join(".podway/run/podwayd.sock");
+    let worktree = fixture.root.join("response-loss/worktree");
+    create_non_bare_worktree(&worktree);
+    let socket_text = socket.to_str().expect("fixture socket path must be UTF-8");
+    let worktree_text = worktree
+        .to_str()
+        .expect("fixture worktree path must be UTF-8");
+    fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "init",
+        ],
+    );
+
+    let proxy_socket = fixture.home.join(".podway/run/response-loss.sock");
+    let listener = UnixListener::bind(&proxy_socket).expect("response-loss relay must bind");
+    fs::set_permissions(&proxy_socket, fs::Permissions::from_mode(0o600))
+        .expect("response-loss relay socket must be private");
+    let daemon_socket = socket.clone();
+    let relay = thread::spawn(move || {
+        let (mut downstream, _) = listener.accept()?;
+        let mut request_wire = Vec::new();
+        downstream.read_to_end(&mut request_wire)?;
+        let mut upstream = UnixStream::connect(daemon_socket)?;
+        upstream.write_all(&request_wire)?;
+        upstream.shutdown(Shutdown::Write)?;
+        let mut response_wire = Vec::new();
+        upstream.read_to_end(&mut response_wire)?;
+        drop(downstream);
+        Ok::<_, std::io::Error>((request_wire, response_wire))
+    });
+
+    let proxy_text = proxy_socket
+        .to_str()
+        .expect("fixture proxy socket path must be UTF-8");
+    let lost = assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                proxy_text,
+                "--worktree",
+                worktree_text,
+                "--timeout",
+                "25s",
+                "--idempotency-key",
+                RESPONSE_LOSS_KEY,
+                "start",
+                "--preset",
+                "analysis",
+                "--task",
+                "Recover the discarded daemon response",
+            ],
+        ),
+        "MUTATION_OUTCOME_UNKNOWN",
+        4,
+    );
+    assert_eq!(lost["retryable"], true);
+    assert_eq!(lost["details"]["outcome"], "unknown");
+    assert_eq!(lost["details"]["idempotency_key"], RESPONSE_LOSS_KEY);
+    assert_eq!(lost["details"]["reconcile"]["command"], "job.lookup");
+
+    let (request_wire, response_wire) = relay
+        .join()
+        .expect("response-loss relay must not panic")
+        .expect("response-loss relay must finish both exchanges");
+    let request_payload =
+        decode_single_frame_v1(&request_wire).expect("relay request must contain one frame");
+    let request = decode_request_payload_v1(request_payload).expect("relay request must decode");
+    assert_eq!(request.operation(), OperationV1::Mutate);
+    assert_eq!(request.command().as_str(), "session.start");
+    assert_eq!(
+        request
+            .idempotency_key()
+            .expect("relay mutation must have an idempotency key")
+            .as_str(),
+        RESPONSE_LOSS_KEY
+    );
+    assert_eq!(lost["request_id"], request.request_id().as_str());
+
+    let response_payload =
+        decode_single_frame_v1(&response_wire).expect("relay response must contain one frame");
+    let ResponseEnvelopeV1::Output(discarded) =
+        decode_response_payload_v1(response_payload).expect("relay response must decode")
+    else {
+        panic!("discarded response must be a successful mutation");
+    };
+    let discarded_json = serde_json::to_value(ResponseEnvelopeV1::Output(discarded.clone()))
+        .expect("discarded response must serialize");
+    let lookup = terminal_lookup(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        RESPONSE_LOSS_KEY,
+    );
+    assert_eq!(lookup["result"]["job"]["command"], "session.start");
+    assert_eq!(lookup["result"]["job"]["state"], "succeeded");
+    assert!(
+        lookup["result"]["job"]["request_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:"))
+    );
+    assert_eq!(lookup["result"]["job"]["terminal_response"], discarded_json);
+
+    let replayed = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            RESPONSE_LOSS_KEY,
+            "start",
+            "--preset",
+            "analysis",
+            "--task",
+            "Recover the discarded daemon response",
+        ],
+    );
+    assert_eq!(replayed["job"], discarded_json["job"]);
+    assert_eq!(replayed["session"], discarded_json["session"]);
+    assert_eq!(replayed["result"], discarded_json["result"]);
+
+    let reused = assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "--timeout",
+                "25s",
+                "--idempotency-key",
+                RESPONSE_LOSS_KEY,
+                "start",
+                "--preset",
+                "analysis",
+                "--task",
+                "A different canonical request",
+            ],
+        ),
+        "IDEMPOTENCY_KEY_REUSED",
+        2,
+    );
+    assert_eq!(reused["retryable"], false);
 
     fixture.uninstall(&controlled_path);
 }

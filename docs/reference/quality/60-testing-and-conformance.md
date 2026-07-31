@@ -217,6 +217,15 @@ session, revision, attempt, and item fences while populating every item shape,
 then covers completion, reopen, replacement, and reset with the same explicit
 consumer identity discipline.
 
+The Dolgorae conflict and reconciliation E2E flows require the installed daemon
+to reject a mismatched contract identity and require closed conflicts for stale
+workspace, session, session-revision, and Procedure-digest observations. A zero-
+duration synchronous wait proves durable admission through `JOB_WAIT_TIMEOUT`
+and recovers the terminal receipt by idempotency-key lookup. A private socket
+relay separately discards a real successful mutation response, requiring
+`MUTATION_OUTCOME_UNKNOWN`, read-only terminal lookup, exact replay, and
+different-request key-reuse rejection without a second admission.
+
 Automation conformance scenarios are defined in the
 [automation acceptance matrix](../interfaces/34-automation-client-contract.md#24-acceptance-matrix).
 Their evidence may span implementation and integration tasks. A scenario enters
