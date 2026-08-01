@@ -51,7 +51,8 @@ the complete `make test` gate, builds thin arm64 release binaries, and creates:
 
 - `dist/podway-0.1.0-aarch64-apple-darwin.tar.gz`;
 - the archive's `.sha256` file;
-- `dist/podway-0.1.0-aarch64-apple-darwin.provenance.json`.
+- `dist/podway-0.1.0-aarch64-apple-darwin.provenance.json`;
+- `dist/podway-0.1.0-aarch64-apple-darwin.dolgorae-handoff.json`.
 
 The archive builder rejects non-arm64 Mach-O binaries, incomplete layouts, stale
 binary versions, a non-1.97.1 Rust toolchain, and a dirty tracked or untracked tree.
@@ -69,13 +70,15 @@ It extracts the release-profile archive, runs the packaged Dolgorae lifecycle,
 conflict, timeout, response-loss, reconciliation, and identity scenarios through
 `podwayd --dev` and `podway --dev`, and rejects any leftover dev socket. It requires
 neither administrator authorization nor a disposable account or launchd domain.
+After conformance succeeds, the deterministic Dolgorae handoff binds the archive,
+both binaries, contract manifest, provenance, source commit and tree, Rust
+toolchain, and Cargo.lock identities needed for consumer pinning.
 Rebuild the archive whenever history is rewritten after packaging; published
 provenance `source_commit` must equal the exact release-tag commit.
 
 ## Current implementation state
 
-The historical baseline and the automation client work through `DOLGI` are
-represented in the local gate. The `REL10` tasks remain incomplete, so
-`REL10005` stays blocked until contract freeze, the final clean-tree gate,
-distribution construction, and compatibility handoff are complete. Generated
-reports from superseded qualification systems are not release inputs.
+The historical baseline, automation client work through `DOLGI`, and REL10 work
+through the compatibility handoff are represented in the local gate. `REL10005`
+remains a deliberate manual review, tag, and publication step. Generated reports
+from superseded qualification systems are not release inputs.

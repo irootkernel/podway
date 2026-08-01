@@ -78,7 +78,8 @@ consumer can inspect and pin the same contract identity as the binaries.
 
 From a clean native Apple Silicon working tree, `make dist` reruns the complete
 `make test` release gate, builds both release binaries, and writes the deterministic
-archive, its SHA-256 file, and a provenance JSON document under `dist/`. The archive
+archive, its SHA-256 file, a provenance JSON document, and a Dolgorae compatibility
+handoff under `dist/`. The archive
 builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
 version mismatches, incomplete archive contents, a Rust toolchain other than 1.97.1,
 and any dirty tracked or untracked source state.
@@ -107,6 +108,12 @@ lifecycle, conflict, admitted-timeout, response-loss, reconciliation, and identi
 scenarios through the extracted `podway --dev`. Success requires orderly termination
 and absence of every temporary daemon socket. This verifies Podway's executable and
 IPC interfaces; it does not retest macOS launchd itself.
+
+After packaged conformance passes, the deterministic
+`podway-0.1.0-aarch64-apple-darwin.dolgorae-handoff.json` document publishes the
+archive and binary digests, build and contract identities, provenance digest,
+source commit and Git tree, Rust toolchain, and Cargo.lock digest. Dolgorae pins
+this closed identity set rather than inferring compatibility from a version string.
 
 ## Installation
 

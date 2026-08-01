@@ -55,6 +55,7 @@ architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py self-test
+	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --all
 	$(MAKE) contract-manifest
 	$(MAKE) preset-tool-test
@@ -114,4 +115,6 @@ dist:
 		--podwayd target/release/podwayd \
 		--output-dir $(DIST_DIR)
 	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py qualify \
+		--output-dir $(DIST_DIR)
+	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py create \
 		--output-dir $(DIST_DIR)

@@ -34,6 +34,9 @@ authoritative gate for the source revision is a successful local `make test` run
 and `podway-0.1.0-aarch64-apple-darwin.provenance.json`. The provenance records the
 source commit, Rust 1.97.1 identity, Cargo.lock digest, target, binary digests,
 release-gate result, contract manifest digest, and signing/notarization status.
+After packaged conformance succeeds, `make dist` also writes the deterministic
+`podway-0.1.0-aarch64-apple-darwin.dolgorae-handoff.json` pinning document with
+the binary, contract, provenance, source tree, and toolchain identities.
 The final `make dist` phase also extracts those release binaries and runs packaged
 conformance through the isolated foreground `--dev` daemon mode. This requires no
 administrator authorization or temporary operating-system account and leaves no
