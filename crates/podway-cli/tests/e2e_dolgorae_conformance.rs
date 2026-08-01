@@ -27,6 +27,7 @@ use podway_protocol::{
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -382,6 +383,41 @@ fn cli_binary() -> PathBuf {
     std::env::var_os("PODWAY_TEST_CLI_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_podway")))
+}
+
+fn sha256_file(path: &Path) -> String {
+    let mut source = fs::File::open(path).expect("digest source must open");
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = source.read(&mut buffer).expect("digest source must read");
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn assert_test_isolation(binary: &Path) {
+    const PROBE_TOKEN: &str = "podway-test-isolation-v1";
+    let output = Command::new(binary)
+        .arg("--podway-test-isolation-probe")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("PODWAY_TEST_ISOLATION_PROBE", PROBE_TOKEN)
+        .output()
+        .expect("packaged isolation probe must execute");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "packaged isolation probe failed for {}: stdout={} stderr={}",
+        binary.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, format!("{PROBE_TOKEN}\n").as_bytes());
+    assert!(output.stderr.is_empty());
 }
 
 const DOLGI_PROCEDURE: &str = r#"schema: podway.procedure/v1
@@ -1686,11 +1722,13 @@ fn aut_t_dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_s
     let archive_root = extraction.join("podway-0.1.0-aarch64-apple-darwin");
     let packaged_cli = archive_root.join("bin/podway");
     let packaged_daemon = archive_root.join("bin/podwayd");
-    for binary in [&packaged_cli, &packaged_daemon] {
+    for (role, binary) in [("podway", &packaged_cli), ("podwayd", &packaged_daemon)] {
         let metadata = fs::symlink_metadata(binary).expect("packaged binary must exist");
         assert!(metadata.file_type().is_file());
         assert!(!metadata.file_type().is_symlink());
         assert_ne!(metadata.permissions().mode() & 0o111, 0);
+        assert_eq!(provenance["binaries"][role], sha256_file(binary));
+        assert_test_isolation(binary);
     }
 
     let cli_identity = assert_json_success(

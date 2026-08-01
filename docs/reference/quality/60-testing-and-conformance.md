@@ -375,7 +375,8 @@ Archive-builder acceptance constructs the deterministic native test-fixture arch
 twice from debug binaries in disposable directories and compares their digests
 without publishing either artifact. The packaged Dolgorae acceptance flow
 additionally extracts one such archive, verifies that CLI, daemon, manifest, source,
-target, and provenance identities agree, and reruns the complete controlled-PATH
-service, lifecycle, conflict, timeout, and reconciliation suite with binary
+target, binary digests, isolation capability, and provenance identities agree, and
+reruns the complete Dolgorae consumer controlled-PATH service, lifecycle, conflict,
+timeout, and reconciliation suite with binary
 selection restricted to that archive's `podway` and `podwayd`. Release-profile
 distribution qualification remains owned by `REL10003`.

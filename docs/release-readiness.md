@@ -1,7 +1,7 @@
 # Release Readiness
 
-Podway uses one executable release gate: run `make test` locally from the repository
-root. That command is authoritative only for requirements and evidence already
+Podway uses one executable source-readiness gate: run `make test` locally from the
+repository root. That command is authoritative only for requirements and evidence already
 registered in the tested tree. Podway v0.1.0 is not release-ready while any
 release-blocking task in the [roadmap](roadmap.md) remains incomplete; a current
 successful run proves the implemented tree, not completion of the remaining
@@ -33,7 +33,7 @@ formatted tree, not from stale pre-format bytes.
 | `make test-unit` | Focused library and binary tests for iteration |
 | `make test-int` | Focused component integration, including a product component with controlled doubles |
 | `make test-fuzzing` | Fixed-run, fixed-seed frame-decoder and request-envelope fuzzing in disposable corpora |
-| `make test-e2e` | User journeys using actual product binaries, shells, and release archives |
+| `make test-e2e` | User journeys using actual debug product binaries, shells, and native test-fixture archives |
 
 The architecture portion also exercises the contributor-only preset tooling against
 the real Podway validator. `make preset-create` and `make preset-import` prepare
@@ -55,13 +55,17 @@ the complete `make test` gate, builds thin arm64 release binaries, and creates:
 
 The archive builder rejects non-arm64 Mach-O binaries, incomplete layouts, stale
 binary versions, a non-1.97.1 Rust toolchain, and a dirty tracked or untracked tree.
+It snapshots each binary through a non-symlink file descriptor, then performs every
+identity, capability, digest, provenance, and archive operation against those exact
+snapshot bytes. An unavailable, timed-out, or ambiguous isolation probe fails closed.
 The local gate exercises the same builder with real debug binaries in temporary
 directories, records `artifact_class=test-fixture` and `release_gate=test-fixture`, requires
 both binaries to expose debug-only isolation before any service mutation, and proves
 that repeated construction produces the same archive digest. `make dist` instead
 requires `artifact_class=distribution` and rejects binaries that expose that isolation
 capability. It also rejects `--allow-dirty`, which is reserved for test fixtures.
-Final packaged release conformance runs only under a disposable macOS
+Final packaged release conformance is a separate `REL10003` completion requirement
+and runs only under a disposable macOS
 account with an isolated launchd user domain; it must not reuse the debug fixture
 override against a real user account.
 Rebuild the archive whenever history is rewritten after packaging; published

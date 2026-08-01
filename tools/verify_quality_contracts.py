@@ -17,13 +17,42 @@ DOLGI_MATRIX_PATH = ROOT / "release/dolgorae-acceptance-matrix-v1.json"
 CRASH_PATH = ROOT / "quality/crash-boundaries-v1.json"
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 FUNCTION_RE_TEMPLATE = r"\bfn\s+{name}\s*(?:<[^>]*>)?\s*\("
+TEST_FUNCTION_RE_TEMPLATE = (
+    r"#\s*\[\s*test\s*\]\s*(?:#\s*\[[^\]]+\]\s*)*"
+    r"(?:pub(?:\([^)]*\))?\s+)?fn\s+{name}\s*\("
+)
 PYTHON_FUNCTION_RE_TEMPLATE = r"^def\s+{name}\s*\("
 DOLGI_TASKS = {
-    "DOLGI001": ("Build the controlled-PATH integration harness", ["AUT-T-PATH"]),
-    "DOLGI002": ("Verify service and quiescent observation", ["AUT-T-OBS"]),
-    "DOLGI003": ("Verify session and item operations", ["AUT-T-ID", "AUT-T-START"]),
-    "DOLGI004": ("Verify conflict and reconciliation paths", ["AUT-T-ID", "AUT-T-RECON"]),
-    "DOLGI005": ("Verify the packaged test-fixture archive", ["AUT-T-DIST"]),
+    "DOLGI001": {
+        "title": "Build the controlled-PATH integration harness",
+        "goal": "Complete AUT-T-PATH by installing through a controlled PATH from a sanitized arbitrary directory and verifying sibling, explicit, and PATH daemon resolution plus the canonical absolute plist path.",
+        "reference_ids": ["AUT-PATH-001–003", "AUT-DAEMON-001–003", "AUT-T-PATH"],
+        "evidence_ids": ["AUT-T-PATH"],
+    },
+    "DOLGI002": {
+        "title": "Verify service and quiescent observation",
+        "goal": "Install the daemon, connect through an explicit socket, initialize a worktree, and obtain compact idle status.",
+        "reference_ids": ["AUT-SOCK-001–004", "AUT-SOCK-005", "AUT-OBS-001", "AUT-OBS-002–004"],
+        "evidence_ids": ["AUT-T-OBS"],
+    },
+    "DOLGI003": {
+        "title": "Verify session and item operations",
+        "goal": "Exercise the full lifecycle with explicit identity fences.",
+        "reference_ids": ["AUT-ID-001–007", "AUT-START-001–004"],
+        "evidence_ids": ["AUT-T-ID", "AUT-T-START"],
+    },
+    "DOLGI004": {
+        "title": "Verify conflict and reconciliation paths",
+        "goal": "Exercise stale identity, digest and daemon mismatch, timeout, response loss, and lookup.",
+        "reference_ids": ["AUT-T-ID", "AUT-T-RECON"],
+        "evidence_ids": ["AUT-T-ID", "AUT-T-RECON"],
+    },
+    "DOLGI005": {
+        "title": "Verify the packaged test-fixture archive",
+        "goal": "Run the complete Dolgorae consumer conformance suite using a native arm64 archive built from debug binaries, require explicit test-fixture provenance, and fail closed unless both packaged binaries expose debug-only isolation.",
+        "reference_ids": ["AUT-REL-001–003", "AUT-T-DIST"],
+        "evidence_ids": ["AUT-T-DIST"],
+    },
 }
 
 
@@ -208,13 +237,13 @@ def validate_acceptance_matrix() -> tuple[int, int]:
     return len(criteria), len(proof_source_files)
 
 
-def roadmap_dolgi_tasks() -> dict[str, tuple[str, str]]:
+def roadmap_dolgi_tasks() -> dict[str, dict[str, Any]]:
     lines = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8").splitlines()
     try:
         start = lines.index("## DOLGI — Dolgorae Integration Conformance")
     except ValueError:
         fail("roadmap omits the DOLGI epic")
-    tasks: dict[str, tuple[str, str]] = {}
+    tasks: dict[str, dict[str, Any]] = {}
     for line in lines[start + 1 :]:
         if line.startswith("## "):
             break
@@ -226,8 +255,24 @@ def roadmap_dolgi_tasks() -> dict[str, tuple[str, str]]:
         task_id = columns[0].strip("`")
         if task_id in tasks:
             fail(f"roadmap repeats DOLGI task {task_id}")
-        tasks[task_id] = (columns[1], columns[2])
+        tasks[task_id] = {
+            "title": columns[1],
+            "status": columns[2],
+            "goal": columns[3],
+            "reference_ids": re.findall(r"\[([^\]]+)\]\(", columns[4]),
+        }
     return tasks
+
+
+def rust_test_function_exists(source: str, function: str) -> bool:
+    return (
+        re.search(
+            TEST_FUNCTION_RE_TEMPLATE.format(name=re.escape(function)),
+            source,
+            re.MULTILINE,
+        )
+        is not None
+    )
 
 
 def validate_dolgi_proof(member: Any, task_id: str, source_files: set[str]) -> None:
@@ -242,8 +287,8 @@ def validate_dolgi_proof(member: Any, task_id: str, source_files: set[str]) -> N
     path = repository_file(relative, f"{task_id} proof path")
     source = path.read_text(encoding="utf-8")
     if kind == "cargo-test":
-        if re.search(FUNCTION_RE_TEMPLATE.format(name=re.escape(function)), source) is None:
-            fail(f"{task_id} proof function is missing from {relative}: {function}")
+        if not rust_test_function_exists(source, function):
+            fail(f"{task_id} proof is not a #[test] function in {relative}: {function}")
         parts = Path(relative).parts
         if len(parts) < 4 or parts[0] != "crates" or parts[2] != "tests":
             fail(f"{task_id} cargo proof is outside a crate test directory")
@@ -273,6 +318,7 @@ def validate_dolgi_proof(member: Any, task_id: str, source_files: set[str]) -> N
 
 def validate_dolgorae_acceptance_matrix(
     matrix_override: dict[str, Any] | None = None,
+    roadmap_override: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[int, int]:
     matrix = load_object(DOLGI_MATRIX_PATH) if matrix_override is None else matrix_override
     if matrix.get("schema") != "podway.dolgorae-acceptance-matrix/v1" or matrix.get("version") != 1:
@@ -280,23 +326,29 @@ def validate_dolgorae_acceptance_matrix(
     tasks = matrix.get("tasks")
     if not isinstance(tasks, list):
         fail("DOLGI acceptance matrix tasks must be a list")
-    roadmap_tasks = roadmap_dolgi_tasks()
+    roadmap_tasks = roadmap_dolgi_tasks() if roadmap_override is None else roadmap_override
     if roadmap_tasks != {
-        task_id: (title, "Completed") for task_id, (title, _evidence) in DOLGI_TASKS.items()
+        task_id: {
+            "title": contract["title"],
+            "status": "Completed",
+            "goal": contract["goal"],
+            "reference_ids": contract["reference_ids"],
+        }
+        for task_id, contract in DOLGI_TASKS.items()
     }:
-        fail("roadmap DOLGI tasks do not match the completed acceptance inventory")
+        fail("roadmap DOLGI title, status, goal, or references do not match the accepted inventory")
     if [task.get("id") for task in tasks if isinstance(task, dict)] != list(DOLGI_TASKS):
         fail("DOLGI acceptance tasks must be complete, unique, and ordered")
 
     proof_source_files: set[str] = set()
     for task in tasks:
         task_id = task["id"]
-        title, expected_evidence = DOLGI_TASKS[task_id]
+        contract = DOLGI_TASKS[task_id]
         if set(task) != {"evidence_ids", "id", "proofs", "status", "title"}:
             fail(f"{task_id} has unexpected or missing fields")
-        if task["title"] != title or task["status"] != "Completed":
+        if task["title"] != contract["title"] or task["status"] != "Completed":
             fail(f"{task_id} title or completion status does not match the roadmap")
-        if task["evidence_ids"] != expected_evidence:
+        if task["evidence_ids"] != contract["evidence_ids"]:
             fail(f"{task_id} evidence IDs do not match the accepted inventory")
         proofs = task["proofs"]
         if not isinstance(proofs, list) or not proofs:
@@ -323,9 +375,13 @@ def validate_dolgorae_acceptance_matrix(
 def self_test_dolgorae_acceptance_matrix() -> int:
     baseline = load_object(DOLGI_MATRIX_PATH)
 
-    def expect_failure(matrix: dict[str, Any], expected: str) -> None:
+    def expect_failure(
+        matrix: dict[str, Any],
+        expected: str,
+        roadmap: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         try:
-            validate_dolgorae_acceptance_matrix(matrix)
+            validate_dolgorae_acceptance_matrix(matrix, roadmap)
         except ContractError as error:
             if expected not in str(error):
                 fail(f"DOLGI matrix self-test failed for {expected}: {error}")
@@ -346,11 +402,23 @@ def self_test_dolgorae_acceptance_matrix() -> int:
     wrong_evidence["tasks"][0]["evidence_ids"] = ["AUT-T-OBS"]
     expect_failure(wrong_evidence, "evidence IDs")
 
+    wrong_goal = copy.deepcopy(roadmap_dolgi_tasks())
+    wrong_goal["DOLGI005"]["goal"] = "Weakened goal."
+    expect_failure(baseline, "title, status, goal, or references", wrong_goal)
+
+    wrong_references = copy.deepcopy(roadmap_dolgi_tasks())
+    wrong_references["DOLGI005"]["reference_ids"] = ["AUT-T-DIST"]
+    expect_failure(baseline, "title, status, goal, or references", wrong_references)
+
     stale_digest = copy.deepcopy(baseline)
     first_source = next(iter(stale_digest["source_files"]))
     stale_digest["source_files"][first_source] = "0" * 64
     expect_failure(stale_digest, "proof source file is stale")
-    return 4
+    if not rust_test_function_exists("#[test]\nfn proof() {}", "proof"):
+        fail("DOLGI matrix self-test rejected a real #[test] function")
+    if rust_test_function_exists("fn proof() {}", "proof"):
+        fail("DOLGI matrix self-test accepted a non-test helper function")
+    return 8
 
 
 def locator_parts(locator: Any, label: str) -> tuple[Path, str]:

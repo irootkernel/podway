@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from enum import Enum
 import gzip
 import hashlib
 import json
@@ -32,10 +33,17 @@ COMPLETION_NAMES = {
 }
 ISOLATION_PROBE_ENV = "PODWAY_TEST_ISOLATION_PROBE"
 ISOLATION_PROBE_TOKEN = "podway-test-isolation-v1"
+ISOLATION_PROBE_TIMEOUT_SECONDS = 5
 
 
 class ReleaseError(RuntimeError):
     pass
+
+
+class TestIsolationCapability(Enum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    INDETERMINATE = "indeterminate"
 
 
 def fail(message: str) -> None:
@@ -68,6 +76,30 @@ def require_regular_file(path: Path, label: str) -> Path:
     if path.is_symlink() or not path.is_file():
         fail(f"{label} must be a regular non-symlink file: {path}")
     return path.resolve()
+
+
+def snapshot_executable(source: Path, destination: Path, label: str) -> Path:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as error:
+        fail(f"cannot open {label} as a regular non-symlink file: {source}: {error}")
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            fail(f"{label} must be a regular non-symlink file: {source}")
+        if metadata.st_mode & stat.S_IXUSR == 0:
+            fail(f"{label} is not executable: {source}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with os.fdopen(descriptor, "rb", closefd=False) as opened_source:
+            with destination.open("xb") as opened_destination:
+                shutil.copyfileobj(opened_source, opened_destination)
+                opened_destination.flush()
+                os.fsync(opened_destination.fileno())
+        os.chmod(destination, 0o755)
+    finally:
+        os.close(descriptor)
+    return destination.resolve()
 
 
 def require_native_binary(path: Path, expected_name: str) -> Path:
@@ -126,22 +158,39 @@ def verify_binary_contract_identity(
     return identity
 
 
-def supports_test_isolation(path: Path) -> bool:
-    environment = os.environ.copy()
-    environment[ISOLATION_PROBE_ENV] = ISOLATION_PROBE_TOKEN
-    completed = subprocess.run(
-        [str(path), "--podway-test-isolation-probe"],
-        cwd=ROOT,
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    return (
-        completed.returncode == 0
-        and completed.stdout == f"{ISOLATION_PROBE_TOKEN}\n".encode()
-        and completed.stderr == b""
-    )
+def run_test_isolation_probe(path: Path, token: str) -> tuple[int, bytes, bytes] | None:
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        ISOLATION_PROBE_ENV: token,
+    }
+    try:
+        completed = subprocess.run(
+            [str(path), "--podway-test-isolation-probe"],
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=ISOLATION_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+def test_isolation_capability(path: Path) -> TestIsolationCapability:
+    enabled_probe = run_test_isolation_probe(path, ISOLATION_PROBE_TOKEN)
+    disabled_probe = run_test_isolation_probe(path, f"{ISOLATION_PROBE_TOKEN}-disabled")
+    if enabled_probe == (0, f"{ISOLATION_PROBE_TOKEN}\n".encode(), b""):
+        return TestIsolationCapability.ENABLED
+    if (
+        enabled_probe is not None
+        and disabled_probe is not None
+        and enabled_probe == disabled_probe
+        and enabled_probe[0] != 0
+    ):
+        return TestIsolationCapability.DISABLED
+    return TestIsolationCapability.INDETERMINATE
 
 
 def validate_package_mode(artifact_class: str, allow_dirty: bool) -> None:
@@ -152,12 +201,23 @@ def validate_package_mode(artifact_class: str, allow_dirty: bool) -> None:
 def verify_artifact_class(
     binaries: dict[str, Path],
     artifact_class: str,
-    capability_probe: Callable[[Path], bool] = supports_test_isolation,
+    capability_probe: Callable[[Path], TestIsolationCapability] = test_isolation_capability,
 ) -> None:
     capabilities = {role: capability_probe(path) for role, path in binaries.items()}
-    expected = artifact_class == "test-fixture"
+    indeterminate = {
+        role: capability.value
+        for role, capability in capabilities.items()
+        if capability is TestIsolationCapability.INDETERMINATE
+    }
+    if indeterminate:
+        fail(f"binary isolation probe was indeterminate: {indeterminate}")
+    expected = (
+        TestIsolationCapability.ENABLED
+        if artifact_class == "test-fixture"
+        else TestIsolationCapability.DISABLED
+    )
     mismatches = {
-        name: {"expected_test_isolation": expected, "actual": actual}
+        name: {"expected_test_isolation": expected.value, "actual": actual.value}
         for name, actual in capabilities.items()
         if actual != expected
     }
@@ -169,8 +229,19 @@ def self_test() -> dict[str, Any]:
     same_name_cli = Path("/fixture/cli/product")
     same_name_daemon = Path("/fixture/daemon/product")
 
-    def probe(enabled: set[Path]) -> Callable[[Path], bool]:
-        return lambda path: path in enabled
+    def probe(
+        enabled: set[Path], indeterminate: set[Path] | None = None
+    ) -> Callable[[Path], TestIsolationCapability]:
+        indeterminate = set() if indeterminate is None else indeterminate
+
+        def capability(path: Path) -> TestIsolationCapability:
+            if path in indeterminate:
+                return TestIsolationCapability.INDETERMINATE
+            if path in enabled:
+                return TestIsolationCapability.ENABLED
+            return TestIsolationCapability.DISABLED
+
+        return capability
 
     def expect_artifact_class_rejection(
         artifact_class: str,
@@ -206,6 +277,18 @@ def self_test() -> dict[str, Any]:
     expect_artifact_class_rejection("test-fixture", {same_name_cli}, "podwayd")
     expect_artifact_class_rejection("distribution", {same_name_cli}, "podway")
     expect_artifact_class_rejection("distribution", {same_name_daemon}, "podwayd")
+    for artifact_class in ("test-fixture", "distribution"):
+        try:
+            verify_artifact_class(
+                {"podway": same_name_cli, "podwayd": same_name_daemon},
+                artifact_class,
+                probe(set(), {same_name_cli}),
+            )
+        except ReleaseError as error:
+            if "indeterminate" not in str(error) or "podway" not in str(error):
+                fail("artifact-class self-test did not fail closed on an indeterminate probe")
+        else:
+            fail("artifact-class self-test accepted an indeterminate probe")
 
     try:
         validate_package_mode("distribution", True)
@@ -216,7 +299,17 @@ def self_test() -> dict[str, Any]:
 
     validate_package_mode("distribution", False)
     validate_package_mode("test-fixture", True)
-    return {"mode": "self-test", "ok": True, "sentinels": 9}
+    with tempfile.TemporaryDirectory(prefix="podway-release-self-test-") as temporary_name:
+        temporary = Path(temporary_name)
+        source = temporary / "source"
+        snapshot = temporary / "snapshot"
+        source.write_bytes(b"verified bytes")
+        source.chmod(0o700)
+        snapshot_executable(source, snapshot, "self-test executable")
+        source.write_bytes(b"replacement bytes")
+        if snapshot.read_bytes() != b"verified bytes":
+            fail("executable snapshot changed after its source was replaced")
+    return {"mode": "self-test", "ok": True, "sentinels": 12}
 
 
 def require_native_host() -> None:
@@ -471,53 +564,65 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
     dirty = require_clean_tree(arguments.allow_dirty)
     manifest_schema, manifest_digest = contract_manifest_identity()
     source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
-    podway = require_native_binary(arguments.podway, "podway")
-    podwayd = require_native_binary(arguments.podwayd, "podwayd")
-    verify_artifact_class({"podway": podway, "podwayd": podwayd}, arguments.artifact_class)
-    podway_identity = verify_binary_contract_identity(
-        podway, "podway", manifest_schema, manifest_digest, source_commit
-    )
-    podwayd_identity = verify_binary_contract_identity(
-        podwayd, "podwayd", manifest_schema, manifest_digest, source_commit
-    )
-    if podway_identity["build_identity"] != podwayd_identity["build_identity"]:
-        fail("podway and podwayd build identities do not match")
-    output_directory = arguments.output_dir
-    if output_directory.exists() and (output_directory.is_symlink() or not output_directory.is_dir()):
-        fail("release output must be a regular directory")
-    output_directory.mkdir(parents=True, exist_ok=True)
-
-    archive_path = output_directory / f"{ARCHIVE_ROOT}.tar.gz"
-    checksum_path = output_directory / f"{archive_path.name}.sha256"
-    provenance_path = output_directory / f"{ARCHIVE_ROOT}.provenance.json"
     with tempfile.TemporaryDirectory(prefix="podway-release-") as temporary_name:
-        staging = Path(temporary_name) / ARCHIVE_ROOT
+        temporary = Path(temporary_name)
+        podway = require_native_binary(
+            snapshot_executable(arguments.podway, temporary / "inputs/podway", "podway"),
+            "podway",
+        )
+        podwayd = require_native_binary(
+            snapshot_executable(arguments.podwayd, temporary / "inputs/podwayd", "podwayd"),
+            "podwayd",
+        )
+        verify_artifact_class(
+            {"podway": podway, "podwayd": podwayd}, arguments.artifact_class
+        )
+        podway_identity = verify_binary_contract_identity(
+            podway, "podway", manifest_schema, manifest_digest, source_commit
+        )
+        podwayd_identity = verify_binary_contract_identity(
+            podwayd, "podwayd", manifest_schema, manifest_digest, source_commit
+        )
+        if podway_identity["build_identity"] != podwayd_identity["build_identity"]:
+            fail("podway and podwayd build identities do not match")
+
+        output_directory = arguments.output_dir
+        if output_directory.exists() and (
+            output_directory.is_symlink() or not output_directory.is_dir()
+        ):
+            fail("release output must be a regular directory")
+        output_directory.mkdir(parents=True, exist_ok=True)
+        archive_path = output_directory / f"{ARCHIVE_ROOT}.tar.gz"
+        checksum_path = output_directory / f"{archive_path.name}.sha256"
+        provenance_path = output_directory / f"{ARCHIVE_ROOT}.provenance.json"
+        staging = temporary / ARCHIVE_ROOT
         staging.mkdir()
         copy_release_inputs(staging, podway, podwayd)
         write_archive(staging, archive_path)
-
-    entries = inspect_archive(archive_path)
-    archive_digest = sha256_file(archive_path)
-    checksum_path.write_text(f"{archive_digest}  {archive_path.name}\n", encoding="utf-8")
-    provenance = {
-        "archive": {"name": archive_path.name, "sha256": archive_digest},
-        "binaries": {"podway": sha256_file(podway), "podwayd": sha256_file(podwayd)},
-        "build_identity": podway_identity["build_identity"],
-        "artifact_class": arguments.artifact_class,
-        "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
-        "contract_manifest_digest": manifest_digest,
-        "contract_manifest_schema": manifest_schema,
-        "release_gate": (
-            "test-fixture" if arguments.artifact_class == "test-fixture" else "make test: passed"
-        ),
-        "release_status": release_status(),
-        "schema": "podway.release-provenance/v1",
-        "source_commit": source_commit,
-        "source_dirty": dirty,
-        "target": TARGET,
-        "toolchain": rust_toolchain(),
-        "version": PRODUCT_VERSION,
-    }
+        entries = inspect_archive(archive_path)
+        archive_digest = sha256_file(archive_path)
+        checksum_path.write_text(f"{archive_digest}  {archive_path.name}\n", encoding="utf-8")
+        provenance = {
+            "archive": {"name": archive_path.name, "sha256": archive_digest},
+            "binaries": {"podway": sha256_file(podway), "podwayd": sha256_file(podwayd)},
+            "build_identity": podway_identity["build_identity"],
+            "artifact_class": arguments.artifact_class,
+            "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
+            "contract_manifest_digest": manifest_digest,
+            "contract_manifest_schema": manifest_schema,
+            "release_gate": (
+                "test-fixture"
+                if arguments.artifact_class == "test-fixture"
+                else "make test: passed"
+            ),
+            "release_status": release_status(),
+            "schema": "podway.release-provenance/v1",
+            "source_commit": source_commit,
+            "source_dirty": dirty,
+            "target": TARGET,
+            "toolchain": rust_toolchain(),
+            "version": PRODUCT_VERSION,
+        }
     write_json(provenance_path, provenance)
     return {
         "archive": str(archive_path.resolve()),

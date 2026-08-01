@@ -82,13 +82,17 @@ archive, its SHA-256 file, and a provenance JSON document under `dist/`. The arc
 builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
 version mismatches, incomplete archive contents, a Rust toolchain other than 1.97.1,
 and any dirty tracked or untracked source state.
+The builder first snapshots both executable inputs through non-symlink file
+descriptors. Binary validation, isolation classification, packaged content, recorded
+digests, and provenance all use those immutable snapshot bytes. Probe failure,
+timeout, or ambiguity rejects both artifact classes.
 
 The provenance document records the shared binary build identity, source commit,
 Rust toolchain identifier, Cargo.lock digest, contract manifest identity, target
 architecture, both binary digests, archive digest, successful local-gate result,
 artifact class, and signing/notarization status. `make test` exercises the same
-archive builder with debug binaries in disposable directories, requires their
-debug-only isolation capability before service mutation, and verifies that repeated
+archive builder with debug binaries in disposable directories, requires and rechecks
+their debug-only isolation capability before service mutation, and verifies that repeated
 construction produces the same archive digest; it does not publish a distribution
 artifact. Release packaging rejects that capability. The extracted release-profile
 archive is qualified later under a disposable macOS account with an isolated launchd
