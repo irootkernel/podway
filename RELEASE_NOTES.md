@@ -9,6 +9,9 @@ Podway 0.1.0 will publish the public v1 IPC, output, error, workspace, procedure
 
 Podway publishes and supports only native Apple Silicon macOS:
 `aarch64-apple-darwin` / thin `arm64` Mach-O.
+`podway version --json` returns the compact Sanho-compatible shape
+`{"name":"podway","version":"v0.1.0"}`; complete release and contract identity
+remains available through `podway version --json --identity`.
 Each Apple Silicon archive contains both `podway` and `podwayd`. Cross-built,
 translated, relabeled, universal, and fat binaries cannot satisfy native release
 acceptance. The 11.0 value is a minimum build deployment target

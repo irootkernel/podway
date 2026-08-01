@@ -110,7 +110,10 @@ def safe_extract(archive_path: Path, destination: Path) -> Path:
 
 
 def json_identity(binary: Path, role: str) -> dict[str, Any]:
-    completed = run([str(binary), "--json", "version"], label=f"{role} identity probe")
+    arguments = [str(binary), "--json", "version"]
+    if role == "podway":
+        arguments.append("--identity")
+    completed = run(arguments, label=f"{role} identity probe")
     try:
         value = json.loads(completed.stdout)
     except json.JSONDecodeError as error:

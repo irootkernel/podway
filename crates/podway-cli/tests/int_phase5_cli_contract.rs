@@ -1291,9 +1291,9 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
     RouteSurface {
         route: "version",
         parser: &["version"],
-        flags: DISPLAY_FLAGS,
+        flags: &["--json", "--no-color", "--quiet", "--identity"],
         values: &[],
-        help_tokens: &[],
+        help_tokens: &["--identity"],
         dynamic: None,
     },
     RouteSurface {
@@ -2406,7 +2406,14 @@ rework:
     .expect("offline procedure fixture must be writable");
     let local_successes = [
         ("help", vec!["--json".to_owned(), "help".to_owned()]),
-        ("version", vec!["--json".to_owned(), "version".to_owned()]),
+        (
+            "version",
+            vec![
+                "--json".to_owned(),
+                "version".to_owned(),
+                "--identity".to_owned(),
+            ],
+        ),
         (
             "completions",
             vec![
@@ -2815,13 +2822,26 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
         argv.extend_from_slice(arguments);
         let output = run(&argv);
         let response = one_json(&output);
+        if *route == "version" {
+            assert!(
+                output.status.success(),
+                "version must work offline: {output:?}"
+            );
+            assert_eq!(
+                response,
+                serde_json::json!({
+                    "name": "podway",
+                    "version": format!("v{}", env!("CARGO_PKG_VERSION")),
+                })
+            );
+            continue;
+        }
         assert_eq!(
             response["command"], *route,
             "{route} must retain its canonical command in every public envelope"
         );
         match *route {
-            "help" | "version" | "completions" | "preset.list" | "preset.show"
-            | "preset.explain" => {
+            "help" | "completions" | "preset.list" | "preset.show" | "preset.explain" => {
                 assert!(
                     output.status.success(),
                     "{route} must work offline: {output:?}"
@@ -3207,8 +3227,20 @@ fn invalid_applicability_and_confirmation_are_usage_json_errors() {
 
 #[test]
 fn static_commands_and_all_completion_targets_do_not_need_a_daemon() {
+    let version = run(&["--json", "version"]);
+    assert!(
+        version.status.success(),
+        "version command failed: {version:?}"
+    );
+    assert_eq!(
+        one_json(&version),
+        serde_json::json!({
+            "name": "podway",
+            "version": format!("v{}", env!("CARGO_PKG_VERSION")),
+        })
+    );
+
     for arguments in [
-        &["--json", "version"][..],
         &["--json", "preset", "list"][..],
         &["--json", "preset", "show", "sw-dev"][..],
         &["--json", "preset", "explain", "sw-dev"][..],

@@ -1,9 +1,9 @@
 {
   "schema": "podway.dolgorae-acceptance-matrix/v1",
   "source_files": {
-    "crates/podway-cli/tests/e2e_dolgorae_conformance.rs": "f11afa6391e693cfbbdfd30c6f63573991e229657492215901eb34c14956ae7b",
+    "crates/podway-cli/tests/e2e_dolgorae_conformance.rs": "b46781002605619b867048f379a4f3e19a15d3effc0b938c50fe2a802c0d58f4",
     "crates/podway-cli/tests/e2e_release_archive.rs": "3fe316aa389ba36f27437ad4c336bb6c5e405b80d0d6409a4a95c9c94b8d1455",
-    "tools/release_archive.py": "006c89e0415d688bd4e2dda84ceb5a0ccc20122f88efd53435190fb10ef71110"
+    "tools/release_archive.py": "0a64e843c9d4228d49e32a576adb04b8ead62b5cbc640dc560f63736ed60415b"
   },
   "tasks": [
     {

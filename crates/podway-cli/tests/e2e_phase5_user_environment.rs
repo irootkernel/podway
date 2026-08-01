@@ -44,7 +44,13 @@ fn aut_t_path_invokes_cli_symlink_from_sanitized_arbitrary_directory() {
     assert!(output.stderr.is_empty());
     let envelope: Value =
         serde_json::from_slice(&output.stdout).expect("version output must be JSON");
-    assert_eq!(envelope["result"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        envelope,
+        serde_json::json!({
+            "name": "podway",
+            "version": format!("v{}", env!("CARGO_PKG_VERSION")),
+        })
+    );
 
     fs::remove_dir_all(root).expect("user-environment fixture must be removed");
 }

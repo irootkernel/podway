@@ -106,7 +106,7 @@ When no explicit endpoint is supplied, an interactive client may read
 | ID | Normative requirement |
 |---|---|
 | `AUT-CONTRACT-001` | `podway.contract-manifest/v1` MUST deterministically cover product version, supported IPC IDs, Procedure and IPC schemas, all integration result and error schemas, catalogs, transition matrix, canonicalization rules, and known-answer fixtures. |
-| `AUT-CONTRACT-002` | `podway --json version` MUST expose product, version, target, build identity, source commit when available, manifest schema and digest, and supported IPC IDs. |
+| `AUT-CONTRACT-002` | `podway version --json` MUST emit exactly the compact `name` and `v`-prefixed `version`; `podway version --json --identity` MUST expose product, version, target, build identity, source commit when available, manifest schema and digest, and supported IPC IDs. |
 | `AUT-CONTRACT-003` | `podway` and `podwayd` from one release MUST embed the same manifest digest. |
 | `AUT-CONTRACT-004` | Installation and every daemon connection MUST reject a product or manifest mismatch before command execution or durable admission; IPC compatibility alone MUST NOT authorize the connection. |
 | `AUT-CONTRACT-005` | `daemon status --json` MUST expose daemon version, executable path, process-instance identity, configured and effective socket, and manifest digest. |
@@ -209,7 +209,8 @@ The controlled-PATH harness includes these probes from a directory that is not a
 Podway worktree:
 
 ```bash
-env -i PATH="<release-bin>:/usr/bin:/bin" podway --json version
+env -i PATH="<release-bin>:/usr/bin:/bin" podway version --json
+env -i PATH="<release-bin>:/usr/bin:/bin" podway version --json --identity
 
 env -i PATH="<release-bin>:/usr/bin:/bin" \
   podway --json \
@@ -256,7 +257,7 @@ Dolgorae is the first consumer; these examples do not add Dolgorae workflow or
 authorization semantics to Podway.
 
 ```bash
-podway --json version
+podway version --json --identity
 
 podway --socket "/Users/example/.podway/run/podwayd.sock" daemon install
 

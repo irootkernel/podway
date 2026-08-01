@@ -19,7 +19,8 @@ These JSON Schema Draft 2020-12 files define Podway v1 structural contracts.
 - `status-result-v1.schema.json`: `status` result object.
 - `compact-status-result-v1.schema.json`: bounded `status --wait-for-idle --compact` result object.
 - `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
-- `version-result-v1.schema.json`: static product and embedded contract identity.
+- `version-summary-v1.schema.json`: compact public product name and version.
+- `version-result-v1.schema.json`: detailed static build and contract identity.
 - `procedure-validation-result-v1.schema.json`: validated Procedure digest and canonical form.
 - `session-start-result-v1.schema.json`: terminal and dry-run session start outcomes.
 - `next-result-v1.schema.json`: `next` result object.

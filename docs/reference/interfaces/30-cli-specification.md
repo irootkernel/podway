@@ -38,7 +38,9 @@ Durations accept `ms`, `s`, and `m`, for example `500ms`, `30s`, and `2m`.
 ## Output modes
 
 - Human-readable text is the default.
-- `--json` emits exactly one success or error JSON object to stdout.
+- `--json` emits exactly one success or error JSON object to stdout. The compact
+  `version --json` success form is the deliberate exception to the common output
+  envelope and is exactly `{"name":"podway","version":"v0.1.0"}` for this release.
 - Diagnostics not represented in the JSON object go to stderr only for process-level failures before JSON can be produced.
 - Color is used only on a TTY and never in JSON.
 - Text wording is not a stable API. JSON fields, schemas, error codes, and exit codes are the stable integration contract.
@@ -59,8 +61,9 @@ podway daemon ...
 ```
 
 `procedure validate` and `procedure show` use the same Rust schema and canonicalization library as the daemon.
-The target machine identity form is `podway --json version` and requires no
-worktree, daemon, `HOME`, or `TMPDIR`.
+`podway version --json` emits only the compact `name` and `version` summary. The
+target machine identity form is `podway version --json --identity`; it retains the
+versioned output envelope and requires no worktree, daemon, `HOME`, or `TMPDIR`.
 
 ## PATH invocation and runtime environment
 

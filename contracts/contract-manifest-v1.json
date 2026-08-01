@@ -172,6 +172,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/version-summary-v1.schema.json",
+      "sha256": "sha256:06cfdec02feb3adaa8e28e5bbddb921691f678444917912e7f6cca3722a8c5b3"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/workspace-init-result-v1.schema.json",
       "sha256": "sha256:51e68c2f017a576b036d25329e1d86be5ff12c16af5504640ab521eaa396bbc7"
     },
@@ -211,7 +216,7 @@
       "sha256": "sha256:33f0aba1e4dc4aaf6454b70f627ad451b0fcf8ae5b92d469083a68b6949c08ce"
     }
   ],
-  "digest": "sha256:1672f082fa6634d7d4e91d305f6877c6118d84afcf1314788bf77a30cc618bf6",
+  "digest": "sha256:5e58fa1d973576fe84f6268d5ad19def001fa139232ed11da67a818f53ca12ed",
   "product": "podway",
   "product_version": "0.1.0",
   "schema_version": "podway.contract-manifest/v1",

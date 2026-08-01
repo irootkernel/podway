@@ -13,7 +13,7 @@ fn digest_is_canonical(value: &str) -> bool {
 #[test]
 fn version_identity_is_static_complete_and_manifest_bound() {
     let output = Command::new(env!("CARGO_BIN_EXE_podway"))
-        .args(["--json", "version"])
+        .args(["--json", "version", "--identity"])
         .current_dir(std::env::temp_dir())
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -76,5 +76,29 @@ fn version_identity_is_static_complete_and_manifest_bound() {
         result["contract_manifest_digest"]
             .as_str()
             .is_some_and(digest_is_canonical)
+    );
+}
+
+#[test]
+fn public_version_json_matches_the_compact_name_and_version_contract() {
+    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+        .args(["version", "--json"])
+        .current_dir(std::env::temp_dir())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("podway version summary must run");
+    assert!(
+        output.status.success(),
+        "version summary failed: {output:?}"
+    );
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        output.stdout,
+        format!(
+            "{{\"name\":\"podway\",\"version\":\"v{}\"}}\n",
+            env!("CARGO_PKG_VERSION")
+        )
+        .as_bytes()
     );
 }

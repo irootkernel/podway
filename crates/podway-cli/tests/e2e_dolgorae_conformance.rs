@@ -1888,10 +1888,10 @@ fn dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite()
 
     let cli_identity = assert_json_success(
         Command::new(&packaged_cli)
-            .args(["--json", "version"])
+            .args(["--json", "version", "--identity"])
             .output()
             .expect("packaged CLI identity probe must execute"),
-        ["--json", "version"],
+        ["--json", "version", "--identity"],
     );
     let daemon_probe = Command::new(&packaged_daemon)
         .args(["--json", "version"])

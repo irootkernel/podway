@@ -65,6 +65,10 @@ const QUIET: Flag = Flag {
     long: "quiet",
     takes_value: false,
 };
+const IDENTITY: Flag = Flag {
+    long: "identity",
+    takes_value: false,
+};
 const IDEMPOTENCY_KEY: Flag = Flag {
     long: "idempotency-key",
     takes_value: true,
@@ -293,7 +297,7 @@ const ROUTES: &[Route] = &[
     },
     Route {
         words: "version",
-        flags: DISPLAY_FLAGS,
+        flags: &[&JSON, &NO_COLOR, &QUIET, &IDENTITY],
         values: "",
         dynamic: None,
     },

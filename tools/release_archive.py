@@ -127,7 +127,10 @@ def verify_binary_contract_identity(
     manifest_digest: str,
     source_commit: str,
 ) -> dict[str, Any]:
-    payload = run([str(path), "--json", "version"], label=f"{expected_name} identity probe")
+    arguments = [str(path), "--json", "version"]
+    if expected_name == "podway":
+        arguments.append("--identity")
+    payload = run(arguments, label=f"{expected_name} identity probe")
     try:
         document = json.loads(payload)
     except json.JSONDecodeError as error:

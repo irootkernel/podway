@@ -7,7 +7,7 @@
     {
       "source": "docs/schemas/README.md",
       "destination": "schemas/README.md",
-      "source_sha256": "530e9e92837d0bf519bc662f7ed5b8efceb9399cdd3b3d14b6a33bdd00e71fcf",
+      "source_sha256": "a8d49f4ff4239b4e178d012630f5d876f981c36543d6b8bbf50a14924384c4d4",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"
@@ -208,6 +208,14 @@
       "source": "docs/schemas/status-result-v1.schema.json",
       "destination": "schemas/status-result-v1.schema.json",
       "source_sha256": "50e8a1da908dee02751bd70a19b820460925e40b2cb16ee8f6dc749725102032",
+      "copy_mode": "exact",
+      "owner": "docs",
+      "generator_version": "docs-assets-v1"
+    },
+    {
+      "source": "docs/schemas/version-summary-v1.schema.json",
+      "destination": "schemas/version-summary-v1.schema.json",
+      "source_sha256": "06cfdec02feb3adaa8e28e5bbddb921691f678444917912e7f6cca3722a8c5b3",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

@@ -146,7 +146,11 @@ enum Command {
         topic: Option<String>,
     },
     /// Print the CLI version.
-    Version,
+    Version {
+        /// Emit the complete build and contract identity.
+        #[arg(long, action = ArgAction::SetTrue)]
+        identity: bool,
+    },
     /// Emit an installable completion script.
     Completions {
         #[arg(value_enum)]
@@ -488,7 +492,7 @@ impl Command {
                 command: JobCommand::Cancel { .. },
             } => Some("job.cancel"),
             Self::Help { .. }
-            | Self::Version
+            | Self::Version { .. }
             | Self::Completions { .. }
             | Self::Procedure { .. }
             | Self::Preset { .. }
@@ -500,7 +504,7 @@ impl Command {
     fn canonical_route(&self) -> &'static str {
         match self {
             Self::Help { .. } => "help",
-            Self::Version => "version",
+            Self::Version { .. } => "version",
             Self::Completions { .. } => "completions",
             Self::Procedure {
                 command: ProcedureCommand::Validate { .. },
@@ -1024,6 +1028,11 @@ impl LocalFailure {
 
 enum RunResult {
     Response(Box<ResponseEnvelopeV1>),
+    VersionSummary {
+        name: &'static str,
+        version: String,
+        text: String,
+    },
     Local {
         command: String,
         result: Map<String, Value>,
@@ -1632,8 +1641,20 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                 text,
             )))
         }
-        Command::Version => {
+        Command::Version { identity } => {
             reject_local_flags(local_flags, "version accepts no daemon-only flags")?;
+            if !identity {
+                return Ok(Some(RunResult::VersionSummary {
+                    name: "podway",
+                    version: format!("v{}", env!("CARGO_PKG_VERSION")),
+                    text: format!("podway {}", env!("CARGO_PKG_VERSION")),
+                }));
+            }
+            if !cli.json {
+                return Err(LocalFailure::request_invalid(
+                    "version --identity requires --json",
+                ));
+            }
             let identity = build_identity_v1();
             Ok(Some(local_result(
                 "version",
@@ -3146,7 +3167,7 @@ fn daemon_payload(
         },
         Command::CompleteDynamic { .. }
         | Command::Help { .. }
-        | Command::Version
+        | Command::Version { .. }
         | Command::Completions { .. }
         | Command::Procedure { .. }
         | Command::Preset { .. }
@@ -3630,6 +3651,23 @@ fn render_result_with_clock_and_writers(
             stdout,
             stderr,
         ),
+        RunResult::VersionSummary {
+            name,
+            version,
+            text,
+        } => {
+            if json_output {
+                let output = json!({ "name": name, "version": version });
+                if serde_json::to_writer(&mut *stdout, &output).is_err()
+                    || writeln!(stdout).is_err()
+                {
+                    return LOCAL_CLIENT_EXIT;
+                }
+            } else if !quiet && writeln!(stdout, "{text}").is_err() {
+                return LOCAL_CLIENT_EXIT;
+            }
+            0
+        }
         RunResult::Local {
             command,
             result,
@@ -4305,7 +4343,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
         }
         "help" => "Usage:\n  podway help [<route>]\n\nExample:\n  podway help session.start",
-        "version" => "Usage:\n  podway version\n\nExample:\n  podway version",
+        "version" => {
+            "Usage:\n  podway version [--json] [--identity]\n\nExamples:\n  podway version\n  podway version --json\n  podway version --json --identity"
+        }
         "completions" => {
             "Usage:\n  podway completions <bash|zsh|fish>\n\nExample:\n  podway completions bash"
         }
