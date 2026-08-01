@@ -378,5 +378,8 @@ additionally extracts one such archive, verifies that CLI, daemon, manifest, sou
 target, binary digests, isolation capability, and provenance identities agree, and
 reruns the complete Dolgorae consumer controlled-PATH service, lifecycle, conflict,
 timeout, and reconciliation suite with binary
-selection restricted to that archive's `podway` and `podwayd`. Release-profile
-distribution qualification remains owned by `REL10003`.
+selection restricted to that archive's `podway` and `podwayd`. `REL10003` performs
+the release-profile counterpart automatically inside `make dist`: it extracts the
+archive, selects a private absolute `PODWAY_DEV_HOME`, runs the packaged lifecycle,
+conflict, timeout, response-loss, reconciliation, and identity scenarios through
+the foreground dev daemon, terminates it through IPC, and requires socket cleanup.

@@ -41,6 +41,10 @@ const JSON: Flag = Flag {
     long: "json",
     takes_value: false,
 };
+const DEV: Flag = Flag {
+    long: "dev",
+    takes_value: false,
+};
 const WORKTREE: Flag = Flag {
     long: "worktree",
     takes_value: true,
@@ -362,6 +366,12 @@ const ROUTES: &[Route] = &[
     Route {
         words: "daemon status",
         flags: DISPLAY_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "terminate",
+        flags: &[&JSON, &DEV, &TIMEOUT, &NO_COLOR, &QUIET],
         values: "",
         dynamic: None,
     },

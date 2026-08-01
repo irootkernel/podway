@@ -11,6 +11,7 @@ options and result surfaces.
 
 ```text
 --json                         emit the versioned JSON contract
+--dev                          use the isolated contributor daemon and state tree
 --worktree <path>              target an explicit Git worktree
 --socket <absolute-path>       target the only permitted daemon endpoint
 --timeout <duration>           bound daemon connection or wait time
@@ -27,6 +28,10 @@ options and result surfaces.
 ```
 
 Not every option applies to every command. Inapplicable options are usage errors rather than silently ignored.
+
+`--dev` is a contributor and packaged-conformance surface, not the normal installed
+service workflow. It is mutually exclusive with `--socket` and with every
+`podway daemon ...` service lifecycle command.
 
 Durations accept `ms`, `s`, and `m`, for example `500ms`, `30s`, and `2m`.
 
@@ -84,6 +89,22 @@ podway help artifacts
 Help MUST include complete examples and must not require internet access.
 
 ## Daemon commands
+
+### Foreground dev mode
+
+```bash
+podwayd --dev
+podway --dev --worktree /absolute/worktree status
+podway --dev terminate
+```
+
+The daemon uses `~/.podway/dev/` by default. Contributors may set
+`PODWAY_DEV_HOME` to an absolute private directory; the variable is read only in
+dev mode. Dev `run`, `state`, and `logs` are isolated from production, while the
+production singleton lock remains shared so both modes cannot run simultaneously.
+`terminate` is dev-only, idempotently removes a safe stale dev socket, waits for an
+orderly daemon shutdown, and succeeds only after the dev socket is absent. Registry
+and log files are preserved.
 
 ### Install
 

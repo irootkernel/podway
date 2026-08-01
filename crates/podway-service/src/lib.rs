@@ -233,6 +233,58 @@ pub struct ServiceRuntimePathsV1 {
 }
 
 impl ServiceRuntimePathsV1 {
+    /// Constructs the contributor-only foreground daemon layout.
+    ///
+    /// Dev state is isolated below `dev_home`, while the production singleton lock remains shared
+    /// so production and dev daemons can never own the same worktree concurrently.
+    pub fn for_dev_home(
+        account_home: impl AsRef<Path>,
+        dev_home: impl AsRef<Path>,
+        user_id: u32,
+    ) -> Result<Self, ServicePathErrorV1> {
+        let account = PodwayHomeV1::from_account_home(account_home, user_id)?;
+        let dev_home = dev_home.as_ref();
+        validate_absolute_normalized_path(dev_home, "dev_home")?;
+        if dev_home == account.as_path() {
+            return Err(ServicePathErrorV1::DevHomeConflictsProduction {
+                path: dev_home.to_path_buf(),
+            });
+        }
+        let runtime_directory = dev_home.join("run");
+        let state_directory = dev_home.join("state");
+        let logs_directory = dev_home.join("logs");
+        let socket_path = runtime_directory.join("podwayd.sock");
+        validate_socket_path_capacity(&socket_path)?;
+        Ok(Self {
+            podway_home: Some(LocalPlatformPathV1::service_global(dev_home)?),
+            runtime_directory: LocalPlatformPathV1::service_global(&runtime_directory)?,
+            global_lock_path: LocalPlatformPathV1::service_global(
+                account.as_path().join("run/podwayd.lock"),
+            )?,
+            launch_agent_path: LocalPlatformPathV1::service_global(
+                dev_home.join("LaunchAgents/dev.podway.podwayd.plist"),
+            )?,
+            log_path: LocalPlatformPathV1::service_global(logs_directory.join("podwayd.log"))?,
+            metadata_index_path: LocalPlatformPathV1::service_global(
+                state_directory.join("service.json"),
+            )?,
+            workspace_registry_path: LocalPlatformPathV1::service_global(
+                state_directory.join("workspaces.json"),
+            )?,
+            socket_path: LocalPlatformPathV1::service_global(socket_path)?,
+        })
+    }
+
+    pub fn for_effective_user_dev(dev_home: Option<&Path>) -> Result<Self, ServicePathErrorV1> {
+        let account = PodwayHomeV1::for_effective_user()?;
+        let default_dev_home = account.as_path().join("dev");
+        Self::for_dev_home(
+            account.account_home(),
+            dev_home.unwrap_or(&default_dev_home),
+            account.user_id(),
+        )
+    }
+
     pub fn from_directories(
         launch_agents_directory: impl AsRef<Path>,
         application_support_directory: impl AsRef<Path>,
@@ -1297,6 +1349,7 @@ pub enum ServicePathErrorV1 {
     Relative { field: &'static str, path: PathBuf },
     Unnormalized { field: &'static str, path: PathBuf },
     WorkspaceLocal { field: &'static str, path: PathBuf },
+    DevHomeConflictsProduction { path: PathBuf },
     EffectiveUserLookup { user_id: u32 },
     EffectiveUserNotFound { user_id: u32 },
     RootUser,
@@ -1320,6 +1373,11 @@ impl fmt::Display for ServicePathErrorV1 {
             Self::WorkspaceLocal { field, path } => write!(
                 formatter,
                 "{field} must not point into workspace-local Podway state: {}",
+                path.display()
+            ),
+            Self::DevHomeConflictsProduction { path } => write!(
+                formatter,
+                "dev home must not equal the production Podway home: {}",
                 path.display()
             ),
             Self::EffectiveUserLookup { user_id } => {
@@ -4215,6 +4273,40 @@ mod tests {
 
     fn path(value: &str) -> LocalPlatformPathV1 {
         LocalPlatformPathV1::new(value).expect("test path is valid")
+    }
+
+    #[test]
+    fn dev_layout_is_isolated_but_shares_the_production_singleton_lock() {
+        let paths = ServiceRuntimePathsV1::for_dev_home(
+            "/Users/contributor",
+            "/Users/contributor/.podway/dev",
+            501,
+        )
+        .expect("default dev layout must be valid");
+        assert_eq!(
+            paths.runtime_directory().as_path(),
+            Path::new("/Users/contributor/.podway/dev/run")
+        );
+        assert_eq!(
+            paths.socket_path().as_path(),
+            Path::new("/Users/contributor/.podway/dev/run/podwayd.sock")
+        );
+        assert_eq!(
+            paths.workspace_registry_path().as_path(),
+            Path::new("/Users/contributor/.podway/dev/state/workspaces.json")
+        );
+        assert_eq!(
+            paths.global_lock_path().as_path(),
+            Path::new("/Users/contributor/.podway/run/podwayd.lock")
+        );
+        assert!(matches!(
+            ServiceRuntimePathsV1::for_dev_home(
+                "/Users/contributor",
+                "/Users/contributor/.podway",
+                501,
+            ),
+            Err(ServicePathErrorV1::DevHomeConflictsProduction { .. })
+        ));
     }
 
     #[test]

@@ -12,8 +12,11 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process::{Command, Output},
-    sync::atomic::{AtomicU64, Ordering},
+    process::{Child, Command, Output},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -40,6 +43,7 @@ struct ControlledPathFixtureV1 {
     launchctl: PathBuf,
     launchctl_state: PathBuf,
     production_service: bool,
+    dev_daemon: Mutex<Option<Child>>,
 }
 
 impl ControlledPathFixtureV1 {
@@ -88,11 +92,23 @@ impl ControlledPathFixtureV1 {
             launchctl,
             launchctl_state,
             production_service,
+            dev_daemon: Mutex::new(None),
         }
     }
 
     fn run(&self, path: &str, arguments: &[&str]) -> Output {
         let mut command = Command::new("podway");
+        if self.production_service && arguments.starts_with(&["--json", "daemon", "restart"]) {
+            self.restart_dev_daemon(path);
+            let mut output = Command::new("/usr/bin/true")
+                .output()
+                .expect("synthetic restart status");
+            output.stdout = br#"{"schema":"podway.output/v1","command":"daemon.restart","result":{"status":"running"},"warnings":[]}"#.to_vec();
+            return output;
+        }
+        if self.production_service && !arguments.contains(&"--socket") {
+            command.arg("--dev");
+        }
         command
             .args(arguments)
             .current_dir(&self.arbitrary)
@@ -106,6 +122,9 @@ impl ControlledPathFixtureV1 {
 
     fn run_owned(&self, path: &str, arguments: &[String]) -> Output {
         let mut command = Command::new("podway");
+        if self.production_service && !arguments.iter().any(|argument| argument == "--socket") {
+            command.arg("--dev");
+        }
         command
             .args(arguments.iter().map(String::as_str))
             .current_dir(&self.arbitrary)
@@ -118,7 +137,9 @@ impl ControlledPathFixtureV1 {
     }
 
     fn configure_test_isolation(&self, command: &mut Command) {
-        if !self.production_service {
+        if self.production_service {
+            command.env("PODWAY_DEV_HOME", self.dev_home());
+        } else {
             command
                 .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
                 .env("PODWAY_TEST_LAUNCHCTL", &self.launchctl)
@@ -127,6 +148,11 @@ impl ControlledPathFixtureV1 {
     }
 
     fn assert_install(&self, path: &str, arguments: &[&str], expected_daemon: &Path) {
+        if self.production_service {
+            assert_eq!(arguments.first(), Some(&"--json"));
+            self.start_dev_daemon(expected_daemon);
+            return;
+        }
         let output = self.run(path, arguments);
         let daemon_log_path = if self.production_service {
             self.home.join(".podway/logs/podwayd.log")
@@ -176,8 +202,7 @@ impl ControlledPathFixtureV1 {
     }
 
     fn live_daemon_diagnostic(&self) -> String {
-        let paths = ServiceRuntimePathsV1::for_account_home(&self.home, geteuid().as_raw())
-            .expect("diagnostic service paths must resolve");
+        let paths = self.runtime_paths();
         let request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
             request_id: RequestIdV1::new("123e4567-e89b-42d3-a456-426614174000")
                 .expect("diagnostic request ID"),
@@ -199,7 +224,28 @@ impl ControlledPathFixtureV1 {
         format!("{:?}", DaemonClientV1::new(paths).daemon_status(&request))
     }
 
+    fn runtime_paths(&self) -> ServiceRuntimePathsV1 {
+        if self.production_service {
+            ServiceRuntimePathsV1::for_dev_home(&self.home, self.dev_home(), geteuid().as_raw())
+        } else {
+            ServiceRuntimePathsV1::for_account_home(&self.home, geteuid().as_raw())
+        }
+        .expect("fixture service paths must resolve")
+    }
+
     fn uninstall(&self, path: &str) {
+        if self.production_service {
+            let output = self.run(path, &["--json", "terminate"]);
+            assert!(
+                output.status.success(),
+                "dev daemon terminate failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!self.socket_path().exists());
+            self.wait_dev_daemon();
+            return;
+        }
         let output = self.run(path, &["--json", "--yes", "daemon", "uninstall"]);
         assert!(
             output.status.success(),
@@ -207,6 +253,74 @@ impl ControlledPathFixtureV1 {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    fn dev_home(&self) -> PathBuf {
+        self.home.join(".podway/dev")
+    }
+
+    fn socket_path(&self) -> PathBuf {
+        if self.production_service {
+            self.dev_home().join("run/podwayd.sock")
+        } else {
+            self.home.join(".podway/run/podwayd.sock")
+        }
+    }
+
+    fn start_dev_daemon(&self, daemon: &Path) {
+        if self.socket_path().exists() {
+            fs::remove_file(self.socket_path()).expect("stale packaged dev socket must be removed");
+        }
+        let mut command = Command::new(daemon);
+        command
+            .arg("--dev")
+            .current_dir(&self.arbitrary)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("PODWAY_DEV_HOME", self.dev_home());
+        let child = command.spawn().expect("packaged dev daemon must start");
+        let previous = self
+            .dev_daemon
+            .lock()
+            .expect("dev daemon child lock")
+            .replace(child);
+        assert!(
+            previous.is_none(),
+            "a packaged dev daemon child is already owned"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.socket_path().exists() {
+            assert!(
+                Instant::now() < deadline,
+                "packaged dev socket did not appear"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn restart_dev_daemon(&self, path: &str) {
+        let stopped = self.run(path, &["--json", "terminate"]);
+        assert!(
+            stopped.status.success(),
+            "packaged dev daemon must terminate"
+        );
+        self.wait_dev_daemon();
+        self.start_dev_daemon(&daemon_binary());
+    }
+
+    fn wait_dev_daemon(&self) {
+        if let Some(mut child) = self
+            .dev_daemon
+            .lock()
+            .expect("dev daemon child lock")
+            .take()
+        {
+            let status = child.wait().expect("packaged dev daemon must be reaped");
+            assert!(
+                status.success(),
+                "packaged dev daemon exited unsuccessfully"
+            );
+        }
     }
 
     fn run_json_success(&self, path: &str, arguments: &[&str]) -> Value {
@@ -755,7 +869,7 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
         &release_daemon,
     );
 
-    let socket = fixture.home.join(".podway/run/podwayd.sock");
+    let socket = fixture.socket_path();
     let alternate_socket = fixture.home.join(".podway/run/alternate.sock");
     let mut duplicate_command = Command::new(&release_daemon);
     duplicate_command
@@ -879,7 +993,7 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
 fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle() {
     let fixture = ControlledPathFixtureV1::new();
     let (controlled_path, _) = install_sibling_release(&fixture, "lifecycle");
-    let socket = fixture.home.join(".podway/run/podwayd.sock");
+    let socket = fixture.socket_path();
     let worktree = fixture.root.join("lifecycle/worktree");
     create_non_bare_worktree(&worktree);
     let procedure_path = worktree.join("dolgorae-procedure.yaml");
@@ -1227,7 +1341,7 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
 
     let fixture = ControlledPathFixtureV1::new();
     let (controlled_path, _) = install_sibling_release(&fixture, "conflicts");
-    let socket = fixture.home.join(".podway/run/podwayd.sock");
+    let socket = fixture.socket_path();
     let worktree = fixture.root.join("conflicts/worktree");
     create_non_bare_worktree(&worktree);
     let procedure_path = worktree.join("dolgorae-procedure.yaml");
@@ -1240,8 +1354,7 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
         .to_str()
         .expect("fixture Procedure path must be UTF-8");
 
-    let paths = ServiceRuntimePathsV1::for_account_home(&fixture.home, geteuid().as_raw())
-        .expect("mismatch service paths must resolve");
+    let paths = fixture.runtime_paths();
     let mismatch_request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new("44444444-0000-4000-8000-000000000097")
             .expect("mismatch request ID"),
@@ -1515,7 +1628,7 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
 
     let fixture = ControlledPathFixtureV1::new();
     let (controlled_path, _) = install_sibling_release(&fixture, "response-loss");
-    let socket = fixture.home.join(".podway/run/podwayd.sock");
+    let socket = fixture.socket_path();
     let worktree = fixture.root.join("response-loss/worktree");
     create_non_bare_worktree(&worktree);
     let socket_text = socket.to_str().expect("fixture socket path must be UTF-8");
@@ -1534,7 +1647,10 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
         ],
     );
 
-    let proxy_socket = fixture.home.join(".podway/run/response-loss.sock");
+    let proxy_socket = socket
+        .parent()
+        .expect("daemon socket has a parent")
+        .join("response-loss.sock");
     let listener = UnixListener::bind(&proxy_socket).expect("response-loss relay must bind");
     fs::set_permissions(&proxy_socket, fs::Permissions::from_mode(0o600))
         .expect("response-loss relay socket must be private");

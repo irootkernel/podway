@@ -229,7 +229,7 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |
 | `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
 | `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
-| `AUT-T-DIST` | native debug test-fixture archive on controlled PATH passes the complete Dolgorae consumer conformance suite with fail-closed isolation; the actual release-profile archive repeats packaged lifecycle, conflict, timeout, reconciliation, and identity checks only under a disposable macOS account and isolated launchd user domain | `DOLGI005`, `REL10001`–`REL10004` |
+| `AUT-T-DIST` | native debug test-fixture archive on controlled PATH passes the complete Dolgorae consumer conformance suite with fail-closed isolation; `make dist` then extracts the actual release-profile archive and repeats packaged lifecycle, conflict, timeout, response-loss, reconciliation, identity, termination, and socket-cleanup checks through its isolated foreground dev mode | `DOLGI005`, `REL10001`–`REL10004` |
 
 The test-fixture slice supersedes DOLGI's earlier release-profile wording. It is
 local executable evidence for the packaged client contract, not evidence that the

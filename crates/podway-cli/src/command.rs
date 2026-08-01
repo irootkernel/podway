@@ -7,7 +7,10 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, File},
     io::{self, IsTerminal, Read, Seek, SeekFrom, Write},
-    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{FileTypeExt, MetadataExt},
+    },
     path::{Component, Path, PathBuf},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -71,6 +74,10 @@ const DAEMON_VERSION_PROBE_POST_KILL_DRAIN: Duration = Duration::from_millis(100
     arg_required_else_help = false
 )]
 struct Cli {
+    /// Use the isolated contributor daemon and state tree.
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    dev: bool,
+
     /// Emit exactly one versioned JSON object to stdout.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     json: bool,
@@ -160,6 +167,8 @@ enum Command {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+    /// Orderly stop the isolated foreground dev daemon.
+    Terminate,
     Init {
         #[arg(long, action = ArgAction::SetTrue)]
         repair: bool,
@@ -483,7 +492,8 @@ impl Command {
             | Self::Completions { .. }
             | Self::Procedure { .. }
             | Self::Preset { .. }
-            | Self::Daemon { .. } => None,
+            | Self::Daemon { .. }
+            | Self::Terminate => None,
         }
     }
 
@@ -508,6 +518,7 @@ impl Command {
                 command: PresetCommand::Explain { .. },
             } => "preset.explain",
             Self::Daemon { command } => daemon_command_name(command),
+            Self::Terminate => "daemon.terminate",
             Self::CompleteDynamic { .. } => "__complete",
             command => command
                 .daemon_wire_name()
@@ -1195,7 +1206,7 @@ pub fn run() -> i32 {
 fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     if let Command::CompleteDynamic { kind } = &cli.command {
         let kind = kind.clone();
-        return dynamic_completion(cli.worktree.take(), cli.socket.take(), &kind);
+        return dynamic_completion(cli.worktree.take(), cli.socket.take(), cli.dev, &kind);
     }
     if let Some(local) = execute_local(&cli)? {
         return Ok(local);
@@ -1224,7 +1235,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     let target = workspace_target(cli.worktree.take())?;
     let wait_timeout_ms = cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
     let explicit = ExplicitPreconditions::parse(&cli)?;
-    let client = daemon_client(wait_timeout_ms, cli.socket.as_deref())
+    let client = daemon_client(wait_timeout_ms, cli.socket.as_deref(), cli.dev)
         .map_err(|failure| failure.with_command(wire_name))?;
 
     let reset_all_workspace_id =
@@ -1651,6 +1662,11 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             Ok(Some(execute_procedure(command)?))
         }
         Command::Daemon { command } => {
+            if cli.dev {
+                return Err(LocalFailure::request_invalid(
+                    "--dev cannot be combined with daemon service lifecycle commands",
+                ));
+            }
             if cli.worktree.is_some()
                 || cli.timeout.is_some()
                 || cli.detach
@@ -1684,8 +1700,90 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                 cli.socket.as_deref(),
             )?))
         }
+        Command::Terminate => {
+            if !cli.dev {
+                return Err(LocalFailure::request_invalid("terminate requires --dev"));
+            }
+            if cli.worktree.is_some()
+                || cli.socket.is_some()
+                || cli.detach
+                || cli.idempotency_key.is_some()
+                || ExplicitPreconditions::parse(cli)?.any()
+                || cli.yes
+            {
+                return Err(LocalFailure::request_invalid(
+                    "dev terminate accepts only --timeout, --json, --quiet, and --no-color",
+                ));
+            }
+            Ok(Some(execute_dev_terminate(
+                cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS),
+            )?))
+        }
         _ => Ok(None),
     }
+}
+
+fn execute_dev_terminate(wait_timeout_ms: u64) -> Result<RunResult, LocalFailure> {
+    let paths = effective_dev_paths("daemon.terminate")?;
+    let socket_path = paths.socket_path().as_path();
+    if !socket_path.exists() {
+        return Ok(dev_terminate_result());
+    }
+    let client = daemon_client(wait_timeout_ms, None, true)?;
+    let request = build_daemon_terminate_request()?;
+    let response = match client.daemon_terminate(&request) {
+        Ok(response) => response,
+        Err(DaemonClientErrorV1::Connection { source, .. })
+            if matches!(
+                source.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            remove_stale_dev_socket(socket_path)?;
+            return Ok(dev_terminate_result());
+        }
+        Err(error) => {
+            return Err(map_client_error_for_request(error, &request)
+                .with_correlation("daemon.terminate", request.request_id().as_str()));
+        }
+    };
+    if matches!(response, ResponseEnvelopeV1::Error(_)) {
+        return Ok(RunResult::Response(Box::new(response)));
+    }
+    let deadline = Instant::now() + Duration::from_millis(wait_timeout_ms);
+    while socket_path.exists() {
+        if Instant::now() >= deadline {
+            return Err(LocalFailure::daemon_unavailable("daemon.terminate"));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Ok(dev_terminate_result())
+}
+
+fn remove_stale_dev_socket(socket_path: &Path) -> Result<(), LocalFailure> {
+    let metadata = match fs::symlink_metadata(socket_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(LocalFailure::daemon_unavailable("daemon.terminate")),
+    };
+    if !metadata.file_type().is_socket() || metadata.uid() != geteuid().as_raw() {
+        return Err(LocalFailure::request_invalid(
+            "dev socket cleanup refused an unexpected filesystem entry",
+        ));
+    }
+    fs::remove_file(socket_path).map_err(|_| LocalFailure::daemon_unavailable("daemon.terminate"))
+}
+
+fn dev_terminate_result() -> RunResult {
+    local_result(
+        "daemon.terminate",
+        json!({
+            "mode": "dev",
+            "termination": "completed",
+            "socket_cleanup": "removed",
+        }),
+        "dev daemon terminated".to_owned(),
+    )
 }
 
 fn execute_service_lifecycle(
@@ -1811,7 +1909,8 @@ fn socket_path_failure(error: ServicePathErrorV1) -> LocalFailure {
         ),
         ServicePathErrorV1::EffectiveUserLookup { .. }
         | ServicePathErrorV1::EffectiveUserNotFound { .. }
-        | ServicePathErrorV1::RootUser => (
+        | ServicePathErrorV1::RootUser
+        | ServicePathErrorV1::DevHomeConflictsProduction { .. } => (
             "effective_user_unavailable",
             "socket path could not be validated",
         ),
@@ -1835,6 +1934,19 @@ fn effective_service_paths(command: &str) -> Result<ServiceRuntimePathsV1, Local
             .map_err(|_| LocalFailure::daemon_unavailable(command));
     }
     ServiceRuntimePathsV1::for_effective_user()
+        .map_err(|_| LocalFailure::daemon_unavailable(command))
+}
+
+fn effective_dev_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
+    let dev_home = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from);
+    #[cfg(debug_assertions)]
+    if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
+        let account_root = PathBuf::from(account_root);
+        let dev_home = dev_home.unwrap_or_else(|| account_root.join(".podway/dev"));
+        return ServiceRuntimePathsV1::for_dev_home(account_root, dev_home, geteuid().as_raw())
+            .map_err(|_| LocalFailure::daemon_unavailable(command));
+    }
+    ServiceRuntimePathsV1::for_effective_user_dev(dev_home.as_deref())
         .map_err(|_| LocalFailure::daemon_unavailable(command))
 }
 
@@ -3038,7 +3150,8 @@ fn daemon_payload(
         | Command::Completions { .. }
         | Command::Procedure { .. }
         | Command::Preset { .. }
-        | Command::Daemon { .. } => {
+        | Command::Daemon { .. }
+        | Command::Terminate => {
             return Err(LocalFailure::request_invalid("unsupported daemon command"));
         }
     }
@@ -3139,9 +3252,19 @@ fn workspace_target(worktree: Option<PathBuf>) -> Result<WorkspaceTarget, LocalF
 fn daemon_client(
     wait_timeout_ms: u64,
     socket_path: Option<&Path>,
+    dev_mode: bool,
 ) -> Result<DaemonClientV1, LocalFailure> {
-    let paths = effective_service_paths("cli")?;
-    let paths = if socket_path.is_some() {
+    if dev_mode && socket_path.is_some() {
+        return Err(LocalFailure::request_invalid(
+            "--dev and --socket are mutually exclusive",
+        ));
+    }
+    let paths = if dev_mode {
+        effective_dev_paths("cli")?
+    } else {
+        effective_service_paths("cli")?
+    };
+    let paths = if socket_path.is_some() || dev_mode {
         paths
     } else {
         resolve_installed_service_endpoint(paths, "cli")?
@@ -3251,6 +3374,25 @@ fn build_daemon_status_request() -> Result<RequestEnvelopeV1, LocalFailure> {
         payload: Map::new(),
     })
     .map_err(|_| LocalFailure::request_invalid("invalid daemon status request"))
+}
+
+fn build_daemon_terminate_request() -> Result<RequestEnvelopeV1, LocalFailure> {
+    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(Uuid::new_v4().to_string())
+            .map_err(|_| LocalFailure::daemon_unavailable("daemon.terminate"))?,
+        client: ClientInfoV1::new("podway", env!("CARGO_PKG_VERSION"), std::process::id())
+            .map_err(|_| LocalFailure::daemon_unavailable("daemon.terminate"))?,
+        operation: OperationV1::Control,
+        command: CommandNameV1::new("daemon.terminate")
+            .map_err(|_| LocalFailure::request_invalid("invalid daemon terminate command"))?,
+        workspace: None,
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, 0)
+            .map_err(|_| LocalFailure::request_invalid("invalid daemon terminate options"))?,
+        payload: Map::new(),
+    })
+    .map_err(|_| LocalFailure::request_invalid("invalid daemon terminate request"))
 }
 
 fn mutation_key(value: Option<String>) -> Result<IdempotencyKeyV1, LocalFailure> {
@@ -4050,6 +4192,7 @@ fn render_warnings(
 fn dynamic_completion(
     worktree: Option<PathBuf>,
     socket_path: Option<PathBuf>,
+    dev_mode: bool,
     kind: &str,
 ) -> Result<RunResult, LocalFailure> {
     let target = match workspace_target(worktree) {
@@ -4058,7 +4201,7 @@ fn dynamic_completion(
             return Ok(empty_dynamic_completion());
         }
     };
-    let client = match daemon_client(200, socket_path.as_deref()) {
+    let client = match daemon_client(200, socket_path.as_deref(), dev_mode) {
         Ok(client) => client,
         Err(_) => {
             return Ok(empty_dynamic_completion());
@@ -4189,6 +4332,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "daemon.stop" => "Usage:\n  podway daemon stop\n\nExample:\n  podway daemon stop",
         "daemon.restart" => "Usage:\n  podway daemon restart\n\nExample:\n  podway daemon restart",
         "daemon.status" => "Usage:\n  podway daemon status\n\nExample:\n  podway daemon status",
+        "daemon.terminate" => {
+            "Usage:\n  podway --dev terminate\n\nExample:\n  podway --dev terminate"
+        }
         "daemon.logs" => {
             "Usage:\n  podway daemon logs [--follow] [--lines <n>]\n\nExample:\n  podway daemon logs --lines 100"
         }
@@ -4514,6 +4660,9 @@ mod tests {
 
     #[test]
     fn parser_accepts_canonical_session_start_and_attachment_forms() {
+        let terminate = Cli::try_parse_from(["podway", "--dev", "terminate"]).unwrap();
+        assert!(terminate.dev);
+        assert!(matches!(terminate.command, Command::Terminate));
         assert!(matches!(
             Cli::try_parse_from(["podway", "start", "--preset", "sw-dev", "--task", "task"])
                 .unwrap()

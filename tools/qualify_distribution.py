@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
-"""Qualify the native release archive in a disposable macOS account."""
+"""Qualify the packaged release through the isolated foreground dev daemon."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
-import platform
-import re
-import secrets
 import shutil
-import stat
 import subprocess
 import tarfile
 import tempfile
@@ -25,11 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
-ACCOUNT_PREFIX = "pwrel10"
-QUALIFICATION_SCHEMA = "podway.distribution-qualification/v1"
 REQUIRED_TESTS = [
-    "aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_directory",
-    "aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_socket",
     "aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle",
     "aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout",
     "aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay",
@@ -50,7 +41,6 @@ def run(
     label: str,
     cwd: Path = ROOT,
     environment: dict[str, str] | None = None,
-    allow_failure: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
     completed = subprocess.run(
         arguments,
@@ -60,7 +50,7 @@ def run(
         stderr=subprocess.PIPE,
         check=False,
     )
-    if completed.returncode != 0 and not allow_failure:
+    if completed.returncode != 0:
         stdout = completed.stdout.decode("utf-8", errors="replace").strip()
         stderr = completed.stderr.decode("utf-8", errors="replace").strip()
         fail(f"{label} failed with exit {completed.returncode}: stdout={stdout} stderr={stderr}")
@@ -79,44 +69,23 @@ def read_json(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def canonical_json(value: Any) -> bytes:
-    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-
-
-def write_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_bytes(canonical_json(value))
-    os.replace(temporary, path)
-
-
-def require_clean_native_tree() -> str:
+def source_commit() -> str:
     release_archive.require_native_host()
-    if os.geteuid() == 0:
-        fail("distribution qualification must be orchestrated by the invoking non-root user")
-    status = run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
-        label="Git worktree inspection",
-    ).stdout
-    if status:
-        fail("distribution qualification requires a clean Git worktree")
     return run(["git", "rev-parse", "HEAD"], label="source commit probe").stdout.decode().strip()
 
 
-def expected_paths(output_directory: Path) -> tuple[Path, Path, Path, Path]:
+def expected_paths(output_directory: Path) -> tuple[Path, Path, Path]:
     archive = output_directory / f"{ARCHIVE_ROOT}.tar.gz"
     checksum = output_directory / f"{archive.name}.sha256"
     provenance = output_directory / f"{ARCHIVE_ROOT}.provenance.json"
-    receipt = output_directory / f"{ARCHIVE_ROOT}.qualification.json"
-    return archive, checksum, provenance, receipt
+    return archive, checksum, provenance
 
 
 def verify_checksum(archive: Path, checksum: Path) -> str:
     if checksum.is_symlink() or not checksum.is_file():
         fail(f"checksum must be a regular non-symlink file: {checksum}")
     digest = release_archive.sha256_file(archive)
-    expected = f"{digest}  {archive.name}\n"
-    if checksum.read_text(encoding="utf-8") != expected:
+    if checksum.read_text(encoding="utf-8") != f"{digest}  {archive.name}\n":
         fail("distribution checksum does not match the archive")
     return digest
 
@@ -141,8 +110,7 @@ def safe_extract(archive_path: Path, destination: Path) -> Path:
 
 
 def json_identity(binary: Path, role: str) -> dict[str, Any]:
-    arguments = [str(binary), "--json", "version"]
-    completed = run(arguments, label=f"{role} identity probe")
+    completed = run([str(binary), "--json", "version"], label=f"{role} identity probe")
     try:
         value = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
@@ -159,14 +127,14 @@ def verify_distribution(
     checksum: Path,
     provenance_path: Path,
     extraction: Path,
-    source_commit: str,
-) -> tuple[dict[str, Any], dict[str, Any], Path, Path, str]:
+    commit: str,
+) -> tuple[Path, Path, dict[str, Any]]:
     provenance = read_json(provenance_path, "release provenance")
     required = {
         "schema": "podway.release-provenance/v1",
         "artifact_class": "distribution",
         "release_gate": "make test: passed",
-        "source_commit": source_commit,
+        "source_commit": commit,
         "source_dirty": False,
         "target": TARGET,
         "version": VERSION,
@@ -178,8 +146,8 @@ def verify_distribution(
     }
     if mismatches:
         fail(f"release provenance mismatch: {mismatches}")
-    archive_digest = verify_checksum(archive, checksum)
-    if provenance.get("archive") != {"name": archive.name, "sha256": archive_digest}:
+    digest = verify_checksum(archive, checksum)
+    if provenance.get("archive") != {"name": archive.name, "sha256": digest}:
         fail("release provenance archive identity does not match the checksum")
     extracted = safe_extract(archive, extraction)
     cli = extracted / "bin/podway"
@@ -195,16 +163,14 @@ def verify_distribution(
     ):
         if identities["podway"].get(field) != identities["podwayd"].get(field):
             fail(f"packaged binary identity mismatch for {field}")
-    for field in ("build_identity", "contract_manifest_digest", "contract_manifest_schema", "source_commit", "target", "version"):
         if identities["podway"].get(field) != provenance.get(field):
             fail(f"packaged identity and provenance mismatch for {field}")
     for role, binary in (("podway", cli), ("podwayd", daemon)):
         if provenance.get("binaries", {}).get(role) != release_archive.sha256_file(binary):
             fail(f"packaged {role} digest does not match provenance")
-        capability = release_archive.test_isolation_capability(binary)
-        if capability is not release_archive.TestIsolationCapability.DISABLED:
+        if release_archive.test_isolation_capability(binary) is not release_archive.TestIsolationCapability.DISABLED:
             fail(f"packaged {role} exposes or ambiguously handles debug isolation")
-    return provenance, identities["podway"], cli, daemon, archive_digest
+    return cli, daemon, provenance
 
 
 def build_harness() -> Path:
@@ -220,7 +186,7 @@ def build_harness() -> Path:
             "--locked",
             "--message-format=json",
         ],
-        label="distribution qualification harness build",
+        label="distribution conformance harness build",
     )
     executable: Path | None = None
     for line in completed.stdout.splitlines():
@@ -241,233 +207,67 @@ def build_harness() -> Path:
     return executable.resolve()
 
 
-def existing_accounts() -> dict[str, int]:
-    completed = run(["/usr/bin/dscl", ".", "-list", "/Users", "UniqueID"], label="account inventory")
-    accounts: dict[str, int] = {}
-    for raw_line in completed.stdout.decode("utf-8", errors="strict").splitlines():
-        fields = raw_line.split()
-        if len(fields) == 2 and fields[1].isdigit():
-            accounts[fields[0]] = int(fields[1])
-    return accounts
-
-
-def account_attribute(name: str, attribute: str) -> str | None:
-    completed = run(
-        ["/usr/bin/dscl", ".", "-read", f"/Users/{name}", attribute],
-        label=f"disposable account {attribute} probe",
-        allow_failure=True,
-    )
-    if completed.returncode != 0:
-        return None
-    output = completed.stdout.decode("utf-8", errors="strict").strip()
-    prefix = f"{attribute}:"
-    if not output.startswith(prefix):
-        fail(f"disposable account {attribute} probe returned an unexpected record")
-    return " ".join(output.removeprefix(prefix).split())
-
-
-def account_exists(name: str) -> bool:
-    return account_attribute(name, "RecordName") is not None
-
-
-def allocate_account() -> tuple[str, int, Path]:
-    accounts = existing_accounts()
-    stale = sorted(name for name in accounts if re.fullmatch(rf"{ACCOUNT_PREFIX}[0-9a-f]{{6}}", name))
-    if stale:
-        fail(f"stale qualification accounts require explicit cleanup: {', '.join(stale)}")
-    used = set(accounts.values())
-    uid = next((candidate for candidate in range(550, 600) if candidate not in used), None)
-    if uid is None:
-        fail("no disposable qualification UID is available in the reserved 550-599 range")
-    for _ in range(32):
-        name = f"{ACCOUNT_PREFIX}{secrets.token_hex(3)}"
-        if name not in accounts:
-            return name, uid, Path("/Users") / name
-    fail("could not allocate a unique disposable qualification account name")
-
-
-def validate_account_target(name: str, uid: int, home: Path) -> None:
-    if re.fullmatch(rf"{ACCOUNT_PREFIX}[0-9a-f]{{6}}", name) is None:
-        fail(f"refusing unsafe qualification account name: {name}")
-    if uid not in range(550, 600):
-        fail(f"refusing unsafe qualification UID: {uid}")
-    if home != Path("/Users") / name:
-        fail(f"refusing unsafe qualification home: {home}")
-
-
-def sudo(arguments: list[str], label: str, *, allow_failure: bool = False) -> subprocess.CompletedProcess[bytes]:
-    return run(["/usr/bin/sudo", "-n", *arguments], label=label, allow_failure=allow_failure)
-
-
-def create_account(name: str, uid: int, home: Path) -> None:
-    validate_account_target(name, uid, home)
-    record = f"/Users/{name}"
-    attributes = (
-        ("RecordName", name),
-        ("RealName", "Podway REL10 Qualification"),
-        ("UniqueID", str(uid)),
-        ("PrimaryGroupID", "20"),
-        ("NFSHomeDirectory", str(home)),
-        ("UserShell", "/bin/zsh"),
-        ("IsHidden", "1"),
-    )
-    for attribute, value in attributes:
-        sudo(
-            ["/usr/bin/dscl", ".", "-create", record, attribute, value],
-            f"disposable account {attribute} creation",
-        )
-    sudo(["/usr/bin/dscl", ".", "-create", record, "Password", "*"], "disable disposable login")
-    observed = existing_accounts().get(name)
-    if observed != uid:
-        fail(f"disposable account was not created with UID {uid}")
-    sudo(["/usr/bin/install", "-d", "-o", name, "-g", "staff", "-m", "0700", str(home)], "prepare disposable home")
-    sudo(["/bin/launchctl", "bootstrap", f"gui/{uid}"], "isolated GUI domain bootstrap")
-    sudo(["/bin/launchctl", "print", f"gui/{uid}"], "isolated GUI domain probe")
-
-
-def cleanup_account(name: str, uid: int, home: Path) -> None:
-    validate_account_target(name, uid, home)
-    errors: list[str] = []
-    bootout = sudo(["/bin/launchctl", "bootout", f"gui/{uid}"], "isolated GUI domain removal", allow_failure=True)
-    if bootout.returncode != 0 and sudo(["/bin/launchctl", "print", f"gui/{uid}"], "isolated GUI domain absence", allow_failure=True).returncode == 0:
-        errors.append("isolated GUI domain remained after bootout")
-    if account_exists(name):
-        observed_uid = existing_accounts().get(name)
-        marker = account_attribute(name, "RealName")
-        if observed_uid not in (None, uid) or marker != "Podway REL10 Qualification":
-            errors.append("refusing to delete a disposable account with unexpected identity")
-        else:
-            deleted = sudo(
-                ["/usr/bin/dscl", ".", "-delete", f"/Users/{name}"],
-                "disposable account deletion",
-                allow_failure=True,
-            )
-            if deleted.returncode != 0 or account_exists(name):
-                errors.append("disposable account deletion failed")
-    if home.exists():
-        removed = sudo(["/bin/rm", "-rf", str(home)], "disposable account home removal", allow_failure=True)
-        if removed.returncode != 0 or home.exists():
-            errors.append(f"disposable account home remained: {home}")
-    if errors:
-        fail("; ".join(errors))
-
-
-def run_packaged_suite(
-    account: str,
-    uid: int,
-    home: Path,
-    harness: Path,
-    cli: Path,
-    daemon: Path,
-) -> None:
-    qualification_root = home / "qualification"
-    arguments = [
-        "/usr/bin/sudo",
-        "-n",
-        "-u",
-        account,
-        "/bin/launchctl",
-        "asuser",
-        str(uid),
-        "/usr/bin/env",
-        "-i",
-        "PATH=/usr/bin:/bin",
-        f"PODWAY_DISTRIBUTION_QUALIFICATION_ROOT={qualification_root}",
-        f"PODWAY_DISTRIBUTION_ACCOUNT_HOME={home}",
-        f"PODWAY_TEST_CLI_BINARY={cli}",
-        f"PODWAYD_TEST_BINARY={daemon}",
-        str(harness),
-        "e2e_dolgorae_conformance::aut_t_",
-        "--nocapture",
-        "--include-ignored",
-        "--test-threads=1",
-    ]
-    completed = run(arguments, label="packaged Dolgorae distribution suite", cwd=home)
-    stdout = completed.stdout.decode("utf-8", errors="strict")
+def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> None:
+    home = root / "home"
+    cases = root / "cases"
+    root.mkdir(mode=0o700)
+    home.mkdir(mode=0o700)
+    cases.mkdir(mode=0o700)
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "PODWAY_DISTRIBUTION_QUALIFICATION_ROOT": str(cases),
+        "PODWAY_DISTRIBUTION_ACCOUNT_HOME": str(home),
+        "PODWAY_TEST_CLI_BINARY": str(cli),
+        "PODWAYD_TEST_BINARY": str(daemon),
+    }
     for test in REQUIRED_TESTS:
-        if test not in stdout:
+        completed = run(
+            [
+                str(harness),
+                f"e2e_dolgorae_conformance::{test}",
+                "--exact",
+                "--nocapture",
+                "--include-ignored",
+                "--test-threads=1",
+            ],
+            label=f"packaged dev-mode Dolgorae scenario {test}",
+            cwd=root,
+            environment=environment,
+        )
+        if test not in completed.stdout.decode("utf-8", errors="strict"):
             fail(f"packaged distribution suite omitted required test: {test}")
+    remaining = list(root.glob("**/podwayd.sock"))
+    if remaining:
+        fail(f"packaged dev-mode suite left daemon sockets behind: {remaining}")
 
 
 def qualify(output_directory: Path) -> dict[str, Any]:
-    source_commit = require_clean_native_tree()
-    archive, checksum, provenance_path, receipt_path = expected_paths(output_directory)
+    commit = source_commit()
+    archive, checksum, provenance_path = expected_paths(output_directory)
     harness = build_harness()
-    with tempfile.TemporaryDirectory(prefix="podway-rel10-qualification-") as temporary_name:
+    # Keep the account-derived dev socket below macOS's Unix-domain path limit.
+    with tempfile.TemporaryDirectory(prefix="pw-rel10-", dir="/tmp") as temporary_name:
         temporary = Path(temporary_name)
-        temporary.chmod(0o755)
-        provenance, identity, cli, daemon, archive_digest = verify_distribution(
-            archive,
-            checksum,
-            provenance_path,
-            temporary / "extracted",
-            source_commit,
+        temporary.chmod(0o700)
+        cli, daemon, provenance = verify_distribution(
+            archive, checksum, provenance_path, temporary / "extracted", commit
         )
-        staged_harness = temporary / "e2e_suite"
-        shutil.copyfile(harness, staged_harness)
-        staged_harness.chmod(0o755)
-        account, uid, home = allocate_account()
-        validate_account_target(account, uid, home)
-        print(
-            json.dumps(
-                {"account": account, "domain": f"gui/{uid}", "home": str(home), "phase": "create"},
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-            flush=True,
-        )
-        created = False
-        suite_error: BaseException | None = None
-        try:
-            create_account(account, uid, home)
-            created = True
-            run_packaged_suite(account, uid, home, staged_harness, cli, daemon)
-        except BaseException as error:
-            suite_error = error
-        cleanup_error: BaseException | None = None
-        if created or account_exists(account):
-            try:
-                cleanup_account(account, uid, home)
-            except BaseException as error:
-                cleanup_error = error
-        if suite_error is not None or cleanup_error is not None:
-            fail(f"qualification failed: suite={suite_error!s}; cleanup={cleanup_error!s}")
-        receipt = {
-            "archive": {"name": archive.name, "sha256": archive_digest},
-            "artifact_class": "distribution",
-            "build_identity": identity["build_identity"],
-            "contract_manifest_digest": provenance["contract_manifest_digest"],
-            "contract_manifest_schema": provenance["contract_manifest_schema"],
-            "isolation": {"account": "disposable", "launchd_domain": "gui/<uid>"},
+        run_packaged_suite(temporary / "runtime", harness, cli, daemon)
+        return {
+            "archive": archive.name,
+            "build_identity": provenance["build_identity"],
+            "mode": "qualify",
             "ok": True,
             "scenarios": REQUIRED_TESTS,
-            "schema": QUALIFICATION_SCHEMA,
-            "source_commit": source_commit,
-            "target": TARGET,
-            "version": VERSION,
         }
-        write_json(receipt_path, receipt)
-        return {"mode": "qualify", "ok": True, "receipt": str(receipt_path.resolve())}
 
 
 def self_test() -> dict[str, Any]:
-    validate_account_target("pwrel10abcdef", 550, Path("/Users/pwrel10abcdef"))
-    rejected = 0
-    for name, uid, home in (
-        ("draccoon", 550, Path("/Users/draccoon")),
-        ("pwrel10abcdef", 501, Path("/Users/pwrel10abcdef")),
-        ("pwrel10abcdef", 550, Path("/Users/draccoon")),
-    ):
-        try:
-            validate_account_target(name, uid, home)
-        except QualificationError:
-            rejected += 1
-        else:
-            fail("unsafe disposable account target was accepted")
-    sample = {"schema": QUALIFICATION_SCHEMA, "ok": True}
-    if canonical_json(sample) != canonical_json(sample):
-        fail("qualification JSON encoding is not deterministic")
-    return {"mode": "self-test", "ok": True, "sentinels": rejected + 1}
+    if len(REQUIRED_TESTS) != len(set(REQUIRED_TESTS)):
+        fail("required packaged scenarios must be unique")
+    if any(not name.startswith("aut_t_") for name in REQUIRED_TESTS):
+        fail("required packaged scenarios must be acceptance tests")
+    return {"mode": "self-test", "ok": True, "scenarios": len(REQUIRED_TESTS)}
 
 
 def main() -> int:

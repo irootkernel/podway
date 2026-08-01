@@ -45,8 +45,8 @@ fn frozen_command_catalog_routes() -> Vec<String> {
         .collect::<Vec<_>>();
     assert_eq!(
         routes.len(),
-        45,
-        "the frozen command catalog must contain exactly 45 routes"
+        46,
+        "the frozen command catalog must contain exactly 46 routes"
     );
     assert_eq!(
         routes.iter().collect::<BTreeSet<_>>().len(),
@@ -221,6 +221,7 @@ fn generated_dynamic_candidates(
 struct DynamicCompletionFixture {
     root: PathBuf,
     socket_path: PathBuf,
+    dev_home: PathBuf,
 }
 
 impl DynamicCompletionFixture {
@@ -241,6 +242,7 @@ impl DynamicCompletionFixture {
         )
         .expect("fixture runtime directory must be private");
         Self {
+            dev_home: root.join("dev"),
             root,
             socket_path: paths.socket_path().as_path().to_path_buf(),
         }
@@ -250,6 +252,7 @@ impl DynamicCompletionFixture {
         let arguments = self.arguments_with_explicit_endpoint(arguments);
         Command::new(env!("CARGO_BIN_EXE_podway"))
             .args(&arguments)
+            .env("PODWAY_DEV_HOME", &self.dev_home)
             .env_remove("HOME")
             .env_remove("TMPDIR")
             .env_remove("XDG_CONFIG_HOME")
@@ -263,6 +266,7 @@ impl DynamicCompletionFixture {
         Command::new(env!("CARGO_BIN_EXE_podway"))
             .args(&arguments)
             .current_dir(directory)
+            .env("PODWAY_DEV_HOME", &self.dev_home)
             .env_remove("HOME")
             .env_remove("TMPDIR")
             .env_remove("XDG_CONFIG_HOME")
@@ -1395,6 +1399,14 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         dynamic: None,
     },
     RouteSurface {
+        route: "daemon.terminate",
+        parser: &["terminate", "--dev"],
+        flags: &["--json", "--dev", "--timeout", "--no-color", "--quiet"],
+        values: &[],
+        help_tokens: &["--dev"],
+        dynamic: None,
+    },
+    RouteSurface {
         route: "daemon.logs",
         parser: &["daemon", "logs", "--lines", "10"],
         flags: &["--json", "--no-color", "--quiet", "--follow", "--lines"],
@@ -2468,6 +2480,7 @@ rework:
         ("daemon.stop", vec!["--json", "daemon", "stop"]),
         ("daemon.restart", vec!["--json", "daemon", "restart"]),
         ("daemon.status", vec!["--json", "daemon", "status"]),
+        ("daemon.terminate", vec!["--json", "--dev", "terminate"]),
         (
             "daemon.logs",
             vec!["--json", "daemon", "logs", "--lines", "1"],
@@ -2513,7 +2526,7 @@ rework:
             .iter()
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 45 public routes"
+        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 46 public routes"
     );
 }
 
@@ -2695,6 +2708,10 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
             &["daemon", "status", "--worktree", "/tmp/podway-grammar"],
         ),
         (
+            "daemon.terminate",
+            &["--dev", "terminate", "--worktree", "/tmp/podway-grammar"],
+        ),
+        (
             "daemon.logs",
             &[
                 "daemon",
@@ -2791,7 +2808,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
             &["job", "cancel", "123e4567-e89b-42d3-a456-426614174003"],
         ),
     ];
-    assert_eq!(routes.len(), 45);
+    assert_eq!(routes.len(), 46);
 
     for (route, arguments) in routes {
         let mut argv = vec!["--json"];
@@ -2819,7 +2836,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
                 assert_eq!(response["exit_code"], 1);
             }
             "daemon.uninstall" | "daemon.start" | "daemon.stop" | "daemon.restart"
-            | "daemon.status" | "daemon.logs" => {
+            | "daemon.status" | "daemon.terminate" | "daemon.logs" => {
                 assert_eq!(output.status.code(), Some(2), "{route}: {output:?}");
                 assert_eq!(response["schema"], "podway.error/v1");
                 assert_eq!(response["code"], "REQUEST_INVALID");
@@ -2894,7 +2911,7 @@ fn completion_route(surface: &RouteSurface) -> String {
 
 #[test]
 fn public_route_surface_table_keeps_parser_help_and_completion_in_lockstep() {
-    assert_eq!(ROUTE_SURFACES.len(), 45);
+    assert_eq!(ROUTE_SURFACES.len(), 46);
     let bash = run(&["completions", "bash"]);
     let zsh = run(&["completions", "zsh"]);
     let fish = run(&["completions", "fish"]);
@@ -3009,6 +3026,7 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "daemon.stop",
         "daemon.restart",
         "daemon.status",
+        "daemon.terminate",
         "daemon.logs",
         "workspace.init",
         "workspace.doctor",
@@ -3041,7 +3059,7 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "job.wait",
         "job.cancel",
     ];
-    assert_eq!(routes.len(), 45);
+    assert_eq!(routes.len(), 46);
 
     for route in routes {
         let output = run(&["--json", "help", route]);

@@ -462,6 +462,7 @@ pub struct UnixServerTransportV1<Source, Dispatcher, Metadata = SystemResponseMe
     timeouts: ServerTransportTimeoutsV1,
     observability: Option<ObservabilityEmitterV1>,
     process_identity: Option<DaemonProcessIdentityV1>,
+    dev_shutdown: Option<ShutdownAdmissionV1>,
 }
 
 impl<Source, Dispatcher> UnixServerTransportV1<Source, Dispatcher, SystemResponseMetadataSourceV1> {
@@ -513,11 +514,17 @@ impl<Source, Dispatcher, Metadata> UnixServerTransportV1<Source, Dispatcher, Met
             timeouts,
             observability,
             process_identity: None,
+            dev_shutdown: None,
         }
     }
 
     pub fn with_process_identity(mut self, identity: DaemonProcessIdentityV1) -> Self {
         self.process_identity = Some(identity);
+        self
+    }
+
+    pub fn with_dev_shutdown(mut self, admission: ShutdownAdmissionV1) -> Self {
+        self.dev_shutdown = Some(admission);
         self
     }
 
@@ -693,6 +700,22 @@ where
             );
             return self.write_response(&mut connection, &response);
         }
+        if request.command().as_str() == "daemon.terminate" {
+            if !is_daemon_control_request(&request) || self.dev_shutdown.is_none() {
+                return self.write_transport_error(
+                    &mut connection,
+                    Some(RequestContextV1::from_request(&request)),
+                    TransportErrorKindV1::InvalidRequest,
+                );
+            }
+            let response = self.daemon_terminate_response(&request)?;
+            self.write_response(&mut connection, &response)?;
+            self.dev_shutdown
+                .as_ref()
+                .expect("dev shutdown capability was checked")
+                .request_shutdown();
+            return Ok(());
+        }
         let slice_request = match SliceRequestV1::from_envelope(&request) {
             Ok(slice_request) => slice_request,
             Err(_) => {
@@ -824,6 +847,36 @@ where
                 warnings: Vec::new(),
             })
             .expect("the daemon constructs a protocol-valid status response"),
+        ))
+    }
+
+    fn daemon_terminate_response(
+        &self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+        let result = serde_json::json!({
+            "mode": "dev",
+            "termination": "requested",
+            "socket_cleanup": "pending",
+        })
+        .as_object()
+        .expect("daemon termination result is an object")
+        .clone();
+        Ok(ResponseEnvelopeV1::Output(
+            OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self
+                    .metadata
+                    .try_generated_at()
+                    .map_err(ServerConnectionErrorV1::ResponseMetadata)?,
+                workspace: None,
+                job: None,
+                session: None,
+                result,
+                warnings: Vec::new(),
+            })
+            .expect("the daemon constructs a protocol-valid termination response"),
         ))
     }
 
@@ -1104,6 +1157,10 @@ fn response_matches_request(response: &ResponseEnvelopeV1, request: &RequestEnve
 }
 
 fn is_daemon_status_request(request: &RequestEnvelopeV1) -> bool {
+    is_daemon_control_request(request)
+}
+
+fn is_daemon_control_request(request: &RequestEnvelopeV1) -> bool {
     request.operation() == OperationV1::Control
         && request.workspace().is_none()
         && request.idempotency_key().is_none()

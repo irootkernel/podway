@@ -129,6 +129,14 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.daemon-status-result/v1
+- name: daemon.terminate
+  cli:
+  - terminate
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
 - name: daemon.logs
   cli:
   - daemon

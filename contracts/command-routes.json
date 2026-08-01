@@ -106,6 +106,13 @@
       "capabilities": []
     },
     {
+      "command": "daemon.terminate",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
       "command": "daemon.logs",
       "owner": "podway-service",
       "path": ["podway-cli", "podway-service"],

@@ -197,9 +197,9 @@ and the remaining `REL10` tasks are release-blocking.
 | `DOLGI005` | Verify the packaged test-fixture archive | Completed | Run the complete Dolgorae consumer conformance suite using a native arm64 archive built from debug binaries, require explicit test-fixture provenance, and fail closed unless both packaged binaries expose debug-only isolation. | [AUT-REL-001–003](reference/interfaces/34-automation-client-contract.md#23-release-artifact-and-installation-aut-rel-001004), [AUT-T-DIST](reference/interfaces/34-automation-client-contract.md#24-acceptance-matrix) |
 
 `DOLGI005` supersedes the earlier unsafe requirement to exercise release-profile
-binaries through debug-only account and launchctl overrides. The actual distribution
-repeats packaged conformance under a disposable account and isolated launchd domain
-in `REL10003`; the test-fixture result is not release-profile qualification.
+binaries through debug-only account and launchctl overrides. `REL10003` repeats
+packaged conformance through the release binaries' isolated foreground dev mode;
+the test-fixture result alone is not release-profile qualification.
 
 ## REL10 — Podway v0.1.0 Release
 
@@ -207,6 +207,6 @@ in `REL10003`; the test-fixture result is not release-profile qualification.
 |---|---|---|---|---|
 | `REL10001` | Freeze the v0.1.0 contract set | Completed | Freeze schemas, specs, canonicalization fixtures, toolchain, source revision, and manifest. | [AUT-CONTRACT-001](reference/interfaces/34-automation-client-contract.md#13-cli-and-daemon-contract-identity-aut-contract-001005), [AUT-REL-002–003](reference/interfaces/34-automation-client-contract.md#23-release-artifact-and-installation-aut-rel-001004) |
 | `REL10002` | Pass the complete local release gate | Completed | Run the authoritative clean-tree `make test` with every new conformance test included. | [AUT-REL-004](reference/interfaces/34-automation-client-contract.md#23-release-artifact-and-installation-aut-rel-001004) |
-| `REL10003` | Build and qualify the deterministic distribution | Completed | Build the native arm64 release archive, checksum, and provenance, then run packaged conformance under a disposable macOS account with an isolated launchd user domain. | [AUT-REL-001–003](reference/interfaces/34-automation-client-contract.md#23-release-artifact-and-installation-aut-rel-001004) |
+| `REL10003` | Build and qualify the deterministic distribution | Completed | Build the native arm64 release archive, checksum, and provenance, then run packaged conformance through the isolated foreground dev daemon mode. | [AUT-REL-001–003](reference/interfaces/34-automation-client-contract.md#23-release-artifact-and-installation-aut-rel-001004) |
 | `REL10004` | Produce the Dolgorae compatibility handoff | Planned | Publish the binary, contract, source, tree, and toolchain identities required for pinning. | [AUT-REL-002–004](reference/interfaces/34-automation-client-contract.md#23-release-artifact-and-installation-aut-rel-001004) |
 | `REL10005` | Tag and release Podway v0.1.0 | Planned | Create the immutable release only after every preceding task is complete. | [AUT-REL-004](reference/interfaces/34-automation-client-contract.md#23-release-artifact-and-installation-aut-rel-001004) |

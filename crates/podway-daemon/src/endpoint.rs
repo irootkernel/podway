@@ -217,6 +217,15 @@ impl SingletonEndpointV1 {
         let current_uid = geteuid().as_raw();
 
         ensure_runtime_directory(runtime_directory, current_uid)?;
+        let lock_parent = lock_path
+            .parent()
+            .ok_or_else(|| EndpointErrorV1::UnsafeLockFile {
+                path: lock_path.to_path_buf(),
+                violation: EndpointPathViolationV1::NotRegularFile,
+            })?;
+        if lock_parent != runtime_directory {
+            ensure_runtime_directory(lock_parent, current_uid)?;
+        }
         let lock = open_and_lock(lock_path, current_uid)?;
 
         ensure_socket_parent(socket_path, runtime_directory, current_uid)?;

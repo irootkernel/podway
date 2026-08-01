@@ -312,6 +312,34 @@ impl DaemonClientV1 {
         self.exchange(request)
     }
 
+    /// Requests orderly shutdown of a foreground dev daemon.
+    pub fn daemon_terminate(
+        &self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<ResponseEnvelopeV1, DaemonClientErrorV1> {
+        if request.command().as_str() != "daemon.terminate"
+            || request.operation() != OperationV1::Control
+            || request.workspace().is_some()
+            || request.idempotency_key().is_some()
+            || request.preconditions().session_id().is_some()
+            || request.preconditions().session_revision().is_some()
+            || request.preconditions().attempt_id().is_some()
+            || request.preconditions().item_revision().is_some()
+            || request.preconditions().blocker_id().is_some()
+            || request.preconditions().job_state().is_some()
+            || request.options().detach()
+            || request.options().wait_timeout_ms() != 0
+            || !request.payload().is_empty()
+        {
+            return Err(DaemonClientErrorV1::RequestAdmission {
+                source: SliceErrorV1::InvalidCommand {
+                    received: request.command().as_str().to_owned(),
+                },
+            });
+        }
+        self.exchange(request)
+    }
+
     fn exchange(
         &self,
         request: &RequestEnvelopeV1,

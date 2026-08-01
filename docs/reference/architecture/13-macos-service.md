@@ -36,6 +36,29 @@ directory. Test-only account-root injection is compiled only in debug builds so
 process-level integration tests can exercise the real binaries without touching
 the developer's installed service state.
 
+## Foreground dev mode
+
+`podwayd --dev` is a contributor-only foreground execution mode compiled into the
+release binaries so packaged IPC conformance can exercise the actual artifact
+without installing a LaunchAgent. Its default root is
+`<effective-user-home>/.podway/dev/`; an absolute `PODWAY_DEV_HOME` overrides that
+root only in dev mode. The dev socket, registry, metadata, and log paths live below
+that root. The singleton lock remains the production
+`<effective-user-home>/.podway/run/podwayd.lock`, preventing simultaneous production
+and dev daemon ownership.
+
+`podway --dev` selects the dev socket directly and never consults installed-service
+metadata. `podway --dev terminate` sends the dev-only `daemon.terminate` control
+request, waits for endpoint cleanup, and safely removes a same-user stale Unix
+socket when no daemon is listening. Production daemons reject that request. Normal
+signal shutdown and dev IPC shutdown share the endpoint guard, which removes only
+the socket identity owned by that process; dev registry and log files remain.
+
+This mode validates Podway's daemon/CLI interface. LaunchAgent plist generation,
+absolute arguments, permissions, atomic publication, and command-runner behavior
+remain covered by static and mocked adapter tests rather than by recreating a macOS
+GUI login domain during distribution packaging.
+
 ## LaunchAgent configuration
 
 The installed plist MUST:

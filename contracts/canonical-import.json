@@ -255,7 +255,7 @@
     {
       "source": "docs/spec/command-catalog.yaml",
       "destination": "spec/command-catalog.yaml",
-      "source_sha256": "5a0fe6c45d179310f990a48671ae0fe2c63c82349d5425f5ab1c6aa6f19a5397",
+      "source_sha256": "7ec10663941d9540e632f742a45342c0d07b66df1656c6b6e67cbb947ffb962e",
       "copy_mode": "exact",
       "owner": "docs",
       "generator_version": "docs-assets-v1"

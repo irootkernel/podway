@@ -47,7 +47,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
-    let socket_path = match arguments.as_slice() {
+    let (dev_mode, socket_path) = match arguments.as_slice() {
         [argument] if argument == "--version" => {
             println!("podwayd {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
@@ -60,23 +60,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             return Ok(());
         }
-        [] => None,
-        [argument] if argument == "--service" => None,
+        [] => (false, None),
+        [argument] if argument == "--service" => (false, None),
+        [argument] if argument == "--dev" => (true, None),
         [service, socket, path] if service == "--service" && socket == "--socket" => {
-            Some(PathBuf::from(path))
+            (false, Some(PathBuf::from(path)))
         }
         _ => {
             return Err(
-                "usage: podwayd [--service [--socket <absolute-path>]|--version|--json version]"
+                "usage: podwayd [--dev|--service [--socket <absolute-path>]|--version|--json version]"
                     .into(),
             );
         }
     };
-    run_service(socket_path)
+    run_service(dev_mode, socket_path)
 }
 
-fn run_service(socket_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let paths = effective_service_paths()?;
+fn run_service(
+    dev_mode: bool,
+    socket_path: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let paths = effective_service_paths(dev_mode)?;
     let paths = match socket_path {
         Some(socket_path) => paths.with_socket_path(socket_path)?,
         None => paths,
@@ -89,13 +93,16 @@ fn run_service(socket_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::E
         paths.socket_path().as_path(),
         paths.socket_path().as_path(),
     )?;
-    let configuration = ProductionDaemonRuntimeConfigV1::new(
+    let mut configuration = ProductionDaemonRuntimeConfigV1::new(
         WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
         NonZeroUsize::new(MAXIMUM_IN_FLIGHT_CONNECTIONS_V1)
             .expect("the production connection limit is nonzero"),
         ServerTransportTimeoutsV1::default(),
     )
     .with_process_identity(process_identity);
+    if dev_mode {
+        configuration = configuration.with_dev_mode();
+    }
     let inspection_options = SqliteStoreOptionsV1::new(1)?;
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
     let signal_control = signals.handle();
@@ -157,10 +164,23 @@ fn run_service(socket_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::E
     )
 }
 
-fn effective_service_paths() -> Result<ServiceRuntimePathsV1, podway_service::ServicePathErrorV1> {
+fn effective_service_paths(
+    dev_mode: bool,
+) -> Result<ServiceRuntimePathsV1, podway_service::ServicePathErrorV1> {
     #[cfg(debug_assertions)]
     if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
+        if dev_mode {
+            let account_root = PathBuf::from(account_root);
+            let dev_home = env::var_os("PODWAY_DEV_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| account_root.join(".podway/dev"));
+            return ServiceRuntimePathsV1::for_dev_home(account_root, dev_home, geteuid().as_raw());
+        }
         return ServiceRuntimePathsV1::for_account_home(account_root, geteuid().as_raw());
+    }
+    if dev_mode {
+        let dev_home = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from);
+        return ServiceRuntimePathsV1::for_effective_user_dev(dev_home.as_deref());
     }
     ServiceRuntimePathsV1::for_effective_user()
 }

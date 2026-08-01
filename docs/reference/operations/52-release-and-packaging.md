@@ -94,21 +94,19 @@ artifact class, and signing/notarization status. `make test` exercises the same
 archive builder with debug binaries in disposable directories, requires and rechecks
 their debug-only isolation capability before service mutation, and verifies that repeated
 construction produces the same archive digest; it does not publish a distribution
-artifact. Release packaging rejects that capability. The extracted release-profile
-archive is qualified later under a disposable macOS account with an isolated launchd
-user domain rather than with the debug fixture override. The test-only
+artifact. Release packaging rejects that capability. After packaging, `make dist`
+extracts the release-profile archive and qualifies its binaries through the isolated
+foreground dev daemon mode. The test-only
 `--allow-dirty` switch is invalid for `artifact_class=distribution`; distribution
 construction always requires a clean tree.
 
-Run `sudo -v` followed by `make dist-qualify` after archive construction. The
-qualification orchestrator itself remains unprivileged and uses the cached
-non-interactive authorization only for the exact hidden account and `gui/<uid>`
-domain that it reports. It runs the controlled-PATH, installed-service, fenced
+Qualification is an automatic, unprivileged final step of `make dist`; there is no
+separate qualification target or receipt. It uses a private temporary
+`PODWAY_DEV_HOME`, starts the extracted `podwayd --dev`, and runs packaged fenced
 lifecycle, conflict, admitted-timeout, response-loss, reconciliation, and identity
-scenarios against the extracted release-profile binaries with no debug isolation
-environment. It fails closed unless the service, launchd domain, disposable account,
-and account home are removed. Success writes the deterministic
-`podway-0.1.0-aarch64-apple-darwin.qualification.json` receipt beside the archive.
+scenarios through the extracted `podway --dev`. Success requires orderly termination
+and absence of every temporary daemon socket. This verifies Podway's executable and
+IPC interfaces; it does not retest macOS launchd itself.
 
 ## Installation
 

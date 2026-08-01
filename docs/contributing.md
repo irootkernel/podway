@@ -110,12 +110,10 @@ the deterministic archive, SHA-256 checksum, and provenance JSON under `dist/`.
 It requires a clean native Apple Silicon working tree. Signing and notarization
 describe the distributed artifact but are not additional source-readiness gates.
 
-After `make dist`, authorize one short-lived administrator session with `sudo -v`
-and run `make dist-qualify`. The qualification target validates the distribution
-identities, creates a hidden disposable local account and isolated `gui/<uid>`
-launchd domain, runs the packaged Dolgorae scenarios, removes the domain and account,
-and writes the qualification receipt under `dist/`. Any cleanup failure fails the
-qualification and must be resolved before release.
+`make dist` also extracts the completed archive and automatically runs packaged
+Dolgorae conformance through a private foreground dev daemon. No `sudo`, account
+creation, launchd domain, separate qualification command, or qualification receipt
+is involved. A failed scenario or leftover dev socket fails `make dist`.
 
 See [quality](reference/quality/60-testing-and-conformance.md),
 [product acceptance](reference/quality/61-product-acceptance.md), and

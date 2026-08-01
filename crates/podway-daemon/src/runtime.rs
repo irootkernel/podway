@@ -42,6 +42,7 @@ pub struct ProductionDaemonRuntimeConfigV1 {
     maximum_in_flight_connections: NonZeroUsize,
     transport_timeouts: ServerTransportTimeoutsV1,
     process_identity: Option<DaemonProcessIdentityV1>,
+    dev_mode: bool,
 }
 
 impl ProductionDaemonRuntimeConfigV1 {
@@ -55,11 +56,17 @@ impl ProductionDaemonRuntimeConfigV1 {
             maximum_in_flight_connections,
             transport_timeouts,
             process_identity: None,
+            dev_mode: false,
         }
     }
 
     pub fn with_process_identity(mut self, identity: DaemonProcessIdentityV1) -> Self {
         self.process_identity = Some(identity);
+        self
+    }
+
+    pub fn with_dev_mode(mut self) -> Self {
+        self.dev_mode = true;
         self
     }
 
@@ -77,6 +84,10 @@ impl ProductionDaemonRuntimeConfigV1 {
 
     pub fn process_identity(&self) -> Option<&DaemonProcessIdentityV1> {
         self.process_identity.as_ref()
+    }
+
+    pub const fn dev_mode(&self) -> bool {
+        self.dev_mode
     }
 }
 
@@ -396,6 +407,9 @@ impl ProductionDaemonRuntimeV1 {
         if let Some(identity) = configuration.process_identity().cloned() {
             transport = transport
                 .with_process_identity(identity.with_effective_socket_path(endpoint.socket_path()));
+        }
+        if configuration.dev_mode() {
+            transport = transport.with_dev_shutdown(admission.clone());
         }
         let transport = Arc::new(transport);
         let accept_loop = ProductionAcceptLoopV1::new_with_observability(

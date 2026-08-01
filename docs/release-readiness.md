@@ -64,15 +64,11 @@ both binaries to expose debug-only isolation before any service mutation, and pr
 that repeated construction produces the same archive digest. `make dist` instead
 requires `artifact_class=distribution` and rejects binaries that expose that isolation
 capability. It also rejects `--allow-dirty`, which is reserved for test fixtures.
-Final packaged release conformance is a separate `REL10003` completion requirement
-and runs only under a disposable macOS
-account with an isolated launchd user domain; it must not reuse the debug fixture
-override against a real user account.
-After `make dist`, run `sudo -v` and `make dist-qualify`. The qualification target
-uses the administrator ticket only to create and remove its reported hidden account
-and isolated `gui/<uid>` domain. It runs the release-profile packaged Dolgorae suite
-without debug overrides and writes a deterministic qualification receipt under
-`dist/`; a service, domain, account, or home cleanup failure rejects the result.
+Final packaged release conformance is the automatic final phase of `make dist`.
+It extracts the release-profile archive, runs the packaged Dolgorae lifecycle,
+conflict, timeout, response-loss, reconciliation, and identity scenarios through
+`podwayd --dev` and `podway --dev`, and rejects any leftover dev socket. It requires
+neither administrator authorization nor a disposable account or launchd domain.
 Rebuild the archive whenever history is rewritten after packaging; published
 provenance `source_commit` must equal the exact release-tag commit.
 
