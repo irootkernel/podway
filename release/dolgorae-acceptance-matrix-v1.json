@@ -1,7 +1,7 @@
 {
   "schema": "podway.dolgorae-acceptance-matrix/v1",
   "source_files": {
-    "crates/podway-cli/tests/e2e_dolgorae_conformance.rs": "1e816219f0d9537388ef8553f81c86210f7c4cd581e3c7a9797df3d353e7d362",
+    "crates/podway-cli/tests/e2e_dolgorae_conformance.rs": "6c625f42962f9323f1b982bc4399c5cd688b8319be92a589cd54160ae51e8802",
     "crates/podway-cli/tests/e2e_release_archive.rs": "3fe316aa389ba36f27437ad4c336bb6c5e405b80d0d6409a4a95c9c94b8d1455",
     "tools/release_archive.py": "006c89e0415d688bd4e2dda84ceb5a0ccc20122f88efd53435190fb10ef71110"
   },
@@ -85,8 +85,8 @@
       "id": "DOLGI005",
       "proofs": [
         {
-          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite",
-          "function": "aut_t_dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite",
+          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite",
+          "function": "dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite",
           "kind": "cargo-test",
           "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs"
         },

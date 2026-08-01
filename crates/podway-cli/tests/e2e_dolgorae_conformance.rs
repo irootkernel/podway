@@ -1655,12 +1655,7 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
 }
 
 #[test]
-fn aut_t_dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite() {
-    const CHILD_MARKER: &str = "PODWAY_DOLGI_DIST_CHILD";
-    if std::env::var_os(CHILD_MARKER).is_some() {
-        return;
-    }
-
+fn dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let root = PathBuf::from(format!("/tmp/pwdgd-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -1767,8 +1762,7 @@ fn aut_t_dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_s
 
     let child = Command::new(std::env::current_exe().expect("E2E test binary path"))
         .arg("e2e_dolgorae_conformance::aut_t_")
-        .args(["--nocapture", "--test-threads=1"])
-        .env(CHILD_MARKER, "1")
+        .args(["--nocapture", "--include-ignored", "--test-threads=1"])
         .env("PODWAY_TEST_CLI_BINARY", &packaged_cli)
         .env("PODWAYD_TEST_BINARY", &packaged_daemon)
         .output()
