@@ -251,8 +251,30 @@ def existing_accounts() -> dict[str, int]:
     return accounts
 
 
-def allocate_account() -> tuple[str, int, Path, str]:
+def account_attribute(name: str, attribute: str) -> str | None:
+    completed = run(
+        ["/usr/bin/dscl", ".", "-read", f"/Users/{name}", attribute],
+        label=f"disposable account {attribute} probe",
+        allow_failure=True,
+    )
+    if completed.returncode != 0:
+        return None
+    output = completed.stdout.decode("utf-8", errors="strict").strip()
+    prefix = f"{attribute}:"
+    if not output.startswith(prefix):
+        fail(f"disposable account {attribute} probe returned an unexpected record")
+    return " ".join(output.removeprefix(prefix).split())
+
+
+def account_exists(name: str) -> bool:
+    return account_attribute(name, "RecordName") is not None
+
+
+def allocate_account() -> tuple[str, int, Path]:
     accounts = existing_accounts()
+    stale = sorted(name for name in accounts if re.fullmatch(rf"{ACCOUNT_PREFIX}[0-9a-f]{{6}}", name))
+    if stale:
+        fail(f"stale qualification accounts require explicit cleanup: {', '.join(stale)}")
     used = set(accounts.values())
     uid = next((candidate for candidate in range(550, 600) if candidate not in used), None)
     if uid is None:
@@ -260,7 +282,7 @@ def allocate_account() -> tuple[str, int, Path, str]:
     for _ in range(32):
         name = f"{ACCOUNT_PREFIX}{secrets.token_hex(3)}"
         if name not in accounts:
-            return name, uid, Path("/Users") / name, secrets.token_urlsafe(32)
+            return name, uid, Path("/Users") / name
     fail("could not allocate a unique disposable qualification account name")
 
 
@@ -277,32 +299,27 @@ def sudo(arguments: list[str], label: str, *, allow_failure: bool = False) -> su
     return run(["/usr/bin/sudo", "-n", *arguments], label=label, allow_failure=allow_failure)
 
 
-def create_account(name: str, uid: int, home: Path, password: str) -> None:
+def create_account(name: str, uid: int, home: Path) -> None:
     validate_account_target(name, uid, home)
-    sudo(
-        [
-            "/usr/sbin/sysadminctl",
-            "-addUser",
-            name,
-            "-fullName",
-            "Podway REL10 Qualification",
-            "-UID",
-            str(uid),
-            "-GID",
-            "20",
-            "-shell",
-            "/bin/zsh",
-            "-password",
-            password,
-            "-home",
-            str(home),
-        ],
-        "disposable account creation",
+    record = f"/Users/{name}"
+    attributes = (
+        ("RecordName", name),
+        ("RealName", "Podway REL10 Qualification"),
+        ("UniqueID", str(uid)),
+        ("PrimaryGroupID", "20"),
+        ("NFSHomeDirectory", str(home)),
+        ("UserShell", "/bin/zsh"),
+        ("IsHidden", "1"),
     )
+    for attribute, value in attributes:
+        sudo(
+            ["/usr/bin/dscl", ".", "-create", record, attribute, value],
+            f"disposable account {attribute} creation",
+        )
+    sudo(["/usr/bin/dscl", ".", "-create", record, "Password", "*"], "disable disposable login")
     observed = existing_accounts().get(name)
     if observed != uid:
         fail(f"disposable account was not created with UID {uid}")
-    sudo(["/usr/bin/dscl", ".", "-create", f"/Users/{name}", "IsHidden", "1"], "hide disposable account")
     sudo(["/usr/bin/install", "-d", "-o", name, "-g", "staff", "-m", "0700", str(home)], "prepare disposable home")
     sudo(["/bin/launchctl", "bootstrap", f"gui/{uid}"], "isolated GUI domain bootstrap")
     sudo(["/bin/launchctl", "print", f"gui/{uid}"], "isolated GUI domain probe")
@@ -314,11 +331,23 @@ def cleanup_account(name: str, uid: int, home: Path) -> None:
     bootout = sudo(["/bin/launchctl", "bootout", f"gui/{uid}"], "isolated GUI domain removal", allow_failure=True)
     if bootout.returncode != 0 and sudo(["/bin/launchctl", "print", f"gui/{uid}"], "isolated GUI domain absence", allow_failure=True).returncode == 0:
         errors.append("isolated GUI domain remained after bootout")
-    deleted = sudo(["/usr/sbin/sysadminctl", "-deleteUser", name, "-secure"], "disposable account deletion", allow_failure=True)
-    if deleted.returncode != 0 or name in existing_accounts():
-        errors.append("disposable account deletion failed")
+    if account_exists(name):
+        observed_uid = existing_accounts().get(name)
+        marker = account_attribute(name, "RealName")
+        if observed_uid not in (None, uid) or marker != "Podway REL10 Qualification":
+            errors.append("refusing to delete a disposable account with unexpected identity")
+        else:
+            deleted = sudo(
+                ["/usr/bin/dscl", ".", "-delete", f"/Users/{name}"],
+                "disposable account deletion",
+                allow_failure=True,
+            )
+            if deleted.returncode != 0 or account_exists(name):
+                errors.append("disposable account deletion failed")
     if home.exists():
-        errors.append(f"disposable account home remained: {home}")
+        removed = sudo(["/bin/rm", "-rf", str(home)], "disposable account home removal", allow_failure=True)
+        if removed.returncode != 0 or home.exists():
+            errors.append(f"disposable account home remained: {home}")
     if errors:
         fail("; ".join(errors))
 
@@ -377,7 +406,7 @@ def qualify(output_directory: Path) -> dict[str, Any]:
         staged_harness = temporary / "e2e_suite"
         shutil.copyfile(harness, staged_harness)
         staged_harness.chmod(0o755)
-        account, uid, home, password = allocate_account()
+        account, uid, home = allocate_account()
         validate_account_target(account, uid, home)
         print(
             json.dumps(
@@ -390,13 +419,13 @@ def qualify(output_directory: Path) -> dict[str, Any]:
         created = False
         suite_error: BaseException | None = None
         try:
-            create_account(account, uid, home, password)
+            create_account(account, uid, home)
             created = True
             run_packaged_suite(account, uid, home, staged_harness, cli, daemon)
         except BaseException as error:
             suite_error = error
         cleanup_error: BaseException | None = None
-        if created or account in existing_accounts():
+        if created or account_exists(account):
             try:
                 cleanup_account(account, uid, home)
             except BaseException as error:
