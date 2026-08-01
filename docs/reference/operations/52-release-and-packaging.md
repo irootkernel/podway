@@ -100,6 +100,16 @@ user domain rather than with the debug fixture override. The test-only
 `--allow-dirty` switch is invalid for `artifact_class=distribution`; distribution
 construction always requires a clean tree.
 
+Run `sudo -v` followed by `make dist-qualify` after archive construction. The
+qualification orchestrator itself remains unprivileged and uses the cached
+non-interactive authorization only for the exact hidden account and `gui/<uid>`
+domain that it reports. It runs the controlled-PATH, installed-service, fenced
+lifecycle, conflict, admitted-timeout, response-loss, reconciliation, and identity
+scenarios against the extracted release-profile binaries with no debug isolation
+environment. It fails closed unless the service, launchd domain, disposable account,
+and account home are removed. Success writes the deterministic
+`podway-0.1.0-aarch64-apple-darwin.qualification.json` receipt beside the archive.
+
 ## Installation
 
 The binary installation mechanism may be a release archive or package manager. Regardless of mechanism:

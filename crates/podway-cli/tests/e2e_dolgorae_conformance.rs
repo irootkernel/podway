@@ -30,6 +30,8 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const DISTRIBUTION_QUALIFICATION_ROOT_ENV: &str = "PODWAY_DISTRIBUTION_QUALIFICATION_ROOT";
+const DISTRIBUTION_ACCOUNT_HOME_ENV: &str = "PODWAY_DISTRIBUTION_ACCOUNT_HOME";
 
 struct ControlledPathFixtureV1 {
     root: PathBuf,
@@ -37,64 +39,102 @@ struct ControlledPathFixtureV1 {
     arbitrary: PathBuf,
     launchctl: PathBuf,
     launchctl_state: PathBuf,
+    production_service: bool,
 }
 
 impl ControlledPathFixtureV1 {
     fn new() -> Self {
         let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let root = PathBuf::from(format!("/tmp/pwdg1-{}-{sequence}", std::process::id()));
-        let home = root.join("home");
+        let qualification_root = std::env::var_os(DISTRIBUTION_QUALIFICATION_ROOT_ENV);
+        let production_service = qualification_root.is_some();
+        let root = qualification_root.map_or_else(
+            || PathBuf::from(format!("/tmp/pwdg1-{}-{sequence}", std::process::id())),
+            |root| PathBuf::from(root).join(format!("case-{}-{sequence}", std::process::id())),
+        );
+        let home = if production_service {
+            let home = PathBuf::from(
+                std::env::var_os(DISTRIBUTION_ACCOUNT_HOME_ENV)
+                    .expect("distribution qualification must provide the account home"),
+            );
+            assert!(
+                home.is_absolute(),
+                "distribution account home must be absolute"
+            );
+            home
+        } else {
+            root.join("home")
+        };
         let arbitrary = root.join("outside-worktree");
         let launchctl_state = root.join("launchctl-state");
-        for directory in [&home, &arbitrary, &launchctl_state] {
+        for directory in [&root, &home, &arbitrary, &launchctl_state] {
             fs::create_dir_all(directory).expect("Dolgorae fixture directory must be created");
         }
         fs::set_permissions(&home, fs::Permissions::from_mode(0o700))
             .expect("fixture account home must be private");
-        let launchctl = root.join("fake-launchctl");
-        fs::write(&launchctl, fake_launchctl_script())
-            .expect("fake launchctl executable must be written");
-        fs::set_permissions(&launchctl, fs::Permissions::from_mode(0o700))
-            .expect("fake launchctl executable must be executable");
+        let launchctl = if production_service {
+            PathBuf::from("/bin/launchctl")
+        } else {
+            let launchctl = root.join("fake-launchctl");
+            fs::write(&launchctl, fake_launchctl_script())
+                .expect("fake launchctl executable must be written");
+            fs::set_permissions(&launchctl, fs::Permissions::from_mode(0o700))
+                .expect("fake launchctl executable must be executable");
+            launchctl
+        };
         Self {
             root,
             home,
             arbitrary,
             launchctl,
             launchctl_state,
+            production_service,
         }
     }
 
     fn run(&self, path: &str, arguments: &[&str]) -> Output {
-        Command::new("podway")
+        let mut command = Command::new("podway");
+        command
             .args(arguments)
             .current_dir(&self.arbitrary)
             .env_clear()
-            .env("PATH", path)
-            .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
-            .env("PODWAY_TEST_LAUNCHCTL", &self.launchctl)
-            .env("PODWAY_TEST_LAUNCHCTL_STATE", &self.launchctl_state)
+            .env("PATH", path);
+        self.configure_test_isolation(&mut command);
+        command
             .output()
             .expect("controlled PATH must invoke podway")
     }
 
     fn run_owned(&self, path: &str, arguments: &[String]) -> Output {
-        Command::new("podway")
+        let mut command = Command::new("podway");
+        command
             .args(arguments.iter().map(String::as_str))
             .current_dir(&self.arbitrary)
             .env_clear()
-            .env("PATH", path)
-            .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
-            .env("PODWAY_TEST_LAUNCHCTL", &self.launchctl)
-            .env("PODWAY_TEST_LAUNCHCTL_STATE", &self.launchctl_state)
+            .env("PATH", path);
+        self.configure_test_isolation(&mut command);
+        command
             .output()
             .expect("controlled PATH must invoke podway")
     }
 
+    fn configure_test_isolation(&self, command: &mut Command) {
+        if !self.production_service {
+            command
+                .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
+                .env("PODWAY_TEST_LAUNCHCTL", &self.launchctl)
+                .env("PODWAY_TEST_LAUNCHCTL_STATE", &self.launchctl_state);
+        }
+    }
+
     fn assert_install(&self, path: &str, arguments: &[&str], expected_daemon: &Path) {
         let output = self.run(path, arguments);
-        let daemon_log = fs::read_to_string(self.launchctl_state.join("daemon.log"))
-            .unwrap_or_else(|_| "<no daemon log>".to_owned());
+        let daemon_log_path = if self.production_service {
+            self.home.join(".podway/logs/podwayd.log")
+        } else {
+            self.launchctl_state.join("daemon.log")
+        };
+        let daemon_log =
+            fs::read_to_string(daemon_log_path).unwrap_or_else(|_| "<no daemon log>".to_owned());
         let status_diagnostic = if output.status.success() {
             "<not needed>".to_owned()
         } else {
@@ -189,7 +229,9 @@ impl ControlledPathFixtureV1 {
 
 impl Drop for ControlledPathFixtureV1 {
     fn drop(&mut self) {
-        if let Ok(pid) = fs::read_to_string(self.launchctl_state.join("pid")) {
+        if !self.production_service
+            && let Ok(pid) = fs::read_to_string(self.launchctl_state.join("pid"))
+        {
             let _ = Command::new("/bin/kill").arg(pid.trim()).status();
         }
         if std::env::var_os("PODWAY_KEEP_DOLGI_FIXTURE").is_some() {
@@ -715,11 +757,13 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
 
     let socket = fixture.home.join(".podway/run/podwayd.sock");
     let alternate_socket = fixture.home.join(".podway/run/alternate.sock");
-    let duplicate = Command::new(&release_daemon)
+    let mut duplicate_command = Command::new(&release_daemon);
+    duplicate_command
         .args(["--service", "--socket"])
         .arg(&alternate_socket)
-        .env_clear()
-        .env("PODWAY_TEST_ACCOUNT_ROOT", &fixture.home)
+        .env_clear();
+    fixture.configure_test_isolation(&mut duplicate_command);
+    let duplicate = duplicate_command
         .output()
         .expect("duplicate daemon probe must execute");
     assert!(!duplicate.status.success());

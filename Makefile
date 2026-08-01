@@ -14,7 +14,7 @@ export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VA
 
 .PHONY: test test-prepare test-rust test-unit test-int test-fuzzing test-e2e \
 	toolchain sync-docs-assets format vet lint architecture architecture-static preset-validator \
-	preset-create preset-import preset-tool-test contract-manifest dist
+	preset-create preset-import preset-tool-test contract-manifest dist dist-qualify
 
 toolchain:
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
@@ -54,6 +54,7 @@ architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py self-test
+	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --all
 	$(MAKE) contract-manifest
 	$(MAKE) preset-tool-test
@@ -111,4 +112,8 @@ dist:
 		--artifact-class distribution \
 		--podway target/release/podway \
 		--podwayd target/release/podwayd \
+		--output-dir $(DIST_DIR)
+
+dist-qualify:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py qualify \
 		--output-dir $(DIST_DIR)

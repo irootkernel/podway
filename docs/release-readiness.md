@@ -68,6 +68,11 @@ Final packaged release conformance is a separate `REL10003` completion requireme
 and runs only under a disposable macOS
 account with an isolated launchd user domain; it must not reuse the debug fixture
 override against a real user account.
+After `make dist`, run `sudo -v` and `make dist-qualify`. The qualification target
+uses the administrator ticket only to create and remove its reported hidden account
+and isolated `gui/<uid>` domain. It runs the release-profile packaged Dolgorae suite
+without debug overrides and writes a deterministic qualification receipt under
+`dist/`; a service, domain, account, or home cleanup failure rejects the result.
 Rebuild the archive whenever history is rewritten after packaging; published
 provenance `source_commit` must equal the exact release-tag commit.
 
