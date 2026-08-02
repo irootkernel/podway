@@ -107,6 +107,10 @@ fn root() -> PathBuf {
 }
 
 fn read_json(relative: &str) -> Value {
+    let relative = relative
+        .strip_prefix("schemas/")
+        .map(|name| PathBuf::from("assets/schemas").join(name))
+        .unwrap_or_else(|| PathBuf::from(relative));
     serde_json::from_slice(&fs::read(root().join(relative)).unwrap()).unwrap()
 }
 
@@ -157,7 +161,8 @@ fn contains_const(value: &Value, expected: &str) -> bool {
 }
 
 fn parse_command_catalog() -> BTreeMap<String, Vec<String>> {
-    let source = fs::read_to_string(root().join("spec/command-catalog.yaml")).unwrap();
+    let source =
+        fs::read_to_string(root().join("assets/specifications/command-catalog.yaml")).unwrap();
     let mut bindings = BTreeMap::new();
     let mut command = None;
     let mut schemas = Vec::new();
@@ -193,7 +198,7 @@ fn parse_command_catalog() -> BTreeMap<String, Vec<String>> {
 }
 
 fn parse_error_catalog() -> BTreeMap<String, ErrorCatalogEntry> {
-    serde_json::from_value::<ErrorCatalog>(read_json("spec/error-codes.json"))
+    serde_json::from_value::<ErrorCatalog>(read_json("assets/specifications/error-codes.json"))
         .unwrap()
         .errors
         .into_iter()
@@ -204,7 +209,7 @@ fn parse_error_catalog() -> BTreeMap<String, ErrorCatalogEntry> {
 
 fn local_schemas() -> LocalSchemas {
     let mut resources = HashMap::new();
-    for entry in fs::read_dir(root().join("schemas")).unwrap() {
+    for entry in fs::read_dir(root().join("assets/schemas")).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;

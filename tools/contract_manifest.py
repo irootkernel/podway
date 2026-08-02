@@ -13,6 +13,8 @@ import tempfile
 import tomllib
 from typing import Any
 
+import repository_assets
+
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = Path("contracts/contract-manifest-v1.json")
@@ -127,8 +129,9 @@ def matching_files(root: Path, directory: str, suffix: str) -> list[str]:
 
 def expected_asset_kinds(root: Path) -> dict[str, str]:
     assets = dict(STATIC_ASSETS)
-    for path in matching_files(root, "schemas", "-v1.schema.json"):
-        assets[path] = "schema"
+    for path in matching_files(root, "assets/schemas", "-v1.schema.json"):
+        relative = Path(path).relative_to("assets/schemas").as_posix()
+        assets[f"schemas/{relative}"] = "schema"
     for path in matching_files(root, "docs/examples/json", ".json"):
         assets[path] = "known_answer_fixture"
     for path in matching_files(root, "tests/fixtures/contract", ".json"):
@@ -185,7 +188,7 @@ def build_manifest(root: Path = ROOT) -> dict[str, Any]:
     assets = []
     for relative_name, kind in sorted(expected_asset_kinds(root).items()):
         relative = normalized_path(relative_name, "contract asset")
-        path = checked_file(root, relative, "contract asset")
+        path = checked_file(root, repository_assets.logical_source(relative), "contract asset")
         assets.append({"kind": kind, "path": relative_name, "sha256": sha256_bytes(path.read_bytes())})
     manifest: dict[str, Any] = {
         "schema_version": MANIFEST_SCHEMA,
@@ -286,8 +289,9 @@ def self_test(root: Path = ROOT) -> list[str]:
         fixture = Path(temporary_name)
         shutil.copy2(root / "Cargo.toml", fixture / "Cargo.toml")
         for relative_name in expected_asset_kinds(root):
-            source = root / relative_name
-            destination = fixture / relative_name
+            source_relative = repository_assets.logical_source(relative_name)
+            source = root / source_relative
+            destination = fixture / source_relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
         write(fixture)
@@ -327,7 +331,9 @@ def self_test(root: Path = ROOT) -> list[str]:
         write(fixture)
         check(fixture)
 
-        first_asset = fixture / sorted(expected_asset_kinds(fixture))[0]
+        first_asset = fixture / repository_assets.logical_source(
+            sorted(expected_asset_kinds(fixture))[0]
+        )
         first_asset.write_bytes(first_asset.read_bytes() + b"\n")
         try:
             check(fixture)

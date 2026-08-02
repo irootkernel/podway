@@ -262,8 +262,8 @@ fn daemon_source_input_hashes() -> BTreeMap<String, String> {
     for path in [
         workspace.join("Cargo.toml"),
         workspace.join("Cargo.lock"),
-        workspace.join("presets"),
-        workspace.join("spec"),
+        workspace.join("assets/presets"),
+        workspace.join("assets/specifications"),
     ] {
         collect_daemon_source_input_hashes(&workspace, &path, &mut inputs);
     }

@@ -47,7 +47,12 @@ def sha256_file(path: Path) -> str:
 
 def daemon_source_inputs(root: Path) -> dict[str, str]:
     inputs: dict[str, str] = {}
-    roots = [root / "Cargo.toml", root / "Cargo.lock", root / "presets", root / "spec"]
+    roots = [
+        root / "Cargo.toml",
+        root / "Cargo.lock",
+        root / "assets" / "presets",
+        root / "assets" / "specifications",
+    ]
     roots.extend(
         path
         for crate in (

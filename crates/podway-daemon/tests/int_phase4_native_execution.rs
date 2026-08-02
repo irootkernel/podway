@@ -37,7 +37,7 @@ use podway_store::{SqliteStoreOptionsV1, SqliteStoreV1, WorkspaceBindingV1};
 use uuid::{Uuid, Version};
 
 const FIXTURE_DISPLAY_V1: &str = "native execution fixture";
-const PROCEDURE_YAML: &[u8] = include_bytes!("../../../presets/sw-dev.yaml");
+const PROCEDURE_YAML: &[u8] = include_bytes!("../../../assets/presets/sw-dev.yaml");
 
 struct WorktreeFixtureV1 {
     temporary_root: PathBuf,

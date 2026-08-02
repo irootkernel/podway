@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify Phase 0A canonical import, crate, and command-route controls."""
+"""Verify canonical assets, crate boundaries, and command-route controls."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import tempfile
 import tomllib
 from typing import Any, Callable
 
-import sync_docs_assets
+import repository_assets
 import contract_manifest
 
 
@@ -31,7 +31,6 @@ REQUIRED_MAKE_TARGETS = (
     "test-int",
     "test-fuzzing",
     "test-e2e",
-    "sync-docs-assets",
     "preset-create",
     "preset-import",
     "preset-tool-test",
@@ -50,7 +49,6 @@ REQUIRED_TEST_SEQUENCE = (
     "record --receipt $(TEST_GATE_RECEIPT)",
 )
 REQUIRED_PREPARE_COMMANDS = (
-    "python3 tools/sync_docs_assets.py --write",
     "python3 tools/verify_docs.py",
     "cargo fmt --all",
     "cargo clippy --workspace --all-targets --locked -- -D warnings",
@@ -135,7 +133,7 @@ def fail(message: str, code: str = "contract_verification_failed") -> None:
 
 
 def read_json(root: Path, relative: Path, label: str) -> dict[str, Any]:
-    path = sync_docs_assets.checked_path(root, relative, label)
+    path = repository_assets.checked_path(root, relative, label)
     if not path.is_file():
         fail(f"{label} is missing: {relative.as_posix()}")
     try:
@@ -148,18 +146,10 @@ def read_json(root: Path, relative: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def validate_canonical_import(root: Path) -> int:
-    try:
-        _, mappings = sync_docs_assets.validate_contract(root)
-        sync_docs_assets.validate_sources(root, mappings)
-        sync_docs_assets.validate_destination_tree(root, mappings, require_content=True)
-    except sync_docs_assets.ContractError as error:
-        fail(str(error))
-    return len(mappings)
-
-
 def catalog_commands(root: Path) -> set[str]:
-    path = sync_docs_assets.checked_path(root, Path("docs/spec/command-catalog.yaml"), "command catalog")
+    path = repository_assets.checked_path(
+        root, Path("assets/specifications/command-catalog.yaml"), "command catalog"
+    )
     if not path.is_file():
         fail("command catalog is missing")
     text = path.read_text(encoding="utf-8")
@@ -172,11 +162,9 @@ def catalog_commands(root: Path) -> set[str]:
 
 
 def validate_v1_identifiers(root: Path) -> int:
-    canonical = read_json(root, Path("contracts/canonical-import.json"), "canonical import contract")
     adjacency = read_json(root, ADJACENCY_PATH, "Cargo adjacency contract")
     routes = read_json(root, ROUTES_PATH, "command route contract")
     expected_contract_versions = {
-        "canonical import contract": (canonical, sync_docs_assets.CONTRACT_VERSION),
         "Cargo adjacency contract": (adjacency, ADJACENCY_VERSION),
         "command route contract": (routes, ROUTES_VERSION),
     }
@@ -186,13 +174,13 @@ def validate_v1_identifiers(root: Path) -> int:
 
     schema_files = sorted(
         path
-        for path in sync_docs_assets.regular_files(root, "docs/schemas", required=True)
+        for path in repository_assets.regular_files(root, "assets/schemas", required=True)
         if path.endswith("-v1.schema.json")
     )
     if not schema_files:
         fail("no v1 JSON schemas were found")
     for relative_name in schema_files:
-        path = sync_docs_assets.checked_path(root, Path(relative_name), "schema")
+        path = repository_assets.checked_path(root, Path(relative_name), "schema")
         try:
             schema = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
@@ -204,17 +192,19 @@ def validate_v1_identifiers(root: Path) -> int:
         if schema.get("$id") != expected_id:
             fail(f"schema v1 identifier drift: {relative_name}")
 
-    error_catalog = read_json(root, Path("docs/spec/error-codes.json"), "error catalog")
+    error_catalog = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
     if error_catalog.get("schema") != "podway.error-catalog/v1":
         fail("error catalog does not declare podway.error-catalog/v1")
     catalog_commands(root)
     preset_files = sorted(
-        path for path in sync_docs_assets.regular_files(root, "docs/presets", required=True) if path.endswith(".yaml")
+        path
+        for path in repository_assets.regular_files(root, "assets/presets", required=True)
+        if path.endswith(".yaml")
     )
     if not preset_files:
         fail("no v1 preset files were found")
     for relative_name in preset_files:
-        path = sync_docs_assets.checked_path(root, Path(relative_name), "preset")
+        path = repository_assets.checked_path(root, Path(relative_name), "preset")
         text = path.read_text(encoding="utf-8")
         if not re.search(r"^schema: podway\.procedure/v1$", text, flags=re.MULTILINE):
             fail(f"preset does not declare podway.procedure/v1: {relative_name}")
@@ -307,7 +297,7 @@ def internal_dependencies(table: dict[str, Any], known: set[str]) -> set[str]:
 def validate_adjacency(root: Path) -> int:
     crates = load_adjacency_contract(root)
     known = set(CRATE_ORDER)
-    root_manifest = read_toml(sync_docs_assets.checked_path(root, Path("Cargo.toml"), "workspace manifest"), "workspace manifest")
+    root_manifest = read_toml(repository_assets.checked_path(root, Path("Cargo.toml"), "workspace manifest"), "workspace manifest")
     workspace = root_manifest.get("workspace")
     if not isinstance(workspace, dict) or not isinstance(workspace.get("members"), list):
         fail("workspace manifest must declare a members list")
@@ -318,7 +308,7 @@ def validate_adjacency(root: Path) -> int:
 
     for crate in crates:
         name = crate["name"]
-        manifest_path = sync_docs_assets.checked_path(root, Path(crate["path"]) / "Cargo.toml", f"manifest for {name}")
+        manifest_path = repository_assets.checked_path(root, Path(crate["path"]) / "Cargo.toml", f"manifest for {name}")
         manifest = read_toml(manifest_path, f"manifest for {name}")
         package = manifest.get("package")
         if not isinstance(package, dict) or package.get("name") != name:
@@ -385,7 +375,7 @@ def validate_routes(root: Path) -> int:
         fail(f"command routes do not exactly cover catalog commands; missing={sorted(expected_commands - commands)}")
     return len(commands)
 def validate_makefile_contract(root: Path) -> int:
-    path = sync_docs_assets.checked_path(root, MAKEFILE_PATH, "Makefile")
+    path = repository_assets.checked_path(root, MAKEFILE_PATH, "Makefile")
     if not path.is_file():
         fail("Makefile is missing", "makefile_contract_drift")
     try:
@@ -437,17 +427,6 @@ def copy_contracts(source_root: Path, destination_root: Path) -> None:
     shutil.copytree(source_root / "contracts", destination_root / "contracts")
 
 
-def build_import_fixture(source_root: Path, destination_root: Path) -> None:
-    shutil.copytree(source_root / "docs", destination_root / "docs")
-    copy_contracts(source_root, destination_root)
-    _, mappings = sync_docs_assets.validate_contract(destination_root)
-    for mapping in mappings:
-        source = destination_root / mapping["source"]
-        destination = destination_root / mapping["destination"]
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
-
-
 def build_adjacency_fixture(source_root: Path, destination_root: Path) -> None:
     copy_contracts(source_root, destination_root)
     crates = load_adjacency_contract(destination_root)
@@ -469,7 +448,7 @@ def build_adjacency_fixture(source_root: Path, destination_root: Path) -> None:
 def require_known_failure(label: str, operation: Callable[[], object]) -> None:
     try:
         operation()
-    except (VerificationError, sync_docs_assets.ContractError):
+    except (VerificationError, repository_assets.AssetError):
         return
     fail(f"known-fail sentinel did not fail: {label}")
 
@@ -478,14 +457,6 @@ def run_sentinels(root: Path) -> list[str]:
     completed: list[str] = []
     with tempfile.TemporaryDirectory(prefix="podway-phase-0a-") as temporary_name:
         temporary = Path(temporary_name)
-        import_fixture = temporary / "tampered-import"
-        import_fixture.mkdir()
-        build_import_fixture(root, import_fixture)
-        with (import_fixture / "schemas/README.md").open("ab") as handle:
-            handle.write(b"tampered\n")
-        require_known_failure("tampered import", lambda: validate_canonical_import(import_fixture))
-        completed.append("tampered_import")
-
         adjacency_fixture = temporary / "forbidden-edge"
         adjacency_fixture.mkdir()
         build_adjacency_fixture(root, adjacency_fixture)
@@ -497,7 +468,7 @@ def run_sentinels(root: Path) -> list[str]:
 
         route_fixture = temporary / "route-bypass"
         route_fixture.mkdir()
-        shutil.copytree(root / "docs", route_fixture / "docs")
+        shutil.copytree(root / "assets", route_fixture / "assets")
         copy_contracts(root, route_fixture)
         route_path = route_fixture / ROUTES_PATH
         route_contract = json.loads(route_path.read_text(encoding="utf-8"))
@@ -520,7 +491,7 @@ def receipt(mode: str, ok: bool, **details: Any) -> None:
 
 def production_checks(root: Path) -> dict[str, int]:
     return {
-        "canonical_imports": validate_canonical_import(root),
+        "canonical_assets": repository_assets.validate_layout(root),
         "v1_identifiers": validate_v1_identifiers(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
@@ -546,7 +517,7 @@ def main() -> int:
         receipt(selected_mode, True, **details)
     except (
         VerificationError,
-        sync_docs_assets.ContractError,
+        repository_assets.AssetError,
         contract_manifest.ManifestError,
         OSError,
         tomllib.TOMLDecodeError,

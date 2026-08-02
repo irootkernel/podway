@@ -35,7 +35,8 @@ fn run(arguments: &[&str]) -> Output {
 }
 fn frozen_command_catalog_routes() -> Vec<String> {
     let catalog = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/command-catalog.yaml"),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/specifications/command-catalog.yaml"),
     )
     .expect("the frozen production command catalog must be readable");
     let routes = catalog

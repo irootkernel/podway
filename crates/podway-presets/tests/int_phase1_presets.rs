@@ -13,13 +13,22 @@ use podway_presets::{PresetError, catalog_v1, list};
 #[test]
 fn built_in_yaml_matches_catalog_sources_and_public_config_admission() {
     let expected_sources: [(&str, &[u8]); 4] = [
-        ("analysis", include_bytes!("../../../presets/analysis.yaml")),
-        ("bug-fix", include_bytes!("../../../presets/bug-fix.yaml")),
+        (
+            "analysis",
+            include_bytes!("../../../assets/presets/analysis.yaml"),
+        ),
+        (
+            "bug-fix",
+            include_bytes!("../../../assets/presets/bug-fix.yaml"),
+        ),
         (
             "docs-only",
-            include_bytes!("../../../presets/docs-only.yaml"),
+            include_bytes!("../../../assets/presets/docs-only.yaml"),
         ),
-        ("sw-dev", include_bytes!("../../../presets/sw-dev.yaml")),
+        (
+            "sw-dev",
+            include_bytes!("../../../assets/presets/sw-dev.yaml"),
+        ),
     ];
     let catalog = catalog_v1();
 
@@ -328,19 +337,19 @@ fn pac_068_071_built_in_preset_table_conformance() {
     let cases = [
         (
             "sw-dev",
-            include_bytes!("../../../presets/sw-dev.yaml").as_slice(),
+            include_bytes!("../../../assets/presets/sw-dev.yaml").as_slice(),
         ),
         (
             "bug-fix",
-            include_bytes!("../../../presets/bug-fix.yaml").as_slice(),
+            include_bytes!("../../../assets/presets/bug-fix.yaml").as_slice(),
         ),
         (
             "docs-only",
-            include_bytes!("../../../presets/docs-only.yaml").as_slice(),
+            include_bytes!("../../../assets/presets/docs-only.yaml").as_slice(),
         ),
         (
             "analysis",
-            include_bytes!("../../../presets/analysis.yaml").as_slice(),
+            include_bytes!("../../../assets/presets/analysis.yaml").as_slice(),
         ),
     ];
 

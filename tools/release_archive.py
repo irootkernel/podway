@@ -19,6 +19,8 @@ import tarfile
 import tempfile
 from typing import Any, Callable
 
+import repository_assets
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT_VERSION = "0.1.0"
@@ -365,17 +367,20 @@ def copy_release_inputs(staging: Path, podway: Path, podwayd: Path) -> None:
     os.chmod(binary_directory / "podwayd", 0o755)
 
     write_completions(podway, staging / "share/completions")
-    for name in ("presets", "schemas"):
-        source = ROOT / name
-        destination = staging / "share/podway" / name
-        for source_file in source_files(source, name):
+    for logical_name in ("presets", "schemas"):
+        source = ROOT / repository_assets.ASSET_DIRECTORIES[logical_name]
+        destination = staging / "share/podway" / logical_name
+        for source_file in source_files(source, logical_name):
             relative = source_file.relative_to(source)
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_file, target)
 
     for relative in contract_manifest_asset_paths():
-        source = require_regular_file(ROOT / relative, f"contract asset {relative.as_posix()}")
+        source = require_regular_file(
+            ROOT / repository_assets.logical_source(relative),
+            f"contract asset {relative.as_posix()}",
+        )
         target = staging / "share/podway" / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
@@ -411,11 +416,11 @@ def expected_archive_files() -> set[str]:
         f"{ARCHIVE_ROOT}/share/completions/{filename}"
         for filename in COMPLETION_NAMES.values()
     )
-    for name in ("presets", "schemas"):
-        source = ROOT / name
+    for logical_name in ("presets", "schemas"):
+        source = ROOT / repository_assets.ASSET_DIRECTORIES[logical_name]
         expected.update(
-            f"{ARCHIVE_ROOT}/share/podway/{name}/{item.relative_to(source).as_posix()}"
-            for item in source_files(source, name)
+            f"{ARCHIVE_ROOT}/share/podway/{logical_name}/{item.relative_to(source).as_posix()}"
+            for item in source_files(source, logical_name)
         )
     expected.update(
         f"{ARCHIVE_ROOT}/share/podway/{relative.as_posix()}"

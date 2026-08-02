@@ -1032,7 +1032,7 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
     assert!(plist.contains(&format!(
         "<key>ProgramArguments</key>\n  <array>\n    <string>{escaped_installed_binary}</string>\n    <string>--service</string>\n    <string>--socket</string>\n    <string>{escaped_socket}</string>\n  </array>"
     )));
-    let expected_plist = include_str!("../../../docs/spec/launchagent.plist.template")
+    let expected_plist = include_str!("../../../assets/specifications/launchagent.plist.template")
         .replace(
             "__PODWAY_GENERATION__",
             receipt["generation"].as_str().unwrap(),

@@ -6,8 +6,8 @@ canonical home for human-readable product and contributor documentation.
 
 - root JSON files define repository contracts and schemas;
 - `interfaces/` freezes internal interface contracts;
-- generated canonical assets remain owned by their documented source and
-  synchronization tool.
+- canonical build assets live under `assets/` and are verified without generated
+  mirrors.
 
 Raw logs, fuzz corpora, and machine-specific output belong under ignored
 `artifacts/`. The repository-root `make test` command is the sole release-readiness

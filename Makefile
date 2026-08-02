@@ -8,13 +8,13 @@ endif
 RUST_TOOLCHAIN_BIN := $(dir $(RUST_TOOLCHAIN_CARGO))
 RUST_TOOLCHAIN_ENV = PATH="$(RUST_TOOLCHAIN_BIN):$${PATH}"
 DIST_DIR ?= dist
-PRESET_DIR ?= docs/presets
+PRESET_DIR ?= assets/presets
 PRESET_VALIDATOR ?= target/debug/podway
 TEST_GATE_RECEIPT ?= target/podway-test-gate-v1.json
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
 .PHONY: test test-if-needed test-prepare test-rust test-unit test-int test-fuzzing test-e2e \
-	toolchain sync-docs-assets format vet lint architecture architecture-static preset-validator \
+	toolchain format vet lint architecture architecture-static preset-validator \
 	preset-create preset-import preset-tool-test contract-manifest dist
 
 toolchain:
@@ -38,13 +38,9 @@ test-if-needed:
 	fi
 
 test-prepare: toolchain
-	$(MAKE) sync-docs-assets
 	$(MAKE) format
 	$(MAKE) lint
 	$(MAKE) architecture-static
-
-sync-docs-assets:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/sync_docs_assets.py --write
 
 format:
 	$(RUST_TOOLCHAIN_ENV) cargo fmt --all

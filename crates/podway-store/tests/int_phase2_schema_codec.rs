@@ -33,7 +33,7 @@ use podway_store::{
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
-const FROZEN_SQLITE_V1_DDL: &str = include_str!("../../../spec/sqlite-v1.sql");
+const FROZEN_SQLITE_V1_DDL: &str = include_str!("../../../assets/specifications/sqlite-v1.sql");
 const EXPECTED_SQLITE_V1_MIGRATION_SHA256: &str =
     "sha256:20ea04d9635b8e1632e6d3aa5f3a888eaca49307b43ade9b9991363b30607423";
 

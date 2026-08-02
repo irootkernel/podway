@@ -11,10 +11,10 @@ use serde::Serialize;
 
 pub use podway_core::Sha256Digest;
 
-pub const ANALYSIS_YAML: &str = include_str!("../../../presets/analysis.yaml");
-pub const BUG_FIX_YAML: &str = include_str!("../../../presets/bug-fix.yaml");
-pub const DOCS_ONLY_YAML: &str = include_str!("../../../presets/docs-only.yaml");
-pub const SW_DEV_YAML: &str = include_str!("../../../presets/sw-dev.yaml");
+pub const ANALYSIS_YAML: &str = include_str!("../../../assets/presets/analysis.yaml");
+pub const BUG_FIX_YAML: &str = include_str!("../../../assets/presets/bug-fix.yaml");
+pub const DOCS_ONLY_YAML: &str = include_str!("../../../assets/presets/docs-only.yaml");
+pub const SW_DEV_YAML: &str = include_str!("../../../assets/presets/sw-dev.yaml");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct PresetMetadata {

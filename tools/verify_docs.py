@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Podway's English documentation, internal links, and roadmap shape."""
+"""Validate Podway's English documentation, local links, and active roadmap."""
 
 from __future__ import annotations
 
@@ -10,36 +10,34 @@ from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parent.parent
-ROADMAP = ROOT / "docs/roadmap.md"
-EPIC_IDS = (
-    "DESGN",
-    "FOUND",
-    "COREX",
-    "STORE",
-    "GITFS",
-    "DAEMN",
-    "CLINT",
-    "MACOS",
-    "DOGFD",
-    "HARDN",
-    "AUTOM",
-    "RPATH",
-    "CONID",
-    "CASID",
-    "PSTRT",
-    "RECON",
-    "MCONT",
-    "DOLGI",
-    "REL10",
+DOCS = ROOT / "docs"
+ROADMAP = DOCS / "roadmap/README.md"
+REQUIRED_SECTIONS = (
+    "architecture",
+    "architecture-decision-records",
+    "specs",
+    "implementation-tips",
+    "todo",
+    "deferred-feedback",
+    "roadmap",
 )
-COMPLETED_BASELINE_EPIC_IDS = EPIC_IDS[:11]
+RETIRED_PATHS = (
+    "docs/reference",
+    "docs/adr",
+    "docs/presets",
+    "docs/schemas",
+    "docs/spec",
+    "presets",
+    "schemas",
+    "spec",
+)
 LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 HANGUL_RE = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
 EPIC_RE = re.compile(r"^## ([A-Z0-9]{5}) — (.+)$")
 TASK_RE = re.compile(
     r"^\| `([A-Z0-9]{5})(\d{3})` \| (.+?) \| "
-    r"(Planned|In Progress|Blocked|Completed) \| (.+?) \| (.+?) \|$"
+    r"(Planned|In Progress|In Review|Completed|Deferred|Blocked) \| (.+?) \| (.+?) \|$"
 )
 
 
@@ -52,8 +50,8 @@ def fail(message: str) -> None:
 
 
 def markdown_files() -> list[Path]:
-    files = [ROOT / "README.md"]
-    files.extend(sorted((ROOT / "docs").rglob("*.md")))
+    files = [ROOT / "README.md", ROOT / "RELEASE_NOTES.md"]
+    files.extend(sorted(DOCS.rglob("*.md")))
     return files
 
 
@@ -117,16 +115,33 @@ def validate_english(files: list[Path]) -> None:
             fail(f"non-English Hangul text in {path.relative_to(ROOT)}:{line}")
 
 
+def validate_layout() -> None:
+    for section in REQUIRED_SECTIONS:
+        index = DOCS / section / "README.md"
+        if not index.is_file():
+            fail(f"documentation section omits README.md: docs/{section}")
+    for retired in RETIRED_PATHS:
+        if (ROOT / retired).exists():
+            fail(f"retired documentation or asset path still exists: {retired}")
+
+
 def validate_roadmap() -> tuple[int, int]:
     lines = ROADMAP.read_text(encoding="utf-8").splitlines()
-    epic_positions = [(index, match.group(1)) for index, line in enumerate(lines) if (match := EPIC_RE.match(line))]
-    epic_ids = tuple(epic_id for _, epic_id in epic_positions)
-    if epic_ids != EPIC_IDS:
-        fail(f"roadmap epic order drift: expected={EPIC_IDS}, actual={epic_ids}")
+    epic_positions = [
+        (index, match.group(1))
+        for index, line in enumerate(lines)
+        if (match := EPIC_RE.match(line))
+    ]
+    if not epic_positions:
+        fail("active roadmap contains no epic")
 
     task_count = 0
-    task_statuses: list[tuple[str, str]] = []
+    statuses: list[tuple[str, str]] = []
+    seen_epics: set[str] = set()
     for epic_index, (start, epic_id) in enumerate(epic_positions):
+        if epic_id in seen_epics:
+            fail(f"active roadmap repeats epic: {epic_id}")
+        seen_epics.add(epic_id)
         end = epic_positions[epic_index + 1][0] if epic_index + 1 < len(epic_positions) else len(lines)
         section = lines[start + 1 : end]
         try:
@@ -145,27 +160,23 @@ def validate_roadmap() -> tuple[int, int]:
             row_epic, suffix, _, status, _, references = match.groups()
             if row_epic != epic_id or suffix != f"{expected_number:03d}":
                 fail(f"non-sequential roadmap task in {epic_id}: {row_epic}{suffix}")
-            if epic_id in COMPLETED_BASELINE_EPIC_IDS and status != "Completed":
-                fail(f"completed roadmap baseline task is not Completed: {row_epic}{suffix}")
             if LINK_RE.search(references) is None:
                 fail(f"roadmap task has no documentation reference: {row_epic}{suffix}")
-            task_statuses.append((f"{row_epic}{suffix}", status))
+            statuses.append((f"{row_epic}{suffix}", status))
             task_count += 1
 
     first_incomplete = next(
-        (index for index, (_, status) in enumerate(task_statuses) if status != "Completed"),
-        len(task_statuses),
+        (index for index, (_, status) in enumerate(statuses) if status != "Completed"),
+        len(statuses),
     )
-    incomplete = task_statuses[first_incomplete:]
-    if incomplete:
-        first_id, first_status = incomplete[0]
-        if first_status not in {"Planned", "In Progress", "Blocked"}:
+    active = statuses[first_incomplete:]
+    if active:
+        first_id, first_status = active[0]
+        if first_status not in {"Planned", "In Progress", "In Review", "Deferred", "Blocked"}:
             fail(f"roadmap has an invalid first incomplete state: {first_id}={first_status}")
-        if first_status in {"In Progress", "Blocked"}:
-            incomplete = incomplete[1:]
-        for task_id, status in incomplete:
+        for task_id, status in active[1:]:
             if status != "Planned":
-                fail(f"roadmap tasks after the first incomplete task must be Planned: {task_id}={status}")
+                fail(f"tasks after the first incomplete task must be Planned: {task_id}={status}")
     return len(epic_positions), task_count
 
 
@@ -173,6 +184,7 @@ def main() -> int:
     try:
         if (ROOT / "sot").exists():
             fail("legacy sot directory still exists")
+        validate_layout()
         files = markdown_files()
         validate_english(files)
         links = validate_links(files)
@@ -180,7 +192,10 @@ def main() -> int:
     except (DocumentationError, OSError, UnicodeError) as error:
         print(f"documentation verification failed: {error}", file=sys.stderr)
         return 1
-    print(f"documentation verified: {len(files)} Markdown files, {links} links, {epics} epics, {tasks} tasks")
+    print(
+        f"documentation verified: {len(files)} Markdown files, {links} links, "
+        f"{epics} active epics, {tasks} active tasks"
+    )
     return 0
 
 

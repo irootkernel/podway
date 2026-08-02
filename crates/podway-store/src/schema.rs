@@ -68,8 +68,8 @@ pub const SQLITE_SCHEMA_VERSION_CURRENT: u32 = SQLITE_SCHEMA_VERSION_V2;
 pub const SQLITE_INITIAL_MIGRATION_NAME_V1: &str = "schema-0-uninitialized";
 pub const SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2: &str = "schema-1-response-context";
 
-const SQLITE_V1_DDL: &str = include_str!("../../../spec/sqlite-v1.sql");
-const SQLITE_V2_DDL: &str = include_str!("../../../spec/sqlite-v2.sql");
+const SQLITE_V1_DDL: &str = include_str!("../../../assets/specifications/sqlite-v1.sql");
+const SQLITE_V2_DDL: &str = include_str!("../../../assets/specifications/sqlite-v2.sql");
 const CONNECTION_PRAGMA_PREAMBLE_V1: &str = concat!(
     "PRAGMA foreign_keys = ON;\n",
     "PRAGMA journal_mode = WAL;\n",

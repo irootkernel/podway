@@ -112,7 +112,7 @@ def verify(podway: Path) -> dict[str, Any]:
             created.as_posix(),
         )
 
-        source = ROOT / "presets/docs-only.yaml"
+        source = ROOT / "assets/presets/docs-only.yaml"
         code, receipt = run_tool(
             podway,
             "import",

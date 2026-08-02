@@ -238,7 +238,7 @@ def validate_acceptance_matrix() -> tuple[int, int]:
 
 
 def roadmap_dolgi_tasks() -> dict[str, dict[str, Any]]:
-    lines = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8").splitlines()
+    lines = (ROOT / "docs/roadmap/archive/v0.1.0.md").read_text(encoding="utf-8").splitlines()
     try:
         start = lines.index("## DOLGI — Dolgorae Integration Conformance")
     except ValueError:

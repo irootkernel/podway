@@ -28,22 +28,22 @@ fn prd_008_embedded_yaml_bytes_match_the_root_preset_sources() {
         (
             "analysis",
             ANALYSIS_YAML,
-            include_bytes!("../../../presets/analysis.yaml"),
+            include_bytes!("../../../assets/presets/analysis.yaml"),
         ),
         (
             "bug-fix",
             BUG_FIX_YAML,
-            include_bytes!("../../../presets/bug-fix.yaml"),
+            include_bytes!("../../../assets/presets/bug-fix.yaml"),
         ),
         (
             "docs-only",
             DOCS_ONLY_YAML,
-            include_bytes!("../../../presets/docs-only.yaml"),
+            include_bytes!("../../../assets/presets/docs-only.yaml"),
         ),
         (
             "sw-dev",
             SW_DEV_YAML,
-            include_bytes!("../../../presets/sw-dev.yaml"),
+            include_bytes!("../../../assets/presets/sw-dev.yaml"),
         ),
     ];
 

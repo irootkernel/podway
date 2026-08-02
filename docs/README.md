@@ -1,55 +1,60 @@
 # Contributor Documentation
 
-This directory is the canonical source for the information and machine-readable
-contracts needed to understand and contribute to Podway. The repository-root
-`schemas/`, `spec/`, and `presets/` directories are generated mirrors used by the
-build and release archive; edit their sources here instead.
+This directory is the canonical home for the human-readable knowledge needed to
+understand, change, test, and release Podway. It documents `podway` and `podwayd`
+as one product rather than maintaining separate CLI and daemon trees.
 
 ## Start here
 
-1. [Project](project.md) explains the problem, goals, vocabulary, and boundaries.
-2. [Repository structure](structure.md) maps crates, assets, tests, and dependency rules.
-3. [Architecture](architecture.md) follows a request through the CLI, daemon, queue, and store.
-4. [Contributing](contributing.md) gives implementation tips and verification commands.
-5. [Roadmap](roadmap.md) records the completed baseline and remaining v0.1.0 work.
+1. [Architecture](architecture/) explains system boundaries, components, data
+   flow, repository layout, and risks.
+2. [Architecture Decision Records](architecture-decision-records/) preserve the
+   reasons behind accepted and superseded decisions.
+3. [Specifications](specs/) define required product, domain, interface, storage,
+   operational, and quality behavior.
+4. [Implementation Tips](implementation-tips/) explain how to work safely in the
+   repository and run verification.
+5. [TODO](todo/) holds candidate work that has not entered the roadmap.
+6. [Deferred Feedback](deferred-feedback/) records small review findings that are
+   intentionally postponed.
+7. [Roadmap](roadmap/) owns adopted work, ordering, and status.
 
-## Detailed reference
-
-- [Product](reference/product/00-product-overview.md): detailed workflows, terminology,
-  goals, and non-goals.
-- [Architecture](reference/architecture/10-system-architecture.md): daemon, worktree,
-  service, and Rust implementation contracts.
-- [Domain](reference/domain/20-domain-model.md): procedures, items, transitions, and
-  session lifecycle.
-- [Interfaces](reference/interfaces/30-cli-specification.md): CLI, JSON, IPC, errors,
-  exit codes, and the accepted [automation client contract](reference/interfaces/34-automation-client-contract.md).
-- [Storage](reference/storage/40-sqlite-model.md): schema, transactions, recovery,
-  retention, and reset behavior.
-- [Operations](reference/operations/50-security-and-trust.md): trust boundary,
-  observability, packaging, installation, and upgrades.
-- [Quality](reference/quality/60-testing-and-conformance.md): tests, acceptance criteria,
-  and requirements traceability.
-- [Risk register](reference/risks.md), [ADRs](adr/), and [worked examples](examples/).
+[Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 ## Canonical assets
 
-- [JSON schemas](schemas/) define versioned authoring and response shapes.
-- [Specifications](spec/) contain the SQLite DDL, command and error catalogs,
-  transition matrix, and LaunchAgent template.
-- [Built-in preset sources](presets/) are embedded in the product after validation.
+Files consumed directly by builds and verification live outside this directory:
 
-Run `make sync-docs-assets` after editing these directories. Never edit the root
-mirrors directly.
+- [`assets/presets/`](../assets/presets/) contains built-in Procedure YAML;
+- [`assets/schemas/`](../assets/schemas/) contains public JSON Schemas;
+- [`assets/specifications/`](../assets/specifications/) contains executable
+  catalogs, DDL, transition data, canonicalization rules, and the LaunchAgent
+  template;
+- [`contracts/`](../contracts/) contains repository and interface contracts.
+
+There are no generated documentation mirrors. Edit each canonical asset in place
+and run the relevant contract checks.
 
 ## Precedence
 
 When sources disagree, resolve them in this order:
 
-1. accepted [Architecture Decision Records](adr/);
-2. machine-readable [schemas](schemas/) and [specifications](spec/);
-3. detailed behavioral documents under `reference/`;
-4. core contributor guides;
-5. examples.
+1. accepted [ADRs](architecture-decision-records/);
+2. canonical machine assets and executable contracts;
+3. behavioral documents under [specs](specs/);
+4. [architecture](architecture/) and [implementation guidance](implementation-tips/);
+5. examples, TODO candidates, deferred feedback, and archived roadmap history.
 
-Fix every affected source when resolving a contradiction. Planned target behavior
-must be labeled as such until its machine contracts and executable evidence land.
+The active roadmap owns status and ordering, not final behavior. Update every
+affected source when resolving a contradiction.
+
+## Maintenance rules
+
+- Write the root README, release notes, and all Markdown under `docs/` in English.
+- Link to the narrowest stable document and heading that supports a claim.
+- Update specifications, machine assets, ADRs, tests, and roadmap state together
+  when a change crosses those boundaries.
+- Keep temporary plans, generated reports, logs, and local evidence out of this
+  canonical documentation tree.
+- Run the documentation and contract verifiers before the complete `make test`
+  gate.

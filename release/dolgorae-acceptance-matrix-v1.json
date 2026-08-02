@@ -3,7 +3,7 @@
   "source_files": {
     "crates/podway-cli/tests/e2e_dolgorae_conformance.rs": "1c62af5d3ad72d312b533fdc30d6660468002f564fd210ecd53ce5bcd2d9f8e6",
     "crates/podway-cli/tests/e2e_release_archive.rs": "3fe316aa389ba36f27437ad4c336bb6c5e405b80d0d6409a4a95c9c94b8d1455",
-    "tools/release_archive.py": "445448ca41bff20dcfd8c0721e778453fd3239fe0f4b0c468579bd51315994c3"
+    "tools/release_archive.py": "bfd3dede93eda3e80d975c9fb2cf0341c552a8fa1bd2c4d4f177246e53e6216d"
   },
   "tasks": [
     {

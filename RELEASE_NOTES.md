@@ -1,46 +1,60 @@
 # Podway 0.1.0 release notes
 
-> Draft: v0.1.0 has not been released. This document describes the target package;
-> release remains blocked by the incomplete tasks in `docs/roadmap.md`.
+Podway 0.1.0 was published on August 2, 2026 as the first public Podway release.
+The release and its artifacts are available from the
+[GitHub release page](https://github.com/irootkernel/podway/releases/tag/v0.1.0).
 
 ## Release identity and compatibility
 
-Podway 0.1.0 will publish the public v1 IPC, output, error, workspace, procedure, and SQLite contracts. It will also publish the automation-client contract assets. Existing uninitialized state or schema-0 state is upgraded transactionally to schema-v1; an incomplete upgrade is not accepted as an installed schema-v1 state.
+Podway 0.1.0 publishes the public v1 IPC, output, error, workspace, procedure, and SQLite contracts together with the automation-client contract assets. Existing
+uninitialized state or schema-0 state is upgraded transactionally to schema-v1;
+an incomplete upgrade is not accepted as an installed schema-v1 state.
 
-Podway publishes and supports only native Apple Silicon macOS:
-`aarch64-apple-darwin` / thin `arm64` Mach-O.
-`podway version --json` returns the compact Sanho-compatible shape
-`{"name":"podway","version":"v0.1.0"}`; complete release and contract identity
-remains available through `podway version --json --identity`.
-Each Apple Silicon archive contains both `podway` and `podwayd`. Cross-built,
-translated, relabeled, universal, and fat binaries cannot satisfy native release
-acceptance. The 11.0 value is a minimum build deployment target
-and Mach-O load-command target only. This release makes no Apple Silicon runtime
-lifecycle or Gatekeeper acceptance claim.
+The supported release target is native Apple Silicon macOS:
+`aarch64-apple-darwin` with thin `arm64` Mach-O binaries. The archive contains the
+matching `podway` and `podwayd` executables. Cross-built, translated, relabeled,
+universal, and fat binaries do not satisfy release acceptance.
+
+`podway version --json` returns the compact product identity. Complete release and
+contract identity is available through `podway version --json --identity`.
 
 ## Trust boundary
 
-Podway is a same-user local tool. Its local IPC and workspace state are trusted only within the operating-system user account that owns them. It does not provide a multi-user access-control boundary.
+Podway is a same-user local tool. Its local IPC and workspace state are trusted
+only within the operating-system user account that owns them.
+It does not provide a multi-user access-control boundary.
 
-## Signing and notarization status
+## Signing and notarization
 
-The target Apple-Silicon public package is currently planned as unsigned and not notarized. Final status is recorded when the artifact is built; no released package exists yet.
-
-Developer ID signing and notarization are recommended when the necessary
-infrastructure is available, but they are not release-readiness requirements. The
-authoritative gate for the source revision is a successful local `make test` run.
+The v0.1.0 Apple Silicon package is unsigned and not notarized. The release makes
+no Gatekeeper acceptance claim. Users should verify the attached SHA-256 checksum
+before installing the binaries.
 
 ## Distribution metadata
 
-`make dist` produces the deterministic
-`podway-0.1.0-aarch64-apple-darwin.tar.gz` archive together with its SHA-256 file
-and `podway-0.1.0-aarch64-apple-darwin.provenance.json`. The provenance records the
-source commit, Rust 1.97.1 identity, Cargo.lock digest, target, binary digests,
-release-gate result, contract manifest digest, and signing/notarization status.
-After packaged conformance succeeds, `make dist` also writes the deterministic
-`podway-0.1.0-aarch64-apple-darwin.dolgorae-handoff.json` pinning document with
-the binary, contract, provenance, source tree, and toolchain identities.
-The final `make dist` phase also extracts those release binaries and runs packaged
-conformance through the isolated foreground `--dev` daemon mode. This requires no
-administrator authorization or temporary operating-system account and leaves no
-qualification receipt or dev socket behind.
+The release provides:
+
+- `podway-0.1.0-aarch64-apple-darwin.tar.gz`;
+- its `.sha256` checksum file;
+- `podway-0.1.0-aarch64-apple-darwin.provenance.json`;
+- `podway-0.1.0-aarch64-apple-darwin.dolgorae-handoff.json`.
+
+The provenance records the source commit, Rust 1.97.1 identity, `Cargo.lock`
+digest, target, binary digests, release-gate result, contract-manifest digest, and
+signing/notarization status. The deterministic Dolgorae handoff binds the binary,
+contract, provenance, source-tree, and toolchain identities required for consumer
+pinning.
+
+The archive was built after the complete local `make test` gate passed. Packaged
+conformance exercised the release binaries through the isolated foreground dev
+daemon mode without administrator authorization or a temporary operating-system
+account.
+
+## Known limitations
+
+- Only native Apple Silicon macOS is supported.
+- The binaries are unsigned and not notarized.
+- The service is a per-user LaunchAgent. It starts after GUI login and does not
+  run before login.
+- The daemon version interface in this tag predates the normalized version-first
+  grammar introduced after v0.1.0.

@@ -12,7 +12,7 @@ use podway_core::{
     UnblockSessionV1, UnixMillis, apply_transition_v1, preview_transition_v1,
 };
 
-const MATRIX: &str = include_str!("../../../spec/state-transition-matrix.csv");
+const MATRIX: &str = include_str!("../../../assets/specifications/state-transition-matrix.csv");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MatrixClassification {
