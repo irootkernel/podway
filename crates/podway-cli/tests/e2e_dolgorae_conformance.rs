@@ -1894,13 +1894,14 @@ fn dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite()
         ["--json", "version", "--identity"],
     );
     let daemon_probe = Command::new(&packaged_daemon)
-        .args(["--json", "version"])
+        .args(["version", "--json", "--identity"])
         .output()
         .expect("packaged daemon identity probe must execute");
     assert!(daemon_probe.status.success());
     assert!(daemon_probe.stderr.is_empty());
-    let daemon_identity: Value = serde_json::from_slice(&daemon_probe.stdout)
+    let daemon_envelope: Value = serde_json::from_slice(&daemon_probe.stdout)
         .expect("packaged daemon identity must be JSON");
+    let daemon_identity = &daemon_envelope["result"];
     for field in [
         "build_identity",
         "contract_manifest_digest",
