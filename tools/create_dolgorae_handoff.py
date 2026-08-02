@@ -130,7 +130,7 @@ def create(output_directory: Path) -> dict[str, Any]:
     provenance = read_object(provenance_path, "release provenance")
     required = {
         "artifact_class": "distribution",
-        "release_gate": "make test: passed",
+        "release_gate": "make test + fuzzing: passed",
         "source_commit": commit,
         "source_dirty": False,
         "target": TARGET,
@@ -167,7 +167,7 @@ def self_test() -> dict[str, Any]:
         "cargo_lock_sha256": "e" * 64,
         "contract_manifest_digest": f"sha256:{'f' * 64}",
         "contract_manifest_schema": "podway.contract-manifest/v1",
-        "release_gate": "make test: passed",
+        "release_gate": "make test + fuzzing: passed",
         "source_commit": "1" * 40,
         "target": TARGET,
         "toolchain": "rustc 1.97.1 (test)",

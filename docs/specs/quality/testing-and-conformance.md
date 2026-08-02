@@ -339,32 +339,33 @@ The project MAY measure the following without making network assumptions:
 Performance diagnostics must not weaken correctness pragmas. They inform
 optimization work but are not a release-readiness gate.
 
-## Local release gate
+## Local development and release gates
 
-The repository-root `make test` command is the only required gate and runs these
+The repository-root `make test` command is the required development gate and runs these
 stages sequentially:
 
-- `test-prepare`: canonical-asset validation, formatting, lint,
+- `test-prepare`: canonical-asset validation, formatting checks, lint,
   dependency checks, architecture guardrails, quality mappings, and contracts;
 - `test-rust`: unit and architecture targets plus one integration suite per crate
-  in one Cargo invocation;
-- `test-fuzzing`: fixed-run, fixed-seed frame decoder and request schema
-  deserializer fuzzing in disposable corpora;
-- `test-e2e`: user journeys through real product binaries, shells, and release
-  archives, including a start/status/next smoke for all four presets.
+  in one Cargo invocation, using four test workers by default;
+- `test-e2e`: serial user journeys through real debug product binaries and shells,
+  including a start/status/next smoke for all four presets.
 
 The E2E layer builds the debug product binaries once. Preset-tool verification
-runs afterward against that prepared CLI instead of initiating another build. A
-successful complete gate records a local source-and-toolchain-bound receipt;
-`make dist` accepts it only for an exact match and otherwise reruns `make test`.
+runs afterward against that prepared CLI instead of initiating another build.
+`make dist` always runs this gate, all-target Clippy, release helper sentinels,
+fixed-run fuzzing, release builds, one distribution package, qualification, and
+the handoff.
 
 Focused `test-unit`, `test-int`, and `architecture` targets remain available while
 iterating. Integration tests may execute one product component against controlled
 collaborators; end-to-end tests are reserved for user-observable product journeys.
 The suite registry preserves every layer source as a separately named Rust module
-while avoiding one operating-system process per source file. Tests within those
-aggregate processes run serially to preserve the isolation formerly provided by
-separate Cargo targets.
+while avoiding one operating-system process per source file. Rust tests use the
+bounded `TEST_THREADS` test-harness setting, which defaults to four; actual
+daemon/process E2E remains serial. Make-driven Cargo gates set
+`CARGO_INCREMENTAL=0` to bound codegen-object growth, while direct Cargo commands
+retain the normal incremental default.
 
 `test-fuzzing` uses `nightly-2026-07-17` and `cargo-fuzz 0.13.2` only for
 sanitizer and coverage instrumentation. Product compilation and all non-fuzz test
@@ -376,15 +377,9 @@ All required crash, migration, protocol, service, and acceptance scenarios are
 included in those targets. There is no hosted-CI or separate release lane
 requirement. The product-acceptance verifier binds every mandatory bullet in the
 acceptance source exactly once; adding an unmapped bullet fails `test-prepare`.
-Archive-builder acceptance constructs the deterministic native test-fixture archive
-twice from debug binaries in disposable directories and compares their digests
-without publishing either artifact. The packaged Dolgorae acceptance flow
-additionally extracts one such archive, verifies that CLI, daemon, manifest, source,
-target, binary digests, isolation capability, and provenance identities agree, and
-reruns the complete Dolgorae consumer controlled-PATH service, lifecycle, conflict,
-timeout, and reconciliation suite with binary
-selection restricted to that archive's `podway` and `podwayd`. `REL10003` performs
-the release-profile counterpart automatically inside `make dist`: it extracts the
+`make dist` packages the release-profile binaries once, verifies CLI, daemon,
+manifest, source, target, binary digests, isolation capability, and provenance
+identities, then extracts the
 archive, selects a private absolute `PODWAY_DEV_HOME`, runs the packaged lifecycle,
 conflict, timeout, response-loss, reconciliation, and identity scenarios through
 the foreground dev daemon, terminates it through IPC, and requires socket cleanup.

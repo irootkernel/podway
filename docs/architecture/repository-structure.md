@@ -66,4 +66,4 @@ interface inputs executed by repository verification tools.
 
 `artifacts/` contains mutable reports, raw logs, fuzzing output, and other
 machine-specific results. The entire directory is ignored and is not a release
-input. Release readiness is decided only by `make test` on the current tree.
+input. Release readiness is decided only by `make dist` on the current tree.

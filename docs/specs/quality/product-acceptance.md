@@ -1,6 +1,6 @@
 # Product Acceptance Criteria
 
-The criteria below describe the implemented baseline bound to the current `make test`; v0.1.0 remains unreleasable until every remaining `REL10` roadmap task through `REL10005` is completed.
+The criteria below describe the implemented baseline checked by `make test` and completed by the distribution qualification in `make dist`.
 
 ## Product purpose
 
@@ -119,11 +119,12 @@ The criteria below describe the implemented baseline bound to the current `make 
 
 ## Final acceptance rule
 
-No criterion may be waived. A failed `make test` result means the tested tree is
-not release-ready. Independent signatures, approval quorums, holdout runs,
+No criterion may be waived. A failed `make test` result means the tree is not ready
+for distribution work; a failed `make dist` result means it is not release-ready.
+Independent signatures, approval quorums, holdout runs,
 qualification archives, and attestation bundles are not acceptance criteria.
 Signing and notarization status must be documented when artifacts are distributed,
-but neither changes the source revision's release-readiness result.
+but neither replaces the distribution gate.
 
 The implemented automation acceptance scenarios are tracked separately in the
 [automation client contract](../interfaces/automation-client-contract.md#24-acceptance-matrix).

@@ -1587,19 +1587,16 @@ fn job_lookup_on_inactive_workspace_leaves_store_registry_and_scheduler_unchange
     assert!(before_resolution.active_scheduler().is_none());
     let database_path = before_resolution.database_path().to_path_buf();
     let registry_path = runtime_manager.registry().registry_path().to_path_buf();
-    let observed_paths = [
-        database_path.clone(),
-        PathBuf::from(format!("{}-wal", database_path.display())),
-        PathBuf::from(format!("{}-shm", database_path.display())),
-        registry_path,
-    ];
-    let snapshot = |paths: &[PathBuf]| {
-        paths
-            .iter()
-            .map(|path| (path.clone(), fs::read(path).ok()))
-            .collect::<Vec<_>>()
-    };
-    let before = snapshot(&observed_paths);
+    let idempotency_key = StoreIdempotencyKeyV1::new("inactive-recon-key").unwrap();
+    let store_before = SqliteStoreV1::inspect_reconciliation_snapshot(
+        &database_path,
+        before_resolution.binding().identity(),
+        before_resolution.store_options(),
+        &idempotency_key,
+        UnixMillis::UNIX_EPOCH,
+    )
+    .expect("inactive store must be inspectable");
+    let registry_before = fs::read(&registry_path).expect("registry must be readable");
     let dispatcher = compose_dispatcher_v1(
         Arc::clone(&runtime_manager),
         WorkerIdV1::new("inactive-recon-reader").unwrap(),
@@ -1619,12 +1616,24 @@ fn job_lookup_on_inactive_workspace_leaves_store_registry_and_scheduler_unchange
     let lookup = dispatch_command(&dispatcher, &lookup, "job.lookup");
     assert_eq!(lookup.result()["found"], true);
     assert_eq!(lookup.result()["job"]["state"], "succeeded");
-    assert_eq!(snapshot(&observed_paths), before);
     let after_resolution = runtime_manager
         .resolve_existing_readonly(git_selector(fixture.main()), None)
         .expect("lookup must leave the workspace resolvable");
     assert!(
         after_resolution.active_scheduler().is_none(),
         "read-only reconciliation must not create a scheduler"
+    );
+    let store_after = SqliteStoreV1::inspect_reconciliation_snapshot(
+        &database_path,
+        after_resolution.binding().identity(),
+        after_resolution.store_options(),
+        &idempotency_key,
+        UnixMillis::UNIX_EPOCH,
+    )
+    .expect("inactive store must remain inspectable");
+    assert_eq!(store_after, store_before);
+    assert_eq!(
+        fs::read(&registry_path).expect("registry must remain readable"),
+        registry_before
     );
 }

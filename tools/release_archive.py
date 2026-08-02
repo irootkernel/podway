@@ -329,8 +329,22 @@ def require_clean_tree(allow_dirty: bool) -> bool:
     )
     dirty = bool(status)
     if dirty and not allow_dirty:
-        fail("release archive construction requires a clean Git worktree")
+        entries = status.decode("utf-8", errors="replace").splitlines()
+        shown = entries[:10]
+        if len(entries) > len(shown):
+            shown.append(f"... and {len(entries) - len(shown)} more")
+        fail(
+            "release archive construction requires a clean Git worktree; "
+            "commit or stash tracked changes and remove or ignore untracked files: "
+            + "; ".join(shown)
+        )
     return dirty
+
+
+def preflight() -> dict[str, Any]:
+    require_native_host()
+    require_clean_tree(False)
+    return {"mode": "preflight", "ok": True}
 
 
 def source_files(directory: Path, label: str) -> list[Path]:
@@ -619,7 +633,7 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
             "release_gate": (
                 "test-fixture"
                 if arguments.artifact_class == "test-fixture"
-                else "make test: passed"
+                else "make test + fuzzing: passed"
             ),
             "release_status": release_status(),
             "schema": "podway.release-provenance/v1",
@@ -652,10 +666,16 @@ def main() -> int:
     )
     package_parser.add_argument("--output-dir", type=Path, required=True)
     package_parser.add_argument("--allow-dirty", action="store_true", help="test-only: package an uncommitted tree")
+    subparsers.add_parser("preflight", help="verify release host and Git worktree state")
     subparsers.add_parser("self-test", help="run isolated artifact-class sentinels")
     arguments = parser.parse_args()
     try:
-        result = self_test() if arguments.command == "self-test" else package(arguments)
+        if arguments.command == "self-test":
+            result = self_test()
+        elif arguments.command == "preflight":
+            result = preflight()
+        else:
+            result = package(arguments)
     except (OSError, ReleaseError, tarfile.TarError, UnicodeError, json.JSONDecodeError) as error:
         print(json.dumps({"error": str(error), "mode": arguments.command, "ok": False}, sort_keys=True, separators=(",", ":")))
         return 1

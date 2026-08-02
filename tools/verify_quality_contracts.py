@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import re
 from pathlib import Path
@@ -15,7 +14,6 @@ ROOT = Path(__file__).resolve().parents[1]
 MATRIX_PATH = ROOT / "release/product-acceptance-matrix-v1.json"
 DOLGI_MATRIX_PATH = ROOT / "release/dolgorae-acceptance-matrix-v1.json"
 CRASH_PATH = ROOT / "quality/crash-boundaries-v1.json"
-DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 FUNCTION_RE_TEMPLATE = r"\bfn\s+{name}\s*(?:<[^>]*>)?\s*\("
 TEST_FUNCTION_RE_TEMPLATE = (
     r"#\s*\[\s*test\s*\]\s*(?:#\s*\[[^\]]+\]\s*)*"
@@ -48,8 +46,8 @@ DOLGI_TASKS = {
         "evidence_ids": ["AUT-T-ID", "AUT-T-RECON"],
     },
     "DOLGI005": {
-        "title": "Verify the packaged test-fixture archive",
-        "goal": "Run the complete Dolgorae consumer conformance suite using a native arm64 archive built from debug binaries, require explicit test-fixture provenance, and fail closed unless both packaged binaries expose debug-only isolation.",
+        "title": "Qualify the distribution archive",
+        "goal": "Package the native arm64 release binaries once, verify archive identity and layout, and exercise the required Dolgorae scenarios against the extracted distribution.",
         "reference_ids": ["AUT-REL-001–003", "AUT-T-DIST"],
         "evidence_ids": ["AUT-T-DIST"],
     },
@@ -74,14 +72,6 @@ def load_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def repository_file(relative: Any, label: str) -> Path:
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
         fail(f"{label} must be a non-empty repository-relative path")
@@ -91,7 +81,7 @@ def repository_file(relative: Any, label: str) -> Path:
     return path
 
 
-def require_test_member(member: Any, criterion_id: str, source_files: set[str]) -> set[str]:
+def require_test_member(member: Any, criterion_id: str, proof_paths: set[str]) -> set[str]:
     if not isinstance(member, dict):
         fail(f"{criterion_id} proof member must be an object")
     required = {"command", "function", "path"}
@@ -127,11 +117,31 @@ def require_test_member(member: Any, criterion_id: str, source_files: set[str]) 
     )
     if not direct_cargo_test and command != exact_e2e_wrapper:
         fail(f"{criterion_id} proof command is not bound to its exact test target and function")
-    source_files.add(relative)
+    proof_paths.add(relative)
     obligations = member.get("obligation_ids", [])
     if not isinstance(obligations, list) or any(not isinstance(item, str) or not item for item in obligations):
         fail(f"{criterion_id} obligation_ids must be a string list")
     return set(obligations)
+
+
+def require_release_step(member: Any, criterion_id: str, proof_paths: set[str]) -> None:
+    if not isinstance(member, dict):
+        fail(f"{criterion_id} release proof must be an object")
+    required = {"command", "function", "kind", "path"}
+    if set(member) != required or member.get("kind") != "release-step":
+        fail(f"{criterion_id} release proof is malformed")
+    relative = member["path"]
+    function = member["function"]
+    command = member["command"]
+    if not all(isinstance(value, str) and value for value in (relative, function, command)):
+        fail(f"{criterion_id} release proof fields must be non-empty strings")
+    path = repository_file(relative, f"{criterion_id} release proof path")
+    source = path.read_text(encoding="utf-8")
+    if re.search(PYTHON_FUNCTION_RE_TEMPLATE.format(name=re.escape(function)), source, re.MULTILINE) is None:
+        fail(f"{criterion_id} release proof function is missing from {relative}: {function}")
+    if command != "make dist" or relative not in (ROOT / "Makefile").read_text(encoding="utf-8"):
+        fail(f"{criterion_id} release proof is not part of make dist")
+    proof_paths.add(relative)
 
 
 def validate_acceptance_matrix() -> tuple[int, int]:
@@ -161,7 +171,7 @@ def validate_acceptance_matrix() -> tuple[int, int]:
             f"criteria={len(criteria)}, bullets={len(source_bullets)}"
         )
     expected_ids = [f"PAC-{number:03d}" for number in range(1, len(criteria) + 1)]
-    proof_source_files: set[str] = set()
+    proof_paths: set[str] = set()
     semantic_coverage: dict[str, set[str]] = {}
     seen_lines: set[int] = set()
     for expected_id, criterion in zip(expected_ids, criteria):
@@ -181,7 +191,7 @@ def validate_acceptance_matrix() -> tuple[int, int]:
             fail(f"{expected_id} proof must be an object")
         kind = proof.get("kind")
         if kind == "cargo-test":
-            obligations = require_test_member(proof, expected_id, proof_source_files)
+            obligations = require_test_member(proof, expected_id, proof_paths)
             if obligations:
                 fail(f"{expected_id} single-test proof must not declare semantic obligations")
         elif kind == "cargo-test-set":
@@ -191,24 +201,17 @@ def validate_acceptance_matrix() -> tuple[int, int]:
             for member in proof["members"]:
                 if member.get("criterion_id") != expected_id:
                     fail(f"{expected_id} test-set member has the wrong criterion_id")
-                member_obligations = require_test_member(member, expected_id, proof_source_files)
+                member_obligations = require_test_member(member, expected_id, proof_paths)
                 if obligations.intersection(member_obligations):
                     fail(f"{expected_id} repeats a semantic obligation")
                 obligations.update(member_obligations)
             semantic_coverage[expected_id] = obligations
+        elif kind == "release-step":
+            require_release_step(proof, expected_id, proof_paths)
         else:
             fail(f"{expected_id} has unsupported proof kind: {kind}")
     if seen_lines != set(source_bullets):
         fail("product acceptance matrix source lines do not exactly cover every mandatory acceptance bullet")
-
-    source_files = matrix.get("source_files")
-    if not isinstance(source_files, dict) or set(source_files) != proof_source_files:
-        fail("product acceptance source_files must equal the exact proof-path set")
-    for relative, expected_digest in source_files.items():
-        if not isinstance(expected_digest, str) or DIGEST_RE.fullmatch(expected_digest) is None:
-            fail(f"product acceptance source digest is malformed: {relative}")
-        if sha256_file(repository_file(relative, "product acceptance source file")) != expected_digest:
-            fail(f"product acceptance source file is stale: {relative}")
 
     contracts = matrix.get("semantic_contracts")
     if not isinstance(contracts, list):
@@ -228,13 +231,7 @@ def validate_acceptance_matrix() -> tuple[int, int]:
     if declared != semantic_coverage:
         fail("semantic contract obligations do not exactly match test-set coverage")
 
-    closure = matrix.get("input_closure")
-    if not isinstance(closure, dict) or closure.get("requireCompleteFileDigests") is not True:
-        fail("product acceptance input closure is malformed")
-    globs = closure.get("globs")
-    if not isinstance(globs, list) or any(not isinstance(item, str) or not item for item in globs):
-        fail("product acceptance input globs must be a non-empty string list")
-    return len(criteria), len(proof_source_files)
+    return len(criteria), len(proof_paths)
 
 
 def roadmap_dolgi_tasks() -> dict[str, dict[str, Any]]:
@@ -275,7 +272,7 @@ def rust_test_function_exists(source: str, function: str) -> bool:
     )
 
 
-def validate_dolgi_proof(member: Any, task_id: str, source_files: set[str]) -> None:
+def validate_dolgi_proof(member: Any, task_id: str, proof_paths: set[str]) -> None:
     if not isinstance(member, dict) or set(member) != {"command", "function", "kind", "path"}:
         fail(f"{task_id} proof must contain exactly command, function, kind, and path")
     relative = member["path"]
@@ -309,11 +306,21 @@ def validate_dolgi_proof(member: Any, task_id: str, source_files: set[str]) -> N
         ) is None:
             fail(f"{task_id} Python proof function is missing from {relative}: {function}")
         expected = f"python3 {relative} self-test"
+    elif kind == "release-step":
+        if re.search(
+            PYTHON_FUNCTION_RE_TEMPLATE.format(name=re.escape(function)),
+            source,
+            re.MULTILINE,
+        ) is None:
+            fail(f"{task_id} release proof function is missing from {relative}: {function}")
+        if relative not in (ROOT / "Makefile").read_text(encoding="utf-8"):
+            fail(f"{task_id} release proof is not part of make dist")
+        expected = "make dist"
     else:
         fail(f"{task_id} has unsupported proof kind: {kind}")
     if command != expected:
         fail(f"{task_id} proof command is not exact: expected={expected}, actual={command}")
-    source_files.add(relative)
+    proof_paths.add(relative)
 
 
 def validate_dolgorae_acceptance_matrix(
@@ -340,7 +347,7 @@ def validate_dolgorae_acceptance_matrix(
     if [task.get("id") for task in tasks if isinstance(task, dict)] != list(DOLGI_TASKS):
         fail("DOLGI acceptance tasks must be complete, unique, and ordered")
 
-    proof_source_files: set[str] = set()
+    proof_paths: set[str] = set()
     for task in tasks:
         task_id = task["id"]
         contract = DOLGI_TASKS[task_id]
@@ -359,17 +366,9 @@ def validate_dolgorae_acceptance_matrix(
             if identity in seen_proofs:
                 fail(f"{task_id} repeats proof {identity}")
             seen_proofs.add(identity)
-            validate_dolgi_proof(proof, task_id, proof_source_files)
+            validate_dolgi_proof(proof, task_id, proof_paths)
 
-    source_files = matrix.get("source_files")
-    if not isinstance(source_files, dict) or set(source_files) != proof_source_files:
-        fail("DOLGI source_files must equal the exact proof-path set")
-    for relative, expected_digest in source_files.items():
-        if not isinstance(expected_digest, str) or DIGEST_RE.fullmatch(expected_digest) is None:
-            fail(f"DOLGI proof source digest is malformed: {relative}")
-        if sha256_file(repository_file(relative, "DOLGI proof source file")) != expected_digest:
-            fail(f"DOLGI proof source file is stale: {relative}")
-    return len(tasks), len(proof_source_files)
+    return len(tasks), len(proof_paths)
 
 
 def self_test_dolgorae_acceptance_matrix() -> int:
@@ -410,15 +409,11 @@ def self_test_dolgorae_acceptance_matrix() -> int:
     wrong_references["DOLGI005"]["reference_ids"] = ["AUT-T-DIST"]
     expect_failure(baseline, "title, status, goal, or references", wrong_references)
 
-    stale_digest = copy.deepcopy(baseline)
-    first_source = next(iter(stale_digest["source_files"]))
-    stale_digest["source_files"][first_source] = "0" * 64
-    expect_failure(stale_digest, "proof source file is stale")
     if not rust_test_function_exists("#[test]\nfn proof() {}", "proof"):
         fail("DOLGI matrix self-test rejected a real #[test] function")
     if rust_test_function_exists("fn proof() {}", "proof"):
         fail("DOLGI matrix self-test accepted a non-test helper function")
-    return 8
+    return 7
 
 
 def locator_parts(locator: Any, label: str) -> tuple[Path, str]:

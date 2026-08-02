@@ -133,7 +133,7 @@ def verify_distribution(
     required = {
         "schema": "podway.release-provenance/v1",
         "artifact_class": "distribution",
-        "release_gate": "make test: passed",
+        "release_gate": "make test + fuzzing: passed",
         "source_commit": commit,
         "source_dirty": False,
         "target": TARGET,

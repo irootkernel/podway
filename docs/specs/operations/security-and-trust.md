@@ -163,8 +163,8 @@ Distribution practice SHOULD include:
 - no runtime dynamic plugin loading;
 - least-privilege user service installation.
 
-These distribution measures describe published artifacts. They are not additional
-release-readiness gates beyond the repository-root `make test` command.
+These distribution measures are enforced by the repository-root `make dist` gate;
+they do not introduce an external approval system.
 
 ## Explicit limitations
 

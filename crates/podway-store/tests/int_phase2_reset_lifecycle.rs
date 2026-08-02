@@ -965,17 +965,21 @@ fn pac_030_interrupted_reset_all_publication_recovers_and_retries_idempotently()
             .arg(RESET_CRASH_CHILD_TEST_NAME)
             .env(RESET_CRASH_CHILD_PATH_ENV, &path)
             .env(RESET_CRASH_CASE_ENV, case_index.to_string())
-            .status()
+            .output()
             .unwrap();
         assert!(
-            !child.success(),
-            "{failpoint:?} child unexpectedly returned success"
+            !child.status.success(),
+            "{failpoint:?} child unexpectedly returned success: stdout={} stderr={}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr),
         );
         #[cfg(unix)]
         assert_eq!(
-            child.signal(),
+            child.status.signal(),
             Some(6),
-            "{failpoint:?} child must terminate via SIGABRT at the failpoint"
+            "{failpoint:?} child must terminate via SIGABRT at the failpoint: stdout={} stderr={}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr),
         );
 
         let workspace = identity();
@@ -1299,10 +1303,21 @@ fn interrupted_publication_link_recovers_one_destination_without_temporary_link(
             RESET_CRASH_CASE_ENV,
             RESET_INTERRUPTED_LINK_CRASH_CASE_INDEX.to_string(),
         )
-        .status()
+        .output()
         .unwrap();
-    assert!(!child.success());
-    assert_eq!(child.signal(), Some(6));
+    assert!(
+        !child.status.success(),
+        "crash child unexpectedly returned success: stdout={} stderr={}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr),
+    );
+    assert_eq!(
+        child.status.signal(),
+        Some(6),
+        "crash child must terminate via SIGABRT: stdout={} stderr={}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr),
+    );
 
     let destination_metadata = fs::symlink_metadata(&path).unwrap();
     assert_eq!(

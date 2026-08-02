@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from run_g005_vertical import cargo_target_directory, produce_daemon_build_receipt, verification_root
+from run_g005_vertical import cargo_target_directory, verification_root
 
 
 ROOT = verification_root()
@@ -41,7 +41,7 @@ def main() -> int:
         "--exact-test",
         type=parse_exact_test,
         metavar="PACKAGE::TARGET::FUNCTION",
-        help="run one exact binary-backed E2E test after preparing canonical build evidence",
+        help="run one exact binary-backed E2E test after building the product binaries",
     )
     arguments = parser.parse_args()
     run(
@@ -64,10 +64,8 @@ def main() -> int:
     podwayd = (target / "debug" / "podwayd").resolve()
     if not podway.is_file() or not podwayd.is_file():
         raise SystemExit("cargo build did not produce both Podway binaries")
-    receipt_path = produce_daemon_build_receipt(ROOT, podwayd)
     environment = os.environ.copy()
     environment["PODWAYD_TEST_BINARY"] = str(podwayd)
-    environment["PODWAYD_BUILD_RECEIPT"] = str(receipt_path.resolve())
     if arguments.exact_test is None:
         test_command = [
             "cargo",
@@ -103,7 +101,6 @@ def main() -> int:
                 "binaries": {"podway": str(podway), "podwayd": str(podwayd)},
                 "mode": "e2e",
                 "ok": True,
-                "receipt": str(receipt_path.resolve()),
             },
             separators=(",", ":"),
             sort_keys=True,

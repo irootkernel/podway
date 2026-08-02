@@ -8,16 +8,21 @@ make test-rust      # unit, architecture, and integration tests
 make test-unit      # focused library and binary tests
 make test-int       # focused component integration tests
 make test-fuzzing   # bounded deterministic protocol fuzzing
-make test-e2e       # real user journeys and archive construction
-make test           # complete release-readiness gate
-make test-if-needed # reuse an exact current-tree receipt or run make test
+make test-e2e       # real user journeys through debug product binaries
+make test           # required development gate
+make dist           # complete release gate, package, qualification, and handoff
 ```
 
-Run the narrowest relevant layer while iterating and `make test` before treating a
-revision as release-ready. The complete gate records
-`target/podway-test-gate-v1.json` only after every layer passes. The receipt binds
-the Git commit, all non-ignored source bytes, `Cargo.lock`, and the selected Rust
-toolchain binaries.
+Run the narrowest relevant layer while iterating and `make test` before sharing a
+development revision. `make dist` always reruns that gate, adds bounded fuzzing,
+all-target Clippy, and qualification of the release-profile distribution before
+creating the handoff.
+
+Rust unit, architecture, and integration targets use four test workers by default;
+set `TEST_THREADS=<n>` on a Make invocation to tune that bound. Real-binary E2E
+remains serial. Make-driven Cargo gates disable incremental compilation to avoid
+accumulating large numbers of codegen objects; ordinary direct `cargo build`
+commands retain Cargo's incremental default.
 
 Cargo integration files are modules of each crate's `int_suite`; run one exact
 test with:
@@ -37,5 +42,5 @@ from or duplicated across aggregate suites.
   and procedure parsing.
 
 Optional diagnostics provide investigation support; they do not replace
-`make test` as the release gate. See the normative [testing and conformance
+`make test` as the development gate or `make dist` as the release gate. See the normative [testing and conformance
 specification](../specs/quality/testing-and-conformance.md).

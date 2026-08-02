@@ -1,10 +1,5 @@
 {
   "schema": "podway.dolgorae-acceptance-matrix/v1",
-  "source_files": {
-    "crates/podway-cli/tests/e2e_dolgorae_conformance.rs": "1c62af5d3ad72d312b533fdc30d6660468002f564fd210ecd53ce5bcd2d9f8e6",
-    "crates/podway-cli/tests/e2e_release_archive.rs": "3fe316aa389ba36f27437ad4c336bb6c5e405b80d0d6409a4a95c9c94b8d1455",
-    "tools/release_archive.py": "bfd3dede93eda3e80d975c9fb2cf0341c552a8fa1bd2c4d4f177246e53e6216d"
-  },
   "tasks": [
     {
       "evidence_ids": [
@@ -85,26 +80,20 @@
       "id": "DOLGI005",
       "proofs": [
         {
-          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite",
-          "function": "dist_extracted_native_test_fixture_archive_runs_the_complete_dolgorae_suite",
-          "kind": "cargo-test",
-          "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs"
-        },
-        {
-          "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_release_archive::pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
-          "function": "pac_072_075_077_archive_fixture_is_complete_deterministic_and_documented",
-          "kind": "cargo-test",
-          "path": "crates/podway-cli/tests/e2e_release_archive.rs"
-        },
-        {
-          "command": "python3 tools/release_archive.py self-test",
-          "function": "self_test",
-          "kind": "python-self-test",
+          "command": "make dist",
+          "function": "package",
+          "kind": "release-step",
           "path": "tools/release_archive.py"
+        },
+        {
+          "command": "make dist",
+          "function": "qualify",
+          "kind": "release-step",
+          "path": "tools/qualify_distribution.py"
         }
       ],
       "status": "Completed",
-      "title": "Verify the packaged test-fixture archive"
+      "title": "Qualify the distribution archive"
     }
   ],
   "version": 1

@@ -20,7 +20,7 @@
 | `R-16` | Global registry accidentally accumulates task data | low | medium | registry fields expand | fixed schema, tests, architecture review | Daemon/Security |
 | `R-17` | Logs leak task or item content | medium | medium | request debug output appears in logs | structured allowlist logging and redaction tests | Daemon/Security |
 | `R-18` | Destructive reset is used accidentally | low | high | session lost without intent | TTY prompt, `--yes`, `--force`, dry run, explicit help | CLI |
-| `R-19` | A non-native binary is distributed as Apple Silicon output | medium | high | executable is translated, universal/fat, cross-built, or relabeled | run `make test` on the native Apple Silicon release host and inspect distributed binaries | Release |
+| `R-19` | A non-native binary is distributed as Apple Silicon output | medium | high | executable is translated, universal/fat, cross-built, or relabeled | run `make dist` on the native Apple Silicon release host and inspect distributed binaries | Release |
 | `R-20` | Same-user threat is misunderstood as strong authentication | medium | medium | users rely on Podway for audit proof | explicit documentation, no “secure evidence” language, no access key | Product/Security |
 | `R-21` | `next` suggestions are incomplete or unsafe to copy | medium | high | users still omit steps | structured argv suggestions, preset E2E assertions, UX dogfooding | CLI/Product |
 | `R-22` | Reset-all crash leaves workspace unusable | low | high | marker or partial DB remains | marker protocol and crash cases C14-C16 | Store/Daemon |

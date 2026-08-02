@@ -1406,16 +1406,19 @@ fn reset_all_crash_boundaries_resume_once_without_duplicate_effects() {
             "podway-phase5-reset-crash-{id}-{}",
             std::process::id()
         ));
-        let status = Command::new(std::env::current_exe().expect("test executable must resolve"))
+        let child = Command::new(std::env::current_exe().expect("test executable must resolve"))
             .args(["--exact", RESET_CRASH_CHILD_TEST, "--nocapture"])
             .env(RESET_CRASH_REPORT_ENV, &report_path)
             .env(RESET_CRASH_BOUNDARY_ENV, format!("{boundary:?}"))
-            .status()
+            .output()
             .expect("reset crash child must start");
         assert_eq!(
-            status.signal(),
+            child.status.signal(),
             Some(nix::libc::SIGABRT),
-            "{id} child must terminate with SIGABRT at its selected boundary: {status:?}"
+            "{id} child must terminate with SIGABRT at its selected boundary: status={:?} stdout={} stderr={}",
+            child.status,
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr),
         );
 
         let report = fs::read_to_string(&report_path)

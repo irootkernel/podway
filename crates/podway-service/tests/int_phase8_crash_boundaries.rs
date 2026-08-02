@@ -645,12 +645,14 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
                         "PODWAY_SERVICE_DURABILITY_WRITE",
                         write_invocation.to_string(),
                     )
-                    .status()
+                    .output()
                     .expect("spawn crash child");
                 assert_eq!(
-                    child.code(),
+                    child.status.code(),
                     Some(86),
-                    "{destination}/{write_invocation}/{point} must terminate at its selected real boundary"
+                    "{destination}/{write_invocation}/{point} must terminate at its selected real boundary: stdout={} stderr={}",
+                    String::from_utf8_lossy(&child.stdout),
+                    String::from_utf8_lossy(&child.stderr),
                 );
                 let paths = paths(&root);
                 let plist = paths.launch_agent_path().as_path();
@@ -776,12 +778,14 @@ fn service_removal_crash_child_preserves_complete_prior_state() {
             "--nocapture",
         ])
         .env("PODWAY_SERVICE_REMOVAL_CRASH_CHILD_ROOT", &root)
-        .status()
+        .output()
         .expect("spawn crash child");
     assert_eq!(
-        child.code(),
+        child.status.code(),
         Some(87),
-        "child must crash between declared removals"
+        "child must crash between declared removals: stdout={} stderr={}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr),
     );
 
     let paths = paths(&root);
@@ -855,12 +859,14 @@ fn bootstrap_side_effect_crash_child_reconciles_to_one_installed_state() {
             "--nocapture",
         ])
         .env("PODWAY_SERVICE_BOOTSTRAP_CRASH_CHILD_ROOT", &root)
-        .status()
+        .output()
         .expect("spawn bootstrap crash child");
     assert_eq!(
-        child.code(),
+        child.status.code(),
         Some(88),
-        "bootstrap failpoint must terminate the child"
+        "bootstrap failpoint must terminate the child: stdout={} stderr={}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr),
     );
 
     let paths = paths(&root);

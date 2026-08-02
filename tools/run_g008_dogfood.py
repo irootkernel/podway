@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from run_g005_vertical import produce_daemon_build_receipt
 
 def verification_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -49,12 +48,12 @@ def run(argv: list[str], *, env: dict[str, str] | None = None) -> subprocess.Com
 
 def main() -> int:
     run(["cargo", "build", "-p", "podway-daemon", "--bin", "podwayd"])
-    daemon = cargo_target_directory() / "debug" / "podwayd"
-    receipt = produce_daemon_build_receipt(ROOT, daemon)
+    daemon = (cargo_target_directory() / "debug" / "podwayd").resolve()
+    if not daemon.is_file():
+        raise SystemExit(f"current podwayd artifact is missing: {daemon}")
 
     environment = os.environ.copy()
-    environment["PODWAYD_TEST_BINARY"] = str(daemon.resolve())
-    environment["PODWAYD_BUILD_RECEIPT"] = str(receipt.resolve())
+    environment["PODWAYD_TEST_BINARY"] = str(daemon)
     completed = run(
         [
             "cargo",
@@ -94,10 +93,9 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "binary": str(daemon.resolve()),
+                "binary": str(daemon),
                 "goal": "G008",
                 "ok": True,
-                "receipt": str(receipt.resolve()),
                 "test": TEST_NAME,
                 "conformanceCells": 4,
                 "scenarios": scenarios,

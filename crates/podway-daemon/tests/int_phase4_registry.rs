@@ -9,7 +9,7 @@ use std::{
         process::ExitStatusExt,
     },
     path::{Path, PathBuf},
-    process::{Command, ExitStatus},
+    process::{Command, Output},
     sync::{
         Arc, Barrier,
         atomic::{AtomicU64, Ordering},
@@ -147,22 +147,23 @@ fn service_runtime_paths_for_root(root: &Path) -> ServiceRuntimePathsV1 {
     .expect("child fixture paths must be valid service paths")
 }
 
-fn assert_aborted(status: ExitStatus, label: &str) {
+fn assert_aborted(output: Output, label: &str) {
     assert!(
-        !status.success(),
-        "{label} child unexpectedly returned without crashing"
+        !output.status.success(),
+        "{label} child unexpectedly returned without crashing: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(
-        status.signal(),
+        output.status.signal(),
         Some(6),
-        "{label} child must terminate with SIGABRT after reaching its failpoint"
+        "{label} child must terminate with SIGABRT after reaching its failpoint: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }
 
-fn run_registry_crash_child(
-    fixture: &RegistryFixture,
-    failpoint: RegistryFailpointV1,
-) -> ExitStatus {
+fn run_registry_crash_child(fixture: &RegistryFixture, failpoint: RegistryFailpointV1) -> Output {
     let failpoint = match failpoint {
         RegistryFailpointV1::BeforeRename => REGISTRY_CRASH_BEFORE_RENAME,
         RegistryFailpointV1::AfterRenameBeforeParentSync => REGISTRY_CRASH_AFTER_RENAME,
@@ -173,7 +174,7 @@ fn run_registry_crash_child(
         .arg("--nocapture")
         .env(REGISTRY_CRASH_ROOT_ENV, fixture.root.as_os_str())
         .env(REGISTRY_CRASH_FAILPOINT_ENV, failpoint)
-        .status()
+        .output()
         .expect("registry crash child must start")
 }
 

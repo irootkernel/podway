@@ -90,13 +90,13 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 
 | ID | Requirement | Design source | Primary conformance |
 |---|---|---|---|
-| `REL-001` | Sole release tuple is `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}` | Release | `make test-e2e`; native service validation |
-| `REL-002` | Archive contains `podway` and `podwayd`, completions, schemas, presets, license | Release | `make test-e2e`; deterministic archive inspection |
-| `REL-003` | Published archives include checksums and source/toolchain provenance | Release | `make test-e2e`; distribution metadata inspection |
+| `REL-001` | Sole release tuple is `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}` | Release | `make dist`; native distribution qualification |
+| `REL-002` | Archive contains `podway` and `podwayd`, completions, schemas, presets, license | Release | `make dist`; archive inspection |
+| `REL-003` | Published archives include checksums and source/toolchain provenance | Release | `make dist`; distribution metadata inspection |
 | `REL-004` | Upgrade migration is tested | Release/storage | `make test-int`; `make test-e2e` |
-| `REL-005` | All product acceptance criteria pass | Product acceptance | `make test`; product-acceptance matrix validation |
+| `REL-005` | All product acceptance criteria pass | Product acceptance | `make test`, `make dist`; product-acceptance matrix validation |
 | `REL-006` | `v0.1.0` is the first public release, while public and storage contracts remain v1 | Release packaging; release readiness | `make test-prepare`; package inspection |
-| `REL-008` | Release readiness is decided solely by the repository-local `make test` gate | ADR-0011 | `make test` |
+| `REL-008` | Release readiness is decided solely by the repository-local `make dist` gate | ADR-0011 | `make dist` |
 
 The omitted seventh release requirement is retired by [ADR-0011](../../architecture-decision-records/0011-local-make-test-release-gate.md), which explains the intentional ID gap.
 

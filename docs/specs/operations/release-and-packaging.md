@@ -76,9 +76,10 @@ consumer can inspect and pin the same contract identity as the binaries.
 
 ### Local archive construction
 
-From a clean native Apple Silicon working tree, `make dist` reuses an exact
-source-and-toolchain-bound local `make test` receipt or runs the complete gate when
-the receipt is absent or stale. It then builds both release binaries and writes the
+From a clean native Apple Silicon working tree, `make dist` always runs the
+native-host and clean-worktree preflight before the development gate, release helper
+sentinels, and bounded fuzzing. Packaging repeats the preflight after the gate. It
+then builds both release binaries and writes the
 deterministic archive, its SHA-256 file, a provenance JSON document, and a Dolgorae
 compatibility handoff under `dist/`. The archive
 builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
@@ -91,12 +92,9 @@ timeout, or ambiguity rejects both artifact classes.
 
 The provenance document records the shared binary build identity, source commit,
 Rust toolchain identifier, Cargo.lock digest, contract manifest identity, target
-architecture, both binary digests, archive digest, successful local-gate result,
-artifact class, and signing/notarization status. `make test` exercises the same
-archive builder with debug binaries in disposable directories, requires and rechecks
-their debug-only isolation capability before service mutation, and verifies that repeated
-construction produces the same archive digest; it does not publish a distribution
-artifact. Release packaging rejects that capability. After packaging, `make dist`
+architecture, both binary digests, archive digest, successful development and
+fuzzing gate result, artifact class, and signing/notarization status. Release
+packaging rejects debug-only isolation capability. After packaging, `make dist`
 extracts the release-profile archive and qualifies its binaries through the isolated
 foreground dev daemon mode. The test-only
 `--allow-dirty` switch is invalid for `artifact_class=distribution`; distribution
@@ -152,7 +150,7 @@ metadata SHOULD record:
 - target architecture;
 - binary checksums;
 - signing/notarization result;
-- the successful `make test` result for the source revision.
+- the successful `make test` and bounded fuzzing result for the source revision.
 
 ## Upgrade
 
@@ -187,21 +185,20 @@ Users may delete `.podway/runtime/` or the whole worktree when task state is no 
 
 ## Release readiness
 
-The repository-root `make test` command is the sole required release-readiness
-gate. It runs static preparation, unit tests, integration scenarios, bounded
-protocol fuzzing, and real-binary end-to-end scenarios sequentially. The
-preparation target includes
-dependency/license review, architecture guardrails, product-acceptance mapping,
-crash-boundary mapping, and contract validation.
+The repository-root `make test` command is the required development gate. It runs
+static preparation, four-worker unit/architecture/integration tests by default,
+and serial real-binary end-to-end scenarios. The preparation target includes
+product-code lint, dependency/license review, architecture guardrails,
+product-acceptance mapping, crash-boundary mapping, and contract validation.
 
-A revision is release-ready when `make test` exits successfully. Because the gate
-validates canonical assets and applies formatting, the tag or archive MUST use the
-resulting tree. A later source change requires a new complete run.
+A revision is release-ready only when `make dist` exits successfully after adding
+all-target lint, release sentinels, bounded fuzzing, release builds, archive
+qualification, and the handoff. The gate validates formatting without rewriting
+the tree.
 
 No hosted CI run, independent signature, approval quorum, holdout run,
-qualification archive, or attestation bundle is required. Archive construction,
-checksum publication, signing, notarization, and release notes are distribution
-operations performed after the source revision is release-ready.
+qualification archive, or attestation bundle is required. Signing, notarization,
+and publication remain distribution operations after `make dist` succeeds.
 
 ## Support policy
 

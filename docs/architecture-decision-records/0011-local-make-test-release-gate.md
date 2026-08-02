@@ -1,4 +1,4 @@
-# ADR-0011: Use the local Makefile test suite as the release gate
+# ADR-0011: Separate the local development and distribution gates
 
 - Status: Accepted
 - Date: 2026-07-22
@@ -13,27 +13,25 @@ depend on infrastructure and identities the project does not operate.
 
 ## Decision
 
-The repository-root `make test` command is the sole required release-readiness
-gate. It runs `test-prepare`, one combined `test-rust` invocation, `test-fuzzing`,
-`test-e2e`, and preset-tool verification sequentially. The fuzzing target uses a
-pinned nightly toolchain only for bounded protocol-input fuzzing. The end-to-end
-target builds and executes the real `podway` and `podwayd` binaries with the
-product's pinned stable toolchain; preset verification reuses the resulting CLI.
+The repository-root `make test` command is the required development gate. It runs
+strict preparation, unit/architecture/integration tests with four workers by
+default, real-binary E2E serially, and preset-tool verification. The repository-root
+`make dist` command is the release gate: it always runs `make test`, all-target
+Clippy, release helper sentinels, bounded protocol fuzzing, release builds, one
+distribution package, qualification, and the Dolgorae handoff.
 
 This decision does not let a passing older gate waive accepted requirements that
 have not yet been implemented or registered as executable evidence. A release
 candidate exists only after its release-blocking roadmap work has entered the
-tested tree; `make test` then remains the single executable gate for that tree.
+tested tree; `make dist` remains the single executable release gate for that tree.
 
-Canonical-asset validation and formatting remain preparation operations in
-`test-prepare`. A release tag or archive uses the resulting validated and formatted
-tree. Any later source change requires another complete `make test` run.
+Canonical-asset validation and formatting checks remain preparation operations in
+`test-prepare`. Distribution does not reuse a cached gate result; every invocation
+runs the complete gate against the tree it packages.
 
-After the complete gate passes, it may write a local cache receipt bound to the
-exact Git commit, source-file fingerprint, Cargo.lock, and selected Rust toolchain
-binaries. Distribution may reuse that result only while every binding still
-matches. A missing, malformed, or stale receipt causes the complete gate to run;
-the receipt is not an independent release decision or attestation.
+Make-driven Cargo gates disable incremental compilation so repeated full-workspace
+verification does not accumulate unbounded codegen objects. Direct Cargo commands
+retain their normal incremental behavior.
 
 There is no additional signature, approval, holdout, qualification, attestation,
 or hosted-CI requirement. Signing, notarization, archive assembly, checksums, and
@@ -42,7 +40,7 @@ release-readiness gate.
 
 ## Consequences
 
-- Contributors have one reproducible command for the complete gate.
+- Contributors have one reproducible development gate and one release command.
 - Unit, integration, bounded fuzzing, and actual-binary scenarios retain distinct
   test layers. Integration sources are registered in one Cargo suite per crate,
   and the CLI's actual-binary sources share one E2E suite.
@@ -50,6 +48,5 @@ release-readiness gate.
   of `test-prepare`.
 - The former `REL-007` detached-approval and quorum requirement is retired. Its
   identifier remains historical and must not be reused.
-- Release status is attached to the exact tested tree, not to a detached evidence
-  bundle.
+- Release status is established by the successful `make dist` invocation.
 - The service exposes only the production daemon installation topology.

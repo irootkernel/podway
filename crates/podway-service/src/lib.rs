@@ -2563,6 +2563,22 @@ fn signal_launchctl_group_v1(process_id: u32, signal: Signal) -> Result<bool, Se
     }
 }
 
+fn signal_reaped_launchctl_group_v1(
+    process_id: u32,
+    signal: Signal,
+) -> Result<bool, ServiceErrorV1> {
+    let process_group = launchctl_process_group_v1(process_id)?;
+    match kill(process_group, signal) {
+        Ok(()) => Ok(true),
+        // Darwin returns EPERM when the reaped child's numeric group ID now names
+        // a group containing a process we do not own. That group is no longer ours.
+        Err(nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM) => Ok(false),
+        Err(error) => Err(launchctl_io_error_v1(format!(
+            "could not signal launchctl process group with {signal:?}: {error}"
+        ))),
+    }
+}
+
 fn wait_for_launchctl_group_absence_v1(
     process_id: u32,
     grace: Duration,
@@ -2571,7 +2587,7 @@ fn wait_for_launchctl_group_absence_v1(
     let deadline = Instant::now() + grace;
     loop {
         match kill(process_group, None) {
-            Err(nix::errno::Errno::ESRCH) => return Ok(()),
+            Err(nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM) => return Ok(()),
             Ok(()) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -2600,12 +2616,21 @@ fn terminate_launchctl_group_v1(
         cleanup_errors.push(error.to_string());
     }
 
-    match wait_for_launchctl_child_v1(child, Instant::now() + grace) {
-        Ok(Some(_)) | Ok(None) => {}
-        Err(error) => cleanup_errors.push(error.to_string()),
-    }
+    let child_reaped = match wait_for_launchctl_child_v1(child, Instant::now() + grace) {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(error) => {
+            cleanup_errors.push(error.to_string());
+            false
+        }
+    };
 
-    if let Err(error) = signal_launchctl_group_v1(process_id, Signal::SIGKILL) {
+    let kill_result = if child_reaped {
+        signal_reaped_launchctl_group_v1(process_id, Signal::SIGKILL)
+    } else {
+        signal_launchctl_group_v1(process_id, Signal::SIGKILL)
+    };
+    if let Err(error) = kill_result {
         cleanup_errors.push(error.to_string());
     }
 
@@ -2764,7 +2789,7 @@ fn terminate_exited_launchctl_group_and_drain_v1(
     stderr: &mut UnixStream,
     grace: Duration,
 ) -> Result<(), ServiceErrorV1> {
-    let termination = signal_launchctl_group_v1(child.id(), Signal::SIGKILL)
+    let termination = signal_reaped_launchctl_group_v1(child.id(), Signal::SIGKILL)
         .and_then(|_| wait_for_launchctl_group_absence_v1(child.id(), grace));
     let drain = final_drain_launchctl_streams_v1(stdout, stderr, grace);
     match (termination, drain) {
@@ -3011,7 +3036,7 @@ impl LaunchctlRunnerV1 for SystemLaunchctlRunnerV1 {
             }
         }
 
-        let surviving_group = signal_launchctl_group_v1(child.id(), Signal::SIGKILL)?;
+        let surviving_group = signal_reaped_launchctl_group_v1(child.id(), Signal::SIGKILL)?;
         wait_for_launchctl_group_absence_v1(child.id(), self.post_kill_drain)?;
         if surviving_group {
             return Err(launchctl_io_error_v1(

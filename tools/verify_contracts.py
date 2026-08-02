@@ -24,8 +24,10 @@ ROUTES_VERSION = "podway.command-routes/v1"
 MAKEFILE_PATH = Path("Makefile")
 REQUIRED_MAKE_TARGETS = (
     "test",
-    "test-if-needed",
     "test-prepare",
+    "release-prepare",
+    "dist-preflight",
+    "lint-all",
     "test-rust",
     "test-unit",
     "test-int",
@@ -38,28 +40,38 @@ REQUIRED_MAKE_TARGETS = (
     "contract-manifest",
 )
 REQUIRED_TEST_SEQUENCE = (
-    "$(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py "
-    "invalidate --receipt $(TEST_GATE_RECEIPT)",
     "$(MAKE) test-prepare",
     "$(MAKE) test-rust",
-    "$(MAKE) test-fuzzing",
     "$(MAKE) test-e2e",
     "$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1",
-    "$(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py "
-    "record --receipt $(TEST_GATE_RECEIPT)",
 )
 REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_docs.py",
-    "cargo fmt --all",
-    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "cargo fmt --all -- --check",
+    "cargo clippy --workspace --lib --bins --locked -- -D warnings",
     "cargo deny check",
     "python3 tools/verify_test_layout.py --check",
     "python3 tools/verify_quality_contracts.py",
-    "python3 tools/verify_contracts.py --all",
+    "python3 tools/verify_contracts.py --check",
     "python3 tools/verify_preset_tooling.py --podway",
     "python3 tools/contract_manifest.py --check",
-    "python3 tools/test_gate_receipt.py check",
-    "python3 tools/test_gate_receipt.py self-test",
+    "CARGO_INCREMENTAL=0",
+    "TEST_THREADS ?= 4",
+    "--test-threads=$(TEST_THREADS)",
+)
+REQUIRED_RELEASE_PREPARE_COMMANDS = (
+    "$(MAKE) lint-all",
+    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+)
+REQUIRED_RELEASE_COMMANDS = (
+    "$(MAKE) dist-preflight",
+    "$(MAKE) test",
+    "$(MAKE) release-prepare",
+    "$(MAKE) test-fuzzing",
+    "cargo build --release --locked",
+    "tools/release_archive.py package",
+    "tools/qualify_distribution.py qualify",
+    "tools/create_dolgorae_handoff.py create",
 )
 CRATE_ORDER = (
     "podway-core",
@@ -395,12 +407,26 @@ def validate_makefile_contract(root: Path) -> int:
     commands = tuple(line.strip() for line in test_recipe.group(1).splitlines())
     if commands != REQUIRED_TEST_SEQUENCE:
         fail(
-            "Makefile test target does not run the complete receipt-bound gate sequentially",
+            "Makefile test target does not run the complete development gate sequentially",
             "makefile_contract_drift",
         )
     missing_commands = [command for command in REQUIRED_PREPARE_COMMANDS if command not in text]
     if missing_commands:
         fail(f"Makefile omits required prepare commands: {missing_commands}", "makefile_contract_drift")
+    release_prepare_recipe = re.search(
+        r"^release-prepare\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE
+    )
+    if release_prepare_recipe is None:
+        fail("Makefile release-prepare target has no recipe", "makefile_contract_drift")
+    release_prepare_text = release_prepare_recipe.group(1)
+    if not release_prepare_text.lstrip().startswith(REQUIRED_RELEASE_PREPARE_COMMANDS[0]):
+        fail(
+            "Makefile release-prepare must run lint-all first",
+            "makefile_contract_drift",
+        )
+    lint_all_recipe = re.search(r"^lint-all\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
+    if lint_all_recipe is None or REQUIRED_RELEASE_PREPARE_COMMANDS[1] not in lint_all_recipe.group(1):
+        fail("Makefile lint-all target omits all-target Clippy", "makefile_contract_drift")
     for target, command in (
         ("preset-create", "tools/manage_presets.py create"),
         ("preset-import", "tools/manage_presets.py import"),
@@ -410,15 +436,20 @@ def validate_makefile_contract(root: Path) -> int:
         if recipe is None or command not in recipe.group(1):
             fail(f"Makefile {target} target omits {command}", "makefile_contract_drift")
     dist_recipe = re.search(r"^dist\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
-    if dist_recipe is None or "$(MAKE) test-if-needed" not in dist_recipe.group(1):
+    if dist_recipe is None:
+        fail("Makefile dist target has no recipe", "makefile_contract_drift")
+    recipe_text = dist_recipe.group(1)
+    positions = [recipe_text.find(command) for command in REQUIRED_RELEASE_COMMANDS]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
         fail(
-            "Makefile dist target must require a current release-gate receipt first",
+            "Makefile dist target does not run the complete release gate in order",
             "makefile_contract_drift",
         )
-    for required in ("cargo build --release --locked", "tools/release_archive.py package"):
-        if required not in text:
-            fail(f"Makefile dist target omits {required}", "makefile_contract_drift")
-    return len(REQUIRED_MAKE_TARGETS) + len(REQUIRED_PREPARE_COMMANDS)
+    return (
+        len(REQUIRED_MAKE_TARGETS)
+        + len(REQUIRED_PREPARE_COMMANDS)
+        + len(REQUIRED_RELEASE_PREPARE_COMMANDS)
+    )
 
 
 

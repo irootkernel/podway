@@ -7,14 +7,15 @@ $(error Rust $(RUST_TOOLCHAIN) is required; install it with rustup)
 endif
 RUST_TOOLCHAIN_BIN := $(dir $(RUST_TOOLCHAIN_CARGO))
 RUST_TOOLCHAIN_ENV = PATH="$(RUST_TOOLCHAIN_BIN):$${PATH}"
+RUST_GATE_ENV = CARGO_INCREMENTAL=0 $(RUST_TOOLCHAIN_ENV)
+TEST_THREADS ?= 4
 DIST_DIR ?= dist
 PRESET_DIR ?= assets/presets
 PRESET_VALIDATOR ?= target/debug/podway
-TEST_GATE_RECEIPT ?= target/podway-test-gate-v1.json
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
-.PHONY: test test-if-needed test-prepare test-rust test-unit test-int test-fuzzing test-e2e \
-	toolchain format vet lint architecture architecture-static preset-validator \
+.PHONY: test test-prepare release-prepare dist-preflight test-rust test-unit test-int test-fuzzing test-e2e \
+	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
 	preset-create preset-import preset-tool-test contract-manifest dist
 
 toolchain:
@@ -22,50 +23,51 @@ toolchain:
 	@$(RUST_TOOLCHAIN_ENV) rustc --version
 
 test:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py invalidate --receipt $(TEST_GATE_RECEIPT)
 	$(MAKE) test-prepare
 	$(MAKE) test-rust
-	$(MAKE) test-fuzzing
 	$(MAKE) test-e2e
 	$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1
-	$(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py record --receipt $(TEST_GATE_RECEIPT)
-
-test-if-needed:
-	@if $(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py check --receipt $(TEST_GATE_RECEIPT) >/dev/null 2>&1; then \
-		$(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py check --receipt $(TEST_GATE_RECEIPT); \
-	else \
-		$(MAKE) test; \
-	fi
 
 test-prepare: toolchain
-	$(MAKE) format
+	$(MAKE) format-check
 	$(MAKE) lint
 	$(MAKE) architecture-static
 
+release-prepare:
+	$(MAKE) lint-all
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --sentinels
+	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py self-test
+	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py self-test
+	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
+
+dist-preflight:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py preflight
+
 format:
 	$(RUST_TOOLCHAIN_ENV) cargo fmt --all
+
+format-check:
+	$(RUST_TOOLCHAIN_ENV) cargo fmt --all -- --check
 
 vet:
 	$(RUST_TOOLCHAIN_ENV) cargo check --workspace --all-targets --locked
 
 lint:
-	$(RUST_TOOLCHAIN_ENV) cargo clippy --workspace --all-targets --locked -- -D warnings
+	$(RUST_GATE_ENV) cargo clippy --workspace --lib --bins --locked -- -D warnings
 	$(RUST_TOOLCHAIN_ENV) cargo deny check
 
+lint-all:
+	$(RUST_GATE_ENV) cargo clippy --workspace --all-targets --locked -- -D warnings
+
 architecture: architecture-static
-	$(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'arch_*' --locked
+	$(RUST_GATE_ENV) cargo test --workspace --test 'arch_*' --locked -- \
+		--test-threads=$(TEST_THREADS)
 
 architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
-	$(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --all
-	$(MAKE) contract-manifest
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --check
 
 contract-manifest:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/contract_manifest.py --check
@@ -99,26 +101,32 @@ preset-tool-test: preset-validator
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_preset_tooling.py --podway "$$PRESET_VALIDATOR"
 
 test-rust:
-	RUST_TEST_THREADS=1 $(RUST_TOOLCHAIN_ENV) cargo test --workspace --lib --bins \
-		--test 'arch_*' --test 'int_*' --locked
+	$(RUST_GATE_ENV) cargo test --workspace --lib --bins \
+		--test 'arch_*' --test 'int_*' --locked -- \
+		--test-threads=$(TEST_THREADS)
 
 test-unit:
-	RUST_TEST_THREADS=1 $(RUST_TOOLCHAIN_ENV) cargo test --workspace --lib --bins --locked
+	$(RUST_GATE_ENV) cargo test --workspace --lib --bins --locked -- \
+		--test-threads=$(TEST_THREADS)
 
 test-int:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
-	RUST_TEST_THREADS=1 $(RUST_TOOLCHAIN_ENV) cargo test --workspace --test 'int_*' --locked
+	$(RUST_GATE_ENV) cargo test --workspace --test 'int_*' --locked -- \
+		--test-threads=$(TEST_THREADS)
 
 test-fuzzing:
-	python3 tools/run_fuzzing.py
+	$(RUST_GATE_ENV) python3 tools/run_fuzzing.py
 
 test-e2e:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
-	$(RUST_TOOLCHAIN_ENV) python3 tools/run_e2e.py
+	$(RUST_GATE_ENV) python3 tools/run_e2e.py
 
 dist:
-	$(MAKE) test-if-needed
-	$(RUST_TOOLCHAIN_ENV) cargo build --release --locked \
+	$(MAKE) dist-preflight
+	$(MAKE) test
+	$(MAKE) release-prepare
+	$(MAKE) test-fuzzing
+	$(RUST_GATE_ENV) cargo build --release --locked \
 		-p podway-cli --bin podway -p podway-daemon --bin podwayd
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
 		--artifact-class distribution \

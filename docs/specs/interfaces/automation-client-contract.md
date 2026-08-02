@@ -8,8 +8,8 @@ is complete; final release readiness remains tracked by the incomplete `REL10`
 epic in the [roadmap](../../roadmap/).
 
 The requirement IDs in this document are stable. A requirement becomes satisfied
-only when its roadmap task is completed and its planned executable evidence is in
-the repository-local `make test` gate.
+only when its roadmap task is completed and its planned executable check is in
+`make test` or the distribution qualification in `make dist`.
 
 ## 2. Scope
 
@@ -206,7 +206,7 @@ the same session.
 | `AUT-REL-001` | Podway MUST publish and support only native thin-arm64 `aarch64-apple-darwin` artifacts built and verified on an untranslated arm64 macOS host. |
 | `AUT-REL-002` | The archive MUST contain both binaries, completions, presets, schemas, specs, canonicalization fixtures, the contract manifest, README, and license, with checksum and provenance. |
 | `AUT-REL-003` | The packaged manifest digest, CLI identity, daemon identity, source revision, target, and toolchain identity MUST agree. |
-| `AUT-REL-004` | v0.1.0 MUST NOT be tagged until every preceding roadmap task is completed and the final packaged Dolgorae conformance run and repository-local `make test` pass. |
+| `AUT-REL-004` | v0.1.0 MUST NOT be tagged until every preceding roadmap task is completed and the repository-local `make dist` gate passes. |
 
 ## 24. Acceptance matrix
 
@@ -235,11 +235,10 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |
 | `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
 | `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
-| `AUT-T-DIST` | native debug test-fixture archive on controlled PATH passes the complete Dolgorae consumer conformance suite with fail-closed isolation; `make dist` then extracts the actual release-profile archive and repeats packaged lifecycle, conflict, timeout, response-loss, reconciliation, identity, termination, and socket-cleanup checks through its isolated foreground dev mode | `DOLGI005`, `REL10001`–`REL10004` |
+| `AUT-T-DIST` | `make dist` packages the native release-profile archive once, verifies its identity and layout, then runs packaged lifecycle, conflict, timeout, response-loss, reconciliation, identity, termination, and socket-cleanup checks through isolated foreground dev mode | `DOLGI005`, `REL10001`–`REL10004` |
 
-The test-fixture slice supersedes DOLGI's earlier release-profile wording. It is
-local executable evidence for the packaged client contract, not evidence that the
-release-profile archive has passed its `REL10003` qualification.
+The distribution qualification is the executable proof for the packaged client
+contract and runs against the same archive selected for handoff.
 
 ## 25. Requirements-to-roadmap traceability
 
@@ -254,7 +253,7 @@ release-profile archive has passed its `REL10003` qualification.
 | `AUT-ADMIT-001`–`003`, `AUT-RECON-001`–`004` | `RECON001`–`RECON005` | `AUT-T-RECON` |
 | `AUT-OBS-001`–`004` | `MCONT004`, `MCONT006`, `DOLGI002` | `AUT-T-OBS` |
 | `AUT-JSON-001`–`004`, `AUT-ERR-001`–`002` | `CASID004`, `MCONT001`–`MCONT006` | `AUT-T-JSON` |
-| `AUT-REL-001`–`004` | `DOLGI005`, `REL10001`–`REL10005` | `AUT-T-DIST`, repository-local `make test` |
+| `AUT-REL-001`–`004` | `DOLGI005`, `REL10001`–`REL10005` | `AUT-T-DIST`, repository-local `make dist` |
 
 ## 26. Example Dolgorae command sequences
 
