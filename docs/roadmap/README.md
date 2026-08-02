@@ -23,7 +23,7 @@ including the [v0.1.1 release roadmap](archive/v0.1.1.md).
 | `REL12003` | Repair the version identity contract | Completed | Make both binaries emit one identical schema-conformant identity and reject malformed runtime probes. | [Version identity result](../todo/TODO-podway-v0.1.2-contract-recovery.md#version-identity-result) |
 | `REL12004` | Enforce authoritative packaged-schema validation | Completed | Validate complete identity envelopes using only the exact manifest-bound packaged contract set. | [Authoritative packaged schema registry](../todo/TODO-podway-v0.1.2-contract-recovery.md#authoritative-packaged-schema-registry) |
 | `REL12005` | Harden qualification and release evidence | Completed | Add early singleton diagnostics and close provenance, handoff, digest, and conformance validation. | [Qualification and release evidence](../todo/TODO-podway-v0.1.2-contract-recovery.md#qualification-and-release-evidence) |
-| `REL12006` | Build and qualify the native v0.1.2 distribution | Planned | Advance the version and pass every clean native arm64 and extracted-distribution release gate. | [Local gate](../todo/TODO-podway-v0.1.2-contract-recovery.md#local-gate) |
+| `REL12006` | Build and qualify the native v0.1.2 distribution | Completed | Advance the version and pass every clean native arm64 and extracted-distribution release gate. | [Local gate](../todo/TODO-podway-v0.1.2-contract-recovery.md#local-gate) |
 | `REL12007` | Publish and independently reverify v0.1.2 | Planned | Publish the annotated immutable release and reverify all downloaded bytes and closed identities. | [Publication order](../todo/TODO-podway-v0.1.2-contract-recovery.md#publication-order) |
 
 Tasks are completed in table order. At most the first incomplete task may be `In

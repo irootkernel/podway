@@ -31,9 +31,9 @@ canonical digests, and compact envelope boundary together. See the
 
 ## Released v1 compatibility boundary
 
-The v0.1.0 and v0.1.1 releases publish byte-identical copies of the public v1
+The v0.1.0, v0.1.1, and v0.1.2 releases publish byte-identical copies of the public v1
 Procedure, output, error, status-result, next-result, and version-result schemas.
-The v0.1.0 files were published below `schemas/`; the canonical v0.1.1 source
+The v0.1.0 files were published below `schemas/`; the canonical v0.1.1 and v0.1.2 source
 location moved to `assets/schemas/` without changing their bytes.
 
 | Schema | SHA-256 |

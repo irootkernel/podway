@@ -105,7 +105,7 @@ metadata rather than artifact bytes, and exposes no Git mutation API.
 
 ## Supported boundary
 
-The complete `v0.1.1` public release is a macOS product with:
+The complete `v0.1.2` public release is a macOS product with:
 
 - both binaries;
 - LaunchAgent installation and lifecycle management;

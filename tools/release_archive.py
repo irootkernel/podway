@@ -27,7 +27,7 @@ import release_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCT_VERSION = "0.1.1"
+PRODUCT_VERSION = "0.1.2"
 TARGET = "aarch64-apple-darwin"
 ARCHIVE_ROOT = f"podway-{PRODUCT_VERSION}-{TARGET}"
 MACHO_64_LITTLE_ENDIAN = b"\xcf\xfa\xed\xfe"
