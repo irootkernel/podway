@@ -2,7 +2,7 @@
 
 ## Release scope
 
-The complete `v0.1.0` public release is a macOS product. It includes:
+The complete `v0.1.1` public release is a macOS product. It includes:
 
 - `podway`;
 - `podwayd`;
@@ -23,7 +23,7 @@ Podway uses semantic versioning for product releases.
 Independent versioned contracts:
 
 ```text
-product binary version: 0.1.0
+product binary version: 0.1.1
 IPC: podway.ipc/v1
 output: podway.output/v1
 error: podway.error/v1
@@ -109,7 +109,7 @@ and absence of every temporary daemon socket. This verifies Podway's executable 
 IPC interfaces; it does not retest macOS launchd itself.
 
 After packaged conformance passes, the deterministic
-`podway-0.1.0-aarch64-apple-darwin.dolgorae-handoff.json` document publishes the
+`podway-0.1.1-aarch64-apple-darwin.dolgorae-handoff.json` document publishes the
 archive and binary digests, build and contract identities, provenance digest,
 source commit and Git tree, Rust toolchain, and Cargo.lock digest. Dolgorae pins
 this closed identity set rather than inferring compatibility from a version string.

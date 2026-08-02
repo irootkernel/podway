@@ -1,60 +1,53 @@
-# Podway 0.1.0 release notes
+# Podway 0.1.1 release notes
 
-Podway 0.1.0 was published on August 2, 2026 as the first public Podway release.
-The release and its artifacts are available from the
-[GitHub release page](https://github.com/irootkernel/podway/releases/tag/v0.1.0).
+Podway 0.1.1 was published on August 3, 2026 as a maintenance release. The
+release and its artifacts are available from the
+[GitHub release page](https://github.com/irootkernel/podway/releases/tag/v0.1.1).
 
-## Release identity and compatibility
+## Changes since 0.1.0
 
-Podway 0.1.0 publishes the public v1 IPC, output, error, workspace, procedure, and SQLite contracts together with the automation-client contract assets. Existing
+- Normalize the daemon version command grammar and align packaged daemon identity
+  probes with the public interface.
+- Simplify the local development and distribution gates by removing cached test
+  receipts and duplicate release-only test execution.
+- Stabilize inactive-workspace SQLite reconciliation tests by comparing logical
+  state instead of transient WAL and SHM file layouts.
+- Handle the macOS process-group reuse race after a launchctl child exits.
+- Capture recursive crash-test output so nested libtest headers do not pollute the
+  parent test run.
+
+## Compatibility
+
+Podway 0.1.1 preserves the public v1 IPC, output, error, workspace, procedure, and SQLite contracts together with the automation-client contract assets. Existing
 uninitialized state or schema-0 state is upgraded transactionally to schema-v1;
 an incomplete upgrade is not accepted as an installed schema-v1 state.
 
-The supported release target is native Apple Silicon macOS:
+The supported release target remains native Apple Silicon macOS:
 `aarch64-apple-darwin` with thin `arm64` Mach-O binaries. The archive contains the
-matching `podway` and `podwayd` executables. Cross-built, translated, relabeled,
-universal, and fat binaries do not satisfy release acceptance.
+matching `podway` and `podwayd` executables.
 
-`podway version --json` returns the compact product identity. Complete release and
-contract identity is available through `podway version --json --identity`.
-
-## Trust boundary
-
-Podway is a same-user local tool. Its local IPC and workspace state are trusted
-only within the operating-system user account that owns them.
-It does not provide a multi-user access-control boundary.
-
-## Signing and notarization
-
-The v0.1.0 Apple Silicon package is unsigned and not notarized. The release makes
-no Gatekeeper acceptance claim. Users should verify the attached SHA-256 checksum
-before installing the binaries.
+Podway is a same-user local tool. Its IPC and workspace state are trusted only
+within the operating-system user account that owns them. It does not provide a multi-user access-control boundary.
 
 ## Distribution metadata
 
 The release provides:
 
-- `podway-0.1.0-aarch64-apple-darwin.tar.gz`;
+- `podway-0.1.1-aarch64-apple-darwin.tar.gz`;
 - its `.sha256` checksum file;
-- `podway-0.1.0-aarch64-apple-darwin.provenance.json`;
-- `podway-0.1.0-aarch64-apple-darwin.dolgorae-handoff.json`.
+- `podway-0.1.1-aarch64-apple-darwin.provenance.json`;
+- `podway-0.1.1-aarch64-apple-darwin.dolgorae-handoff.json`.
 
 The provenance records the source commit, Rust 1.97.1 identity, `Cargo.lock`
 digest, target, binary digests, release-gate result, contract-manifest digest, and
-signing/notarization status. The deterministic Dolgorae handoff binds the binary,
-contract, provenance, source-tree, and toolchain identities required for consumer
-pinning.
+signing/notarization status. Packaged conformance exercises the release binaries
+through the isolated foreground dev daemon mode.
 
-The archive was built after the complete local `make test` gate passed. Packaged
-conformance exercised the release binaries through the isolated foreground dev
-daemon mode without administrator authorization or a temporary operating-system
-account.
+## Signing and known limitations
 
-## Known limitations
+The v0.1.1 Apple Silicon package is unsigned and not notarized. Users should
+verify the attached SHA-256 checksum before installation.
 
 - Only native Apple Silicon macOS is supported.
-- The binaries are unsigned and not notarized.
 - The service is a per-user LaunchAgent. It starts after GUI login and does not
   run before login.
-- The daemon version interface in this tag predates the normalized version-first
-  grammar introduced after v0.1.0.
