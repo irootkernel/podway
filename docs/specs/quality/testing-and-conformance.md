@@ -250,6 +250,12 @@ Daemon ingress separately proves that a diagnostic version change with matching
 product and manifest is accepted, while a different release version with the same
 IPC ID and a different manifest is rejected before dispatch.
 
+The binary identity proof parses complete typed envelopes from both real
+binaries, requires their closed version results to be exactly equal, and rejects
+the captured v0.1.1 daemon output that omitted `result.schema`. Runtime-probe
+controls also reject bare results, wrong discriminators or commands, unknown
+result fields, and missing required identity fields.
+
 ### CONID final review
 
 The final identity review binds each requirement to an executable proof:

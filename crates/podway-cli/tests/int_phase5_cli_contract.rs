@@ -27,6 +27,10 @@ use serde_json::Value;
 fn run(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_podway"))
         .args(arguments)
+        .env(
+            "PODWAY_TEST_ACCOUNT_ROOT",
+            format!("/tmp/podway-cli-phase5-{}", std::process::id()),
+        )
         .env_remove("HOME")
         .env_remove("TMPDIR")
         .env_remove("XDG_CONFIG_HOME")

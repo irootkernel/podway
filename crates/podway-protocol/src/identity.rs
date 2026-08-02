@@ -5,6 +5,7 @@ include!(concat!(env!("OUT_DIR"), "/contract_identity.rs"));
 /// Static build and contract identity embedded in a Podway executable.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BuildIdentityV1 {
+    schema: &'static str,
     product: &'static str,
     version: &'static str,
     target: &'static str,
@@ -16,6 +17,10 @@ pub struct BuildIdentityV1 {
 }
 
 impl BuildIdentityV1 {
+    pub const fn schema(&self) -> &'static str {
+        self.schema
+    }
+
     pub const fn product(&self) -> &'static str {
         self.product
     }
@@ -51,6 +56,7 @@ impl BuildIdentityV1 {
 
 pub const fn build_identity_v1() -> BuildIdentityV1 {
     BuildIdentityV1 {
+        schema: "podway.version-result/v1",
         product: PRODUCT_V1,
         version: PRODUCT_VERSION_V1,
         target: BUILD_TARGET_V1,
@@ -69,6 +75,7 @@ mod tests {
     #[test]
     fn contract_identity_is_complete_and_canonical() {
         let identity = build_identity_v1();
+        assert_eq!(identity.schema(), "podway.version-result/v1");
         assert_eq!(identity.product(), "podway");
         assert_eq!(identity.version(), env!("CARGO_PKG_VERSION"));
         assert!(!identity.target().is_empty());

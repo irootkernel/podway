@@ -64,6 +64,8 @@ podway daemon ...
 `podway version --json` emits only the compact `name` and `version` summary. The
 target machine identity form is `podway version --json --identity`; it retains the
 versioned output envelope and requires no worktree, daemon, `HOME`, or `TMPDIR`.
+Its closed result includes `schema: podway.version-result/v1` and is identical
+after JSON parsing to the daemon binary's identity result.
 
 The daemon binary follows the same version grammar:
 
@@ -75,7 +77,9 @@ podwayd version --json --identity
 
 Its compact form is `{"name":"podwayd","version":"v0.1.0"}`. The identity
 form retains the versioned output envelope and is the interface used by service
-installation and release qualification to verify the embedded contract.
+installation and release qualification to verify the embedded contract. Those
+runtime probes validate the complete typed envelope and reject bare or malformed
+identity results before using any reported field.
 
 ## PATH invocation and runtime environment
 

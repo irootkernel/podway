@@ -106,9 +106,9 @@ When no explicit endpoint is supplied, an interactive client may read
 | ID | Normative requirement |
 |---|---|
 | `AUT-CONTRACT-001` | `podway.contract-manifest/v1` MUST deterministically cover product version, supported IPC IDs, Procedure and IPC schemas, all integration result and error schemas, catalogs, transition matrix, canonicalization rules, and known-answer fixtures. |
-| `AUT-CONTRACT-002` | `podway version --json` MUST emit exactly the compact `name` and `v`-prefixed `version`; `podway version --json --identity` MUST expose product, version, target, build identity, source commit when available, manifest schema and digest, and supported IPC IDs. |
-| `AUT-CONTRACT-003` | `podway` and `podwayd` from one release MUST embed the same manifest digest. |
-| `AUT-CONTRACT-004` | Installation and every daemon connection MUST reject a product or manifest mismatch before command execution or durable admission; IPC compatibility alone MUST NOT authorize the connection. |
+| `AUT-CONTRACT-002` | `podway version --json` MUST emit exactly the compact `name` and `v`-prefixed `version`; `podway version --json --identity` MUST emit a validated `podway.output/v1` envelope with a closed `podway.version-result/v1` result exposing product, version, target, build identity, source commit when available, manifest schema and digest, and supported IPC IDs. |
+| `AUT-CONTRACT-003` | `podway` and `podwayd` from one release MUST emit exactly equal closed identity results and embed the same manifest digest. |
+| `AUT-CONTRACT-004` | Installation and every daemon connection MUST reject a malformed complete identity envelope or a product or manifest mismatch before command execution or durable admission; IPC compatibility alone MUST NOT authorize the connection. |
 | `AUT-CONTRACT-005` | `daemon status --json` MUST expose daemon version, executable path, process-instance identity, configured and effective socket, and manifest digest. |
 
 The client version field is diagnostic and MUST NOT independently authorize or
@@ -116,7 +116,9 @@ reject a connection. Admission is determined by product and manifest identity.
 
 `podwayd version --json` emits the compact daemon name and `v`-prefixed version.
 `podwayd version --json --identity` emits the full versioned identity envelope used
-by installation and qualification probes.
+by installation and qualification probes. Runtime probes reject bare results and
+validate the outer discriminator, command, and closed result before extracting
+identity fields.
 
 Because the manifest covers product version, peers from different releases have
 different manifest digests even when they support the same IPC ID. Changing only

@@ -2,6 +2,7 @@
 
 use std::{fs, path::Path, process::Command};
 
+use podway_protocol::ResponseEnvelopeV1;
 use serde_json::Value;
 
 fn digest_is_canonical(value: &str) -> bool {
@@ -22,6 +23,45 @@ fn version_identity_is_static_complete_and_manifest_bound() {
     assert!(output.status.success(), "version probe failed: {output:?}");
     assert!(output.stderr.is_empty());
     assert_eq!(String::from_utf8_lossy(&output.stdout).lines().count(), 1);
+
+    let ResponseEnvelopeV1::Output(cli_envelope) = serde_json::from_slice(&output.stdout)
+        .expect("version output satisfies the typed public protocol")
+    else {
+        panic!("version identity must be a success envelope");
+    };
+    assert_eq!(cli_envelope.command().as_str(), "version");
+    assert_eq!(cli_envelope.result()["schema"], "podway.version-result/v1");
+
+    let daemon = Path::new(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd");
+    let daemon_output = Command::new(daemon)
+        .args(["version", "--json", "--identity"])
+        .current_dir(std::env::temp_dir())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("podwayd version probe must run");
+    assert!(
+        daemon_output.status.success(),
+        "daemon version probe failed: {daemon_output:?}"
+    );
+    assert!(daemon_output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&daemon_output.stdout)
+            .lines()
+            .count(),
+        1
+    );
+    let ResponseEnvelopeV1::Output(daemon_envelope) = serde_json::from_slice(&daemon_output.stdout)
+        .expect("daemon version output satisfies the typed public protocol")
+    else {
+        panic!("daemon version identity must be a success envelope");
+    };
+    assert_eq!(daemon_envelope.command().as_str(), "version");
+    assert_eq!(
+        cli_envelope.result(),
+        daemon_envelope.result(),
+        "both release binaries must report one identical closed identity"
+    );
 
     let envelope: Value = serde_json::from_slice(&output.stdout).expect("version output is JSON");
     let result = envelope["result"]

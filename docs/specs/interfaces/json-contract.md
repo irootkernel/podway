@@ -54,6 +54,22 @@ release. A consumer pinned to an earlier pre-release schema-only snapshot must
 replace `max_items: 0` with a supported value in `1..=1000`. Zero was never an
 accepted runtime value and is not restored by v0.1.2.
 
+## Version identity envelope
+
+`podway version --json --identity` and `podwayd version --json --identity`
+each emit exactly one newline-terminated `podway.output/v1` document whose
+command is `version`. The shared result is a closed
+`podway.version-result/v1` object, including its required `schema`
+discriminator and complete product, build, source, target, manifest, and IPC
+identity. The two result objects are exactly equal; only envelope correlation
+and generation metadata may differ.
+
+Runtime probes decode and validate the complete output envelope and its
+command-selected result. A bare result, error envelope, wrong outer or result
+discriminator, wrong command, missing result field, or unknown result field is
+rejected. The common output envelope remains open to additive envelope fields
+as defined by the public schema; the version result remains closed.
+
 ## Common success envelope
 
 ```json

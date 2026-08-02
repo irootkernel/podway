@@ -13,7 +13,9 @@ use podway_daemon::{
         SystemResponseMetadataSourceV1,
     },
 };
-use podway_protocol::{OUTPUT_SCHEMA_V1, RequestIdV1, build_identity_v1};
+use podway_protocol::{
+    CommandNameV1, OutputEnvelopeInputV1, OutputEnvelopeV1, RequestIdV1, build_identity_v1,
+};
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
 use signal_hook::{
@@ -68,17 +70,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     || (first == "--identity" && second == "--json")) =>
         {
             let generated_at = SystemResponseMetadataSourceV1::default().generated_at();
+            let result = serde_json::to_value(build_identity_v1())
+                .expect("the static build identity always serializes")
+                .as_object()
+                .cloned()
+                .expect("the static build identity is an object");
+            let output = OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+                request_id: RequestIdV1::new(Uuid::new_v4().to_string())?,
+                command: CommandNameV1::new("version")?,
+                generated_at,
+                workspace: None,
+                job: None,
+                session: None,
+                result,
+                warnings: Vec::new(),
+            })?;
             println!(
                 "{}",
-                serde_json::to_string(&serde_json::json!({
-                    "schema": OUTPUT_SCHEMA_V1,
-                    "request_id": Uuid::new_v4().to_string(),
-                    "command": "version",
-                    "generated_at": generated_at,
-                    "result": build_identity_v1(),
-                    "warnings": [],
-                }))
-                .expect("the static build identity always serializes")
+                serde_json::to_string(&output)
+                    .expect("the validated version envelope always serializes")
             );
             return Ok(());
         }

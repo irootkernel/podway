@@ -36,16 +36,16 @@ use podway_presets::{PresetError, catalog_v1};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1, JobOutputV1, JobStateV1,
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
-    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1, build_identity_v1, ensure_command_result_schema_v1,
-    ensure_error_details_schema_v1, validate_command_result_v1,
+    OutputEnvelopeInputV1, OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1,
+    StatusResultV1, WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
+    ensure_command_result_schema_v1, ensure_error_details_schema_v1, validate_command_result_v1,
 };
 use podway_service::{
-    InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1, MacosServiceCommandRunnerV1,
-    SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1, ServiceFilesystemV1,
-    ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1,
-    ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
+    DaemonContractVerifierV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
+    MacosServiceCommandRunnerV1, SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1,
+    ServiceFilesystemV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1,
+    ServiceManagerV1, ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
     StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
     installed_socket_path_from_metadata_v1,
 };
@@ -1823,11 +1823,12 @@ fn execute_service_lifecycle(
             .map_err(|error| socket_path_failure(error).with_command(command_name))?;
     }
     let clock = system_service_clock(SystemTime::now(), command_name)?;
-    let runner = MacosServiceCommandRunnerV1::new(
+    let runner = MacosServiceCommandRunnerV1::new_with_contract_verifier(
         StdServiceFilesystemV1,
         system_launchctl_runner(),
         clock,
         geteuid().as_raw(),
+        CliDaemonContractVerifierV1,
     )
     .map_err(|_| LocalFailure::daemon_unavailable(command_name))?;
     let manager = ServiceManagerV1::new(runner, clock, paths.clone());
@@ -2086,6 +2087,35 @@ struct DaemonStaticIdentityV1 {
     protocol_versions: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct CliDaemonContractVerifierV1;
+
+impl DaemonContractVerifierV1 for CliDaemonContractVerifierV1 {
+    fn verify(
+        &self,
+        binary: &Path,
+        expected_product: &str,
+        expected_manifest_digest: &str,
+    ) -> Result<(), ServiceErrorV1> {
+        let observed = probe_daemon_identity(binary).ok();
+        let actual_product = observed.as_ref().map(|identity| identity.product.clone());
+        let actual_manifest_digest = observed
+            .as_ref()
+            .map(|identity| identity.contract_manifest_digest.clone());
+        if actual_product.as_deref() == Some(expected_product)
+            && actual_manifest_digest.as_deref() == Some(expected_manifest_digest)
+        {
+            return Ok(());
+        }
+        Err(ServiceErrorV1::ContractMismatchV1 {
+            expected_product: expected_product.to_owned(),
+            actual_product,
+            expected_manifest_digest: expected_manifest_digest.to_owned(),
+            actual_manifest_digest,
+        })
+    }
+}
+
 fn probe_daemon_identity(binary: &Path) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
     let runner = SystemLaunchctlRunnerV1::new(binary).with_bounds(
         DAEMON_VERSION_PROBE_TIMEOUT,
@@ -2109,19 +2139,25 @@ fn probe_daemon_identity_with_runner(
             message: "daemon identity probe returned malformed output".to_owned(),
         });
     }
-    let value =
-        serde_json::from_str::<Value>(&output.stdout).map_err(|_| ServiceErrorV1::IoV1 {
+    let response = serde_json::from_str::<ResponseEnvelopeV1>(&output.stdout).map_err(|_| {
+        ServiceErrorV1::IoV1 {
             operation: None,
             message: "daemon identity probe returned malformed output".to_owned(),
-        })?;
-    let object = value
-        .get("result")
-        .unwrap_or(&value)
-        .as_object()
-        .ok_or_else(|| ServiceErrorV1::IoV1 {
+        }
+    })?;
+    let ResponseEnvelopeV1::Output(envelope) = response else {
+        return Err(ServiceErrorV1::IoV1 {
             operation: None,
             message: "daemon identity probe returned malformed output".to_owned(),
-        })?;
+        });
+    };
+    if envelope.command().as_str() != "version" {
+        return Err(ServiceErrorV1::IoV1 {
+            operation: None,
+            message: "daemon identity probe returned malformed output".to_owned(),
+        });
+    }
+    let object = envelope.result();
     let required_string = |field: &str| {
         object
             .get(field)
@@ -3686,7 +3722,21 @@ fn render_result_with_clock_and_writers(
                     Ok(timestamp) => timestamp,
                     Err(failure) => return render_clock_failure_to(failure, stderr),
                 };
-                let output = json!({ "schema": "podway.output/v1", "request_id": Uuid::new_v4().to_string(), "command": command, "generated_at": generated_at.as_str(), "result": result, "warnings": [] });
+                let request_id = RequestIdV1::new(Uuid::new_v4().to_string())
+                    .expect("UUID-v4 request identifiers satisfy the public protocol");
+                let command = CommandNameV1::new(command.clone())
+                    .expect("local command names satisfy the public protocol");
+                let output = OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+                    request_id,
+                    command,
+                    generated_at,
+                    workspace: None,
+                    job: None,
+                    session: None,
+                    result: result.clone(),
+                    warnings: Vec::new(),
+                })
+                .expect("local results satisfy the public output protocol");
                 if serde_json::to_writer(&mut *stdout, &output).is_err()
                     || writeln!(stdout).is_err()
                 {
@@ -4604,14 +4654,17 @@ mod tests {
             &runtime,
         )
         .expect("service status fixture paths");
+        let valid_envelope = json!({
+            "schema": "podway.output/v1",
+            "request_id": "123e4567-e89b-42d3-a456-426614174000",
+            "command": "version",
+            "generated_at": "2026-08-03T00:00:00.000Z",
+            "result": expected,
+            "warnings": [],
+        });
         let success = VersionProbeScript::new(&format!(
-            "printf '%s\\n' '{{\"product\":\"{}\",\"version\":\"{}\",\"target\":\"{}\",\"build_identity\":\"{}\",\"source_commit\":null,\"contract_manifest_schema\":\"{}\",\"contract_manifest_digest\":\"{}\",\"supported_ipc_ids\":[\"podway.ipc/v1\"]}}'",
-            expected.product(),
-            expected.version(),
-            expected.target(),
-            expected.build_identity(),
-            expected.contract_manifest_schema(),
-            expected.contract_manifest_digest(),
+            "printf '%s\\n' '{}'",
+            serde_json::to_string(&valid_envelope).expect("valid identity fixture serializes")
         ));
         let observed = probe_daemon_identity(&success.path).expect("valid probe output");
         assert_eq!(observed.product, expected.product());
@@ -4620,6 +4673,48 @@ mod tests {
             observed.contract_manifest_digest,
             expected.contract_manifest_digest()
         );
+
+        let malformed_v011 = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/contract/v0.1.1-daemon-version-output.json"
+        ));
+        let malformed_v011 =
+            VersionProbeScript::new(&format!("printf '%s' '{}'", malformed_v011.trim_end()));
+        assert!(
+            probe_daemon_identity(&malformed_v011.path).is_err(),
+            "the exact v0.1.1 daemon identity must fail for missing result.schema"
+        );
+
+        let mut malformed = Vec::new();
+        malformed.push(("bare result", valid_envelope["result"].clone()));
+        let mut wrong_result_schema = valid_envelope.clone();
+        wrong_result_schema["result"]["schema"] = json!("podway.status-result/v1");
+        malformed.push(("wrong result schema", wrong_result_schema));
+        let mut unknown_result_field = valid_envelope.clone();
+        unknown_result_field["result"]["unknown"] = json!(true);
+        malformed.push(("unknown result field", unknown_result_field));
+        let mut missing_result_field = valid_envelope.clone();
+        missing_result_field["result"]
+            .as_object_mut()
+            .expect("identity result object")
+            .remove("target");
+        malformed.push(("missing result field", missing_result_field));
+        let mut wrong_outer_schema = valid_envelope.clone();
+        wrong_outer_schema["schema"] = json!("podway.error/v1");
+        malformed.push(("wrong outer schema", wrong_outer_schema));
+        let mut wrong_command = valid_envelope.clone();
+        wrong_command["command"] = json!("daemon.status");
+        malformed.push(("wrong command", wrong_command));
+        for (name, value) in malformed {
+            let fixture = VersionProbeScript::new(&format!(
+                "printf '%s\\n' '{}'",
+                serde_json::to_string(&value).expect("malformed fixture serializes")
+            ));
+            assert!(
+                probe_daemon_identity(&fixture.path).is_err(),
+                "probe must reject {name}"
+            );
+        }
         let installed = ServiceInstallMetadataV1::new(
             &success.path,
             paths.socket_path().as_path(),

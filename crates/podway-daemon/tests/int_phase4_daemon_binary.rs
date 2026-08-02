@@ -290,9 +290,12 @@ fn podwayd_service_and_version_modes_are_explicit() {
     assert!(json_identity.stderr.is_empty());
     let envelope: Value =
         serde_json::from_slice(&json_identity.stdout).expect("podwayd JSON identity is valid");
+    let _: ResponseEnvelopeV1 = serde_json::from_slice(&json_identity.stdout)
+        .expect("podwayd JSON identity satisfies the typed public protocol");
     assert_eq!(envelope["schema"], "podway.output/v1");
     assert_eq!(envelope["command"], "version");
     let identity = &envelope["result"];
+    assert_eq!(identity["schema"], "podway.version-result/v1");
     assert_eq!(identity["product"], "podway");
     assert_eq!(identity["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(
