@@ -65,6 +65,11 @@ REQUIRED_PREPARE_COMMANDS = (
 REQUIRED_RELEASE_PREPARE_COMMANDS = (
     "$(MAKE) lint-all",
     "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "python3 tools/release_evidence.py self-test",
+    "python3 tools/release_archive.py self-test",
+    "python3 tools/qualify_distribution.py self-test",
+    "python3 tools/create_dolgorae_handoff.py self-test",
+    "python3 tools/verify_release_bundle.py self-test",
 )
 REQUIRED_RELEASE_COMMANDS = (
     "$(MAKE) dist-preflight",
@@ -75,6 +80,7 @@ REQUIRED_RELEASE_COMMANDS = (
     "tools/release_archive.py package",
     "tools/qualify_distribution.py qualify",
     "tools/create_dolgorae_handoff.py create",
+    "tools/verify_release_bundle.py verify",
 )
 CRATE_ORDER = (
     "podway-core",
@@ -430,6 +436,16 @@ def validate_makefile_contract(root: Path) -> int:
     lint_all_recipe = re.search(r"^lint-all\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
     if lint_all_recipe is None or REQUIRED_RELEASE_PREPARE_COMMANDS[1] not in lint_all_recipe.group(1):
         fail("Makefile lint-all target omits all-target Clippy", "makefile_contract_drift")
+    missing_release_sentinels = [
+        command
+        for command in REQUIRED_RELEASE_PREPARE_COMMANDS[2:]
+        if command not in release_prepare_text
+    ]
+    if missing_release_sentinels:
+        fail(
+            f"Makefile release-prepare omits release sentinels: {missing_release_sentinels}",
+            "makefile_contract_drift",
+        )
     for target, command in (
         ("preset-create", "tools/manage_presets.py create"),
         ("preset-import", "tools/manage_presets.py import"),

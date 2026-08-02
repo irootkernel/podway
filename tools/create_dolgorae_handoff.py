@@ -13,18 +13,14 @@ import tempfile
 from typing import Any
 
 import release_archive
+import release_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
-SCHEMA = "podway.dolgorae-compatibility-handoff/v1"
-PACKAGED_CONFORMANCE = [
-    "aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle",
-    "aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout",
-    "aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay",
-]
+SCHEMA = release_evidence.HANDOFF_SCHEMA
 
 
 class HandoffError(RuntimeError):
@@ -66,53 +62,24 @@ def require_regular_file(path: Path, label: str) -> Path:
 
 
 def canonical_bytes(value: dict[str, Any]) -> bytes:
-    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    return release_evidence.canonical_bytes(value)
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
-    if path.parent.is_symlink() or not path.parent.is_dir():
-        fail(f"handoff output directory must be a regular directory: {path.parent}")
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-    )
-    temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as opened:
-            opened.write(canonical_bytes(value))
-            opened.flush()
-            os.fsync(opened.fileno())
-        temporary.chmod(0o644)
-        temporary.replace(path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+        release_evidence.atomic_write_json(path, value)
+    except release_evidence.EvidenceError as error:
+        fail(str(error))
 
 
 def handoff_from_provenance(
     provenance: dict[str, Any], provenance_name: str, provenance_sha256: str, source_tree: str
 ) -> dict[str, Any]:
-    return {
-        "artifact": provenance["archive"],
-        "binaries": provenance["binaries"],
-        "build_identity": provenance["build_identity"],
-        "contract": {
-            "digest": provenance["contract_manifest_digest"],
-            "schema": provenance["contract_manifest_schema"],
-        },
-        "packaged_conformance": {"result": "passed", "scenarios": PACKAGED_CONFORMANCE},
-        "provenance": {"name": provenance_name, "sha256": provenance_sha256},
-        "release_gate": provenance["release_gate"],
-        "schema": SCHEMA,
-        "source": {"commit": provenance["source_commit"], "tree": source_tree},
-        "target": provenance["target"],
-        "toolchain": {
-            "cargo_lock_sha256": provenance["cargo_lock_sha256"],
-            "rustc": provenance["toolchain"],
-        },
-        "version": provenance["version"],
-    }
+    if provenance.get("source_tree") != source_tree:
+        fail("release provenance source tree does not match the qualified Git tree")
+    return release_evidence.handoff_from_provenance(
+        provenance, provenance_name, provenance_sha256
+    )
 
 
 def create(output_directory: Path) -> dict[str, Any]:
@@ -128,21 +95,17 @@ def create(output_directory: Path) -> dict[str, Any]:
     require_regular_file(checksum, "release archive checksum")
     require_regular_file(provenance_path, "release provenance")
     provenance = read_object(provenance_path, "release provenance")
-    required = {
-        "artifact_class": "distribution",
-        "release_gate": "make test + fuzzing: passed",
-        "source_commit": commit,
-        "source_dirty": False,
-        "target": TARGET,
-        "version": VERSION,
-    }
-    mismatches = {
-        key: {"expected": expected, "actual": provenance.get(key)}
-        for key, expected in required.items()
-        if provenance.get(key) != expected
-    }
-    if mismatches:
-        fail(f"release provenance mismatch: {mismatches}")
+    try:
+        release_evidence.validate_provenance(
+            provenance,
+            version=VERSION,
+            target=TARGET,
+            commit=commit,
+            tree=source_tree,
+            conformance_result=release_evidence.PASSED,
+        )
+    except release_evidence.EvidenceError as error:
+        fail(str(error))
     archive_digest = release_archive.sha256_file(archive)
     if checksum.read_text(encoding="utf-8") != f"{archive_digest}  {archive.name}\n":
         fail("release archive checksum does not match")
@@ -162,13 +125,24 @@ def create(output_directory: Path) -> dict[str, Any]:
 def self_test() -> dict[str, Any]:
     provenance = {
         "archive": {"name": "podway.tar.gz", "sha256": "a" * 64},
+        "artifact_class": "distribution",
         "binaries": {"podway": "b" * 64, "podwayd": "c" * 64},
         "build_identity": f"sha256:{'d' * 64}",
         "cargo_lock_sha256": "e" * 64,
         "contract_manifest_digest": f"sha256:{'f' * 64}",
         "contract_manifest_schema": "podway.contract-manifest/v1",
+        "packaged_conformance": {
+            "result": release_evidence.PASSED,
+            "scenarios": release_evidence.PACKAGED_CONFORMANCE_SCENARIOS,
+        },
+        "product": release_evidence.PRODUCT,
         "release_gate": "make test + fuzzing: passed",
+        "release_gate_result": "passed",
+        "release_status": release_evidence.RELEASE_STATUS,
+        "schema": release_evidence.PROVENANCE_SCHEMA,
         "source_commit": "1" * 40,
+        "source_dirty": False,
+        "source_tree": "3" * 40,
         "target": TARGET,
         "toolchain": "rustc 1.97.1 (test)",
         "version": VERSION,
@@ -180,6 +154,22 @@ def self_test() -> dict[str, Any]:
     required = {"artifact", "binaries", "contract", "source", "toolchain"}
     if not required.issubset(first):
         fail("handoff omits a pinning identity")
+    release_evidence.validate_handoff(first, provenance, "provenance.json", "2" * 64)
+    pending = json.loads(json.dumps(provenance))
+    pending["packaged_conformance"]["result"] = release_evidence.PENDING
+    try:
+        release_evidence.validate_provenance(
+            pending,
+            version=VERSION,
+            target=TARGET,
+            commit="1" * 40,
+            tree="3" * 40,
+            conformance_result=release_evidence.PASSED,
+        )
+    except release_evidence.EvidenceError:
+        pass
+    else:
+        fail("handoff accepted pending packaged-conformance evidence")
     with tempfile.TemporaryDirectory(prefix="podway-handoff-self-test-") as temporary_name:
         temporary = Path(temporary_name)
         victim = temporary / "victim.json"

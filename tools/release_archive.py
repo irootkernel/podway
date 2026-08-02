@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import errno
 from enum import Enum
+import fcntl
 import gzip
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
+import pwd
 import re
 import shutil
 import stat
@@ -20,6 +23,7 @@ import tempfile
 from typing import Any, Callable
 
 import repository_assets
+import release_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -315,7 +319,63 @@ def self_test() -> dict[str, Any]:
         source.write_bytes(b"replacement bytes")
         if snapshot.read_bytes() != b"verified bytes":
             fail("executable snapshot changed after its source was replaced")
-    return {"mode": "self-test", "ok": True, "sentinels": 12}
+        account_home = temporary / "account"
+        runtime = account_home / ".podway/run"
+        socket = runtime / "podwayd.sock"
+        uid = os.geteuid()
+        probe_production_singleton(account_home, uid)
+        runtime.mkdir(parents=True, mode=0o700)
+        socket.write_text("socket sentinel\n", encoding="utf-8")
+        probe_production_singleton(account_home, uid)
+        if socket.read_text(encoding="utf-8") != "socket sentinel\n":
+            fail("singleton preflight inspected or changed the socket path")
+        lock = runtime / "podwayd.lock"
+        lock.write_text("", encoding="utf-8")
+        lock.chmod(0o600)
+        probe_production_singleton(account_home, uid)
+        held = os.open(lock, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                probe_production_singleton(account_home, uid)
+            except ReleaseError as error:
+                if "stop the production service" not in str(error):
+                    fail("singleton contention diagnostic omits remediation")
+            else:
+                fail("singleton preflight accepted a held production lock")
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+            os.close(held)
+        lock.chmod(0o640)
+        expect_singleton_rejection(account_home, uid, "mode")
+        lock.unlink()
+        lock.mkdir(mode=0o700)
+        expect_singleton_rejection(account_home, uid, "regular")
+        lock.rmdir()
+        victim = temporary / "lock-target"
+        victim.write_text("", encoding="utf-8")
+        victim.chmod(0o600)
+        lock.symlink_to(victim)
+        expect_singleton_rejection(account_home, uid, "symlink")
+        lock.unlink()
+        runtime.chmod(0o755)
+        expect_singleton_rejection(account_home, uid, "mode")
+        runtime.chmod(0o700)
+        expect_singleton_rejection(account_home, uid + 1, "owner")
+        original_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(temporary / "spoofed-home")
+        try:
+            fake_home = effective_account_home(
+                lambda _uid: type("Entry", (), {"pw_dir": str(account_home)})()
+            )
+            if fake_home != account_home:
+                fail("effective account-home probe trusted ambient HOME")
+        finally:
+            if original_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = original_home
+    return {"mode": "self-test", "ok": True, "sentinels": 22}
 
 
 def require_native_host() -> None:
@@ -344,10 +404,88 @@ def require_clean_tree(allow_dirty: bool) -> bool:
     return dirty
 
 
+def effective_account_home(account_lookup: Callable[[int], Any] = pwd.getpwuid) -> Path:
+    home = Path(account_lookup(os.geteuid()).pw_dir)
+    if not home.is_absolute():
+        fail("effective account home must be an absolute path")
+    return home
+
+
+def _validate_owned_mode(metadata: os.stat_result, uid: int, mode: int, label: str) -> None:
+    if metadata.st_uid != uid:
+        fail(f"production singleton {label} has unsafe owner")
+    if stat.S_IMODE(metadata.st_mode) != mode:
+        fail(f"production singleton {label} has unsafe mode")
+
+
+def probe_production_singleton(account_home: Path, uid: int) -> None:
+    runtime = account_home / ".podway/run"
+    lock = runtime / "podwayd.lock"
+    try:
+        runtime_metadata = runtime.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(runtime_metadata.st_mode):
+        fail("production singleton runtime directory is a symlink")
+    if not stat.S_ISDIR(runtime_metadata.st_mode):
+        fail("production singleton runtime path is not a directory")
+    _validate_owned_mode(runtime_metadata, uid, 0o700, "runtime directory")
+    try:
+        lock_metadata = lock.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(lock_metadata.st_mode):
+        fail("production singleton lock file is a symlink")
+    if not stat.S_ISREG(lock_metadata.st_mode):
+        fail("production singleton lock path is not a regular file")
+    _validate_owned_mode(lock_metadata, uid, 0o600, "lock file")
+    descriptor = os.open(lock, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened_metadata = os.fstat(descriptor)
+        if (
+            opened_metadata.st_dev != lock_metadata.st_dev
+            or opened_metadata.st_ino != lock_metadata.st_ino
+        ):
+            fail("production singleton lock file changed during preflight")
+        _validate_owned_mode(opened_metadata, uid, 0o600, "opened lock file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno in {errno.EACCES, errno.EAGAIN}:
+                fail(
+                    "production singleton lock is held; stop the production service "
+                    "or foreground dev daemon before running the release gate"
+                )
+            raise
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        os.close(descriptor)
+
+
+def expect_singleton_rejection(account_home: Path, uid: int, expected: str) -> None:
+    try:
+        probe_production_singleton(account_home, uid)
+    except ReleaseError as error:
+        if expected not in str(error):
+            fail(f"singleton self-test expected {expected!r}, observed {error}")
+    else:
+        fail(f"singleton preflight accepted unsafe {expected} fixture")
+
+
 def preflight() -> dict[str, Any]:
     require_native_host()
     require_clean_tree(False)
-    return {"mode": "preflight", "ok": True}
+    account_home = effective_account_home()
+    probe_production_singleton(account_home, os.geteuid())
+    return {
+        "lock": str(account_home / ".podway/run/podwayd.lock"),
+        "mode": "preflight",
+        "ok": True,
+    }
 
 
 def source_files(directory: Path, label: str) -> list[Path]:
@@ -581,6 +719,7 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
     require_native_host()
     dirty = require_clean_tree(arguments.allow_dirty)
     source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
+    source_tree = run(["git", "rev-parse", "HEAD^{tree}"], label="source tree probe").decode().strip()
     with tempfile.TemporaryDirectory(prefix="podway-release-") as temporary_name:
         temporary = Path(temporary_name)
         podway = require_native_binary(
@@ -620,20 +759,41 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
             "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
             "contract_manifest_digest": contract_receipt["contract_manifest_digest"],
             "contract_manifest_schema": contract_receipt["contract_manifest_schema"],
+            "packaged_conformance": {
+                "result": release_evidence.PENDING,
+                "scenarios": release_evidence.PACKAGED_CONFORMANCE_SCENARIOS,
+            },
+            "product": release_evidence.PRODUCT,
             "release_gate": (
                 "test-fixture"
                 if arguments.artifact_class == "test-fixture"
                 else "make test + fuzzing: passed"
             ),
+            "release_gate_result": release_evidence.PASSED,
             "release_status": release_status(),
             "schema": "podway.release-provenance/v1",
             "source_commit": source_commit,
             "source_dirty": dirty,
+            "source_tree": source_tree,
             "target": TARGET,
             "toolchain": rust_toolchain(),
             "version": PRODUCT_VERSION,
         }
-    write_json(provenance_path, provenance)
+    if arguments.artifact_class == "distribution":
+        try:
+            release_evidence.validate_provenance(
+                provenance,
+                version=PRODUCT_VERSION,
+                target=TARGET,
+                commit=source_commit,
+                tree=source_tree,
+                conformance_result=release_evidence.PENDING,
+            )
+        except release_evidence.EvidenceError as error:
+            fail(str(error))
+        release_evidence.atomic_write_json(provenance_path, provenance)
+    else:
+        write_json(provenance_path, provenance)
     return {
         "archive": str(archive_path.resolve()),
         "archive_sha256": archive_digest,
@@ -666,7 +826,14 @@ def main() -> int:
             result = preflight()
         else:
             result = package(arguments)
-    except (OSError, ReleaseError, tarfile.TarError, UnicodeError, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        ReleaseError,
+        release_evidence.EvidenceError,
+        tarfile.TarError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as error:
         print(json.dumps({"error": str(error), "mode": arguments.command, "ok": False}, sort_keys=True, separators=(",", ":")))
         return 1
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))

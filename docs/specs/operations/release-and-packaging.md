@@ -85,6 +85,12 @@ compatibility handoff under `dist/`. The archive
 builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
 version mismatches, incomplete archive contents, a Rust toolchain other than 1.97.1,
 and any dirty tracked or untracked source state.
+The first preflight derives the effective account home from the operating-system
+account database instead of ambient `HOME`. If the production runtime and lock
+exist, it requires an owner-private `0700` real directory and owner-private `0600`
+regular lock file, then probes the daemon's non-blocking exclusive singleton lock.
+A held or unsafe lock fails before formatting or compilation. The probe releases a
+free lock immediately and never reads, removes, or replaces the daemon socket.
 The builder first snapshots both executable inputs through non-symlink file
 descriptors. Binary validation, isolation classification, packaged content, recorded
 digests, and provenance all use those immutable snapshot bytes. Probe failure,
@@ -100,29 +106,41 @@ parallel partial schema or identity interpretation. Manifest self/member drift,
 missing or extra schemas, duplicate paths or `$id` values, unregistered `$ref`
 targets, and external network or filesystem references are release-blocking.
 
-The provenance document records the shared binary build identity, source commit,
-Rust toolchain identifier, Cargo.lock digest, contract manifest identity, target
-architecture, both binary digests, archive digest, successful development and
-fuzzing gate result, artifact class, and signing/notarization status. Release
+The provenance document records the product, shared binary build identity, source
+commit and Git tree, clean-tree state, Rust toolchain identifier, Cargo.lock digest,
+contract manifest identity, target architecture, both binary digests, archive
+digest, successful development and fuzzing gate result, artifact class, and
+signing/notarization status. Release
 packaging rejects debug-only isolation capability. After packaging, `make dist`
 extracts the release-profile archive and qualifies its binaries through the isolated
 foreground dev daemon mode. The test-only
 `--allow-dirty` switch is invalid for `artifact_class=distribution`; distribution
 construction always requires a clean tree.
 
-Qualification is an automatic, unprivileged final step of `make dist`; there is no
-separate qualification target or receipt. It uses a private temporary
+Packaging initially writes the exact required conformance scenario list with a
+`pending` result. Qualification is an automatic, unprivileged step of `make dist`;
+there is no separate qualification target or receipt. It uses a private temporary
 `PODWAY_DEV_HOME`, starts the extracted `podwayd --dev`, and runs packaged fenced
 lifecycle, conflict, admitted-timeout, response-loss, reconciliation, and identity
 scenarios through the extracted `podway --dev`. Success requires orderly termination
-and absence of every temporary daemon socket. This verifies Podway's executable and
-IPC interfaces; it does not retest macOS launchd itself.
+and absence of every temporary daemon socket. Only after every extracted-archive
+check and scenario succeeds does qualification atomically replace the provenance
+result with `passed`; failure preserves the pending document byte-for-byte. This
+verifies Podway's executable and IPC interfaces; it does not retest macOS launchd
+itself.
 
 After packaged conformance passes, the deterministic
 `podway-0.1.1-aarch64-apple-darwin.dolgorae-handoff.json` document publishes the
 archive and binary digests, build and contract identities, provenance digest,
 source commit and Git tree, Rust toolchain, and Cargo.lock digest. Dolgorae pins
 this closed identity set rather than inferring compatibility from a version string.
+Handoff creation rejects pending, incomplete, unknown, or malformed evidence and
+repeats the exact release-gate, signing/notarization, and packaged-conformance
+results. A final offline verifier then independently re-extracts the archive and
+compares checksum, archive layout, binaries, manifest-bound identities, provenance,
+handoff, source commit/tree, and Cargo.lock in both directions. `make dist` succeeds
+only after that final verification and after proving no qualification socket or
+daemon process remains.
 
 ## Installation
 

@@ -10,13 +10,13 @@ make test-int       # focused component integration tests
 make test-fuzzing   # bounded deterministic protocol fuzzing
 make test-e2e       # real user journeys through debug product binaries
 make test           # required development gate
-make dist           # complete release gate, package, qualification, and handoff
+make dist           # complete gate, qualification, handoff, and final verification
 ```
 
 Run the narrowest relevant layer while iterating and `make test` before sharing a
 development revision. `make dist` always reruns that gate, adds bounded fuzzing,
 all-target Clippy, and qualification of the release-profile distribution before
-creating the handoff.
+creating the handoff and independently verifying the final bundle.
 
 Rust unit, architecture, and integration targets use four test workers by default;
 set `TEST_THREADS=<n>` on a Make invocation to tune that bound. Real-binary E2E

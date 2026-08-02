@@ -14,17 +14,14 @@ import tempfile
 from typing import Any
 
 import release_archive
+import release_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
-REQUIRED_TESTS = [
-    "aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle",
-    "aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout",
-    "aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay",
-]
+REQUIRED_TESTS = release_evidence.PACKAGED_CONFORMANCE_SCENARIOS
 
 
 class QualificationError(RuntimeError):
@@ -74,6 +71,10 @@ def source_commit() -> str:
     return run(["git", "rev-parse", "HEAD"], label="source commit probe").stdout.decode().strip()
 
 
+def source_tree() -> str:
+    return run(["git", "rev-parse", "HEAD^{tree}"], label="source tree probe").stdout.decode().strip()
+
+
 def expected_paths(output_directory: Path) -> tuple[Path, Path, Path]:
     archive = output_directory / f"{ARCHIVE_ROOT}.tar.gz"
     checksum = output_directory / f"{archive.name}.sha256"
@@ -115,24 +116,20 @@ def verify_distribution(
     provenance_path: Path,
     extraction: Path,
     commit: str,
+    tree: str,
 ) -> tuple[Path, Path, dict[str, Any]]:
     provenance = read_json(provenance_path, "release provenance")
-    required = {
-        "schema": "podway.release-provenance/v1",
-        "artifact_class": "distribution",
-        "release_gate": "make test + fuzzing: passed",
-        "source_commit": commit,
-        "source_dirty": False,
-        "target": TARGET,
-        "version": VERSION,
-    }
-    mismatches = {
-        key: {"expected": expected, "actual": provenance.get(key)}
-        for key, expected in required.items()
-        if provenance.get(key) != expected
-    }
-    if mismatches:
-        fail(f"release provenance mismatch: {mismatches}")
+    try:
+        release_evidence.validate_provenance(
+            provenance,
+            version=VERSION,
+            target=TARGET,
+            commit=commit,
+            tree=tree,
+            conformance_result=release_evidence.PENDING,
+        )
+    except release_evidence.EvidenceError as error:
+        fail(str(error))
     digest = verify_checksum(archive, checksum)
     if provenance.get("archive") != {"name": archive.name, "sha256": digest}:
         fail("release provenance archive identity does not match the checksum")
@@ -230,6 +227,7 @@ def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> No
 
 def qualify(output_directory: Path) -> dict[str, Any]:
     commit = source_commit()
+    tree = source_tree()
     archive, checksum, provenance_path = expected_paths(output_directory)
     harness = build_harness()
     # Keep the account-derived dev socket below macOS's Unix-domain path limit.
@@ -237,12 +235,13 @@ def qualify(output_directory: Path) -> dict[str, Any]:
         temporary = Path(temporary_name)
         temporary.chmod(0o700)
         cli, daemon, provenance = verify_distribution(
-            archive, checksum, provenance_path, temporary / "extracted", commit
+            archive, checksum, provenance_path, temporary / "extracted", commit, tree
         )
         run_packaged_suite(temporary / "runtime", harness, cli, daemon)
+        passed = release_evidence.mark_packaged_conformance_passed(provenance_path, provenance)
         return {
             "archive": archive.name,
-            "build_identity": provenance["build_identity"],
+            "build_identity": passed["build_identity"],
             "mode": "qualify",
             "ok": True,
             "scenarios": REQUIRED_TESTS,
@@ -254,6 +253,25 @@ def self_test() -> dict[str, Any]:
         fail("required packaged scenarios must be unique")
     if any(not name.startswith("aut_t_") for name in REQUIRED_TESTS):
         fail("required packaged scenarios must be acceptance tests")
+    with tempfile.TemporaryDirectory(prefix="podway-qualification-self-test-") as name:
+        path = Path(name) / "provenance.json"
+        pending = {
+            "packaged_conformance": {
+                "result": release_evidence.PENDING,
+                "scenarios": REQUIRED_TESTS,
+            }
+        }
+        release_evidence.atomic_write_json(path, pending)
+        original = path.read_bytes()
+        try:
+            raise QualificationError("simulated packaged scenario failure")
+        except QualificationError:
+            pass
+        if path.read_bytes() != original:
+            fail("failed qualification changed pending provenance")
+        passed = release_evidence.mark_packaged_conformance_passed(path, pending)
+        if passed["packaged_conformance"]["result"] != release_evidence.PASSED:
+            fail("successful qualification did not publish passed evidence")
     return {"mode": "self-test", "ok": True, "scenarios": len(REQUIRED_TESTS)}
 
 
@@ -266,7 +284,14 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         result = self_test() if arguments.command == "self-test" else qualify(arguments.output_dir)
-    except (OSError, QualificationError, release_archive.ReleaseError, tarfile.TarError, UnicodeError) as error:
+    except (
+        OSError,
+        QualificationError,
+        release_archive.ReleaseError,
+        release_evidence.EvidenceError,
+        tarfile.TarError,
+        UnicodeError,
+    ) as error:
         print(json.dumps({"error": str(error), "mode": arguments.command, "ok": False}, sort_keys=True, separators=(",", ":")))
         return 1
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))

@@ -363,7 +363,7 @@ The E2E layer builds the debug product binaries once. Preset-tool verification
 runs afterward against that prepared CLI instead of initiating another build.
 `make dist` always runs this gate, all-target Clippy, release helper sentinels,
 fixed-run fuzzing, release builds, one distribution package, qualification, and
-the handoff.
+the handoff, followed by independent final bundle verification.
 
 The verifier controls include the captured malformed v0.1.1 daemon envelope,
 every missing required version field, wrong and unknown discriminators or
@@ -399,3 +399,7 @@ conflict, timeout, response-loss, reconciliation, and identity scenarios through
 the foreground dev daemon, terminates it through IPC, and requires socket cleanup.
 Source packaging and extracted qualification both call the same manifest-bound
 Rust verifier before accepting either binary identity.
+The release preflight checks the effective account's production singleton before
+the expensive gate. Packaged conformance is recorded as pending until every
+scenario passes, then published atomically; handoff and final verification reject
+pending or shape drift and compare all repeated identities bidirectionally.

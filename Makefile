@@ -37,9 +37,11 @@ test-prepare: toolchain
 release-prepare:
 	$(MAKE) lint-all
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --sentinels
+	$(RUST_TOOLCHAIN_ENV) python3 tools/release_evidence.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_release_bundle.py self-test
 
 dist-preflight:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py preflight
@@ -145,4 +147,6 @@ dist:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py qualify \
 		--output-dir $(DIST_DIR)
 	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py create \
+		--output-dir $(DIST_DIR)
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_release_bundle.py verify \
 		--output-dir $(DIST_DIR)
