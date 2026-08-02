@@ -7,9 +7,11 @@ release-blocking task in the [roadmap](roadmap.md) remains incomplete; a current
 successful run proves the implemented tree, not completion of the remaining
 release tasks.
 
-Once all release tasks are complete, the final clean-tree
-`make test` run is the sole executable source-readiness decision. It runs generated
-source checks, unit and integration tests, bounded fuzzing, and real-binary E2E.
+Once all release tasks are complete, the final clean-tree `make test` run is the
+sole executable source-readiness decision. It runs generated source checks, unit
+and integration tests, bounded fuzzing, real-binary E2E, and preset tooling. A
+successful run writes a local receipt bound to the exact source bytes, Git commit,
+Cargo.lock, and Rust toolchain binaries.
 
 The gate requires rustup and resolves exact toolchains. Rust 1.97.1 builds and tests
 the product. The isolated fuzzing target uses `nightly-2026-07-17` and
@@ -35,10 +37,11 @@ formatted tree, not from stale pre-format bytes.
 | `make test-fuzzing` | Fixed-run, fixed-seed frame-decoder and request-envelope fuzzing in disposable corpora |
 | `make test-e2e` | User journeys using actual debug product binaries, shells, and native test-fixture archives |
 
-The architecture portion also exercises the contributor-only preset tooling against
-the real Podway validator. `make preset-create` and `make preset-import` prepare
-canonical source candidates; they do not add public CLI commands or expand the four
-preset v0.1 catalog without the remaining documentation, catalog, and end-to-end work.
+After E2E prepares the real debug binaries, the gate reuses that `podway` executable
+for contributor-only preset tooling. `make preset-create` and `make preset-import`
+prepare canonical source candidates; they do not add public CLI commands or expand
+the four preset v0.1 catalog without the remaining documentation, catalog, and
+end-to-end work.
 
 Signing, notarization, archive assembly, checksum publication, and release-note
 publication may still be performed when distributing a build. They describe the
@@ -46,8 +49,9 @@ published artifact and do not introduce another release-readiness gate.
 
 ## Distribution
 
-Run `make dist` from a clean native Apple Silicon working tree. The target reruns
-the complete `make test` gate, builds thin arm64 release binaries, and creates:
+Run `make dist` from a clean native Apple Silicon working tree. The target reuses a
+matching local `make test` receipt when available and otherwise runs the complete
+gate. It then builds thin arm64 release binaries and creates:
 
 - `dist/podway-0.1.0-aarch64-apple-darwin.tar.gz`;
 - the archive's `.sha256` file;

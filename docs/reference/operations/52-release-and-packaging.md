@@ -76,10 +76,11 @@ consumer can inspect and pin the same contract identity as the binaries.
 
 ### Local archive construction
 
-From a clean native Apple Silicon working tree, `make dist` reruns the complete
-`make test` release gate, builds both release binaries, and writes the deterministic
-archive, its SHA-256 file, a provenance JSON document, and a Dolgorae compatibility
-handoff under `dist/`. The archive
+From a clean native Apple Silicon working tree, `make dist` reuses an exact
+source-and-toolchain-bound local `make test` receipt or runs the complete gate when
+the receipt is absent or stale. It then builds both release binaries and writes the
+deterministic archive, its SHA-256 file, a provenance JSON document, and a Dolgorae
+compatibility handoff under `dist/`. The archive
 builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
 version mismatches, incomplete archive contents, a Rust toolchain other than 1.97.1,
 and any dirty tracked or untracked source state.

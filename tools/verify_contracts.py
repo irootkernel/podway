@@ -24,6 +24,7 @@ ROUTES_VERSION = "podway.command-routes/v1"
 MAKEFILE_PATH = Path("Makefile")
 REQUIRED_MAKE_TARGETS = (
     "test",
+    "test-if-needed",
     "test-prepare",
     "test-rust",
     "test-unit",
@@ -38,10 +39,15 @@ REQUIRED_MAKE_TARGETS = (
     "contract-manifest",
 )
 REQUIRED_TEST_SEQUENCE = (
+    "$(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py "
+    "invalidate --receipt $(TEST_GATE_RECEIPT)",
     "$(MAKE) test-prepare",
     "$(MAKE) test-rust",
     "$(MAKE) test-fuzzing",
     "$(MAKE) test-e2e",
+    "$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1",
+    "$(RUST_TOOLCHAIN_ENV) python3 tools/test_gate_receipt.py "
+    "record --receipt $(TEST_GATE_RECEIPT)",
 )
 REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/sync_docs_assets.py --write",
@@ -54,6 +60,8 @@ REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_contracts.py --all",
     "python3 tools/verify_preset_tooling.py --podway",
     "python3 tools/contract_manifest.py --check",
+    "python3 tools/test_gate_receipt.py check",
+    "python3 tools/test_gate_receipt.py self-test",
 )
 CRATE_ORDER = (
     "podway-core",
@@ -396,7 +404,10 @@ def validate_makefile_contract(root: Path) -> int:
         fail("Makefile test target has no recipe", "makefile_contract_drift")
     commands = tuple(line.strip() for line in test_recipe.group(1).splitlines())
     if commands != REQUIRED_TEST_SEQUENCE:
-        fail("Makefile test target does not run prepare, unit, int, fuzzing, and e2e sequentially", "makefile_contract_drift")
+        fail(
+            "Makefile test target does not run the complete receipt-bound gate sequentially",
+            "makefile_contract_drift",
+        )
     missing_commands = [command for command in REQUIRED_PREPARE_COMMANDS if command not in text]
     if missing_commands:
         fail(f"Makefile omits required prepare commands: {missing_commands}", "makefile_contract_drift")
@@ -409,8 +420,11 @@ def validate_makefile_contract(root: Path) -> int:
         if recipe is None or command not in recipe.group(1):
             fail(f"Makefile {target} target omits {command}", "makefile_contract_drift")
     dist_recipe = re.search(r"^dist\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
-    if dist_recipe is None or "$(MAKE) test" not in dist_recipe.group(1):
-        fail("Makefile dist target must run the sole release gate first", "makefile_contract_drift")
+    if dist_recipe is None or "$(MAKE) test-if-needed" not in dist_recipe.group(1):
+        fail(
+            "Makefile dist target must require a current release-gate receipt first",
+            "makefile_contract_drift",
+        )
     for required in ("cargo build --release --locked", "tools/release_archive.py package"):
         if required not in text:
             fail(f"Makefile dist target omits {required}", "makefile_contract_drift")

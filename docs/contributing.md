@@ -67,11 +67,18 @@ make test-int       # focused component integration, including binary-with-doubl
 make test-fuzzing   # bounded deterministic protocol fuzzing
 make test-e2e       # real user journeys through product binaries, shells, and archives
 make test           # complete release-readiness gate
+make test-if-needed # reuse an exact current-tree test receipt, or run make test
 ```
 
 Run the narrowest relevant layer while iterating and `make test` before treating a
 revision as release-ready. `test-prepare` synchronizes assets and runs `rustfmt`, so
 review its resulting diff before committing.
+
+The complete gate records `target/podway-test-gate-v1.json` only after every layer
+passes. The receipt binds the Git commit, all non-ignored source bytes, Cargo.lock,
+and the selected cargo/rustc binaries. `make dist` reuses it only while every input
+still matches; otherwise it runs `make test`. This receipt is a local build cache,
+not a published attestation.
 
 Cargo integration sources are modules of each crate's `int_suite`; run one exact
 test with `cargo test -p PACKAGE --test int_suite SOURCE_STEM::FUNCTION -- --exact`.
@@ -105,10 +112,11 @@ Bound optional fuzz runs with the same libFuzzer run, timeout, and memory flags 
 
 ## Release artifacts
 
-`make dist` runs the complete gate, builds thin arm64 release binaries, and creates
-the deterministic archive, SHA-256 checksum, and provenance JSON under `dist/`.
-It requires a clean native Apple Silicon working tree. Signing and notarization
-describe the distributed artifact but are not additional source-readiness gates.
+`make dist` requires a matching local gate receipt or runs the complete gate, then
+builds thin arm64 release binaries and creates the deterministic archive, SHA-256
+checksum, and provenance JSON under `dist/`. It requires a clean native Apple
+Silicon working tree. Signing and notarization describe the distributed artifact
+but are not additional source-readiness gates.
 
 `make dist` also extracts the completed archive and automatically runs packaged
 Dolgorae conformance through a private foreground dev daemon. No `sudo`, account

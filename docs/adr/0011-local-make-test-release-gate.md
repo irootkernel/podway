@@ -15,9 +15,10 @@ depend on infrastructure and identities the project does not operate.
 
 The repository-root `make test` command is the sole required release-readiness
 gate. It runs `test-prepare`, one combined `test-rust` invocation, `test-fuzzing`,
-and `test-e2e` sequentially. The fuzzing target uses a pinned nightly toolchain only
-for bounded protocol-input fuzzing. The end-to-end target builds and executes the
-real `podway` and `podwayd` binaries with the product's pinned stable toolchain.
+`test-e2e`, and preset-tool verification sequentially. The fuzzing target uses a
+pinned nightly toolchain only for bounded protocol-input fuzzing. The end-to-end
+target builds and executes the real `podway` and `podwayd` binaries with the
+product's pinned stable toolchain; preset verification reuses the resulting CLI.
 
 This decision does not let a passing older gate waive accepted requirements that
 have not yet been implemented or registered as executable evidence. A release
@@ -27,6 +28,12 @@ tested tree; `make test` then remains the single executable gate for that tree.
 Generated-source synchronization and formatting remain corrective operations in
 `test-prepare`. A release tag or archive uses the resulting formatted tree. Any
 later source change requires another complete `make test` run.
+
+After the complete gate passes, it may write a local cache receipt bound to the
+exact Git commit, source-file fingerprint, Cargo.lock, and selected Rust toolchain
+binaries. Distribution may reuse that result only while every binding still
+matches. A missing, malformed, or stale receipt causes the complete gate to run;
+the receipt is not an independent release decision or attestation.
 
 There is no additional signature, approval, holdout, qualification, attestation,
 or hosted-CI requirement. Signing, notarization, archive assembly, checksums, and

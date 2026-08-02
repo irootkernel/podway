@@ -353,6 +353,11 @@ stages sequentially:
 - `test-e2e`: user journeys through real product binaries, shells, and release
   archives, including a start/status/next smoke for all four presets.
 
+The E2E layer builds the debug product binaries once. Preset-tool verification
+runs afterward against that prepared CLI instead of initiating another build. A
+successful complete gate records a local source-and-toolchain-bound receipt;
+`make dist` accepts it only for an exact match and otherwise reruns `make test`.
+
 Focused `test-unit`, `test-int`, and `architecture` targets remain available while
 iterating. Integration tests may execute one product component against controlled
 collaborators; end-to-end tests are reserved for user-observable product journeys.
