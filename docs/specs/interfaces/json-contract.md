@@ -29,6 +29,31 @@ covered known-answer fixtures lock the catalogs, schemas, runtime decoders,
 canonical digests, and compact envelope boundary together. See the
 [automation contract](automation-client-contract.md#21-command-specific-json-schemas-aut-json-001004).
 
+## Released v1 compatibility boundary
+
+The v0.1.0 and v0.1.1 releases publish byte-identical copies of the public v1
+Procedure, output, error, status-result, next-result, and version-result schemas.
+The v0.1.0 files were published below `schemas/`; the canonical v0.1.1 source
+location moved to `assets/schemas/` without changing their bytes.
+
+| Schema | SHA-256 |
+|---|---|
+| `procedure-v1.schema.json` | `cc2aed122f69032d612626248da614aee79bccbaa6a0a151e531119590b13e42` |
+| `output-v1.schema.json` | `19355e4f256fba8b17a4813f332006603b4e103fd747786f5e13d6447c2c55cd` |
+| `error-v1.schema.json` | `371ccd1e07a0f503bc70a5a4b167ff43a0dfbe9ed8e5b78533cd9a7848d06bf8` |
+| `status-result-v1.schema.json` | `50e8a1da908dee02751bd70a19b820460925e40b2cb16ee8f6dc749725102032` |
+| `next-result-v1.schema.json` | `a27e51dad161a9ef8c6de67da6f372a7b3d2337ff3ca2598f1ecb4f1ae627f56` |
+| `version-result-v1.schema.json` | `fe92513aa0cb4f75bd02e220b9feb5bf19795105cf364518f4119689e02baf7c` |
+
+No released v1 contract requires a v2 identifier or an unversioned migration.
+Before v0.1.0, commit `754ff5d7e764e74234f0b22a0a6fe255bfa09ea4`
+changed the Procedure schema's explicit `list.max_items` minimum from zero to
+one. The core constructor already rejected zero; the change aligned schema and
+configuration admission with that runtime behavior before the first public
+release. A consumer pinned to an earlier pre-release schema-only snapshot must
+replace `max_items: 0` with a supported value in `1..=1000`. Zero was never an
+accepted runtime value and is not restored by v0.1.2.
+
 ## Common success envelope
 
 ```json

@@ -177,6 +177,12 @@ Rules:
 - when unique, exact string equality determines duplication;
 - insertion order is preserved.
 
+The `max_items` lower bound is part of the released v1 Procedure contract. A
+pre-v0.1.0 schema-only snapshot briefly described zero, but the core constructor
+already rejected that value. Consumers of that pre-release snapshot must migrate
+`max_items: 0` to a value in `1..=1000`; no public release accepted zero at
+runtime.
+
 ### `artifact`
 
 ```yaml
