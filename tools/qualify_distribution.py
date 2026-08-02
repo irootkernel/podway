@@ -110,16 +110,13 @@ def safe_extract(archive_path: Path, destination: Path) -> Path:
 
 
 def json_identity(binary: Path, role: str) -> dict[str, Any]:
-    arguments = [str(binary), "--json", "version"]
-    if role == "podway":
-        arguments.append("--identity")
+    arguments = [str(binary), "version", "--json", "--identity"]
     completed = run(arguments, label=f"{role} identity probe")
     try:
         value = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
         fail(f"{role} identity probe returned invalid JSON: {error}")
-    if role == "podway":
-        value = value.get("result") if isinstance(value, dict) else None
+    value = value.get("result") if isinstance(value, dict) else None
     if not isinstance(value, dict):
         fail(f"{role} identity probe did not return an object")
     return value

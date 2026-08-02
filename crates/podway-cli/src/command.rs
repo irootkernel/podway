@@ -2098,7 +2098,11 @@ fn probe_daemon_identity(binary: &Path) -> Result<DaemonStaticIdentityV1, Servic
 fn probe_daemon_identity_with_runner(
     runner: &impl LaunchctlRunnerV1,
 ) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
-    let output = runner.run(&["--json".to_owned(), "version".to_owned()])?;
+    let output = runner.run(&[
+        "version".to_owned(),
+        "--json".to_owned(),
+        "--identity".to_owned(),
+    ])?;
     if output.exit_status != 0 || !output.stderr.is_empty() || output.stdout.contains('\u{fffd}') {
         return Err(ServiceErrorV1::IoV1 {
             operation: None,
@@ -2110,10 +2114,14 @@ fn probe_daemon_identity_with_runner(
             operation: None,
             message: "daemon identity probe returned malformed output".to_owned(),
         })?;
-    let object = value.as_object().ok_or_else(|| ServiceErrorV1::IoV1 {
-        operation: None,
-        message: "daemon identity probe returned malformed output".to_owned(),
-    })?;
+    let object = value
+        .get("result")
+        .unwrap_or(&value)
+        .as_object()
+        .ok_or_else(|| ServiceErrorV1::IoV1 {
+            operation: None,
+            message: "daemon identity probe returned malformed output".to_owned(),
+        })?;
     let required_string = |field: &str| {
         object
             .get(field)

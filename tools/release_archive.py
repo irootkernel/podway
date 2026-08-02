@@ -112,7 +112,7 @@ def require_native_binary(path: Path, expected_name: str) -> Path:
         fail(f"{expected_name} is not a thin 64-bit little-endian Mach-O binary")
     if int.from_bytes(header[4:8], "little") != CPU_TYPE_ARM64:
         fail(f"{expected_name} is not an arm64 Mach-O binary")
-    version_arguments = ["version"] if expected_name == "podway" else ["--version"]
+    version_arguments = ["version"]
     version = run([str(path), *version_arguments], label=f"{expected_name} version probe")
     expected_version = f"{expected_name} {PRODUCT_VERSION}\n".encode()
     if version != expected_version:
@@ -127,9 +127,7 @@ def verify_binary_contract_identity(
     manifest_digest: str,
     source_commit: str,
 ) -> dict[str, Any]:
-    arguments = [str(path), "--json", "version"]
-    if expected_name == "podway":
-        arguments.append("--identity")
+    arguments = [str(path), "version", "--json", "--identity"]
     payload = run(arguments, label=f"{expected_name} identity probe")
     try:
         document = json.loads(payload)

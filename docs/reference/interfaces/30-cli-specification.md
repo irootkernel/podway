@@ -65,6 +65,18 @@ podway daemon ...
 target machine identity form is `podway version --json --identity`; it retains the
 versioned output envelope and requires no worktree, daemon, `HOME`, or `TMPDIR`.
 
+The daemon binary follows the same version grammar:
+
+```text
+podwayd version
+podwayd version --json
+podwayd version --json --identity
+```
+
+Its compact form is `{"name":"podwayd","version":"v0.1.0"}`. The identity
+form retains the versioned output envelope and is the interface used by service
+installation and release qualification to verify the embedded contract.
+
 ## PATH invocation and runtime environment
 
 Automation may invoke `podway` by command name through a controlled `PATH`,

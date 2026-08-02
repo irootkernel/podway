@@ -249,7 +249,7 @@ fn podwayd_reports_stable_live_process_identity() {
 #[test]
 fn podwayd_service_and_version_modes_are_explicit() {
     let version = Command::new(env!("CARGO_BIN_EXE_podwayd"))
-        .arg("--version")
+        .arg("version")
         .output()
         .expect("podwayd version process must run");
     assert!(version.status.success());
@@ -259,7 +259,7 @@ fn podwayd_service_and_version_modes_are_explicit() {
     );
 
     let json_version = Command::new(env!("CARGO_BIN_EXE_podwayd"))
-        .args(["--json", "version"])
+        .args(["version", "--json"])
         .env_clear()
         .output()
         .expect("podwayd JSON version process must run");
@@ -271,8 +271,28 @@ fn podwayd_service_and_version_modes_are_explicit() {
             .count(),
         1
     );
-    let identity: Value =
+    let summary: Value =
         serde_json::from_slice(&json_version.stdout).expect("podwayd JSON version is valid");
+    assert_eq!(
+        summary,
+        serde_json::json!({
+            "name": "podwayd",
+            "version": format!("v{}", env!("CARGO_PKG_VERSION")),
+        })
+    );
+
+    let json_identity = Command::new(env!("CARGO_BIN_EXE_podwayd"))
+        .args(["version", "--json", "--identity"])
+        .env_clear()
+        .output()
+        .expect("podwayd JSON identity process must run");
+    assert!(json_identity.status.success());
+    assert!(json_identity.stderr.is_empty());
+    let envelope: Value =
+        serde_json::from_slice(&json_identity.stdout).expect("podwayd JSON identity is valid");
+    assert_eq!(envelope["schema"], "podway.output/v1");
+    assert_eq!(envelope["command"], "version");
+    let identity = &envelope["result"];
     assert_eq!(identity["product"], "podway");
     assert_eq!(identity["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(

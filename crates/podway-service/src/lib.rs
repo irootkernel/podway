@@ -2495,7 +2495,11 @@ impl DaemonContractVerifierV1 for SystemDaemonContractVerifierV1 {
             self.post_kill_drain,
         );
         let (actual_product, actual_manifest_digest) = runner
-            .run(&["--json".to_owned(), "version".to_owned()])
+            .run(&[
+                "version".to_owned(),
+                "--json".to_owned(),
+                "--identity".to_owned(),
+            ])
             .ok()
             .map(|output| {
                 daemon_contract_probe_identity_v1(
@@ -3683,7 +3687,14 @@ fn daemon_contract_probe_identity_v1(
     let identity = if successful && stderr.is_empty() {
         serde_json::from_slice::<serde_json::Value>(stdout)
             .ok()
-            .and_then(|value| value.as_object().cloned())
+            .and_then(|value| {
+                value
+                    .get("result")
+                    .cloned()
+                    .unwrap_or(value)
+                    .as_object()
+                    .cloned()
+            })
     } else {
         None
     };
@@ -4364,7 +4375,7 @@ mod tests {
         std::fs::write(
             &binary,
             format!(
-                "#!/bin/sh\n[ \"$1 $2\" = \"--json version\" ] || exit 9\nprintf '%s\\n' '{{\"product\":\"podway\",\"contract_manifest_digest\":\"{digest}\"}}'\n"
+                "#!/bin/sh\n[ \"$1 $2 $3\" = \"version --json --identity\" ] || exit 9\nprintf '%s\\n' '{{\"result\":{{\"product\":\"podway\",\"contract_manifest_digest\":\"{digest}\"}}}}'\n"
             ),
         )
         .expect("probe fixture must be written");

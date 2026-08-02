@@ -13,7 +13,7 @@ use podway_daemon::{
         SystemResponseMetadataSourceV1,
     },
 };
-use podway_protocol::{RequestIdV1, build_identity_v1};
+use podway_protocol::{OUTPUT_SCHEMA_V1, RequestIdV1, build_identity_v1};
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
 use signal_hook::{
@@ -48,15 +48,37 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
     let (dev_mode, socket_path) = match arguments.as_slice() {
-        [argument] if argument == "--version" => {
+        [argument] if argument == "version" || argument == "--version" => {
             println!("podwayd {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
-        [json, version] if json == "--json" && version == "version" => {
+        [version, json] if version == "version" && json == "--json" => {
             println!(
                 "{}",
-                serde_json::to_string(&build_identity_v1())
-                    .expect("the static build identity always serializes")
+                serde_json::json!({
+                    "name": "podwayd",
+                    "version": format!("v{}", env!("CARGO_PKG_VERSION")),
+                })
+            );
+            return Ok(());
+        }
+        [version, first, second]
+            if version == "version"
+                && ((first == "--json" && second == "--identity")
+                    || (first == "--identity" && second == "--json")) =>
+        {
+            let generated_at = SystemResponseMetadataSourceV1::default().generated_at();
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema": OUTPUT_SCHEMA_V1,
+                    "request_id": Uuid::new_v4().to_string(),
+                    "command": "version",
+                    "generated_at": generated_at,
+                    "result": build_identity_v1(),
+                    "warnings": [],
+                }))
+                .expect("the static build identity always serializes")
             );
             return Ok(());
         }
@@ -68,7 +90,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: podwayd [--dev|--service [--socket <absolute-path>]|--version|--json version]"
+                "usage: podwayd [--dev|--service [--socket <absolute-path>]|version [--json [--identity]]]"
                     .into(),
             );
         }

@@ -113,6 +113,11 @@ When no explicit endpoint is supplied, an interactive client may read
 
 The client version field is diagnostic and MUST NOT independently authorize or
 reject a connection. Admission is determined by product and manifest identity.
+
+`podwayd version --json` emits the compact daemon name and `v`-prefixed version.
+`podwayd version --json --identity` emits the full versioned identity envelope used
+by installation and qualification probes.
+
 Because the manifest covers product version, peers from different releases have
 different manifest digests even when they support the same IPC ID. Changing only
 the declared client version while retaining a matching product and manifest does
