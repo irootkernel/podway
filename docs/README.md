@@ -14,7 +14,8 @@ as one product rather than maintaining separate CLI and daemon trees.
    operational, and quality behavior.
 4. [Implementation Tips](implementation-tips/) explain how to work safely in the
    repository and run verification.
-5. [TODO](todo/) holds candidate work that has not entered the roadmap.
+5. [TODO](todo/) holds candidate work and the authoritative design dossiers for
+   adopted work that is not yet complete.
 6. [Deferred Feedback](deferred-feedback/) records small review findings that are
    intentionally postponed.
 7. [Roadmap](roadmap/) owns adopted work, ordering, and status.
@@ -43,9 +44,12 @@ When sources disagree, resolve them in this order:
 2. canonical machine assets and executable contracts;
 3. behavioral documents under [specs](specs/);
 4. [architecture](architecture/) and [implementation guidance](implementation-tips/);
-5. examples, TODO candidates, deferred feedback, and archived roadmap history.
+5. the active roadmap and adopted TODO design dossiers for unfinished work;
+6. examples, TODO candidates, deferred feedback, and archived roadmap history.
 
-The active roadmap owns status and ordering, not final behavior. Update every
+The active roadmap owns status and ordering, and an adopted TODO dossier owns the
+decision-complete implementation plan for its unfinished work. Neither overrides
+implemented behavior in an ADR, machine asset, or specification. Update every
 affected source when resolving a contradiction.
 
 ## Maintenance rules
