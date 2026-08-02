@@ -70,6 +70,25 @@ discriminator, wrong command, missing result field, or unknown result field is
 rejected. The common output envelope remains open to additive envelope fields
 as defined by the public schema; the version result remains closed.
 
+### Manifest-bound validation registry
+
+Release validation uses one feature-gated Rust verifier for both the source tree
+and an extracted distribution. It validates the closed manifest shape and
+canonical self-digest, verifies every member digest, and requires the manifest's
+schema inventory to equal the physical v1 schema inventory with unique `$id`
+values. Source logical paths map only to the canonical `assets/` authorities;
+packaged logical paths resolve directly below `share/podway`.
+
+The verifier registers schemas only by their manifest-bound `$id` and canonical
+`podway:///schemas/...` packaged path. Local fragments are allowed. Missing,
+unknown, network, external-filesystem, duplicate, stale, symlinked, or escaping
+resources fail closed; the JSON Schema implementation has no fallback retriever.
+Every registered schema must compile against this offline registry. The same
+registry validates the complete binary identity envelope against
+`output-v1.schema.json` and its result separately against
+`version-result-v1.schema.json` before expected identity fields or binary
+equality are evaluated.
+
 ## Common success envelope
 
 ```json

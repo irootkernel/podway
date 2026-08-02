@@ -14,7 +14,7 @@ PRESET_DIR ?= assets/presets
 PRESET_VALIDATOR ?= target/debug/podway
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
-.PHONY: test test-prepare release-prepare dist-preflight test-rust test-unit test-int test-fuzzing test-e2e \
+.PHONY: test test-prepare release-prepare dist-preflight test-rust test-unit test-int test-fuzzing test-e2e contract-verifier-test \
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
 	preset-create preset-import preset-tool-test contract-manifest dist
 
@@ -25,6 +25,7 @@ toolchain:
 test:
 	$(MAKE) test-prepare
 	$(MAKE) test-rust
+	$(MAKE) contract-verifier-test
 	$(MAKE) test-e2e
 	$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1
 
@@ -113,6 +114,14 @@ test-int:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_GATE_ENV) cargo test --workspace --test 'int_*' --locked -- \
 		--test-threads=$(TEST_THREADS)
+
+contract-verifier-test:
+	$(RUST_GATE_ENV) cargo clippy --offline --locked -p podway-protocol \
+		--features release-contract-verifier --lib --bin podway-contract-verifier \
+		--test int_suite -- -D warnings
+	$(RUST_GATE_ENV) cargo test --offline --locked -p podway-protocol \
+		--features release-contract-verifier --test int_suite \
+		int_release_contract_verifier -- --test-threads=$(TEST_THREADS)
 
 test-fuzzing:
 	$(RUST_GATE_ENV) python3 tools/run_fuzzing.py

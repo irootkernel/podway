@@ -8,3 +8,6 @@ mod int_phase4_framing;
 mod int_phase4_slice_contract;
 #[path = "int_phase5_slice_contract.rs"]
 mod int_phase5_slice_contract;
+#[cfg(feature = "release-contract-verifier")]
+#[path = "int_release_contract_verifier.rs"]
+mod int_release_contract_verifier;

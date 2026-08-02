@@ -10,6 +10,11 @@ autotests = false
 podway-core = { path = "../podway-core" }
 serde.workspace = true
 serde_json.workspace = true
+jsonschema = { version = "0.49.2", default-features = false, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[features]
+release-contract-verifier = ["dep:jsonschema", "dep:sha2"]
 
 [build-dependencies]
 serde_json.workspace = true
@@ -26,3 +31,9 @@ path = "tests/int_suite.rs"
 [dev-dependencies]
 jsonschema = { version = "0.49.2", default-features = false }
 sha2.workspace = true
+tempfile.workspace = true
+
+[[bin]]
+name = "podway-contract-verifier"
+path = "src/bin/podway-contract-verifier.rs"
+required-features = ["release-contract-verifier"]

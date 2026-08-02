@@ -109,19 +109,6 @@ def safe_extract(archive_path: Path, destination: Path) -> Path:
     return destination / ARCHIVE_ROOT
 
 
-def json_identity(binary: Path, role: str) -> dict[str, Any]:
-    arguments = [str(binary), "version", "--json", "--identity"]
-    completed = run(arguments, label=f"{role} identity probe")
-    try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        fail(f"{role} identity probe returned invalid JSON: {error}")
-    value = value.get("result") if isinstance(value, dict) else None
-    if not isinstance(value, dict):
-        fail(f"{role} identity probe did not return an object")
-    return value
-
-
 def verify_distribution(
     archive: Path,
     checksum: Path,
@@ -152,7 +139,9 @@ def verify_distribution(
     extracted = safe_extract(archive, extraction)
     cli = extracted / "bin/podway"
     daemon = extracted / "bin/podwayd"
-    identities = {"podway": json_identity(cli, "podway"), "podwayd": json_identity(daemon, "podwayd")}
+    contract_receipt = release_archive.verify_release_contract(
+        extracted / "share/podway", cli, daemon, commit
+    )
     for field in (
         "build_identity",
         "contract_manifest_digest",
@@ -161,9 +150,7 @@ def verify_distribution(
         "target",
         "version",
     ):
-        if identities["podway"].get(field) != identities["podwayd"].get(field):
-            fail(f"packaged binary identity mismatch for {field}")
-        if identities["podway"].get(field) != provenance.get(field):
+        if contract_receipt.get(field) != provenance.get(field):
             fail(f"packaged identity and provenance mismatch for {field}")
     for role, binary in (("podway", cli), ("podwayd", daemon)):
         if provenance.get("binaries", {}).get(role) != release_archive.sha256_file(binary):

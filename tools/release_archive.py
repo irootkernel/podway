@@ -122,43 +122,46 @@ def require_native_binary(path: Path, expected_name: str) -> Path:
     return path
 
 
-def verify_binary_contract_identity(
-    path: Path,
-    expected_name: str,
-    manifest_schema: str,
-    manifest_digest: str,
+def verify_release_contract(
+    contract_root: Path,
+    podway: Path,
+    podwayd: Path,
     source_commit: str,
 ) -> dict[str, Any]:
-    arguments = [str(path), "version", "--json", "--identity"]
-    payload = run(arguments, label=f"{expected_name} identity probe")
+    payload = run(
+        [
+            "cargo",
+            "run",
+            "--quiet",
+            "--offline",
+            "--locked",
+            "-p",
+            "podway-protocol",
+            "--features",
+            "release-contract-verifier",
+            "--bin",
+            "podway-contract-verifier",
+            "--",
+            "--contract-root",
+            str(contract_root),
+            "--podway",
+            str(podway),
+            "--podwayd",
+            str(podwayd),
+            "--expected-target",
+            TARGET,
+            "--expected-source-commit",
+            source_commit,
+        ],
+        label="authoritative Rust release contract verifier",
+    )
     try:
-        document = json.loads(payload)
+        receipt = json.loads(payload)
     except json.JSONDecodeError as error:
-        fail(f"{expected_name} identity probe did not return JSON: {error}")
-    if not isinstance(document, dict):
-        fail(f"{expected_name} identity probe must return a JSON object")
-    identity = document.get("result", document)
-    if not isinstance(identity, dict):
-        fail(f"{expected_name} identity result must be a JSON object")
-    expected = {
-        "product": "podway",
-        "version": PRODUCT_VERSION,
-        "target": TARGET,
-        "contract_manifest_schema": manifest_schema,
-        "contract_manifest_digest": manifest_digest,
-        "source_commit": source_commit,
-    }
-    mismatches = {
-        field: {"expected": value, "actual": identity.get(field)}
-        for field, value in expected.items()
-        if identity.get(field) != value
-    }
-    if mismatches:
-        fail(f"{expected_name} contract identity mismatch: {mismatches}")
-    build_identity = identity.get("build_identity")
-    if not isinstance(build_identity, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", build_identity) is None:
-        fail(f"{expected_name} has an invalid build identity")
-    return identity
+        fail(f"Rust release contract verifier returned invalid JSON: {error}")
+    if not isinstance(receipt, dict) or receipt.get("schema") != "podway.contract-verification/v1":
+        fail("Rust release contract verifier returned an invalid receipt")
+    return receipt
 
 
 def run_test_isolation_probe(path: Path, token: str) -> tuple[int, bytes, bytes] | None:
@@ -474,11 +477,6 @@ def contract_manifest_document() -> dict[str, Any]:
     return manifest
 
 
-def contract_manifest_identity() -> tuple[str, str]:
-    manifest = contract_manifest_document()
-    return manifest["schema_version"], manifest["digest"]
-
-
 def contract_manifest_asset_paths() -> list[Path]:
     manifest = contract_manifest_document()
     return [Path(asset["path"]) for asset in manifest["assets"]]
@@ -582,7 +580,6 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
     validate_package_mode(arguments.artifact_class, arguments.allow_dirty)
     require_native_host()
     dirty = require_clean_tree(arguments.allow_dirty)
-    manifest_schema, manifest_digest = contract_manifest_identity()
     source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
     with tempfile.TemporaryDirectory(prefix="podway-release-") as temporary_name:
         temporary = Path(temporary_name)
@@ -597,14 +594,7 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
         verify_artifact_class(
             {"podway": podway, "podwayd": podwayd}, arguments.artifact_class
         )
-        podway_identity = verify_binary_contract_identity(
-            podway, "podway", manifest_schema, manifest_digest, source_commit
-        )
-        podwayd_identity = verify_binary_contract_identity(
-            podwayd, "podwayd", manifest_schema, manifest_digest, source_commit
-        )
-        if podway_identity["build_identity"] != podwayd_identity["build_identity"]:
-            fail("podway and podwayd build identities do not match")
+        contract_receipt = verify_release_contract(ROOT, podway, podwayd, source_commit)
 
         output_directory = arguments.output_dir
         if output_directory.exists() and (
@@ -625,11 +615,11 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
         provenance = {
             "archive": {"name": archive_path.name, "sha256": archive_digest},
             "binaries": {"podway": sha256_file(podway), "podwayd": sha256_file(podwayd)},
-            "build_identity": podway_identity["build_identity"],
+            "build_identity": contract_receipt["build_identity"],
             "artifact_class": arguments.artifact_class,
             "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
-            "contract_manifest_digest": manifest_digest,
-            "contract_manifest_schema": manifest_schema,
+            "contract_manifest_digest": contract_receipt["contract_manifest_digest"],
+            "contract_manifest_schema": contract_receipt["contract_manifest_schema"],
             "release_gate": (
                 "test-fixture"
                 if arguments.artifact_class == "test-fixture"

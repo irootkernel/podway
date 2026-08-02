@@ -33,6 +33,7 @@ REQUIRED_MAKE_TARGETS = (
     "test-int",
     "test-fuzzing",
     "test-e2e",
+    "contract-verifier-test",
     "preset-create",
     "preset-import",
     "preset-tool-test",
@@ -42,6 +43,7 @@ REQUIRED_MAKE_TARGETS = (
 REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) test-prepare",
     "$(MAKE) test-rust",
+    "$(MAKE) contract-verifier-test",
     "$(MAKE) test-e2e",
     "$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1",
 )
@@ -55,6 +57,7 @@ REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_contracts.py --check",
     "python3 tools/verify_preset_tooling.py --podway",
     "python3 tools/contract_manifest.py --check",
+    "--features release-contract-verifier",
     "CARGO_INCREMENTAL=0",
     "TEST_THREADS ?= 4",
     "--test-threads=$(TEST_THREADS)",
@@ -454,6 +457,39 @@ def validate_makefile_contract(root: Path) -> int:
 
 
 
+def validate_release_contract_verifier(root: Path) -> int:
+    archive = (root / "tools/release_archive.py").read_text(encoding="utf-8")
+    qualification = (root / "tools/qualify_distribution.py").read_text(encoding="utf-8")
+    required_archive = (
+        "def verify_release_contract(",
+        '"--features",\n            "release-contract-verifier"',
+        '"--contract-root"',
+        "contract_receipt = verify_release_contract(ROOT, podway, podwayd, source_commit)",
+    )
+    required_qualification = (
+        "release_archive.verify_release_contract(",
+        'extracted / "share/podway"',
+    )
+    if any(token not in archive for token in required_archive) or any(
+        token not in qualification for token in required_qualification
+    ):
+        fail(
+            "release tooling does not route source and packaged identity through the Rust verifier",
+            "release_contract_verifier_drift",
+        )
+    forbidden = (
+        "def verify_binary_contract_identity(",
+        "def json_identity(",
+        '.get("result", document)',
+    )
+    if any(token in archive or token in qualification for token in forbidden):
+        fail(
+            "release tooling reintroduced a partial Python identity validator",
+            "release_contract_verifier_drift",
+        )
+    return len(required_archive) + len(required_qualification) + len(forbidden)
+
+
 def copy_contracts(source_root: Path, destination_root: Path) -> None:
     shutil.copytree(source_root / "contracts", destination_root / "contracts")
 
@@ -527,6 +563,7 @@ def production_checks(root: Path) -> dict[str, int]:
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
         "makefile_contract": validate_makefile_contract(root),
+        "release_contract_verifier": validate_release_contract_verifier(root),
         "contract_manifest_assets": contract_manifest.check(root),
     }
 

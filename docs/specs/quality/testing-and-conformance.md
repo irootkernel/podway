@@ -354,6 +354,8 @@ stages sequentially:
   dependency checks, architecture guardrails, quality mappings, and contracts;
 - `test-rust`: unit and architecture targets plus one integration suite per crate
   in one Cargo invocation, using four test workers by default;
+- `contract-verifier-test`: offline feature-gated verifier lint and source/package
+  parity plus negative controls;
 - `test-e2e`: serial user journeys through real debug product binaries and shells,
   including a start/status/next smoke for all four presets.
 
@@ -362,6 +364,12 @@ runs afterward against that prepared CLI instead of initiating another build.
 `make dist` always runs this gate, all-target Clippy, release helper sentinels,
 fixed-run fuzzing, release builds, one distribution package, qualification, and
 the handoff.
+
+The verifier controls include the captured malformed v0.1.1 daemon envelope,
+every missing required version field, wrong and unknown discriminators or
+fields, binary/source/manifest drift, manifest self/member digest drift,
+missing/extra/duplicate schemas and `$id` values, symlinks, and external or
+unknown references.
 
 Focused `test-unit`, `test-int`, and `architecture` targets remain available while
 iterating. Integration tests may execute one product component against controlled
@@ -389,3 +397,5 @@ identities, then extracts the
 archive, selects a private absolute `PODWAY_DEV_HOME`, runs the packaged lifecycle,
 conflict, timeout, response-loss, reconciliation, and identity scenarios through
 the foreground dev daemon, terminates it through IPC, and requires socket cleanup.
+Source packaging and extracted qualification both call the same manifest-bound
+Rust verifier before accepting either binary identity.

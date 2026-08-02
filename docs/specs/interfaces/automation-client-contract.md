@@ -207,7 +207,7 @@ the same session.
 |---|---|
 | `AUT-REL-001` | Podway MUST publish and support only native thin-arm64 `aarch64-apple-darwin` artifacts built and verified on an untranslated arm64 macOS host. |
 | `AUT-REL-002` | The archive MUST contain both binaries, completions, presets, schemas, specs, canonicalization fixtures, the contract manifest, README, and license, with checksum and provenance. |
-| `AUT-REL-003` | The packaged manifest digest, CLI identity, daemon identity, source revision, target, and toolchain identity MUST agree. |
+| `AUT-REL-003` | One offline manifest-bound Rust verifier MUST validate the source and packaged manifest shape, canonical and member digests, complete unique schema registry, full CLI and daemon envelopes and closed results, and agreement of packaged manifest digest, binary identities, source revision, target, and toolchain identity. |
 | `AUT-REL-004` | v0.1.0 MUST NOT be tagged until every preceding roadmap task is completed and the repository-local `make dist` gate passes. |
 
 ## 24. Acceptance matrix
@@ -231,7 +231,7 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 |---|---|---|
 | `AUT-T-PATH` | sanitized environment, arbitrary directory, CLI symlink, sibling/explicit/PATH daemon resolution, absolute plist path | `RPATH006`, `DOLGI001` |
 | `AUT-T-SOCK` | correct, wrong, relative, over-long, regular-file, symlink, insecure-parent, wrong-owner, stale, same/different-socket duplicate daemon | `RPATH003`–`RPATH006` |
-| `AUT-T-CONTRACT` | matching peers, same version/different manifest, different version/same IPC, replaced executable, restart after upgrade | `CONID003`–`CONID006` |
+| `AUT-T-CONTRACT` | matching peers, complete source/package schema validation, malformed v0.1.1 and generated identity/manifest/schema/reference drift, same version/different manifest, different version/same IPC, replaced executable, restart after upgrade | `CONID003`–`CONID006`, `REL12003`–`REL12004` |
 | `AUT-T-ID` | replaced workspace/session, same numeric revision on another session, stale reopen, wrong attempt/item, guarded reads | `CASID003`–`CASID005` |
 | `AUT-T-START` | matching/mismatching digest, source deletion/replacement/race, restart, exact replay, key reuse with another digest | `PSTRT001`–`PSTRT005` |
 | `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |

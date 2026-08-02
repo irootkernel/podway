@@ -90,6 +90,16 @@ descriptors. Binary validation, isolation classification, packaged content, reco
 digests, and provenance all use those immutable snapshot bytes. Probe failure,
 timeout, or ambiguity rejects both artifact classes.
 
+Before packaging, the internal Rust release-contract verifier reconstructs the
+source manifest and its exact offline schema registry, validates both complete
+identity envelopes and their closed version results, and requires the two result
+objects to be equal. Qualification invokes that same verifier against the
+extracted archive's `share/podway` contract root. Python release tooling only
+orchestrates the verifier and consumes its receipt; it does not maintain a
+parallel partial schema or identity interpretation. Manifest self/member drift,
+missing or extra schemas, duplicate paths or `$id` values, unregistered `$ref`
+targets, and external network or filesystem references are release-blocking.
+
 The provenance document records the shared binary build identity, source commit,
 Rust toolchain identifier, Cargo.lock digest, contract manifest identity, target
 architecture, both binary digests, archive digest, successful development and

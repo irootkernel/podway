@@ -12,6 +12,8 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 mod codec;
 mod framing;
 mod identity;
+#[cfg(feature = "release-contract-verifier")]
+mod release_contract;
 mod result_contract;
 mod slice;
 
@@ -24,6 +26,11 @@ pub use framing::{
     write_frame_v1,
 };
 pub use identity::{BuildIdentityV1, build_identity_v1};
+#[cfg(feature = "release-contract-verifier")]
+pub use release_contract::{
+    ReleaseContractErrorV1, ReleaseContractVerifierConfigV1, VerificationReceiptV1,
+    verify_release_contract_v1,
+};
 pub use result_contract::{
     SUPPORTED_RESULT_SCHEMAS_V1, ensure_command_result_schema_v1, validate_command_result_v1,
 };
