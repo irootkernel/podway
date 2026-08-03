@@ -1,7 +1,8 @@
 # Podway 0.1.2 release notes
 
-Podway 0.1.2 is a contract-recovery maintenance release candidate. Publication
-and the immutable GitHub release verification remain a separate release task.
+Podway 0.1.2 was published on August 3, 2026 as a contract-recovery maintenance
+release. The release and its artifacts are available from the
+[GitHub release page](https://github.com/irootkernel/podway/releases/tag/v0.1.2).
 
 ## Changes since 0.1.1
 
@@ -36,7 +37,7 @@ within the operating-system user account that owns them. It does not provide a m
 
 ## Distribution metadata
 
-The release candidate produces:
+The release provides:
 
 - `podway-0.1.2-aarch64-apple-darwin.tar.gz`;
 - its `.sha256` checksum file;

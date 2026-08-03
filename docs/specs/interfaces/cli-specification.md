@@ -4,7 +4,7 @@
 
 The public command is `podway`. The daemon binary is `podwayd` and is normally managed through `podway daemon ...`.
 
-This document describes the implemented v0.1.0 grammar, including its automation
+This document describes the implemented v0.1.2 grammar, including its automation
 options and result surfaces.
 
 ## Global options
@@ -40,7 +40,7 @@ Durations accept `ms`, `s`, and `m`, for example `500ms`, `30s`, and `2m`.
 - Human-readable text is the default.
 - `--json` emits exactly one success or error JSON object to stdout. The compact
   `version --json` success form is the deliberate exception to the common output
-  envelope and is exactly `{"name":"podway","version":"v0.1.0"}` for this release.
+  envelope and is exactly `{"name":"podway","version":"v0.1.2"}` for this release.
 - Diagnostics not represented in the JSON object go to stderr only for process-level failures before JSON can be produced.
 - Color is used only on a TTY and never in JSON.
 - Text wording is not a stable API. JSON fields, schemas, error codes, and exit codes are the stable integration contract.
@@ -75,7 +75,7 @@ podwayd version --json
 podwayd version --json --identity
 ```
 
-Its compact form is `{"name":"podwayd","version":"v0.1.0"}`. The identity
+Its compact form is `{"name":"podwayd","version":"v0.1.2"}`. The identity
 form retains the versioned output envelope and is the interface used by service
 installation and release qualification to verify the embedded contract. Those
 runtime probes validate the complete typed envelope and reject bare or malformed
