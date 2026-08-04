@@ -100,6 +100,26 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 
 The omitted seventh release requirement is retired by [ADR-0011](../../architecture-decision-records/0011-local-make-test-release-gate.md), which explains the intentional ID gap.
 
+## Podway v2 traceability contracts
+
+The v2 acceptance baseline is machine-bound by four manifest assets:
+
+- [`v2-acceptance-matrix-v1.json`](../../../quality/v2-acceptance-matrix-v1.json)
+  binds every mandatory §17 statement to its source line, contract paths, planned
+  test class, and owning tasks;
+- [`v2-compatibility-matrix-v1.json`](../../../quality/v2-compatibility-matrix-v1.json)
+  closes the retained v1 families and the additive v2 compatibility boundaries;
+- [`v2-payload-matrix-v1.json`](../../../quality/v2-payload-matrix-v1.json)
+  assigns the complete resolved `next` shape and status projections to bounded
+  wire components;
+- [`v2-release-gate-matrix-v1.json`](../../../release/v2-release-gate-matrix-v1.json)
+  partitions the acceptance statements into the nine release categories and
+  preserves the admission and final-gate conditions.
+
+Rows marked `planned` are traceability obligations only. They are not evidence
+that the runtime behavior, complete §17 acceptance gate, public v2 admission, or
+GA release has passed.
+
 ## Change-control rule
 
 Automation requirements use `AUT-*` identifiers in the

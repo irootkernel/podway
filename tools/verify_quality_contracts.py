@@ -14,6 +14,21 @@ ROOT = Path(__file__).resolve().parents[1]
 MATRIX_PATH = ROOT / "release/product-acceptance-matrix-v1.json"
 DOLGI_MATRIX_PATH = ROOT / "release/dolgorae-acceptance-matrix-v1.json"
 CRASH_PATH = ROOT / "quality/crash-boundaries-v1.json"
+V2_ACCEPTANCE_PATH = ROOT / "quality/v2-acceptance-matrix-v1.json"
+V2_COMPATIBILITY_PATH = ROOT / "quality/v2-compatibility-matrix-v1.json"
+V2_PAYLOAD_PATH = ROOT / "quality/v2-payload-matrix-v1.json"
+V2_RELEASE_PATH = ROOT / "release/v2-release-gate-matrix-v1.json"
+V2_SECTION_COUNTS = {
+    "17.1": 6,
+    "17.2": 14,
+    "17.3": 16,
+    "17.4": 13,
+    "17.5": 7,
+    "17.6": 9,
+    "17.7": 7,
+    "17.8": 4,
+    "17.9": 11,
+}
 FUNCTION_RE_TEMPLATE = r"\bfn\s+{name}\s*(?:<[^>]*>)?\s*\("
 TEST_FUNCTION_RE_TEMPLATE = (
     r"#\s*\[\s*test\s*\]\s*(?:#\s*\[[^\]]+\]\s*)*"
@@ -457,12 +472,551 @@ def validate_crash_registry() -> int:
     return len(windows)
 
 
+def v2_source_bullets() -> dict[str, list[tuple[int, str]]]:
+    source = ROOT / "docs/todo/TODO-podway-v2-full-feature-ga.md"
+    lines = source.read_text(encoding="utf-8").splitlines()
+    sections: dict[str, list[tuple[int, list[str]]]] = {
+        section: [] for section in V2_SECTION_COUNTS
+    }
+    current: str | None = None
+    for line_number, line in enumerate(lines, start=1):
+        if line.startswith("### 17."):
+            candidate = line.split()[1]
+            current = candidate if candidate in sections else None
+            continue
+        if line.startswith("## 18."):
+            current = None
+        if current is None:
+            continue
+        if line.startswith("- "):
+            sections[current].append((line_number, [line[2:]]))
+        elif sections[current] and line and not line.startswith("#"):
+            sections[current][-1][1].append(line.strip())
+    result = {
+        section: [(line, " ".join(parts)) for line, parts in bullets]
+        for section, bullets in sections.items()
+    }
+    observed = {section: len(bullets) for section, bullets in result.items()}
+    if observed != V2_SECTION_COUNTS:
+        fail(f"v2 acceptance source section counts drift: {observed}")
+    return result
+
+
+def roadmap_v2_tasks() -> set[str]:
+    text = (ROOT / "docs/roadmap/README.md").read_text(encoding="utf-8")
+    return set(re.findall(r"\| `(V2[A-Z]{3}-[0-9]{3})` \|", text))
+
+
+def require_exact_keys(value: Any, expected: set[str], label: str) -> None:
+    if not isinstance(value, dict) or set(value) != expected:
+        fail(f"{label} has unexpected or missing fields")
+
+
+def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    matrix = load_object(V2_ACCEPTANCE_PATH) if matrix is None else matrix
+    require_exact_keys(
+        matrix,
+        {"schema", "version", "source", "evidence_policy", "criteria"},
+        "v2 acceptance matrix",
+    )
+    if matrix["schema"] != "podway.v2-acceptance-matrix/v1" or matrix["version"] != 1:
+        fail("v2 acceptance matrix schema or version is unsupported")
+    source = matrix["source"]
+    require_exact_keys(source, {"path", "heading", "section_counts"}, "v2 acceptance source")
+    if source != {
+        "path": "docs/todo/TODO-podway-v2-full-feature-ga.md",
+        "heading": "## 17. Verification and Acceptance",
+        "section_counts": V2_SECTION_COUNTS,
+    }:
+        fail("v2 acceptance source binding drift")
+    criteria = matrix["criteria"]
+    if not isinstance(criteria, list) or len(criteria) != 87:
+        fail("v2 acceptance matrix must contain exactly 87 criteria")
+    source_bullets = v2_source_bullets()
+    tasks = roadmap_v2_tasks()
+    allowed_classes = {
+        "parser-contract", "graph-property", "runtime-integration", "goal-state-table",
+        "authoring-golden", "confirmation-e2e", "compatibility-e2e", "automation-e2e",
+        "payload-boundary",
+    }
+    expected = [
+        (section, ordinal, line, text)
+        for section, bullets in source_bullets.items()
+        for ordinal, (line, text) in enumerate(bullets, start=1)
+    ]
+    indexed: dict[str, dict[str, Any]] = {}
+    for number, (criterion, source_item) in enumerate(zip(criteria, expected), start=1):
+        identifier = f"V2ACC-{number:03d}"
+        require_exact_keys(
+            criterion,
+            {"id", "section", "ordinal", "line", "text", "contract_paths", "test_class", "owning_tasks", "implementation_status"},
+            identifier,
+        )
+        section, ordinal, line, text = source_item
+        if (criterion["id"], criterion["section"], criterion["ordinal"], criterion["line"], criterion["text"]) != (
+            identifier, section, ordinal, line, text
+        ):
+            fail(f"{identifier} does not exactly match its §17 source bullet")
+        contract_paths = criterion["contract_paths"]
+        if not isinstance(contract_paths, list) or not contract_paths:
+            fail(f"{identifier} must bind at least one contract path")
+        for relative in contract_paths:
+            repository_file(relative, f"{identifier} contract path")
+        if criterion["test_class"] not in allowed_classes:
+            fail(f"{identifier} has an unsupported test class")
+        owning_tasks = criterion["owning_tasks"]
+        if not isinstance(owning_tasks, list) or not owning_tasks or len(owning_tasks) != len(set(owning_tasks)) or any(task not in tasks for task in owning_tasks):
+            fail(f"{identifier} owning tasks must be non-empty, unique, and registered in the roadmap")
+        if criterion["implementation_status"] != "planned":
+            fail(f"{identifier} must remain planned until executable evidence lands")
+        indexed[identifier] = criterion
+    return indexed
+
+
+def validate_v2_compatibility_matrix(acceptance: dict[str, dict[str, Any]], matrix: dict[str, Any] | None = None) -> int:
+    matrix = load_object(V2_COMPATIBILITY_PATH) if matrix is None else matrix
+    require_exact_keys(matrix, {"schema", "version", "source_acceptance_matrix", "evidence_policy", "result_family_inventories", "requirements", "surface_cases", "v1_frozen_assets"}, "v2 compatibility matrix")
+    if matrix["schema"] != "podway.v2-compatibility-matrix/v1" or matrix["version"] != 1:
+        fail("v2 compatibility matrix schema or version is unsupported")
+    expected_inventories = {
+        "existing_route_v2": [
+            "assets/schemas/procedure-validation-result-v2.schema.json", "assets/schemas/detached-admission-result-v2.schema.json",
+            "assets/schemas/session-start-result-v2.schema.json", "assets/schemas/status-result-v2.schema.json",
+            "assets/schemas/compact-status-result-v2.schema.json", "assets/schemas/next-result-v2.schema.json",
+            "assets/schemas/stage-transition-result-v2.schema.json", "assets/schemas/item-mutation-result-v2.schema.json",
+        ],
+        "new_route_v1": [
+            "assets/schemas/procedure-source-result-v1.schema.json", "assets/schemas/procedure-diagnostics-result-v1.schema.json",
+            "assets/schemas/procedure-graph-result-v1.schema.json", "assets/schemas/procedure-preview-result-v1.schema.json",
+            "assets/schemas/decision-result-v1.schema.json", "assets/schemas/rework-result-v1.schema.json",
+            "assets/schemas/goal-definition-result-v1.schema.json", "assets/schemas/goal-revision-result-v1.schema.json",
+            "assets/schemas/criterion-assessment-result-v1.schema.json",
+        ],
+        "registry": "crates/podway-protocol/src/result_contract.rs",
+        "command_catalog": "assets/specifications/command-catalog.yaml",
+    }
+    if matrix["result_family_inventories"] != expected_inventories:
+        fail("v2 compatibility result family inventories drift")
+    for value in expected_inventories.values():
+        for relative in value if isinstance(value, list) else [value]:
+            repository_file(relative, "v2 compatibility result family inventory")
+    requirements = matrix["requirements"]
+    expected_ids = [identifier for identifier, item in acceptance.items() if item["section"] == "17.7"]
+    if not isinstance(requirements, list) or [item.get("acceptance_id") for item in requirements if isinstance(item, dict)] != expected_ids:
+        fail("v2 compatibility matrix must cover §17.7 exactly once and in order")
+    expected_requirement_boundaries = [
+        "v1-behavior-and-fixtures", "v1-storage-migration", "unsupported-peer",
+        "v1-command-semantics", "reactivation-semantics", "release-admission-fence",
+        "current-task-retention",
+    ]
+    for number, item in enumerate(requirements, start=1):
+        require_exact_keys(item, {"id", "acceptance_id", "text", "boundary", "contract_paths", "test_class", "owning_tasks", "implementation_status"}, f"V2COMP-{number:03d}")
+        criterion = acceptance[item["acceptance_id"]]
+        if item["id"] != f"V2COMP-{number:03d}" or item["text"] != criterion["text"] or item["boundary"] != expected_requirement_boundaries[number - 1] or item["contract_paths"] != criterion["contract_paths"] or item["test_class"] != "compatibility-e2e" or item["owning_tasks"] != criterion["owning_tasks"] or item["implementation_status"] != "planned":
+            fail(f"V2COMP-{number:03d} drifts from its acceptance criterion")
+        for relative in item["contract_paths"]:
+            repository_file(relative, f"V2COMP-{number:03d} contract path")
+    expected_boundaries = [
+        "existing-route-v2-result-family",
+        "new-route-v1-result-family",
+        "v2-never-extends-v1-result-family",
+        "registered-unserved-route-is-unsupported-capability",
+        "absent-route-is-unknown-command-or-usage",
+        "manifest-digest-is-capability-discovery",
+        "v1-reopen-is-not-v2-reactivation",
+        "released-v1-result-families-byte-for-byte",
+    ]
+    surface_cases = matrix["surface_cases"]
+    if not isinstance(surface_cases, list) or [item.get("boundary") for item in surface_cases if isinstance(item, dict)] != expected_boundaries:
+        fail("v2 compatibility specialized surface cases are incomplete or unordered")
+    for number, item in enumerate(surface_cases, start=1):
+        require_exact_keys(item, {"id", "boundary", "contract_paths", "owning_tasks", "implementation_status"}, f"V2COMP-SURFACE-{number:03d}")
+        owning_tasks = item["owning_tasks"]
+        if item["id"] != f"V2COMP-SURFACE-{number:03d}" or item["implementation_status"] != "planned" or not isinstance(owning_tasks, list) or not owning_tasks or len(owning_tasks) != len(set(owning_tasks)) or any(task not in roadmap_v2_tasks() for task in owning_tasks):
+            fail(f"V2COMP-SURFACE-{number:03d} is malformed or overstates evidence")
+        for relative in item["contract_paths"]:
+            repository_file(relative, f"V2COMP-SURFACE-{number:03d} contract path")
+    frozen = matrix["v1_frozen_assets"]
+    expected_frozen = [
+        "assets/schemas/compact-status-result-v1.schema.json",
+        "assets/schemas/daemon-status-result-v1.schema.json",
+        "assets/schemas/detached-admission-result-v1.schema.json",
+        "assets/schemas/error-v1.schema.json",
+        "assets/schemas/item-mutation-result-v1.schema.json",
+        "assets/schemas/job-lookup-result-v1.schema.json",
+        "assets/schemas/job-result-v1.schema.json",
+        "assets/schemas/next-result-v1.schema.json",
+        "assets/schemas/output-v1.schema.json",
+        "assets/schemas/procedure-validation-result-v1.schema.json",
+        "assets/schemas/session-start-result-v1.schema.json",
+        "assets/schemas/stage-transition-result-v1.schema.json",
+        "assets/schemas/status-result-v1.schema.json",
+        "assets/schemas/version-result-v1.schema.json",
+        "assets/schemas/workspace-init-result-v1.schema.json",
+    ]
+    if frozen != expected_frozen:
+        fail("v2 compatibility matrix must bind the exact 13 released v1 result families plus output and error envelopes")
+    for relative in frozen:
+        repository_file(relative, "v1 frozen asset")
+    if "contracts/command-routes.json" in frozen:
+        fail("the additive command route inventory is not a byte-frozen v1 asset")
+    return len(requirements)
+
+
+def selector_base(selector: Any) -> str:
+    if not isinstance(selector, str) or not selector:
+        fail("v2 payload selector must be a non-empty string")
+    return selector.split("[", 1)[0]
+
+
+def schema_registry() -> dict[str, dict[str, Any]]:
+    registry: dict[str, dict[str, Any]] = {}
+    for path in (ROOT / "assets/schemas").rglob("*.schema.json"):
+        value = load_object(path)
+        identifier = value.get("$id")
+        if isinstance(identifier, str):
+            registry[identifier] = value
+    return registry
+
+
+def resolve_schema_reference(reference: str, current: dict[str, Any], registry: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    base, _, fragment = reference.partition("#")
+    target = registry.get(base) if base else current
+    if target is None:
+        fail(f"v2 payload schema reference is unregistered: {reference}")
+    value: Any = target
+    if fragment:
+        if not fragment.startswith("/"):
+            fail(f"v2 payload schema reference fragment is invalid: {reference}")
+        for token in fragment[1:].split("/"):
+            token = token.replace("~1", "/").replace("~0", "~")
+            if not isinstance(value, dict) or token not in value:
+                fail(f"v2 payload schema reference fragment is missing: {reference}")
+            value = value[token]
+    if not isinstance(value, dict):
+        fail(f"v2 payload schema reference is not an object: {reference}")
+    return value
+
+
+def schema_leaf_paths(schema: dict[str, Any], path: str, current: dict[str, Any], registry: dict[str, dict[str, Any]], active: set[int] | None = None) -> set[str]:
+    active = set() if active is None else active
+    marker = id(schema)
+    if marker in active:
+        fail(f"v2 payload schema recursion is not a bounded leaf contract: {path}")
+    active.add(marker)
+    try:
+        if "$ref" in schema:
+            target = resolve_schema_reference(schema["$ref"], current, registry)
+            target_root = registry.get(schema["$ref"].partition("#")[0], current)
+            leaves = schema_leaf_paths(target, path, target_root, registry, active)
+            structural_siblings = {
+                key: value
+                for key, value in schema.items()
+                if key != "$ref" and key in {"properties", "items", "allOf", "anyOf", "oneOf"}
+            }
+            if structural_siblings:
+                leaves.update(schema_leaf_paths(structural_siblings, path, current, registry, active))
+            return leaves
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            leaves = set()
+            for name, child in properties.items():
+                if isinstance(child, dict):
+                    leaves.update(schema_leaf_paths(child, f"{path}.{name}" if path else name, current, registry, active))
+            return leaves
+        items = schema.get("items")
+        if isinstance(items, dict):
+            return schema_leaf_paths(items, f"{path}[]", current, registry, active)
+        alternatives = [schema[key] for key in ("allOf", "anyOf", "oneOf") if key in schema]
+        if alternatives:
+            leaves: set[str] = set()
+            for group in alternatives:
+                if not isinstance(group, list):
+                    fail(f"v2 payload schema combinator is not an array: {path}")
+                for branch in group:
+                    if isinstance(branch, dict) and branch.get("type") != "null":
+                        leaves.update(schema_leaf_paths(branch, path, current, registry, active))
+            return leaves or {path}
+        return {path}
+    finally:
+        active.remove(marker)
+
+
+def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: dict[str, Any] | None = None) -> int:
+    matrix = load_object(V2_PAYLOAD_PATH) if matrix is None else matrix
+    require_exact_keys(matrix, {"schema", "version", "source_acceptance_matrix", "evidence_policy", "frame_bytes", "next_budget_bytes", "headroom_bytes", "output_envelope", "next_schema", "resolved_next_shape", "components", "suggestion_partition", "status_contract", "projection_bounds", "requirements"}, "v2 payload matrix")
+    if matrix["schema"] != "podway.v2-payload-matrix/v1" or matrix["version"] != 1:
+        fail("v2 payload matrix schema or version is unsupported")
+    if (matrix["frame_bytes"], matrix["next_budget_bytes"], matrix["headroom_bytes"]) != (1048576, 1015808, 32768):
+        fail("v2 payload whole-frame arithmetic drift")
+    schema = load_object(repository_file(matrix["next_schema"], "v2 next schema"))
+    fields = set(schema.get("properties", {}))
+    registry = schema_registry()
+    all_leaves = schema_leaf_paths(schema, "", schema, registry)
+    if not {"suggestions[].command", "suggestions[].argv[]", "suggestions[].item_id"}.issubset(all_leaves):
+        fail("v2 payload schema leaf resolution did not reach suggestion array members")
+    output_envelope = matrix["output_envelope"]
+    require_exact_keys(output_envelope, {"schema", "selectors"}, "v2 output envelope binding")
+    output_schema = load_object(repository_file(output_envelope["schema"], "v2 output envelope schema"))
+    output_fields = set(output_schema.get("properties", {}))
+    if output_envelope["schema"] != "assets/schemas/output-v1.schema.json" or output_envelope["selectors"] != list(output_schema.get("properties", {})) or set(output_envelope["selectors"]) != output_fields:
+        fail("v2 output envelope binding must cover every inherited output/v1 field in schema order")
+    envelope_leaves = schema_leaf_paths(output_schema, "", output_schema, registry)
+    if not {"warnings[]", "workspace.uuid", "job.id", "session.id", "result.admission.admitted"}.issubset(envelope_leaves):
+        fail("v2 output envelope binding does not resolve inherited nested fields and warnings")
+    resolved_shape = matrix["resolved_next_shape"]
+    if resolved_shape != {"unique_instance_leaf_paths": 112, "non_suggestion_leaf_paths": 109, "suggestion_leaf_paths": 3, "conditional_assignments": 115, "v2_command_values": 19}:
+        fail("v2 resolved next shape counts drift")
+    if len(all_leaves) != 112 or len([leaf for leaf in all_leaves if leaf.startswith("suggestions[]")]) != 3:
+        fail("v2 next schema resolved leaf inventory drift")
+    components = matrix["components"]
+    if not isinstance(components, list) or [item.get("constant") for item in components if isinstance(item, dict)] != ["ENVELOPE_RESERVE", "NEXT_STATIC_BUDGET", "READBACK_BUDGET", "GOAL_DISPLAY_MAX", "BLOCKER_WINDOW_MAX", "COUNTERS_MAX"]:
+        fail("v2 payload components are incomplete or unordered")
+    if sum(item.get("bytes", 0) for item in components) != matrix["next_budget_bytes"]:
+        fail("v2 payload component sum does not match next_budget_bytes")
+    selectors = [selector for component in components for selector in component.get("selectors", [])]
+    bases = [selector_base(selector) for selector in selectors]
+    if set(bases) != fields:
+        fail(f"v2 payload field coverage drift: missing={sorted(fields - set(bases))}, extra={sorted(set(bases) - fields)}")
+    duplicates = {field for field in bases if bases.count(field) > 1}
+    partition = matrix["suggestion_partition"]
+    require_exact_keys(partition, {"field", "exhaustive", "disjoint", "predicates"}, "v2 suggestion partition")
+    expected_predicates = ["command!=goal.assess_criterion&&command!=goal.define", "command==goal.assess_criterion||command==goal.define"]
+    if duplicates != {"suggestions"} or partition != {"field": "suggestions", "exhaustive": True, "disjoint": True, "predicates": expected_predicates}:
+        fail("v2 payload selectors must assign every field once with the exact exhaustive suggestion partition")
+    expected_suggestion_selectors = [f"suggestions[{predicate}]" for predicate in expected_predicates]
+    if [selector for selector in selectors if selector_base(selector) == "suggestions"] != expected_suggestion_selectors:
+        fail("v2 suggestion selectors do not match the declared partition")
+    properties = schema["properties"]
+    covered_leaves: list[str] = []
+    for base in bases:
+        if base != "suggestions":
+            covered_leaves.extend(schema_leaf_paths(properties[base], base, schema, registry))
+    non_suggestion_leaves = {leaf for leaf in all_leaves if not leaf.startswith("suggestions[]")}
+    if set(covered_leaves) != non_suggestion_leaves or len(covered_leaves) != len(set(covered_leaves)):
+        fail("v2 payload selectors do not assign every resolved non-suggestion leaf exactly once")
+    suggestion_leaves = schema_leaf_paths(properties["suggestions"], "suggestions", schema, registry)
+    if not suggestion_leaves or any(not leaf.startswith("suggestions[]") for leaf in suggestion_leaves):
+        fail("v2 payload suggestion leaf expansion is invalid")
+    component_counts = {
+        component["constant"]: sum(
+            len(schema_leaf_paths(properties[selector_base(selector)], selector_base(selector), schema, registry))
+            for selector in component["selectors"]
+        )
+        for component in components
+    }
+    if component_counts != {"ENVELOPE_RESERVE": 18, "NEXT_STATIC_BUDGET": 23, "READBACK_BUDGET": 51, "GOAL_DISPLAY_MAX": 14, "BLOCKER_WINDOW_MAX": 5, "COUNTERS_MAX": 4} or sum(component_counts.values()) != 115:
+        fail("v2 payload resolved component assignment counts drift")
+    command_schema = resolve_schema_reference("urn:podway:schema:v2-result-components:v1#/$defs/v2Command", schema, registry)
+    command_values = command_schema.get("enum")
+    if not isinstance(command_values, list) or len(command_values) != 19 or len(set(command_values)) != 19:
+        fail("v2 suggestion partition is not bound to all 19 command values")
+    goal_commands = {"goal.assess_criterion", "goal.define"}
+    if not goal_commands.issubset(command_values) or not set(command_values).difference(goal_commands):
+        fail("v2 suggestion command partition is not exhaustive and disjoint")
+    status_contract = matrix["status_contract"]
+    expected_status = {
+        "status_values_max_bytes": 262144,
+        "item_value_max_characters": 2048,
+        "item_value_marker": "value_truncated",
+        "values_window_markers": ["items_total", "items_truncated"],
+        "blocker_window_max_bytes": 49152,
+        "blocker_window_order": "newest-first-complete-entries",
+        "blocker_window_markers": ["blockers_total", "blockers_truncated"],
+        "trace_window_max_bytes": 65536,
+        "trace_window_count": 4,
+        "trace_window_markers": ["trace_truncated", "trace_window"],
+        "compact_exclusions": ["trace_entries", "history", "windows", "readback_values", "prompts", "instructions", "statements", "suggestion_argv"],
+        "status_readback_values": False,
+    }
+    if status_contract != expected_status:
+        fail("v2 status payload bounds, exclusions, or truncation semantics drift")
+    expected_projections = [
+        {"projection": "compact-status", "schema": "assets/schemas/compact-status-result-v2.schema.json", "maximum_bytes": 262144, "test_class": "payload-boundary", "implementation_status": "planned"},
+        {"projection": "standard-status", "schema": "assets/schemas/status-result-v2.schema.json", "maximum_bytes": 1048576, "test_class": "payload-boundary", "implementation_status": "planned"},
+        {"projection": "verbose-status", "schema": "assets/schemas/status-result-v2.schema.json", "maximum_bytes": 1048576, "window_bytes": 65536, "window_count": 4, "test_class": "payload-boundary", "implementation_status": "planned"},
+    ]
+    if matrix["projection_bounds"] != expected_projections:
+        fail("v2 payload projection bounds or planned evidence status drift")
+    for projection in matrix["projection_bounds"]:
+        repository_file(projection["schema"], f"{projection['projection']} schema")
+    requirements = matrix["requirements"]
+    expected_ids = [identifier for identifier, item in acceptance.items() if item["section"] == "17.9"]
+    if not isinstance(requirements, list) or [item.get("acceptance_id") for item in requirements if isinstance(item, dict)] != expected_ids:
+        fail("v2 payload matrix must cover §17.9 exactly once and in order")
+    for number, item in enumerate(requirements, start=1):
+        require_exact_keys(item, {"id", "acceptance_id", "test_class", "owning_tasks", "implementation_status"}, f"V2PAY-{number:03d}")
+        if item["id"] != f"V2PAY-{number:03d}" or item["test_class"] != "payload-boundary" or item["implementation_status"] != "planned" or item["owning_tasks"] != acceptance[item["acceptance_id"]]["owning_tasks"]:
+            fail(f"V2PAY-{number:03d} overstates evidence or drifts from its acceptance criterion")
+    return len(requirements)
+
+
+def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: dict[str, Any] | None = None) -> int:
+    matrix = load_object(V2_RELEASE_PATH) if matrix is None else matrix
+    require_exact_keys(matrix, {"schema", "version", "source_acceptance_matrix", "admission_rule", "admission_policy", "task_test_policy", "categories", "final_gates"}, "v2 release gate matrix")
+    if matrix["schema"] != "podway.v2-release-gate-matrix/v1" or matrix["version"] != 1:
+        fail("v2 release gate matrix schema or version is unsupported")
+    expected_admission = {
+        "read_only_authoring_during_development": True,
+        "normal_v2_session_admission": "closed",
+        "development_unlock_requires_all": ["explicit-development-only-build-feature", "development-mode", "disposable-workspace-marker", "separate-socket", "separate-state-directory"],
+        "development_unlock_refuses": ["installed-daemon", "launch-agent", "normally-registered-workspace"],
+        "development_state_migration_promise": False,
+        "release_qualification_requires_unlock_absent": True,
+    }
+    if matrix["admission_policy"] != expected_admission:
+        fail("v2 admission and development-unlock policy drift")
+    expected_task_policy = {
+        "focused_success_and_failure_tests": True,
+        "affected_specs_and_machine_contracts_same_change": True,
+        "v1_regression_required": True,
+        "make_test_before_executable_task_completion": True,
+        "final_integrated_make_test_task": "V2REL-005",
+        "sole_release_readiness_task": "V2REL-006",
+    }
+    if matrix["task_test_policy"] != expected_task_policy:
+        fail("v2 per-task development gate policy drift")
+    categories = matrix["categories"]
+    if not isinstance(categories, list) or len(categories) != 9:
+        fail("v2 release gate matrix must contain nine acceptance categories")
+    observed: list[str] = []
+    gate_owners = ["V2REL-001", "V2REL-005", "V2REL-003", "V2REL-005", "V2REL-005", "V2REL-003", "V2REL-001", "V2REL-003", "V2REL-002"]
+    gates = ["make test", "make test", "make test-e2e", "make test", "make test", "make test-e2e", "make test", "make test-e2e", "make test-fuzzing"]
+    roadmap_tasks = roadmap_v2_tasks()
+    for number, (category, section) in enumerate(zip(categories, V2_SECTION_COUNTS), start=1):
+        require_exact_keys(category, {"id", "section", "acceptance_ids", "required_tasks", "gate_owner_task", "gate", "implementation_status"}, f"V2GATE-{number:02d}")
+        expected = [identifier for identifier, item in acceptance.items() if item["section"] == section]
+        expected_tasks: list[str] = []
+        for identifier in expected:
+            for task in acceptance[identifier]["owning_tasks"]:
+                if task not in expected_tasks:
+                    expected_tasks.append(task)
+        if category["id"] != f"V2GATE-{number:02d}" or category["section"] != section or category["acceptance_ids"] != expected or category["required_tasks"] != expected_tasks or category["gate_owner_task"] != gate_owners[number - 1] or category["gate"] != gates[number - 1] or category["implementation_status"] != "planned":
+            fail(f"V2GATE-{number:02d} does not exactly cover its §17 category")
+        if any(task not in roadmap_tasks for task in category["required_tasks"] + [category["gate_owner_task"]]):
+            fail(f"V2GATE-{number:02d} references an unregistered roadmap task")
+        observed.extend(category["acceptance_ids"])
+    if observed != list(acceptance):
+        fail("v2 release categories must partition all 87 acceptance criteria")
+    gates = matrix["final_gates"]
+    expected_gates = [
+        {"task": "V2REL-005", "command": "make test", "implementation_status": "planned"},
+        {"task": "V2REL-006", "command": "make dist", "implementation_status": "planned"},
+        {"task": "V2REL-007", "command": "explicit release authorization", "implementation_status": "planned", "conditions": ["all-prior-pv2ga-tasks-completed", "public-v2-admission-enabled-only-in-qualified-artifacts", "immutable-release-evidence-recorded", "explicit-release-authorization", "dossier-and-roadmap-archived"]},
+    ]
+    if gates != expected_gates:
+        fail("v2 final release gates drift")
+    return len(categories)
+
+
+def self_test_v2_matrices() -> int:
+    baseline = load_object(V2_ACCEPTANCE_PATH)
+    acceptance = validate_v2_acceptance_matrix(baseline)
+
+    def expect_failure(action: Any, expected: str, label: str) -> None:
+        try:
+            action()
+        except ContractError as error:
+            if expected not in str(error):
+                fail(f"{label} sentinel failed incorrectly: {error}")
+        else:
+            fail(f"{label} sentinel unexpectedly passed")
+
+    missing = copy.deepcopy(baseline)
+    missing["criteria"].pop()
+    expect_failure(lambda: validate_v2_acceptance_matrix(missing), "exactly 87", "v2 acceptance missing-entry")
+    wrong_line = copy.deepcopy(baseline)
+    wrong_line["criteria"][0]["line"] += 1
+    expect_failure(lambda: validate_v2_acceptance_matrix(wrong_line), "source bullet", "v2 acceptance source-drift")
+    overstated = copy.deepcopy(baseline)
+    overstated["criteria"][0]["implementation_status"] = "automated"
+    expect_failure(lambda: validate_v2_acceptance_matrix(overstated), "remain planned", "v2 acceptance evidence")
+
+    compatibility = load_object(V2_COMPATIBILITY_PATH)
+    missing_surface = copy.deepcopy(compatibility)
+    missing_surface["surface_cases"].pop()
+    expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, missing_surface), "specialized surface cases", "v2 compatibility missing-surface")
+    orphan_surface = copy.deepcopy(compatibility)
+    orphan_surface["surface_cases"].append(copy.deepcopy(orphan_surface["surface_cases"][-1]))
+    expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, orphan_surface), "specialized surface cases", "v2 compatibility orphan-surface")
+    missing_frozen = copy.deepcopy(compatibility)
+    missing_frozen["v1_frozen_assets"].pop()
+    expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, missing_frozen), "exact 13 released", "v2 compatibility frozen-family")
+    missing_family = copy.deepcopy(compatibility)
+    missing_family["result_family_inventories"]["existing_route_v2"].pop()
+    expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, missing_family), "result family inventories", "v2 compatibility family-inventory")
+    wrong_boundary = copy.deepcopy(compatibility)
+    wrong_boundary["requirements"][2]["boundary"] = "v1-output"
+    expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, wrong_boundary), "drifts from its acceptance criterion", "v2 compatibility boundary")
+    wrong_compatibility_class = copy.deepcopy(compatibility)
+    wrong_compatibility_class["requirements"][0]["test_class"] = "unit"
+    expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, wrong_compatibility_class), "drifts from its acceptance criterion", "v2 compatibility test-class")
+    wrong_compatibility_path = copy.deepcopy(compatibility)
+    wrong_compatibility_path["requirements"][0]["contract_paths"] = ["missing-contract"]
+    expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, wrong_compatibility_path), "drifts from its acceptance criterion", "v2 compatibility contract-path")
+
+    payload = load_object(V2_PAYLOAD_PATH)
+    missing_leaf = copy.deepcopy(payload)
+    missing_leaf["components"][1]["selectors"].remove("title")
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, missing_leaf), "field coverage drift", "v2 payload missing-leaf")
+    double_leaf = copy.deepcopy(payload)
+    double_leaf["components"][0]["selectors"].append("title")
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, double_leaf), "assign every field once", "v2 payload double-leaf")
+    wrong_sum = copy.deepcopy(payload)
+    wrong_sum["components"][0]["bytes"] += 1
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_sum), "component sum", "v2 payload arithmetic")
+    wrong_partition = copy.deepcopy(payload)
+    wrong_partition["suggestion_partition"]["predicates"][0] = "command!=goal.define"
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_partition), "exact exhaustive suggestion partition", "v2 payload suggestion-partition")
+    wrong_projection = copy.deepcopy(payload)
+    wrong_projection["projection_bounds"][0]["maximum_bytes"] += 1
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_projection), "projection bounds", "v2 payload projection")
+    wrong_status = copy.deepcopy(payload)
+    wrong_status["status_contract"]["status_readback_values"] = True
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_status), "status payload bounds", "v2 payload status")
+    wrong_envelope = copy.deepcopy(payload)
+    wrong_envelope["output_envelope"]["selectors"].pop()
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_envelope), "output envelope binding", "v2 payload envelope")
+    wrong_shape = copy.deepcopy(payload)
+    wrong_shape["resolved_next_shape"]["unique_instance_leaf_paths"] += 1
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_shape), "resolved next shape", "v2 payload resolved-shape")
+    wrong_payload_class = copy.deepcopy(payload)
+    wrong_payload_class["requirements"][0]["test_class"] = "unit"
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_payload_class), "V2PAY-001", "v2 payload test-class")
+
+    release = load_object(V2_RELEASE_PATH)
+    wrong_admission = copy.deepcopy(release)
+    wrong_admission["admission_policy"]["normal_v2_session_admission"] = "open"
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_admission), "admission and development-unlock", "v2 release admission")
+    wrong_task_policy = copy.deepcopy(release)
+    wrong_task_policy["task_test_policy"]["make_test_before_executable_task_completion"] = False
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_task_policy), "per-task development gate", "v2 release task-policy")
+    wrong_category = copy.deepcopy(release)
+    wrong_category["categories"][0]["acceptance_ids"].pop()
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category), "exactly cover", "v2 release category")
+    wrong_closeout = copy.deepcopy(release)
+    wrong_closeout["final_gates"][2]["conditions"].pop()
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_closeout), "final release gates", "v2 release closeout")
+    wrong_category_task = copy.deepcopy(release)
+    wrong_category_task["categories"][0]["required_tasks"].pop()
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category_task), "exactly cover", "v2 release category-task")
+    wrong_category_gate = copy.deepcopy(release)
+    wrong_category_gate["categories"][0]["gate"] = "make dist"
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category_gate), "exactly cover", "v2 release category-gate")
+    return 25
+
+
 def main() -> int:
     try:
         criteria, proof_files = validate_acceptance_matrix()
         dolgi_sentinels = self_test_dolgorae_acceptance_matrix()
         dolgi_tasks, dolgi_proof_files = validate_dolgorae_acceptance_matrix()
         crash_windows = validate_crash_registry()
+        v2_acceptance = validate_v2_acceptance_matrix()
+        v2_compatibility = validate_v2_compatibility_matrix(v2_acceptance)
+        v2_payload = validate_v2_payload_matrix(v2_acceptance)
+        v2_release = validate_v2_release_matrix(v2_acceptance)
+        v2_sentinels = self_test_v2_matrices()
     except ContractError as error:
         print(f"quality contract verification failed: {error}")
         return 1
@@ -470,7 +1024,9 @@ def main() -> int:
         f"quality contracts verified: {criteria} acceptance criteria, "
         f"{proof_files} proof files, {dolgi_tasks} DOLGI tasks, "
         f"{dolgi_proof_files} DOLGI proof files, {dolgi_sentinels} DOLGI sentinels, "
-        f"{crash_windows} crash windows"
+        f"{crash_windows} crash windows, {len(v2_acceptance)} v2 acceptance criteria, "
+        f"{v2_compatibility} v2 compatibility requirements, {v2_payload} v2 payload requirements, "
+        f"{v2_release} v2 release categories, {v2_sentinels} v2 sentinels"
     )
     return 0
 

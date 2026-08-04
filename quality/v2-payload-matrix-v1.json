@@ -1,0 +1,286 @@
+{
+  "schema": "podway.v2-payload-matrix/v1",
+  "version": 1,
+  "source_acceptance_matrix": "quality/v2-acceptance-matrix-v1.json",
+  "evidence_policy": "Budget assignments and planned test classes are static contract traceability, not production serialization proof.",
+  "frame_bytes": 1048576,
+  "next_budget_bytes": 1015808,
+  "headroom_bytes": 32768,
+  "output_envelope": {
+    "schema": "assets/schemas/output-v1.schema.json",
+    "selectors": [
+      "schema",
+      "request_id",
+      "command",
+      "generated_at",
+      "workspace",
+      "job",
+      "session",
+      "result",
+      "warnings"
+    ]
+  },
+  "next_schema": "assets/schemas/next-result-v2.schema.json",
+  "resolved_next_shape": {
+    "unique_instance_leaf_paths": 112,
+    "non_suggestion_leaf_paths": 109,
+    "suggestion_leaf_paths": 3,
+    "conditional_assignments": 115,
+    "v2_command_values": 19
+  },
+  "components": [
+    {
+      "constant": "ENVELOPE_RESERVE",
+      "bytes": 65536,
+      "selectors": [
+        "schema",
+        "procedure_schema",
+        "procedure_digest",
+        "node",
+        "attempt",
+        "queue",
+        "revision",
+        "missing_required_item_count",
+        "readiness"
+      ]
+    },
+    {
+      "constant": "NEXT_STATIC_BUDGET",
+      "bytes": 262144,
+      "selectors": [
+        "allowed_actions",
+        "allowed_manual_rework_targets",
+        "description",
+        "evidence_guidance",
+        "instructions",
+        "intent",
+        "missing_required_items",
+        "next_graph_node_id",
+        "objective",
+        "options",
+        "prompt",
+        "reason_policy",
+        "skip",
+        "terminal",
+        "title",
+        "suggestions[command!=goal.assess_criterion&&command!=goal.define]"
+      ]
+    },
+    {
+      "constant": "READBACK_BUDGET",
+      "bytes": 524288,
+      "selectors": [
+        "readback",
+        "references"
+      ]
+    },
+    {
+      "constant": "GOAL_DISPLAY_MAX",
+      "bytes": 73728,
+      "selectors": [
+        "goal",
+        "goal_defined",
+        "goal_revision",
+        "goal_tracking",
+        "latest_goal_outcome",
+        "suggestions[command==goal.assess_criterion||command==goal.define]"
+      ]
+    },
+    {
+      "constant": "BLOCKER_WINDOW_MAX",
+      "bytes": 49152,
+      "selectors": [
+        "blockers",
+        "blockers_total",
+        "blockers_truncated"
+      ]
+    },
+    {
+      "constant": "COUNTERS_MAX",
+      "bytes": 40960,
+      "selectors": [
+        "counters",
+        "trace_length"
+      ]
+    }
+  ],
+  "suggestion_partition": {
+    "field": "suggestions",
+    "exhaustive": true,
+    "disjoint": true,
+    "predicates": [
+      "command!=goal.assess_criterion&&command!=goal.define",
+      "command==goal.assess_criterion||command==goal.define"
+    ]
+  },
+  "status_contract": {
+    "status_values_max_bytes": 262144,
+    "item_value_max_characters": 2048,
+    "item_value_marker": "value_truncated",
+    "values_window_markers": [
+      "items_total",
+      "items_truncated"
+    ],
+    "blocker_window_max_bytes": 49152,
+    "blocker_window_order": "newest-first-complete-entries",
+    "blocker_window_markers": [
+      "blockers_total",
+      "blockers_truncated"
+    ],
+    "trace_window_max_bytes": 65536,
+    "trace_window_count": 4,
+    "trace_window_markers": [
+      "trace_truncated",
+      "trace_window"
+    ],
+    "compact_exclusions": [
+      "trace_entries",
+      "history",
+      "windows",
+      "readback_values",
+      "prompts",
+      "instructions",
+      "statements",
+      "suggestion_argv"
+    ],
+    "status_readback_values": false
+  },
+  "projection_bounds": [
+    {
+      "projection": "compact-status",
+      "schema": "assets/schemas/compact-status-result-v2.schema.json",
+      "maximum_bytes": 262144,
+      "test_class": "payload-boundary",
+      "implementation_status": "planned"
+    },
+    {
+      "projection": "standard-status",
+      "schema": "assets/schemas/status-result-v2.schema.json",
+      "maximum_bytes": 1048576,
+      "test_class": "payload-boundary",
+      "implementation_status": "planned"
+    },
+    {
+      "projection": "verbose-status",
+      "schema": "assets/schemas/status-result-v2.schema.json",
+      "maximum_bytes": 1048576,
+      "window_bytes": 65536,
+      "window_count": 4,
+      "test_class": "payload-boundary",
+      "implementation_status": "planned"
+    }
+  ],
+  "requirements": [
+    {
+      "id": "V2PAY-001",
+      "acceptance_id": "V2ACC-077",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-002",
+      "acceptance_id": "V2ACC-078",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-003",
+      "acceptance_id": "V2ACC-079",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-004",
+      "acceptance_id": "V2ACC-080",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2RUN-002",
+        "V2DRW-005",
+        "V2GOL-004",
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-005",
+      "acceptance_id": "V2ACC-081",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2RUN-002",
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-006",
+      "acceptance_id": "V2ACC-082",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2RUN-002",
+        "V2DRW-005",
+        "V2GOL-004",
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-007",
+      "acceptance_id": "V2ACC-083",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2RUN-002",
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-008",
+      "acceptance_id": "V2ACC-084",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2RUN-002",
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-009",
+      "acceptance_id": "V2ACC-085",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2RUN-003",
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-010",
+      "acceptance_id": "V2ACC-086",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2DOG-001",
+        "V2DOG-002"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2PAY-011",
+      "acceptance_id": "V2ACC-087",
+      "test_class": "payload-boundary",
+      "owning_tasks": [
+        "V2RUN-008",
+        "V2REL-002"
+      ],
+      "implementation_status": "planned"
+    }
+  ]
+}

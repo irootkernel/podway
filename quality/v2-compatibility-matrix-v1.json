@@ -1,0 +1,258 @@
+{
+  "schema": "podway.v2-compatibility-matrix/v1",
+  "version": 1,
+  "source_acceptance_matrix": "quality/v2-acceptance-matrix-v1.json",
+  "evidence_policy": "All entries are planned compatibility obligations, not current runtime proof.",
+  "result_family_inventories": {
+    "existing_route_v2": [
+      "assets/schemas/procedure-validation-result-v2.schema.json",
+      "assets/schemas/detached-admission-result-v2.schema.json",
+      "assets/schemas/session-start-result-v2.schema.json",
+      "assets/schemas/status-result-v2.schema.json",
+      "assets/schemas/compact-status-result-v2.schema.json",
+      "assets/schemas/next-result-v2.schema.json",
+      "assets/schemas/stage-transition-result-v2.schema.json",
+      "assets/schemas/item-mutation-result-v2.schema.json"
+    ],
+    "new_route_v1": [
+      "assets/schemas/procedure-source-result-v1.schema.json",
+      "assets/schemas/procedure-diagnostics-result-v1.schema.json",
+      "assets/schemas/procedure-graph-result-v1.schema.json",
+      "assets/schemas/procedure-preview-result-v1.schema.json",
+      "assets/schemas/decision-result-v1.schema.json",
+      "assets/schemas/rework-result-v1.schema.json",
+      "assets/schemas/goal-definition-result-v1.schema.json",
+      "assets/schemas/goal-revision-result-v1.schema.json",
+      "assets/schemas/criterion-assessment-result-v1.schema.json"
+    ],
+    "registry": "crates/podway-protocol/src/result_contract.rs",
+    "command_catalog": "assets/specifications/command-catalog.yaml"
+  },
+  "requirements": [
+    {
+      "id": "V2COMP-001",
+      "acceptance_id": "V2ACC-066",
+      "text": "all v1 behavior and fixtures remain valid;",
+      "boundary": "v1-behavior-and-fixtures",
+      "contract_paths": [
+        "docs/specs/interfaces/ipc-protocol.md",
+        "docs/specs/operations/release-and-packaging.md"
+      ],
+      "test_class": "compatibility-e2e",
+      "owning_tasks": [
+        "V2REL-001"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-002",
+      "acceptance_id": "V2ACC-067",
+      "text": "v1 sessions survive storage migration unchanged;",
+      "boundary": "v1-storage-migration",
+      "contract_paths": [
+        "docs/specs/interfaces/ipc-protocol.md",
+        "docs/specs/operations/release-and-packaging.md"
+      ],
+      "test_class": "compatibility-e2e",
+      "owning_tasks": [
+        "V2PLT-001"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-003",
+      "acceptance_id": "V2ACC-068",
+      "text": "v2 commands fail clearly against unsupported peers;",
+      "boundary": "unsupported-peer",
+      "contract_paths": [
+        "docs/specs/interfaces/ipc-protocol.md",
+        "docs/specs/operations/release-and-packaging.md"
+      ],
+      "test_class": "compatibility-e2e",
+      "owning_tasks": [
+        "V2REL-001"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-004",
+      "acceptance_id": "V2ACC-069",
+      "text": "v1 commands are not silently reinterpreted under v2;",
+      "boundary": "v1-command-semantics",
+      "contract_paths": [
+        "docs/specs/interfaces/ipc-protocol.md",
+        "docs/specs/operations/release-and-packaging.md"
+      ],
+      "test_class": "compatibility-e2e",
+      "owning_tasks": [
+        "V2MOD-008"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-005",
+      "acceptance_id": "V2ACC-070",
+      "text": "v1 `reopen` is not reinterpreted, and v2 reports the documented reactivation paths instead (§9.5);",
+      "boundary": "reactivation-semantics",
+      "contract_paths": [
+        "docs/specs/interfaces/ipc-protocol.md",
+        "docs/specs/operations/release-and-packaging.md"
+      ],
+      "test_class": "compatibility-e2e",
+      "owning_tasks": [
+        "V2MOD-008"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-006",
+      "acceptance_id": "V2ACC-071",
+      "text": "a release artifact cannot admit a `podway.procedure/v2` session before the complete acceptance gate passes; the development-only unlock is absent from release builds, is refused by an installed daemon or LaunchAgent, and refuses any workspace not created as disposable development state (§19);",
+      "boundary": "release-admission-fence",
+      "contract_paths": [
+        "docs/specs/interfaces/ipc-protocol.md",
+        "docs/specs/operations/release-and-packaging.md"
+      ],
+      "test_class": "compatibility-e2e",
+      "owning_tasks": [
+        "V2PLT-009",
+        "V2REL-003",
+        "V2REL-006"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-007",
+      "acceptance_id": "V2ACC-072",
+      "text": "reset and recovery preserve the current-task retention boundary.",
+      "boundary": "current-task-retention",
+      "contract_paths": [
+        "docs/specs/interfaces/ipc-protocol.md",
+        "docs/specs/operations/release-and-packaging.md"
+      ],
+      "test_class": "compatibility-e2e",
+      "owning_tasks": [
+        "V2PLT-005"
+      ],
+      "implementation_status": "planned"
+    }
+  ],
+  "surface_cases": [
+    {
+      "id": "V2COMP-SURFACE-001",
+      "boundary": "existing-route-v2-result-family",
+      "contract_paths": [
+        "docs/specs/interfaces/json-contract.md",
+        "crates/podway-protocol/src/result_contract.rs",
+        "assets/specifications/command-catalog.yaml"
+      ],
+      "owning_tasks": [
+        "V2REL-001"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-SURFACE-002",
+      "boundary": "new-route-v1-result-family",
+      "contract_paths": [
+        "docs/specs/interfaces/json-contract.md",
+        "crates/podway-protocol/src/result_contract.rs",
+        "assets/specifications/command-catalog.yaml"
+      ],
+      "owning_tasks": [
+        "V2REL-001"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-SURFACE-003",
+      "boundary": "v2-never-extends-v1-result-family",
+      "contract_paths": [
+        "docs/specs/interfaces/json-contract.md",
+        "crates/podway-protocol/src/result_contract.rs",
+        "assets/specifications/command-catalog.yaml"
+      ],
+      "owning_tasks": [
+        "V2REL-001"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-SURFACE-004",
+      "boundary": "registered-unserved-route-is-unsupported-capability",
+      "contract_paths": [
+        "contracts/command-routes.json",
+        "assets/specifications/error-codes.json"
+      ],
+      "owning_tasks": [
+        "V2PLT-010"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-SURFACE-005",
+      "boundary": "absent-route-is-unknown-command-or-usage",
+      "contract_paths": [
+        "contracts/command-routes.json",
+        "docs/specs/interfaces/cli-specification.md"
+      ],
+      "owning_tasks": [
+        "V2PLT-008"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-SURFACE-006",
+      "boundary": "manifest-digest-is-capability-discovery",
+      "contract_paths": [
+        "contracts/contract-manifest-v1.json",
+        "assets/schemas/version-result-v1.schema.json"
+      ],
+      "owning_tasks": [
+        "V2REL-001"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-SURFACE-007",
+      "boundary": "v1-reopen-is-not-v2-reactivation",
+      "contract_paths": [
+        "docs/specs/domain/rework-and-lifecycle.md",
+        "docs/specs/domain/state-transitions.md"
+      ],
+      "owning_tasks": [
+        "V2MOD-008"
+      ],
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2COMP-SURFACE-008",
+      "boundary": "released-v1-result-families-byte-for-byte",
+      "contract_paths": [
+        "docs/specs/interfaces/json-contract.md",
+        "crates/podway-protocol/src/result_contract.rs"
+      ],
+      "owning_tasks": [
+        "V2REL-001"
+      ],
+      "implementation_status": "planned"
+    }
+  ],
+  "v1_frozen_assets": [
+    "assets/schemas/compact-status-result-v1.schema.json",
+    "assets/schemas/daemon-status-result-v1.schema.json",
+    "assets/schemas/detached-admission-result-v1.schema.json",
+    "assets/schemas/error-v1.schema.json",
+    "assets/schemas/item-mutation-result-v1.schema.json",
+    "assets/schemas/job-lookup-result-v1.schema.json",
+    "assets/schemas/job-result-v1.schema.json",
+    "assets/schemas/next-result-v1.schema.json",
+    "assets/schemas/output-v1.schema.json",
+    "assets/schemas/procedure-validation-result-v1.schema.json",
+    "assets/schemas/session-start-result-v1.schema.json",
+    "assets/schemas/stage-transition-result-v1.schema.json",
+    "assets/schemas/status-result-v1.schema.json",
+    "assets/schemas/version-result-v1.schema.json",
+    "assets/schemas/workspace-init-result-v1.schema.json"
+  ]
+}
