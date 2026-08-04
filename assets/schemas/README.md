@@ -35,15 +35,15 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `detached-admission-result-v2.schema.json`: Procedure v2 durable mutation admission.
 - `session-start-result-v2.schema.json`: Procedure v2 dry-run and live start outcomes.
 - `compact-status-result-v2.schema.json`: bounded value-free Procedure v2 status.
-- `status-result-v2.schema.json`: standard and independently windowed verbose Procedure v2 status.
+- `status-result-v2.schema.json`: standard status and verbose status with six independently bounded history windows, including decisions and rework.
 - `next-result-v2.schema.json`: bounded action, decision, and goal-aware machine guidance.
 - `stage-transition-result-v2.schema.json`: Procedure v2 action and administrative transitions.
 - `item-mutation-result-v2.schema.json`: Procedure v2 item mutation outcome.
 - `authoring-diagnostic-v1.schema.json`: standalone bounded authoring diagnostic.
 - `procedure-source-result-v1.schema.json`: format, scaffold, and convert source output.
-- `procedure-diagnostics-result-v1.schema.json`: vet, lint, and check diagnostics.
+- `procedure-diagnostics-result-v1.schema.json`: shared bounded diagnostics for every Procedure v2 authoring command.
 - `procedure-graph-result-v1.schema.json`: deterministic graph projection output.
-- `procedure-preview-result-v1.schema.json`: bounded graph metadata preview.
+- `procedure-preview-result-v1.schema.json`: closed read-only preview report with checks, diagnostics, graph, Mermaid, digest, and an admissible start suggestion.
 - `decision-result-v1.schema.json`: immutable routed decision outcome.
 - `rework-result-v1.schema.json`: manual rework outcome.
 - `goal-definition-result-v1.schema.json`: initial session goal record.

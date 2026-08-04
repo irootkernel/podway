@@ -247,6 +247,13 @@ revision contains:
 - optional caller-supplied actor attribution;
 - creation time and the preceding revision identity.
 
+Every revision records its binding trace sequence: `goal define` uses the active
+attempt it binds, while `goal revise` uses the fresh target attempt activated by
+that transaction. Goal assessment records carry the trace sequence of their
+decision attempt. These correlations make both record families pageable with
+the verbose history cursor without making either record part of the execution
+trace itself.
+
 Every goal field is bounded: the goal statement at 1,000 characters, each
 criterion identifier at 64 and each criterion statement at 300 characters,
 each revision reason at 1,000 characters, each criterion assessment reason
@@ -1774,6 +1781,8 @@ Status projections MUST distinguish:
 - `trace_length` `[compact]`; the current valid execution trace as entries
   `[verbose]`;
 - stale historical attempts `[verbose]`;
+- immutable decision records and declared or manual rework records, each
+  correlated by execution trace sequence `[verbose]`;
 - the active attempt's resolved evidence reference metadata and each
   reference's state — resolved, unresolved, skipped, or stale (§8);
   read-back values belong to `next` alone (§10.4) `[standard]`;
@@ -1867,6 +1876,10 @@ Payload bounds apply per projection tier (§10.4):
   fields; a verbose view MUST NOT silently omit a trace member — whenever
   the window excludes any attempt, `trace_truncated` MUST be true and
   `trace_window` MUST report the trace sequence bounds actually carried;
+- `status --verbose --history-before <trace-sequence>` applies one exclusive
+  cursor to every history family; entries whose trace sequence is greater than
+  or equal to the cursor are omitted, so clients can page a coherent historical
+  view without a second public route;
 - the complete `next` response is bounded by the wire-size budget of §10.4:
   vet enforces the per-placement components and the remaining components
   are design constants, so a reachable `next` result always encodes within
@@ -2075,13 +2088,15 @@ Read-back belongs to `next` alone: status projections at every tier carry
 reference metadata and never read-back values, and `next` has exactly one
 form — there is no verbose `next`.
 
-Verbose status adds the history windows: the current valid execution trace
-and every stale-history family (attempts, goal revisions, goal assessments)
-as newest-first windows of at most `TRACE_WINDOW_MAX` = 65,536 bytes each,
-with explicit `trace_truncated` and `trace_window` fields whenever entries
-are omitted. Four windows add 262,144 bytes to the standard charge — under
-850,000 bytes in total, within the frame with more than 190,000 bytes of
-headroom. §17.9 requires a verbose maximum-size fixture.
+Verbose status adds the history windows: the current valid execution trace,
+stale attempts, immutable decision records, declared and manual rework records,
+stale goal revisions, and stale goal assessments. Each is a newest-first window
+of at most `TRACE_WINDOW_MAX` = 65,536 bytes, with explicit `trace_truncated`
+and `trace_window` fields whenever entries are omitted. Every history entry
+carries its correlated execution trace sequence so the same exclusive
+`--history-before <trace-sequence>` cursor pages all six families. Six windows
+add 393,216 bytes to the standard charge — under 980,000 bytes in total and
+within the frame. §17.9 requires a verbose maximum-size fixture.
 
 Only because of this whole-envelope arithmetic may a runtime serialization
 failure be classified as an integrity fault: it can occur only when an

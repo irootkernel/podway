@@ -81,6 +81,27 @@ installation and release qualification to verify the embedded contract. Those
 runtime probes validate the complete typed envelope and reject bare or malformed
 identity results before using any reported field.
 
+## Reserved Procedure v2 contract grammar
+
+This subsection records adopted, non-executable v2 grammar. It does not expand
+the implemented v0.1.2 command surface.
+
+```text
+podway procedure preview <file> [--json]
+podway status --verbose [--history-before <trace-sequence>]
+```
+
+`procedure preview` is unconditionally read-only. Its JSON result always reports
+admissibility, validate/vet/lint checks, and bounded diagnostics. When admissible,
+it also returns the normalized graph, Mermaid, canonical digest, and a structured
+`session.start` suggestion whose argv contains the same digest. It returns no
+start suggestion when validation or vetting fails.
+
+All Procedure v2 authoring commands use the shared structured diagnostic family
+for failures. `status --verbose` returns the six trace-sequenced history windows
+defined by `status-result/v2`; `--history-before` applies the exclusive cursor to
+each window. Standard status does not return history windows.
+
 ## PATH invocation and runtime environment
 
 Automation may invoke `podway` by command name through a controlled `PATH`,

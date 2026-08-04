@@ -64,12 +64,15 @@ wrappers remain unchanged: a terminal v2 job identifies its closed inner result
 by that result's own discriminator.
 
 The thirteen v2-only routes are prepared by nine `/v1` families. Format,
-scaffold, and convert share `procedure-source-result/v1`; vet, lint, and check
-share `procedure-diagnostics-result/v1`; graph, preview, decide, rework, goal
-definition, goal revision, and criterion assessment each select the correspondingly
-named closed family. `authoring-diagnostic/v1` is the standalone diagnostic
-object used by bounded diagnostic results. Registering these schemas does not
-make the future routes callable; route registration is a separate contract step.
+scaffold, and convert share `procedure-source-result/v1` on success. Every v2
+authoring route, including the existing `procedure.validate` route, selects
+`procedure-diagnostics-result/v1` when it must return structured diagnostics;
+vet, lint, and check also use that family for successful diagnostic reports.
+Graph, preview, decide, rework, goal definition, goal revision, and criterion
+assessment otherwise select the correspondingly named closed family.
+`authoring-diagnostic/v1` is the standalone diagnostic object used by bounded
+diagnostic results. Registering these schemas does not make the future routes
+callable; route registration is a separate contract step.
 
 Every family is closed, uses the Procedure v2 identifier and value bounds where
 applicable, and is selected through the version-aware protocol registry. V2
@@ -78,6 +81,21 @@ validation success is metadata-only (`file`, Procedure schema, digest, and
 retained output envelope. Source and graph text projections cap one scalar at
 131,072 characters; production encoding must still reject an oversized complete
 serialized output.
+
+Preview is one closed report rather than a loose graph summary. Every result
+contains the source file, admissibility, validate/vet/lint checks, and bounded
+diagnostics. An admissible result additionally contains procedure identity and
+purpose, the canonical digest, goal policy, the complete bounded summary,
+normalized graph, Mermaid, and a structured `session.start` suggestion whose
+argv contains that digest. An inadmissible result cannot contain a start
+suggestion.
+
+Verbose `status-result/v2` adds six independently bounded, newest-first history
+windows: current trace, stale attempts, decisions, rework, stale goal revisions,
+and stale goal assessments. Every entry carries the execution `trace_sequence`
+it belongs to; the shared `--history-before` cursor can therefore page all six
+windows without adding a separate public history route. Standard status forbids
+every history window.
 
 The retained `podway.output/v1` envelope is intentionally still open. A v2
 producer therefore applies an additional production guard: at most four warning

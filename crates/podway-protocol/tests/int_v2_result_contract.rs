@@ -158,11 +158,11 @@ fn examples() -> BTreeMap<&'static str, Value> {
         ),
         (
             "podway.procedure-preview-result/v1",
-            json!({"schema":"podway.procedure-preview-result/v1","procedure_schema":"podway.procedure/v2","procedure_digest":DIGEST,"entry_graph_node_id":"work","node_count":1,"edge_count":0,"terminal_graph_node_ids":["work"],"goal_tracking":false}),
+            json!({"schema":"podway.procedure-preview-result/v1","file":"workflow.yaml","admissible":true,"procedure_schema":"podway.procedure/v2","procedure_id":"workflow","procedure_version":"1","purpose":"test","procedure_digest":DIGEST,"goal_tracking":false,"goal_assessment_graph_node_ids":[],"summary":{"definition_count":1,"graph_node_count":1,"action_node_count":1,"decision_node_count":0,"route_count":0,"cycle_count":0,"evidence_reference_count":0,"skippable_node_count":0,"manual_rework_target_count":0},"checks":{"validate":true,"vet":true,"lint":true},"graph":{"entry_graph_node_id":"work","terminal_graph_node_ids":["work"],"nodes":[{"graph_node_id":"work","node_definition_id":"work","node_type":"action","terminal":true,"skippable":false}],"edges":[]},"mermaid":"flowchart TD\n  work","start_suggestion":{"command":"session.start","argv":["start","--procedure","workflow.yaml","--confirm-digest",DIGEST]},"diagnostics":[],"diagnostics_truncated":false,"diagnostics_total":0}),
         ),
         (
             "podway.decision-result/v1",
-            json!({"schema":"podway.decision-result/v1","graph_node_id":"review","attempt_id":UUID,"attempt_number":1,"option_id":"accept","effect":"advance","revision":2,"session_state":"running","record":{"session_id":UUID,"session_revision":1,"procedure_schema":"podway.procedure/v2","procedure_snapshot_id":UUID,"procedure_digest":DIGEST,"graph_node_id":"review","node_definition_id":"review","attempt_id":UUID,"attempt_number":1,"goal_revision":null,"option_id":"accept","effect":"advance","target_graph_node_id":"finish","reason":"accepted","recorded_at":"2026-08-04T00:00:00.000Z","references":[]}}),
+            json!({"schema":"podway.decision-result/v1","graph_node_id":"review","attempt_id":UUID,"attempt_number":1,"option_id":"accept","effect":"advance","revision":2,"session_state":"running","record":{"trace_sequence":1,"session_id":UUID,"session_revision":1,"procedure_schema":"podway.procedure/v2","procedure_snapshot_id":UUID,"procedure_digest":DIGEST,"graph_node_id":"review","node_definition_id":"review","attempt_id":UUID,"attempt_number":1,"goal_revision":null,"option_id":"accept","effect":"advance","target_graph_node_id":"finish","reason":"accepted","recorded_at":"2026-08-04T00:00:00.000Z","references":[]}}),
         ),
         (
             "podway.rework-result/v1",
@@ -184,7 +184,7 @@ fn examples() -> BTreeMap<&'static str, Value> {
 }
 
 #[test]
-fn v2ctr003_registry_is_versioned_and_covers_exactly_the_future_routes() {
+fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 8);
     assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 9);
     assert!(
@@ -206,6 +206,7 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_future_routes() {
         routes,
         BTreeSet::from([
             "procedure.format",
+            "procedure.validate",
             "procedure.vet",
             "procedure.lint",
             "procedure.check",
@@ -220,7 +221,7 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_future_routes() {
             "goal.assess_criterion",
         ])
     );
-    assert_eq!(routes.len(), 13);
+    assert_eq!(routes.len(), 14);
 }
 
 #[test]
@@ -683,6 +684,8 @@ fn v2ctr003_critical_bounds_and_variant_rules_fail_closed() {
     for field in [
         "current_trace_history",
         "stale_attempt_history",
+        "decision_history",
+        "rework_history",
         "stale_goal_revision_history",
         "stale_goal_assessment_history",
     ] {
@@ -710,10 +713,57 @@ fn v2ctr003_critical_bounds_and_variant_rules_fail_closed() {
     });
     assert_valid("schemas/status-result-v2.schema.json", &max_trace_window);
 
+    let mut decision_history = verbose.clone();
+    decision_history["decision_history"] = json!({
+        "entries":[fixtures["podway.decision-result/v1"]["record"].clone()],
+        "trace_truncated":false,
+        "trace_window":{"first_sequence":1,"last_sequence":1}
+    });
+    assert_valid("schemas/status-result-v2.schema.json", &decision_history);
+
+    let mut rework_history = verbose.clone();
+    rework_history["rework_history"] = json!({
+        "entries":[{
+            "trace_sequence":1,"kind":"manual","from_graph_node_id":"finish",
+            "to_graph_node_id":"work","target_attempt_id":UUID,"reason":"retry",
+            "reactivated":true,"recorded_at":"2026-08-04T00:00:00.000Z"
+        }],
+        "trace_truncated":false,
+        "trace_window":{"first_sequence":1,"last_sequence":1}
+    });
+    assert_valid("schemas/status-result-v2.schema.json", &rework_history);
+
+    let inadmissible_preview = json!({
+        "schema":"podway.procedure-preview-result/v1","file":"workflow.yaml",
+        "admissible":false,"checks":{"validate":false,"vet":false,"lint":false},
+        "diagnostics":[],"diagnostics_truncated":false,"diagnostics_total":0
+    });
+    assert_valid(
+        "schemas/procedure-preview-result-v1.schema.json",
+        &inadmissible_preview,
+    );
+    let mut inadmissible_with_start = inadmissible_preview;
+    inadmissible_with_start["start_suggestion"] =
+        fixtures["podway.procedure-preview-result/v1"]["start_suggestion"].clone();
+    assert_invalid(
+        "schemas/procedure-preview-result-v1.schema.json",
+        &inadmissible_with_start,
+    );
+    let mut false_inadmissible = fixtures["podway.procedure-preview-result/v1"].clone();
+    false_inadmissible["admissible"] = json!(false);
+    false_inadmissible
+        .as_object_mut()
+        .unwrap()
+        .remove("start_suggestion");
+    assert_invalid(
+        "schemas/procedure-preview-result-v1.schema.json",
+        &false_inadmissible,
+    );
+
     let mut invalid_goal_assessment_summary = verbose;
     invalid_goal_assessment_summary["stale_goal_assessment_history"] = json!({
         "entries":[{
-            "session_id":UUID,"session_revision":1,"procedure_snapshot_id":UUID,
+            "trace_sequence":1,"session_id":UUID,"session_revision":1,"procedure_snapshot_id":UUID,
             "procedure_digest":DIGEST,"graph_node_id":"review","node_definition_id":"review",
             "attempt_id":UUID,"attempt_number":1,"goal_revision":1,"assessment":"session_goal",
             "option_id":"accept","effect":"advance","target_graph_node_id":"finish",
@@ -819,6 +869,8 @@ fn v2ctr003_retained_envelope_warnings_have_a_production_bound() {
     for field in [
         "current_trace_history",
         "stale_attempt_history",
+        "decision_history",
+        "rework_history",
         "stale_goal_revision_history",
         "stale_goal_assessment_history",
     ] {

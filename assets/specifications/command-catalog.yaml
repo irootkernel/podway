@@ -42,6 +42,7 @@ commands:
   result_schemas:
   - podway.procedure-validation-result/v1
   - podway.procedure-validation-result/v2
+  - podway.procedure-diagnostics-result/v1
 - name: procedure.show
   availability: executable
   cli:
@@ -675,6 +676,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-source-result/v1
+  - podway.procedure-diagnostics-result/v1
 - name: procedure.vet
   availability: reserved_contract
   cli:
@@ -723,6 +725,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-graph-result/v1
+  - podway.procedure-diagnostics-result/v1
 - name: procedure.preview
   availability: reserved_contract
   cli:
@@ -735,6 +738,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-preview-result/v1
+  - podway.procedure-diagnostics-result/v1
 - name: procedure.scaffold
   availability: reserved_contract
   cli:
@@ -747,6 +751,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-source-result/v1
+  - podway.procedure-diagnostics-result/v1
 - name: procedure.convert
   availability: reserved_contract
   cli:
@@ -759,6 +764,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-source-result/v1
+  - podway.procedure-diagnostics-result/v1
 - name: session.decide
   availability: reserved_contract
   cli:

@@ -1968,7 +1968,7 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
         json!([
             {"tier":"compact","maximum_bytes":262144,"includes":["counters","trace_length"],"excludes":["trace_entries","history","windows","readback_values","prompts","instructions","statements","suggestion_argv"]},
             {"tier":"standard","maximum_bytes":1048576,"status_values_max_bytes":262144,"item_value_max_characters":2048,"value_marker":"value_truncated","window_markers":["items_total","items_truncated"]},
-            {"tier":"verbose","maximum_bytes":1048576,"trace_window_max_bytes":65536,"trace_window_count":4,"window_markers":["trace_truncated","trace_window"]}
+            {"tier":"verbose","maximum_bytes":1048576,"trace_window_max_bytes":65536,"trace_window_count":6,"window_markers":["trace_truncated","trace_window"]}
         ])
     );
     assert_eq!(

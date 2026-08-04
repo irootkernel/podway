@@ -22,7 +22,7 @@
       "id": "V2ACC-001",
       "section": "17.1",
       "ordinal": 1,
-      "line": 2859,
+      "line": 2874,
       "text": "YAML and JSON resolve to identical canonical semantics;",
       "contract_paths": [
         "assets/schemas/procedure-v2.schema.json",
@@ -38,7 +38,7 @@
       "id": "V2ACC-002",
       "section": "17.1",
       "ordinal": 2,
-      "line": 2860,
+      "line": 2875,
       "text": "unknown fields, duplicate keys, aliases, tags, includes, oversized values, and unsupported constructs fail closed;",
       "contract_paths": [
         "assets/schemas/procedure-v2.schema.json",
@@ -54,7 +54,7 @@
       "id": "V2ACC-003",
       "section": "17.1",
       "ordinal": 3,
-      "line": 2862,
+      "line": 2877,
       "text": "canonical digest is stable across field ordering and formatting;",
       "contract_paths": [
         "assets/schemas/procedure-v2.schema.json",
@@ -70,7 +70,7 @@
       "id": "V2ACC-004",
       "section": "17.1",
       "ordinal": 4,
-      "line": 2863,
+      "line": 2878,
       "text": "v1 and v2 are unambiguously discriminated;",
       "contract_paths": [
         "assets/schemas/procedure-v2.schema.json",
@@ -86,7 +86,7 @@
       "id": "V2ACC-005",
       "section": "17.1",
       "ordinal": 5,
-      "line": 2864,
+      "line": 2879,
       "text": "`goal_tracking: true` is the only accepted opt-in form, and every other value, including `false`, a string, a list, or a nested object, is rejected (§7.1);",
       "contract_paths": [
         "assets/schemas/procedure-v2.schema.json",
@@ -102,7 +102,7 @@
       "id": "V2ACC-006",
       "section": "17.1",
       "ordinal": 6,
-      "line": 2867,
+      "line": 2882,
       "text": "procedure `purpose`, decision `objective`, `evidence_guidance`, `evidence_from`, placement `skip`, and assessment mappings have closed, deterministic canonical forms.",
       "contract_paths": [
         "assets/schemas/procedure-v2.schema.json",
@@ -118,7 +118,7 @@
       "id": "V2ACC-007",
       "section": "17.2",
       "ordinal": 1,
-      "line": 2873,
+      "line": 2888,
       "text": "unique definition and graph placement identities;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -134,7 +134,7 @@
       "id": "V2ACC-008",
       "section": "17.2",
       "ordinal": 2,
-      "line": 2874,
+      "line": 2889,
       "text": "valid entry graph node and a finite terminal route from every reachable node;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -150,7 +150,7 @@
       "id": "V2ACC-009",
       "section": "17.2",
       "ordinal": 3,
-      "line": 2876,
+      "line": 2891,
       "text": "unreachable-node detection;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -166,7 +166,7 @@
       "id": "V2ACC-010",
       "section": "17.2",
       "ordinal": 4,
-      "line": 2877,
+      "line": 2892,
       "text": "route completeness, covering both an option without a route and a route for an undefined option;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -182,7 +182,7 @@
       "id": "V2ACC-011",
       "section": "17.2",
       "ordinal": 5,
-      "line": 2879,
+      "line": 2894,
       "text": "the single cycle rule of §9.2, with its corollaries reported derivatively rather than as independent requirements;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -198,7 +198,7 @@
       "id": "V2ACC-012",
       "section": "17.2",
       "ordinal": 6,
-      "line": 2881,
+      "line": 2896,
       "text": "acceptance of valid rework cycles without attempt or traversal limits;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -214,7 +214,7 @@
       "id": "V2ACC-013",
       "section": "17.2",
       "ordinal": 7,
-      "line": 2882,
+      "line": 2897,
       "text": "dominance analysis, with the preservation lemma of §11.3 exercised as a property test over generated graphs and generated valid execution traces;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -230,7 +230,7 @@
       "id": "V2ACC-014",
       "section": "17.2",
       "ordinal": 8,
-      "line": 2884,
+      "line": 2899,
       "text": "every declared rework route's target dominates its routing decision placement (`REWORK_TARGET_NOT_DOMINATING`);",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -246,7 +246,7 @@
       "id": "V2ACC-015",
       "section": "17.2",
       "ordinal": 9,
-      "line": 2886,
+      "line": 2901,
       "text": "`evidence_from` checks: an unknown source placement, an entry naming its own consuming placement, a required source that does not strictly dominate its consumer, and a required source that declares `skip.allowed: true` (`SKIPPABLE_EVIDENCE_SOURCE`);",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -262,7 +262,7 @@
       "id": "V2ACC-016",
       "section": "17.2",
       "ordinal": 10,
-      "line": 2890,
+      "line": 2905,
       "text": "evidence item selector validation and the aggregate read-back budget arithmetic, including a maximum-size reachable read-back fixture (`READBACK_BUDGET_EXCEEDED`);",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -279,7 +279,7 @@
       "id": "V2ACC-017",
       "section": "17.2",
       "ordinal": 11,
-      "line": 2893,
+      "line": 2908,
       "text": "goal-assessment dominance for opted-in terminal paths;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -295,7 +295,7 @@
       "id": "V2ACC-018",
       "section": "17.2",
       "ordinal": 12,
-      "line": 2894,
+      "line": 2909,
       "text": "goal-assessment option and outcome coverage, so that no option is unmapped and no outcome is unreachable (§7.4);",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -311,7 +311,7 @@
       "id": "V2ACC-019",
       "section": "17.2",
       "ordinal": 13,
-      "line": 2896,
+      "line": 2911,
       "text": "manual rework policy validation;",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -327,7 +327,7 @@
       "id": "V2ACC-020",
       "section": "17.2",
       "ordinal": 14,
-      "line": 2897,
+      "line": 2912,
       "text": "deterministic diagnostics.",
       "contract_paths": [
         "docs/specs/domain/procedure-and-item-specification.md",
@@ -343,7 +343,7 @@
       "id": "V2ACC-021",
       "section": "17.3",
       "ordinal": 1,
-      "line": 2901,
+      "line": 2916,
       "text": "at most one active attempt across the session, and exactly one while it runs, enforced as a store-level invariant rather than inferred from graph shape;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -359,7 +359,7 @@
       "id": "V2ACC-022",
       "section": "17.3",
       "ordinal": 2,
-      "line": 2904,
+      "line": 2919,
       "text": "action completion and decision selection enforce different contracts;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -375,7 +375,7 @@
       "id": "V2ACC-023",
       "section": "17.3",
       "ordinal": 3,
-      "line": 2905,
+      "line": 2920,
       "text": "skip honors the placement skip policy and every terminal readiness gate;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -391,7 +391,7 @@
       "id": "V2ACC-024",
       "section": "17.3",
       "ordinal": 4,
-      "line": 2906,
+      "line": 2921,
       "text": "an action placement may declare `evidence_from`; its resolved references gate nothing — `complete` does not re-verify their freshness and no readiness condition depends on them (§6.2);",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -407,7 +407,7 @@
       "id": "V2ACC-025",
       "section": "17.3",
       "ordinal": 5,
-      "line": 2909,
+      "line": 2924,
       "text": "`next` on any placement that declares `evidence_from` carries the read-back of §8.4, including decision-record and goal-assessment content for decision sources;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -423,7 +423,7 @@
       "id": "V2ACC-026",
       "section": "17.3",
       "ordinal": 6,
-      "line": 2912,
+      "line": 2927,
       "text": "runtime read-back presents exactly the selected items of each reference (§8.1), never the unselected remainder;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -439,7 +439,7 @@
       "id": "V2ACC-027",
       "section": "17.3",
       "ordinal": 7,
-      "line": 2914,
+      "line": 2929,
       "text": "delayed or duplicated decisions fail or replay safely;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -455,7 +455,7 @@
       "id": "V2ACC-028",
       "section": "17.3",
       "ordinal": 8,
-      "line": 2915,
+      "line": 2930,
       "text": "declared rework and manual rework create fresh attempts;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -472,7 +472,7 @@
       "id": "V2ACC-029",
       "section": "17.3",
       "ordinal": 9,
-      "line": 2916,
+      "line": 2931,
       "text": "trace-suffix invalidation is complete and atomic, including the routing decision's own attempt (§9.3);",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -488,7 +488,7 @@
       "id": "V2ACC-030",
       "section": "17.3",
       "ordinal": 10,
-      "line": 2918,
+      "line": 2933,
       "text": "stale resolved evidence references never satisfy readiness or `decide`;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -504,7 +504,7 @@
       "id": "V2ACC-031",
       "section": "17.3",
       "ordinal": 11,
-      "line": 2919,
+      "line": 2934,
       "text": "re-resolution occurs only on a fresh attempt and never in place;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -520,11 +520,22 @@
       "id": "V2ACC-032",
       "section": "17.3",
       "ordinal": 12,
-      "line": 2920,
+      "line": 2935,
       "text": "historical attempts, decision records, and goal assessments remain inspectable and reportable while non-satisfying;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
-        "docs/specs/storage/transactions-concurrency-and-idempotency.md"
+        "docs/specs/storage/transactions-concurrency-and-idempotency.md",
+        "assets/schemas/status-result-v2.schema.json"
+      ],
+      "contract_refs": [
+        {
+          "path": "assets/schemas/status-result-v2.schema.json",
+          "anchor": "/properties/decision_history"
+        },
+        {
+          "path": "assets/schemas/status-result-v2.schema.json",
+          "anchor": "/properties/rework_history"
+        }
       ],
       "test_class": "runtime-integration",
       "owning_tasks": [
@@ -537,7 +548,7 @@
       "id": "V2ACC-033",
       "section": "17.3",
       "ordinal": 13,
-      "line": 2922,
+      "line": 2937,
       "text": "completed-session reactivation through manual rework and `goal revise --reactivate` behaves deterministically;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -554,7 +565,7 @@
       "id": "V2ACC-034",
       "section": "17.3",
       "ordinal": 14,
-      "line": 2924,
+      "line": 2939,
       "text": "cancelled sessions cannot reactivate;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -571,7 +582,7 @@
       "id": "V2ACC-035",
       "section": "17.3",
       "ordinal": 15,
-      "line": 2925,
+      "line": 2940,
       "text": "repeated retry and rework traversal remains valid without a count limit;",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -587,7 +598,7 @@
       "id": "V2ACC-036",
       "section": "17.3",
       "ordinal": 16,
-      "line": 2926,
+      "line": 2941,
       "text": "storage exhaustion fails atomically rather than becoming an implicit limit.",
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
@@ -604,7 +615,7 @@
       "id": "V2ACC-037",
       "section": "17.4",
       "ordinal": 1,
-      "line": 2930,
+      "line": 2945,
       "text": "goal tracking is absent and inapplicable for procedures that do not opt in;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -620,7 +631,7 @@
       "id": "V2ACC-038",
       "section": "17.4",
       "ordinal": 2,
-      "line": 2931,
+      "line": 2946,
       "text": "opted-in sessions may define revision 1 at start or during an initial action;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -636,7 +647,7 @@
       "id": "V2ACC-039",
       "section": "17.4",
       "ordinal": 3,
-      "line": 2932,
+      "line": 2947,
       "text": "goal definition requires a statement and at least one stable-ID criterion;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -652,7 +663,7 @@
       "id": "V2ACC-040",
       "section": "17.4",
       "ordinal": 4,
-      "line": 2933,
+      "line": 2948,
       "text": "goal revision atomically records the new revision and reworks the selected valid trace suffix, and its target obeys the manual rework policy;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -668,7 +679,7 @@
       "id": "V2ACC-041",
       "section": "17.4",
       "ordinal": 5,
-      "line": 2935,
+      "line": 2950,
       "text": "goal revision targets that are not revision-safe are rejected, so a revision can never strand a valid but revision-mismatched assessment with no reachable assessment decision (§7.2, §7.5);",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -684,7 +695,7 @@
       "id": "V2ACC-042",
       "section": "17.4",
       "ordinal": 6,
-      "line": 2938,
+      "line": 2953,
       "text": "`--reactivate` is required to revise a completed session and is inert for a running one; cancelled sessions may not revise;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -700,7 +711,7 @@
       "id": "V2ACC-043",
       "section": "17.4",
       "ordinal": 7,
-      "line": 2940,
+      "line": 2955,
       "text": "delayed mutations against an older goal revision fail;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -716,7 +727,7 @@
       "id": "V2ACC-044",
       "section": "17.4",
       "ordinal": 8,
-      "line": 2941,
+      "line": 2956,
       "text": "general decisions never create goal assessments;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -732,7 +743,7 @@
       "id": "V2ACC-045",
       "section": "17.4",
       "ordinal": 9,
-      "line": 2942,
+      "line": 2957,
       "text": "criterion statuses are homogeneous within one assessment attempt, a mixed result fails with `CRITERION_MODE_MIXED`, and only `retry` switches the mode;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -748,7 +759,7 @@
       "id": "V2ACC-046",
       "section": "17.4",
       "ordinal": 10,
-      "line": 2944,
+      "line": 2959,
       "text": "outcome determination matches §7.4, and outcome coverage guarantees that the determined outcome has a selectable option and route;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -764,7 +775,7 @@
       "id": "V2ACC-047",
       "section": "17.4",
       "ordinal": 11,
-      "line": 2946,
+      "line": 2961,
       "text": "criterion citations are validated against the attempt's resolved evidence references and its persisted decision-local items;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -780,7 +791,7 @@
       "id": "V2ACC-048",
       "section": "17.4",
       "ordinal": 12,
-      "line": 2948,
+      "line": 2963,
       "text": "stale goal assessments never satisfy terminal readiness;",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -796,7 +807,7 @@
       "id": "V2ACC-049",
       "section": "17.4",
       "ordinal": 13,
-      "line": 2949,
+      "line": 2964,
       "text": "completed lifecycle and recorded goal outcome remain distinct.",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
@@ -812,7 +823,7 @@
       "id": "V2ACC-050",
       "section": "17.5",
       "ordinal": 1,
-      "line": 2953,
+      "line": 2968,
       "text": "format is deterministic and idempotent on stdout;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -828,7 +839,7 @@
       "id": "V2ACC-051",
       "section": "17.5",
       "ordinal": 2,
-      "line": 2954,
+      "line": 2969,
       "text": "`format --check` has safe exit behavior;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -844,7 +855,7 @@
       "id": "V2ACC-052",
       "section": "17.5",
       "ordinal": 3,
-      "line": 2955,
+      "line": 2970,
       "text": "v0.2.0 GA ships `format` stdout, `--check`, and `--write`, with supported comments preserved and unsupported source constructs rejected before write;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -860,7 +871,7 @@
       "id": "V2ACC-053",
       "section": "17.5",
       "ordinal": 4,
-      "line": 2957,
+      "line": 2972,
       "text": "comments are never silently lost;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -876,7 +887,7 @@
       "id": "V2ACC-054",
       "section": "17.5",
       "ordinal": 5,
-      "line": 2958,
+      "line": 2973,
       "text": "validate, vet, lint, and check have stable JSON diagnostics;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -892,7 +903,7 @@
       "id": "V2ACC-055",
       "section": "17.5",
       "ordinal": 6,
-      "line": 2959,
+      "line": 2974,
       "text": "the Mermaid, graph JSON, PlantUML, and DOT projections are deterministic;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -908,7 +919,7 @@
       "id": "V2ACC-056",
       "section": "17.5",
       "ordinal": 7,
-      "line": 2960,
+      "line": 2975,
       "text": "projections contain no attempt-local content or sensitive metadata.",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -924,11 +935,22 @@
       "id": "V2ACC-057",
       "section": "17.6",
       "ordinal": 1,
-      "line": 2964,
+      "line": 2979,
       "text": "preview and start compute the same canonical digest;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
-        "docs/specs/domain/state-transitions.md"
+        "docs/specs/domain/state-transitions.md",
+        "assets/schemas/procedure-preview-result-v1.schema.json"
+      ],
+      "contract_refs": [
+        {
+          "path": "assets/schemas/procedure-preview-result-v1.schema.json",
+          "anchor": "/properties/procedure_digest"
+        },
+        {
+          "path": "docs/specs/interfaces/cli-specification.md",
+          "anchor": "## Reserved Procedure v2 contract grammar"
+        }
       ],
       "test_class": "confirmation-e2e",
       "owning_tasks": [
@@ -941,7 +963,7 @@
       "id": "V2ACC-058",
       "section": "17.6",
       "ordinal": 2,
-      "line": 2965,
+      "line": 2980,
       "text": "built-in v2 preset starts are exempt from the confirmation fence and fail closed on a shipped-digest mismatch;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -957,7 +979,7 @@
       "id": "V2ACC-059",
       "section": "17.6",
       "ordinal": 3,
-      "line": 2967,
+      "line": 2982,
       "text": "every custom start requires the exact digest, and a flagless custom start fails with `DIGEST_CONFIRMATION_REQUIRED` without creating session state (§13.3);",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -973,11 +995,22 @@
       "id": "V2ACC-060",
       "section": "17.6",
       "ordinal": 4,
-      "line": 2970,
+      "line": 2985,
       "text": "preview is unconditionally read-only: it persists nothing and never creates session state, and its printed start command carries the computed digest (§13.2);",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
-        "docs/specs/domain/state-transitions.md"
+        "docs/specs/domain/state-transitions.md",
+        "assets/schemas/procedure-preview-result-v1.schema.json"
+      ],
+      "contract_refs": [
+        {
+          "path": "assets/schemas/procedure-preview-result-v1.schema.json",
+          "anchor": "/properties/start_suggestion"
+        },
+        {
+          "path": "docs/specs/interfaces/cli-specification.md",
+          "anchor": "## Reserved Procedure v2 contract grammar"
+        }
       ],
       "test_class": "confirmation-e2e",
       "owning_tasks": [
@@ -989,7 +1022,7 @@
       "id": "V2ACC-061",
       "section": "17.6",
       "ordinal": 5,
-      "line": 2973,
+      "line": 2988,
       "text": "semantic edits invalidate confirmation;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -1005,7 +1038,7 @@
       "id": "V2ACC-062",
       "section": "17.6",
       "ordinal": 6,
-      "line": 2974,
+      "line": 2989,
       "text": "non-semantic formatting does not;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -1021,7 +1054,7 @@
       "id": "V2ACC-063",
       "section": "17.6",
       "ordinal": 7,
-      "line": 2975,
+      "line": 2990,
       "text": "mismatch fails without creating session state;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -1037,7 +1070,7 @@
       "id": "V2ACC-064",
       "section": "17.6",
       "ordinal": 8,
-      "line": 2976,
+      "line": 2991,
       "text": "the stored snapshot exactly matches the confirmed digest;",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -1053,7 +1086,7 @@
       "id": "V2ACC-065",
       "section": "17.6",
       "ordinal": 9,
-      "line": 2977,
+      "line": 2992,
       "text": "attribution is never presented as cryptographic authority.",
       "contract_paths": [
         "docs/specs/interfaces/cli-specification.md",
@@ -1070,7 +1103,7 @@
       "id": "V2ACC-066",
       "section": "17.7",
       "ordinal": 1,
-      "line": 2981,
+      "line": 2996,
       "text": "all v1 behavior and fixtures remain valid;",
       "contract_paths": [
         "docs/specs/interfaces/ipc-protocol.md",
@@ -1086,7 +1119,7 @@
       "id": "V2ACC-067",
       "section": "17.7",
       "ordinal": 2,
-      "line": 2982,
+      "line": 2997,
       "text": "v1 sessions survive storage migration unchanged;",
       "contract_paths": [
         "docs/specs/interfaces/ipc-protocol.md",
@@ -1102,7 +1135,7 @@
       "id": "V2ACC-068",
       "section": "17.7",
       "ordinal": 3,
-      "line": 2983,
+      "line": 2998,
       "text": "v2 commands fail clearly against unsupported peers;",
       "contract_paths": [
         "docs/specs/interfaces/ipc-protocol.md",
@@ -1118,7 +1151,7 @@
       "id": "V2ACC-069",
       "section": "17.7",
       "ordinal": 4,
-      "line": 2984,
+      "line": 2999,
       "text": "v1 commands are not silently reinterpreted under v2;",
       "contract_paths": [
         "docs/specs/interfaces/ipc-protocol.md",
@@ -1134,7 +1167,7 @@
       "id": "V2ACC-070",
       "section": "17.7",
       "ordinal": 5,
-      "line": 2985,
+      "line": 3000,
       "text": "v1 `reopen` is not reinterpreted, and v2 reports the documented reactivation paths instead (§9.5);",
       "contract_paths": [
         "docs/specs/interfaces/ipc-protocol.md",
@@ -1150,7 +1183,7 @@
       "id": "V2ACC-071",
       "section": "17.7",
       "ordinal": 6,
-      "line": 2987,
+      "line": 3002,
       "text": "a release artifact cannot admit a `podway.procedure/v2` session before the complete acceptance gate passes; the development-only unlock is absent from release builds, is refused by an installed daemon or LaunchAgent, and refuses any workspace not created as disposable development state (§19);",
       "contract_paths": [
         "docs/specs/interfaces/ipc-protocol.md",
@@ -1168,7 +1201,7 @@
       "id": "V2ACC-072",
       "section": "17.7",
       "ordinal": 7,
-      "line": 2992,
+      "line": 3007,
       "text": "reset and recovery preserve the current-task retention boundary.",
       "contract_paths": [
         "docs/specs/interfaces/ipc-protocol.md",
@@ -1184,7 +1217,7 @@
       "id": "V2ACC-073",
       "section": "17.8",
       "ordinal": 1,
-      "line": 2996,
+      "line": 3011,
       "text": "`allowed_actions` and `suggestions[].argv` cover every legal next mutation in every reachable state, including one `decide` suggestion for every allowed option and one `goal assess-criterion` suggestion for every unassessed criterion of the bound goal revision;",
       "contract_paths": [
         "docs/specs/interfaces/automation-client-contract.md",
@@ -1200,7 +1233,7 @@
       "id": "V2ACC-074",
       "section": "17.8",
       "ordinal": 2,
-      "line": 3000,
+      "line": 3015,
       "text": "every placeholder-free `argv` executes unedited and produces the mutation it advertises; every placeholder-bearing `argv` requires only placeholder substitution (§10.1);",
       "contract_paths": [
         "docs/specs/interfaces/automation-client-contract.md",
@@ -1218,7 +1251,7 @@
       "id": "V2ACC-075",
       "section": "17.8",
       "ordinal": 3,
-      "line": 3003,
+      "line": 3018,
       "text": "wrong-verb calls return stable errors and change no state (§10.2);",
       "contract_paths": [
         "docs/specs/interfaces/automation-client-contract.md",
@@ -1234,7 +1267,7 @@
       "id": "V2ACC-076",
       "section": "17.8",
       "ordinal": 4,
-      "line": 3004,
+      "line": 3019,
       "text": "the inherited automation behaviors hold for every v2 command: idempotency keys, revision preconditions, detached admission and job lookup, and terminal-receipt replay (§16.1).",
       "contract_paths": [
         "docs/specs/interfaces/automation-client-contract.md",
@@ -1252,7 +1285,7 @@
       "id": "V2ACC-077",
       "section": "17.9",
       "ordinal": 1,
-      "line": 3010,
+      "line": 3025,
       "text": "the wire-size budget table of §10.4 sums to 1,015,808 bytes, and every field of the `next` result schema is assigned to exactly one budget component — a field belonging to none is an acceptance failure;",
       "contract_paths": [
         "assets/schemas/next-result-v2.schema.json",
@@ -1268,7 +1301,7 @@
       "id": "V2ACC-078",
       "section": "17.9",
       "ordinal": 2,
-      "line": 3013,
+      "line": 3028,
       "text": "an executable maximum-size fixture constructs a complete `next` response — procedure-static content at the `NEXT_STATIC_BUDGET` ceiling, 16 criteria with runtime suggestion argv, 64 open blockers, 64 graph nodes of counters, a maximal envelope with warnings, and read-back at `READBACK_BUDGET` — serializes it through the production result schema and framing path, and proves the encoded size is at most 1,048,576 bytes;",
       "contract_paths": [
         "assets/schemas/next-result-v2.schema.json",
@@ -1284,7 +1317,7 @@
       "id": "V2ACC-079",
       "section": "17.9",
       "ordinal": 3,
-      "line": 3020,
+      "line": 3035,
       "text": "the same fixture binds the arithmetic to the encoding: it constructs escape-heavy content that exercises the 6-byte character factor and asserts, per component, that the charged worst case is greater than or equal to the encoded size of the constructed content;",
       "contract_paths": [
         "assets/schemas/next-result-v2.schema.json",
@@ -1300,7 +1333,7 @@
       "id": "V2ACC-080",
       "section": "17.9",
       "ordinal": 4,
-      "line": 3024,
+      "line": 3039,
       "text": "a corresponding fixture proves a maximum-size compact status projection serialized through the production path is at most 262,144 bytes, and a verbose fixture with the values window at `STATUS_VALUES_MAX` and every history window at `TRACE_WINDOW_MAX` proves a verbose response stays within one frame;",
       "contract_paths": [
         "assets/schemas/compact-status-result-v2.schema.json",
@@ -1320,7 +1353,7 @@
       "id": "V2ACC-081",
       "section": "17.9",
       "ordinal": 5,
-      "line": 3029,
+      "line": 3044,
       "text": "compact status carries the per-graph-node attempt counts, rework-traversal counters, and `trace_length` of §9.9, and never the full execution trace, stale history, or evidence read-back values;",
       "contract_paths": [
         "assets/schemas/compact-status-result-v2.schema.json",
@@ -1337,7 +1370,7 @@
       "id": "V2ACC-082",
       "section": "17.9",
       "ordinal": 6,
-      "line": 3032,
+      "line": 3047,
       "text": "verbose trace windows carry `trace_truncated` and `trace_window` fields that are present and accurate whenever any trace member is omitted;",
       "contract_paths": [
         "assets/schemas/status-result-v2.schema.json",
@@ -1356,7 +1389,7 @@
       "id": "V2ACC-083",
       "section": "17.9",
       "ordinal": 7,
-      "line": 3034,
+      "line": 3049,
       "text": "the open-blocker window carries complete newest-first entries within `BLOCKER_WINDOW_MAX`, and `blockers_total` and `blockers_truncated` are present and accurate exactly when entries are omitted (§10.4);",
       "contract_paths": [
         "assets/schemas/status-result-v2.schema.json",
@@ -1373,7 +1406,7 @@
       "id": "V2ACC-084",
       "section": "17.9",
       "ordinal": 8,
-      "line": 3037,
+      "line": 3052,
       "text": "verbose item values render at most 2,048 characters per value with accurate per-item `value_truncated` markers (§10.4);",
       "contract_paths": [
         "assets/schemas/status-result-v2.schema.json",
@@ -1390,7 +1423,7 @@
       "id": "V2ACC-085",
       "section": "17.9",
       "ordinal": 9,
-      "line": 3039,
+      "line": 3054,
       "text": "read-back respects the §5.1 item value bounds and the §8.1 selectors (§8.4);",
       "contract_paths": [
         "assets/schemas/next-result-v2.schema.json",
@@ -1407,7 +1440,7 @@
       "id": "V2ACC-086",
       "section": "17.9",
       "ordinal": 10,
-      "line": 3041,
+      "line": 3056,
       "text": "every built-in v2 preset passes both vet budgets with recorded headroom;",
       "contract_paths": [
         "assets/schemas/next-result-v2.schema.json",
@@ -1424,7 +1457,7 @@
       "id": "V2ACC-087",
       "section": "17.9",
       "ordinal": 11,
-      "line": 3042,
+      "line": 3057,
       "text": "all of the above hold after arbitrarily many cycle traversals, without any Podway-imposed traversal limit (§9.8).",
       "contract_paths": [
         "assets/schemas/next-result-v2.schema.json",

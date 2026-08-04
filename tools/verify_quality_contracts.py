@@ -512,6 +512,43 @@ def require_exact_keys(value: Any, expected: set[str], label: str) -> None:
         fail(f"{label} has unexpected or missing fields")
 
 
+V2_ANCHORED_CONTRACT_REFS = {
+    "V2ACC-032": [
+        {"path": "assets/schemas/status-result-v2.schema.json", "anchor": "/properties/decision_history"},
+        {"path": "assets/schemas/status-result-v2.schema.json", "anchor": "/properties/rework_history"},
+    ],
+    "V2ACC-057": [
+        {"path": "assets/schemas/procedure-preview-result-v1.schema.json", "anchor": "/properties/procedure_digest"},
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"},
+    ],
+    "V2ACC-060": [
+        {"path": "assets/schemas/procedure-preview-result-v1.schema.json", "anchor": "/properties/start_suggestion"},
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"},
+    ],
+}
+
+
+def validate_v2_contract_ref(reference: Any, contract_paths: list[str], label: str) -> None:
+    require_exact_keys(reference, {"path", "anchor"}, label)
+    relative = reference["path"]
+    anchor = reference["anchor"]
+    if not isinstance(relative, str) or relative not in contract_paths:
+        fail(f"{label} path must be one of the criterion contract paths")
+    if not isinstance(anchor, str) or not anchor:
+        fail(f"{label} anchor must be a non-empty string")
+    path = repository_file(relative, f"{label} path")
+    if anchor.startswith("/"):
+        value: Any = load_object(path)
+        try:
+            for raw_part in anchor[1:].split("/"):
+                part = raw_part.replace("~1", "/").replace("~0", "~")
+                value = value[int(part)] if isinstance(value, list) else value[part]
+        except (KeyError, IndexError, TypeError, ValueError):
+            fail(f"{label} JSON Pointer does not resolve: {anchor}")
+    elif anchor not in path.read_text(encoding="utf-8").splitlines():
+        fail(f"{label} text anchor does not resolve: {anchor}")
+
+
 def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
     matrix = load_object(V2_ACCEPTANCE_PATH) if matrix is None else matrix
     require_exact_keys(
@@ -547,9 +584,15 @@ def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[
     indexed: dict[str, dict[str, Any]] = {}
     for number, (criterion, source_item) in enumerate(zip(criteria, expected), start=1):
         identifier = f"V2ACC-{number:03d}"
+        expected_keys = {
+            "id", "section", "ordinal", "line", "text", "contract_paths",
+            "test_class", "owning_tasks", "implementation_status",
+        }
+        if identifier in V2_ANCHORED_CONTRACT_REFS:
+            expected_keys.add("contract_refs")
         require_exact_keys(
             criterion,
-            {"id", "section", "ordinal", "line", "text", "contract_paths", "test_class", "owning_tasks", "implementation_status"},
+            expected_keys,
             identifier,
         )
         section, ordinal, line, text = source_item
@@ -562,6 +605,16 @@ def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[
             fail(f"{identifier} must bind at least one contract path")
         for relative in contract_paths:
             repository_file(relative, f"{identifier} contract path")
+        if identifier in V2_ANCHORED_CONTRACT_REFS:
+            references = criterion["contract_refs"]
+            if references != V2_ANCHORED_CONTRACT_REFS[identifier]:
+                fail(f"{identifier} anchored contract references drift")
+            for reference_number, reference in enumerate(references, start=1):
+                validate_v2_contract_ref(
+                    reference,
+                    contract_paths,
+                    f"{identifier} contract reference {reference_number}",
+                )
         if criterion["test_class"] not in allowed_classes:
             fail(f"{identifier} has an unsupported test class")
         owning_tasks = criterion["owning_tasks"]
@@ -771,9 +824,9 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     if not {"warnings[]", "workspace.uuid", "job.id", "session.id", "result.admission.admitted"}.issubset(envelope_leaves):
         fail("v2 output envelope binding does not resolve inherited nested fields and warnings")
     resolved_shape = matrix["resolved_next_shape"]
-    if resolved_shape != {"unique_instance_leaf_paths": 112, "non_suggestion_leaf_paths": 109, "suggestion_leaf_paths": 3, "conditional_assignments": 115, "v2_command_values": 19}:
+    if resolved_shape != {"unique_instance_leaf_paths": 113, "non_suggestion_leaf_paths": 110, "suggestion_leaf_paths": 3, "conditional_assignments": 116, "v2_command_values": 19}:
         fail("v2 resolved next shape counts drift")
-    if len(all_leaves) != 112 or len([leaf for leaf in all_leaves if leaf.startswith("suggestions[]")]) != 3:
+    if len(all_leaves) != 113 or len([leaf for leaf in all_leaves if leaf.startswith("suggestions[]")]) != 3:
         fail("v2 next schema resolved leaf inventory drift")
     components = matrix["components"]
     if not isinstance(components, list) or [item.get("constant") for item in components if isinstance(item, dict)] != ["ENVELOPE_RESERVE", "NEXT_STATIC_BUDGET", "READBACK_BUDGET", "GOAL_DISPLAY_MAX", "BLOCKER_WINDOW_MAX", "COUNTERS_MAX"]:
@@ -811,7 +864,7 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
         )
         for component in components
     }
-    if component_counts != {"ENVELOPE_RESERVE": 18, "NEXT_STATIC_BUDGET": 23, "READBACK_BUDGET": 51, "GOAL_DISPLAY_MAX": 14, "BLOCKER_WINDOW_MAX": 5, "COUNTERS_MAX": 4} or sum(component_counts.values()) != 115:
+    if component_counts != {"ENVELOPE_RESERVE": 18, "NEXT_STATIC_BUDGET": 23, "READBACK_BUDGET": 52, "GOAL_DISPLAY_MAX": 14, "BLOCKER_WINDOW_MAX": 5, "COUNTERS_MAX": 4} or sum(component_counts.values()) != 116:
         fail("v2 payload resolved component assignment counts drift")
     command_schema = resolve_schema_reference("urn:podway:schema:v2-result-components:v1#/$defs/v2Command", schema, registry)
     command_values = command_schema.get("enum")
@@ -830,7 +883,7 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
         "blocker_window_order": "newest-first-complete-entries",
         "blocker_window_markers": ["blockers_total", "blockers_truncated"],
         "trace_window_max_bytes": 65536,
-        "trace_window_count": 4,
+        "trace_window_count": 6,
         "trace_window_markers": ["trace_truncated", "trace_window"],
         "compact_exclusions": ["trace_entries", "history", "windows", "readback_values", "prompts", "instructions", "statements", "suggestion_argv"],
         "status_readback_values": False,
@@ -937,6 +990,12 @@ def self_test_v2_matrices() -> int:
     overstated = copy.deepcopy(baseline)
     overstated["criteria"][0]["implementation_status"] = "automated"
     expect_failure(lambda: validate_v2_acceptance_matrix(overstated), "remain planned", "v2 acceptance evidence")
+    missing_anchor = copy.deepcopy(baseline)
+    del missing_anchor["criteria"][31]["contract_refs"]
+    expect_failure(lambda: validate_v2_acceptance_matrix(missing_anchor), "unexpected or missing fields", "v2 acceptance missing-anchor")
+    wrong_anchor = copy.deepcopy(baseline)
+    wrong_anchor["criteria"][56]["contract_refs"][0]["anchor"] = "/properties/missing"
+    expect_failure(lambda: validate_v2_acceptance_matrix(wrong_anchor), "anchored contract references drift", "v2 acceptance wrong-anchor")
 
     compatibility = load_object(V2_COMPATIBILITY_PATH)
     missing_surface = copy.deepcopy(compatibility)
@@ -1012,7 +1071,7 @@ def self_test_v2_matrices() -> int:
     wrong_category_gate = copy.deepcopy(release)
     wrong_category_gate["categories"][0]["gate"] = "make dist"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category_gate), "exactly cover", "v2 release category-gate")
-    return 26
+    return 28
 
 
 def main() -> int:

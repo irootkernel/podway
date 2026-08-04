@@ -26,10 +26,10 @@
   },
   "next_schema": "assets/schemas/next-result-v2.schema.json",
   "resolved_next_shape": {
-    "unique_instance_leaf_paths": 112,
-    "non_suggestion_leaf_paths": 109,
+    "unique_instance_leaf_paths": 113,
+    "non_suggestion_leaf_paths": 110,
     "suggestion_leaf_paths": 3,
-    "conditional_assignments": 115,
+    "conditional_assignments": 116,
     "v2_command_values": 19
   },
   "components": [
@@ -132,7 +132,7 @@
       "blockers_truncated"
     ],
     "trace_window_max_bytes": 65536,
-    "trace_window_count": 4,
+    "trace_window_count": 6,
     "trace_window_markers": [
       "trace_truncated",
       "trace_window"
