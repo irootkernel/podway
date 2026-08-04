@@ -327,6 +327,10 @@ normative authoring format; equivalent JSON resolves to the same canonical
 semantic model and digest. The v1 parser, defaults, canonical bytes, digests,
 sessions, and public results remain unchanged.
 
+The normative structural contract is
+[`procedure-v2.schema.json`](../../../assets/schemas/procedure-v2.schema.json).
+Its outer parser limits are enforced before structural or semantic validation.
+
 A v2 procedure separates reusable action or decision definitions from graph
 placements. Every placement has a unique graph-node ID, routes name placements,
 and exactly one placement attempt is active. Alternative routes may converge on

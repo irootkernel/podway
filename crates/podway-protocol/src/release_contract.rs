@@ -276,7 +276,7 @@ impl ContractSetV1 {
                 )));
             }
             if asset.kind == "schema" {
-                if !asset.path.starts_with("schemas/") || !asset.path.ends_with("-v1.schema.json") {
+                if !is_versioned_schema_path(&asset.path) {
                     return Err(ReleaseContractErrorV1::new(format!(
                         "schema asset has an invalid logical path: {}",
                         asset.path
@@ -501,6 +501,25 @@ impl ContractSetV1 {
         }
         Ok(result)
     }
+}
+
+fn is_versioned_schema_path(path: &str) -> bool {
+    let Some(relative) = path.strip_prefix("schemas/") else {
+        return false;
+    };
+    let Some(name) = relative.rsplit('/').next() else {
+        return false;
+    };
+    let Some(stem) = name.strip_suffix(".schema.json") else {
+        return false;
+    };
+    let Some((basename, version)) = stem.rsplit_once("-v") else {
+        return false;
+    };
+    !basename.is_empty()
+        && !version.is_empty()
+        && !version.starts_with('0')
+        && version.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn validate_manifest_identity(

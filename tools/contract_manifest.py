@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import tempfile
 import tomllib
@@ -129,8 +130,11 @@ def matching_files(root: Path, directory: str, suffix: str) -> list[str]:
 
 def expected_asset_kinds(root: Path) -> dict[str, str]:
     assets = dict(STATIC_ASSETS)
-    for path in matching_files(root, "assets/schemas", "-v1.schema.json"):
+    schema_paths = matching_files(root, "assets/schemas", ".schema.json")
+    for path in schema_paths:
         relative = Path(path).relative_to("assets/schemas").as_posix()
+        if re.fullmatch(r".+-v[1-9][0-9]*\.schema\.json", relative) is None:
+            fail(f"schema asset is not version-named: {path}")
         assets[f"schemas/{relative}"] = "schema"
     for path in matching_files(root, "docs/examples/json", ".json"):
         assets[path] = "known_answer_fixture"
@@ -297,6 +301,29 @@ def self_test(root: Path = ROOT) -> list[str]:
         write(fixture)
         check(fixture)
         completed.append("deterministic_generation")
+
+        nested_schema = fixture / "assets/schemas/nested/example-v2.schema.json"
+        nested_schema.parent.mkdir(parents=True, exist_ok=True)
+        nested_schema.write_text(
+            '{"$schema":"https://json-schema.org/draft/2020-12/schema",'
+            '"$id":"urn:podway:schema:example:v2"}\n',
+            encoding="utf-8",
+        )
+        write(fixture)
+        check(fixture)
+        if "schemas/nested/example-v2.schema.json" not in expected_asset_kinds(fixture):
+            fail("nested versioned schema discovery sentinel did not pass")
+        completed.append("nested_versioned_schema")
+
+        unversioned_schema = fixture / "assets/schemas/unversioned.schema.json"
+        unversioned_schema.write_text("{}\n", encoding="utf-8")
+        try:
+            expected_asset_kinds(fixture)
+        except ManifestError:
+            completed.append("unversioned_schema_rejected")
+        else:
+            fail("unversioned schema sentinel did not fail")
+        unversioned_schema.unlink()
 
         nested_examples = fixture / "docs/examples/json/nested/example.json"
         nested_contract = fixture / "tests/fixtures/contract/nested/fixture.json"

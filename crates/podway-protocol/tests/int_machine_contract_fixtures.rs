@@ -1078,3 +1078,355 @@ fn mcont006_manifest_recursively_covers_known_answers_with_exact_digests() {
         assert_eq!(digest, sha256(&root().join(relative)));
     }
 }
+
+fn procedure_v2_fixture() -> Value {
+    json!({
+        "schema": "podway.procedure/v2",
+        "id": "bounded-v2",
+        "version": "2",
+        "name": "Bounded v2 procedure",
+        "purpose": "Exercise the complete structural authoring contract.",
+        "description": "A schema known answer.",
+        "goal_tracking": true,
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Do the work",
+                "intent": "Record bounded values.",
+                "description": "An action definition.",
+                "instructions": ["Work outside Podway."],
+                "items": [
+                    {"id":"confirm","type":"confirm","prompt":"Confirm.","help":"Confirmation guidance.","required":true},
+                    {"id":"text","type":"text","prompt":"Text.","required":true,"max_length":16384},
+                    {"id":"choice","type":"choice","prompt":"Choose.","required":false,"choices":["one","two"]},
+                    {"id":"integer","type":"integer","prompt":"Number.","required":false,"minimum":-1,"maximum":1},
+                    {"id":"list","type":"list","prompt":"List.","required":false,"max_items":100,"max_item_length":1000},
+                    {"id":"artifact","type":"artifact","prompt":"Artifact.","required":false,"allowed_media_types":["application/json"]}
+                ]
+            },
+            "choose": {
+                "type": "decision",
+                "title": "Choose an outcome",
+                "description": "A decision definition.",
+                "objective": "Select the supported outcome.",
+                "prompt": "Which outcome is supported?",
+                "evidence_guidance": ["Consult the recorded values."],
+                "options": [
+                    {"id":"achieved","label":"Achieved","criteria":"All criteria are satisfied."},
+                    {"id":"not-achieved","label":"Not achieved"},
+                    {"id":"superseded","label":"Superseded"}
+                ],
+                "reason": {"required":true,"prompt":"Explain the selection."},
+                "assessment": {
+                    "target":"session_goal",
+                    "outcomes": {
+                        "achieved":"achieved",
+                        "not-achieved":"not_achieved",
+                        "superseded":"superseded"
+                    }
+                }
+            }
+        },
+        "graph": {
+            "entry": "perform",
+            "nodes": [
+                {
+                    "id":"perform",
+                    "use":"work",
+                    "skip":{"allowed":true,"reason_required":false},
+                    "next":"decide"
+                },
+                {
+                    "id":"decide",
+                    "use":"choose",
+                    "evidence_from":[{"node":"perform","required":false,"items":["text"]}],
+                    "routes": {
+                        "achieved":{"to":"finish","effect":"advance"},
+                        "not-achieved":{"to":"finish","effect":"advance"},
+                        "superseded":{"to":"finish","effect":"advance"}
+                    }
+                },
+                {"id":"finish","use":"work","terminal":true}
+            ]
+        },
+        "manual_rework": {"allowed_targets":["perform"]}
+    })
+}
+
+#[test]
+fn v2ctr002_procedure_v2_schema_accepts_complete_closed_authoring_shape() {
+    assert_schema_valid("schemas/procedure-v2.schema.json", &procedure_v2_fixture());
+}
+
+#[test]
+fn v2ctr002_procedure_v2_schema_accepts_exact_authoring_boundaries() {
+    let mut maximum = procedure_v2_fixture();
+    maximum["id"] = json!(format!("a{}", "a".repeat(63)));
+    maximum["version"] = json!("v".repeat(64));
+    maximum["name"] = json!("n".repeat(120));
+    maximum["purpose"] = json!("p".repeat(500));
+    maximum["description"] = json!("d".repeat(1000));
+
+    maximum["node_definitions"]["work"]["title"] = json!("t".repeat(120));
+    maximum["node_definitions"]["work"]["intent"] = json!("i".repeat(300));
+    maximum["node_definitions"]["work"]["description"] = json!("d".repeat(1000));
+    maximum["node_definitions"]["work"]["instructions"] = json!(vec!["i".repeat(1000); 16]);
+    let mut maximum_items = maximum["node_definitions"]["work"]["items"]
+        .as_array()
+        .unwrap()
+        .clone();
+    for index in maximum_items.len()..64 {
+        maximum_items.push(json!({
+            "id":format!("item-{index}"),
+            "type":"confirm",
+            "prompt":"p".repeat(300),
+            "help":"h".repeat(1000),
+            "required":false
+        }));
+    }
+    maximum["node_definitions"]["work"]["items"] = json!(maximum_items);
+    maximum["node_definitions"]["work"]["items"][1]["max_length"] = json!(16384);
+    maximum["node_definitions"]["work"]["items"][2]["choices"] = json!(
+        (0..32)
+            .map(|index| format!("{index:02}{}", "c".repeat(118)))
+            .collect::<Vec<_>>()
+    );
+    maximum["node_definitions"]["work"]["items"][4]["max_items"] = json!(100);
+    maximum["node_definitions"]["work"]["items"][4]["max_item_length"] = json!(1000);
+    maximum["node_definitions"]["work"]["items"][5]["allowed_media_types"] = json!(
+        (0..64)
+            .map(|index| format!("application/x-{index}"))
+            .collect::<Vec<_>>()
+    );
+
+    maximum["node_definitions"]["choose"]["title"] = json!("t".repeat(120));
+    maximum["node_definitions"]["choose"]["description"] = json!("d".repeat(1000));
+    maximum["node_definitions"]["choose"]["objective"] = json!("o".repeat(300));
+    maximum["node_definitions"]["choose"]["prompt"] = json!("p".repeat(500));
+    maximum["node_definitions"]["choose"]["evidence_guidance"] = json!(vec!["g".repeat(200); 8]);
+    maximum["node_definitions"]["choose"]["reason"]["prompt"] = json!("r".repeat(300));
+    maximum["node_definitions"]["choose"]["options"] = json!(
+        (0..8)
+            .map(|index| json!({
+                "id":format!("option-{index}"),
+                "label":"l".repeat(120),
+                "criteria":"c".repeat(500)
+            }))
+            .collect::<Vec<_>>()
+    );
+
+    let mut definitions = maximum["node_definitions"].as_object().unwrap().clone();
+    let action = definitions["work"].clone();
+    for index in 0..62 {
+        definitions.insert(format!("definition-{index}"), action.clone());
+    }
+    maximum["node_definitions"] = Value::Object(definitions);
+
+    maximum["graph"]["nodes"][1]["evidence_from"] = json!(
+        (0..8)
+            .map(|index| json!({
+                "node":format!("source-{index}"),
+                "required":false,
+                "items":(0..16).map(|item| format!("item-{item}")).collect::<Vec<_>>()
+            }))
+            .collect::<Vec<_>>()
+    );
+    let terminal = maximum["graph"]["nodes"][2].clone();
+    let mut nodes = maximum["graph"]["nodes"].as_array().unwrap().clone();
+    for index in nodes.len()..64 {
+        let mut node = terminal.clone();
+        node["id"] = json!(format!("terminal-{index}"));
+        nodes.push(node);
+    }
+    maximum["graph"]["nodes"] = json!(nodes);
+    maximum["manual_rework"]["allowed_targets"] = json!(
+        (0..64)
+            .map(|index| format!("target-{index}"))
+            .collect::<Vec<_>>()
+    );
+
+    assert_schema_valid("schemas/procedure-v2.schema.json", &maximum);
+}
+
+#[test]
+fn v2ctr002_procedure_v2_schema_rejects_unknown_fields_and_policy_drift() {
+    let valid = procedure_v2_fixture();
+    for (name, mut invalid) in [
+        ("root unknown", valid.clone()),
+        ("definition unknown", valid.clone()),
+        ("item unknown", valid.clone()),
+        ("placement display override", valid.clone()),
+        ("route unknown", valid.clone()),
+        ("option descriptive extension", valid.clone()),
+    ] {
+        match name {
+            "root unknown" => invalid["unknown"] = json!(true),
+            "definition unknown" => invalid["node_definitions"]["work"]["unknown"] = json!(true),
+            "item unknown" => {
+                invalid["node_definitions"]["work"]["items"][0]["unknown"] = json!(true)
+            }
+            "placement display override" => {
+                invalid["graph"]["nodes"][0]["title"] = json!("Override")
+            }
+            "route unknown" => {
+                invalid["graph"]["nodes"][1]["routes"]["achieved"]["unknown"] = json!(true)
+            }
+            "option descriptive extension" => {
+                invalid["node_definitions"]["choose"]["options"][0]["description"] =
+                    json!("No extension")
+            }
+            _ => unreachable!(),
+        }
+        assert_schema_invalid("schemas/procedure-v2.schema.json", &invalid);
+    }
+
+    let mut false_reason = valid.clone();
+    false_reason["node_definitions"]["choose"]["reason"]["required"] = json!(false);
+    assert_schema_invalid("schemas/procedure-v2.schema.json", &false_reason);
+
+    let mut v1_reason_spelling = valid.clone();
+    v1_reason_spelling["node_definitions"]["choose"]["reason"] = json!({"reason_required":true});
+    assert_schema_invalid("schemas/procedure-v2.schema.json", &v1_reason_spelling);
+
+    let mut false_skip = valid.clone();
+    false_skip["graph"]["nodes"][0]["skip"]["allowed"] = json!(false);
+    assert_schema_invalid("schemas/procedure-v2.schema.json", &false_skip);
+
+    let mut reason_field_in_skip = valid;
+    reason_field_in_skip["graph"]["nodes"][0]["skip"] = json!({"allowed":true,"required":true});
+    assert_schema_invalid("schemas/procedure-v2.schema.json", &reason_field_in_skip);
+}
+
+#[test]
+fn v2ctr002_procedure_v2_schema_enforces_collection_and_string_bounds() {
+    let valid = procedure_v2_fixture();
+    let mut invalid_cases = Vec::new();
+
+    let mut empty_version = valid.clone();
+    empty_version["version"] = json!("");
+    invalid_cases.push(empty_version);
+    let mut long_version = valid.clone();
+    long_version["version"] = json!("v".repeat(65));
+    invalid_cases.push(long_version);
+    for (pointer, value) in [
+        ("/id", json!(format!("a{}", "a".repeat(64)))),
+        ("/name", json!("n".repeat(121))),
+        ("/purpose", json!("p".repeat(501))),
+        ("/description", json!("d".repeat(1001))),
+        ("/node_definitions/work/title", json!("t".repeat(121))),
+        ("/node_definitions/work/intent", json!("i".repeat(301))),
+        (
+            "/node_definitions/work/description",
+            json!("d".repeat(1001)),
+        ),
+        ("/node_definitions/choose/title", json!("t".repeat(121))),
+        ("/node_definitions/choose/objective", json!("o".repeat(301))),
+        ("/node_definitions/choose/prompt", json!("p".repeat(501))),
+        (
+            "/node_definitions/choose/reason/prompt",
+            json!("r".repeat(301)),
+        ),
+        (
+            "/node_definitions/choose/options/0/label",
+            json!("l".repeat(121)),
+        ),
+        (
+            "/node_definitions/choose/options/0/criteria",
+            json!("c".repeat(501)),
+        ),
+        (
+            "/node_definitions/work/items/0/prompt",
+            json!("p".repeat(301)),
+        ),
+        (
+            "/node_definitions/work/items/0/help",
+            json!("h".repeat(1001)),
+        ),
+    ] {
+        let mut invalid = valid.clone();
+        *invalid.pointer_mut(pointer).unwrap() = value;
+        invalid_cases.push(invalid);
+    }
+    let mut missing_action_intent = valid.clone();
+    missing_action_intent["node_definitions"]["work"]
+        .as_object_mut()
+        .unwrap()
+        .remove("intent");
+    invalid_cases.push(missing_action_intent);
+    let mut empty_optional_collection = valid.clone();
+    empty_optional_collection["node_definitions"]["work"]["instructions"] = json!([]);
+    invalid_cases.push(empty_optional_collection);
+
+    let mut too_many_instructions = valid.clone();
+    too_many_instructions["node_definitions"]["work"]["instructions"] =
+        json!(vec!["instruction"; 17]);
+    invalid_cases.push(too_many_instructions);
+    let mut long_instruction = valid.clone();
+    long_instruction["node_definitions"]["work"]["instructions"][0] = json!("i".repeat(1001));
+    invalid_cases.push(long_instruction);
+    let mut too_many_items = valid.clone();
+    let item = valid["node_definitions"]["work"]["items"][0].clone();
+    too_many_items["node_definitions"]["work"]["items"] = json!(vec![item; 65]);
+    invalid_cases.push(too_many_items);
+    let mut too_many_choices = valid.clone();
+    too_many_choices["node_definitions"]["work"]["items"][2]["choices"] = json!(
+        (0..33)
+            .map(|index| format!("choice-{index}"))
+            .collect::<Vec<_>>()
+    );
+    invalid_cases.push(too_many_choices);
+    let mut text_too_large = valid.clone();
+    text_too_large["node_definitions"]["work"]["items"][1]["max_length"] = json!(16385);
+    invalid_cases.push(text_too_large);
+    let mut list_too_large = valid.clone();
+    list_too_large["node_definitions"]["work"]["items"][4]["max_items"] = json!(101);
+    invalid_cases.push(list_too_large);
+    let mut list_item_too_large = valid.clone();
+    list_item_too_large["node_definitions"]["work"]["items"][4]["max_item_length"] = json!(1001);
+    invalid_cases.push(list_item_too_large);
+
+    let mut too_many_options = valid.clone();
+    let option = valid["node_definitions"]["choose"]["options"][0].clone();
+    too_many_options["node_definitions"]["choose"]["options"] = json!(vec![option; 9]);
+    invalid_cases.push(too_many_options);
+    let mut too_much_guidance = valid.clone();
+    too_much_guidance["node_definitions"]["choose"]["evidence_guidance"] =
+        json!(vec!["guidance"; 9]);
+    invalid_cases.push(too_much_guidance);
+    let mut long_guidance = valid.clone();
+    long_guidance["node_definitions"]["choose"]["evidence_guidance"][0] = json!("g".repeat(201));
+    invalid_cases.push(long_guidance);
+    let mut too_many_references = valid.clone();
+    too_many_references["graph"]["nodes"][1]["evidence_from"] =
+        json!(vec![json!({"node":"perform"}); 9]);
+    invalid_cases.push(too_many_references);
+    let mut too_many_selected_items = valid.clone();
+    too_many_selected_items["graph"]["nodes"][1]["evidence_from"][0]["items"] = json!(
+        (0..17)
+            .map(|index| format!("item-{index}"))
+            .collect::<Vec<_>>()
+    );
+    invalid_cases.push(too_many_selected_items);
+    let mut too_many_nodes = valid.clone();
+    let node = valid["graph"]["nodes"][2].clone();
+    too_many_nodes["graph"]["nodes"] = json!(vec![node; 65]);
+    invalid_cases.push(too_many_nodes);
+    let mut too_many_definitions = valid.clone();
+    let definition = valid["node_definitions"]["work"].clone();
+    let definitions = (0..65)
+        .map(|index| (format!("definition-{index}"), definition.clone()))
+        .collect::<Map<String, Value>>();
+    too_many_definitions["node_definitions"] = Value::Object(definitions);
+    invalid_cases.push(too_many_definitions);
+    let mut too_many_manual_targets = valid.clone();
+    too_many_manual_targets["manual_rework"]["allowed_targets"] = json!(
+        (0..65)
+            .map(|index| format!("target-{index}"))
+            .collect::<Vec<_>>()
+    );
+    invalid_cases.push(too_many_manual_targets);
+
+    for invalid in invalid_cases {
+        assert_schema_invalid("schemas/procedure-v2.schema.json", &invalid);
+    }
+}

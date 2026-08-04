@@ -75,7 +75,7 @@ as defined by the public schema; the version result remains closed.
 Release validation uses one feature-gated Rust verifier for both the source tree
 and an extracted distribution. It validates the closed manifest shape and
 canonical self-digest, verifies every member digest, and requires the manifest's
-schema inventory to equal the physical v1 schema inventory with unique `$id`
+schema inventory to equal the physical version-named schema inventory with unique `$id`
 values. Source logical paths map only to the canonical `assets/` authorities;
 packaged logical paths resolve directly below `share/podway`.
 

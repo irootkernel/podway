@@ -182,7 +182,7 @@ def catalog_commands(root: Path) -> set[str]:
     return names
 
 
-def validate_v1_identifiers(root: Path) -> int:
+def validate_contract_identifiers(root: Path) -> int:
     adjacency = read_json(root, ADJACENCY_PATH, "Cargo adjacency contract")
     routes = read_json(root, ROUTES_PATH, "command route contract")
     expected_contract_versions = {
@@ -196,22 +196,25 @@ def validate_v1_identifiers(root: Path) -> int:
     schema_files = sorted(
         path
         for path in repository_assets.regular_files(root, "assets/schemas", required=True)
-        if path.endswith("-v1.schema.json")
+        if path.endswith(".schema.json")
     )
     if not schema_files:
-        fail("no v1 JSON schemas were found")
+        fail("no versioned JSON schemas were found")
     for relative_name in schema_files:
         path = repository_assets.checked_path(root, Path(relative_name), "schema")
         try:
             schema = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             fail(f"cannot parse schema {relative_name}: {error}")
-        basename = Path(relative_name).name.removesuffix("-v1.schema.json")
-        expected_id = f"urn:podway:schema:{basename}:v1"
+        match = re.fullmatch(r"(.+)-v([1-9][0-9]*)\.schema\.json", Path(relative_name).name)
+        if match is None:
+            fail(f"schema filename is not versioned: {relative_name}")
+        basename, version = match.groups()
+        expected_id = f"urn:podway:schema:{basename}:v{version}"
         if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
             fail(f"schema draft identifier drift: {relative_name}")
         if schema.get("$id") != expected_id:
-            fail(f"schema v1 identifier drift: {relative_name}")
+            fail(f"schema identifier drift: {relative_name}")
 
     error_catalog = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
     if error_catalog.get("schema") != "podway.error-catalog/v1":
@@ -575,7 +578,7 @@ def receipt(mode: str, ok: bool, **details: Any) -> None:
 def production_checks(root: Path) -> dict[str, int]:
     return {
         "canonical_assets": repository_assets.validate_layout(root),
-        "v1_identifiers": validate_v1_identifiers(root),
+        "contract_identifiers": validate_contract_identifiers(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
         "makefile_contract": validate_makefile_contract(root),

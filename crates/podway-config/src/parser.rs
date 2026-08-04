@@ -13,29 +13,32 @@ use yaml_rust2::{
 
 use crate::{ConfigError, ProcedureDefinitionV1, ValidatedProcedureV1, WorkspaceConfigV1};
 
-pub const MAX_PROCEDURE_DOCUMENT_BYTES_V1: usize = podway_core::MAX_PROCEDURE_DOCUMENT_BYTES_V1;
-pub const MAX_PROCEDURE_DOCUMENT_DEPTH_V1: usize = 64;
-pub const MAX_PROCEDURE_DOCUMENT_NODES_V1: usize = 100_000;
+pub const MAX_PROCEDURE_DOCUMENT_BYTES: usize = podway_core::MAX_PROCEDURE_DOCUMENT_BYTES_V1;
+pub const MAX_PROCEDURE_DOCUMENT_DEPTH: usize = 64;
+pub const MAX_PROCEDURE_DOCUMENT_NODES: usize = 100_000;
+pub const MAX_PROCEDURE_DOCUMENT_BYTES_V1: usize = MAX_PROCEDURE_DOCUMENT_BYTES;
+pub const MAX_PROCEDURE_DOCUMENT_DEPTH_V1: usize = MAX_PROCEDURE_DOCUMENT_DEPTH;
+pub const MAX_PROCEDURE_DOCUMENT_NODES_V1: usize = MAX_PROCEDURE_DOCUMENT_NODES;
 pub const MAX_WORKSPACE_CONFIG_BYTES_V1: usize = 64 * 1024;
 pub const MAX_WORKSPACE_CONFIG_DEPTH_V1: usize = 16;
 pub const MAX_WORKSPACE_CONFIG_NODES_V1: usize = 1_024;
 
-/// The source encoding accepted for a procedure v1 document.
+/// The source encoding accepted for a Procedure document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProcedureFormatV1 {
+pub enum ProcedureDocumentFormat {
     Json,
     Yaml,
 }
 
 /// Resource limits applied before a procedure is admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProcedureParseLimitsV1 {
+pub struct ProcedureDocumentLimits {
     pub max_bytes: usize,
     pub max_depth: usize,
     pub max_nodes: usize,
 }
 
-impl Default for ProcedureParseLimitsV1 {
+impl Default for ProcedureDocumentLimits {
     fn default() -> Self {
         Self {
             max_bytes: MAX_PROCEDURE_DOCUMENT_BYTES_V1,
@@ -44,6 +47,11 @@ impl Default for ProcedureParseLimitsV1 {
         }
     }
 }
+
+/// Backward-compatible v1 name for [`ProcedureDocumentFormat`].
+pub type ProcedureFormatV1 = ProcedureDocumentFormat;
+/// Backward-compatible v1 name for [`ProcedureDocumentLimits`].
+pub type ProcedureParseLimitsV1 = ProcedureDocumentLimits;
 /// Resource limits applied before a workspace config is admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkspaceConfigParseLimitsV1 {
@@ -75,6 +83,49 @@ impl From<ProcedureParseLimitsV1> for BoundedYamlLimitsV1 {
             max_nodes: limits.max_nodes,
         }
     }
+}
+
+/// Decodes one Procedure YAML or JSON document after applying shared resource and syntax safety
+/// checks. This function does not dispatch a schema version or perform semantic validation.
+pub fn decode_procedure_document(
+    input: impl AsRef<[u8]>,
+    format: ProcedureDocumentFormat,
+) -> Result<Value, ConfigError> {
+    decode_procedure_document_with_limits(input, format, ProcedureDocumentLimits::default())
+}
+
+/// As [`decode_procedure_document`], with explicit resource limits for trusted tests and callers.
+pub fn decode_procedure_document_with_limits(
+    input: impl AsRef<[u8]>,
+    format: ProcedureDocumentFormat,
+    limits: ProcedureDocumentLimits,
+) -> Result<Value, ConfigError> {
+    decode_procedure_document_with_name(input, format, limits, "Procedure document")
+}
+
+fn decode_procedure_document_with_name(
+    input: impl AsRef<[u8]>,
+    format: ProcedureDocumentFormat,
+    limits: ProcedureDocumentLimits,
+    document_name: &'static str,
+) -> Result<Value, ConfigError> {
+    let input = input.as_ref();
+    if input.len() > limits.max_bytes {
+        return Err(ConfigError::InputTooLarge {
+            maximum: limits.max_bytes,
+            actual: input.len(),
+        });
+    }
+    let text = std::str::from_utf8(input).map_err(|_| ConfigError::InvalidDocument {
+        reason: "input must be valid UTF-8".to_owned(),
+    })?;
+
+    let value = match format {
+        ProcedureDocumentFormat::Json => JsonParser::new(text, limits).parse()?,
+        ProcedureDocumentFormat::Yaml => parse_yaml_value(text, limits, document_name)?,
+    };
+    reject_nulls(&value, document_name)?;
+    Ok(value)
 }
 
 impl From<WorkspaceConfigParseLimitsV1> for BoundedYamlLimitsV1 {
@@ -129,37 +180,22 @@ pub fn parse_procedure_v1_with_limits(
     format: ProcedureFormatV1,
     limits: ProcedureParseLimitsV1,
 ) -> Result<ValidatedProcedureV1, ConfigError> {
-    let input = input.as_ref();
-    if input.len() > limits.max_bytes {
-        return Err(ConfigError::InputTooLarge {
-            maximum: limits.max_bytes,
-            actual: input.len(),
-        });
-    }
-    let text = std::str::from_utf8(input).map_err(|_| ConfigError::InvalidDocument {
-        reason: "input must be valid UTF-8".to_owned(),
-    })?;
-
-    let mut definition = match format {
-        ProcedureFormatV1::Json => {
-            let value = JsonParser::new(text, limits).parse()?;
-            reject_nulls(&value)?;
-            serde_json::from_value(value).map_err(|error| ConfigError::InvalidDocument {
-                reason: error.to_string(),
-            })?
-        }
-        ProcedureFormatV1::Yaml => parse_yaml_definition(text, limits)?,
-    };
+    let value = decode_procedure_document_with_name(input, format, limits, "procedure v1")?;
+    let mut definition: ProcedureDefinitionV1 =
+        serde_json::from_value(value).map_err(|error| ConfigError::InvalidDocument {
+            reason: error.to_string(),
+        })?;
 
     definition.validate()?;
     definition.apply_documented_defaults();
     ValidatedProcedureV1::new(definition)
 }
 
-fn parse_yaml_definition(
+fn parse_yaml_value(
     input: &str,
-    limits: ProcedureParseLimitsV1,
-) -> Result<ProcedureDefinitionV1, ConfigError> {
+    limits: ProcedureDocumentLimits,
+    document_name: &'static str,
+) -> Result<Value, ConfigError> {
     if input.trim().is_empty() {
         return Err(ConfigError::InvalidDocument {
             reason: "procedure document must not be empty".to_owned(),
@@ -179,7 +215,7 @@ fn parse_yaml_definition(
         depth: 1,
         nodes: &nodes,
         limits: limits.into(),
-        document_name: "procedure v1",
+        document_name,
         failure: &failure,
     })
     .deserialize(document)
@@ -196,8 +232,6 @@ fn parse_yaml_definition(
         });
     }
 
-    // Deserialize from the original event stream so serde's derived struct deserializers reject
-    // duplicate fields rather than allowing an intermediate map to overwrite one.
     serde_yaml::from_str(input).map_err(|error| ConfigError::InvalidDocument {
         reason: error.to_string(),
     })
@@ -246,20 +280,20 @@ fn parse_yaml_workspace_config(
         reason: error.to_string(),
     })
 }
-fn reject_nulls(value: &Value) -> Result<(), ConfigError> {
+fn reject_nulls(value: &Value, document_name: &str) -> Result<(), ConfigError> {
     match value {
         Value::Null => Err(ConfigError::InvalidDocument {
-            reason: "explicit null is not allowed by procedure v1".to_owned(),
+            reason: format!("explicit null is not allowed by {document_name}"),
         }),
         Value::Array(values) => {
             for value in values {
-                reject_nulls(value)?;
+                reject_nulls(value, document_name)?;
             }
             Ok(())
         }
         Value::Object(values) => {
             for value in values.values() {
-                reject_nulls(value)?;
+                reject_nulls(value, document_name)?;
             }
             Ok(())
         }

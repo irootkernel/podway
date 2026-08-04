@@ -1,9 +1,10 @@
 # Schemas
 
-These JSON Schema Draft 2020-12 files define Podway v1 structural contracts.
+These JSON Schema Draft 2020-12 files define Podway's versioned structural contracts.
 
 - `workspace-v1.schema.json`: `.podway/config.yaml` after YAML parsing.
 - `procedure-v1.schema.json`: custom procedures and built-in presets.
+- `procedure-v2.schema.json`: closed and bounded Procedure v2 YAML/JSON authoring shape.
 - `registry-v1.schema.json`: minimal daemon path registry.
 - `ipc-request-v1.schema.json`: framed daemon request payload.
 - `output-v1.schema.json`: success envelope.

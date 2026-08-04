@@ -13,11 +13,13 @@ mod parser;
 mod validation;
 
 pub use parser::{
-    MAX_PROCEDURE_DOCUMENT_BYTES_V1, MAX_PROCEDURE_DOCUMENT_DEPTH_V1,
-    MAX_PROCEDURE_DOCUMENT_NODES_V1, MAX_WORKSPACE_CONFIG_BYTES_V1, MAX_WORKSPACE_CONFIG_DEPTH_V1,
-    MAX_WORKSPACE_CONFIG_NODES_V1, ProcedureFormatV1, ProcedureParseLimitsV1,
-    WorkspaceConfigParseLimitsV1, parse_procedure_v1, parse_procedure_v1_with_limits,
-    parse_workspace_config_v1, parse_workspace_config_v1_with_limits,
+    MAX_PROCEDURE_DOCUMENT_BYTES, MAX_PROCEDURE_DOCUMENT_BYTES_V1, MAX_PROCEDURE_DOCUMENT_DEPTH,
+    MAX_PROCEDURE_DOCUMENT_DEPTH_V1, MAX_PROCEDURE_DOCUMENT_NODES, MAX_PROCEDURE_DOCUMENT_NODES_V1,
+    MAX_WORKSPACE_CONFIG_BYTES_V1, MAX_WORKSPACE_CONFIG_DEPTH_V1, MAX_WORKSPACE_CONFIG_NODES_V1,
+    ProcedureDocumentFormat, ProcedureDocumentLimits, ProcedureFormatV1, ProcedureParseLimitsV1,
+    WorkspaceConfigParseLimitsV1, decode_procedure_document, decode_procedure_document_with_limits,
+    parse_procedure_v1, parse_procedure_v1_with_limits, parse_workspace_config_v1,
+    parse_workspace_config_v1_with_limits,
 };
 pub use validation::{
     IntoProcedureSnapshotSourceV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
