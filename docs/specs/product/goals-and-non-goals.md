@@ -15,6 +15,19 @@ The priorities are ordered. A lower priority MUST NOT weaken a higher priority.
 
 ## Functional goals
 
+The stage and linear-order requirements below define the released v1 contract.
+Podway v2 additionally MUST:
+
+- represent a finite declarative graph of action and decision placements;
+- retain one authoritative cursor and exactly one active node attempt;
+- permit alternative routes to converge on one placement without parallel or
+  synchronizing execution;
+- preserve prior attempts for the current session and expose prior recorded
+  items only through bounded, exact references;
+- record decisions, declared rework, goal revisions, criterion results, and
+  goal assessments as immutable session-scoped records;
+- fail closed on stale, ambiguous, unsupported, or non-dominating references.
+
 Podway MUST:
 
 - run an ordered procedure with one active stage attempt;
@@ -119,7 +132,7 @@ goals:
 - remote synchronization;
 - team or server mode;
 - multiple simultaneous sessions in one worktree;
-- parallel stage groups or joins;
+- parallel stage groups or synchronizing joins;
 - long-term session export and import;
 - artifact content storage;
 - cryptographic actor signatures;

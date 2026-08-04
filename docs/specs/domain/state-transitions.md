@@ -1,5 +1,9 @@
 # State Transitions
 
+The transition table and algorithms below define the implemented
+`podway.procedure/v1` command behavior. V2 commands and versioned dispatch do not
+change these v1 transitions.
+
 ## General command rules
 
 Every successful state-changing session mutation:

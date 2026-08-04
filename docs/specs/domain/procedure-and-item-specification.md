@@ -1,6 +1,6 @@
 # Procedure and Item Specification
 
-## File format
+## V1 file format
 
 Procedure definitions are YAML or JSON documents conforming to `podway.procedure/v1`. The normative structure is [`../../../assets/schemas/procedure-v1.schema.json`](../../../assets/schemas/procedure-v1.schema.json).
 
@@ -319,3 +319,46 @@ At start, the daemon stores:
 - snapshot creation timestamp.
 
 The running session never re-reads source procedure files. `status` may report that the source file changed, but source drift cannot alter stage semantics.
+
+## Procedure v2 contract baseline
+
+Procedure v2 uses the exact discriminator `podway.procedure/v2`. YAML is the
+normative authoring format; equivalent JSON resolves to the same canonical
+semantic model and digest. The v1 parser, defaults, canonical bytes, digests,
+sessions, and public results remain unchanged.
+
+A v2 procedure separates reusable action or decision definitions from graph
+placements. Every placement has a unique graph-node ID, routes name placements,
+and exactly one placement attempt is active. Alternative routes may converge on
+one placement, but convergence activates from one traversed route and never
+waits for multiple branches. Required recorded-item references downstream of a
+convergence point may name only placements that dominate the consumer;
+branch-specific references are optional.
+
+An action records work only through the six existing item types. A reference to
+a prior terminal placement binds its exact attempt and complete recorded-item
+digest, and may select a bounded subset of item IDs for read-back. Selection does
+not change what the digest attests. Semantic fitness remains the external actor's
+judgment. Decisions, declared rework, goal revisions, criterion results, and goal
+assessments are immutable session-scoped records. Invalidated or stale records
+remain inspectable but cannot satisfy current progression, and no record has a
+cross-session lifecycle.
+
+The v2 schema and parser MUST apply these fixed authoring rules:
+
+- `version` is a non-empty string of at most 64 characters;
+- the outer YAML or JSON document is at most 1,048,576 bytes, nesting depth is
+  at most 64, and the parsed representation contains at most 100,000 nodes;
+- all objects are closed and unknown fields are rejected;
+- an action definition requires both non-empty `title` and `intent`;
+- an option supports optional `criteria` as its only descriptive field;
+- a declared reason policy uses `required: true`; other values are invalid;
+- a declared action-placement skip policy uses `allowed: true`; other values
+  are invalid, and reason requirement is expressed separately;
+- graph placements have no display override fields;
+- empty optional collections are omitted rather than serialized explicitly.
+
+These rules do not relax the field and collection bounds of the canonical v2
+schema. Procedure content remains declarative: commands, expressions, plugins,
+remote includes, network endpoints, secrets, Git mutation, and paths outside the
+worktree are invalid.

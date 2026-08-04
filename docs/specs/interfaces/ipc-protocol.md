@@ -191,6 +191,22 @@ After decoding a request, the daemon compares the client product and exact embed
 admission. The bundled v0.1.0 CLI fails closed against any daemon with a different
 product or manifest identity even when the IPC identifier is compatible.
 
+### V2 compatibility boundary
+
+V2 retains `podway.ipc/v1`, `podway.output/v1`, and `podway.error/v1`; it does
+not add an automation transport or weaken request framing, identity fences,
+idempotency, detached admission, or job reconciliation. Existing commands used
+against a v2 session select a closed `/v2` result family. A new v2-only command
+starts a distinct closed result family at `/v1`. V1 sessions continue to emit
+their released v1 result families without v2 fields or changed semantics.
+
+A peer MUST reject a registered command it cannot serve or a result family it
+does not support with a structured compatibility error. It MUST NOT ignore
+unknown v2 fields, extend a v1 result with v2 state, or downgrade a v2 Procedure
+to v1. A route absent from a build retains that build's ordinary unknown-command
+or usage behavior; the exact contract-manifest digest is the machine-readable
+capability signal.
+
 ## Request canonicalization
 
 For mutation idempotency, the daemon constructs canonical request identity from:

@@ -1,6 +1,6 @@
 # ADR-0015: Permit a Constrained Single-Cursor Graph
 
-- Status: Accepted
+- Status: Superseded by [ADR-0017](0017-single-cursor-convergence.md)
 - Date: 2026-08-04
 - Supersedes: [ADR-0002](0002-single-active-stage.md)
 

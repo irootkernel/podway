@@ -8,7 +8,11 @@ A **Workspace** is one valid, non-bare Git worktree initialized for Podway. Its 
 
 ### Procedure
 
-A **Procedure** is versioned data describing an ordered list of stages, their instructions, required and optional items, skip policy, and allowed return destinations. A procedure contains no executable code.
+A **Procedure** is versioned declarative data and contains no executable code. A
+v1 Procedure describes an ordered list of stages, their instructions, required
+and optional items, skip policy, and allowed return destinations. A v2 Procedure
+describes reusable action and decision definitions placed in a constrained
+single-cursor graph.
 
 ### Procedure snapshot
 
@@ -20,11 +24,30 @@ A **Task Session** is the single current task managed in one workspace. Its life
 
 ### Stage
 
-A **Stage** is one ordered unit of procedure progress. Stages are addressed by stable kebab-case IDs and zero-based internal indexes.
+A **Stage** is one ordered unit of v1 procedure progress. Stages are addressed by stable kebab-case IDs and zero-based internal indexes.
+
+### Node definition
+
+A **Node Definition** is a reusable v2 action or decision contract. It owns the
+intrinsic instructions, item contracts, or decision policy and is not a routing
+identity.
+
+### Graph node
+
+A **Graph Node** is one uniquely identified placement of a node definition in a
+v2 Procedure. Routes and manual rework targets name graph nodes.
 
 ### Attempt
 
-An **Attempt** is one execution of one stage. Retry and return create new attempts. Attempt lifecycle is `active`, `completed`, `skipped`, or `abandoned`.
+An **Attempt** is one execution of a v1 stage or v2 graph node. Retry and rework
+create fresh attempts. Attempt lifecycle is `active`, `completed`, `skipped`, or
+`abandoned`.
+
+### Evidence reference
+
+An **Evidence Reference** is a v2 link resolved to one prior terminal graph-node
+attempt and its complete recorded-item digest. An optional item selector limits
+read-back only; it does not narrow the digest or assert semantic truth.
 
 ### Item
 
@@ -82,6 +105,9 @@ The implementation MUST continuously enforce the following invariants.
 
 ### Session invariants
 
+`INV-S05` through `INV-S09` define the released v1 stage contract. V2 retains
+`INV-S01` through `INV-S04` and `INV-S10` and adds the v2 invariants below.
+
 - **INV-S01:** A workspace has at most one task session.
 - **INV-S02:** A running session has exactly one active attempt.
 - **INV-S03:** A completed or cancelled session has no active attempt.
@@ -93,7 +119,22 @@ The implementation MUST continuously enforce the following invariants.
 - **INV-S09:** Old attempt items never satisfy a new attempt automatically.
 - **INV-S10:** Every successful state-changing session mutation increments the session revision exactly once.
 
+### V2 session invariants
+
+- **INV-V2S01:** A running v2 session has one authoritative cursor and exactly one active graph-node attempt.
+- **INV-V2S02:** A convergence placement activates through exactly one traversed incoming route and never waits for another branch.
+- **INV-V2S03:** Routes are declared data and never expressions, hooks, or procedure-defined commands.
+- **INV-V2S04:** Required recorded-item references name prior valid terminal placements that dominate their consumer.
+- **INV-V2S05:** Item selection limits read-back while the source digest covers the complete recorded item values.
+- **INV-V2S06:** Decision, rework, goal revision, criterion, and goal-assessment records are immutable and session-scoped.
+- **INV-V2S07:** Stale or invalidated attempts and records remain inspectable but cannot satisfy current progression.
+- **INV-V2S08:** V2 has no parallel attempts, synchronizing joins, typed producer outputs, or general evidence ledger.
+
 ### Rework invariants
+
+The `return`, `reopen`, and `redo` invariants below define v1. V2 rework instead
+uses declared or manual graph-node targets and always creates a fresh attempt;
+its detailed transition rules are versioned separately.
 
 - **INV-R01:** Retry abandons the active attempt before creating the next attempt of the same stage.
 - **INV-R02:** Return targets only an allowed earlier stage.

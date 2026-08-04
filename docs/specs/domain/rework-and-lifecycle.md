@@ -1,5 +1,9 @@
 # Rework and Session Lifecycle
 
+This document defines the implemented `podway.procedure/v1` lifecycle. V2 graph
+rework is governed by the v2 contract baseline and does not reinterpret v1
+`return`, `reopen`, or `redo`.
+
 ## Purpose
 
 Rework is a primary Podway behavior. It ensures that a later discovery cannot leave earlier-dependent work marked complete without repeating the relevant ordered stages.

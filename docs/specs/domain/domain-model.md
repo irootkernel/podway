@@ -1,5 +1,9 @@
 # Domain Model
 
+The concrete rows and stage structures below define the implemented
+`podway.procedure/v1` aggregate. V2 retains the one-session, one-active-attempt
+boundary but adds separately versioned graph and workflow-record types.
+
 ## Aggregate boundary
 
 The authoritative domain aggregate is the **current task session inside one workspace**. A workspace also owns queue and operational records, but only one session may exist at a time.

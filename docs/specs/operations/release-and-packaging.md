@@ -228,6 +228,25 @@ No hosted CI run, independent signature, approval quorum, holdout run,
 qualification archive, or attestation bundle is required. Signing, notarization,
 and publication remain distribution operations after `make dist` succeeds.
 
+### V2 admission and GA boundary
+
+Normal builds MUST refuse `podway.procedure/v2` session admission until all ten
+PV2GA epics and every v2 acceptance category are complete. Intermediate work may
+ship read-only authoring surfaces, but no release artifact may admit or persist a
+partial v2 session contract.
+
+Development dogfooding may admit v2 only when all of these conditions hold: the
+binary was compiled with the explicit development-only feature, existing
+development mode is active, the workspace is marked disposable, and separate
+socket and state directories are in use. The unlock MUST reject an installed
+daemon, LaunchAgent, or normally registered workspace. Development v2 state is
+discardable and receives no migration-preservation promise.
+
+V0.2.0 reaches full-feature GA only after the complete integrated development,
+compatibility, payload, persistence, native runtime, recovery, and distribution
+gates pass. Release qualification MUST prove that the development admission
+unlock is absent before public v2 admission can be enabled.
+
 ## Support policy
 
 Podway releases only for currently supported macOS major versions on native Apple

@@ -75,9 +75,10 @@ that the described commands, schemas, storage, or behavior are implemented.
 
 This design is governed by:
 
-- [ADR-0015](../architecture-decision-records/0015-constrained-single-cursor-graph.md),
-  which supersedes ADR-0002 to permit the constrained single-cursor graph while
-  preserving one active attempt;
+- [ADR-0017](../architecture-decision-records/0017-single-cursor-convergence.md),
+  which supersedes ADR-0015 and transitively ADR-0002 to permit convergence
+  reached by one cursor while preserving one active attempt and rejecting
+  parallel or synchronizing joins;
 - [ADR-0016](../architecture-decision-records/0016-recorded-item-workflow-memory.md),
   which extends ADR-0007 to recognize decision records and goal
   assessments as new session-scoped record kinds, and to record durably the
@@ -205,7 +206,6 @@ graph. A graph node owns contextual wiring such as:
 - an action node's next target, terminal disposition, or skip policy;
 - a decision node's option routes;
 - transition effects;
-- optional placement-specific display context allowed by the schema.
 
 Every `graph_node_id` MUST be unique within a procedure graph. The same node
 definition MAY be placed multiple times under different graph node IDs.
@@ -598,7 +598,9 @@ them and MUST NOT relax them. The v2 authoring bounds are:
 | Bound | Value |
 |---|---|
 | every identifier (procedure, definition, node, item, option, criterion) | 64 characters |
+| procedure `version` | 1 to 64 characters |
 | procedure `name` / `purpose` / `description` | 120 / 500 / 1,000 characters |
+| source document / nesting depth / parsed nodes | 1,048,576 bytes / 64 / 100,000 |
 | graph nodes per procedure | 64 |
 | node definitions per procedure | 64 |
 | definition `title` / `intent` / `description` | 120 / 300 / 1,000 characters |
@@ -622,6 +624,16 @@ These numbers exist so that the wire-size budget of §10.4 is provable
 arithmetic. They cap each field individually; the §10.4 budgets cap their
 combination, so a definition that drives every bound to its ceiling at once
 is rejected at vet rather than admitted.
+
+Schema shape decisions are fixed as follows:
+
+- action definitions require non-empty `title` and `intent`;
+- an option's only optional descriptive field is `criteria`;
+- a declared `reason` policy requires `required: true`; `false` is invalid;
+- a declared action-placement `skip` policy requires `allowed: true`; `false`
+  is invalid;
+- graph placements have no display override fields;
+- empty optional collections are omitted rather than written explicitly.
 
 Procedure files MUST NOT:
 
@@ -673,10 +685,13 @@ work contract, as v1 stages do.
 
 An action node represents work performed outside Podway.
 
-An action definition MAY contain:
+An action definition MUST contain:
 
 - `title`;
 - `intent`;
+
+It MAY additionally contain:
+
 - `description`;
 - `instructions`;
 - typed required and optional items.
@@ -775,7 +790,7 @@ Each option contains:
 
 - a stable option ID unique within the definition;
 - a human-readable label;
-- optional non-executable criteria or help text.
+- optional non-executable `criteria`.
 
 Criteria are guidance for the external decision-maker. They are not executable
 conditions and are not evaluated by Podway.
@@ -3137,7 +3152,7 @@ tree, and `V2REL-006` is the only release-readiness gate.
 
 | Task | Deliverable | Acceptance and focused gate |
 |---|---|---|
-| `V2CTR-001` | Promote the accepted v2 decisions into behavioral specifications. | Specs state the graph, recorded-item, v1 compatibility, admission, and GA boundaries without contradicting ADR-0015 or ADR-0016; run `python3 tools/verify_docs.py`. |
+| `V2CTR-001` | Promote the accepted v2 decisions into behavioral specifications. | Specs state the graph, recorded-item, v1 compatibility, admission, and GA boundaries without contradicting ADR-0017 or ADR-0016; run `python3 tools/verify_docs.py`. |
 | `V2CTR-002` | Add the closed Procedure v2 YAML/JSON schema. | Valid examples pass; unknown fields, parser hazards, and every §5 bound fail closed; run schema and `podway-config` exact tests. |
 | `V2CTR-003` | Define every v2 result and authoring-diagnostic schema family. | Existing commands use `/v2` result families, new commands start at `/v1`, and every result is closed and bounded; run protocol schema exact tests. |
 | `V2CTR-004` | Register the route, error, schema, and manifest delta. | Exactly the 13 routes in §16.1 are added; every normative runtime error and authoring diagnostic is registered with no silent surface growth; run `make architecture-static`. |
