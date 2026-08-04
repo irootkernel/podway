@@ -1,0 +1,12 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "compatibility",
+  "evidence_level": "contract-recipe",
+  "implementation_status": "planned",
+  "cases": [
+    {"id": "release-build", "operation": "attempt v2 admission with a release binary", "expected": "refused-before-complete-gate"},
+    {"id": "development-unlock", "operation": "admit in a source-built daemon with explicit unlock and disposable workspace markers", "expected": "allowed-only-when-all-conjuncts-hold"},
+    {"id": "installed-daemon", "operation": "attempt development unlock through an installed daemon or LaunchAgent", "expected": "refused"},
+    {"id": "non-disposable-workspace", "operation": "attempt development unlock outside disposable state", "expected": "refused"}
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "negative",
+  "evidence_level": "contract-recipe",
+  "implementation_status": "planned",
+  "cases": [
+    {"id": "duplicate-definition-source-key", "mutation": "encode the same node definition key twice in source", "expected_code": "SOURCE_CONSTRUCT_UNSUPPORTED"},
+    {"id": "ambiguous-placement-id", "mutation": "make two graph references resolve ambiguously", "expected_code": "AMBIGUOUS_GRAPH_REFERENCE"},
+    {"id": "unknown-entry", "mutation": "set graph.entry to an undefined node", "expected_code": "ENTRY_NODE_INVALID"},
+    {"id": "no-terminal-route", "mutation": "remove every finite route to a terminal", "expected_code": "NO_TERMINAL_PATH"},
+    {"id": "unreachable-node", "mutation": "append an unreferenced graph node", "expected_code": "UNREACHABLE_GRAPH_NODE"},
+    {"id": "option-without-route", "mutation": "remove the route for one decision option", "expected_code": "DECISION_OPTION_ROUTE_MISSING"},
+    {"id": "route-for-undefined-option", "mutation": "add a route for an undefined decision option", "expected_code": "DECISION_ROUTE_OPTION_UNDEFINED"},
+    {"id": "invalid-cycle", "mutation": "add a forward cycle that is not declared rework", "expected_code": "GRAPH_CYCLE_INVALID"},
+    {"id": "rework-target-not-dominating", "mutation": "route rework to a non-dominating placement", "expected_code": "REWORK_TARGET_NOT_DOMINATING"},
+    {"id": "unknown-evidence-source", "mutation": "reference an undefined source placement", "expected_code": "EVIDENCE_SOURCE_UNKNOWN"},
+    {"id": "self-evidence-source", "mutation": "reference the consuming placement itself", "expected_code": "EVIDENCE_SOURCE_SELF_REFERENCE"},
+    {"id": "evidence-source-not-dominating", "mutation": "make a required source not strictly dominate its consumer", "expected_code": "EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER"},
+    {"id": "skippable-required-source", "mutation": "mark a required evidence source skippable", "expected_code": "SKIPPABLE_EVIDENCE_SOURCE"},
+    {"id": "unknown-evidence-item", "mutation": "select an undefined source item", "expected_code": "EVIDENCE_SELECTOR_UNKNOWN_ITEM"},
+    {"id": "readback-over-budget", "mutation": "increase aggregate selected read-back above READBACK_BUDGET", "expected_code": "READBACK_BUDGET_EXCEEDED"},
+    {"id": "goal-assessment-not-dominating", "mutation": "place goal assessment off one terminal path", "expected_code": "GOAL_ASSESSMENT_NOT_DOMINATING_TERMINAL"},
+    {"id": "assessment-option-unmapped", "mutation": "remove one assessment option mapping", "expected_code": "GOAL_ASSESSMENT_OPTION_UNMAPPED"},
+    {"id": "assessment-outcome-unreachable", "mutation": "remove the only option for one goal outcome", "expected_code": "GOAL_ASSESSMENT_OUTCOME_UNREACHABLE"},
+    {"id": "manual-rework-target-invalid", "mutation": "allow manual rework to an undefined placement", "expected_code": "MANUAL_REWORK_TARGET_UNKNOWN"}
+  ]
+}

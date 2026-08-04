@@ -88,6 +88,42 @@ struct ManifestAsset {
     sha256: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V2FixtureCatalog {
+    schema: String,
+    version: u8,
+    fixture_root: String,
+    source_acceptance_matrix: String,
+    source_compatibility_matrix: String,
+    source_payload_matrix: String,
+    evidence_policy: String,
+    fixtures: Vec<V2FixtureAsset>,
+    cases: Vec<V2FixtureCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V2FixtureAsset {
+    id: String,
+    path: String,
+    media_type: String,
+    sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V2FixtureCase {
+    id: String,
+    fixture_class: String,
+    fixture_ids: Vec<String>,
+    acceptance_ids: Vec<String>,
+    specialized_ids: Vec<String>,
+    owning_tasks: Vec<String>,
+    evidence_level: String,
+    implementation_status: String,
+}
+
 #[derive(Clone)]
 struct LocalSchemas(Arc<HashMap<String, Value>>);
 
@@ -1132,6 +1168,52 @@ fn discover_json_files(relative: &str) -> BTreeSet<String> {
     found
 }
 
+fn discover_regular_files(relative: &str) -> BTreeSet<String> {
+    fn visit(repository: &Path, directory: &Path, found: &mut BTreeSet<String>) {
+        let mut entries = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        entries.sort();
+        for path in entries {
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            assert!(
+                !metadata.file_type().is_symlink(),
+                "fixture symlink: {}",
+                path.display()
+            );
+            if metadata.is_dir() {
+                visit(repository, &path, found);
+            } else {
+                assert!(
+                    metadata.is_file(),
+                    "non-regular fixture entry: {}",
+                    path.display()
+                );
+                let relative = path.strip_prefix(repository).unwrap();
+                let normalized = relative
+                    .components()
+                    .map(|part| {
+                        part.as_os_str()
+                            .to_str()
+                            .expect("fixture path must be UTF-8")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                assert!(found.insert(normalized));
+            }
+        }
+    }
+
+    let repository = root();
+    let directory = repository.join(relative);
+    let metadata = fs::symlink_metadata(&directory).unwrap();
+    assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+    let mut found = BTreeSet::new();
+    visit(&repository, &directory, &mut found);
+    found
+}
+
 #[test]
 fn mcont006_manifest_recursively_covers_known_answers_with_exact_digests() {
     let manifest: Manifest =
@@ -1147,11 +1229,854 @@ fn mcont006_manifest_recursively_covers_known_answers_with_exact_digests() {
     let expected = discover_json_files("docs/examples/json")
         .into_iter()
         .chain(discover_json_files("tests/fixtures/contract"))
+        .chain(discover_regular_files("tests/fixtures/v2"))
         .collect::<BTreeSet<_>>();
     assert_eq!(assets.keys().cloned().collect::<BTreeSet<_>>(), expected);
     for (relative, digest) in assets {
         assert_eq!(digest, sha256(&root().join(relative)));
     }
+}
+
+fn collect_expected_codes(value: &Value, codes: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(code) = object.get("expected_code").and_then(Value::as_str) {
+                codes.insert(code.to_owned());
+            }
+            object
+                .values()
+                .for_each(|value| collect_expected_codes(value, codes));
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_expected_codes(value, codes)),
+        _ => {}
+    }
+}
+
+fn boundary_pairs(value: &Value, field: &str) -> BTreeMap<String, (u64, u64)> {
+    value[field]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["dimension"].as_str().unwrap().to_owned(),
+                (
+                    entry["at_limit"].as_u64().unwrap(),
+                    entry["one_over"].as_u64().unwrap(),
+                ),
+            )
+        })
+        .collect()
+}
+
+fn recipe_case_ids(value: &Value) -> BTreeSet<String> {
+    value["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn recipe_expected_codes(value: &Value) -> BTreeMap<String, String> {
+    value["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| {
+            entry["expected_code"]
+                .as_str()
+                .map(|code| (entry["id"].as_str().unwrap().to_owned(), code.to_owned()))
+        })
+        .collect()
+}
+
+fn validate_v2_fixture_catalog(value: &Value) -> Result<(usize, usize), String> {
+    let catalog: V2FixtureCatalog =
+        serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+    if catalog.schema != "podway.v2-fixture-catalog/v1"
+        || catalog.version != 1
+        || catalog.fixture_root != "tests/fixtures/v2"
+        || catalog.source_acceptance_matrix != "quality/v2-acceptance-matrix-v1.json"
+        || catalog.source_compatibility_matrix != "quality/v2-compatibility-matrix-v1.json"
+        || catalog.source_payload_matrix != "quality/v2-payload-matrix-v1.json"
+        || catalog.evidence_policy
+            != "Every entry is manifest-bound with planned runtime ownership. The YAML/JSON pair and result-family values are validated now only as schema known answers; no entry proves future parser, graph, runtime, payload, compatibility, admission, or release behavior."
+    {
+        return Err("v2 fixture catalog identity or evidence policy drift".to_owned());
+    }
+
+    let physical_paths = discover_regular_files(&catalog.fixture_root);
+    let mut fixture_ids = BTreeSet::new();
+    let mut fixture_paths = BTreeSet::new();
+    let mut fixture_media = BTreeMap::new();
+    for fixture in &catalog.fixtures {
+        if fixture.id.is_empty() || !fixture_ids.insert(fixture.id.clone()) {
+            return Err("v2 fixture IDs must be unique and non-empty".to_owned());
+        }
+        let path = Path::new(&fixture.path);
+        if path.is_absolute()
+            || fixture.path.contains('\\')
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir
+                        | std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+            || !fixture.path.starts_with("tests/fixtures/v2/")
+            || !fixture_paths.insert(fixture.path.clone())
+        {
+            return Err("v2 fixture paths must be normalized, unique, and rooted".to_owned());
+        }
+        let source = root().join(path);
+        let metadata = fs::symlink_metadata(&source).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("v2 fixture path must resolve to a regular non-symlink file".to_owned());
+        }
+        if fixture.sha256 != sha256(&source) {
+            return Err(format!("v2 fixture digest drift: {}", fixture.id));
+        }
+        let expected_media = match path.extension().and_then(|value| value.to_str()) {
+            Some("json") => "application/json",
+            Some("yaml" | "yml") => "application/yaml",
+            _ => "application/octet-stream",
+        };
+        if fixture.media_type != expected_media {
+            return Err(format!("v2 fixture media type drift: {}", fixture.id));
+        }
+        fixture_media.insert(fixture.id.clone(), fixture.media_type.clone());
+    }
+    if fixture_paths != physical_paths {
+        return Err("v2 fixture inventory does not exactly cover physical files".to_owned());
+    }
+
+    let acceptance = read_json(&catalog.source_acceptance_matrix);
+    let mut expected_acceptance = BTreeSet::new();
+    let mut acceptance_owners = BTreeMap::<String, BTreeSet<String>>::new();
+    for criterion in acceptance["criteria"]
+        .as_array()
+        .ok_or("acceptance criteria missing")?
+    {
+        let section = criterion["section"]
+            .as_str()
+            .ok_or("acceptance section missing")?;
+        if matches!(section, "17.1" | "17.2" | "17.7" | "17.9") {
+            let id = criterion["id"]
+                .as_str()
+                .ok_or("acceptance ID missing")?
+                .to_owned();
+            expected_acceptance.insert(id.clone());
+            acceptance_owners.insert(
+                id,
+                criterion["owning_tasks"]
+                    .as_array()
+                    .ok_or("acceptance owners missing")?
+                    .iter()
+                    .map(|owner| {
+                        owner
+                            .as_str()
+                            .ok_or("acceptance owner malformed")
+                            .map(str::to_owned)
+                    })
+                    .collect::<Result<_, _>>()?,
+            );
+        }
+    }
+    let compatibility = read_json(&catalog.source_compatibility_matrix);
+    let payload = read_json(&catalog.source_payload_matrix);
+    let specialized_entries = compatibility["requirements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            compatibility["surface_cases"]
+                .as_array()
+                .into_iter()
+                .flatten(),
+        )
+        .chain(payload["requirements"].as_array().into_iter().flatten())
+        .collect::<Vec<_>>();
+    let mut specialized_metadata = BTreeMap::<String, (Option<String>, BTreeSet<String>)>::new();
+    for entry in specialized_entries {
+        let id = entry["id"]
+            .as_str()
+            .ok_or("specialized fixture ID missing")?
+            .to_owned();
+        let acceptance_id = entry
+            .get("acceptance_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let owners = entry["owning_tasks"]
+            .as_array()
+            .ok_or("specialized owners missing")?
+            .iter()
+            .map(|owner| {
+                owner
+                    .as_str()
+                    .ok_or("specialized owner malformed")
+                    .map(str::to_owned)
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if specialized_metadata
+            .insert(id, (acceptance_id, owners))
+            .is_some()
+        {
+            return Err("specialized fixture ID is duplicated".to_owned());
+        }
+    }
+    let expected_specialized = specialized_metadata
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let mut case_ids = BTreeSet::new();
+    let mut used_fixtures = BTreeSet::new();
+    let mut observed_acceptance = BTreeSet::new();
+    let mut observed_specialized = BTreeSet::new();
+    let mut classes = BTreeSet::new();
+    for case in &catalog.cases {
+        if case.id.is_empty() || !case_ids.insert(case.id.clone()) {
+            return Err("v2 fixture case IDs must be unique and non-empty".to_owned());
+        }
+        if !matches!(
+            case.fixture_class.as_str(),
+            "known-answer" | "negative" | "graph" | "compatibility" | "maximum-size"
+        ) || !classes.insert(case.fixture_class.clone()) && case.fixture_class != "maximum-size"
+        {
+            return Err("v2 fixture class is invalid or unexpectedly repeated".to_owned());
+        }
+        if case.evidence_level != "contract-recipe" || case.implementation_status != "planned" {
+            return Err("v2 fixture case falsely promotes planned evidence".to_owned());
+        }
+        if case.fixture_ids.is_empty() || case.acceptance_ids.is_empty() {
+            return Err("v2 fixture case mapping must be non-empty".to_owned());
+        }
+        for fixture_id in &case.fixture_ids {
+            if !fixture_ids.contains(fixture_id) || !used_fixtures.insert(fixture_id.clone()) {
+                return Err("v2 fixture must be referenced by exactly one case".to_owned());
+            }
+        }
+        let mut expected_owners = BTreeSet::new();
+        for acceptance_id in &case.acceptance_ids {
+            if !expected_acceptance.contains(acceptance_id)
+                || !observed_acceptance.insert(acceptance_id.clone())
+            {
+                return Err("v2 fixture acceptance mapping is unknown or duplicated".to_owned());
+            }
+            expected_owners.extend(acceptance_owners[acceptance_id].iter().cloned());
+        }
+        for specialized_id in &case.specialized_ids {
+            if !expected_specialized.contains(specialized_id)
+                || !observed_specialized.insert(specialized_id.clone())
+            {
+                return Err("v2 fixture specialized mapping is unknown or duplicated".to_owned());
+            }
+            let (acceptance_id, owners) = &specialized_metadata[specialized_id];
+            if acceptance_id
+                .as_ref()
+                .is_some_and(|acceptance_id| !case.acceptance_ids.contains(acceptance_id))
+            {
+                return Err("v2 fixture specialized mapping crosses acceptance cases".to_owned());
+            }
+            expected_owners.extend(owners.iter().cloned());
+        }
+        if case.owning_tasks.iter().cloned().collect::<BTreeSet<_>>() != expected_owners
+            || case.owning_tasks.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err("v2 fixture owning task mapping drift".to_owned());
+        }
+    }
+    if used_fixtures != fixture_ids
+        || observed_acceptance != expected_acceptance
+        || observed_specialized != expected_specialized
+    {
+        return Err("v2 fixture mappings are not exhaustive".to_owned());
+    }
+    if classes
+        != [
+            "compatibility",
+            "graph",
+            "known-answer",
+            "negative",
+            "maximum-size",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    {
+        return Err("v2 fixture class coverage drift".to_owned());
+    }
+    let observed_case_fixtures = catalog
+        .cases
+        .iter()
+        .map(|case| (case.id.clone(), case.fixture_ids.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let expected_case_fixtures = BTreeMap::from([
+        (
+            "V2FIX-PROCEDURE-KNOWN-ANSWER".to_owned(),
+            vec![
+                "procedure-equivalence-contract".to_owned(),
+                "procedure-equivalent-json".to_owned(),
+                "procedure-equivalent-yaml".to_owned(),
+            ],
+        ),
+        (
+            "V2FIX-PROCEDURE-NEGATIVE".to_owned(),
+            vec!["procedure-malformed-inputs".to_owned()],
+        ),
+        (
+            "V2FIX-GRAPH".to_owned(),
+            vec![
+                "graph-negative-cases".to_owned(),
+                "graph-valid-cases".to_owned(),
+            ],
+        ),
+        (
+            "V2FIX-COMPATIBILITY".to_owned(),
+            vec![
+                "compatibility-admission-fence".to_owned(),
+                "compatibility-unsupported-peer".to_owned(),
+                "compatibility-v1-boundaries".to_owned(),
+                "protocol-result-families".to_owned(),
+            ],
+        ),
+        (
+            "V2FIX-PAYLOAD-NEXT".to_owned(),
+            vec!["payload-maximum-next".to_owned()],
+        ),
+        (
+            "V2FIX-PAYLOAD-STATUS".to_owned(),
+            vec!["payload-maximum-status".to_owned()],
+        ),
+        (
+            "V2FIX-PAYLOAD-TRUNCATION".to_owned(),
+            vec!["payload-truncation-overflow".to_owned()],
+        ),
+    ]);
+    if observed_case_fixtures != expected_case_fixtures {
+        return Err("v2 fixture case-to-file mapping drift".to_owned());
+    }
+
+    let authoring_catalog = read_json("assets/specifications/authoring-diagnostics.json");
+    let runtime_catalog = read_json("assets/specifications/error-codes.json");
+    let authoring_codes = authoring_catalog["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["code"].as_str().unwrap().to_owned());
+    let runtime_codes = runtime_catalog["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["code"].as_str().unwrap().to_owned());
+    let registered_codes = authoring_codes
+        .chain(runtime_codes)
+        .collect::<BTreeSet<_>>();
+    for fixture in &catalog.fixtures {
+        if fixture_media[&fixture.id] != "application/json" {
+            continue;
+        }
+        let document = read_json(&fixture.path);
+        let mut declared_codes = BTreeSet::new();
+        collect_expected_codes(&document, &mut declared_codes);
+        if !declared_codes.is_subset(&registered_codes) {
+            return Err(format!(
+                "v2 fixture declares an unregistered code: {}",
+                fixture.id
+            ));
+        }
+        if document.get("schema").and_then(Value::as_str) == Some("podway.v2-fixture-recipe/v1")
+            && (document.get("evidence_level").and_then(Value::as_str) != Some("contract-recipe")
+                || document
+                    .get("implementation_status")
+                    .and_then(Value::as_str)
+                    != Some("planned"))
+        {
+            return Err(format!("v2 fixture recipe evidence drift: {}", fixture.id));
+        }
+    }
+
+    Ok((catalog.fixtures.len(), catalog.cases.len()))
+}
+
+#[test]
+fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
+    let catalog = read_json("tests/fixtures/contract/v2-fixture-catalog-v1.json");
+    assert_eq!(validate_v2_fixture_catalog(&catalog).unwrap(), (13, 7));
+    let catalog_cases = catalog["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| (case["id"].as_str().unwrap(), case))
+        .collect::<BTreeMap<_, _>>();
+    let numbered_ids = |prefix: &str, start: u8, end: u8| {
+        (start..=end)
+            .map(|number| format!("{prefix}-{number:03}"))
+            .collect::<Vec<_>>()
+    };
+    for (case_id, expected) in [
+        (
+            "V2FIX-PROCEDURE-KNOWN-ANSWER",
+            vec!["V2ACC-001", "V2ACC-003", "V2ACC-004", "V2ACC-006"],
+        ),
+        ("V2FIX-PROCEDURE-NEGATIVE", vec!["V2ACC-002", "V2ACC-005"]),
+    ] {
+        assert_eq!(catalog_cases[case_id]["acceptance_ids"], json!(expected));
+    }
+    assert_eq!(
+        catalog_cases["V2FIX-GRAPH"]["acceptance_ids"],
+        json!(numbered_ids("V2ACC", 7, 20))
+    );
+    assert_eq!(
+        catalog_cases["V2FIX-COMPATIBILITY"]["acceptance_ids"],
+        json!(numbered_ids("V2ACC", 66, 72))
+    );
+    let mut expected_compatibility = numbered_ids("V2COMP", 1, 7);
+    expected_compatibility.extend(numbered_ids("V2COMP-SURFACE", 1, 8));
+    assert_eq!(
+        catalog_cases["V2FIX-COMPATIBILITY"]["specialized_ids"],
+        json!(expected_compatibility)
+    );
+    assert_eq!(
+        catalog_cases["V2FIX-PAYLOAD-NEXT"]["acceptance_ids"],
+        json!(numbered_ids("V2ACC", 77, 79))
+    );
+    assert_eq!(
+        catalog_cases["V2FIX-PAYLOAD-STATUS"]["acceptance_ids"],
+        json!(numbered_ids("V2ACC", 80, 84))
+    );
+    assert_eq!(
+        catalog_cases["V2FIX-PAYLOAD-TRUNCATION"]["acceptance_ids"],
+        json!(numbered_ids("V2ACC", 85, 87))
+    );
+    assert_eq!(
+        catalog_cases["V2FIX-PAYLOAD-NEXT"]["specialized_ids"],
+        json!(numbered_ids("V2PAY", 1, 3))
+    );
+    assert_eq!(
+        catalog_cases["V2FIX-PAYLOAD-STATUS"]["specialized_ids"],
+        json!(numbered_ids("V2PAY", 4, 8))
+    );
+    assert_eq!(
+        catalog_cases["V2FIX-PAYLOAD-TRUNCATION"]["specialized_ids"],
+        json!(numbered_ids("V2PAY", 9, 11))
+    );
+
+    let json_document = read_json("tests/fixtures/v2/procedures/equivalent-procedure.json");
+    let yaml_document: Value = serde_yaml::from_slice(
+        &fs::read(root().join("tests/fixtures/v2/procedures/equivalent-procedure.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(yaml_document, json_document);
+    assert_schema_valid("schemas/procedure-v2.schema.json", &json_document);
+    let equivalence_contract = read_json("tests/fixtures/v2/procedures/equivalence-contract.json");
+    let canonical = podway_core::canonicalize_json_v1(&json_document).unwrap();
+    assert_eq!(
+        equivalence_contract["canonical_sha256"],
+        json!(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+    );
+    assert_eq!(
+        equivalence_contract["future_assertions"],
+        json!([
+            "YAML and JSON parse to the same structural value and canonical bytes",
+            "field ordering and non-semantic formatting preserve canonical_sha256",
+            "podway.procedure/v1 dispatch remains v1 and podway.procedure/v2 dispatch remains v2",
+            "purpose objective evidence_guidance evidence_from skip and assessment mappings retain closed canonical forms"
+        ])
+    );
+
+    let malformed = read_json("tests/fixtures/v2/procedures/malformed-inputs.json");
+    let expected_authoring_bounds = [
+        ("identifier characters", 64, 65),
+        ("procedure version characters", 64, 65),
+        ("procedure name characters", 120, 121),
+        ("procedure purpose characters", 500, 501),
+        ("procedure description characters", 1000, 1001),
+        ("source document bytes", 1_048_576, 1_048_577),
+        ("source nesting depth", 64, 65),
+        ("parsed nodes", 100_000, 100_001),
+        ("graph nodes", 64, 65),
+        ("node definitions", 64, 65),
+        ("definition title characters", 120, 121),
+        ("definition intent characters", 300, 301),
+        ("definition description characters", 1000, 1001),
+        ("decision objective characters", 300, 301),
+        ("decision prompt characters", 500, 501),
+        ("reason-policy prompt characters", 300, 301),
+        ("instructions per definition", 16, 17),
+        ("instruction characters", 1000, 1001),
+        ("items per definition", 64, 65),
+        ("item prompt characters", 300, 301),
+        ("item help characters", 1000, 1001),
+        ("text item max_length", 16_384, 16_385),
+        ("list entries", 100, 101),
+        ("list entry characters", 1000, 1001),
+        ("choice count", 32, 33),
+        ("choice characters", 120, 121),
+        ("evidence_from entries", 8, 9),
+        ("selected evidence items", 16, 17),
+        ("decision options", 8, 9),
+        ("option label characters", 120, 121),
+        ("option criteria characters", 500, 501),
+        ("evidence guidance entries", 8, 9),
+        ("evidence guidance characters", 200, 201),
+    ]
+    .into_iter()
+    .map(|(name, at_limit, one_over)| (name.to_owned(), (at_limit, one_over)))
+    .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        boundary_pairs(&malformed, "boundary_cases"),
+        expected_authoring_bounds
+    );
+    assert_eq!(
+        recipe_case_ids(&malformed),
+        [
+            "unknown-field",
+            "duplicate-yaml-key",
+            "duplicate-json-key",
+            "yaml-alias",
+            "yaml-tag",
+            "include",
+            "multiple-yaml-documents",
+            "trailing-json",
+            "malformed-json",
+            "invalid-utf8",
+            "goal-tracking-false",
+            "goal-tracking-string",
+            "goal-tracking-list",
+            "goal-tracking-object",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    assert_eq!(
+        recipe_expected_codes(&malformed),
+        [
+            ("unknown-field", "AUTHORING_SCHEMA_INVALID"),
+            ("duplicate-yaml-key", "SOURCE_CONSTRUCT_UNSUPPORTED"),
+            ("duplicate-json-key", "SOURCE_CONSTRUCT_UNSUPPORTED"),
+            ("yaml-alias", "SOURCE_CONSTRUCT_UNSUPPORTED"),
+            ("yaml-tag", "SOURCE_CONSTRUCT_UNSUPPORTED"),
+            ("include", "AUTHORING_SCHEMA_INVALID"),
+            ("multiple-yaml-documents", "SOURCE_CONSTRUCT_UNSUPPORTED"),
+            ("trailing-json", "SOURCE_CONSTRUCT_UNSUPPORTED"),
+            ("malformed-json", "SOURCE_CONSTRUCT_UNSUPPORTED"),
+            ("invalid-utf8", "SOURCE_CONSTRUCT_UNSUPPORTED"),
+            ("goal-tracking-false", "AUTHORING_SCHEMA_INVALID"),
+            ("goal-tracking-string", "AUTHORING_SCHEMA_INVALID"),
+            ("goal-tracking-list", "AUTHORING_SCHEMA_INVALID"),
+            ("goal-tracking-object", "AUTHORING_SCHEMA_INVALID"),
+        ]
+        .into_iter()
+        .map(|(id, code)| (id.to_owned(), code.to_owned()))
+        .collect()
+    );
+
+    let graph_valid = read_json("tests/fixtures/v2/graphs/valid-cases.json");
+    assert_eq!(
+        recipe_case_ids(&graph_valid),
+        [
+            "linear-terminal",
+            "unbounded-valid-rework-cycle",
+            "maximum-reachable-readback",
+            "dominance-preservation-property",
+            "deterministic-diagnostics",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    let graph_negative = read_json("tests/fixtures/v2/graphs/negative-cases.json");
+    assert_eq!(recipe_case_ids(&graph_negative).len(), 19);
+    assert_eq!(
+        recipe_expected_codes(&graph_negative),
+        [
+            (
+                "duplicate-definition-source-key",
+                "SOURCE_CONSTRUCT_UNSUPPORTED"
+            ),
+            ("ambiguous-placement-id", "AMBIGUOUS_GRAPH_REFERENCE"),
+            ("unknown-entry", "ENTRY_NODE_INVALID"),
+            ("no-terminal-route", "NO_TERMINAL_PATH"),
+            ("unreachable-node", "UNREACHABLE_GRAPH_NODE"),
+            ("option-without-route", "DECISION_OPTION_ROUTE_MISSING"),
+            (
+                "route-for-undefined-option",
+                "DECISION_ROUTE_OPTION_UNDEFINED"
+            ),
+            ("invalid-cycle", "GRAPH_CYCLE_INVALID"),
+            (
+                "rework-target-not-dominating",
+                "REWORK_TARGET_NOT_DOMINATING"
+            ),
+            ("unknown-evidence-source", "EVIDENCE_SOURCE_UNKNOWN"),
+            ("self-evidence-source", "EVIDENCE_SOURCE_SELF_REFERENCE"),
+            (
+                "evidence-source-not-dominating",
+                "EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER"
+            ),
+            ("skippable-required-source", "SKIPPABLE_EVIDENCE_SOURCE"),
+            ("unknown-evidence-item", "EVIDENCE_SELECTOR_UNKNOWN_ITEM"),
+            ("readback-over-budget", "READBACK_BUDGET_EXCEEDED"),
+            (
+                "goal-assessment-not-dominating",
+                "GOAL_ASSESSMENT_NOT_DOMINATING_TERMINAL"
+            ),
+            (
+                "assessment-option-unmapped",
+                "GOAL_ASSESSMENT_OPTION_UNMAPPED"
+            ),
+            (
+                "assessment-outcome-unreachable",
+                "GOAL_ASSESSMENT_OUTCOME_UNREACHABLE"
+            ),
+            (
+                "manual-rework-target-invalid",
+                "MANUAL_REWORK_TARGET_UNKNOWN"
+            ),
+        ]
+        .into_iter()
+        .map(|(id, code)| (id.to_owned(), code.to_owned()))
+        .collect()
+    );
+    for (path, expected) in [
+        (
+            "tests/fixtures/v2/compatibility/v1-boundaries.json",
+            vec![
+                "released-v1-fixtures",
+                "v1-storage-migration",
+                "v1-command-dispatch",
+                "v1-reopen",
+                "current-task-retention",
+                "existing-route-v2-result-family",
+                "new-route-v1-result-family",
+                "v2-never-extends-v1-result-family",
+                "manifest-digest-capability-discovery",
+            ],
+        ),
+        (
+            "tests/fixtures/v2/compatibility/unsupported-peer.json",
+            vec![
+                "v2-command-to-v1-peer",
+                "registered-but-unserved",
+                "absent-route",
+            ],
+        ),
+        (
+            "tests/fixtures/v2/compatibility/admission-fence.json",
+            vec![
+                "release-build",
+                "development-unlock",
+                "installed-daemon",
+                "non-disposable-workspace",
+            ],
+        ),
+    ] {
+        assert_eq!(
+            recipe_case_ids(&read_json(path)),
+            expected.into_iter().map(str::to_owned).collect()
+        );
+    }
+
+    let result_catalog = read_json("tests/fixtures/v2/protocol/result-families.json");
+    assert_eq!(
+        result_catalog["schema"],
+        json!("podway.v2-result-known-answers/v1")
+    );
+    let result_fixtures = result_catalog["fixtures"].as_object().unwrap();
+    let compatibility_matrix = read_json("quality/v2-compatibility-matrix-v1.json");
+    let result_schema_paths =
+        compatibility_matrix["result_family_inventories"]["existing_route_v2"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(
+                compatibility_matrix["result_family_inventories"]["new_route_v1"]
+                    .as_array()
+                    .unwrap(),
+            )
+            .map(|path| path.as_str().unwrap())
+            .collect::<Vec<_>>();
+    let expected_result_ids = result_schema_paths
+        .iter()
+        .map(|path| {
+            read_json(path)["properties"]["schema"]["const"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        result_fixtures.keys().cloned().collect::<BTreeSet<_>>(),
+        expected_result_ids
+    );
+    for schema_path in result_schema_paths {
+        let schema_id = read_json(schema_path)["properties"]["schema"]["const"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_schema_valid(
+            &schema_path.replacen("assets/schemas/", "schemas/", 1),
+            &result_fixtures[&schema_id],
+        );
+    }
+
+    let maximum_next = read_json("tests/fixtures/v2/payload/maximum-next-recipe.json");
+    let payload_matrix = read_json("quality/v2-payload-matrix-v1.json");
+    assert_eq!(maximum_next["frame_bytes"], payload_matrix["frame_bytes"]);
+    assert_eq!(
+        maximum_next["charged_bytes"],
+        payload_matrix["next_budget_bytes"]
+    );
+    assert_eq!(
+        maximum_next["headroom_bytes"],
+        payload_matrix["headroom_bytes"]
+    );
+    let matrix_components = payload_matrix["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["constant"].as_str().unwrap().to_owned(),
+                entry["bytes"].clone(),
+            )
+        })
+        .collect::<Map<_, _>>();
+    assert_eq!(maximum_next["components"], Value::Object(matrix_components));
+    assert_eq!(
+        maximum_next["construction"],
+        json!([
+            "materialize every next-result-v2 field from the payload matrix exactly once",
+            "fill procedure-static content to NEXT_STATIC_BUDGET",
+            "fill read-back to READBACK_BUDGET",
+            "include 16 criteria and their runtime suggestion argv",
+            "include 64 blockers, 64 graph-node counters, and maximal warnings",
+            "use escape-heavy control characters for the six-byte accounting factor"
+        ])
+    );
+
+    let maximum_status = read_json("tests/fixtures/v2/payload/maximum-status-recipe.json");
+    assert_eq!(
+        maximum_status["projections"],
+        json!([
+            {"tier":"compact","maximum_bytes":262144,"includes":["counters","trace_length"],"excludes":["trace_entries","history","windows","readback_values","prompts","instructions","statements","suggestion_argv"]},
+            {"tier":"standard","maximum_bytes":1048576,"status_values_max_bytes":262144,"item_value_max_characters":2048,"value_marker":"value_truncated","window_markers":["items_total","items_truncated"]},
+            {"tier":"verbose","maximum_bytes":1048576,"trace_window_max_bytes":65536,"trace_window_count":4,"window_markers":["trace_truncated","trace_window"]}
+        ])
+    );
+    assert_eq!(
+        maximum_status["projections"][0]["excludes"],
+        payload_matrix["status_contract"]["compact_exclusions"]
+    );
+    assert_eq!(
+        maximum_status["blocker_window_max_bytes"],
+        payload_matrix["status_contract"]["blocker_window_max_bytes"]
+    );
+    assert_eq!(
+        maximum_status["blocker_window_order"],
+        payload_matrix["status_contract"]["blocker_window_order"]
+    );
+    assert_eq!(
+        maximum_status["blocker_window_markers"],
+        payload_matrix["status_contract"]["blocker_window_markers"]
+    );
+
+    let payload = read_json("tests/fixtures/v2/payload/truncation-and-overflow-recipe.json");
+    let expected_domain_bounds = [
+        ("goal statement characters", 1000, 1001),
+        ("criterion identifier characters", 64, 65),
+        ("criterion statement characters", 300, 301),
+        ("goal revision reason characters", 1000, 1001),
+        ("criterion assessment reason characters", 2000, 2001),
+        ("criteria per goal revision", 16, 17),
+        ("open blockers per attempt", 64, 65),
+        ("blocker reason characters", 1000, 1001),
+        (
+            "decision retry rework or skip reason characters",
+            2000,
+            2001,
+        ),
+        ("actor attribution characters", 256, 257),
+        ("citations per criterion assessment", 4, 5),
+    ]
+    .into_iter()
+    .map(|(name, at_limit, one_over)| (name.to_owned(), (at_limit, one_over)))
+    .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        boundary_pairs(&payload, "domain_boundary_cases"),
+        expected_domain_bounds
+    );
+    assert_eq!(
+        recipe_case_ids(&payload),
+        [
+            "item-value-boundary",
+            "status-values-window",
+            "blocker-window",
+            "history-windows",
+            "readback-is-next-only",
+            "readback-item-bounds-and-selectors",
+            "built-in-static-budget",
+            "arbitrary-cycle-traversal",
+            "integrity-classification",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let mut sentinels = Vec::new();
+    let mut extra = catalog.clone();
+    let extra_fixture = extra["fixtures"][0].clone();
+    extra["fixtures"]
+        .as_array_mut()
+        .unwrap()
+        .push(extra_fixture);
+    sentinels.push(extra);
+    let mut missing = catalog.clone();
+    missing["fixtures"].as_array_mut().unwrap().pop();
+    sentinels.push(missing);
+    let mut duplicate = catalog.clone();
+    duplicate["fixtures"][1]["id"] = duplicate["fixtures"][0]["id"].clone();
+    sentinels.push(duplicate);
+    let mut digest = catalog.clone();
+    digest["fixtures"][0]["sha256"] = json!(format!("sha256:{}", "0".repeat(64)));
+    sentinels.push(digest);
+    let mut traversal = catalog.clone();
+    traversal["fixtures"][0]["path"] = json!("tests/fixtures/v2/../contract/fixture.json");
+    sentinels.push(traversal);
+    let mut acceptance = catalog.clone();
+    acceptance["cases"][0]["acceptance_ids"][0] = json!("V2ACC-087");
+    sentinels.push(acceptance);
+    let mut owner = catalog.clone();
+    owner["cases"][0]["owning_tasks"] = json!(["V2REL-006"]);
+    sentinels.push(owner);
+    let mut specialized_swap = catalog.clone();
+    let compatibility_id = specialized_swap["cases"][3]["specialized_ids"][0].clone();
+    let payload_id = specialized_swap["cases"][4]["specialized_ids"][0].clone();
+    specialized_swap["cases"][3]["specialized_ids"][0] = payload_id;
+    specialized_swap["cases"][4]["specialized_ids"][0] = compatibility_id;
+    sentinels.push(specialized_swap);
+    let mut fixture_swap = catalog.clone();
+    let procedure_fixture = fixture_swap["cases"][0]["fixture_ids"][0].clone();
+    let graph_fixture = fixture_swap["cases"][2]["fixture_ids"][0].clone();
+    fixture_swap["cases"][0]["fixture_ids"][0] = graph_fixture;
+    fixture_swap["cases"][2]["fixture_ids"][0] = procedure_fixture;
+    sentinels.push(fixture_swap);
+    let mut promotion = catalog;
+    promotion["cases"][0]["implementation_status"] = json!("automated");
+    sentinels.push(promotion);
+    assert!(
+        sentinels
+            .iter()
+            .all(|value| validate_v2_fixture_catalog(value).is_err())
+    );
 }
 
 fn procedure_v2_fixture() -> Value {

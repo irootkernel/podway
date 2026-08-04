@@ -1,0 +1,17 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "compatibility",
+  "evidence_level": "contract-recipe",
+  "implementation_status": "planned",
+  "cases": [
+    {"id": "released-v1-fixtures", "operation": "run every manifest-bound v1 known answer unchanged", "expected": "byte-for-byte-stable"},
+    {"id": "v1-storage-migration", "operation": "migrate a v1 session store", "expected": "v1-session-semantics-unchanged"},
+    {"id": "v1-command-dispatch", "operation": "dispatch every v1 command against migrated state", "expected": "v1-semantics-only"},
+    {"id": "v1-reopen", "operation": "invoke v1 reopen and inspect v2 reactivation routes separately", "expected": "never-reinterpreted"},
+    {"id": "current-task-retention", "operation": "reset and recover current task state", "expected": "retention-boundary-preserved"},
+    {"id": "existing-route-v2-result-family", "operation": "validate the eight existing-route v2 result schemas against their exact command inventory", "expected": "separate-v2-result-families"},
+    {"id": "new-route-v1-result-family", "operation": "validate the nine new-route v1 result schemas against their exact command inventory", "expected": "new-routes-start-at-v1"},
+    {"id": "v2-never-extends-v1-result-family", "operation": "compare every v2 result discriminator with the frozen released v1 family", "expected": "disjoint-additive-families"},
+    {"id": "manifest-digest-capability-discovery", "operation": "compare peer manifest identity and registered route inventory before dispatch", "expected": "capability-derived-from-manifest"}
+  ]
+}

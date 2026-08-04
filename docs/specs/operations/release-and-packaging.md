@@ -62,6 +62,7 @@ podway-<version>-<target>/
       spec/
       docs/examples/json/
       tests/fixtures/contract/
+      tests/fixtures/v2/
       contracts/contract-manifest-v1.json
   LICENSE
   README.md

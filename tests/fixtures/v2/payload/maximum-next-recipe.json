@@ -1,0 +1,30 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "maximum-size",
+  "evidence_level": "contract-recipe",
+  "implementation_status": "planned",
+  "production_proof_required": true,
+  "frame_bytes": 1048576,
+  "charged_bytes": 1015808,
+  "headroom_bytes": 32768,
+  "components": {
+    "ENVELOPE_RESERVE": 65536,
+    "NEXT_STATIC_BUDGET": 262144,
+    "READBACK_BUDGET": 524288,
+    "GOAL_DISPLAY_MAX": 73728,
+    "BLOCKER_WINDOW_MAX": 49152,
+    "COUNTERS_MAX": 40960
+  },
+  "construction": [
+    "materialize every next-result-v2 field from the payload matrix exactly once",
+    "fill procedure-static content to NEXT_STATIC_BUDGET",
+    "fill read-back to READBACK_BUDGET",
+    "include 16 criteria and their runtime suggestion argv",
+    "include 64 blockers, 64 graph-node counters, and maximal warnings",
+    "use escape-heavy control characters for the six-byte accounting factor"
+  ],
+  "future_assertions": [
+    "production result-schema serialization is at most frame_bytes",
+    "each charged component is greater than or equal to its encoded bytes"
+  ]
+}

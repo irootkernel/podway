@@ -102,7 +102,7 @@ The omitted seventh release requirement is retired by [ADR-0011](../../architect
 
 ## Podway v2 traceability contracts
 
-The v2 acceptance baseline is machine-bound by four manifest assets:
+The v2 acceptance baseline is organized by five manifest-bound index assets:
 
 - [`v2-acceptance-matrix-v1.json`](../../../quality/v2-acceptance-matrix-v1.json)
   binds every mandatory §17 statement to its source line, contract paths, planned
@@ -114,11 +114,21 @@ The v2 acceptance baseline is machine-bound by four manifest assets:
   wire components;
 - [`v2-release-gate-matrix-v1.json`](../../../release/v2-release-gate-matrix-v1.json)
   partitions the acceptance statements into the nine release categories and
-  preserves the admission and final-gate conditions.
+  preserves the admission and final-gate conditions;
+- [`v2-fixture-catalog-v1.json`](../../../tests/fixtures/contract/v2-fixture-catalog-v1.json)
+  inventories every raw v2 fixture by path and digest, binds the parser, graph,
+  compatibility, and payload recipes to their §17 rows and specialized matrices,
+  and keeps their future runtime ownership explicit.
 
-Rows marked `planned` are traceability obligations only. They are not evidence
-that the runtime behavior, complete §17 acceptance gate, public v2 admission, or
-GA release has passed.
+Every raw file under `tests/fixtures/v2/` is also directly manifest-bound; the
+catalog's one-to-one inventory and digest check is an additional closed mapping,
+not an indirect substitute for manifest coverage.
+
+Rows and fixture recipes marked `planned` are traceability obligations only. The
+YAML/JSON pair is a current schema known answer, but the graph, compatibility,
+payload, and admission recipes are not evidence that their future production
+paths, the complete §17 acceptance gate, public v2 admission, or GA release have
+passed.
 
 ## Change-control rule
 

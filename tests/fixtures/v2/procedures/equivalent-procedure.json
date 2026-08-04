@@ -1,0 +1,66 @@
+{
+  "schema": "podway.procedure/v2",
+  "id": "fixture-equivalence",
+  "version": "2",
+  "name": "Fixture equivalence",
+  "purpose": "Lock YAML and JSON to one structural Procedure value.",
+  "description": "A reviewable v2 known answer.",
+  "goal_tracking": true,
+  "node_definitions": {
+    "work": {
+      "type": "action",
+      "title": "Do the work",
+      "intent": "Record the result.",
+      "instructions": ["Work outside Podway."],
+      "items": [
+        {
+          "id": "result",
+          "type": "text",
+          "prompt": "Record the result.",
+          "required": true,
+          "max_length": 1000
+        }
+      ]
+    },
+    "assess": {
+      "type": "decision",
+      "title": "Assess the goal",
+      "objective": "Determine the goal outcome.",
+      "prompt": "Which outcome applies?",
+      "options": [
+        {"id": "achieved", "label": "Achieved"},
+        {"id": "not-achieved", "label": "Not achieved"},
+        {"id": "superseded", "label": "Superseded"}
+      ],
+      "reason": {"required": true, "prompt": "Explain the assessment."},
+      "assessment": {
+        "target": "session_goal",
+        "outcomes": {
+          "achieved": "achieved",
+          "not-achieved": "not_achieved",
+          "superseded": "superseded"
+        }
+      }
+    }
+  },
+  "graph": {
+    "entry": "perform",
+    "nodes": [
+      {"id": "perform", "use": "work", "next": "decide"},
+      {
+        "id": "decide",
+        "use": "assess",
+        "evidence_from": [
+          {"node": "perform", "required": true, "items": ["result"]}
+        ],
+        "routes": {
+          "achieved": {"to": "finish", "effect": "advance"},
+          "not-achieved": {"to": "finish", "effect": "advance"},
+          "superseded": {"to": "finish", "effect": "advance"}
+        }
+      },
+      {"id": "finish", "use": "work", "terminal": true}
+    ]
+  },
+  "manual_rework": {"allowed_targets": ["perform"]}
+}

@@ -349,9 +349,79 @@
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/contract/v0.1.1-daemon-version-output.json",
       "sha256": "sha256:c25ca16938c8350c6ea8be9e8edc0f497ab5fec37de3a8863b0cae5312978cb8"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/contract/v2-fixture-catalog-v1.json",
+      "sha256": "sha256:37854c3feeb899292c475c3acc2feacfd2e931769150620647bc930732d1eee6"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/compatibility/admission-fence.json",
+      "sha256": "sha256:feb08140fd8f6cc62131151048209686fd53ebe2a0bb3d100313e8d06c13ce8f"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/compatibility/unsupported-peer.json",
+      "sha256": "sha256:4aa559e6c22f744cbbe6d10f37d2c666d7e76d1774a12a5af2ab47356fe5c2e4"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/compatibility/v1-boundaries.json",
+      "sha256": "sha256:20c5043f3a3ce353cbb30b1b203767dba07feb533df5d16f57b2e873a98b647b"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/graphs/negative-cases.json",
+      "sha256": "sha256:53b0e82fde161c76293ef8f7693390722e145a2bd88a2275c2e0a27ba73c6178"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/graphs/valid-cases.json",
+      "sha256": "sha256:97060b88247f9dec6c9bcc4b51621c6b063e44ec495540a32ec166cb46013e51"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/payload/maximum-next-recipe.json",
+      "sha256": "sha256:7b4ccc75f672982796467ff36272e21f2cdecfc3710e2559bacb4b184d912721"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/payload/maximum-status-recipe.json",
+      "sha256": "sha256:e80f7456f16b5bb1527d30efc761c64d97a91e07feddcd8d06daef1db056b72f"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/payload/truncation-and-overflow-recipe.json",
+      "sha256": "sha256:0581ef813212b9202847ca064de3696b05238dff10c4482f6ffe4b1ba50d4556"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/equivalence-contract.json",
+      "sha256": "sha256:c29c960479a46ce77f8d39d30b5b4c8fa96a6d897441a6fb6df823b54a074aea"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/equivalent-procedure.json",
+      "sha256": "sha256:4199d47619fd71b4a4cfee131d1b9971dfb773e3c3f37aca43f7f41eba39d88d"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/equivalent-procedure.yaml",
+      "sha256": "sha256:8714682bd21c5301db431846202826e13b5f8021a0ee3961540d28c69465db79"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/malformed-inputs.json",
+      "sha256": "sha256:ec1a6d041fee422df83a514a5430b09293fa01fd141a61c65bedf1f2816d6ec4"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/protocol/result-families.json",
+      "sha256": "sha256:db1077c96a3c82ce0a9db2f2781dcc8fa6f77810a01591ce2f4ddcf5e5d9911a"
     }
   ],
-  "digest": "sha256:b1fe58a1c5de2980f10da5265e76b470fa8f0a58ca48061d35f4209a42cfbc73",
+  "digest": "sha256:f1ac19670751dad69e3a5ff79105863cbcf128efa19722403f0c46703d6d28a8",
   "product": "podway",
   "product_version": "0.1.2",
   "schema_version": "podway.contract-manifest/v1",

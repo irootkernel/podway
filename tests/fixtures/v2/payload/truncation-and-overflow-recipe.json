@@ -1,0 +1,31 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "maximum-size",
+  "evidence_level": "contract-recipe",
+  "implementation_status": "planned",
+  "production_proof_required": true,
+  "domain_boundary_cases": [
+    {"dimension": "goal statement characters", "at_limit": 1000, "one_over": 1001},
+    {"dimension": "criterion identifier characters", "at_limit": 64, "one_over": 65},
+    {"dimension": "criterion statement characters", "at_limit": 300, "one_over": 301},
+    {"dimension": "goal revision reason characters", "at_limit": 1000, "one_over": 1001},
+    {"dimension": "criterion assessment reason characters", "at_limit": 2000, "one_over": 2001},
+    {"dimension": "criteria per goal revision", "at_limit": 16, "one_over": 17},
+    {"dimension": "open blockers per attempt", "at_limit": 64, "one_over": 65},
+    {"dimension": "blocker reason characters", "at_limit": 1000, "one_over": 1001},
+    {"dimension": "decision retry rework or skip reason characters", "at_limit": 2000, "one_over": 2001},
+    {"dimension": "actor attribution characters", "at_limit": 256, "one_over": 257},
+    {"dimension": "citations per criterion assessment", "at_limit": 4, "one_over": 5}
+  ],
+  "cases": [
+    {"id": "item-value-boundary", "operation": "encode values at 2048 and 2049 characters", "expected": "the latter is truncated with value_truncated"},
+    {"id": "status-values-window", "operation": "cross STATUS_VALUES_MAX by one complete value", "expected": "items_total and items_truncated report omission"},
+    {"id": "blocker-window", "operation": "cross BLOCKER_WINDOW_MAX by one complete blocker", "expected": "blockers_total and blockers_truncated report omission"},
+    {"id": "history-windows", "operation": "cross each TRACE_WINDOW_MAX by one complete entry", "expected": "trace_truncated and trace_window report omission"},
+    {"id": "readback-is-next-only", "operation": "populate resolved reference metadata in every status tier", "expected": "no read-back value is serialized"},
+    {"id": "readback-item-bounds-and-selectors", "operation": "select 16 items from a source at every §5.1 item-value limit while retaining no unselected item", "expected": "next carries exactly the selected bounded items and status carries metadata only"},
+    {"id": "built-in-static-budget", "operation": "vet every built-in v2 preset against NEXT_STATIC_BUDGET and require headroom", "expected": "each shipped preset remains within the same static bound"},
+    {"id": "arbitrary-cycle-traversal", "operation": "traverse a valid rework cycle for an arbitrary generated count while every individual response remains bounded", "expected": "no cumulative traversal budget or counter overflow"},
+    {"id": "integrity-classification", "operation": "force production serialization beyond the statically proved bound", "expected": "integrity fault rather than expected overflow"}
+  ]
+}

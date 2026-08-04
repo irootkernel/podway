@@ -65,7 +65,7 @@ Dependencies: none.
 | `V2CTR-003` | Define v2 result and diagnostic schemas | Completed | Close every new or version-bumped public result family. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
 | `V2CTR-004` | Register the public contract delta | Completed | Register the exact route, error, schema, and manifest surface. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
 | `V2CTR-005` | Extend conformance traceability | Completed | Map every v2 requirement to a contract, test class, and task. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
-| `V2CTR-006` | Build the v2 fixture corpus | Planned | Provide bounded known-answer, negative, compatibility, and maximum-size evidence. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
+| `V2CTR-006` | Build the v2 fixture corpus | Completed | Provide bounded known-answer, negative, compatibility, and maximum-size evidence. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
 
 ## V2MOD — Procedure Model and Configuration
 

@@ -1,0 +1,20 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "maximum-size",
+  "evidence_level": "contract-recipe",
+  "implementation_status": "planned",
+  "production_proof_required": true,
+  "blocker_window_max_bytes": 49152,
+  "blocker_window_order": "newest-first-complete-entries",
+  "blocker_window_markers": ["blockers_total", "blockers_truncated"],
+  "projections": [
+    {"tier": "compact", "maximum_bytes": 262144, "includes": ["counters", "trace_length"], "excludes": ["trace_entries", "history", "windows", "readback_values", "prompts", "instructions", "statements", "suggestion_argv"]},
+    {"tier": "standard", "maximum_bytes": 1048576, "status_values_max_bytes": 262144, "item_value_max_characters": 2048, "value_marker": "value_truncated", "window_markers": ["items_total", "items_truncated"]},
+    {"tier": "verbose", "maximum_bytes": 1048576, "trace_window_max_bytes": 65536, "trace_window_count": 4, "window_markers": ["trace_truncated", "trace_window"]}
+  ],
+  "future_assertions": [
+    "each projection serializes through the production result and framing path",
+    "status contains reference metadata but no read-back values",
+    "complete entries are retained until the next entry exceeds its window"
+  ]
+}

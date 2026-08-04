@@ -146,6 +146,8 @@ def expected_asset_kinds(root: Path) -> dict[str, str]:
         assets[path] = "known_answer_fixture"
     for path in matching_files(root, "tests/fixtures/contract", ".json"):
         assets[path] = "known_answer_fixture"
+    for path in matching_files(root, "tests/fixtures/v2", ""):
+        assets[path] = "known_answer_fixture"
     return assets
 
 
@@ -340,6 +342,23 @@ def self_test(root: Path = ROOT) -> list[str]:
         if not all(path.relative_to(fixture).as_posix() in nested_assets for path in (nested_examples, nested_contract)):
             fail("nested known-answer discovery sentinel did not pass")
         completed.append("nested_known_answers")
+
+        nested_v2 = fixture / "tests/fixtures/v2/nested/fixture.bin"
+        nested_v2.parent.mkdir(parents=True, exist_ok=True)
+        nested_v2.write_bytes(b"\x00v2-fixture\xff")
+        if nested_v2.relative_to(fixture).as_posix() not in expected_asset_kinds(fixture):
+            fail("non-JSON v2 fixture discovery sentinel did not pass")
+        completed.append("v2_all_regular_files")
+
+        v2_file_link = fixture / "tests/fixtures/v2/nested/fixture-link.bin"
+        v2_file_link.symlink_to(nested_v2)
+        try:
+            expected_asset_kinds(fixture)
+        except ManifestError:
+            completed.append("v2_file_symlink_rejected")
+        else:
+            fail("v2 fixture symlink sentinel did not fail")
+        v2_file_link.unlink()
 
         file_link = fixture / "docs/examples/json/fixture-link"
         file_link.symlink_to(nested_examples)

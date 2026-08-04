@@ -1,0 +1,96 @@
+{
+  "schema": "podway.v2-fixture-catalog/v1",
+  "version": 1,
+  "fixture_root": "tests/fixtures/v2",
+  "source_acceptance_matrix": "quality/v2-acceptance-matrix-v1.json",
+  "source_compatibility_matrix": "quality/v2-compatibility-matrix-v1.json",
+  "source_payload_matrix": "quality/v2-payload-matrix-v1.json",
+  "evidence_policy": "Every entry is manifest-bound with planned runtime ownership. The YAML/JSON pair and result-family values are validated now only as schema known answers; no entry proves future parser, graph, runtime, payload, compatibility, admission, or release behavior.",
+  "fixtures": [
+    {"id": "compatibility-admission-fence", "path": "tests/fixtures/v2/compatibility/admission-fence.json", "media_type": "application/json", "sha256": "sha256:feb08140fd8f6cc62131151048209686fd53ebe2a0bb3d100313e8d06c13ce8f"},
+    {"id": "compatibility-unsupported-peer", "path": "tests/fixtures/v2/compatibility/unsupported-peer.json", "media_type": "application/json", "sha256": "sha256:4aa559e6c22f744cbbe6d10f37d2c666d7e76d1774a12a5af2ab47356fe5c2e4"},
+    {"id": "compatibility-v1-boundaries", "path": "tests/fixtures/v2/compatibility/v1-boundaries.json", "media_type": "application/json", "sha256": "sha256:20c5043f3a3ce353cbb30b1b203767dba07feb533df5d16f57b2e873a98b647b"},
+    {"id": "graph-negative-cases", "path": "tests/fixtures/v2/graphs/negative-cases.json", "media_type": "application/json", "sha256": "sha256:53b0e82fde161c76293ef8f7693390722e145a2bd88a2275c2e0a27ba73c6178"},
+    {"id": "graph-valid-cases", "path": "tests/fixtures/v2/graphs/valid-cases.json", "media_type": "application/json", "sha256": "sha256:97060b88247f9dec6c9bcc4b51621c6b063e44ec495540a32ec166cb46013e51"},
+    {"id": "payload-maximum-next", "path": "tests/fixtures/v2/payload/maximum-next-recipe.json", "media_type": "application/json", "sha256": "sha256:7b4ccc75f672982796467ff36272e21f2cdecfc3710e2559bacb4b184d912721"},
+    {"id": "payload-maximum-status", "path": "tests/fixtures/v2/payload/maximum-status-recipe.json", "media_type": "application/json", "sha256": "sha256:e80f7456f16b5bb1527d30efc761c64d97a91e07feddcd8d06daef1db056b72f"},
+    {"id": "payload-truncation-overflow", "path": "tests/fixtures/v2/payload/truncation-and-overflow-recipe.json", "media_type": "application/json", "sha256": "sha256:0581ef813212b9202847ca064de3696b05238dff10c4482f6ffe4b1ba50d4556"},
+    {"id": "protocol-result-families", "path": "tests/fixtures/v2/protocol/result-families.json", "media_type": "application/json", "sha256": "sha256:db1077c96a3c82ce0a9db2f2781dcc8fa6f77810a01591ce2f4ddcf5e5d9911a"},
+    {"id": "procedure-equivalence-contract", "path": "tests/fixtures/v2/procedures/equivalence-contract.json", "media_type": "application/json", "sha256": "sha256:c29c960479a46ce77f8d39d30b5b4c8fa96a6d897441a6fb6df823b54a074aea"},
+    {"id": "procedure-equivalent-json", "path": "tests/fixtures/v2/procedures/equivalent-procedure.json", "media_type": "application/json", "sha256": "sha256:4199d47619fd71b4a4cfee131d1b9971dfb773e3c3f37aca43f7f41eba39d88d"},
+    {"id": "procedure-equivalent-yaml", "path": "tests/fixtures/v2/procedures/equivalent-procedure.yaml", "media_type": "application/yaml", "sha256": "sha256:8714682bd21c5301db431846202826e13b5f8021a0ee3961540d28c69465db79"},
+    {"id": "procedure-malformed-inputs", "path": "tests/fixtures/v2/procedures/malformed-inputs.json", "media_type": "application/json", "sha256": "sha256:ec1a6d041fee422df83a514a5430b09293fa01fd141a61c65bedf1f2816d6ec4"}
+  ],
+  "cases": [
+    {
+      "id": "V2FIX-PROCEDURE-KNOWN-ANSWER",
+      "fixture_class": "known-answer",
+      "fixture_ids": ["procedure-equivalence-contract", "procedure-equivalent-json", "procedure-equivalent-yaml"],
+      "acceptance_ids": ["V2ACC-001", "V2ACC-003", "V2ACC-004", "V2ACC-006"],
+      "specialized_ids": [],
+      "owning_tasks": ["V2MOD-004", "V2MOD-005", "V2MOD-007"],
+      "evidence_level": "contract-recipe",
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2FIX-PROCEDURE-NEGATIVE",
+      "fixture_class": "negative",
+      "fixture_ids": ["procedure-malformed-inputs"],
+      "acceptance_ids": ["V2ACC-002", "V2ACC-005"],
+      "specialized_ids": [],
+      "owning_tasks": ["V2MOD-004", "V2MOD-006"],
+      "evidence_level": "contract-recipe",
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2FIX-GRAPH",
+      "fixture_class": "graph",
+      "fixture_ids": ["graph-negative-cases", "graph-valid-cases"],
+      "acceptance_ids": ["V2ACC-007", "V2ACC-008", "V2ACC-009", "V2ACC-010", "V2ACC-011", "V2ACC-012", "V2ACC-013", "V2ACC-014", "V2ACC-015", "V2ACC-016", "V2ACC-017", "V2ACC-018", "V2ACC-019", "V2ACC-020"],
+      "specialized_ids": [],
+      "owning_tasks": ["V2AUT-008", "V2GRF-001", "V2GRF-002"],
+      "evidence_level": "contract-recipe",
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2FIX-COMPATIBILITY",
+      "fixture_class": "compatibility",
+      "fixture_ids": ["compatibility-admission-fence", "compatibility-unsupported-peer", "compatibility-v1-boundaries", "protocol-result-families"],
+      "acceptance_ids": ["V2ACC-066", "V2ACC-067", "V2ACC-068", "V2ACC-069", "V2ACC-070", "V2ACC-071", "V2ACC-072"],
+      "specialized_ids": ["V2COMP-001", "V2COMP-002", "V2COMP-003", "V2COMP-004", "V2COMP-005", "V2COMP-006", "V2COMP-007", "V2COMP-SURFACE-001", "V2COMP-SURFACE-002", "V2COMP-SURFACE-003", "V2COMP-SURFACE-004", "V2COMP-SURFACE-005", "V2COMP-SURFACE-006", "V2COMP-SURFACE-007", "V2COMP-SURFACE-008"],
+      "owning_tasks": ["V2MOD-008", "V2PLT-001", "V2PLT-005", "V2PLT-008", "V2PLT-009", "V2PLT-010", "V2REL-001", "V2REL-003", "V2REL-006"],
+      "evidence_level": "contract-recipe",
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2FIX-PAYLOAD-NEXT",
+      "fixture_class": "maximum-size",
+      "fixture_ids": ["payload-maximum-next"],
+      "acceptance_ids": ["V2ACC-077", "V2ACC-078", "V2ACC-079"],
+      "specialized_ids": ["V2PAY-001", "V2PAY-002", "V2PAY-003"],
+      "owning_tasks": ["V2REL-002"],
+      "evidence_level": "contract-recipe",
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2FIX-PAYLOAD-STATUS",
+      "fixture_class": "maximum-size",
+      "fixture_ids": ["payload-maximum-status"],
+      "acceptance_ids": ["V2ACC-080", "V2ACC-081", "V2ACC-082", "V2ACC-083", "V2ACC-084"],
+      "specialized_ids": ["V2PAY-004", "V2PAY-005", "V2PAY-006", "V2PAY-007", "V2PAY-008"],
+      "owning_tasks": ["V2DRW-005", "V2GOL-004", "V2REL-002", "V2RUN-002"],
+      "evidence_level": "contract-recipe",
+      "implementation_status": "planned"
+    },
+    {
+      "id": "V2FIX-PAYLOAD-TRUNCATION",
+      "fixture_class": "maximum-size",
+      "fixture_ids": ["payload-truncation-overflow"],
+      "acceptance_ids": ["V2ACC-085", "V2ACC-086", "V2ACC-087"],
+      "specialized_ids": ["V2PAY-009", "V2PAY-010", "V2PAY-011"],
+      "owning_tasks": ["V2DOG-001", "V2DOG-002", "V2REL-002", "V2RUN-003", "V2RUN-008"],
+      "evidence_level": "contract-recipe",
+      "implementation_status": "planned"
+    }
+  ]
+}

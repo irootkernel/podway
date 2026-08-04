@@ -30,6 +30,7 @@ path = "tests/int_suite.rs"
 
 [dev-dependencies]
 jsonschema = { version = "0.49.2", default-features = false }
+serde_yaml.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 
