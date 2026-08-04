@@ -22,14 +22,15 @@ material decisions and registering the adopted work in the active roadmap.
 ## Adopted design dossiers
 
 An adopted dossier is the authoritative, decision-complete implementation plan
-for one unfinished roadmap epic. It contains:
+for one unfinished roadmap epic or for one release program composed of a closed
+set of related epics. It contains:
 
 1. Status and authority
 2. Verified context and evidence
 3. Goals, non-goals, and scope
 4. Accepted design decisions and interfaces
 5. Failure handling and compatibility boundaries
-6. Roadmap traceability
+6. Roadmap ownership, dependencies, and traceability
 7. Verification and release acceptance
 8. References
 
@@ -39,9 +40,13 @@ table. Specifications, accepted ADRs, and canonical machine assets remain the
 sources of truth for implemented behavior; a dossier records intended changes
 until the owning task updates those sources.
 
+A release-program dossier must name its release target, enumerate every owning
+epic, define their dependency graph, and map each epic's tasks independently. It
+must not use the release-program identifier as a synthetic epic or task prefix.
+
 ## Lifecycle
 
-- Keep an adopted dossier here while any task in its owning epic is incomplete.
+- Keep an adopted dossier here while any task in any owning epic is incomplete.
 - Update the dossier before implementation when a material design decision
   changes, and update the roadmap or specifications in the same change when their
   authority is affected.
@@ -50,6 +55,7 @@ until the owning task updates those sources.
 - Do not leave generated reports, logs, mutable qualification receipts, or
   temporary plans in this directory.
 
-Current adopted dossier:
+Current adopted dossiers:
 
 - [Podway v0.1.2 contract recovery and native release](TODO-podway-v0.1.2-contract-recovery.md)
+- [Podway v2 full-feature GA](TODO-podway-v2-full-feature-ga.md)

@@ -28,3 +28,5 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0012](0012-explicit-daemon-endpoint-and-canonical-per-user-podway-home.md): canonical user home and endpoint
 - [ADR-0013](0013-native-apple-silicon-macos-only.md): native Apple Silicon macOS support
 - [ADR-0014](0014-single-canonical-asset-tree.md): one canonical build asset tree
+- [ADR-0015](0015-constrained-single-cursor-graph.md): constrained single-cursor graph
+- [ADR-0016](0016-recorded-item-workflow-memory.md): recorded-item workflow memory

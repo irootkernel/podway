@@ -1,6 +1,6 @@
 # ADR-0002: Permit One Active Stage Attempt
 
-- Status: Accepted
+- Status: Superseded by [ADR-0015](0015-constrained-single-cursor-graph.md)
 - Date: 2026-07-13
 
 ## Context

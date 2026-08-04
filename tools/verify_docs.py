@@ -36,9 +36,10 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 HANGUL_RE = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
 EPIC_RE = re.compile(r"^## ([A-Z0-9]{5}) — (.+)$")
 TASK_RE = re.compile(
-    r"^\| `([A-Z0-9]{5})(\d{3})` \| (.+?) \| "
+    r"^\| `([A-Z0-9]{5})(-?)(\d{3})` \| (.+?) \| "
     r"(Planned|In Progress|In Review|Completed|Deferred|Blocked) \| (.+?) \| (.+?) \|$"
 )
+LEGACY_COMPACT_TASK_EPICS = frozenset({"REL12"})
 
 
 class DocumentationError(RuntimeError):
@@ -136,7 +137,6 @@ def validate_roadmap() -> tuple[int, int]:
         fail("active roadmap contains no epic")
 
     task_count = 0
-    statuses: list[tuple[str, str]] = []
     seen_epics: set[str] = set()
     for epic_index, (start, epic_id) in enumerate(epic_positions):
         if epic_id in seen_epics:
@@ -153,30 +153,35 @@ def validate_roadmap() -> tuple[int, int]:
         rows = [line for line in section[header + 2 :] if line.startswith("|")]
         if not rows:
             fail(f"{epic_id} has no roadmap tasks")
+        expected_separator = "" if epic_id in LEGACY_COMPACT_TASK_EPICS else "-"
+        statuses: list[tuple[str, str]] = []
         for expected_number, row in enumerate(rows, start=1):
             match = TASK_RE.fullmatch(row)
             if match is None:
                 fail(f"malformed roadmap row in {epic_id}: {row}")
-            row_epic, suffix, _, status, _, references = match.groups()
+            row_epic, separator, suffix, _, status, _, references = match.groups()
+            task_id = f"{row_epic}{separator}{suffix}"
+            if separator != expected_separator:
+                fail(f"invalid roadmap task separator in {epic_id}: {task_id}")
             if row_epic != epic_id or suffix != f"{expected_number:03d}":
-                fail(f"non-sequential roadmap task in {epic_id}: {row_epic}{suffix}")
+                fail(f"non-sequential roadmap task in {epic_id}: {task_id}")
             if LINK_RE.search(references) is None:
-                fail(f"roadmap task has no documentation reference: {row_epic}{suffix}")
-            statuses.append((f"{row_epic}{suffix}", status))
+                fail(f"roadmap task has no documentation reference: {task_id}")
+            statuses.append((task_id, status))
             task_count += 1
 
-    first_incomplete = next(
-        (index for index, (_, status) in enumerate(statuses) if status != "Completed"),
-        len(statuses),
-    )
-    active = statuses[first_incomplete:]
-    if active:
-        first_id, first_status = active[0]
-        if first_status not in {"Planned", "In Progress", "In Review", "Deferred", "Blocked"}:
-            fail(f"roadmap has an invalid first incomplete state: {first_id}={first_status}")
-        for task_id, status in active[1:]:
-            if status != "Planned":
-                fail(f"tasks after the first incomplete task must be Planned: {task_id}={status}")
+        first_incomplete = next(
+            (index for index, (_, status) in enumerate(statuses) if status != "Completed"),
+            len(statuses),
+        )
+        active = statuses[first_incomplete:]
+        if active:
+            first_id, first_status = active[0]
+            if first_status not in {"Planned", "In Progress", "In Review", "Deferred", "Blocked"}:
+                fail(f"roadmap has an invalid first incomplete state: {first_id}={first_status}")
+            for task_id, status in active[1:]:
+                if status != "Planned":
+                    fail(f"tasks after the first incomplete task must be Planned: {task_id}={status}")
     return len(epic_positions), task_count
 
 
