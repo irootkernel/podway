@@ -124,6 +124,14 @@ LOCAL_COMMANDS = {
     "completions",
     "procedure.validate",
     "procedure.show",
+    "procedure.format",
+    "procedure.vet",
+    "procedure.lint",
+    "procedure.check",
+    "procedure.graph",
+    "procedure.preview",
+    "procedure.scaffold",
+    "procedure.convert",
     "preset.list",
     "preset.show",
     "preset.explain",
@@ -139,6 +147,84 @@ SERVICE_COMMANDS = {
 }
 PROHIBITED_CAPABILITIES = {"command_runner", "git_mutation", "network"}
 DEPENDENCY_TABLES = {"dependencies", "dev-dependencies", "build-dependencies"}
+V2_ROUTE_DELTA = {
+    "procedure.format", "procedure.vet", "procedure.lint", "procedure.check",
+    "procedure.graph", "procedure.preview", "procedure.scaffold", "procedure.convert",
+    "session.decide", "session.rework", "goal.define", "goal.revise",
+    "goal.assess_criterion",
+}
+V1_ROUTE_BASELINE = {
+    "help", "version", "completions", "procedure.validate", "procedure.show",
+    "preset.list", "preset.show", "preset.explain", "daemon.install", "daemon.uninstall",
+    "daemon.start", "daemon.stop", "daemon.restart", "daemon.status", "daemon.terminate",
+    "daemon.logs", "workspace.init", "workspace.doctor", "workspace.show", "workspace.repair",
+    "session.start", "session.start_replace", "session.status", "session.next",
+    "session.complete", "session.skip", "session.retry", "session.return", "session.block",
+    "session.unblock", "session.cancel", "session.reopen", "session.reset",
+    "workspace.reset_all", "item.check", "item.uncheck", "item.set", "item.add",
+    "item.remove", "item.attach", "item.clear", "job.list", "job.lookup", "job.status",
+    "job.wait", "job.cancel",
+}
+V1_RUNTIME_ERROR_BASELINE = (
+    "DAEMON_NOT_INSTALLED", "DAEMON_UNAVAILABLE", "DAEMON_SHUTTING_DOWN",
+    "DAEMON_VERSION_INCOMPATIBLE", "DAEMON_CONTRACT_MISMATCH",
+    "PROTOCOL_VERSION_UNSUPPORTED", "REQUEST_TOO_LARGE", "REQUEST_INVALID",
+    "SOCKET_ENDPOINT_INVALID", "NOT_A_GIT_WORKTREE", "BARE_GIT_REPOSITORY",
+    "WORKTREE_GONE", "WORKSPACE_NOT_INITIALIZED", "WORKSPACE_ALREADY_INITIALIZED",
+    "WORKSPACE_INIT_CONFLICT", "WORKSPACE_ID_CONFLICT", "WORKSPACE_UUID_MISMATCH",
+    "WORKSPACE_CONFIG_INVALID", "WORKSPACE_STATE_UNREADABLE", "WORKSPACE_SCHEMA_UNSUPPORTED",
+    "WORKSPACE_QUEUE_FULL", "WORKSPACE_MAINTENANCE", "WORKSPACE_PATH_UNSAFE",
+    "PATH_OUTSIDE_WORKTREE", "MIGRATION_FAILED", "PROCEDURE_NOT_FOUND", "PROCEDURE_INVALID",
+    "PROCEDURE_SCHEMA_UNSUPPORTED", "PROCEDURE_DIGEST_MISMATCH", "PRESET_NOT_FOUND",
+    "SESSION_NOT_FOUND", "SESSION_ID_MISMATCH", "SESSION_ALREADY_EXISTS",
+    "SESSION_NOT_RUNNING", "SESSION_NOT_COMPLETED", "SESSION_CANCELLED",
+    "SESSION_REVISION_CONFLICT", "ATTEMPT_NOT_CURRENT", "STAGE_NOT_FOUND",
+    "STAGE_NOT_SKIPPABLE", "RETURN_NOT_ALLOWED", "REOPEN_NOT_ALLOWED",
+    "REQUIRED_ITEMS_MISSING", "BLOCKERS_PRESENT", "BLOCKER_LIMIT_REACHED", "ITEM_NOT_FOUND",
+    "ITEM_TYPE_MISMATCH", "ITEM_CONSTRAINT_FAILED", "ITEM_REVISION_CONFLICT",
+    "ITEM_ALREADY_SET", "LIST_VALUE_NOT_FOUND", "LIST_VALUE_DUPLICATE", "ARTIFACT_NOT_FOUND",
+    "ARTIFACT_UNREADABLE", "ARTIFACT_CHANGED", "ARTIFACT_MEDIA_TYPE_NOT_ALLOWED",
+    "BLOCKER_NOT_FOUND", "BLOCKER_NOT_CURRENT", "IDEMPOTENCY_KEY_REUSED", "JOB_NOT_FOUND",
+    "JOB_NOT_CANCELLABLE", "JOB_WAIT_TIMEOUT", "MUTATION_OUTCOME_UNKNOWN",
+    "CONFIRMATION_REQUIRED", "INTERNAL_ERROR",
+)
+V2_RUNTIME_ERROR_CODES = {
+    "PROCEDURE_V2_SCHEMA_INVALID", "GRAPH_NODE_NOT_FOUND", "NODE_DEFINITION_NOT_FOUND",
+    "GRAPH_NODE_TYPE_MISMATCH", "OPTION_NOT_ALLOWED", "ROUTE_NOT_ALLOWED",
+    "DECISION_REASON_MISSING", "EVIDENCE_REFERENCE_UNRESOLVED",
+    "EVIDENCE_REFERENCE_STALE", "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+    "MANUAL_REWORK_TARGET_NOT_ON_TRACE", "GOAL_TRACKING_NOT_ENABLED",
+    "SESSION_GOAL_MISSING", "SESSION_GOAL_ALREADY_DEFINED", "GOAL_REVISION_STALE",
+    "GOAL_REVISION_TARGET_NOT_ALLOWED", "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
+    "REACTIVATION_FLAG_REQUIRED", "CRITERION_MODE_MIXED", "CRITERION_CITATION_INVALID",
+    "CRITERION_RESULT_MISSING", "CRITERION_NOT_FOUND", "FRESH_GOAL_ASSESSMENT_MISSING",
+    "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED", "DIGEST_CONFIRMATION_REQUIRED",
+    "UNSUPPORTED_V2_CAPABILITY",
+}
+V2_AUTHORING_DIAGNOSTIC_CODES = {
+    "AUTHORING_SCHEMA_INVALID", "SOURCE_CONSTRUCT_UNSUPPORTED", "FORMAT_NOT_CANONICAL",
+    "ENTRY_NODE_INVALID", "GRAPH_DEFINITION_UNKNOWN", "ROUTE_TARGET_NOT_FOUND",
+    "UNREACHABLE_GRAPH_NODE", "NO_TERMINAL_PATH", "ACTION_DISPOSITION_INVALID",
+    "DECISION_OPTION_ROUTE_MISSING", "DECISION_ROUTE_OPTION_UNDEFINED",
+    "GOAL_ASSESSMENT_OPTION_UNMAPPED", "GOAL_ASSESSMENT_OUTCOME_UNKNOWN",
+    "GOAL_ASSESSMENT_OUTCOME_UNREACHABLE",
+    "GOAL_ASSESSMENT_REQUIRES_GOAL_TRACKING",
+    "GOAL_ASSESSMENT_NOT_DOMINATING_TERMINAL", "EVIDENCE_SOURCE_UNKNOWN",
+    "EVIDENCE_SOURCE_SELF_REFERENCE", "EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER",
+    "SKIPPABLE_EVIDENCE_SOURCE", "EVIDENCE_SELECTOR_UNKNOWN_ITEM",
+    "READBACK_BUDGET_EXCEEDED", "NEXT_STATIC_BUDGET_EXCEEDED",
+    "DECISION_SKIP_NOT_ALLOWED", "GRAPH_CYCLE_INVALID", "REWORK_TARGET_NOT_DOMINATING",
+    "MANUAL_REWORK_TARGET_UNKNOWN", "AMBIGUOUS_GRAPH_REFERENCE", "UNUSED_NODE_DEFINITION",
+    "SINGLE_OPTION_DECISION", "INDISTINGUISHABLE_OPTION_LABELS", "IDENTICAL_EFFECTIVE_ROUTES",
+    "WEAK_PURPOSE_GUIDANCE", "WEAK_INTENT_GUIDANCE", "WEAK_OBJECTIVE_GUIDANCE",
+    "WEAK_PROMPT_GUIDANCE", "WEAK_CRITERIA_GUIDANCE", "WEAK_REASON_GUIDANCE",
+    "EVIDENCE_GUIDANCE_MISSING", "OPTIONAL_EVIDENCE_UNRESOLVABLE",
+    "GOAL_CLARIFICATION_PATH_MISSING", "GOAL_ASSESSMENT_TOO_EARLY",
+    "MANUAL_REWORK_TARGETS_BROAD", "LARGE_OPTION_SET", "LARGE_CYCLE",
+    "DUPLICATED_NODE_DEFINITION", "GRAPH_NODE_ID_CONFUSING", "REWORK_TOPOLOGY_CONFUSING",
+    "NO_REACTIVATION_PATH", "GOAL_REVISION_TARGET_UNSAFE",
+    "MULTIPLE_GOAL_ASSESSMENT_SOURCES",
+}
 
 
 class VerificationError(Exception):
@@ -182,6 +268,52 @@ def catalog_commands(root: Path) -> set[str]:
     return names
 
 
+def validate_v2_catalog_delta(root: Path) -> int:
+    commands = catalog_commands(root)
+    if commands != V1_ROUTE_BASELINE | V2_ROUTE_DELTA:
+        fail("command catalog must contain the 46-route baseline plus exactly 13 v2 routes")
+
+    runtime = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
+    if set(runtime) != {"schema", "exit_codes", "errors"}:
+        fail("error catalog has unexpected or missing top-level fields")
+    entries = runtime.get("errors")
+    if not isinstance(entries, list) or len(entries) != 91:
+        fail("runtime error catalog must contain the 65-code baseline plus 26 v2 codes")
+    runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
+    if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
+        fail("runtime error catalog codes must be unique strings")
+    if tuple(runtime_codes[:65]) != V1_RUNTIME_ERROR_BASELINE or set(runtime_codes[65:]) != V2_RUNTIME_ERROR_CODES:
+        fail("runtime error catalog omits a required v2 code")
+    for entry in entries:
+        if not isinstance(entry.get("summary"), str) or not entry["summary"]:
+            fail("runtime error entries require a summary")
+        if not isinstance(entry.get("exit_code"), int) or str(entry["exit_code"]) not in runtime["exit_codes"]:
+            fail("runtime error entry has an invalid exit code")
+        if not isinstance(entry.get("retryable"), bool):
+            fail("runtime error entry has an invalid retryability value")
+
+    authoring = read_json(
+        root, Path("assets/specifications/authoring-diagnostics.json"),
+        "authoring diagnostic catalog",
+    )
+    if set(authoring) != {"schema", "diagnostics"} or authoring.get("schema") != "podway.authoring-diagnostic-catalog/v1":
+        fail("authoring diagnostic catalog has an invalid shape or identity")
+    diagnostics = authoring.get("diagnostics")
+    if not isinstance(diagnostics, list) or len(diagnostics) != len(V2_AUTHORING_DIAGNOSTIC_CODES):
+        fail("authoring diagnostic catalog must be the exhaustive v2 inventory")
+    diagnostic_codes = [entry.get("code") for entry in diagnostics if isinstance(entry, dict)]
+    if set(diagnostic_codes) != V2_AUTHORING_DIAGNOSTIC_CODES or len(diagnostic_codes) != len(set(diagnostic_codes)):
+        fail("authoring diagnostic catalog has missing, duplicate, or unapproved codes")
+    if set(runtime_codes) & set(diagnostic_codes):
+        fail("runtime errors and authoring diagnostics must use disjoint code namespaces")
+    for entry in diagnostics:
+        if set(entry) != {"code", "severity", "summary"}:
+            fail("authoring diagnostic entry has unexpected or missing fields")
+        if entry["severity"] not in {"error", "warning"} or not isinstance(entry["summary"], str) or not entry["summary"]:
+            fail("authoring diagnostic entry has an invalid severity or summary")
+    return len(entries) + len(diagnostics)
+
+
 def validate_contract_identifiers(root: Path) -> int:
     adjacency = read_json(root, ADJACENCY_PATH, "Cargo adjacency contract")
     routes = read_json(root, ROUTES_PATH, "command route contract")
@@ -219,6 +351,7 @@ def validate_contract_identifiers(root: Path) -> int:
     error_catalog = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
     if error_catalog.get("schema") != "podway.error-catalog/v1":
         fail("error catalog does not declare podway.error-catalog/v1")
+    validate_v2_catalog_delta(root)
     catalog_commands(root)
     preset_files = sorted(
         path
@@ -354,7 +487,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list):
+    if not isinstance(routes, list) or len(routes) != 59:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}
@@ -567,6 +700,45 @@ def run_sentinels(root: Path) -> list[str]:
         route_path.write_text(json.dumps(route_contract, sort_keys=True) + "\n", encoding="utf-8")
         require_known_failure("route bypass", lambda: validate_routes(route_fixture))
         completed.append("route_bypass")
+
+        route_growth_fixture = temporary / "route-growth"
+        route_growth_fixture.mkdir()
+        shutil.copytree(root / "assets", route_growth_fixture / "assets")
+        copy_contracts(root, route_growth_fixture)
+        catalog_path = route_growth_fixture / "assets/specifications/command-catalog.yaml"
+        catalog_path.write_text(
+            catalog_path.read_text(encoding="utf-8")
+            + "- name: procedure.future\n  cli:\n  - procedure\n  - future\n",
+            encoding="utf-8",
+        )
+        require_known_failure("silent route growth", lambda: validate_v2_catalog_delta(route_growth_fixture))
+        completed.append("silent_route_growth")
+
+        error_growth_fixture = temporary / "error-growth"
+        error_growth_fixture.mkdir()
+        shutil.copytree(root / "assets", error_growth_fixture / "assets")
+        error_path = error_growth_fixture / "assets/specifications/error-codes.json"
+        error_catalog = json.loads(error_path.read_text(encoding="utf-8"))
+        error_catalog["errors"].append({
+            "code": "FUTURE_ERROR", "exit_code": 1, "retryable": False,
+            "summary": "Unapproved growth.",
+        })
+        error_path.write_text(json.dumps(error_catalog) + "\n", encoding="utf-8")
+        require_known_failure("silent error growth", lambda: validate_v2_catalog_delta(error_growth_fixture))
+        completed.append("silent_error_growth")
+
+        diagnostic_overlap_fixture = temporary / "diagnostic-overlap"
+        diagnostic_overlap_fixture.mkdir()
+        shutil.copytree(root / "assets", diagnostic_overlap_fixture / "assets")
+        diagnostic_path = diagnostic_overlap_fixture / "assets/specifications/authoring-diagnostics.json"
+        diagnostic_catalog = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+        diagnostic_catalog["diagnostics"][0]["code"] = "PROCEDURE_INVALID"
+        diagnostic_path.write_text(json.dumps(diagnostic_catalog) + "\n", encoding="utf-8")
+        require_known_failure(
+            "runtime authoring overlap",
+            lambda: validate_v2_catalog_delta(diagnostic_overlap_fixture),
+        )
+        completed.append("runtime_authoring_overlap")
         completed.extend(f"contract_manifest_{item}" for item in contract_manifest.self_test(root))
     return completed
 
@@ -579,6 +751,7 @@ def production_checks(root: Path) -> dict[str, int]:
     return {
         "canonical_assets": repository_assets.validate_layout(root),
         "contract_identifiers": validate_contract_identifiers(root),
+        "v2_catalog_delta": validate_v2_catalog_delta(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
         "makefile_contract": validate_makefile_contract(root),

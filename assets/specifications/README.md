@@ -4,12 +4,15 @@
 - `sqlite-v2.sql`: response-context migration for durable terminal-envelope reconstruction.
 - `launchagent.plist.template`: reference macOS user LaunchAgent.
 - `error-codes.json`: stable public error and exit-code catalog.
+- `authoring-diagnostics.json`: stable authoring-time diagnostic catalog.
 - `command-catalog.yaml`: command classification, queue behavior, and preconditions.
 - `state-transition-matrix.csv`: compact transition reference.
 - `canonicalization-v1.json`: machine-readable canonical JSON and Procedure normalization rules.
 
 `command-catalog.yaml` records every closed result discriminator in `result_schemas`;
-multiple entries represent request-selected or detached variants. `error-codes.json`
+multiple entries represent request-selected or detached variants. Runtime errors in
+`error-codes.json` and authoring findings in `authoring-diagnostics.json` are
+separate automation namespaces. `error-codes.json`
 uses `details_schema` only for errors with a closed public detail family. The
 transition matrix binds each state-changing route to its terminal `result_schema`
 and uses `none` where no closed terminal result is defined. A

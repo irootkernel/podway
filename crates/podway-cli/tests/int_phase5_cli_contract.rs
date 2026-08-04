@@ -37,7 +37,7 @@ fn run(arguments: &[&str]) -> Output {
         .output()
         .expect("podway binary must run")
 }
-fn frozen_command_catalog_routes() -> Vec<String> {
+fn registered_command_catalog_routes() -> Vec<String> {
     let catalog = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/specifications/command-catalog.yaml"),
@@ -50,8 +50,8 @@ fn frozen_command_catalog_routes() -> Vec<String> {
         .collect::<Vec<_>>();
     assert_eq!(
         routes.len(),
-        46,
-        "the frozen command catalog must contain exactly 46 routes"
+        59,
+        "the registered command catalog must contain the 46 executable routes and 13 reserved v2 routes"
     );
     assert_eq!(
         routes.iter().collect::<BTreeSet<_>>().len(),
@@ -2270,20 +2270,43 @@ fn status_text_semantic_projection(stdout: &[u8]) -> Value {
 #[test]
 fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_output_for_every_route()
  {
-    let public_routes = frozen_command_catalog_routes();
-    assert_eq!(ROUTE_SURFACES.len(), public_routes.len());
+    let registered_routes = registered_command_catalog_routes();
+    let executable_routes = ROUTE_SURFACES
+        .iter()
+        .map(|surface| surface.route)
+        .collect::<Vec<_>>();
     assert_eq!(
-        ROUTE_SURFACES
-            .iter()
-            .map(|surface| surface.route)
-            .collect::<Vec<_>>(),
-        public_routes.iter().map(String::as_str).collect::<Vec<_>>(),
-        "the CLI surface must exactly match the frozen, production command catalog",
+        executable_routes,
+        registered_routes[..ROUTE_SURFACES.len()],
+        "the current CLI surface must preserve the frozen 46-route prefix",
+    );
+    let reserved_v2_routes = registered_routes[ROUTE_SURFACES.len()..]
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        reserved_v2_routes,
+        BTreeSet::from([
+            "goal.assess_criterion",
+            "goal.define",
+            "goal.revise",
+            "procedure.check",
+            "procedure.convert",
+            "procedure.format",
+            "procedure.graph",
+            "procedure.lint",
+            "procedure.preview",
+            "procedure.scaffold",
+            "procedure.vet",
+            "session.decide",
+            "session.rework",
+        ]),
+        "the contract-only v2 delta must stay absent from the executable CLI until V2PLT-008",
     );
     assert_eq!(DAEMON_CONTRACTS.len(), 30);
     for contract in DAEMON_CONTRACTS {
         assert!(
-            public_routes.iter().any(|route| route == contract.route),
+            executable_routes.contains(&contract.route),
             "{} must be a frozen public command rather than an untracked daemon entry point",
             contract.route,
         );
@@ -2534,11 +2557,8 @@ rework:
         .collect::<BTreeSet<_>>();
     assert_eq!(
         executed_routes,
-        public_routes
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 46 public routes"
+        executable_routes.into_iter().collect::<BTreeSet<_>>(),
+        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 46 current executable routes"
     );
 }
 

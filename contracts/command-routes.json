@@ -328,6 +328,97 @@
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",
       "capabilities": []
+    },
+    {
+      "command": "procedure.format",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.vet",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.lint",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.check",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.graph",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.preview",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.scaffold",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "procedure.convert",
+      "owner": "podway-cli",
+      "path": ["podway-cli"],
+      "execution": "local",
+      "capabilities": []
+    },
+    {
+      "command": "session.decide",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.rework",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "goal.define",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "goal.revise",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "goal.assess_criterion",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
     }
   ]
 }

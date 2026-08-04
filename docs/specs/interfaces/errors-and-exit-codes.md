@@ -4,10 +4,21 @@
 
 Public failures use stable uppercase error codes. Human messages may improve without a schema change. Automation must branch on `code`, `retryable`, and structured `details`.
 
-The machine-readable catalog is [`../../../assets/specifications/error-codes.json`](../../../assets/specifications/error-codes.json).
+The machine-readable runtime catalog is
+[`../../../assets/specifications/error-codes.json`](../../../assets/specifications/error-codes.json).
+Authoring-time findings use the separate, disjoint
+[`../../../assets/specifications/authoring-diagnostics.json`](../../../assets/specifications/authoring-diagnostics.json)
+catalog. A code belongs to exactly one catalog.
 
 The tables below are the implemented machine contract. Automation errors have
 closed detail schemas, canonical assets, and executable contract tests.
+
+The v2 contract baseline registers 26 additive runtime codes and the exhaustive
+authoring diagnostic inventory before their commands become executable. Route
+registration in the manifest is not parser or daemon support: until the owning
+V2PLT tasks land, these routes remain absent from the build and retain the
+ordinary unknown-command or invalid-request behavior. A peer that later carries
+a route but cannot serve it uses `UNSUPPORTED_V2_CAPABILITY`.
 
 ## Exit codes
 
@@ -130,6 +141,27 @@ closed detail schemas, canonical assets, and executable contract tests.
 |---|---:|---:|---|
 | `CONFIRMATION_REQUIRED` | 2 | no | Destructive non-interactive command lacks `--yes` |
 | `INTERNAL_ERROR` | 6 | no | Unexpected implementation failure |
+
+## Registered v2 runtime errors
+
+The additive runtime inventory covers Procedure v2 schema rejection; graph-node
+and definition lookup and type mismatches; option and route rejection; decision
+reason and evidence-reference failures; manual rework eligibility; goal opt-in,
+definition, revision, reactivation, criterion, and final-assessment checks; digest
+confirmation; and unsupported registered capability. Exact codes, exit classes,
+and retryability are frozen by `error-codes.json`. In particular,
+`EVIDENCE_REFERENCE_STALE` and `GOAL_REVISION_STALE` are retryable exit-4
+conflicts, while `DIGEST_CONFIRMATION_REQUIRED` is a non-retryable exit-2 usage
+failure and `UNSUPPORTED_V2_CAPABILITY` is a non-retryable exit-3 compatibility
+failure.
+
+Authoring diagnostics never use runtime error codes. The authoring catalog
+separately enumerates every validate, vet, and lint condition from Procedure v2,
+including the mandatory stable codes
+`EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER`, `SKIPPABLE_EVIDENCE_SOURCE`,
+`EVIDENCE_SELECTOR_UNKNOWN_ITEM`, `READBACK_BUDGET_EXCEEDED`,
+`NEXT_STATIC_BUDGET_EXCEEDED`, `REWORK_TARGET_NOT_DOMINATING`, and
+`NO_REACTIVATION_PATH`.
 
 `INTERNAL_ERROR` is never marked retryable, and its details include a diagnostic ID. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation.
 

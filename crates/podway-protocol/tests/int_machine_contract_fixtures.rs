@@ -9,8 +9,9 @@ use std::{
 use jsonschema::{Retrieve, Uri};
 use podway_core::{MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, MAX_STAGE_ITEMS};
 use podway_protocol::{
-    MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, RequestEnvelopeV1, ResponseEnvelopeV1,
-    SUPPORTED_RESULT_SCHEMAS_V1, validate_command_result_v1,
+    EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
+    NEW_ROUTE_RESULT_SCHEMAS_V1, RequestEnvelopeV1, ResponseEnvelopeV1,
+    SUPPORTED_RESULT_SCHEMAS_V1, error_code_catalog_v1, validate_command_result_v1,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -207,6 +208,45 @@ fn parse_error_catalog() -> BTreeMap<String, ErrorCatalogEntry> {
         .collect()
 }
 
+#[test]
+fn mcont006_runtime_and_authoring_catalogs_are_frozen_disjoint_and_decoder_bound() {
+    let runtime =
+        serde_json::from_value::<ErrorCatalog>(read_json("assets/specifications/error-codes.json"))
+            .unwrap();
+    let expected = runtime
+        .errors
+        .iter()
+        .map(|entry| (entry.code.as_str(), entry.exit_code, entry.retryable))
+        .collect::<Vec<_>>();
+    assert_eq!(error_code_catalog_v1().collect::<Vec<_>>(), expected);
+    assert_eq!(expected.len(), 91);
+
+    let authoring = read_json("assets/specifications/authoring-diagnostics.json");
+    let diagnostic_codes = authoring["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["code"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(diagnostic_codes.len(), 51);
+    let runtime_codes = expected
+        .iter()
+        .map(|(code, _, _)| *code)
+        .collect::<BTreeSet<_>>();
+    assert!(runtime_codes.is_disjoint(&diagnostic_codes));
+    for mandatory in [
+        "EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER",
+        "SKIPPABLE_EVIDENCE_SOURCE",
+        "EVIDENCE_SELECTOR_UNKNOWN_ITEM",
+        "READBACK_BUDGET_EXCEEDED",
+        "NEXT_STATIC_BUDGET_EXCEEDED",
+        "REWORK_TARGET_NOT_DOMINATING",
+        "NO_REACTIVATION_PATH",
+    ] {
+        assert!(diagnostic_codes.contains(mandatory));
+    }
+}
+
 fn local_schemas() -> LocalSchemas {
     let mut resources = HashMap::new();
     for entry in fs::read_dir(root().join("assets/schemas")).unwrap() {
@@ -327,9 +367,44 @@ fn mcont006_result_fixtures_lock_catalog_schemas_and_runtime_decoders() {
         observed,
         parse_command_catalog()
             .into_iter()
-            .map(|(command, schemas)| (command, schemas.into_iter().collect()))
+            .filter_map(|(command, schemas)| {
+                let schemas = schemas
+                    .into_iter()
+                    .filter(|schema| SUPPORTED_RESULT_SCHEMAS_V1.contains(&schema.as_str()))
+                    .collect::<BTreeSet<_>>();
+                (!schemas.is_empty()).then_some((command, schemas))
+            })
             .collect()
     );
+
+    let mut registered_v2 = BTreeMap::<String, BTreeSet<String>>::new();
+    for contract in EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+    {
+        for command in contract.commands {
+            registered_v2
+                .entry((*command).to_owned())
+                .or_default()
+                .insert(contract.schema.to_owned());
+        }
+    }
+    let observed_v2 = parse_command_catalog()
+        .into_iter()
+        .filter_map(|(command, schemas)| {
+            let schemas = schemas
+                .into_iter()
+                .filter(|schema| {
+                    EXISTING_ROUTE_RESULT_SCHEMAS_V2
+                        .iter()
+                        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+                        .any(|contract| contract.schema == schema)
+                })
+                .collect::<BTreeSet<_>>();
+            (!schemas.is_empty()).then_some((command, schemas))
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(observed_v2, registered_v2);
 
     let mut exercised = BTreeSet::new();
     for binding in &fixture.result_bindings {

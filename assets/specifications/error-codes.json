@@ -415,6 +415,162 @@
       "exit_code": 6,
       "retryable": false,
       "summary": "An unexpected internal error occurred."
+    },
+    {
+      "code": "PROCEDURE_V2_SCHEMA_INVALID",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The Procedure v2 document violates its closed schema."
+    },
+    {
+      "code": "GRAPH_NODE_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The requested graph node does not exist."
+    },
+    {
+      "code": "NODE_DEFINITION_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The requested node definition does not exist."
+    },
+    {
+      "code": "GRAPH_NODE_TYPE_MISMATCH",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The active graph node has the wrong type for the command."
+    },
+    {
+      "code": "OPTION_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The selected decision option is not allowed."
+    },
+    {
+      "code": "ROUTE_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The selected transition route is not allowed."
+    },
+    {
+      "code": "DECISION_REASON_MISSING",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The decision requires a reason."
+    },
+    {
+      "code": "EVIDENCE_REFERENCE_UNRESOLVED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "A required evidence reference is unresolved."
+    },
+    {
+      "code": "EVIDENCE_REFERENCE_STALE",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "A resolved evidence reference is stale."
+    },
+    {
+      "code": "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The graph node is not an allowed manual rework target."
+    },
+    {
+      "code": "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The manual rework target has no valid attempt on the current trace."
+    },
+    {
+      "code": "GOAL_TRACKING_NOT_ENABLED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The Procedure does not enable session-goal tracking."
+    },
+    {
+      "code": "SESSION_GOAL_MISSING",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The session goal has not been defined."
+    },
+    {
+      "code": "SESSION_GOAL_ALREADY_DEFINED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The session goal is already defined."
+    },
+    {
+      "code": "GOAL_REVISION_STALE",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The expected goal revision is no longer current."
+    },
+    {
+      "code": "GOAL_REVISION_TARGET_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The goal revision rework target is not allowed by policy."
+    },
+    {
+      "code": "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The goal revision rework target is not revision-safe."
+    },
+    {
+      "code": "REACTIVATION_FLAG_REQUIRED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Reactivating a completed session requires the explicit flag."
+    },
+    {
+      "code": "CRITERION_MODE_MIXED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Criterion applicability and assessment modes cannot be mixed in one attempt."
+    },
+    {
+      "code": "CRITERION_CITATION_INVALID",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "A criterion citation does not name resolved attempt state."
+    },
+    {
+      "code": "CRITERION_RESULT_MISSING",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "A required criterion result is missing."
+    },
+    {
+      "code": "CRITERION_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The requested goal criterion does not exist."
+    },
+    {
+      "code": "FRESH_GOAL_ASSESSMENT_MISSING",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "A fresh final goal assessment is required."
+    },
+    {
+      "code": "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The selected option does not match the determined goal outcome."
+    },
+    {
+      "code": "DIGEST_CONFIRMATION_REQUIRED",
+      "exit_code": 2,
+      "retryable": false,
+      "summary": "A custom Procedure start requires explicit digest confirmation."
+    },
+    {
+      "code": "UNSUPPORTED_V2_CAPABILITY",
+      "exit_code": 3,
+      "retryable": false,
+      "summary": "The registered v2 command or result family is not supported by this build."
     }
   ]
 }

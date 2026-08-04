@@ -565,6 +565,7 @@ fn validate_asset_shape(asset: &ManifestAssetV1) -> Result<(), ReleaseContractEr
         asset.kind.as_str(),
         "schema"
             | "catalog"
+            | "route_contract"
             | "transition_matrix"
             | "canonicalization_rules"
             | "known_answer_fixture"

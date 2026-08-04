@@ -1827,8 +1827,138 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         exit_code: 6,
         retryable: false,
     },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_V2_SCHEMA_INVALID",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GRAPH_NODE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "NODE_DEFINITION_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GRAPH_NODE_TYPE_MISMATCH",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "OPTION_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ROUTE_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DECISION_REASON_MISSING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "EVIDENCE_REFERENCE_UNRESOLVED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "EVIDENCE_REFERENCE_STALE",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GOAL_TRACKING_NOT_ENABLED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_GOAL_MISSING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_GOAL_ALREADY_DEFINED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GOAL_REVISION_STALE",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GOAL_REVISION_TARGET_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "REACTIVATION_FLAG_REQUIRED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "CRITERION_MODE_MIXED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "CRITERION_CITATION_INVALID",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "CRITERION_RESULT_MISSING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "CRITERION_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "FRESH_GOAL_ASSESSMENT_MISSING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DIGEST_CONFIRMATION_REQUIRED",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "UNSUPPORTED_V2_CAPABILITY",
+        exit_code: 3,
+        retryable: false,
+    },
 ];
-/// Returns the complete frozen v1 error catalog in wire order.
+/// Returns the complete frozen public error catalog in wire order.
 pub fn error_code_catalog_v1() -> impl ExactSizeIterator<Item = (&'static str, u8, bool)> {
     ERROR_CODE_CATALOG_V1
         .iter()

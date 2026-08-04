@@ -37,6 +37,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-validation-result/v1
+  - podway.procedure-validation-result/v2
 - name: procedure.show
   cli:
   - procedure
@@ -200,6 +201,8 @@ commands:
   result_schemas:
   - podway.session-start-result/v1
   - podway.detached-admission-result/v1
+  - podway.session-start-result/v2
+  - podway.detached-admission-result/v2
 - name: session.start_replace
   cli:
   - start
@@ -219,6 +222,8 @@ commands:
   result_schemas:
   - podway.session-start-result/v1
   - podway.detached-admission-result/v1
+  - podway.session-start-result/v2
+  - podway.detached-admission-result/v2
 - name: session.status
   cli:
   - status
@@ -232,6 +237,8 @@ commands:
   result_schemas:
   - podway.status-result/v1
   - podway.compact-status-result/v1
+  - podway.status-result/v2
+  - podway.compact-status-result/v2
 - name: session.next
   cli:
   - next
@@ -244,6 +251,7 @@ commands:
   - session_id_optional
   result_schemas:
   - podway.next-result/v1
+  - podway.next-result/v2
 - name: session.complete
   cli:
   - complete
@@ -261,6 +269,8 @@ commands:
   result_schemas:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
+  - podway.stage-transition-result/v2
+  - podway.detached-admission-result/v2
 - name: session.skip
   cli:
   - skip
@@ -278,6 +288,8 @@ commands:
   result_schemas:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
+  - podway.stage-transition-result/v2
+  - podway.detached-admission-result/v2
 - name: session.retry
   cli:
   - retry
@@ -295,6 +307,8 @@ commands:
   result_schemas:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
+  - podway.stage-transition-result/v2
+  - podway.detached-admission-result/v2
 - name: session.return
   cli:
   - return
@@ -329,6 +343,8 @@ commands:
   result_schemas:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
+  - podway.stage-transition-result/v2
+  - podway.detached-admission-result/v2
 - name: session.unblock
   cli:
   - unblock
@@ -346,6 +362,8 @@ commands:
   result_schemas:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
+  - podway.stage-transition-result/v2
+  - podway.detached-admission-result/v2
 - name: session.cancel
   cli:
   - cancel
@@ -363,6 +381,8 @@ commands:
   result_schemas:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
+  - podway.stage-transition-result/v2
+  - podway.detached-admission-result/v2
 - name: session.reopen
   cli:
   - reopen
@@ -396,6 +416,8 @@ commands:
   result_schemas:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
+  - podway.stage-transition-result/v2
+  - podway.detached-admission-result/v2
 - name: workspace.reset_all
   cli:
   - reset
@@ -426,6 +448,8 @@ commands:
   result_schemas:
   - podway.item-mutation-result/v1
   - podway.detached-admission-result/v1
+  - podway.item-mutation-result/v2
+  - podway.detached-admission-result/v2
 - name: item.uncheck
   cli:
   - uncheck
@@ -443,6 +467,8 @@ commands:
   result_schemas:
   - podway.item-mutation-result/v1
   - podway.detached-admission-result/v1
+  - podway.item-mutation-result/v2
+  - podway.detached-admission-result/v2
 - name: item.set
   cli:
   - set
@@ -460,6 +486,8 @@ commands:
   result_schemas:
   - podway.item-mutation-result/v1
   - podway.detached-admission-result/v1
+  - podway.item-mutation-result/v2
+  - podway.detached-admission-result/v2
 - name: item.add
   cli:
   - add
@@ -477,6 +505,8 @@ commands:
   result_schemas:
   - podway.item-mutation-result/v1
   - podway.detached-admission-result/v1
+  - podway.item-mutation-result/v2
+  - podway.detached-admission-result/v2
 - name: item.remove
   cli:
   - remove
@@ -494,6 +524,8 @@ commands:
   result_schemas:
   - podway.item-mutation-result/v1
   - podway.detached-admission-result/v1
+  - podway.item-mutation-result/v2
+  - podway.detached-admission-result/v2
 - name: item.attach
   cli:
   - attach
@@ -511,6 +543,8 @@ commands:
   result_schemas:
   - podway.item-mutation-result/v1
   - podway.detached-admission-result/v1
+  - podway.item-mutation-result/v2
+  - podway.detached-admission-result/v2
 - name: item.clear
   cli:
   - clear
@@ -528,6 +562,8 @@ commands:
   result_schemas:
   - podway.item-mutation-result/v1
   - podway.detached-admission-result/v1
+  - podway.item-mutation-result/v2
+  - podway.detached-admission-result/v2
 - name: job.list
   cli:
   - job
@@ -581,3 +617,179 @@ commands:
   destructive_confirmation: false
   preconditions:
   - job_state
+- name: procedure.format
+  cli:
+  - procedure
+  - format
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-source-result/v1
+- name: procedure.vet
+  cli:
+  - procedure
+  - vet
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-diagnostics-result/v1
+- name: procedure.lint
+  cli:
+  - procedure
+  - lint
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-diagnostics-result/v1
+- name: procedure.check
+  cli:
+  - procedure
+  - check
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-diagnostics-result/v1
+- name: procedure.graph
+  cli:
+  - procedure
+  - graph
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-graph-result/v1
+- name: procedure.preview
+  cli:
+  - procedure
+  - preview
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-preview-result/v1
+- name: procedure.scaffold
+  cli:
+  - procedure
+  - scaffold
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-source-result/v1
+- name: procedure.convert
+  cli:
+  - procedure
+  - convert
+  operation: static
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.procedure-source-result/v1
+- name: session.decide
+  cli:
+  - decide
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+  result_schemas:
+  - podway.decision-result/v1
+  - podway.detached-admission-result/v2
+- name: session.rework
+  cli:
+  - rework
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  - attempt_id_when_running
+  idempotency_scope: session
+  result_schemas:
+  - podway.rework-result/v1
+  - podway.detached-admission-result/v2
+- name: goal.define
+  cli:
+  - goal
+  - define
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  idempotency_scope: session
+  result_schemas:
+  - podway.goal-definition-result/v1
+  - podway.detached-admission-result/v2
+- name: goal.revise
+  cli:
+  - goal
+  - revise
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  - goal_revision
+  idempotency_scope: session
+  result_schemas:
+  - podway.goal-revision-result/v1
+  - podway.detached-admission-result/v2
+- name: goal.assess_criterion
+  cli:
+  - goal
+  - assess-criterion
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  - attempt_id
+  - goal_revision
+  idempotency_scope: session
+  result_schemas:
+  - podway.criterion-assessment-result/v1
+  - podway.detached-admission-result/v2
