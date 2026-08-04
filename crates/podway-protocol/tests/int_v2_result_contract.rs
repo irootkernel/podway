@@ -298,7 +298,7 @@ fn v2ctr003_every_registered_result_has_a_closed_schema_and_known_answer() {
 
 #[test]
 fn v2ctr003_authoring_diagnostic_is_standalone_closed_and_bounded() {
-    let diagnostic = json!({
+    let mut diagnostic = json!({
         "code":"EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER", "severity":"error",
         "schema":"podway.procedure/v2", "source_path":"workflow.yaml",
         "location":{"line":1,"column":1,"end_line":1,"end_column":8},
@@ -318,6 +318,70 @@ fn v2ctr003_authoring_diagnostic_is_standalone_closed_and_bounded() {
         .build(&schema_without_id)
         .unwrap();
     assert!(!validator.is_valid(&oversized));
+
+    let catalog: Value = serde_json::from_slice(
+        &fs::read(root().join("assets/specifications/authoring-diagnostics.json")).unwrap(),
+    )
+    .unwrap();
+    let catalog_pairs = catalog["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["code"].as_str().unwrap().to_owned(),
+                entry["severity"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let schema_pairs = schema["allOf"][0]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|branch| {
+            let severity = branch["properties"]["severity"]["const"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            branch["properties"]["code"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(move |code| (code.as_str().unwrap().to_owned(), severity.clone()))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(schema_pairs, catalog_pairs);
+    assert_eq!(schema_pairs.len(), 51);
+
+    for (code, severity) in &catalog_pairs {
+        diagnostic["code"] = json!(code);
+        diagnostic["severity"] = json!(severity);
+        assert!(
+            validator.is_valid(&diagnostic),
+            "catalog diagnostic {code}/{severity} was rejected"
+        );
+    }
+
+    diagnostic["code"] = json!("UNKNOWN_AUTHORING_DIAGNOSTIC");
+    diagnostic["severity"] = json!("error");
+    assert!(!validator.is_valid(&diagnostic));
+
+    diagnostic["code"] = json!("AUTHORING_SCHEMA_INVALID");
+    diagnostic["severity"] = json!("warning");
+    assert!(!validator.is_valid(&diagnostic));
+    diagnostic["code"] = json!("UNUSED_NODE_DEFINITION");
+    diagnostic["severity"] = json!("error");
+    assert!(!validator.is_valid(&diagnostic));
+
+    diagnostic["severity"] = json!("warning");
+    diagnostic["unknown"] = json!(true);
+    assert!(!validator.is_valid(&diagnostic));
+    diagnostic.as_object_mut().unwrap().remove("unknown");
+    diagnostic.as_object_mut().unwrap().remove("message");
+    assert!(!validator.is_valid(&diagnostic));
+    diagnostic["message"] = json!("Unused node definition.");
+    diagnostic.as_object_mut().unwrap().remove("source_path");
+    assert!(!validator.is_valid(&diagnostic));
 }
 
 #[test]
@@ -530,8 +594,7 @@ fn v2ctr003_critical_bounds_and_variant_rules_fail_closed() {
     );
 
     let mut standard_history = fixtures["podway.status-result/v2"].clone();
-    standard_history["current_trace_history"] =
-        json!({"entries":[],"truncated":false,"window":{"first_sequence":1,"last_sequence":1}});
+    standard_history["current_trace_history"] = json!({"entries":[],"trace_truncated":false,"trace_window":{"first_sequence":1,"last_sequence":1}});
     assert_invalid("schemas/status-result-v2.schema.json", &standard_history);
 
     let mut false_skip = fixtures["podway.status-result/v2"].clone();
@@ -623,9 +686,17 @@ fn v2ctr003_critical_bounds_and_variant_rules_fail_closed() {
         "stale_goal_revision_history",
         "stale_goal_assessment_history",
     ] {
-        verbose[field] = json!({"entries":[],"truncated":false,"window":null});
+        verbose[field] = json!({"entries":[],"trace_truncated":false,"trace_window":null});
     }
     assert_valid("schemas/status-result-v2.schema.json", &verbose);
+
+    let mut legacy_history_markers = verbose.clone();
+    legacy_history_markers["current_trace_history"] =
+        json!({"entries":[],"truncated":false,"window":null});
+    assert_invalid(
+        "schemas/status-result-v2.schema.json",
+        &legacy_history_markers,
+    );
 
     let mut max_trace_window = verbose.clone();
     max_trace_window["current_trace_history"] = json!({
@@ -634,8 +705,8 @@ fn v2ctr003_critical_bounds_and_variant_rules_fail_closed() {
             "attempt_id":UUID,"attempt_number":1,"goal_revision":null,"lifecycle":"active",
             "validity":"valid","started_at":"2026-08-04T00:00:00.000Z"
         }],
-        "truncated":false,
-        "window":{"first_sequence":u64::MAX,"last_sequence":u64::MAX}
+        "trace_truncated":false,
+        "trace_window":{"first_sequence":u64::MAX,"last_sequence":u64::MAX}
     });
     assert_valid("schemas/status-result-v2.schema.json", &max_trace_window);
 
@@ -651,8 +722,8 @@ fn v2ctr003_critical_bounds_and_variant_rules_fail_closed() {
             "references":[],"actor":null,"recorded_at":"2026-08-04T00:00:00.000Z",
             "record_digest":DIGEST
         }],
-        "truncated":false,
-        "window":{"first_sequence":1,"last_sequence":1}
+        "trace_truncated":false,
+        "trace_window":{"first_sequence":1,"last_sequence":1}
     });
     assert_invalid(
         "schemas/status-result-v2.schema.json",
@@ -751,7 +822,7 @@ fn v2ctr003_retained_envelope_warnings_have_a_production_bound() {
         "stale_goal_revision_history",
         "stale_goal_assessment_history",
     ] {
-        verbose[field] = json!({"entries":[],"truncated":false,"window":null});
+        verbose[field] = json!({"entries":[],"trace_truncated":false,"trace_window":null});
     }
     verbose["current_trace_history"]["padding"] = json!("x".repeat(65_536));
     let verbose_output = json!({

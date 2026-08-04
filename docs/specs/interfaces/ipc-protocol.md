@@ -82,7 +82,12 @@ The normative structural schema is [`../../../assets/schemas/ipc-request-v1.sche
 | `control` | daemon lifecycle health or queued-job cancellation | depends | cancellation yes internally |
 | `bootstrap` | workspace initialization and destructive recreation | yes | yes when state is readable |
 
-The command catalog provides the definitive mapping.
+The command catalog provides the definitive operation mapping and a closed
+`availability` value for every registered route. `executable` routes are present in
+the current product dispatch surface. `reserved_contract` routes reserve the v2
+contract identity but MUST NOT be dispatched until their owning platform tasks make
+them executable. The command-route contract carries the same availability split, and
+the two assets MUST agree without relying on catalog order.
 
 ### Live daemon status probe
 

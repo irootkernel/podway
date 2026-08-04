@@ -1,7 +1,7 @@
 //! CLI process-boundary integration contracts using controlled collaborators.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read, Write},
     net::Shutdown,
@@ -37,28 +37,62 @@ fn run(arguments: &[&str]) -> Output {
         .output()
         .expect("podway binary must run")
 }
-fn registered_command_catalog_routes() -> Vec<String> {
+fn registered_command_catalog_route_availability() -> BTreeMap<String, String> {
     let catalog = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/specifications/command-catalog.yaml"),
     )
     .expect("the frozen production command catalog must be readable");
-    let routes = catalog
-        .lines()
-        .filter_map(|line| line.strip_prefix("- name: "))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
+    let mut routes = BTreeMap::new();
+    let mut lines = catalog.lines();
+    while let Some(line) = lines.next() {
+        let Some(route) = line.strip_prefix("- name: ") else {
+            continue;
+        };
+        let availability = lines
+            .next()
+            .and_then(|line| line.strip_prefix("  availability: "))
+            .expect("every registered command must declare availability after its name");
+        assert!(
+            matches!(availability, "executable" | "reserved_contract"),
+            "command availability must use the closed contract enum",
+        );
+        assert!(
+            routes
+                .insert(route.to_owned(), availability.to_owned())
+                .is_none(),
+            "the frozen command catalog must not repeat routes",
+        );
+    }
     assert_eq!(
         routes.len(),
         59,
         "the registered command catalog must contain the 46 executable routes and 13 reserved v2 routes"
     );
-    assert_eq!(
-        routes.iter().collect::<BTreeSet<_>>().len(),
-        routes.len(),
-        "the frozen command catalog must not repeat routes"
-    );
     routes
+}
+
+fn registered_command_route_contract_availability() -> BTreeMap<String, String> {
+    let contract: Value =
+        serde_json::from_str(include_str!("../../../contracts/command-routes.json"))
+            .expect("the command route contract must be valid JSON");
+    contract["routes"]
+        .as_array()
+        .expect("the command route contract must contain routes")
+        .iter()
+        .map(|route| {
+            (
+                route["command"]
+                    .as_str()
+                    .expect("route command must be a string")
+                    .to_owned(),
+                route["availability"]
+                    .as_str()
+                    .expect("route availability must be a string")
+                    .to_owned(),
+            )
+        })
+        .collect()
 }
 
 fn one_json(output: &Output) -> Value {
@@ -2270,19 +2304,31 @@ fn status_text_semantic_projection(stdout: &[u8]) -> Value {
 #[test]
 fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_output_for_every_route()
  {
-    let registered_routes = registered_command_catalog_routes();
-    let executable_routes = ROUTE_SURFACES
+    let registered_routes = registered_command_catalog_route_availability();
+    assert_eq!(
+        registered_routes,
+        registered_command_route_contract_availability(),
+        "the command catalog and command route contract must agree on availability",
+    );
+    let executable_routes = registered_routes
+        .iter()
+        .filter_map(|(route, availability)| {
+            (availability == "executable").then_some(route.as_str())
+        })
+        .collect::<BTreeSet<_>>();
+    let executable_surfaces = ROUTE_SURFACES
         .iter()
         .map(|surface| surface.route)
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        executable_routes,
-        registered_routes[..ROUTE_SURFACES.len()],
-        "the current CLI surface must preserve the frozen 46-route prefix",
+        executable_routes, executable_surfaces,
+        "availability must identify exactly the current 46-route CLI surface",
     );
-    let reserved_v2_routes = registered_routes[ROUTE_SURFACES.len()..]
+    let reserved_v2_routes = registered_routes
         .iter()
-        .map(String::as_str)
+        .filter_map(|(route, availability)| {
+            (availability == "reserved_contract").then_some(route.as_str())
+        })
         .collect::<BTreeSet<_>>();
     assert_eq!(
         reserved_v2_routes,

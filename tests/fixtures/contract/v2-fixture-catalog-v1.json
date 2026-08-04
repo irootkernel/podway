@@ -13,7 +13,7 @@
     {"id": "graph-negative-cases", "path": "tests/fixtures/v2/graphs/negative-cases.json", "media_type": "application/json", "sha256": "sha256:53b0e82fde161c76293ef8f7693390722e145a2bd88a2275c2e0a27ba73c6178"},
     {"id": "graph-valid-cases", "path": "tests/fixtures/v2/graphs/valid-cases.json", "media_type": "application/json", "sha256": "sha256:97060b88247f9dec6c9bcc4b51621c6b063e44ec495540a32ec166cb46013e51"},
     {"id": "payload-maximum-next", "path": "tests/fixtures/v2/payload/maximum-next-recipe.json", "media_type": "application/json", "sha256": "sha256:7b4ccc75f672982796467ff36272e21f2cdecfc3710e2559bacb4b184d912721"},
-    {"id": "payload-maximum-status", "path": "tests/fixtures/v2/payload/maximum-status-recipe.json", "media_type": "application/json", "sha256": "sha256:e80f7456f16b5bb1527d30efc761c64d97a91e07feddcd8d06daef1db056b72f"},
+    {"id": "payload-maximum-status", "path": "tests/fixtures/v2/payload/maximum-status-recipe.json", "media_type": "application/json", "sha256": "sha256:ddef2cd1f8d3524c36971e1ba034008aba265b023c62ce06c2ab380ec10f0967"},
     {"id": "payload-truncation-overflow", "path": "tests/fixtures/v2/payload/truncation-and-overflow-recipe.json", "media_type": "application/json", "sha256": "sha256:0581ef813212b9202847ca064de3696b05238dff10c4482f6ffe4b1ba50d4556"},
     {"id": "protocol-result-families", "path": "tests/fixtures/v2/protocol/result-families.json", "media_type": "application/json", "sha256": "sha256:db1077c96a3c82ce0a9db2f2781dcc8fa6f77810a01591ce2f4ddcf5e5d9911a"},
     {"id": "procedure-equivalence-contract", "path": "tests/fixtures/v2/procedures/equivalence-contract.json", "media_type": "application/json", "sha256": "sha256:c29c960479a46ce77f8d39d30b5b4c8fa96a6d897441a6fb6df823b54a074aea"},

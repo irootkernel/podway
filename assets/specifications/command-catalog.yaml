@@ -1,6 +1,7 @@
 schema: podway.command-catalog/v1
 commands:
 - name: help
+  availability: executable
   cli:
   - help
   operation: static
@@ -9,6 +10,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: version
+  availability: executable
   cli:
   - version
   operation: static
@@ -19,6 +21,7 @@ commands:
   result_schemas:
   - podway.version-result/v1
 - name: completions
+  availability: executable
   cli:
   - completions
   operation: static
@@ -27,6 +30,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: procedure.validate
+  availability: executable
   cli:
   - procedure
   - validate
@@ -39,6 +43,7 @@ commands:
   - podway.procedure-validation-result/v1
   - podway.procedure-validation-result/v2
 - name: procedure.show
+  availability: executable
   cli:
   - procedure
   - show
@@ -48,6 +53,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: preset.list
+  availability: executable
   cli:
   - preset
   - list
@@ -57,6 +63,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: preset.show
+  availability: executable
   cli:
   - preset
   - show
@@ -66,6 +73,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: preset.explain
+  availability: executable
   cli:
   - preset
   - explain
@@ -75,6 +83,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: daemon.install
+  availability: executable
   cli:
   - daemon
   - install
@@ -84,6 +93,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: daemon.uninstall
+  availability: executable
   cli:
   - daemon
   - uninstall
@@ -93,6 +103,7 @@ commands:
   session_mutation: false
   destructive_confirmation: true
 - name: daemon.start
+  availability: executable
   cli:
   - daemon
   - start
@@ -102,6 +113,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: daemon.stop
+  availability: executable
   cli:
   - daemon
   - stop
@@ -111,6 +123,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: daemon.restart
+  availability: executable
   cli:
   - daemon
   - restart
@@ -120,6 +133,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: daemon.status
+  availability: executable
   cli:
   - daemon
   - status
@@ -131,6 +145,7 @@ commands:
   result_schemas:
   - podway.daemon-status-result/v1
 - name: daemon.terminate
+  availability: executable
   cli:
   - terminate
   operation: control
@@ -139,6 +154,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: daemon.logs
+  availability: executable
   cli:
   - daemon
   - logs
@@ -148,6 +164,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: workspace.init
+  availability: executable
   cli:
   - init
   operation: bootstrap
@@ -160,6 +177,7 @@ commands:
   - podway.workspace-init-result/v1
   - podway.detached-admission-result/v1
 - name: workspace.doctor
+  availability: executable
   cli:
   - doctor
   operation: query
@@ -168,6 +186,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: workspace.show
+  availability: executable
   cli:
   - workspace
   - show
@@ -177,6 +196,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: workspace.repair
+  availability: executable
   cli:
   - workspace
   - repair
@@ -186,6 +206,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: session.start
+  availability: executable
   cli:
   - start
   operation: mutate
@@ -204,6 +225,7 @@ commands:
   - podway.session-start-result/v2
   - podway.detached-admission-result/v2
 - name: session.start_replace
+  availability: executable
   cli:
   - start
   - --replace
@@ -225,6 +247,7 @@ commands:
   - podway.session-start-result/v2
   - podway.detached-admission-result/v2
 - name: session.status
+  availability: executable
   cli:
   - status
   operation: query
@@ -240,6 +263,7 @@ commands:
   - podway.status-result/v2
   - podway.compact-status-result/v2
 - name: session.next
+  availability: executable
   cli:
   - next
   operation: query
@@ -253,6 +277,7 @@ commands:
   - podway.next-result/v1
   - podway.next-result/v2
 - name: session.complete
+  availability: executable
   cli:
   - complete
   operation: mutate
@@ -272,6 +297,7 @@ commands:
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.skip
+  availability: executable
   cli:
   - skip
   operation: mutate
@@ -291,6 +317,7 @@ commands:
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.retry
+  availability: executable
   cli:
   - retry
   operation: mutate
@@ -310,6 +337,7 @@ commands:
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.return
+  availability: executable
   cli:
   - return
   operation: mutate
@@ -327,6 +355,7 @@ commands:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
 - name: session.block
+  availability: executable
   cli:
   - block
   operation: mutate
@@ -346,6 +375,7 @@ commands:
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.unblock
+  availability: executable
   cli:
   - unblock
   operation: mutate
@@ -365,6 +395,7 @@ commands:
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.cancel
+  availability: executable
   cli:
   - cancel
   operation: mutate
@@ -384,6 +415,7 @@ commands:
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.reopen
+  availability: executable
   cli:
   - reopen
   operation: mutate
@@ -400,6 +432,7 @@ commands:
   - podway.stage-transition-result/v1
   - podway.detached-admission-result/v1
 - name: session.reset
+  availability: executable
   cli:
   - reset
   operation: mutate
@@ -419,6 +452,7 @@ commands:
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: workspace.reset_all
+  availability: executable
   cli:
   - reset
   - --all
@@ -432,6 +466,7 @@ commands:
   - workspace_uuid_when_readable
   idempotency_scope: workspace
 - name: item.check
+  availability: executable
   cli:
   - check
   operation: mutate
@@ -451,6 +486,7 @@ commands:
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.uncheck
+  availability: executable
   cli:
   - uncheck
   operation: mutate
@@ -470,6 +506,7 @@ commands:
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.set
+  availability: executable
   cli:
   - set
   operation: mutate
@@ -489,6 +526,7 @@ commands:
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.add
+  availability: executable
   cli:
   - add
   operation: mutate
@@ -508,6 +546,7 @@ commands:
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.remove
+  availability: executable
   cli:
   - remove
   operation: mutate
@@ -527,6 +566,7 @@ commands:
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.attach
+  availability: executable
   cli:
   - attach
   operation: mutate
@@ -546,6 +586,7 @@ commands:
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.clear
+  availability: executable
   cli:
   - clear
   operation: mutate
@@ -565,6 +606,7 @@ commands:
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: job.list
+  availability: executable
   cli:
   - job
   - list
@@ -574,6 +616,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: job.lookup
+  availability: executable
   cli:
   - job
   - lookup
@@ -585,6 +628,7 @@ commands:
   result_schemas:
   - podway.job-lookup-result/v1
 - name: job.status
+  availability: executable
   cli:
   - job
   - status
@@ -596,6 +640,7 @@ commands:
   result_schemas:
   - podway.job-result/v1
 - name: job.wait
+  availability: executable
   cli:
   - job
   - wait
@@ -607,6 +652,7 @@ commands:
   result_schemas:
   - podway.job-result/v1
 - name: job.cancel
+  availability: executable
   cli:
   - job
   - cancel
@@ -618,6 +664,7 @@ commands:
   preconditions:
   - job_state
 - name: procedure.format
+  availability: reserved_contract
   cli:
   - procedure
   - format
@@ -629,6 +676,7 @@ commands:
   result_schemas:
   - podway.procedure-source-result/v1
 - name: procedure.vet
+  availability: reserved_contract
   cli:
   - procedure
   - vet
@@ -640,6 +688,7 @@ commands:
   result_schemas:
   - podway.procedure-diagnostics-result/v1
 - name: procedure.lint
+  availability: reserved_contract
   cli:
   - procedure
   - lint
@@ -651,6 +700,7 @@ commands:
   result_schemas:
   - podway.procedure-diagnostics-result/v1
 - name: procedure.check
+  availability: reserved_contract
   cli:
   - procedure
   - check
@@ -662,6 +712,7 @@ commands:
   result_schemas:
   - podway.procedure-diagnostics-result/v1
 - name: procedure.graph
+  availability: reserved_contract
   cli:
   - procedure
   - graph
@@ -673,6 +724,7 @@ commands:
   result_schemas:
   - podway.procedure-graph-result/v1
 - name: procedure.preview
+  availability: reserved_contract
   cli:
   - procedure
   - preview
@@ -684,6 +736,7 @@ commands:
   result_schemas:
   - podway.procedure-preview-result/v1
 - name: procedure.scaffold
+  availability: reserved_contract
   cli:
   - procedure
   - scaffold
@@ -695,6 +748,7 @@ commands:
   result_schemas:
   - podway.procedure-source-result/v1
 - name: procedure.convert
+  availability: reserved_contract
   cli:
   - procedure
   - convert
@@ -706,6 +760,7 @@ commands:
   result_schemas:
   - podway.procedure-source-result/v1
 - name: session.decide
+  availability: reserved_contract
   cli:
   - decide
   operation: mutate
@@ -723,6 +778,7 @@ commands:
   - podway.decision-result/v1
   - podway.detached-admission-result/v2
 - name: session.rework
+  availability: reserved_contract
   cli:
   - rework
   operation: mutate
@@ -740,6 +796,7 @@ commands:
   - podway.rework-result/v1
   - podway.detached-admission-result/v2
 - name: goal.define
+  availability: reserved_contract
   cli:
   - goal
   - define
@@ -757,6 +814,7 @@ commands:
   - podway.goal-definition-result/v1
   - podway.detached-admission-result/v2
 - name: goal.revise
+  availability: reserved_contract
   cli:
   - goal
   - revise
@@ -775,6 +833,7 @@ commands:
   - podway.goal-revision-result/v1
   - podway.detached-admission-result/v2
 - name: goal.assess_criterion
+  availability: reserved_contract
   cli:
   - goal
   - assess-criterion

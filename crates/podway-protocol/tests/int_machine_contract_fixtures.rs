@@ -1987,6 +1987,10 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
         maximum_status["blocker_window_markers"],
         payload_matrix["status_contract"]["blocker_window_markers"]
     );
+    assert_eq!(
+        maximum_status["verbose_history_shape"],
+        json!({"entries":[],"trace_truncated":false,"trace_window":null})
+    );
 
     let payload = read_json("tests/fixtures/v2/payload/truncation-and-overflow-recipe.json");
     let expected_domain_bounds = [

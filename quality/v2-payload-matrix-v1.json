@@ -8,6 +8,7 @@
   "headroom_bytes": 32768,
   "output_envelope": {
     "schema": "assets/schemas/output-v1.schema.json",
+    "component": "ENVELOPE_RESERVE",
     "selectors": [
       "schema",
       "request_id",
@@ -18,6 +19,9 @@
       "session",
       "result",
       "warnings"
+    ],
+    "framing_selectors": [
+      "4-byte-big-endian-payload-length"
     ]
   },
   "next_schema": "assets/schemas/next-result-v2.schema.json",

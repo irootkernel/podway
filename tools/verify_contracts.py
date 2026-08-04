@@ -253,7 +253,7 @@ def read_json(root: Path, relative: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def catalog_commands(root: Path) -> set[str]:
+def catalog_route_availability(root: Path) -> dict[str, str]:
     path = repository_assets.checked_path(
         root, Path("assets/specifications/command-catalog.yaml"), "command catalog"
     )
@@ -262,16 +262,39 @@ def catalog_commands(root: Path) -> set[str]:
     text = path.read_text(encoding="utf-8")
     if not re.search(r"^schema: podway\.command-catalog/v1$", text, flags=re.MULTILINE):
         fail("command catalog does not declare podway.command-catalog/v1")
-    names = set(re.findall(r"^- name: ([a-z][a-z0-9._-]*)$", text, flags=re.MULTILINE))
+    names = re.findall(r"^- name: ([a-z][a-z0-9._-]*)$", text, flags=re.MULTILINE)
+    entries = re.findall(
+        r"^- name: ([a-z][a-z0-9._-]*)\n  availability: ([a-z_]+)$",
+        text,
+        flags=re.MULTILINE,
+    )
     if not names:
         fail("command catalog contains no commands")
-    return names
+    if len(names) != len(set(names)):
+        fail("command catalog command names must be unique")
+    if len(entries) != len(names):
+        fail("every command catalog entry must declare availability immediately after its name")
+    availability = dict(entries)
+    if set(availability.values()) - {"executable", "reserved_contract"}:
+        fail("command catalog availability must be executable or reserved_contract")
+    return availability
+
+
+def catalog_commands(root: Path) -> set[str]:
+    return set(catalog_route_availability(root))
 
 
 def validate_v2_catalog_delta(root: Path) -> int:
-    commands = catalog_commands(root)
+    availability = catalog_route_availability(root)
+    commands = set(availability)
     if commands != V1_ROUTE_BASELINE | V2_ROUTE_DELTA:
         fail("command catalog must contain the 46-route baseline plus exactly 13 v2 routes")
+    expected_availability = {
+        **dict.fromkeys(V1_ROUTE_BASELINE, "executable"),
+        **dict.fromkeys(V2_ROUTE_DELTA, "reserved_contract"),
+    }
+    if availability != expected_availability:
+        fail("command catalog must mark the 46 v1 routes executable and 13 v2 routes reserved_contract")
 
     runtime = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
     if set(runtime) != {"schema", "exit_codes", "errors"}:
@@ -494,9 +517,12 @@ def validate_routes(root: Path) -> int:
     commands: set[str] = set()
     task_commands = expected_commands - LOCAL_COMMANDS - SERVICE_COMMANDS
     for route in routes:
-        if not isinstance(route, dict) or set(route) != {"command", "owner", "path", "execution", "capabilities"}:
+        if not isinstance(route, dict) or set(route) != {
+            "command", "availability", "owner", "path", "execution", "capabilities",
+        }:
             fail("command route has unexpected or missing fields")
         command = route["command"]
+        availability = route["availability"]
         owner = route["owner"]
         path = route["path"]
         execution = route["execution"]
@@ -509,6 +535,9 @@ def validate_routes(root: Path) -> int:
             fail(f"route capabilities are invalid for {command}")
         if capabilities or set(capabilities) & PROHIBITED_CAPABILITIES:
             fail(f"route capabilities violate the no-runner/no-Git-mutation/no-network policy: {command}")
+        expected_availability = "reserved_contract" if command in V2_ROUTE_DELTA else "executable"
+        if availability != expected_availability:
+            fail(f"route availability is invalid for {command}")
         if command in LOCAL_COMMANDS:
             expected_owner, expected_path, expected_execution = "podway-cli", ["podway-cli"], "local"
         elif command in SERVICE_COMMANDS:
@@ -701,6 +730,19 @@ def run_sentinels(root: Path) -> list[str]:
         require_known_failure("route bypass", lambda: validate_routes(route_fixture))
         completed.append("route_bypass")
 
+        route_availability_fixture = temporary / "route-availability"
+        route_availability_fixture.mkdir()
+        shutil.copytree(root / "assets", route_availability_fixture / "assets")
+        copy_contracts(root, route_availability_fixture)
+        route_path = route_availability_fixture / ROUTES_PATH
+        route_contract = json.loads(route_path.read_text(encoding="utf-8"))
+        route_contract["routes"][-1]["availability"] = "executable"
+        route_path.write_text(json.dumps(route_contract, sort_keys=True) + "\n", encoding="utf-8")
+        require_known_failure(
+            "route availability mismatch", lambda: validate_routes(route_availability_fixture)
+        )
+        completed.append("route_availability_mismatch")
+
         route_growth_fixture = temporary / "route-growth"
         route_growth_fixture.mkdir()
         shutil.copytree(root / "assets", route_growth_fixture / "assets")
@@ -713,6 +755,26 @@ def run_sentinels(root: Path) -> list[str]:
         )
         require_known_failure("silent route growth", lambda: validate_v2_catalog_delta(route_growth_fixture))
         completed.append("silent_route_growth")
+
+        catalog_availability_fixture = temporary / "catalog-availability"
+        catalog_availability_fixture.mkdir()
+        shutil.copytree(root / "assets", catalog_availability_fixture / "assets")
+        copy_contracts(root, catalog_availability_fixture)
+        catalog_path = catalog_availability_fixture / "assets/specifications/command-catalog.yaml"
+        catalog_text = catalog_path.read_text(encoding="utf-8")
+        catalog_path.write_text(
+            catalog_text.replace(
+                "- name: goal.assess_criterion\n  availability: reserved_contract",
+                "- name: goal.assess_criterion\n  availability: executable",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        require_known_failure(
+            "catalog availability mismatch",
+            lambda: validate_v2_catalog_delta(catalog_availability_fixture),
+        )
+        completed.append("catalog_availability_mismatch")
 
         error_growth_fixture = temporary / "error-growth"
         error_growth_fixture.mkdir()

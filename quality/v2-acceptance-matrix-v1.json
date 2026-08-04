@@ -1303,7 +1303,8 @@
       "line": 3024,
       "text": "a corresponding fixture proves a maximum-size compact status projection serialized through the production path is at most 262,144 bytes, and a verbose fixture with the values window at `STATUS_VALUES_MAX` and every history window at `TRACE_WINDOW_MAX` proves a verbose response stays within one frame;",
       "contract_paths": [
-        "assets/schemas/next-result-v2.schema.json",
+        "assets/schemas/compact-status-result-v2.schema.json",
+        "assets/schemas/status-result-v2.schema.json",
         "docs/specs/interfaces/json-contract.md"
       ],
       "test_class": "payload-boundary",
@@ -1322,7 +1323,7 @@
       "line": 3029,
       "text": "compact status carries the per-graph-node attempt counts, rework-traversal counters, and `trace_length` of §9.9, and never the full execution trace, stale history, or evidence read-back values;",
       "contract_paths": [
-        "assets/schemas/next-result-v2.schema.json",
+        "assets/schemas/compact-status-result-v2.schema.json",
         "docs/specs/interfaces/json-contract.md"
       ],
       "test_class": "payload-boundary",
@@ -1339,7 +1340,7 @@
       "line": 3032,
       "text": "verbose trace windows carry `trace_truncated` and `trace_window` fields that are present and accurate whenever any trace member is omitted;",
       "contract_paths": [
-        "assets/schemas/next-result-v2.schema.json",
+        "assets/schemas/status-result-v2.schema.json",
         "docs/specs/interfaces/json-contract.md"
       ],
       "test_class": "payload-boundary",
@@ -1358,7 +1359,7 @@
       "line": 3034,
       "text": "the open-blocker window carries complete newest-first entries within `BLOCKER_WINDOW_MAX`, and `blockers_total` and `blockers_truncated` are present and accurate exactly when entries are omitted (§10.4);",
       "contract_paths": [
-        "assets/schemas/next-result-v2.schema.json",
+        "assets/schemas/status-result-v2.schema.json",
         "docs/specs/interfaces/json-contract.md"
       ],
       "test_class": "payload-boundary",
@@ -1375,7 +1376,7 @@
       "line": 3037,
       "text": "verbose item values render at most 2,048 characters per value with accurate per-item `value_truncated` markers (§10.4);",
       "contract_paths": [
-        "assets/schemas/next-result-v2.schema.json",
+        "assets/schemas/status-result-v2.schema.json",
         "docs/specs/interfaces/json-contract.md"
       ],
       "test_class": "payload-boundary",

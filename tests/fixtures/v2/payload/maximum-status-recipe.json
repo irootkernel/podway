@@ -7,6 +7,7 @@
   "blocker_window_max_bytes": 49152,
   "blocker_window_order": "newest-first-complete-entries",
   "blocker_window_markers": ["blockers_total", "blockers_truncated"],
+  "verbose_history_shape": {"entries": [], "trace_truncated": false, "trace_window": null},
   "projections": [
     {"tier": "compact", "maximum_bytes": 262144, "includes": ["counters", "trace_length"], "excludes": ["trace_entries", "history", "windows", "readback_values", "prompts", "instructions", "statements", "suggestion_argv"]},
     {"tier": "standard", "maximum_bytes": 1048576, "status_values_max_bytes": 262144, "item_value_max_characters": 2048, "value_marker": "value_truncated", "window_markers": ["items_total", "items_truncated"]},

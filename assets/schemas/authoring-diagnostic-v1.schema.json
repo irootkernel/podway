@@ -4,6 +4,81 @@
   "title": "Podway Authoring Diagnostic v1",
   "type": "object", "additionalProperties": false,
   "required": ["code", "severity", "schema", "source_path", "location", "field", "message", "hint"],
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "code": {
+              "enum": [
+                "AUTHORING_SCHEMA_INVALID",
+                "SOURCE_CONSTRUCT_UNSUPPORTED",
+                "FORMAT_NOT_CANONICAL",
+                "ENTRY_NODE_INVALID",
+                "GRAPH_DEFINITION_UNKNOWN",
+                "ROUTE_TARGET_NOT_FOUND",
+                "UNREACHABLE_GRAPH_NODE",
+                "NO_TERMINAL_PATH",
+                "ACTION_DISPOSITION_INVALID",
+                "DECISION_OPTION_ROUTE_MISSING",
+                "DECISION_ROUTE_OPTION_UNDEFINED",
+                "GOAL_ASSESSMENT_OPTION_UNMAPPED",
+                "GOAL_ASSESSMENT_OUTCOME_UNKNOWN",
+                "GOAL_ASSESSMENT_OUTCOME_UNREACHABLE",
+                "GOAL_ASSESSMENT_REQUIRES_GOAL_TRACKING",
+                "GOAL_ASSESSMENT_NOT_DOMINATING_TERMINAL",
+                "EVIDENCE_SOURCE_UNKNOWN",
+                "EVIDENCE_SOURCE_SELF_REFERENCE",
+                "EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER",
+                "SKIPPABLE_EVIDENCE_SOURCE",
+                "EVIDENCE_SELECTOR_UNKNOWN_ITEM",
+                "READBACK_BUDGET_EXCEEDED",
+                "NEXT_STATIC_BUDGET_EXCEEDED",
+                "DECISION_SKIP_NOT_ALLOWED",
+                "GRAPH_CYCLE_INVALID",
+                "REWORK_TARGET_NOT_DOMINATING",
+                "MANUAL_REWORK_TARGET_UNKNOWN",
+                "AMBIGUOUS_GRAPH_REFERENCE"
+              ]
+            },
+            "severity": { "const": "error" }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "enum": [
+                "UNUSED_NODE_DEFINITION",
+                "SINGLE_OPTION_DECISION",
+                "INDISTINGUISHABLE_OPTION_LABELS",
+                "IDENTICAL_EFFECTIVE_ROUTES",
+                "WEAK_PURPOSE_GUIDANCE",
+                "WEAK_INTENT_GUIDANCE",
+                "WEAK_OBJECTIVE_GUIDANCE",
+                "WEAK_PROMPT_GUIDANCE",
+                "WEAK_CRITERIA_GUIDANCE",
+                "WEAK_REASON_GUIDANCE",
+                "EVIDENCE_GUIDANCE_MISSING",
+                "OPTIONAL_EVIDENCE_UNRESOLVABLE",
+                "GOAL_CLARIFICATION_PATH_MISSING",
+                "GOAL_ASSESSMENT_TOO_EARLY",
+                "MANUAL_REWORK_TARGETS_BROAD",
+                "LARGE_OPTION_SET",
+                "LARGE_CYCLE",
+                "DUPLICATED_NODE_DEFINITION",
+                "GRAPH_NODE_ID_CONFUSING",
+                "REWORK_TOPOLOGY_CONFUSING",
+                "NO_REACTIVATION_PATH",
+                "GOAL_REVISION_TARGET_UNSAFE",
+                "MULTIPLE_GOAL_ASSESSMENT_SOURCES"
+              ]
+            },
+            "severity": { "const": "warning" }
+          }
+        }
+      ]
+    }
+  ],
   "properties": {
     "code": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Z][A-Z0-9_]*$" },
     "severity": { "enum": ["error", "warning"] }, "schema": { "const": "podway.procedure/v2" },

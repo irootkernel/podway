@@ -756,10 +756,16 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     if not {"suggestions[].command", "suggestions[].argv[]", "suggestions[].item_id"}.issubset(all_leaves):
         fail("v2 payload schema leaf resolution did not reach suggestion array members")
     output_envelope = matrix["output_envelope"]
-    require_exact_keys(output_envelope, {"schema", "selectors"}, "v2 output envelope binding")
+    require_exact_keys(output_envelope, {"schema", "component", "selectors", "framing_selectors"}, "v2 output envelope binding")
     output_schema = load_object(repository_file(output_envelope["schema"], "v2 output envelope schema"))
     output_fields = set(output_schema.get("properties", {}))
-    if output_envelope["schema"] != "assets/schemas/output-v1.schema.json" or output_envelope["selectors"] != list(output_schema.get("properties", {})) or set(output_envelope["selectors"]) != output_fields:
+    if (
+        output_envelope["schema"] != "assets/schemas/output-v1.schema.json"
+        or output_envelope["component"] != "ENVELOPE_RESERVE"
+        or output_envelope["selectors"] != list(output_schema.get("properties", {}))
+        or set(output_envelope["selectors"]) != output_fields
+        or output_envelope["framing_selectors"] != ["4-byte-big-endian-payload-length"]
+    ):
         fail("v2 output envelope binding must cover every inherited output/v1 field in schema order")
     envelope_leaves = schema_leaf_paths(output_schema, "", output_schema, registry)
     if not {"warnings[]", "workspace.uuid", "job.id", "session.id", "result.admission.admitted"}.issubset(envelope_leaves):
@@ -977,6 +983,9 @@ def self_test_v2_matrices() -> int:
     wrong_envelope = copy.deepcopy(payload)
     wrong_envelope["output_envelope"]["selectors"].pop()
     expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_envelope), "output envelope binding", "v2 payload envelope")
+    wrong_envelope_component = copy.deepcopy(payload)
+    wrong_envelope_component["output_envelope"]["component"] = "NEXT_STATIC_BUDGET"
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_envelope_component), "output envelope binding", "v2 payload envelope-component")
     wrong_shape = copy.deepcopy(payload)
     wrong_shape["resolved_next_shape"]["unique_instance_leaf_paths"] += 1
     expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_shape), "resolved next shape", "v2 payload resolved-shape")
@@ -1003,7 +1012,7 @@ def self_test_v2_matrices() -> int:
     wrong_category_gate = copy.deepcopy(release)
     wrong_category_gate["categories"][0]["gate"] = "make dist"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category_gate), "exactly cover", "v2 release category-gate")
-    return 25
+    return 26
 
 
 def main() -> int:
