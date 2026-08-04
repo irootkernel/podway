@@ -54,6 +54,37 @@ release. A consumer pinned to an earlier pre-release schema-only snapshot must
 replace `max_items: 0` with a supported value in `1..=1000`. Zero was never an
 accepted runtime value and is not restored by v0.1.2.
 
+## Procedure v2 result families
+
+The released v1 envelopes and result schemas above remain unchanged. Existing
+Procedure-aware routes select eight new `/v2` families for validation, detached
+admission, start, compact status, status, next, stage transitions, and item
+mutations. The version-neutral `job-result/v1` and `job-lookup-result/v1`
+wrappers remain unchanged: a terminal v2 job identifies its closed inner result
+by that result's own discriminator.
+
+The thirteen v2-only routes are prepared by nine `/v1` families. Format,
+scaffold, and convert share `procedure-source-result/v1`; vet, lint, and check
+share `procedure-diagnostics-result/v1`; graph, preview, decide, rework, goal
+definition, goal revision, and criterion assessment each select the correspondingly
+named closed family. `authoring-diagnostic/v1` is the standalone diagnostic
+object used by bounded diagnostic results. Registering these schemas does not
+make the future routes callable; route registration is a separate contract step.
+
+Every family is closed, uses the Procedure v2 identifier and value bounds where
+applicable, and is selected through the version-aware protocol registry. V2
+validation success is metadata-only (`file`, Procedure schema, digest, and
+`valid: true`) so it does not duplicate a maximum-size Procedure inside the
+retained output envelope. Source and graph text projections cap one scalar at
+131,072 characters; production encoding must still reject an oversized complete
+serialized output.
+
+The retained `podway.output/v1` envelope is intentionally still open. A v2
+producer therefore applies an additional production guard: at most four warning
+objects, each with exactly bounded `code` (64 characters), `path` (256
+characters), and `message` (512 characters), followed by the complete frame-size check. This is a v2
+production obligation and does not alter the released v1 envelope schema.
+
 ## Version identity envelope
 
 `podway version --json --identity` and `podwayd version --json --identity`

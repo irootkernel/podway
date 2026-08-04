@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:detached-admission-result:v2",
+  "title": "Podway Detached Admission Result v2",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "detached", "admission", "job"],
+  "properties": {
+    "schema": { "const": "podway.detached-admission-result/v2" },
+    "detached": { "const": true },
+    "admission": {
+      "type": "object", "additionalProperties": false,
+      "required": ["job_id", "workspace_sequence", "idempotency_key"],
+      "properties": {
+        "job_id": { "type": "string", "format": "uuid" },
+        "workspace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "job": {
+      "type": "object", "additionalProperties": false,
+      "required": ["job_id", "command", "state", "workspace_sequence", "created_at"],
+      "properties": {
+        "job_id": { "type": "string", "format": "uuid" }, "command": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "state": { "const": "queued" }, "workspace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+        "created_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" }
+      }
+    },
+    "procedure_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }
+  }
+}

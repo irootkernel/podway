@@ -12,6 +12,694 @@ use crate::{
     Rfc3339MillisV1, StatusResultV1,
 };
 
+/// A closed result family reserved by the Procedure v2 public contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResultSchemaContractV2 {
+    pub schema: &'static str,
+    pub schema_path: &'static str,
+    pub commands: &'static [&'static str],
+}
+
+/// Result families for existing routes whose v2-session shape breaks from v1.
+pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        "podway.procedure-validation-result/v2",
+        "schemas/procedure-validation-result-v2.schema.json",
+        &["procedure.validate"],
+    ),
+    result_schema_v2(
+        "podway.detached-admission-result/v2",
+        "schemas/detached-admission-result-v2.schema.json",
+        &[
+            "session.start",
+            "session.start_replace",
+            "session.complete",
+            "session.skip",
+            "session.retry",
+            "session.block",
+            "session.unblock",
+            "session.cancel",
+            "session.reset",
+            "session.decide",
+            "session.rework",
+            "goal.define",
+            "goal.revise",
+            "goal.assess_criterion",
+            "item.check",
+            "item.uncheck",
+            "item.set",
+            "item.add",
+            "item.remove",
+            "item.attach",
+            "item.clear",
+        ],
+    ),
+    result_schema_v2(
+        "podway.session-start-result/v2",
+        "schemas/session-start-result-v2.schema.json",
+        &["session.start", "session.start_replace"],
+    ),
+    result_schema_v2(
+        "podway.status-result/v2",
+        "schemas/status-result-v2.schema.json",
+        &["session.status"],
+    ),
+    result_schema_v2(
+        "podway.compact-status-result/v2",
+        "schemas/compact-status-result-v2.schema.json",
+        &["session.status"],
+    ),
+    result_schema_v2(
+        "podway.next-result/v2",
+        "schemas/next-result-v2.schema.json",
+        &["session.next"],
+    ),
+    result_schema_v2(
+        "podway.stage-transition-result/v2",
+        "schemas/stage-transition-result-v2.schema.json",
+        &[
+            "session.complete",
+            "session.skip",
+            "session.retry",
+            "session.block",
+            "session.unblock",
+            "session.cancel",
+            "session.reset",
+        ],
+    ),
+    result_schema_v2(
+        "podway.item-mutation-result/v2",
+        "schemas/item-mutation-result-v2.schema.json",
+        &[
+            "item.check",
+            "item.uncheck",
+            "item.set",
+            "item.add",
+            "item.remove",
+            "item.attach",
+            "item.clear",
+        ],
+    ),
+];
+
+/// Result families for v2-only routes. New command surfaces begin at `/v1`.
+pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        "podway.procedure-source-result/v1",
+        "schemas/procedure-source-result-v1.schema.json",
+        &[
+            "procedure.format",
+            "procedure.scaffold",
+            "procedure.convert",
+        ],
+    ),
+    result_schema_v2(
+        "podway.procedure-diagnostics-result/v1",
+        "schemas/procedure-diagnostics-result-v1.schema.json",
+        &["procedure.vet", "procedure.lint", "procedure.check"],
+    ),
+    result_schema_v2(
+        "podway.procedure-graph-result/v1",
+        "schemas/procedure-graph-result-v1.schema.json",
+        &["procedure.graph"],
+    ),
+    result_schema_v2(
+        "podway.procedure-preview-result/v1",
+        "schemas/procedure-preview-result-v1.schema.json",
+        &["procedure.preview"],
+    ),
+    result_schema_v2(
+        "podway.decision-result/v1",
+        "schemas/decision-result-v1.schema.json",
+        &["session.decide"],
+    ),
+    result_schema_v2(
+        "podway.rework-result/v1",
+        "schemas/rework-result-v1.schema.json",
+        &["session.rework"],
+    ),
+    result_schema_v2(
+        "podway.goal-definition-result/v1",
+        "schemas/goal-definition-result-v1.schema.json",
+        &["goal.define"],
+    ),
+    result_schema_v2(
+        "podway.goal-revision-result/v1",
+        "schemas/goal-revision-result-v1.schema.json",
+        &["goal.revise"],
+    ),
+    result_schema_v2(
+        "podway.criterion-assessment-result/v1",
+        "schemas/criterion-assessment-result-v1.schema.json",
+        &["goal.assess_criterion"],
+    ),
+];
+
+const fn result_schema_v2(
+    schema: &'static str,
+    schema_path: &'static str,
+    commands: &'static [&'static str],
+) -> ResultSchemaContractV2 {
+    ResultSchemaContractV2 {
+        schema,
+        schema_path,
+        commands,
+    }
+}
+
+/// Decodes a result discriminator against the reserved v2-aware registry.
+///
+/// This does not make any future command routable. It only lets later route and
+/// runtime work select the exact closed family without extending a v1 shape.
+pub fn decode_result_schema_contract_v2(
+    result: &Map<String, Value>,
+) -> Option<&'static ResultSchemaContractV2> {
+    let schema = result.get("schema")?.as_str()?;
+    let contract = EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .find(|contract| contract.schema == schema)?;
+    let required = required_result_fields_v2(schema);
+    let allowed = allowed_result_fields_v2(schema);
+    (required.iter().all(|field| result.contains_key(*field))
+        && result.keys().all(|field| allowed.contains(&field.as_str())))
+    .then_some(contract)
+}
+
+fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
+    match schema {
+        "podway.procedure-validation-result/v2" => {
+            &["schema", "file", "procedure_schema", "digest", "valid"]
+        }
+        "podway.detached-admission-result/v2" => &["schema", "detached", "admission", "job"],
+        "podway.session-start-result/v2" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "dry_run",
+            "goal_tracking",
+        ],
+        "podway.compact-status-result/v2" => &[
+            "schema",
+            "procedure",
+            "session",
+            "current",
+            "goal_tracking",
+            "goal_defined",
+            "trace_length",
+            "counters",
+            "items",
+            "blockers",
+            "queue",
+        ],
+        "podway.status-result/v2" => &[
+            "schema",
+            "tier",
+            "procedure",
+            "session",
+            "current",
+            "purpose",
+            "goal_tracking",
+            "goal_defined",
+            "trace_length",
+            "counters",
+            "items",
+            "blockers",
+            "queue",
+            "missing_required_item_ids",
+            "blocker_window",
+            "blockers_truncated",
+            "item_values",
+            "items_total",
+            "items_truncated",
+            "references",
+            "allowed_option_ids",
+            "allowed_manual_rework_targets",
+        ],
+        "podway.next-result/v2" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "goal_tracking",
+            "goal_defined",
+            "node",
+            "attempt",
+            "trace_length",
+            "counters",
+            "queue",
+            "revision",
+            "readiness",
+            "missing_required_item_count",
+            "blockers_total",
+            "allowed_actions",
+            "suggestions",
+            "references",
+            "readback",
+            "allowed_manual_rework_targets",
+        ],
+        "podway.stage-transition-result/v2" => &["schema", "transition", "revision"],
+        "podway.item-mutation-result/v2" => &[
+            "schema",
+            "changed",
+            "graph_node_id",
+            "attempt_id",
+            "attempt_number",
+            "item_id",
+            "revision",
+        ],
+        "podway.procedure-source-result/v1" => &[
+            "schema",
+            "operation",
+            "target_schema",
+            "document",
+            "target_digest",
+        ],
+        "podway.procedure-diagnostics-result/v1" => &[
+            "schema",
+            "operation",
+            "procedure_schema",
+            "file",
+            "valid",
+            "diagnostics",
+            "diagnostics_truncated",
+            "diagnostics_total",
+        ],
+        "podway.procedure-graph-result/v1" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "format",
+            "projection_digest",
+            "projection",
+        ],
+        "podway.procedure-preview-result/v1" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "entry_graph_node_id",
+            "node_count",
+            "edge_count",
+            "terminal_graph_node_ids",
+            "goal_tracking",
+        ],
+        "podway.decision-result/v1" => &[
+            "schema",
+            "graph_node_id",
+            "attempt_id",
+            "attempt_number",
+            "option_id",
+            "effect",
+            "revision",
+            "session_state",
+            "record",
+        ],
+        "podway.rework-result/v1" => &[
+            "schema",
+            "from_graph_node_id",
+            "to_graph_node_id",
+            "target_attempt_id",
+            "reason",
+            "reactivated",
+            "revision",
+        ],
+        "podway.goal-definition-result/v1" => &[
+            "schema",
+            "goal_revision",
+            "statement",
+            "criteria",
+            "recorded_at",
+            "revision",
+        ],
+        "podway.goal-revision-result/v1" => &[
+            "schema",
+            "goal_revision",
+            "statement",
+            "criteria",
+            "reason",
+            "recorded_at",
+            "rework_to",
+            "reactivated",
+            "revision",
+        ],
+        "podway.criterion-assessment-result/v1" => &[
+            "schema",
+            "graph_node_id",
+            "attempt_id",
+            "goal_revision",
+            "mode",
+            "result",
+            "complete",
+            "revision",
+        ],
+        _ => &[],
+    }
+}
+
+fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
+    match schema {
+        "podway.detached-admission-result/v2" => {
+            &["schema", "detached", "admission", "job", "procedure_digest"]
+        }
+        "podway.session-start-result/v2" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "dry_run",
+            "goal_tracking",
+            "session_id",
+            "revision",
+            "entry_graph_node_id",
+            "goal_required",
+        ],
+        "podway.compact-status-result/v2" => &[
+            "schema",
+            "procedure",
+            "session",
+            "current",
+            "goal_tracking",
+            "goal_defined",
+            "goal_revision",
+            "latest_goal_outcome",
+            "trace_length",
+            "counters",
+            "items",
+            "blockers",
+            "queue",
+        ],
+        "podway.status-result/v2" => &[
+            "schema",
+            "tier",
+            "procedure",
+            "session",
+            "current",
+            "purpose",
+            "goal_tracking",
+            "goal_defined",
+            "goal_revision",
+            "latest_goal_outcome",
+            "goal",
+            "trace_length",
+            "counters",
+            "items",
+            "blockers",
+            "queue",
+            "missing_required_item_ids",
+            "blocker_window",
+            "blockers_truncated",
+            "item_values",
+            "items_total",
+            "items_truncated",
+            "references",
+            "allowed_option_ids",
+            "next_graph_node_id",
+            "terminal",
+            "skip",
+            "allowed_manual_rework_targets",
+            "current_trace_history",
+            "stale_attempt_history",
+            "stale_goal_revision_history",
+            "stale_goal_assessment_history",
+        ],
+        "podway.next-result/v2" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "goal_tracking",
+            "goal_defined",
+            "goal_revision",
+            "latest_goal_outcome",
+            "goal",
+            "node",
+            "attempt",
+            "trace_length",
+            "counters",
+            "queue",
+            "revision",
+            "readiness",
+            "title",
+            "intent",
+            "description",
+            "objective",
+            "prompt",
+            "reason_policy",
+            "instructions",
+            "missing_required_item_count",
+            "missing_required_items",
+            "options",
+            "evidence_guidance",
+            "next_graph_node_id",
+            "terminal",
+            "skip",
+            "allowed_manual_rework_targets",
+            "allowed_actions",
+            "suggestions",
+            "references",
+            "readback",
+            "blockers_total",
+            "blockers",
+            "blockers_truncated",
+        ],
+        "podway.stage-transition-result/v2" => &[
+            "schema",
+            "transition",
+            "from_graph_node_id",
+            "from_attempt_id",
+            "to_graph_node_id",
+            "to_attempt_id",
+            "blocker_id",
+            "all",
+            "reason",
+            "reset",
+            "revision",
+            "session_state",
+        ],
+        "podway.item-mutation-result/v2" => &[
+            "schema",
+            "changed",
+            "graph_node_id",
+            "attempt_id",
+            "attempt_number",
+            "item_id",
+            "revision",
+            "value_digest",
+        ],
+        "podway.procedure-source-result/v1" => &[
+            "schema",
+            "operation",
+            "target_schema",
+            "document",
+            "target_digest",
+            "file",
+            "mode",
+            "changed",
+            "template",
+            "source_schema",
+            "source_digest",
+        ],
+        "podway.procedure-diagnostics-result/v1" => &[
+            "schema",
+            "operation",
+            "procedure_schema",
+            "file",
+            "digest",
+            "valid",
+            "diagnostics",
+            "diagnostics_truncated",
+            "diagnostics_total",
+        ],
+        "podway.decision-result/v1" => &[
+            "schema",
+            "graph_node_id",
+            "attempt_id",
+            "attempt_number",
+            "option_id",
+            "effect",
+            "target_graph_node_id",
+            "target_attempt_id",
+            "revision",
+            "session_state",
+            "record",
+        ],
+        "podway.goal-definition-result/v1" => &[
+            "schema",
+            "goal_revision",
+            "statement",
+            "criteria",
+            "actor",
+            "recorded_at",
+            "revision",
+        ],
+        "podway.goal-revision-result/v1" => &[
+            "schema",
+            "goal_revision",
+            "statement",
+            "criteria",
+            "reason",
+            "actor",
+            "recorded_at",
+            "rework_to",
+            "reactivated",
+            "revision",
+        ],
+        "podway.criterion-assessment-result/v1" => &[
+            "schema",
+            "graph_node_id",
+            "attempt_id",
+            "goal_revision",
+            "mode",
+            "result",
+            "complete",
+            "determined_outcome",
+            "revision",
+        ],
+        _ => required_result_fields_v2(schema),
+    }
+}
+
+/// Returns the exact required and allowed top-level keys for a registered family.
+pub fn result_schema_top_level_fields_v2(
+    schema: &str,
+) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .any(|contract| contract.schema == schema)
+        .then(|| {
+            (
+                required_result_fields_v2(schema),
+                allowed_result_fields_v2(schema),
+            )
+        })
+}
+
+pub const MAX_V2_OUTPUT_WARNINGS: usize = 4;
+pub const MAX_V2_WARNING_CODE_CHARS: usize = 64;
+pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
+pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
+
+/// Checks the v2 production bound imposed on the retained open v1 envelope.
+pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
+    warnings.len() <= MAX_V2_OUTPUT_WARNINGS
+        && warnings.iter().all(|warning| {
+            warning.len() == 3
+                && warning
+                    .keys()
+                    .all(|field| matches!(field.as_str(), "code" | "path" | "message"))
+                && warning
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| {
+                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_CODE_CHARS
+                    })
+                && warning
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| {
+                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_PATH_CHARS
+                    })
+                && warning
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| {
+                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_MESSAGE_CHARS
+                    })
+        })
+}
+
+/// Validates the retained v1 envelope boundary for a v2 result before framing.
+pub fn validate_v2_output_envelope_value(output: &Value) -> bool {
+    let Some(envelope) = output.as_object() else {
+        return false;
+    };
+    if envelope.get("schema").and_then(Value::as_str) != Some(crate::OUTPUT_SCHEMA_V1) {
+        return false;
+    }
+    let Some(request_id) = envelope.get("request_id").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(generated_at) = envelope.get("generated_at").and_then(Value::as_str) else {
+        return false;
+    };
+    if crate::RequestIdV1::new(request_id).is_err()
+        || crate::Rfc3339MillisV1::new(generated_at).is_err()
+    {
+        return false;
+    }
+    let Some(command) = envelope.get("command").and_then(Value::as_str) else {
+        return false;
+    };
+    if crate::CommandNameV1::new(command).is_err() {
+        return false;
+    }
+    let Some(result) = envelope.get("result").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(contract) = decode_result_schema_contract_v2(result) else {
+        return false;
+    };
+    if !contract.commands.contains(&command) {
+        return false;
+    }
+    let Some(warnings) = envelope.get("warnings").and_then(Value::as_array) else {
+        return false;
+    };
+    let warning_maps: Option<Vec<_>> = warnings
+        .iter()
+        .map(|warning| warning.as_object().cloned())
+        .collect();
+    if !warning_maps.is_some_and(|warnings| validate_v2_output_warnings(&warnings)) {
+        return false;
+    }
+    let Some(length) = serde_json::to_vec(output)
+        .ok()
+        .and_then(|encoded| encoded.len().checked_add(1))
+    else {
+        return false;
+    };
+    if length > crate::MAX_FRAME_PAYLOAD_BYTES_V1 {
+        return false;
+    }
+    if contract.schema == "podway.compact-status-result/v2" {
+        let Some(queue) = result.get("queue").and_then(Value::as_object) else {
+            return false;
+        };
+        return length <= crate::MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1
+            && queue.get("pending_mutations") == Some(&Value::Bool(false))
+            && queue.get("queued_count").and_then(Value::as_u64) == Some(0)
+            && queue.get("running_job_id") == Some(&Value::Null);
+    }
+    if contract.schema == "podway.status-result/v2" {
+        if !result
+            .get("item_values")
+            .and_then(|values| serde_json::to_vec(values).ok())
+            .is_some_and(|encoded| encoded.len() <= 262_144)
+            || !result
+                .get("blocker_window")
+                .and_then(|values| serde_json::to_vec(values).ok())
+                .is_some_and(|encoded| encoded.len() <= 49_152)
+        {
+            return false;
+        }
+        if result.get("tier").and_then(Value::as_str) != Some("verbose") {
+            return true;
+        }
+        return [
+            "current_trace_history",
+            "stale_attempt_history",
+            "stale_goal_revision_history",
+            "stale_goal_assessment_history",
+        ]
+        .iter()
+        .all(|field| {
+            result
+                .get(*field)
+                .and_then(|window| serde_json::to_vec(window).ok())
+                .is_some_and(|encoded| encoded.len() <= 65_536)
+        });
+    }
+    true
+}
+
 macro_rules! define_result_schemas_v1 {
     ($($name:ident = $value:literal;)+) => {
         $(const $name: &str = $value;)+

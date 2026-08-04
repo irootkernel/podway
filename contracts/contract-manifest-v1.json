@@ -47,6 +47,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/authoring-diagnostic-v1.schema.json",
+      "sha256": "sha256:5ec325c6be3acb01aa1833f752462e6dc3e0d7aac02fcb61ccd7f97f0abf252c"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/blocker-limit-details-v1.schema.json",
       "sha256": "sha256:943ef3d0dabc9bfeac6d134ba45feb752abb23f03ee7a31d9920353abf66bf05"
     },
@@ -57,8 +62,18 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/compact-status-result-v2.schema.json",
+      "sha256": "sha256:f8465b33a76e8f7294483ce2885804a0106fb34283ac18f4e6eebcdb44da11bb"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/contract-manifest-v1.schema.json",
       "sha256": "sha256:df1abac74845a7e3eea91ff39f7e95d64a01152b187d00bc8987be8a8302526a"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/criterion-assessment-result-v1.schema.json",
+      "sha256": "sha256:46ca2525b79f2ef1135cef5d2abf39bf9f283dcb12e843f8d3fcdc63287b9368"
     },
     {
       "kind": "schema",
@@ -72,8 +87,18 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/decision-result-v1.schema.json",
+      "sha256": "sha256:d6fd9fad69e8085a8235bb5de7732eee740ed10c19d7573d10ac856a70d88ee7"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/detached-admission-result-v1.schema.json",
       "sha256": "sha256:4ea7b6744261ff08174d6a7c076d9ee9c1adb43e01f5e55234826102bd5ed8e7"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/detached-admission-result-v2.schema.json",
+      "sha256": "sha256:31b3e4b256866455d807ffc1c2c6dd9b0dd867debd92d899d812bbe8cbbd6c9c"
     },
     {
       "kind": "schema",
@@ -84,6 +109,16 @@
       "kind": "schema",
       "path": "schemas/error-v1.schema.json",
       "sha256": "sha256:371ccd1e07a0f503bc70a5a4b167ff43a0dfbe9ed8e5b78533cd9a7848d06bf8"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/goal-definition-result-v1.schema.json",
+      "sha256": "sha256:0645cffa594909053a3072b7348a1c9c6d2d6af070c63ed52089db85ec4a487c"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/goal-revision-result-v1.schema.json",
+      "sha256": "sha256:34da445a65398844a4c8c0e4a9b824ad2b03af1c9783d3c317291b2010191364"
     },
     {
       "kind": "schema",
@@ -99,6 +134,11 @@
       "kind": "schema",
       "path": "schemas/item-mutation-result-v1.schema.json",
       "sha256": "sha256:f62a24e178cc5816bc4c306cb9d5a24d6f2f594704a7b2128e791e49ede726b9"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/item-mutation-result-v2.schema.json",
+      "sha256": "sha256:5a0b2a8c170fe21f9ca67f93993591e7063ad3d4ca7d92d968d48fc4d862e086"
     },
     {
       "kind": "schema",
@@ -122,8 +162,33 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/next-result-v2.schema.json",
+      "sha256": "sha256:7497951f0e9f4e56d338ca468321f3b34febeb3e0c20f3a747faebf7bbc19581"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/output-v1.schema.json",
       "sha256": "sha256:19355e4f256fba8b17a4813f332006603b4e103fd747786f5e13d6447c2c55cd"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/procedure-diagnostics-result-v1.schema.json",
+      "sha256": "sha256:a557c0c50d948e2dec2324af4c104acc9bf5218884eff4beec8b316c23e76984"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/procedure-graph-result-v1.schema.json",
+      "sha256": "sha256:42551e9592bbfd0171eb1736347da05ba7306cdb5a6517cea6571af9cb41ef72"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/procedure-preview-result-v1.schema.json",
+      "sha256": "sha256:a90b4225abdaac0aed30c6feaff0591a6e9086ce99b31375ec2d678d8cca7271"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/procedure-source-result-v1.schema.json",
+      "sha256": "sha256:8cbecbcf8ac5280b92f68893c9f5225ad1ec9d4664169867e2e614701e387bbe"
     },
     {
       "kind": "schema",
@@ -142,6 +207,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/procedure-validation-result-v2.schema.json",
+      "sha256": "sha256:d2c5462dd720ef24ead7b2c10ea4a7ca21cc638ac18c2d300f52f835eb720230"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/registry-v1.schema.json",
       "sha256": "sha256:ae259c2fb9d5e285c8450a55b2f9133ab4758e32041905475fb0d1fd8ff3f2ad"
     },
@@ -152,8 +222,18 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/rework-result-v1.schema.json",
+      "sha256": "sha256:d6737385ae851830b48d0094b2606e9436e2297f8584c9b616f9815bca31687b"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/session-start-result-v1.schema.json",
       "sha256": "sha256:36137a660d17292619e3eb82abe1cb7dd38f72fd16b5e7836f13c9a83d87dc0d"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/session-start-result-v2.schema.json",
+      "sha256": "sha256:18b38c2d843cac0879096f40ca7baae300eb211e054adf391f5f82b144d066f1"
     },
     {
       "kind": "schema",
@@ -167,8 +247,23 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/stage-transition-result-v2.schema.json",
+      "sha256": "sha256:e6b3cd08690b0d5b547cf9f8d6d9dd005f9717df3684771fc254908f5aaf2615"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/status-result-v1.schema.json",
       "sha256": "sha256:50e8a1da908dee02751bd70a19b820460925e40b2cb16ee8f6dc749725102032"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/status-result-v2.schema.json",
+      "sha256": "sha256:a4d0ddb21afa152d7a5e69dce0f878ec1cc51bd4d38e3f15d2a54e940195e76f"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/v2-result-components-v1.schema.json",
+      "sha256": "sha256:8c9f74e174070e8f2e4bae53b42a27e15b3cb03a65ec3c55590100ee631ce2f5"
     },
     {
       "kind": "schema",
@@ -226,7 +321,7 @@
       "sha256": "sha256:c25ca16938c8350c6ea8be9e8edc0f497ab5fec37de3a8863b0cae5312978cb8"
     }
   ],
-  "digest": "sha256:bab5ca03b578a95f489f5acd87ae0eb1eb16657568579bc2a94bf824f4ce44e2",
+  "digest": "sha256:ff8216340ad39fe4e4a0cc191fea05a419d6f2d2fb4a2d28c72314cca3110056",
   "product": "podway",
   "product_version": "0.1.2",
   "schema_version": "podway.contract-manifest/v1",

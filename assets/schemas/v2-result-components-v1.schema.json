@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:v2-result-components:v1",
+  "title": "Podway v2 Result Components v1",
+  "$defs": {
+    "identifier": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+    "text": { "type": "string", "maxLength": 4096 },
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time", "maxLength": 24, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$" },
+    "warning": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "path", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Z][A-Z0-9_]*$" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "warnings": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/warning" } },
+    "nodeIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["node_definition_id", "graph_node_id", "node_type"],
+      "properties": {
+        "node_definition_id": { "$ref": "#/$defs/identifier" },
+        "graph_node_id": { "$ref": "#/$defs/identifier" },
+        "node_type": { "enum": ["action", "decision"] }
+      }
+    },
+    "procedureIdentity": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "id", "version", "digest"],
+      "properties": { "schema": { "const": "podway.procedure/v2" }, "id": { "$ref": "#/$defs/identifier" }, "version": { "type": "string", "minLength": 1, "maxLength": 64 }, "digest": { "$ref": "#/$defs/digest" } }
+    },
+    "sessionIdentity": {
+      "type": "object", "additionalProperties": false, "required": ["id", "lifecycle", "revision"],
+      "properties": { "id": { "type": "string", "format": "uuid" }, "lifecycle": { "enum": ["running", "completed", "cancelled"] }, "revision": { "$ref": "#/$defs/revision" } }
+    },
+    "attemptIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attempt_id", "attempt_number"],
+      "properties": {
+        "attempt_id": { "type": "string", "format": "uuid" },
+        "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
+      }
+    },
+    "counter": {
+      "type": "object", "additionalProperties": false,
+      "required": ["graph_node_id", "attempt_count", "rework_traversal_count"],
+      "properties": {
+        "graph_node_id": { "$ref": "#/$defs/identifier" },
+        "attempt_count": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "rework_traversal_count": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
+      }
+    },
+    "queue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pending_mutations", "queued_count", "running_job_id", "latest_workspace_sequence"],
+      "properties": {
+        "pending_mutations": { "type": "boolean" },
+        "queued_count": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "running_job_id": { "type": ["string", "null"], "format": "uuid" },
+        "latest_workspace_sequence": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
+      }
+    },
+    "revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "readiness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["items_satisfied", "unblocked", "goal_ready", "can_advance"],
+      "properties": {
+        "items_satisfied": { "type": "boolean" }, "unblocked": { "type": "boolean" },
+        "goal_ready": { "type": "boolean" }, "can_advance": { "type": "boolean" }
+      }
+    },
+    "currentIdentity": {
+      "type": "object", "additionalProperties": false, "required": ["node", "attempt", "readiness", "missing_required_item_count", "blockers_total"],
+      "properties": { "node": { "$ref": "#/$defs/nodeIdentity" }, "attempt": { "$ref": "#/$defs/attemptIdentity" }, "readiness": { "$ref": "#/$defs/readiness" }, "missing_required_item_count": { "type": "integer", "minimum": 0, "maximum": 64 }, "blockers_total": { "type": "integer", "minimum": 0, "maximum": 64 } }
+    },
+    "compactItem": {
+      "type": "object", "additionalProperties": false, "required": ["item_id", "type", "required", "satisfied", "revision"],
+      "properties": { "item_id": { "$ref": "#/$defs/identifier" }, "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] }, "required": { "type": "boolean" }, "satisfied": { "type": "boolean" }, "revision": { "$ref": "#/$defs/revision" } }
+    },
+    "compactBlocker": {
+      "type": "object", "additionalProperties": false, "required": ["blocker_id", "attempt_id", "state"],
+      "properties": { "blocker_id": { "type": "string", "format": "uuid" }, "attempt_id": { "type": "string", "format": "uuid" }, "state": { "const": "open" } }
+    },
+    "blocker": {
+      "type": "object", "additionalProperties": false,
+      "required": ["blocker_id", "reason", "created_at"],
+      "properties": {
+        "blocker_id": { "type": "string", "format": "uuid" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "itemProjection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["item_id", "value", "value_truncated"],
+      "properties": {
+        "item_id": { "$ref": "#/$defs/identifier" },
+        "value": { "type": "string", "maxLength": 2048 },
+        "value_truncated": { "type": "boolean" }
+      }
+    },
+    "referenceMetadata": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_graph_node_id", "state"],
+      "properties": {
+        "source_graph_node_id": { "$ref": "#/$defs/identifier" },
+        "source_title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "source_attempt_id": { "type": "string", "format": "uuid" },
+        "source_attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+        "items_digest": { "$ref": "#/$defs/digest" },
+        "state": { "enum": ["resolved", "unresolved", "skipped", "stale"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "unresolved" } }, "required": ["state"] }, "then": { "not": { "anyOf": [{ "required": ["source_attempt_id"] }, { "required": ["source_attempt_number"] }, { "required": ["items_digest"] }] } }, "else": { "required": ["source_attempt_id", "source_attempt_number", "items_digest"] } }
+      ]
+    },
+    "criterionStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["criterion_id", "statement", "status"],
+      "properties": {
+        "criterion_id": { "$ref": "#/$defs/identifier" },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "status": { "enum": ["unassessed", "satisfied", "unsatisfied", "not_applicable"] }
+      }
+    },
+    "goalDisplay": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "statement", "criteria"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "criteria": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/criterionStatus" } },
+        "assessment_mode": { "enum": ["assessment", "applicability"] },
+        "determined_outcome": { "enum": ["achieved", "not_achieved", "superseded"] }
+      }
+    },
+    "v2Command": { "enum": ["session.complete", "session.decide", "session.retry", "session.skip", "session.rework", "session.block", "session.unblock", "session.cancel", "session.reset", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
+    "suggestion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["command", "argv"],
+      "properties": {
+        "command": { "$ref": "#/$defs/v2Command" },
+        "argv": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 256 } },
+        "item_id": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "itemValue": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        { "type": "string", "maxLength": 16384 },
+        { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 1000 } },
+        { "$ref": "#/$defs/artifactValue" }
+      ]
+    },
+    "artifactValue": { "type": "object", "additionalProperties": false, "required": ["location_type", "location", "sha256_digest", "size_bytes", "media_type"], "properties": { "location_type": { "enum": ["path", "reference"] }, "location": { "type": "string", "minLength": 1, "maxLength": 4096 }, "sha256_digest": { "$ref": "#/$defs/digest" }, "size_bytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }, "media_type": { "type": "string", "minLength": 1, "maxLength": 255 } } },
+    "readbackItem": {
+      "type": "object", "additionalProperties": false, "required": ["item_id", "type", "value"],
+      "properties": { "item_id": { "$ref": "#/$defs/identifier" }, "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] }, "value": { "$ref": "#/$defs/itemValue" } },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "confirm" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "boolean" } } } },
+        { "if": { "properties": { "type": { "const": "text" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "string", "maxLength": 16384 } } } },
+        { "if": { "properties": { "type": { "const": "choice" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "string", "maxLength": 120 } } } },
+        { "if": { "properties": { "type": { "const": "integer" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 } } } },
+        { "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 1000 } } } } },
+        { "if": { "properties": { "type": { "const": "artifact" } }, "required": ["type"] }, "then": { "properties": { "value": { "$ref": "#/$defs/artifactValue" } } } }
+      ]
+    },
+    "citation": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "reference_graph_node_id": { "$ref": "#/$defs/identifier" }, "item_id": { "$ref": "#/$defs/identifier" }, "local_item_id": { "$ref": "#/$defs/identifier" } },
+      "oneOf": [
+        { "required": ["reference_graph_node_id"], "not": { "required": ["local_item_id"] } },
+        { "required": ["local_item_id"], "not": { "anyOf": [{ "required": ["reference_graph_node_id"] }, { "required": ["item_id"] }] } }
+      ]
+    },
+    "criterionResult": {
+      "type": "object", "additionalProperties": false, "required": ["criterion_id", "status", "reason", "citations"],
+      "properties": {
+        "criterion_id": { "$ref": "#/$defs/identifier" }, "status": { "enum": ["satisfied", "unsatisfied", "not_applicable"] },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "citations": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/citation" } }
+      }
+    },
+    "referenceSnapshot": {
+      "type": "object", "additionalProperties": false, "required": ["source_graph_node_id", "state"],
+      "properties": {
+        "source_graph_node_id": { "$ref": "#/$defs/identifier" }, "source_attempt_id": { "type": "string", "format": "uuid" }, "source_attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+        "items_digest": { "$ref": "#/$defs/digest" }, "state": { "enum": ["resolved", "unresolved", "skipped"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "unresolved" } }, "required": ["state"] }, "then": { "not": { "anyOf": [{ "required": ["source_attempt_id"] }, { "required": ["source_attempt_number"] }, { "required": ["items_digest"] }] } }, "else": { "required": ["source_attempt_id", "source_attempt_number", "items_digest"] } }
+      ]
+    },
+    "decisionRecord": {
+      "type": "object", "additionalProperties": false, "required": ["session_id", "session_revision", "procedure_schema", "procedure_snapshot_id", "procedure_digest", "graph_node_id", "node_definition_id", "attempt_id", "attempt_number", "goal_revision", "option_id", "effect", "target_graph_node_id", "reason", "recorded_at", "references"],
+      "properties": {
+        "session_id": { "type": "string", "format": "uuid" }, "session_revision": { "$ref": "#/$defs/revision" }, "procedure_schema": { "const": "podway.procedure/v2" }, "procedure_snapshot_id": { "type": "string", "format": "uuid" }, "procedure_digest": { "$ref": "#/$defs/digest" },
+        "graph_node_id": { "$ref": "#/$defs/identifier" }, "node_definition_id": { "$ref": "#/$defs/identifier" }, "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "goal_revision": { "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615 },
+        "option_id": { "$ref": "#/$defs/identifier" }, "effect": { "enum": ["advance", "rework"] }, "target_graph_node_id": { "$ref": "#/$defs/identifier" }, "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "actor": { "type": "string", "minLength": 1, "maxLength": 256 }, "recorded_at": { "$ref": "#/$defs/timestamp" },
+        "references": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/referenceSnapshot" } },
+        "assessment": { "const": "session_goal" }, "assessment_mode": { "enum": ["assessment", "applicability"] }, "goal_outcome": { "enum": ["achieved", "not_achieved", "superseded"] },
+        "criterion_results": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/criterionResult" } }
+      },
+      "allOf": [
+        { "if": { "required": ["assessment"] }, "then": { "required": ["assessment_mode", "goal_outcome", "criterion_results"], "properties": { "goal_revision": { "type": "integer" } } }, "else": { "not": { "anyOf": [{ "required": ["assessment_mode"] }, { "required": ["goal_outcome"] }, { "required": ["criterion_results"] }] } } },
+        { "if": { "required": ["assessment_mode"] }, "then": { "required": ["assessment", "goal_outcome", "criterion_results"], "properties": { "goal_revision": { "type": "integer" } } } },
+        { "if": { "required": ["goal_outcome"] }, "then": { "required": ["assessment", "assessment_mode", "criterion_results"], "properties": { "goal_revision": { "type": "integer" } } } },
+        { "if": { "required": ["criterion_results"] }, "then": { "required": ["assessment", "assessment_mode", "goal_outcome"], "properties": { "goal_revision": { "type": "integer" } } } },
+        { "if": { "properties": { "goal_outcome": { "const": "achieved" } }, "required": ["goal_outcome"] }, "then": { "properties": { "assessment_mode": { "const": "assessment" }, "criterion_results": { "items": { "properties": { "status": { "const": "satisfied" } } } } } } },
+        { "if": { "properties": { "goal_outcome": { "const": "not_achieved" } }, "required": ["goal_outcome"] }, "then": { "properties": { "assessment_mode": { "const": "assessment" }, "criterion_results": { "items": { "properties": { "status": { "enum": ["satisfied", "unsatisfied"] } } }, "contains": { "properties": { "status": { "const": "unsatisfied" } }, "required": ["status"] }, "minContains": 1 } } } },
+        { "if": { "properties": { "goal_outcome": { "const": "superseded" } }, "required": ["goal_outcome"] }, "then": { "properties": { "assessment_mode": { "const": "applicability" }, "criterion_results": { "items": { "properties": { "status": { "const": "not_applicable" }, "citations": { "maxItems": 0 } } } } } } }
+      ]
+    },
+    "readback": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_graph_node_id", "source_title", "state", "items"],
+      "properties": {
+        "source_graph_node_id": { "$ref": "#/$defs/identifier" }, "source_title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "source_attempt_id": { "type": "string", "format": "uuid" }, "source_attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "items_digest": { "$ref": "#/$defs/digest" },
+        "state": { "enum": ["resolved", "unresolved", "skipped", "stale"] },
+        "items": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/readbackItem" } },
+        "decision_record": { "$ref": "#/$defs/decisionRecord" }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "unresolved" } }, "required": ["state"] }, "then": { "properties": { "items": { "maxItems": 0 } }, "not": { "anyOf": [{ "required": ["source_attempt_id"] }, { "required": ["source_attempt_number"] }, { "required": ["items_digest"] }, { "required": ["decision_record"] }] } }, "else": { "required": ["source_attempt_id", "source_attempt_number", "items_digest"] } },
+        { "if": { "properties": { "state": { "const": "skipped" } }, "required": ["state"] }, "then": { "properties": { "items": { "maxItems": 0 } }, "not": { "required": ["decision_record"] } } }
+      ]
+    },
+    "traceEntry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["trace_sequence", "graph_node_id", "node_definition_id", "attempt_id", "attempt_number", "goal_revision", "lifecycle", "validity", "started_at"],
+      "properties": {
+        "trace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "node_definition_id": { "$ref": "#/$defs/identifier" },
+        "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "goal_revision": { "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615 },
+        "lifecycle": { "enum": ["active", "completed", "skipped", "abandoned"] }, "validity": { "enum": ["valid", "stale"] },
+        "started_at": { "$ref": "#/$defs/timestamp" }, "finished_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "staleAttemptSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["trace_sequence", "graph_node_id", "node_definition_id", "attempt_id", "attempt_number", "goal_revision", "lifecycle", "validity", "started_at", "finished_at", "terminal_reason", "items", "items_total", "items_truncated"],
+      "properties": {
+        "trace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "node_definition_id": { "$ref": "#/$defs/identifier" },
+        "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "goal_revision": { "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615 },
+        "lifecycle": { "enum": ["completed", "skipped", "abandoned"] }, "validity": { "const": "stale" }, "started_at": { "$ref": "#/$defs/timestamp" }, "finished_at": { "$ref": "#/$defs/timestamp" },
+        "terminal_reason": { "type": ["string", "null"], "maxLength": 2000 }, "items": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/itemProjection" } },
+        "items_total": { "type": "integer", "minimum": 0, "maximum": 64 }, "items_truncated": { "type": "boolean" }, "record_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "staleGoalRevisionSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "predecessor_revision", "statement", "criteria", "actor", "recorded_at", "rework_to", "reactivated"],
+      "properties": { "revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "predecessor_revision": { "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615 }, "statement": { "type": "string", "minLength": 1, "maxLength": 1000 }, "criteria": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/criterionStatus" } }, "actor": { "type": ["string", "null"], "maxLength": 256 }, "recorded_at": { "$ref": "#/$defs/timestamp" }, "rework_to": { "type": ["string", "null"], "maxLength": 64 }, "reactivated": { "type": "boolean" } }
+    },
+    "traceWindow": {
+      "type": "object", "additionalProperties": false, "required": ["first_sequence", "last_sequence"],
+      "properties": { "first_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "last_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } }
+    },
+    "goalAssessmentSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["session_id", "session_revision", "procedure_snapshot_id", "procedure_digest", "graph_node_id", "node_definition_id", "attempt_id", "attempt_number", "goal_revision", "assessment", "option_id", "effect", "target_graph_node_id", "mode", "outcome", "criterion_statuses", "references", "actor", "recorded_at", "record_digest"],
+      "properties": {
+        "session_id": { "type": "string", "format": "uuid" }, "session_revision": { "$ref": "#/$defs/revision" }, "procedure_snapshot_id": { "type": "string", "format": "uuid" }, "procedure_digest": { "$ref": "#/$defs/digest" },
+        "graph_node_id": { "$ref": "#/$defs/identifier" }, "node_definition_id": { "$ref": "#/$defs/identifier" }, "attempt_id": { "type": "string", "format": "uuid" },
+        "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+        "goal_revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "assessment": { "const": "session_goal" }, "option_id": { "$ref": "#/$defs/identifier" }, "effect": { "enum": ["advance", "rework"] }, "target_graph_node_id": { "$ref": "#/$defs/identifier" }, "mode": { "enum": ["assessment", "applicability"] },
+        "outcome": { "enum": ["achieved", "not_achieved", "superseded"] }, "criterion_statuses": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/criterionAssessmentStatus" } },
+        "references": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/referenceSnapshot" } }, "actor": { "type": ["string", "null"], "maxLength": 256 }, "recorded_at": { "$ref": "#/$defs/timestamp" }, "record_digest": { "$ref": "#/$defs/digest" }
+      },
+      "allOf": [
+        { "if": { "properties": { "outcome": { "const": "achieved" } }, "required": ["outcome"] }, "then": { "properties": { "mode": { "const": "assessment" }, "criterion_statuses": { "items": { "properties": { "status": { "const": "satisfied" } } } } } } },
+        { "if": { "properties": { "outcome": { "const": "not_achieved" } }, "required": ["outcome"] }, "then": { "properties": { "mode": { "const": "assessment" }, "criterion_statuses": { "items": { "properties": { "status": { "enum": ["satisfied", "unsatisfied"] } } }, "contains": { "properties": { "status": { "const": "unsatisfied" } }, "required": ["status"] }, "minContains": 1 } } } },
+        { "if": { "properties": { "outcome": { "const": "superseded" } }, "required": ["outcome"] }, "then": { "properties": { "mode": { "const": "applicability" }, "criterion_statuses": { "items": { "properties": { "status": { "const": "not_applicable" }, "citations": { "maxItems": 0 } } } } } } }
+      ]
+    },
+    "criterionAssessmentStatus": {
+      "type": "object", "additionalProperties": false, "required": ["criterion_id", "status", "citations"],
+      "properties": { "criterion_id": { "$ref": "#/$defs/identifier" }, "status": { "enum": ["satisfied", "unsatisfied", "not_applicable"] }, "citations": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/citation" } } }
+    }
+  }
+}

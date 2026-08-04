@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:goal-definition-result:v1",
+  "title": "Podway Goal Definition Result v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "goal_revision", "statement", "criteria", "recorded_at", "revision"],
+  "properties": {
+    "schema": { "const": "podway.goal-definition-result/v1" }, "goal_revision": { "const": 1 },
+    "statement": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "criteria": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "object", "additionalProperties": false, "required": ["criterion_id", "statement"], "properties": { "criterion_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "statement": { "type": "string", "minLength": 1, "maxLength": 300 } } } },
+    "actor": { "type": "string", "minLength": 1, "maxLength": 256 }, "recorded_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
+    "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" }
+  }
+}

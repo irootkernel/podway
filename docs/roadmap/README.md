@@ -62,7 +62,7 @@ Dependencies: none.
 |---|---|---|---|---|
 | `V2CTR-001` | Promote accepted decisions into specifications | Completed | Establish the normative graph, recorded-item, compatibility, admission, and GA boundaries. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
 | `V2CTR-002` | Add the Procedure v2 schema | Completed | Define the closed bounded YAML and JSON authoring contract. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
-| `V2CTR-003` | Define v2 result and diagnostic schemas | Planned | Close every new or version-bumped public result family. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
+| `V2CTR-003` | Define v2 result and diagnostic schemas | Completed | Close every new or version-bumped public result family. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
 | `V2CTR-004` | Register the public contract delta | Planned | Register the exact route, error, schema, and manifest surface. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
 | `V2CTR-005` | Extend conformance traceability | Planned | Map every v2 requirement to a contract, test class, and task. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |
 | `V2CTR-006` | Build the v2 fixture corpus | Planned | Provide bounded known-answer, negative, compatibility, and maximum-size evidence. | [V2CTR plan](../todo/TODO-podway-v2-full-feature-ga.md#191-epic-v2ctr-canonical-contract-baseline) |

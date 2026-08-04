@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:status-result:v2",
+  "title": "Podway Status Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "tier", "procedure", "session", "current", "purpose", "goal_tracking", "goal_defined", "trace_length", "counters", "items", "blockers", "queue", "missing_required_item_ids", "blocker_window", "blockers_truncated", "item_values", "items_total", "items_truncated", "references", "allowed_option_ids", "allowed_manual_rework_targets"],
+  "properties": {
+    "schema": { "const": "podway.status-result/v2" }, "tier": { "enum": ["standard", "verbose"] },
+    "procedure": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/procedureIdentity" },
+    "session": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/sessionIdentity" },
+    "current": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/currentIdentity" }] },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "goal_tracking": { "type": "boolean" }, "goal_defined": { "type": "boolean" },
+    "goal_revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+    "latest_goal_outcome": { "enum": ["achieved", "not_achieved", "superseded"] },
+    "goal": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/goalDisplay" },
+    "trace_length": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "counters": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/counter" } },
+    "items": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/compactItem" } },
+    "blockers": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/compactBlocker" } },
+    "queue": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/queue" },
+    "missing_required_item_ids": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" } },
+    "blocker_window": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/blocker" } },
+    "blockers_truncated": { "type": "boolean" },
+    "item_values": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/itemProjection" } },
+    "items_total": { "type": "integer", "minimum": 0, "maximum": 64 }, "items_truncated": { "type": "boolean" },
+    "references": { "type": "array", "maxItems": 8, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/referenceMetadata" } },
+    "allowed_option_ids": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" } },
+    "next_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "terminal": { "const": true },
+    "skip": { "type": "object", "additionalProperties": false, "required": ["allowed", "reason_required"], "properties": { "allowed": { "const": true }, "reason_required": { "type": "boolean" } } },
+    "allowed_manual_rework_targets": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" } },
+    "current_trace_history": { "$ref": "#/$defs/currentTraceHistory" },
+    "stale_attempt_history": { "$ref": "#/$defs/staleAttemptHistory" },
+    "stale_goal_revision_history": { "$ref": "#/$defs/staleGoalRevisionHistory" },
+    "stale_goal_assessment_history": { "$ref": "#/$defs/staleGoalAssessmentHistory" }
+  },
+  "allOf": [
+    { "if": { "properties": { "tier": { "const": "verbose" } }, "required": ["tier"] }, "then": { "required": ["current_trace_history", "stale_attempt_history", "stale_goal_revision_history", "stale_goal_assessment_history"] } },
+    { "if": { "properties": { "tier": { "const": "standard" } }, "required": ["tier"] }, "then": { "not": { "anyOf": [{ "required": ["current_trace_history"] }, { "required": ["stale_attempt_history"] }, { "required": ["stale_goal_revision_history"] }, { "required": ["stale_goal_assessment_history"] }] } } },
+    { "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] } }, "required": ["session"] }, "then": { "properties": { "current": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/currentIdentity" } } }, "else": { "properties": { "current": { "type": "null" }, "items": { "maxItems": 0 }, "blockers": { "maxItems": 0 }, "missing_required_item_ids": { "maxItems": 0 }, "blocker_window": { "maxItems": 0 }, "item_values": { "maxItems": 0 }, "allowed_option_ids": { "maxItems": 0 } }, "not": { "anyOf": [{ "required": ["next_graph_node_id"] }, { "required": ["terminal"] }, { "required": ["skip"] }] } } },
+    { "if": { "properties": { "current": { "properties": { "node": { "properties": { "node_type": { "const": "action" } }, "required": ["node_type"] } }, "required": ["node"] } }, "required": ["current"] }, "then": { "oneOf": [{ "required": ["next_graph_node_id"], "not": { "required": ["terminal"] } }, { "required": ["terminal"], "not": { "required": ["next_graph_node_id"] } }], "properties": { "allowed_option_ids": { "maxItems": 0 } } } },
+    { "if": { "properties": { "current": { "properties": { "node": { "properties": { "node_type": { "const": "decision" } }, "required": ["node_type"] } }, "required": ["node"] } }, "required": ["current"] }, "then": { "not": { "anyOf": [{ "required": ["next_graph_node_id"] }, { "required": ["terminal"] }, { "required": ["skip"] }] } } },
+    { "if": { "properties": { "goal_tracking": { "const": false } }, "required": ["goal_tracking"] }, "then": { "properties": { "goal_defined": { "const": false } }, "not": { "anyOf": [{ "required": ["goal_revision"] }, { "required": ["latest_goal_outcome"] }, { "required": ["goal"] }] } } },
+    { "if": { "properties": { "goal_defined": { "const": false } }, "required": ["goal_defined"] }, "then": { "not": { "anyOf": [{ "required": ["goal_revision"] }, { "required": ["latest_goal_outcome"] }, { "required": ["goal"] }] } } },
+    { "if": { "properties": { "goal_defined": { "const": true } }, "required": ["goal_defined"] }, "then": { "required": ["goal_revision", "goal"], "properties": { "goal_tracking": { "const": true } } } }
+  ],
+  "$defs": {
+    "currentTraceHistory": { "$ref": "#/$defs/traceHistoryBase", "properties": { "entries": { "type": "array", "maxItems": 32, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/traceEntry" } } } },
+    "staleAttemptHistory": { "$ref": "#/$defs/traceHistoryBase", "properties": { "entries": { "type": "array", "maxItems": 1, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/staleAttemptSummary" } } } },
+    "staleGoalRevisionHistory": { "$ref": "#/$defs/traceHistoryBase", "properties": { "entries": { "type": "array", "maxItems": 1, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/staleGoalRevisionSummary" } } } },
+    "staleGoalAssessmentHistory": { "$ref": "#/$defs/traceHistoryBase", "properties": { "entries": { "type": "array", "maxItems": 1, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/goalAssessmentSummary" } } } },
+    "traceHistoryBase": {
+      "type": "object", "additionalProperties": false, "required": ["entries", "truncated", "window"],
+      "properties": { "entries": { "type": "array", "maxItems": 32 }, "truncated": { "type": "boolean" }, "window": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/traceWindow" }] } },
+      "allOf": [
+        { "if": { "properties": { "entries": { "maxItems": 0 } }, "required": ["entries"] }, "then": { "properties": { "window": { "type": "null" }, "truncated": { "const": false } } } },
+        { "if": { "properties": { "entries": { "minItems": 1 } }, "required": ["entries"] }, "then": { "properties": { "window": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/traceWindow" } } } }
+      ]
+    }
+  }
+}

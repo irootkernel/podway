@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure-diagnostics-result:v1",
+  "title": "Podway Procedure Diagnostics Result v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "operation", "procedure_schema", "file", "valid", "diagnostics", "diagnostics_truncated", "diagnostics_total"],
+  "properties": {
+    "schema": { "const": "podway.procedure-diagnostics-result/v1" }, "operation": { "enum": ["vet", "lint", "check"] },
+    "procedure_schema": { "const": "podway.procedure/v2" }, "file": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/path" },
+    "digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }, "valid": { "type": "boolean" },
+    "diagnostics": { "type": "array", "maxItems": 256, "items": { "$ref": "urn:podway:schema:authoring-diagnostic:v1" } },
+    "diagnostics_truncated": { "type": "boolean" }, "diagnostics_total": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+  }
+}

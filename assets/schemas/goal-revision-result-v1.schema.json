@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:goal-revision-result:v1",
+  "title": "Podway Goal Revision Result v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "goal_revision", "statement", "criteria", "reason", "recorded_at", "rework_to", "reactivated", "revision"],
+  "properties": {
+    "schema": { "const": "podway.goal-revision-result/v1" }, "goal_revision": { "type": "integer", "minimum": 2, "maximum": 18446744073709551615 },
+    "statement": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "criteria": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "object", "additionalProperties": false, "required": ["criterion_id", "statement"], "properties": { "criterion_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "statement": { "type": "string", "minLength": 1, "maxLength": 300 } } } },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }, "actor": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "recorded_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" }, "rework_to": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "reactivated": { "type": "boolean" }, "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" }
+  }
+}

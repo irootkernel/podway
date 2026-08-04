@@ -207,6 +207,13 @@ to v1. A route absent from a build retains that build's ordinary unknown-command
 or usage behavior; the exact contract-manifest digest is the machine-readable
 capability signal.
 
+The version-aware result registry reserves the complete Procedure v2 family set
+without registering the thirteen future command routes. It validates required
+family shape before later typed decoding. V2 producers must also enforce the
+bounded-warning guard defined by the JSON contract and the existing complete
+frame limit; retaining the open v1 envelope is not permission for unbounded v2
+warnings or oversized encoded responses.
+
 ## Request canonicalization
 
 For mutation idempotency, the daemon constructs canonical request identity from:

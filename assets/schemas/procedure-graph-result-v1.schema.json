@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure-graph-result:v1",
+  "title": "Podway Procedure Graph Result v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "procedure_schema", "procedure_digest", "format", "projection_digest", "projection"],
+  "properties": {
+    "schema": { "const": "podway.procedure-graph-result/v1" }, "procedure_schema": { "const": "podway.procedure/v2" },
+    "procedure_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+    "format": { "enum": ["json", "mermaid", "plantuml", "dot"] }, "projection_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+    "projection": { "type": "string", "maxLength": 131072 }
+  }
+}

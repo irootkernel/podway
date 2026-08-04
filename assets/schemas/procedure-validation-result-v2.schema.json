@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure-validation-result:v2",
+  "title": "Podway Procedure Validation Result v2",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "file", "procedure_schema", "digest", "valid"],
+  "properties": {
+    "schema": { "const": "podway.procedure-validation-result/v2" },
+    "file": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/path" },
+    "procedure_schema": { "const": "podway.procedure/v2" },
+    "digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+    "valid": { "const": true }
+  }
+}

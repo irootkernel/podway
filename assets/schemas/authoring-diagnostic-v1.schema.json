@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:authoring-diagnostic:v1",
+  "title": "Podway Authoring Diagnostic v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["code", "severity", "schema", "source_path", "location", "field", "message", "hint"],
+  "properties": {
+    "code": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Z][A-Z0-9_]*$" },
+    "severity": { "enum": ["error", "warning"] }, "schema": { "const": "podway.procedure/v2" },
+    "source_path": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/path" },
+    "location": {
+      "type": "object", "additionalProperties": false,
+      "required": ["line", "column", "end_line", "end_column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1, "maximum": 1048576 }, "column": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "end_line": { "type": "integer", "minimum": 1, "maximum": 1048576 }, "end_column": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+      }
+    },
+    "field": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "node_definition_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "related_graph_node_ids": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" } },
+    "message": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "hint": { "type": "string", "minLength": 1, "maxLength": 512 }
+  }
+}

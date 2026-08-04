@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:item-mutation-result:v2",
+  "title": "Podway Item Mutation Result v2",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "changed", "graph_node_id", "attempt_id", "attempt_number", "item_id", "revision"],
+  "properties": {
+    "schema": { "const": "podway.item-mutation-result/v2" }, "changed": { "type": "boolean" },
+    "graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+    "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" },
+    "value_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }
+  }
+}

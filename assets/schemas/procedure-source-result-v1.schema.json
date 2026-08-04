@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure-source-result:v1",
+  "title": "Podway Procedure Source Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation", "target_schema", "document", "target_digest"],
+  "properties": {
+    "schema": { "const": "podway.procedure-source-result/v1" },
+    "operation": { "enum": ["format", "scaffold", "convert"] },
+    "target_schema": { "const": "podway.procedure/v2" },
+    "document": { "type": "string", "minLength": 1, "maxLength": 131072 },
+    "target_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+    "file": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/path" },
+    "mode": { "enum": ["stdout", "check", "write"] },
+    "changed": { "type": "boolean" },
+    "template": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "source_schema": { "const": "podway.procedure/v1" },
+    "source_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "format" } }, "required": ["operation"] },
+      "then": { "required": ["file", "mode", "changed"], "not": { "anyOf": [{ "required": ["template"] }, { "required": ["source_schema"] }, { "required": ["source_digest"] }] } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "scaffold" } }, "required": ["operation"] },
+      "then": { "required": ["template"], "not": { "anyOf": [{ "required": ["file"] }, { "required": ["mode"] }, { "required": ["changed"] }, { "required": ["source_schema"] }, { "required": ["source_digest"] }] } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "convert" } }, "required": ["operation"] },
+      "then": { "required": ["source_schema", "source_digest"], "not": { "anyOf": [{ "required": ["file"] }, { "required": ["mode"] }, { "required": ["changed"] }, { "required": ["template"] }] } }
+    }
+  ]
+}

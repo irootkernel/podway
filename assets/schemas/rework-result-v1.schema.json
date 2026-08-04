@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:rework-result:v1",
+  "title": "Podway Manual Rework Result v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "from_graph_node_id", "to_graph_node_id", "target_attempt_id", "reason", "reactivated", "revision"],
+  "properties": {
+    "schema": { "const": "podway.rework-result/v1" }, "from_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "to_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "target_attempt_id": { "type": "string", "format": "uuid" },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }, "reactivated": { "type": "boolean" },
+    "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" }
+  }
+}

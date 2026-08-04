@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:criterion-assessment-result:v1",
+  "title": "Podway Criterion Assessment Result v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "graph_node_id", "attempt_id", "goal_revision", "mode", "result", "complete", "revision"],
+  "properties": {
+    "schema": { "const": "podway.criterion-assessment-result/v1" }, "graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "attempt_id": { "type": "string", "format": "uuid" }, "goal_revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+    "mode": { "enum": ["assessment", "applicability"] }, "result": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/criterionResult" },
+    "complete": { "type": "boolean" }, "determined_outcome": { "enum": ["achieved", "not_achieved", "superseded"] },
+    "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" }
+  },
+  "allOf": [
+    { "if": { "properties": { "mode": { "const": "assessment" } }, "required": ["mode"] }, "then": { "properties": { "result": { "properties": { "status": { "enum": ["satisfied", "unsatisfied"] } } }, "determined_outcome": { "enum": ["achieved", "not_achieved"] } } } },
+    { "if": { "properties": { "mode": { "const": "applicability" } }, "required": ["mode"] }, "then": { "properties": { "result": { "properties": { "status": { "const": "not_applicable" }, "citations": { "maxItems": 0 } } }, "determined_outcome": { "const": "superseded" } } } },
+    { "if": { "properties": { "complete": { "const": true }, "result": { "properties": { "status": { "const": "unsatisfied" } }, "required": ["status"] } }, "required": ["complete", "result"] }, "then": { "properties": { "determined_outcome": { "const": "not_achieved" } } } },
+    { "if": { "properties": { "complete": { "const": true }, "result": { "properties": { "status": { "const": "not_applicable" } }, "required": ["status"] } }, "required": ["complete", "result"] }, "then": { "properties": { "determined_outcome": { "const": "superseded" } } } },
+    { "if": { "properties": { "complete": { "const": true } }, "required": ["complete"] }, "then": { "required": ["determined_outcome"] }, "else": { "not": { "required": ["determined_outcome"] } } }
+  ]
+}

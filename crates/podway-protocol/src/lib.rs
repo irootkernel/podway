@@ -32,7 +32,11 @@ pub use release_contract::{
     verify_release_contract_v1,
 };
 pub use result_contract::{
-    SUPPORTED_RESULT_SCHEMAS_V1, ensure_command_result_schema_v1, validate_command_result_v1,
+    EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_V2_OUTPUT_WARNINGS, MAX_V2_WARNING_CODE_CHARS,
+    MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS, NEW_ROUTE_RESULT_SCHEMAS_V1,
+    ResultSchemaContractV2, SUPPORTED_RESULT_SCHEMAS_V1, decode_result_schema_contract_v2,
+    ensure_command_result_schema_v1, result_schema_top_level_fields_v2, validate_command_result_v1,
+    validate_v2_output_envelope_value, validate_v2_output_warnings,
 };
 pub use slice::*;
 
