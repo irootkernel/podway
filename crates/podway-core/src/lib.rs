@@ -12,12 +12,14 @@ pub mod aggregate;
 pub mod canonical;
 pub mod derive;
 pub mod procedure;
+pub mod procedure_v2;
 pub mod transition;
 
 pub use aggregate::*;
 pub use canonical::*;
 pub use derive::*;
 pub use procedure::*;
+pub use procedure_v2::*;
 pub use transition::*;
 
 pub const MAX_PROCEDURE_IDENTIFIER_BYTES: usize = 64;
@@ -276,6 +278,10 @@ uuid_newtype!(ProcedureSnapshotId);
 uuid_newtype!(BlockerId);
 procedure_identifier_newtype!(StageId);
 procedure_identifier_newtype!(ItemId);
+procedure_identifier_newtype!(NodeDefinitionId);
+procedure_identifier_newtype!(GraphNodeId);
+procedure_identifier_newtype!(OptionId);
+procedure_identifier_newtype!(CriterionId);
 
 /// An optimistic-concurrency revision. Zero is valid for absent-or-never-written slots.
 #[derive(

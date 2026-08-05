@@ -1745,7 +1745,7 @@ fn validate_procedure_identifier(value: &str) -> Result<(), DomainError> {
     Ok(())
 }
 
-fn validate_text(
+pub(crate) fn validate_text(
     field: &'static str,
     value: &str,
     minimum: usize,
