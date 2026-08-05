@@ -226,6 +226,55 @@ Apply these distinctions as well:
 - After any formatting, generation, test, or release command, inspect `git status`
   and the complete diff so generated or evidence changes are intentional.
 
+### Gaori Test Evidence
+
+The repository verification rules above remain authoritative. Gaori is an optional
+local execution and evidence-compression adapter, not an additional test gate or
+acceptance authority.
+
+When a required check is expected to produce long or noisy output, prefer running
+it through Gaori from the repository root:
+
+- preparation and static checks: `gaori --json run prepare`;
+- unit tests: `gaori --json run unit`;
+- integration tests: `gaori --json run integration`;
+- end-to-end tests: `gaori --json run e2e`;
+- complete development gate: `gaori --json run full`;
+- complete distribution gate, only when release readiness is in scope:
+  `gaori --json run dist`.
+
+For a dynamically selected Rust test, use a tagged ad-hoc run with the generic
+parser:
+
+```bash
+gaori --json run --tag rust --tag unit -- \
+  cargo test -p <package> --test int_suite <source>::<function> -- --exact
+```
+
+Before the first Gaori run in a task, verify that `gaori --version` succeeds. Do
+not require or compare a specific Gaori version. Configured commands require the
+local `.gaori/tester.yaml`. If the binary or compatible local config is unavailable,
+run the underlying Make or Cargo command documented by the repository and report
+that Gaori evidence compression was unavailable. Do not install or upgrade Gaori
+unless master explicitly asks.
+
+The wrapped command's exit code is authoritative for pass/fail. `extractor_status`
+describes evidence quality only and never changes the result. Tags select project
+rules, not parsers, and specialized parsers do not automatically fall back to
+`generic`.
+
+When a command passes, do not open its generated logs by default. When it does not
+pass, inspect `*.summary.md` first, followed by `*.summary.json` or a bounded
+excerpt. Read only a bounded raw-log section when compact evidence is insufficient
+or degraded. Raw logs are unredacted and may contain secrets.
+
+Keep the entire `.gaori/` directory out of Git. Do not add or commit its config,
+rules, toolchain metadata, proposals, or evidence. In the final report, include the
+Gaori command, process exit code, artifact `status`, `extractor_status`, relevant
+summary and raw-log paths, and skipped checks. Gaori evidence alone does not
+establish review acceptance, development readiness, release readiness, or runtime
+activation.
+
 ## Repository Safety and Delivery
 
 - Do not commit, amend, push, tag, publish, release, install, uninstall, start, stop,

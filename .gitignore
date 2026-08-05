@@ -15,6 +15,9 @@
 *.sqlite3-shm
 *.sqlite3-wal
 
+# Gaori local configuration and test evidence
+/.gaori/
+
 # Test, coverage, and temporary artifacts
 /coverage/
 /dist/
