@@ -13,6 +13,7 @@ pub mod canonical;
 pub mod derive;
 pub mod procedure;
 pub mod procedure_v2;
+pub mod session_v2;
 pub mod transition;
 
 pub use aggregate::*;
@@ -20,6 +21,7 @@ pub use canonical::*;
 pub use derive::*;
 pub use procedure::*;
 pub use procedure_v2::*;
+pub use session_v2::*;
 pub use transition::*;
 
 pub const MAX_PROCEDURE_IDENTIFIER_BYTES: usize = 64;

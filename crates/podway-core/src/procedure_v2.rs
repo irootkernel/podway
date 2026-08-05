@@ -48,6 +48,7 @@ const MIN_ROUTES_PER_DECISION: usize = 1;
 const MAX_ROUTES_PER_DECISION: usize = 8;
 const MIN_MANUAL_REWORK_TARGETS: usize = 1;
 const MAX_MANUAL_REWORK_TARGETS: usize = 64;
+const MAX_GRAPH_NODES_PER_PROCEDURE: usize = 64;
 const MIN_ASSESSMENT_OUTCOME_MAPPINGS: usize = 3;
 const MAX_ASSESSMENT_OUTCOME_MAPPINGS: usize = 8;
 
@@ -1295,6 +1296,99 @@ impl ManualReworkTargetListV2 {
     }
 }
 
+/// One placed node in a Procedure v2 graph. The enum has no fork, parallel, spawn, synchronizing
+/// join, or executable variant: an action carries exactly one outcome and a decision maps each
+/// option to exactly one declared route (ADR-0017, INV-V2S08).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GraphPlacementV2 {
+    Action(ActionPlacementV2),
+    Decision(DecisionPlacementV2),
+}
+
+impl GraphPlacementV2 {
+    pub fn id(&self) -> &GraphNodeId {
+        match self {
+            Self::Action(placement) => placement.id(),
+            Self::Decision(placement) => placement.id(),
+        }
+    }
+
+    pub const fn node_kind(&self) -> NodeKindV2 {
+        match self {
+            Self::Action(_) => NodeKindV2::Action,
+            Self::Decision(_) => NodeKindV2::Decision,
+        }
+    }
+}
+
+/// The declarative single-cursor Procedure v2 graph: one entry placement, the bounded set of placed
+/// nodes, and the optional manual rework target list. Construction enforces only structural
+/// assembly — one to 64 placements, unique graph node ids, and the entry present. Branches, declared
+/// rework cycles, and convergence are accepted as declarative data; topology and reference vetting
+/// is owned by V2MOD-006 and V2GRF-001.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcedureGraphV2 {
+    entry: GraphNodeId,
+    placements: Vec<GraphPlacementV2>,
+    manual_rework: Option<ManualReworkTargetListV2>,
+}
+
+impl ProcedureGraphV2 {
+    pub fn new(
+        entry: GraphNodeId,
+        placements: Vec<GraphPlacementV2>,
+        manual_rework: Option<ManualReworkTargetListV2>,
+    ) -> Result<Self, DomainError> {
+        if placements.is_empty() || placements.len() > MAX_GRAPH_NODES_PER_PROCEDURE {
+            return Err(invalid("graph node count must be between one and 64"));
+        }
+        let mut seen = BTreeSet::new();
+        let mut entry_present = false;
+        for placement in &placements {
+            if !seen.insert(placement.id().clone()) {
+                return Err(invalid("graph node identifiers must be unique"));
+            }
+            if placement.id() == &entry {
+                entry_present = true;
+            }
+        }
+        if !entry_present {
+            return Err(invalid("the entry graph node must be present in the graph"));
+        }
+        Ok(Self {
+            entry,
+            placements,
+            manual_rework,
+        })
+    }
+
+    pub fn entry(&self) -> &GraphNodeId {
+        &self.entry
+    }
+
+    pub fn placements(&self) -> &[GraphPlacementV2] {
+        &self.placements
+    }
+
+    pub fn manual_rework(&self) -> Option<&ManualReworkTargetListV2> {
+        self.manual_rework.as_ref()
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.placements.len()
+    }
+
+    pub fn placement(&self, id: &GraphNodeId) -> Option<&GraphPlacementV2> {
+        self.placements
+            .iter()
+            .find(|placement| placement.id() == id)
+    }
+
+    pub fn node_kind(&self, id: &GraphNodeId) -> Option<NodeKindV2> {
+        self.placement(id).map(GraphPlacementV2::node_kind)
+    }
+}
+
 /// The procedure-level session-goal tracking opt-in.
 ///
 /// Session goal tracking is enabled only when a procedure declares exactly `goal_tracking: true`.
@@ -2293,6 +2387,100 @@ mod tests {
         assert_eq!(
             CriterionAssessmentReasonV2::new("").unwrap_err(),
             invalid("criterion assessment reason")
+        );
+    }
+
+    #[test]
+    fn graph_assembles_entry_placements_and_manual_rework() {
+        let entry = node_id("implement");
+        let middle = node_id("review");
+        let closeout = node_id("closeout");
+        let routes = DecisionRouteMapV2::new(vec![
+            DecisionRouteEntryV2::new(
+                opt_id("branch-a"),
+                DecisionRouteV2::new(closeout.clone(), TransitionEffectV2::Advance),
+            ),
+            DecisionRouteEntryV2::new(
+                opt_id("branch-b"),
+                DecisionRouteV2::new(closeout.clone(), TransitionEffectV2::Advance),
+            ),
+        ])
+        .unwrap();
+        // Two decision routes converge on `closeout`; convergence is ordinary declarative data
+        // reached by one cursor, never a synchronizing join (INV-V2S02, INV-V2S08).
+        let graph = ProcedureGraphV2::new(
+            entry.clone(),
+            vec![
+                GraphPlacementV2::Action(ActionPlacementV2::new(
+                    entry.clone(),
+                    def_id("implement"),
+                    None,
+                    None,
+                    ActionOutcomeV2::Next(middle.clone()),
+                )),
+                GraphPlacementV2::Decision(DecisionPlacementV2::new(
+                    middle,
+                    def_id("evaluate"),
+                    None,
+                    routes,
+                )),
+                GraphPlacementV2::Action(ActionPlacementV2::new(
+                    closeout.clone(),
+                    def_id("close"),
+                    None,
+                    None,
+                    ActionOutcomeV2::Terminal,
+                )),
+            ],
+            Some(ManualReworkTargetListV2::new(vec![entry.clone()]).unwrap()),
+        )
+        .unwrap();
+
+        assert_eq!(graph.entry(), &entry);
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.node_kind(&closeout), Some(NodeKindV2::Action));
+        assert_eq!(
+            graph.node_kind(&node_id("review")),
+            Some(NodeKindV2::Decision),
+        );
+        assert!(graph.placement(&closeout).is_some());
+        assert!(graph.manual_rework().is_some());
+    }
+
+    #[test]
+    fn graph_assembly_rejects_duplicates_missing_entry_and_overflow() {
+        let placement = |id: &str| {
+            GraphPlacementV2::Action(ActionPlacementV2::new(
+                node_id(id),
+                def_id("d"),
+                None,
+                None,
+                ActionOutcomeV2::Terminal,
+            ))
+        };
+        let n1 = node_id("n1");
+        assert_eq!(
+            ProcedureGraphV2::new(n1.clone(), vec![placement("n1"), placement("n1")], None),
+            Err(invalid("graph node identifiers must be unique"))
+        );
+        assert_eq!(
+            ProcedureGraphV2::new(
+                node_id("missing"),
+                vec![placement("n1"), placement("n2")],
+                None
+            ),
+            Err(invalid("the entry graph node must be present in the graph"))
+        );
+        assert_eq!(
+            ProcedureGraphV2::new(n1, Vec::new(), None),
+            Err(invalid("graph node count must be between one and 64"))
+        );
+        let sixty_five: Vec<GraphPlacementV2> =
+            (0..65).map(|i| placement(&format!("n-{i}"))).collect();
+        let entry_sixty_five = sixty_five[0].id().clone();
+        assert_eq!(
+            ProcedureGraphV2::new(entry_sixty_five, sixty_five, None),
+            Err(invalid("graph node count must be between one and 64"))
         );
     }
 }

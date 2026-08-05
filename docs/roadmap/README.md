@@ -74,7 +74,7 @@ Dependencies: `V2CTR`.
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `V2MOD-001` | Add v2 domain values | Completed | Represent action, decision, route, rework, and goal values in core. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
-| `V2MOD-002` | Enforce graph cursor invariants | Planned | Preserve exactly one authoritative cursor and active attempt. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
+| `V2MOD-002` | Enforce graph cursor invariants | Completed | Preserve exactly one authoritative cursor and active attempt. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
 | `V2MOD-003` | Add workflow memory record types | Planned | Represent recorded-item references and immutable decision, rework, and goal records. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
 | `V2MOD-004` | Parse v2 YAML | Planned | Dispatch and parse bounded v2 YAML without changing v1. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
 | `V2MOD-005` | Parse v2 JSON | Planned | Produce semantics identical to equivalent YAML. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
