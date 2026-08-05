@@ -11,16 +11,20 @@ use serde::{Deserialize, Serialize};
 pub mod aggregate;
 pub mod canonical;
 pub mod derive;
+pub mod goal_record_v2;
 pub mod procedure;
 pub mod procedure_v2;
+pub mod record_v2;
 pub mod session_v2;
 pub mod transition;
 
 pub use aggregate::*;
 pub use canonical::*;
 pub use derive::*;
+pub use goal_record_v2::*;
 pub use procedure::*;
 pub use procedure_v2::*;
+pub use record_v2::*;
 pub use session_v2::*;
 pub use transition::*;
 
