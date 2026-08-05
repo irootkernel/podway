@@ -150,9 +150,10 @@ A client disconnect never cancels an admitted job.
 
 ## Response
 
-The response frame contains either:
+The response frame contains one of:
 
-- `podway.output/v1`; or
+- `podway.output/v1` for released v1 success families;
+- `podway.output/v2` for Procedure v2 success families; or
 - `podway.error/v1`.
 
 Protocol-level failures use the same error envelope where possible. If the request is too malformed to recover `request_id`, the response generates a new ID and includes `details.request_id_recovered=false`.
@@ -198,8 +199,8 @@ product or manifest identity even when the IPC identifier is compatible.
 
 ### V2 compatibility boundary
 
-V2 retains `podway.ipc/v1`, `podway.output/v1`, and `podway.error/v1`; it does
-not add an automation transport or weaken request framing, identity fences,
+V2 retains `podway.ipc/v1` and `podway.error/v1`, and adds the success-only
+`podway.output/v2` envelope; it does not add an automation transport or weaken request framing, identity fences,
 idempotency, detached admission, or job reconciliation. Existing commands used
 against a v2 session select a closed `/v2` result family. A new v2-only command
 starts a distinct closed result family at `/v1`. V1 sessions continue to emit
@@ -216,8 +217,8 @@ The version-aware result registry reserves the complete Procedure v2 family set
 without registering the thirteen future command routes. It validates required
 family shape before later typed decoding. V2 producers must also enforce the
 bounded-warning guard defined by the JSON contract and the existing complete
-frame limit; retaining the open v1 envelope is not permission for unbounded v2
-warnings or oversized encoded responses.
+frame limit; the open outer v2 envelope is not permission for unbounded warnings
+or oversized encoded responses.
 
 ## Request canonicalization
 

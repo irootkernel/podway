@@ -4,8 +4,8 @@
   "evidence_level": "contract-recipe",
   "implementation_status": "planned",
   "cases": [
-    {"id": "v2-command-to-v1-peer", "operation": "send each v2-only command to a peer without its registered capability", "expected_code": "UNSUPPORTED_V2_CAPABILITY"},
-    {"id": "registered-but-unserved", "operation": "send a registered v2 command before its daemon implementation exists", "expected_code": "UNSUPPORTED_V2_CAPABILITY"},
+    {"id": "v2-command-to-v1-peer", "operation": "send each v2-only command to a peer that registers the command but lacks its required result family", "expected_code": "UNSUPPORTED_V2_CAPABILITY", "expected_details_schema": "podway.v2-runtime-error-details/v1"},
+    {"id": "registered-but-unserved", "operation": "send a registered v2 command before its daemon implementation exists", "expected_code": "UNSUPPORTED_V2_CAPABILITY", "expected_details_schema": "podway.v2-runtime-error-details/v1"},
     {"id": "absent-route", "operation": "send a command absent from the route registry", "expected": "usage-or-unknown-command-before-v2-dispatch"}
   ]
 }

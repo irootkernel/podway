@@ -56,12 +56,13 @@ accepted runtime value and is not restored by v0.1.2.
 
 ## Procedure v2 result families
 
-The released v1 envelopes and result schemas above remain unchanged. Existing
-Procedure-aware routes select eight new `/v2` families for validation, detached
-admission, start, compact status, status, next, stage transitions, and item
-mutations. The version-neutral `job-result/v1` and `job-lookup-result/v1`
-wrappers remain unchanged: a terminal v2 job identifies its closed inner result
-by that result's own discriminator.
+The released v1 envelopes and result schemas above remain unchanged. Procedure
+v2 success responses use `podway.output/v2`. Existing Procedure-aware routes
+select ten new `/v2` families for validation, detached admission, start, compact
+status, status, next, stage transitions, item mutations, job lookup, and job
+status/wait. A terminal v2 job preserves the complete original
+`podway.output/v2` or `podway.error/v1` envelope, or the closed cancellation
+summary.
 
 The thirteen v2-only routes are prepared by nine `/v1` families. Format,
 scaffold, and convert share `procedure-source-result/v1` on success. Every v2
@@ -74,12 +75,28 @@ assessment otherwise select the correspondingly named closed family.
 diagnostic results. Registering these schemas does not make the future routes
 callable; route registration is a separate contract step.
 
+Session-start results always report `goal_defined`. When goal tracking is
+disabled it is `false`; when tracking is enabled it reports whether the start
+input supplied revision 1, and an opted-in session may therefore start with
+either value. Compact status carries blocker state only as
+`current.blockers_total`.
+Standard and verbose status add the bounded `blocker_window` and
+`blockers_truncated`; they do not repeat a root compact blocker list.
+
+The nested `record` in `decision-result/v1` is the authoritative immutable
+decision history. Its `graph_node_id`, `attempt_id`, `attempt_number`,
+`option_id`, `effect`, and `target_graph_node_id` values are projected at the
+top level for direct consumers. Producers and decoders must reject a result
+unless all six projections exactly match the record.
+
 Every family is closed, uses the Procedure v2 identifier and value bounds where
 applicable, and is selected through the version-aware protocol registry. V2
 validation success is metadata-only (`file`, Procedure schema, digest, and
 `valid: true`) so it does not duplicate a maximum-size Procedure inside the
-retained output envelope. Source and graph text projections cap one scalar at
-131,072 characters; production encoding must still reject an oversized complete
+retained output envelope. Source projections use the normative
+`SOURCE_PROJECTION_MAX_CHARACTERS` budget of 131,072 characters and fail with
+`SOURCE_PROJECTION_BUDGET_EXCEEDED` before output; graph text projections use
+the same scalar cap. Production encoding must still reject an oversized complete
 serialized output.
 
 Preview is one closed report rather than a loose graph summary. Every result
@@ -97,11 +114,37 @@ it belongs to; the shared `--history-before` cursor can therefore page all six
 windows without adding a separate public history route. Standard status forbids
 every history window.
 
-The retained `podway.output/v1` envelope is intentionally still open. A v2
-producer therefore applies an additional production guard: at most four warning
+The additive `podway.output/v2` envelope retains the open outer shape of v1 but
+closes its command-to-result selection to the registered Procedure v2 families.
+A v2 producer applies an additional production guard: at most four warning
 objects, each with exactly bounded `code` (64 characters), `path` (256
 characters), and `message` (512 characters), followed by the complete frame-size check. This is a v2
 production obligation and does not alter the released v1 envelope schema.
+
+Procedure v2 runtime errors retain the open `podway.error/v1` envelope but bind
+every registered v2 code to `podway.v2-runtime-error-details/v1`. A v2 runtime
+error message is limited to 512 characters. When retained as a terminal job
+response, its command is one of the registered v2 mutations; lookup additionally
+requires the stored job command and nested terminal command to be identical.
+These contextual producer and reconciliation guards do not narrow the released
+v1 error schema.
+
+## Procedure v2 payload and admission bounds
+
+Every Procedure v2 mutation success uses the closed admission component from
+`podway.v2-result-components/v1`. An admitted value contains exactly
+`admitted=true`, a UUID job ID, and `workspace_sequence` in
+`1..=18446744073709551615`. V2 runtime error details use the same upper bound and
+also permit the closed pre-admission value `{"admitted":false}`. The released
+v1 output and error schemas remain byte-identical and are not narrowed by these
+v2 components.
+
+All v2 result collections and scalar fields have explicit schema bounds. The
+complete encoded response, including envelope, warnings, projections, history,
+and read-back, must also fit the IPC frame limit; satisfying an individual field
+or collection limit does not bypass the whole-frame check. Terminal job receipts
+store one non-recursive original output or error envelope and are subject to the
+same bound.
 
 ## Version identity envelope
 
@@ -491,7 +534,9 @@ terminal_response
 ```
 
 For succeeded and failed jobs, `terminal_response` is the complete immutable
-original `podway.output/v1` or `podway.error/v1` response envelope. Its request
+original mutation success or error response envelope: `podway.output/v1` for
+v1 jobs, a non-recursive terminal-mutation `podway.output/v2` for Procedure v2
+jobs, or `podway.error/v1`. Its request
 ID, command, completion timestamp, workspace, job, session/result, warnings, and
 public error fields therefore survive response loss, daemon restart, and job-row
 pruning. It is `null` only for queued or running jobs. A cancelled job uses the

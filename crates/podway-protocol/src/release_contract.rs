@@ -565,11 +565,9 @@ fn validate_asset_shape(asset: &ManifestAssetV1) -> Result<(), ReleaseContractEr
         asset.kind.as_str(),
         "schema"
             | "catalog"
-            | "route_contract"
             | "transition_matrix"
             | "canonicalization_rules"
             | "known_answer_fixture"
-            | "quality_matrix"
     ) || !is_sha256_identity(&asset.sha256)
     {
         return Err(ReleaseContractErrorV1::new(format!(

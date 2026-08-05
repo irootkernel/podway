@@ -5,6 +5,7 @@
   "implementation_status": "planned",
   "cases": [
     {"id": "linear-terminal", "operation": "vet equivalent-procedure.json", "expected": "accepted"},
+    {"id": "terminal-path-through-rework", "operation": "vet a graph where one reachable decision reaches an advance-only terminal path through a declared rework edge", "expected": "accepted"},
     {"id": "unbounded-valid-rework-cycle", "operation": "add a decision route back to its dominating work placement", "expected": "accepted-without-attempt-or-traversal-limit"},
     {"id": "maximum-reachable-readback", "operation": "construct a reachable consumer whose selected dominating source items exactly fill READBACK_BUDGET", "expected": "accepted-at-limit-and-rejected-one-byte-over"},
     {"id": "dominance-preservation-property", "operation": "generate valid graphs and valid execution traces", "expected": "every resolved required predecessor remains dominating"},

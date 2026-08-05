@@ -12,7 +12,7 @@
     "node": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/nodeIdentity" }, "attempt": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/attemptIdentity" },
     "trace_length": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "counters": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/counter" } },
-    "queue": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/queue" }, "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" },
+    "queue": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/queue" }, "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/sessionRevision" },
     "readiness": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/readiness" },
     "title": { "type": "string", "minLength": 1, "maxLength": 120 }, "intent": { "type": "string", "minLength": 1, "maxLength": 300 },
     "description": { "type": "string", "maxLength": 1000 }, "objective": { "type": "string", "minLength": 1, "maxLength": 300 },

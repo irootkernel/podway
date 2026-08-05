@@ -168,7 +168,7 @@ the same session.
 |---|---|
 | `AUT-RECON-001` | `job lookup --idempotency-key <key>` MUST be a read-only, worktree-scoped query and MUST NOT submit or replay a mutation. |
 | `AUT-RECON-002` | Lookup MUST return `found=false` for no record and MUST return job ID, sequence, command, request digest, and state for admitted non-terminal jobs. |
-| `AUT-RECON-003` | Lookup MUST return the complete immutable original `podway.output/v1` or `podway.error/v1` terminal envelope, including request correlation, command, completion timestamp, workspace, job, session/result or public error details, from the retained receipt after the terminal job row is pruned. It MUST NOT retain or reveal the full original request. Cancelled jobs retain the closed cancellation summary. |
+| `AUT-RECON-003` | Lookup MUST return the complete immutable original success envelope (`podway.output/v1` for v1 jobs or `podway.output/v2` for Procedure v2 jobs) or `podway.error/v1` terminal envelope, including request correlation, command, completion timestamp, workspace, job, session/result or public error details, from the retained receipt after the terminal job row is pruned. It MUST NOT retain or reveal the full original request. Cancelled jobs retain the closed cancellation summary. |
 | `AUT-RECON-004` | Reusing an idempotency key for a different canonical request MUST continue to fail with the stable reuse error. |
 
 ## 19. Quiescent observation (AUT-OBS-001)
@@ -241,6 +241,22 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 
 The distribution qualification is the executable proof for the packaged client
 contract and runs against the same archive selected for handoff.
+
+## Procedure v2 automation boundary
+
+Automation discovers Procedure v2 capability from the manifest-bound command
+route and result-schema registries before dispatch. Registered but unserved v2
+routes fail with `UNSUPPORTED_V2_CAPABILITY`; absent routes retain the ordinary
+unknown-command or usage behavior. Automation never infers support from product
+version text or human-readable output.
+
+Every v2 mutation uses the existing workspace, session, attempt, revision, and
+idempotency fences applicable to its command. A successful mutation result and
+an admitted terminal error carry the same bounded job admission identity used by
+lookup and replay. A retained terminal envelope always names a v2 mutation, and
+job lookup requires its nested command to equal the immutable job command.
+Preview and other authoring reads remain side-effect free.
+Existing v1 commands and sessions retain their v1 meanings and wire families.
 
 ## 25. Requirements-to-roadmap traceability
 

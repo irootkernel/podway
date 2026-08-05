@@ -7,7 +7,7 @@
   "next_budget_bytes": 1015808,
   "headroom_bytes": 32768,
   "output_envelope": {
-    "schema": "assets/schemas/output-v1.schema.json",
+    "schema": "assets/schemas/output-v2.schema.json",
     "component": "ENVELOPE_RESERVE",
     "selectors": [
       "schema",
@@ -24,12 +24,59 @@
       "4-byte-big-endian-payload-length"
     ]
   },
+  "terminal_receipt_contract": {
+    "schema": "assets/schemas/job-result-v2.schema.json",
+    "terminal_success_ref": "urn:podway:schema:output:v2#/$defs/terminalMutationOutput",
+    "terminal_error_ref": "urn:podway:schema:error:v1",
+    "terminal_error_details_ref": "urn:podway:schema:v2-runtime-error-details:v1",
+    "v2_error_message_max_characters": 512,
+    "maximum_wrapper_depth": 1,
+    "fixture": "tests/fixtures/v2/payload/maximum-terminal-receipt-recipe.json",
+    "candidate_error_codes": [
+      "PROCEDURE_V2_SCHEMA_INVALID",
+      "GRAPH_NODE_NOT_FOUND",
+      "NODE_DEFINITION_NOT_FOUND",
+      "GRAPH_NODE_TYPE_MISMATCH",
+      "OPTION_NOT_ALLOWED",
+      "ROUTE_NOT_ALLOWED",
+      "DECISION_REASON_MISSING",
+      "EVIDENCE_REFERENCE_UNRESOLVED",
+      "EVIDENCE_REFERENCE_STALE",
+      "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+      "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+      "GOAL_TRACKING_NOT_ENABLED",
+      "SESSION_GOAL_MISSING",
+      "SESSION_GOAL_ALREADY_DEFINED",
+      "GOAL_REVISION_STALE",
+      "GOAL_REVISION_TARGET_NOT_ALLOWED",
+      "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
+      "REACTIVATION_FLAG_REQUIRED",
+      "CRITERION_MODE_MIXED",
+      "CRITERION_CITATION_INVALID",
+      "CRITERION_RESULT_MISSING",
+      "CRITERION_NOT_FOUND",
+      "FRESH_GOAL_ASSESSMENT_MISSING",
+      "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
+      "DIGEST_CONFIRMATION_REQUIRED",
+      "UNSUPPORTED_V2_CAPABILITY"
+    ],
+    "candidate_result_schemas": [
+      "assets/schemas/session-start-result-v2.schema.json",
+      "assets/schemas/stage-transition-result-v2.schema.json",
+      "assets/schemas/item-mutation-result-v2.schema.json",
+      "assets/schemas/decision-result-v1.schema.json",
+      "assets/schemas/rework-result-v1.schema.json",
+      "assets/schemas/goal-definition-result-v1.schema.json",
+      "assets/schemas/goal-revision-result-v1.schema.json",
+      "assets/schemas/criterion-assessment-result-v1.schema.json"
+    ]
+  },
   "next_schema": "assets/schemas/next-result-v2.schema.json",
   "resolved_next_shape": {
-    "unique_instance_leaf_paths": 113,
-    "non_suggestion_leaf_paths": 110,
+    "unique_instance_leaf_paths": 112,
+    "non_suggestion_leaf_paths": 109,
     "suggestion_leaf_paths": 3,
-    "conditional_assignments": 116,
+    "conditional_assignments": 115,
     "v2_command_values": 19
   },
   "components": [
@@ -169,7 +216,7 @@
       "schema": "assets/schemas/status-result-v2.schema.json",
       "maximum_bytes": 1048576,
       "window_bytes": 65536,
-      "window_count": 4,
+      "window_count": 6,
       "test_class": "payload-boundary",
       "implementation_status": "planned"
     }

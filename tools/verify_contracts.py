@@ -203,6 +203,7 @@ V2_RUNTIME_ERROR_CODES = {
 }
 V2_AUTHORING_DIAGNOSTIC_CODES = {
     "AUTHORING_SCHEMA_INVALID", "SOURCE_CONSTRUCT_UNSUPPORTED", "FORMAT_NOT_CANONICAL",
+    "SOURCE_PROJECTION_BUDGET_EXCEEDED",
     "ENTRY_NODE_INVALID", "GRAPH_DEFINITION_UNKNOWN", "ROUTE_TARGET_NOT_FOUND",
     "UNREACHABLE_GRAPH_NODE", "NO_TERMINAL_PATH", "ACTION_DISPOSITION_INVALID",
     "DECISION_OPTION_ROUTE_MISSING", "DECISION_ROUTE_OPTION_UNDEFINED",
@@ -314,6 +315,13 @@ def validate_v2_catalog_delta(root: Path) -> int:
             fail("runtime error entry has an invalid exit code")
         if not isinstance(entry.get("retryable"), bool):
             fail("runtime error entry has an invalid retryability value")
+    v2_details_schemas = {
+        entry.get("code"): entry.get("details_schema") for entry in entries[65:]
+    }
+    if v2_details_schemas != dict.fromkeys(
+        V2_RUNTIME_ERROR_CODES, "podway.v2-runtime-error-details/v1"
+    ):
+        fail("every v2 runtime error must bind the closed v2 details schema")
 
     authoring = read_json(
         root, Path("assets/specifications/authoring-diagnostics.json"),

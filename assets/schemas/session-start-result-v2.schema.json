@@ -3,20 +3,22 @@
   "$id": "urn:podway:schema:session-start-result:v2",
   "title": "Podway Session Start Result v2",
   "type": "object", "additionalProperties": false,
-  "required": ["schema", "procedure_schema", "procedure_digest", "dry_run", "goal_tracking"],
+  "required": ["schema", "procedure_schema", "procedure_digest", "dry_run", "goal_tracking", "goal_defined"],
   "properties": {
     "schema": { "const": "podway.session-start-result/v2" },
     "procedure_schema": { "const": "podway.procedure/v2" },
     "procedure_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
     "dry_run": { "type": "boolean" },
     "goal_tracking": { "type": "boolean" },
+    "goal_defined": { "type": "boolean" },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" },
     "session_id": { "type": "string", "format": "uuid" },
-    "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" },
-    "entry_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
-    "goal_required": { "type": "boolean" }
+    "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/sessionRevision" },
+    "entry_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }
   },
   "allOf": [
-    { "if": { "properties": { "dry_run": { "const": true } }, "required": ["dry_run"] }, "then": { "not": { "anyOf": [{ "required": ["session_id"] }, { "required": ["revision"] }, { "required": ["entry_graph_node_id"] }] } }, "else": { "required": ["session_id", "revision", "entry_graph_node_id"] } },
-    { "if": { "properties": { "goal_tracking": { "const": true } }, "required": ["goal_tracking"] }, "then": { "required": ["goal_required"] }, "else": { "not": { "required": ["goal_required"] } } }
+    { "if": { "properties": { "dry_run": { "const": true } }, "required": ["dry_run"] }, "then": { "not": { "anyOf": [{ "required": ["admission"] }, { "required": ["session_id"] }, { "required": ["revision"] }, { "required": ["entry_graph_node_id"] }] } }, "else": { "required": ["admission", "session_id", "revision", "entry_graph_node_id"] } },
+    { "if": { "properties": { "goal_tracking": { "const": false } }, "required": ["goal_tracking"] }, "then": { "properties": { "goal_defined": { "const": false } } } },
+    { "if": { "properties": { "goal_defined": { "const": true } }, "required": ["goal_defined"] }, "then": { "properties": { "goal_tracking": { "const": true } } } }
   ]
 }

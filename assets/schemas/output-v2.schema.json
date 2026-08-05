@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:output:v2",
+  "title": "Podway Success Output v2",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "request_id", "command", "generated_at", "result", "warnings"],
+  "properties": {
+    "schema": { "const": "podway.output/v2" },
+    "request_id": { "type": "string", "format": "uuid" },
+    "command": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "generated_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
+    "workspace": { "$ref": "urn:podway:schema:output:v1#/$defs/workspace" },
+    "job": { "$ref": "urn:podway:schema:output:v1#/$defs/job" },
+    "session": { "$ref": "urn:podway:schema:output:v1#/$defs/session" },
+    "result": { "type": "object" },
+    "warnings": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/warnings" }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/procedureValidation" },
+    { "$ref": "#/$defs/detachedAdmission" },
+    { "$ref": "#/$defs/sessionStart" },
+    { "$ref": "#/$defs/status" },
+    { "$ref": "#/$defs/compactStatus" },
+    { "$ref": "#/$defs/next" },
+    { "$ref": "#/$defs/stageTransition" },
+    { "$ref": "#/$defs/itemMutation" },
+    { "$ref": "#/$defs/jobLookup" },
+    { "$ref": "#/$defs/jobResult" },
+    { "$ref": "#/$defs/procedureSource" },
+    { "$ref": "#/$defs/procedureDiagnostics" },
+    { "$ref": "#/$defs/procedureGraph" },
+    { "$ref": "#/$defs/procedurePreview" },
+    { "$ref": "#/$defs/decision" },
+    { "$ref": "#/$defs/rework" },
+    { "$ref": "#/$defs/goalDefinition" },
+    { "$ref": "#/$defs/goalRevision" },
+    { "$ref": "#/$defs/criterionAssessment" }
+  ],
+  "$defs": {
+    "terminalMutationOutput": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schema", "request_id", "command", "generated_at", "result", "warnings"],
+      "properties": {
+        "schema": { "const": "podway.output/v2" },
+        "request_id": { "type": "string", "format": "uuid" },
+        "command": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "generated_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
+        "workspace": { "$ref": "urn:podway:schema:output:v1#/$defs/workspace" },
+        "job": { "$ref": "urn:podway:schema:output:v1#/$defs/job" },
+        "session": { "$ref": "urn:podway:schema:output:v1#/$defs/session" },
+        "result": { "type": "object" },
+        "warnings": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/warnings" }
+      },
+      "oneOf": [
+        { "$ref": "#/$defs/sessionStartMutation" },
+        { "$ref": "#/$defs/stageTransition" },
+        { "$ref": "#/$defs/itemMutation" },
+        { "$ref": "#/$defs/decision" },
+        { "$ref": "#/$defs/rework" },
+        { "$ref": "#/$defs/goalDefinition" },
+        { "$ref": "#/$defs/goalRevision" },
+        { "$ref": "#/$defs/criterionAssessment" }
+      ]
+    },
+    "procedureValidation": { "properties": { "command": { "const": "procedure.validate" }, "result": { "$ref": "urn:podway:schema:procedure-validation-result:v2" } } },
+    "detachedAdmission": {
+      "required": ["workspace", "job"],
+      "properties": {
+        "command": { "enum": ["session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
+        "result": { "$ref": "urn:podway:schema:detached-admission-result:v2" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "command": { "enum": ["session.start", "session.start_replace"] } }, "required": ["command"] },
+          "then": { "properties": { "result": { "required": ["procedure_digest"] } } },
+          "else": { "properties": { "result": { "not": { "required": ["procedure_digest"] } } } }
+        }
+      ]
+    },
+    "sessionStart": {
+      "properties": { "command": { "enum": ["session.start", "session.start_replace"] }, "result": { "$ref": "urn:podway:schema:session-start-result:v2" } },
+      "allOf": [
+        {
+          "if": { "properties": { "result": { "properties": { "dry_run": { "const": false } }, "required": ["dry_run"] } }, "required": ["result"] },
+          "then": { "required": ["workspace", "job"] }
+        }
+      ]
+    },
+    "sessionStartMutation": {
+      "required": ["workspace", "job"],
+      "properties": {
+        "command": { "enum": ["session.start", "session.start_replace"] },
+        "result": {
+          "allOf": [
+            { "$ref": "urn:podway:schema:session-start-result:v2" },
+            { "properties": { "dry_run": { "const": false } }, "required": ["dry_run"] }
+          ]
+        }
+      }
+    },
+    "status": { "properties": { "command": { "const": "session.status" }, "result": { "$ref": "urn:podway:schema:status-result:v2" } } },
+    "compactStatus": { "properties": { "command": { "const": "session.status" }, "result": { "$ref": "urn:podway:schema:compact-status-result:v2" } } },
+    "next": { "properties": { "command": { "const": "session.next" }, "result": { "$ref": "urn:podway:schema:next-result:v2" } } },
+    "stageTransition": { "required": ["workspace", "job"], "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset"] }, "result": { "$ref": "urn:podway:schema:stage-transition-result:v2" } } },
+    "itemMutation": { "required": ["workspace", "job"], "properties": { "command": { "enum": ["item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] }, "result": { "$ref": "urn:podway:schema:item-mutation-result:v2" } } },
+    "jobLookup": { "properties": { "command": { "const": "job.lookup" }, "result": { "$ref": "urn:podway:schema:job-lookup-result:v2" } } },
+    "jobResult": { "properties": { "command": { "enum": ["job.status", "job.wait"] }, "result": { "$ref": "urn:podway:schema:job-result:v2" } } },
+    "procedureSource": { "properties": { "command": { "enum": ["procedure.format", "procedure.scaffold", "procedure.convert"] }, "result": { "$ref": "urn:podway:schema:procedure-source-result:v1" } } },
+    "procedureDiagnostics": { "properties": { "command": { "enum": ["procedure.format", "procedure.validate", "procedure.vet", "procedure.lint", "procedure.check", "procedure.graph", "procedure.preview", "procedure.scaffold", "procedure.convert"] }, "result": { "$ref": "urn:podway:schema:procedure-diagnostics-result:v1" } } },
+    "procedureGraph": { "properties": { "command": { "const": "procedure.graph" }, "result": { "$ref": "urn:podway:schema:procedure-graph-result:v1" } } },
+    "procedurePreview": { "properties": { "command": { "const": "procedure.preview" }, "result": { "$ref": "urn:podway:schema:procedure-preview-result:v1" } } },
+    "decision": { "required": ["workspace", "job"], "properties": { "command": { "const": "session.decide" }, "result": { "$ref": "urn:podway:schema:decision-result:v1" } } },
+    "rework": { "required": ["workspace", "job"], "properties": { "command": { "const": "session.rework" }, "result": { "$ref": "urn:podway:schema:rework-result:v1" } } },
+    "goalDefinition": { "required": ["workspace", "job"], "properties": { "command": { "const": "goal.define" }, "result": { "$ref": "urn:podway:schema:goal-definition-result:v1" } } },
+    "goalRevision": { "required": ["workspace", "job"], "properties": { "command": { "const": "goal.revise" }, "result": { "$ref": "urn:podway:schema:goal-revision-result:v1" } } },
+    "criterionAssessment": { "required": ["workspace", "job"], "properties": { "command": { "const": "goal.assess_criterion" }, "result": { "$ref": "urn:podway:schema:criterion-assessment-result:v1" } } }
+  }
+}

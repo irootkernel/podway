@@ -34,9 +34,9 @@ pub use release_contract::{
 pub use result_contract::{
     EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_V2_OUTPUT_WARNINGS, MAX_V2_WARNING_CODE_CHARS,
     MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS, NEW_ROUTE_RESULT_SCHEMAS_V1,
-    ResultSchemaContractV2, SUPPORTED_RESULT_SCHEMAS_V1, decode_result_schema_contract_v2,
-    ensure_command_result_schema_v1, result_schema_top_level_fields_v2, validate_command_result_v1,
-    validate_v2_output_envelope_value, validate_v2_output_warnings,
+    OUTPUT_SCHEMA_V2, ResultSchemaContractV2, SUPPORTED_RESULT_SCHEMAS_V1, V2_MUTATION_COMMANDS,
+    decode_result_schema_contract_v2, ensure_command_result_schema_v1,
+    result_schema_top_level_fields_v2, validate_command_result_v1, validate_v2_output_warnings,
 };
 pub use slice::*;
 
@@ -2117,7 +2117,12 @@ impl ErrorEnvelopeV1 {
                 actual_retryable: self.retryable,
             });
         }
-        validate_non_empty_scalar_bounded(&self.message, usize::MAX, "message")?;
+        let message_limit = if is_v2_runtime_error_code_v1(self.code.as_str()) {
+            MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1
+        } else {
+            usize::MAX
+        };
+        validate_non_empty_scalar_bounded(&self.message, message_limit, "message")?;
         validate_json_map_depth(&self.details, 1)?;
         if let Some(admission) = self.details.get("admission") {
             validate_admission_metadata_v1(admission, true)?;
@@ -2126,6 +2131,14 @@ impl ErrorEnvelopeV1 {
         validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
         validate_mutation_outcome_unknown_details_v1(self.code.as_str(), &self.details)?;
         validate_closed_error_details_v1(self.code.as_str(), &self.details)?;
+        if is_v2_runtime_error_code_v1(self.code.as_str())
+            && V2_MUTATION_COMMANDS.contains(&self.command.as_str())
+            && !self.details.contains_key("admission")
+        {
+            return Err(ProtocolError::InvalidErrorDetails {
+                code: self.code.as_str().to_owned(),
+            });
+        }
         if let Some(workspace) = &self.workspace {
             validate_json_map_depth(workspace, 1)?;
         }
@@ -2342,6 +2355,9 @@ fn validate_closed_error_details_v1(
         }
         "JOB_WAIT_TIMEOUT" => validate_wait_timeout_details_v1(details),
         "BLOCKER_LIMIT_REACHED" => validate_blocker_limit_details_v1(details),
+        code if is_v2_runtime_error_code_v1(code) => {
+            validate_v2_runtime_error_details_v1(code, details)
+        }
         _ => true,
     };
     if valid {
@@ -2351,6 +2367,266 @@ fn validate_closed_error_details_v1(
             code: code.to_owned(),
         })
     }
+}
+
+const V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1: &str = "podway.v2-runtime-error-details/v1";
+/// Maximum scalar count for messages produced with Procedure v2 runtime errors.
+pub const MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1: usize = 512;
+/// Registered Procedure v2 runtime codes that use the shared closed details family.
+pub const V2_RUNTIME_ERROR_CODES_V1: &[&str] = &[
+    "PROCEDURE_V2_SCHEMA_INVALID",
+    "GRAPH_NODE_NOT_FOUND",
+    "NODE_DEFINITION_NOT_FOUND",
+    "GRAPH_NODE_TYPE_MISMATCH",
+    "OPTION_NOT_ALLOWED",
+    "ROUTE_NOT_ALLOWED",
+    "DECISION_REASON_MISSING",
+    "EVIDENCE_REFERENCE_UNRESOLVED",
+    "EVIDENCE_REFERENCE_STALE",
+    "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+    "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+    "GOAL_TRACKING_NOT_ENABLED",
+    "SESSION_GOAL_MISSING",
+    "SESSION_GOAL_ALREADY_DEFINED",
+    "GOAL_REVISION_STALE",
+    "GOAL_REVISION_TARGET_NOT_ALLOWED",
+    "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
+    "REACTIVATION_FLAG_REQUIRED",
+    "CRITERION_MODE_MIXED",
+    "CRITERION_CITATION_INVALID",
+    "CRITERION_RESULT_MISSING",
+    "CRITERION_NOT_FOUND",
+    "FRESH_GOAL_ASSESSMENT_MISSING",
+    "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
+    "DIGEST_CONFIRMATION_REQUIRED",
+    "UNSUPPORTED_V2_CAPABILITY",
+];
+
+fn is_v2_runtime_error_code_v1(code: &str) -> bool {
+    V2_RUNTIME_ERROR_CODES_V1.contains(&code)
+}
+
+fn validate_v2_runtime_error_details_v1(code: &str, details: &Map<String, Value>) -> bool {
+    type FieldValidatorV1 = (&'static str, fn(&Value) -> bool);
+
+    let fields: &[FieldValidatorV1] = match code {
+        "PROCEDURE_V2_SCHEMA_INVALID" => &[("diagnostic_codes", validate_diagnostic_codes_v1)],
+        "GRAPH_NODE_NOT_FOUND" => &[("graph_node_id", validate_v2_identifier_value_v1)],
+        "NODE_DEFINITION_NOT_FOUND" => &[("node_definition_id", validate_v2_identifier_value_v1)],
+        "GRAPH_NODE_TYPE_MISMATCH" => &[
+            ("graph_node_id", validate_v2_identifier_value_v1),
+            ("expected_node_type", validate_node_type_v1),
+            ("actual_node_type", validate_node_type_v1),
+        ],
+        "OPTION_NOT_ALLOWED" => &[
+            ("graph_node_id", validate_v2_identifier_value_v1),
+            ("option_id", validate_v2_identifier_value_v1),
+            ("allowed_option_ids", validate_identifier_set_8_v1),
+        ],
+        "ROUTE_NOT_ALLOWED" => &[
+            ("graph_node_id", validate_v2_identifier_value_v1),
+            ("option_id", validate_v2_identifier_value_v1),
+        ],
+        "DECISION_REASON_MISSING" => &[("graph_node_id", validate_v2_identifier_value_v1)],
+        "EVIDENCE_REFERENCE_UNRESOLVED" => &[
+            ("graph_node_id", validate_v2_identifier_value_v1),
+            ("source_graph_node_ids", validate_identifier_set_8_v1),
+        ],
+        "EVIDENCE_REFERENCE_STALE" => &[
+            ("graph_node_id", validate_v2_identifier_value_v1),
+            ("source_graph_node_id", validate_v2_identifier_value_v1),
+            ("expected_source_attempt_id", validate_attempt_id_value_v1),
+            ("current_source_attempt_id", validate_nullable_attempt_id_v1),
+        ],
+        "MANUAL_REWORK_TARGET_NOT_ALLOWED"
+        | "MANUAL_REWORK_TARGET_NOT_ON_TRACE"
+        | "GOAL_REVISION_TARGET_NOT_ALLOWED"
+        | "GOAL_REVISION_TARGET_NOT_REVISION_SAFE" => {
+            &[("target_graph_node_id", validate_v2_identifier_value_v1)]
+        }
+        "GOAL_TRACKING_NOT_ENABLED" | "SESSION_GOAL_MISSING" | "REACTIVATION_FLAG_REQUIRED" => &[],
+        "SESSION_GOAL_ALREADY_DEFINED" | "FRESH_GOAL_ASSESSMENT_MISSING" => {
+            &[("goal_revision", validate_positive_revision_v1)]
+        }
+        "GOAL_REVISION_STALE" => &[
+            ("expected_goal_revision", validate_positive_revision_v1),
+            ("actual_goal_revision", validate_positive_revision_v1),
+        ],
+        "CRITERION_MODE_MIXED" => &[
+            ("criterion_id", validate_v2_identifier_value_v1),
+            ("expected_mode", validate_criterion_mode_v1),
+            ("actual_status", validate_criterion_status_v1),
+        ],
+        "CRITERION_CITATION_INVALID" => &[
+            ("criterion_id", validate_v2_identifier_value_v1),
+            ("citation", validate_citation_v1),
+        ],
+        "CRITERION_RESULT_MISSING" => &[("missing_criterion_ids", validate_identifier_set_16_v1)],
+        "CRITERION_NOT_FOUND" => &[("criterion_id", validate_v2_identifier_value_v1)],
+        "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED" => &[
+            ("option_id", validate_v2_identifier_value_v1),
+            ("determined_outcome", validate_goal_outcome_v1),
+            ("allowed_option_ids", validate_identifier_set_8_v1),
+        ],
+        "DIGEST_CONFIRMATION_REQUIRED" => &[("procedure_digest", validate_digest_value_v1)],
+        "UNSUPPORTED_V2_CAPABILITY" => &[("capability", validate_bounded_text_128_v1)],
+        _ => return false,
+    };
+    if details.get("schema").and_then(Value::as_str) != Some(V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1)
+        || details.get("kind").and_then(Value::as_str) != Some(code)
+        || details.keys().any(|key| {
+            key != "schema"
+                && key != "kind"
+                && key != "admission"
+                && !fields.iter().any(|(field, _)| key == field)
+                && !(code == "UNSUPPORTED_V2_CAPABILITY"
+                    && matches!(
+                        key.as_str(),
+                        "required_result_schema" | "contract_manifest_digest"
+                    ))
+        })
+        || !fields
+            .iter()
+            .all(|(field, validate)| details.get(*field).is_some_and(validate))
+        || details
+            .get("admission")
+            .is_some_and(|admission| validate_admission_metadata_v1(admission, true).is_err())
+    {
+        return false;
+    }
+    if code == "UNSUPPORTED_V2_CAPABILITY" {
+        return details
+            .get("required_result_schema")
+            .is_none_or(validate_bounded_text_128_v1)
+            && details
+                .get("contract_manifest_digest")
+                .is_none_or(validate_digest_value_v1);
+    }
+    true
+}
+
+fn validate_v2_identifier_value_v1(value: &Value) -> bool {
+    value.as_str().is_some_and(|value| {
+        let mut segments = value.split('-');
+        let Some(first) = segments.next() else {
+            return false;
+        };
+        value.chars().count() <= 64
+            && !first.is_empty()
+            && first.starts_with(|character: char| character.is_ascii_lowercase())
+            && first
+                .chars()
+                .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+            && segments.all(|segment| {
+                !segment.is_empty()
+                    && segment.chars().all(|character| {
+                        character.is_ascii_lowercase() || character.is_ascii_digit()
+                    })
+            })
+    })
+}
+
+fn validate_string_set_v1(value: &Value, maximum: usize, validate: fn(&Value) -> bool) -> bool {
+    value.as_array().is_some_and(|values| {
+        !values.is_empty()
+            && values.len() <= maximum
+            && values.iter().all(validate)
+            && values
+                .iter()
+                .enumerate()
+                .all(|(index, item)| values[..index].iter().all(|prior| prior != item))
+    })
+}
+
+fn validate_identifier_set_8_v1(value: &Value) -> bool {
+    validate_string_set_v1(value, 8, validate_v2_identifier_value_v1)
+}
+
+fn validate_identifier_set_16_v1(value: &Value) -> bool {
+    validate_string_set_v1(value, 16, validate_v2_identifier_value_v1)
+}
+
+fn validate_diagnostic_codes_v1(value: &Value) -> bool {
+    validate_string_set_v1(value, 256, |value| {
+        value.as_str().is_some_and(|code| {
+            !code.is_empty()
+                && code.chars().count() <= 64
+                && code.starts_with(|character: char| character.is_ascii_uppercase())
+                && code.chars().all(|character| {
+                    character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+                })
+        })
+    })
+}
+
+fn validate_attempt_id_value_v1(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|value| AttemptId::new(value).is_ok())
+}
+
+fn validate_nullable_attempt_id_v1(value: &Value) -> bool {
+    value.is_null() || validate_attempt_id_value_v1(value)
+}
+
+fn validate_positive_revision_v1(value: &Value) -> bool {
+    value.as_u64().is_some_and(|value| value > 0)
+}
+
+fn validate_node_type_v1(value: &Value) -> bool {
+    matches!(value.as_str(), Some("action" | "decision"))
+}
+
+fn validate_criterion_mode_v1(value: &Value) -> bool {
+    matches!(value.as_str(), Some("assessment" | "applicability"))
+}
+
+fn validate_criterion_status_v1(value: &Value) -> bool {
+    matches!(
+        value.as_str(),
+        Some("satisfied" | "unsatisfied" | "not_applicable")
+    )
+}
+
+fn validate_goal_outcome_v1(value: &Value) -> bool {
+    matches!(
+        value.as_str(),
+        Some("achieved" | "not_achieved" | "superseded")
+    )
+}
+
+fn validate_digest_value_v1(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|value| Sha256Digest::new(value).is_ok())
+}
+
+fn validate_bounded_text_128_v1(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|value| !value.is_empty() && value.chars().count() <= 128)
+}
+
+fn validate_citation_v1(value: &Value) -> bool {
+    let Some(citation) = value.as_object() else {
+        return false;
+    };
+    if citation
+        .keys()
+        .any(|key| !matches!(key.as_str(), "reference_graph_node_id" | "local_item_id"))
+        || citation
+            .values()
+            .any(|value| !validate_v2_identifier_value_v1(value))
+    {
+        return false;
+    }
+    matches!(
+        (
+            citation.contains_key("reference_graph_node_id"),
+            citation.contains_key("local_item_id"),
+        ),
+        (true, false) | (false, true)
+    )
 }
 
 fn validate_endpoint_details_v1(details: &Map<String, Value>) -> bool {
@@ -2552,6 +2828,15 @@ fn validate_not_admitted_value_v1(value: Option<&Value>) -> bool {
 
 /// Adds a stable schema identifier to each closed public error-detail family.
 pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Value>) {
+    if is_v2_runtime_error_code_v1(code) {
+        details
+            .entry("schema".to_owned())
+            .or_insert_with(|| Value::String(V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1.to_owned()));
+        details
+            .entry("kind".to_owned())
+            .or_insert_with(|| Value::String(code.to_owned()));
+        return;
+    }
     let schema = match code {
         "DAEMON_NOT_INSTALLED"
         | "DAEMON_UNAVAILABLE"

@@ -217,8 +217,9 @@ It includes queue indicators so the caller knows whether later admitted mutation
 IPC transport may retry and responses may be lost. Podway guarantees **one logical state effect per idempotency key and canonical request**, not exactly one network exchange.
 
 Lookup by idempotency key does not replay a request. Store terminal receipt v4 retains
-the bounded semantic projections plus the canonical public `podway.output/v1` or
-`podway.error/v1` envelope sealed in the terminal transaction. Lookup returns that
+the bounded semantic projections plus canonical `podway.output/v1` for v1 jobs,
+non-recursive terminal-mutation `podway.output/v2` for Procedure v2 jobs,
+`podway.error/v1` for failures, or the closed cancellation summary. Lookup returns that
 stored envelope after job-row pruning instead of applying the current catalog or result
 renderer. Canonical execution JSON and the full original request are not copied into the
 retained receipt. Pre-admission, admitted, and unknown-outcome states are

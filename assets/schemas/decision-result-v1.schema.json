@@ -3,13 +3,13 @@
   "$id": "urn:podway:schema:decision-result:v1",
   "title": "Podway Decision Result v1",
   "type": "object", "additionalProperties": false,
-  "required": ["schema", "graph_node_id", "attempt_id", "attempt_number", "option_id", "effect", "revision", "session_state", "record"],
+  "required": ["schema", "admission", "graph_node_id", "attempt_id", "attempt_number", "option_id", "effect", "target_graph_node_id", "target_attempt_id", "revision", "session_state", "record"],
   "properties": {
-    "schema": { "const": "podway.decision-result/v1" }, "graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "schema": { "const": "podway.decision-result/v1" }, "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" }, "graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
     "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
     "option_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "effect": { "enum": ["advance", "rework"] },
     "target_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "target_attempt_id": { "type": "string", "format": "uuid" },
-    "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" }, "session_state": { "enum": ["running", "completed"] },
+    "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/sessionRevision" }, "session_state": { "const": "running" },
     "record": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/decisionRecord" }
   }
 }

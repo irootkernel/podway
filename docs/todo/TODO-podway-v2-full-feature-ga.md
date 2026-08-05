@@ -75,6 +75,10 @@ that the described commands, schemas, storage, or behavior are implemented.
 
 This design is governed by:
 
+- [ADR-0018](../architecture-decision-records/0018-v2-success-envelope.md),
+  which assigns Procedure v2 successes to `podway.output/v2`, retains
+  `podway.error/v1` for failures, and gives v2 job lookup and status/wait their
+  closed v2 wrappers;
 - [ADR-0017](../architecture-decision-records/0017-single-cursor-convergence.md),
   which supersedes ADR-0015 and transitively ADR-0002 to permit convergence
   reached by one cursor while preserving one active attempt and rejecting
@@ -607,7 +611,7 @@ them and MUST NOT relax them. The v2 authoring bounds are:
 | every identifier (procedure, definition, node, item, option, criterion) | 64 characters |
 | procedure `version` | 1 to 64 characters |
 | procedure `name` / `purpose` / `description` | 120 / 500 / 1,000 characters |
-| source document / nesting depth / parsed nodes | 1,048,576 bytes / 64 / 100,000 |
+| source document input / canonical source projection / nesting depth / parsed nodes | 1,048,576 bytes / `SOURCE_PROJECTION_MAX_CHARACTERS` = 131,072 characters / 64 / 100,000 |
 | graph nodes per procedure | 64 |
 | node definitions per procedure | 64 |
 | definition `title` / `intent` / `description` | 120 / 300 / 1,000 characters |
@@ -2009,8 +2013,8 @@ The components sum to 1,015,808 bytes, leaving 32,768 bytes of headroom
 below the 1,048,576-byte frame. Every field of a `next` result belongs to
 exactly one component:
 
-- `ENVELOPE_RESERVE`: the output envelope, workspace, session, job, queue,
-  and revision metadata, request identity, the bounded warnings array, and
+- `ENVELOPE_RESERVE`: the direct output envelope or one terminal job
+  reconciliation wrapper, workspace, session, job, queue, revision metadata,
   framing overhead — the envelope surface v2 inherits unchanged (§16.1) —
   plus the response identities: procedure schema and digest, node
   definition ID, graph node ID, node type, and the active attempt ID and
@@ -2127,7 +2131,7 @@ Required behavior:
 - default output goes to stdout;
 - `--check` exits nonzero when the source is not in canonical authoring form;
 - `--write` updates only the explicitly named procedure file;
-- output is deterministic and idempotent;
+- output is deterministic, idempotent, and rejected with `SOURCE_PROJECTION_BUDGET_EXCEEDED` when its complete canonical source projection exceeds `SOURCE_PROJECTION_MAX_CHARACTERS`;
 - graph node and option author order is preserved where order is meaningful;
 - formatting never changes the canonical semantic digest;
 - unknown or invalid fields are reported, not dropped;
@@ -2161,7 +2165,7 @@ Validation covers closed local structure:
   disposition, a decision placement's routes, any placement's `evidence_from`
   entries, and a skip policy on action placements only;
 - the `goal_tracking: true` scalar opt-in form (§7.1);
-- collection and string bounds;
+- collection and string bounds, including the complete canonical source projection bound;
 - unknown field rejection.
 
 Validation is local and structural. It sees one placement at a time and
@@ -2387,6 +2391,13 @@ branches entering the join, so it does not dominate the consuming decision:
   "code": "EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER",
   "severity": "error",
   "schema": "podway.procedure/v2",
+  "source_path": "workflow.yaml",
+  "location": {
+    "line": 87,
+    "column": 9,
+    "end_line": 87,
+    "end_column": 31
+  },
   "graph_node_id": "confirm-closeout",
   "field": "graph.nodes[confirm-closeout].evidence_from[finish-not-achieved]",
   "message": "Required evidence is not produced on every path to this node.",
@@ -2732,9 +2743,9 @@ The daemon continues to:
 
 ## 16. Contract and Error Surface
 
-The v2 contract strategy is fixed, not implementer-selectable. The
-`podway.output/v1` and `podway.error/v1` envelopes are retained unchanged and
-remain open to additive envelope fields. Every v2 surface gets a closed
+The v2 contract strategy is fixed, not implementer-selectable. Procedure v2
+successes use the additive `podway.output/v2` envelope; failures retain
+`podway.error/v1`. Both remain open to additive envelope fields. Every v2 surface gets a closed
 result schema selected by its own `schema` discriminator, under one naming
 rule: a v2 variant of an existing v1 command surface bumps that family's
 major version (for example `podway.next-result/v2` for `next` against a v2
@@ -2744,7 +2755,8 @@ continue to emit the pinned v1 result families byte-for-byte; a v2 session
 never emits a v1 result family extended with v2 fields. Every new family and
 route registers through §16.1's chain, and a peer that does not support a
 family rejects it with the structured compatibility error rather than
-ignoring unknown fields.
+ignoring unknown fields. V2 job lookup and status/wait use their `/v2` wrappers
+and preserve the complete original v2 success or v1 error terminal envelope.
 
 Versioned surfaces:
 
@@ -2788,6 +2800,8 @@ The error catalog must distinguish at least:
   §11.3);
 - procedure-static next content over budget at vet,
   `NEXT_STATIC_BUDGET_EXCEEDED` (§10.4, §11.3);
+- canonical source projection over `SOURCE_PROJECTION_MAX_CHARACTERS`,
+  `SOURCE_PROJECTION_BUDGET_EXCEEDED` (§5.1, §11.1, §11.2);
 - rework route target not dominating its routing decision placement at vet,
   `REWORK_TARGET_NOT_DOMINATING` (§9.3);
 - goal-assessment outcome mapping with an unmapped option or an unmapped
@@ -2834,14 +2848,18 @@ JSON schemas, and 65 error codes. V2 adds exactly these 13 routes:
 - `session.decide` and `session.rework`;
 - `goal.define`, `goal.revise`, and `goal.assess_criterion`.
 
-`procedure.validate`, v2 `skip`, item mutations, session start, status, next,
-complete, and retry reuse their existing routes under versioned dispatch. The
-schema inventory is the exhaustive result-family set required by §16, and the
-error inventory is the exhaustive stable runtime-error and authoring-diagnostic
-set required by §§6–13 and §16. Their final counts are derived contract outputs,
-not discretionary targets or permission to grow the surface silently. Every
-added route, schema family, error code, and diagnostic code MUST register
-through:
+The existing version-aware routes are `procedure.validate`, `session.start`,
+`session.start_replace`, `session.status`, `session.next`, `session.complete`,
+`session.skip`, `session.retry`, `session.block`, `session.unblock`,
+`session.cancel`, and `session.reset`; `item.check`, `item.uncheck`, `item.set`,
+`item.add`, `item.remove`, `item.attach`, and `item.clear`; and `job.lookup`,
+`job.status`, and `job.wait`; they all reuse their routes under versioned
+dispatch. The schema inventory is the exhaustive result-family
+set required by §16; the error inventory is the exhaustive stable runtime-error
+and authoring-diagnostic set required by §§6–13 and §16. Final counts are derived
+contract outputs, not discretionary targets or permission to grow the surface
+silently. Every added route, schema family, error code, and diagnostic code MUST
+register through:
 
 - the digest-locked contract manifest;
 - the known-answer fixtures;
@@ -2873,7 +2891,7 @@ acceptance requires evidence across the following areas.
 
 - YAML and JSON resolve to identical canonical semantics;
 - unknown fields, duplicate keys, aliases, tags, includes, oversized values,
-  and unsupported constructs fail closed;
+  canonical source projections over 131,072 characters, and unsupported constructs fail closed;
 - canonical digest is stable across field ordering and formatting;
 - v1 and v2 are unambiguously discriminated;
 - `goal_tracking: true` is the only accepted opt-in form, and every other
@@ -3025,13 +3043,13 @@ acceptance requires evidence across the following areas.
 - the wire-size budget table of §10.4 sums to 1,015,808 bytes, and every
   field of the `next` result schema is assigned to exactly one budget
   component — a field belonging to none is an acceptance failure;
-- an executable maximum-size fixture constructs a complete `next` response
-  — procedure-static content at the `NEXT_STATIC_BUDGET` ceiling, 16
+- executable maximum-size fixtures separately construct a direct complete `next`
+  response — procedure-static content at the `NEXT_STATIC_BUDGET` ceiling, 16
   criteria with runtime suggestion argv, 64 open blockers, 64 graph nodes
   of counters, a maximal envelope with warnings, and read-back at
-  `READBACK_BUDGET` — serializes it through the production result schema
-  and framing path, and proves the encoded size is at most 1,048,576
-  bytes;
+  `READBACK_BUDGET` — and the largest terminal mutation receipt nested once
+  in `job.status` or `job.wait`; each serializes through its production result
+  schema and framing path and proves an encoded size of at most 1,048,576 bytes;
 - the same fixture binds the arithmetic to the encoding: it constructs
   escape-heavy content that exercises the 6-byte character factor and
   asserts, per component, that the charged worst case is greater than or

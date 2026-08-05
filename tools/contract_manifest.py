@@ -23,11 +23,11 @@ MANIFEST_SCHEMA = "podway.contract-manifest/v1"
 PRODUCT = "podway"
 SUPPORTED_IPC_IDS = ["podway.ipc/v1"]
 STATIC_ASSETS = {
-    "contracts/command-routes.json": "route_contract",
-    "quality/v2-acceptance-matrix-v1.json": "quality_matrix",
-    "quality/v2-compatibility-matrix-v1.json": "quality_matrix",
-    "quality/v2-payload-matrix-v1.json": "quality_matrix",
-    "release/v2-release-gate-matrix-v1.json": "quality_matrix",
+    "contracts/command-routes.json": "catalog",
+    "quality/v2-acceptance-matrix-v1.json": "catalog",
+    "quality/v2-compatibility-matrix-v1.json": "catalog",
+    "quality/v2-payload-matrix-v1.json": "catalog",
+    "release/v2-release-gate-matrix-v1.json": "catalog",
     "spec/authoring-diagnostics.json": "catalog",
     "spec/command-catalog.yaml": "catalog",
     "spec/error-codes.json": "catalog",

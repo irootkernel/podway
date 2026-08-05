@@ -102,6 +102,21 @@ for failures. `status --verbose` returns the six trace-sequenced history windows
 defined by `status-result/v2`; `--history-before` applies the exclusive cursor to
 each window. Standard status does not return history windows.
 
+## Procedure v2 preview and confirmation
+
+`procedure preview` never admits a job, creates a session, or writes state. A
+successful admissible preview reports the same canonical Procedure digest that
+`session.start` will validate and returns a structured start suggestion carrying
+that digest. Invalid or non-vetted input returns bounded diagnostics and no start
+suggestion.
+
+Starting a custom Procedure v2 requires `--confirm-digest <digest>` equal to the
+validated canonical digest. Semantic edits invalidate an earlier confirmation;
+formatting and ordering changes that preserve canonical semantics do not.
+Built-in v2 presets use their shipped digest and do not require interactive
+confirmation, but a shipped-digest mismatch fails closed. Preview remains
+read-only regardless of confirmation or admissibility.
+
 ## PATH invocation and runtime environment
 
 Automation may invoke `podway` by command name through a controlled `PATH`,

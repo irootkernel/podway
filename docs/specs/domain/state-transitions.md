@@ -287,3 +287,43 @@ job identity and sequence
 ```
 
 No-op item clears return equal before and after revisions with `changed=false`.
+
+## Procedure v2 cursor and history transitions
+
+A running Procedure v2 session owns one cursor and exactly one active graph-node
+attempt. Completing or skipping an action, or deciding an option, terminates the
+current attempt and either activates one fresh target attempt or completes the
+session. Retry abandons the active attempt and creates a fresh attempt of the
+same placement. No transition activates parallel attempts or waits for another
+branch.
+
+Evidence references resolve once when a decision attempt is activated and bind
+the exact source attempt and complete recorded-item digest. A reference becomes
+stale when rework invalidates its source. Stale references and records remain
+reportable but cannot satisfy readiness or decision preconditions.
+
+Declared rework and manual rework target graph placements, create a fresh target
+attempt, and causally invalidate the affected trace suffix. A manual target must
+be allowed by the immutable Procedure and occur on the current trace. Historical
+attempts, decisions, rework records, goal revisions, and assessments are retained
+in bounded newest-first status windows and remain non-satisfying after staleness.
+
+## Procedure v2 goal and criterion transitions
+
+`goal define` is accepted exactly once for an opted-in session. `goal revise`
+requires the current goal revision, a non-empty reason, an allowed revision-safe
+rework target, and `--reactivate` when the session is completed. It atomically
+creates the next immutable goal revision, invalidates the affected suffix, and
+activates a fresh target attempt. Cancelled sessions cannot be reactivated.
+
+`goal assess-criterion` is valid only on the active goal-assessment decision
+attempt. It validates the current goal revision, criterion identity, homogeneous
+assessment mode, required reason, and every citation target. Evidence citations
+must name fresh resolved references; local citations must name items persisted
+on the active decision attempt. `not_applicable` accepts no citations. Retry or
+staleness clears the satisfying effect of attempt-local criterion state.
+
+The assessment decision succeeds only after every current criterion has a fresh
+result and the selected option matches the deterministically derived goal
+outcome. Podway validates formal state and identity but not the semantic truth or
+relevance of a result.

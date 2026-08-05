@@ -20,6 +20,31 @@ pub struct ResultSchemaContractV2 {
     pub commands: &'static [&'static str],
 }
 
+/// Mutation routes whose v2 terminal responses and errors carry admission metadata.
+pub const V2_MUTATION_COMMANDS: &[&str] = &[
+    "session.start",
+    "session.start_replace",
+    "session.complete",
+    "session.skip",
+    "session.retry",
+    "session.block",
+    "session.unblock",
+    "session.cancel",
+    "session.reset",
+    "session.decide",
+    "session.rework",
+    "goal.define",
+    "goal.revise",
+    "goal.assess_criterion",
+    "item.check",
+    "item.uncheck",
+    "item.set",
+    "item.add",
+    "item.remove",
+    "item.attach",
+    "item.clear",
+];
+
 /// Result families for existing routes whose v2-session shape breaks from v1.
 pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
     result_schema_v2(
@@ -99,6 +124,16 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
             "item.attach",
             "item.clear",
         ],
+    ),
+    result_schema_v2(
+        "podway.job-lookup-result/v2",
+        "schemas/job-lookup-result-v2.schema.json",
+        &["job.lookup"],
+    ),
+    result_schema_v2(
+        "podway.job-result/v2",
+        "schemas/job-result-v2.schema.json",
+        &["job.status", "job.wait"],
     ),
 ];
 
@@ -192,8 +227,72 @@ pub fn decode_result_schema_contract_v2(
     let required = required_result_fields_v2(schema);
     let allowed = allowed_result_fields_v2(schema);
     (required.iter().all(|field| result.contains_key(*field))
-        && result.keys().all(|field| allowed.contains(&field.as_str())))
+        && result.keys().all(|field| allowed.contains(&field.as_str()))
+        && validate_result_correlations_v2(schema, result))
     .then_some(contract)
+}
+
+fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) -> bool {
+    match schema {
+        "podway.decision-result/v1" => {
+            let Some(record) = result.get("record").and_then(Value::as_object) else {
+                return false;
+            };
+            [
+                "graph_node_id",
+                "attempt_id",
+                "attempt_number",
+                "option_id",
+                "effect",
+                "target_graph_node_id",
+            ]
+            .iter()
+            .all(|field| {
+                result
+                    .get(*field)
+                    .zip(record.get(*field))
+                    .is_some_and(|(projected, recorded)| projected == recorded)
+            })
+        }
+        "podway.job-result/v2" => terminal_response_command_v2(result.get("job"))
+            .is_some_and(|command| command.is_none_or(is_v2_mutation_command)),
+        "podway.job-lookup-result/v2" => match result.get("found") {
+            Some(Value::Bool(false)) => !result.contains_key("job"),
+            Some(Value::Bool(true)) => {
+                let Some(job) = result.get("job").and_then(Value::as_object) else {
+                    return false;
+                };
+                let Some(job_command) = job.get("command").and_then(Value::as_str) else {
+                    return false;
+                };
+                is_v2_mutation_command(job_command)
+                    && terminal_response_command_v2(job.get("terminal_response")).is_some_and(
+                        |terminal_command| {
+                            terminal_command.is_none_or(|value| value == job_command)
+                        },
+                    )
+            }
+            _ => false,
+        },
+        _ => true,
+    }
+}
+
+fn terminal_response_command_v2(value: Option<&Value>) -> Option<Option<&str>> {
+    match value {
+        Some(Value::Null) => Some(None),
+        Some(Value::Object(response))
+            if response.get("kind").and_then(Value::as_str) == Some("cancelled") =>
+        {
+            Some(None)
+        }
+        Some(Value::Object(response)) => response.get("command").and_then(Value::as_str).map(Some),
+        _ => None,
+    }
+}
+
+fn is_v2_mutation_command(command: &str) -> bool {
+    V2_MUTATION_COMMANDS.contains(&command)
 }
 
 fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
@@ -201,13 +300,14 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
         "podway.procedure-validation-result/v2" => {
             &["schema", "file", "procedure_schema", "digest", "valid"]
         }
-        "podway.detached-admission-result/v2" => &["schema", "detached", "admission", "job"],
+        "podway.detached-admission-result/v2" => &["schema", "detached", "admission"],
         "podway.session-start-result/v2" => &[
             "schema",
             "procedure_schema",
             "procedure_digest",
             "dry_run",
             "goal_tracking",
+            "goal_defined",
         ],
         "podway.compact-status-result/v2" => &[
             "schema",
@@ -219,7 +319,6 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "trace_length",
             "counters",
             "items",
-            "blockers",
             "queue",
         ],
         "podway.status-result/v2" => &[
@@ -234,7 +333,6 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "trace_length",
             "counters",
             "items",
-            "blockers",
             "queue",
             "missing_required_item_ids",
             "blocker_window",
@@ -267,9 +365,10 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "readback",
             "allowed_manual_rework_targets",
         ],
-        "podway.stage-transition-result/v2" => &["schema", "transition", "revision"],
+        "podway.stage-transition-result/v2" => &["schema", "admission", "transition", "revision"],
         "podway.item-mutation-result/v2" => &[
             "schema",
+            "admission",
             "changed",
             "graph_node_id",
             "attempt_id",
@@ -277,6 +376,8 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "item_id",
             "revision",
         ],
+        "podway.job-lookup-result/v2" => &["schema", "found"],
+        "podway.job-result/v2" => &["schema", "job"],
         "podway.procedure-source-result/v1" => &[
             "schema",
             "operation",
@@ -313,17 +414,21 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.decision-result/v1" => &[
             "schema",
+            "admission",
             "graph_node_id",
             "attempt_id",
             "attempt_number",
             "option_id",
             "effect",
+            "target_graph_node_id",
+            "target_attempt_id",
             "revision",
             "session_state",
             "record",
         ],
         "podway.rework-result/v1" => &[
             "schema",
+            "admission",
             "from_graph_node_id",
             "to_graph_node_id",
             "target_attempt_id",
@@ -333,6 +438,7 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.goal-definition-result/v1" => &[
             "schema",
+            "admission",
             "goal_revision",
             "statement",
             "criteria",
@@ -341,6 +447,7 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.goal-revision-result/v1" => &[
             "schema",
+            "admission",
             "goal_revision",
             "statement",
             "criteria",
@@ -352,6 +459,7 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.criterion-assessment-result/v1" => &[
             "schema",
+            "admission",
             "graph_node_id",
             "attempt_id",
             "goal_revision",
@@ -367,7 +475,7 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
 fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
     match schema {
         "podway.detached-admission-result/v2" => {
-            &["schema", "detached", "admission", "job", "procedure_digest"]
+            &["schema", "detached", "admission", "procedure_digest"]
         }
         "podway.session-start-result/v2" => &[
             "schema",
@@ -375,10 +483,11 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "procedure_digest",
             "dry_run",
             "goal_tracking",
+            "admission",
             "session_id",
             "revision",
             "entry_graph_node_id",
-            "goal_required",
+            "goal_defined",
         ],
         "podway.compact-status-result/v2" => &[
             "schema",
@@ -392,7 +501,6 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "trace_length",
             "counters",
             "items",
-            "blockers",
             "queue",
         ],
         "podway.status-result/v2" => &[
@@ -410,7 +518,6 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "trace_length",
             "counters",
             "items",
-            "blockers",
             "queue",
             "missing_required_item_ids",
             "blocker_window",
@@ -472,6 +579,7 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.stage-transition-result/v2" => &[
             "schema",
+            "admission",
             "transition",
             "from_graph_node_id",
             "from_attempt_id",
@@ -486,6 +594,7 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.item-mutation-result/v2" => &[
             "schema",
+            "admission",
             "changed",
             "graph_node_id",
             "attempt_id",
@@ -494,6 +603,8 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "revision",
             "value_digest",
         ],
+        "podway.job-lookup-result/v2" => &["schema", "found", "job"],
+        "podway.job-result/v2" => &["schema", "job"],
         "podway.procedure-source-result/v1" => &[
             "schema",
             "operation",
@@ -540,6 +651,7 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.decision-result/v1" => &[
             "schema",
+            "admission",
             "graph_node_id",
             "attempt_id",
             "attempt_number",
@@ -553,6 +665,7 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.goal-definition-result/v1" => &[
             "schema",
+            "admission",
             "goal_revision",
             "statement",
             "criteria",
@@ -562,6 +675,7 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.goal-revision-result/v1" => &[
             "schema",
+            "admission",
             "goal_revision",
             "statement",
             "criteria",
@@ -574,6 +688,7 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
         ],
         "podway.criterion-assessment-result/v1" => &[
             "schema",
+            "admission",
             "graph_node_id",
             "attempt_id",
             "goal_revision",
@@ -607,8 +722,9 @@ pub const MAX_V2_OUTPUT_WARNINGS: usize = 4;
 pub const MAX_V2_WARNING_CODE_CHARS: usize = 64;
 pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
 pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
+pub const OUTPUT_SCHEMA_V2: &str = "podway.output/v2";
 
-/// Checks the v2 production bound imposed on the retained open v1 envelope.
+/// Checks the production warning bound for the open v2 success envelope.
 pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
     warnings.len() <= MAX_V2_OUTPUT_WARNINGS
         && warnings.iter().all(|warning| {
@@ -635,102 +751,6 @@ pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
                         !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_MESSAGE_CHARS
                     })
         })
-}
-
-/// Validates the retained v1 envelope boundary for a v2 result before framing.
-pub fn validate_v2_output_envelope_value(output: &Value) -> bool {
-    let Some(envelope) = output.as_object() else {
-        return false;
-    };
-    if envelope.get("schema").and_then(Value::as_str) != Some(crate::OUTPUT_SCHEMA_V1) {
-        return false;
-    }
-    let Some(request_id) = envelope.get("request_id").and_then(Value::as_str) else {
-        return false;
-    };
-    let Some(generated_at) = envelope.get("generated_at").and_then(Value::as_str) else {
-        return false;
-    };
-    if crate::RequestIdV1::new(request_id).is_err()
-        || crate::Rfc3339MillisV1::new(generated_at).is_err()
-    {
-        return false;
-    }
-    let Some(command) = envelope.get("command").and_then(Value::as_str) else {
-        return false;
-    };
-    if crate::CommandNameV1::new(command).is_err() {
-        return false;
-    }
-    let Some(result) = envelope.get("result").and_then(Value::as_object) else {
-        return false;
-    };
-    let Some(contract) = decode_result_schema_contract_v2(result) else {
-        return false;
-    };
-    if !contract.commands.contains(&command) {
-        return false;
-    }
-    let Some(warnings) = envelope.get("warnings").and_then(Value::as_array) else {
-        return false;
-    };
-    let warning_maps: Option<Vec<_>> = warnings
-        .iter()
-        .map(|warning| warning.as_object().cloned())
-        .collect();
-    if !warning_maps.is_some_and(|warnings| validate_v2_output_warnings(&warnings)) {
-        return false;
-    }
-    let Some(length) = serde_json::to_vec(output)
-        .ok()
-        .and_then(|encoded| encoded.len().checked_add(1))
-    else {
-        return false;
-    };
-    if length > crate::MAX_FRAME_PAYLOAD_BYTES_V1 {
-        return false;
-    }
-    if contract.schema == "podway.compact-status-result/v2" {
-        let Some(queue) = result.get("queue").and_then(Value::as_object) else {
-            return false;
-        };
-        return length <= crate::MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1
-            && queue.get("pending_mutations") == Some(&Value::Bool(false))
-            && queue.get("queued_count").and_then(Value::as_u64) == Some(0)
-            && queue.get("running_job_id") == Some(&Value::Null);
-    }
-    if contract.schema == "podway.status-result/v2" {
-        if !result
-            .get("item_values")
-            .and_then(|values| serde_json::to_vec(values).ok())
-            .is_some_and(|encoded| encoded.len() <= 262_144)
-            || !result
-                .get("blocker_window")
-                .and_then(|values| serde_json::to_vec(values).ok())
-                .is_some_and(|encoded| encoded.len() <= 49_152)
-        {
-            return false;
-        }
-        if result.get("tier").and_then(Value::as_str) != Some("verbose") {
-            return true;
-        }
-        return [
-            "current_trace_history",
-            "stale_attempt_history",
-            "decision_history",
-            "rework_history",
-            "stale_goal_revision_history",
-            "stale_goal_assessment_history",
-        ]
-        .iter()
-        .all(|field| {
-            result
-                .get(*field)
-                .and_then(|window| serde_json::to_vec(window).ok())
-                .is_some_and(|encoded| encoded.len() <= 65_536)
-        });
-    }
-    true
 }
 
 macro_rules! define_result_schemas_v1 {

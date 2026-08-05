@@ -628,6 +628,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.job-lookup-result/v1
+  - podway.job-lookup-result/v2
 - name: job.status
   availability: executable
   cli:
@@ -640,6 +641,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.job-result/v1
+  - podway.job-result/v2
 - name: job.wait
   availability: executable
   cli:
@@ -652,6 +654,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.job-result/v1
+  - podway.job-result/v2
 - name: job.cancel
   availability: executable
   cli:

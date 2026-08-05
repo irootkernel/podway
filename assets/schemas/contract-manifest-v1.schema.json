@@ -24,7 +24,7 @@
         "required": ["kind", "path", "sha256"],
         "properties": {
           "kind": {
-            "enum": ["schema", "catalog", "route_contract", "transition_matrix", "canonicalization_rules", "known_answer_fixture", "quality_matrix"]
+            "enum": ["schema", "catalog", "transition_matrix", "canonicalization_rules", "known_answer_fixture"]
           },
           "path": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$" },
           "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }

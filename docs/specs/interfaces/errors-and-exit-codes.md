@@ -155,6 +155,15 @@ conflicts, while `DIGEST_CONFIRMATION_REQUIRED` is a non-retryable exit-2 usage
 failure and `UNSUPPORTED_V2_CAPABILITY` is a non-retryable exit-3 compatibility
 failure.
 
+Every registered v2 runtime code uses the closed
+`podway.v2-runtime-error-details/v1` details family inside the retained
+`podway.error/v1` envelope. Its required `kind` exactly equals the outer error
+code; code-specific fields are bounded, unknown fields are rejected, and the
+optional `admission` field retains the ordinary admission metadata contract.
+The canonical error catalog binds each of these 26 codes to that details schema,
+and v2 runtime error messages are bounded to 512 characters without changing the
+released `podway.error/v1` schema.
+
 Authoring diagnostics never use runtime error codes. The authoring catalog
 separately enumerates every validate, vet, and lint condition from Procedure v2,
 including the mandatory stable codes

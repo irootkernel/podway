@@ -16,6 +16,7 @@
   "future_assertions": [
     "each projection serializes through the production result and framing path",
     "status contains reference metadata but no read-back values",
+    "stale-attempt history carries at most eight stale or unresolved reference metadata entries without read-back values",
     "complete entries are retained until the next entry exceeds its window"
   ]
 }

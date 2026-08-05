@@ -31,3 +31,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0015](0015-constrained-single-cursor-graph.md): constrained single-cursor graph (superseded by ADR-0017)
 - [ADR-0016](0016-recorded-item-workflow-memory.md): recorded-item workflow memory
 - [ADR-0017](0017-single-cursor-convergence.md): single-cursor convergence
+- [ADR-0018](0018-v2-success-envelope.md): versioned Procedure v2 success envelope

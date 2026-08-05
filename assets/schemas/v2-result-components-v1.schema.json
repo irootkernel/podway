@@ -7,6 +7,18 @@
     "text": { "type": "string", "maxLength": 4096 },
     "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "admitted": {
+      "allOf": [
+        { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" },
+        { "properties": { "workspace_sequence": { "maximum": 18446744073709551615 } } }
+      ]
+    },
+    "admission": {
+      "oneOf": [
+        { "$ref": "#/$defs/admitted" },
+        { "type": "object", "additionalProperties": false, "required": ["admitted"], "properties": { "admitted": { "const": false } } }
+      ]
+    },
     "timestamp": { "type": "string", "format": "date-time", "maxLength": 24, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$" },
     "warning": {
       "type": "object", "additionalProperties": false,
@@ -33,7 +45,7 @@
     },
     "sessionIdentity": {
       "type": "object", "additionalProperties": false, "required": ["id", "lifecycle", "revision"],
-      "properties": { "id": { "type": "string", "format": "uuid" }, "lifecycle": { "enum": ["running", "completed", "cancelled"] }, "revision": { "$ref": "#/$defs/revision" } }
+      "properties": { "id": { "type": "string", "format": "uuid" }, "lifecycle": { "enum": ["running", "completed", "cancelled"] }, "revision": { "$ref": "#/$defs/sessionRevision" } }
     },
     "attemptIdentity": {
       "type": "object", "additionalProperties": false,
@@ -63,6 +75,7 @@
       }
     },
     "revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "sessionRevision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
     "readiness": {
       "type": "object", "additionalProperties": false,
       "required": ["items_satisfied", "unblocked", "goal_ready", "can_advance"],
@@ -78,10 +91,6 @@
     "compactItem": {
       "type": "object", "additionalProperties": false, "required": ["item_id", "type", "required", "satisfied", "revision"],
       "properties": { "item_id": { "$ref": "#/$defs/identifier" }, "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] }, "required": { "type": "boolean" }, "satisfied": { "type": "boolean" }, "revision": { "$ref": "#/$defs/revision" } }
-    },
-    "compactBlocker": {
-      "type": "object", "additionalProperties": false, "required": ["blocker_id", "attempt_id", "state"],
-      "properties": { "blocker_id": { "type": "string", "format": "uuid" }, "attempt_id": { "type": "string", "format": "uuid" }, "state": { "const": "open" } }
     },
     "blocker": {
       "type": "object", "additionalProperties": false,
@@ -170,10 +179,10 @@
     },
     "citation": {
       "type": "object", "additionalProperties": false,
-      "properties": { "reference_graph_node_id": { "$ref": "#/$defs/identifier" }, "item_id": { "$ref": "#/$defs/identifier" }, "local_item_id": { "$ref": "#/$defs/identifier" } },
+      "properties": { "reference_graph_node_id": { "$ref": "#/$defs/identifier" }, "local_item_id": { "$ref": "#/$defs/identifier" } },
       "oneOf": [
         { "required": ["reference_graph_node_id"], "not": { "required": ["local_item_id"] } },
-        { "required": ["local_item_id"], "not": { "anyOf": [{ "required": ["reference_graph_node_id"] }, { "required": ["item_id"] }] } }
+        { "required": ["local_item_id"], "not": { "required": ["reference_graph_node_id"] } }
       ]
     },
     "criterionResult": {
@@ -197,7 +206,7 @@
     "decisionRecord": {
       "type": "object", "additionalProperties": false, "required": ["trace_sequence", "session_id", "session_revision", "procedure_schema", "procedure_snapshot_id", "procedure_digest", "graph_node_id", "node_definition_id", "attempt_id", "attempt_number", "goal_revision", "option_id", "effect", "target_graph_node_id", "reason", "recorded_at", "references"],
       "properties": {
-        "trace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "session_id": { "type": "string", "format": "uuid" }, "session_revision": { "$ref": "#/$defs/revision" }, "procedure_schema": { "const": "podway.procedure/v2" }, "procedure_snapshot_id": { "type": "string", "format": "uuid" }, "procedure_digest": { "$ref": "#/$defs/digest" },
+        "trace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "session_id": { "type": "string", "format": "uuid" }, "session_revision": { "$ref": "#/$defs/sessionRevision" }, "procedure_schema": { "const": "podway.procedure/v2" }, "procedure_snapshot_id": { "type": "string", "format": "uuid" }, "procedure_digest": { "$ref": "#/$defs/digest" },
         "graph_node_id": { "$ref": "#/$defs/identifier" }, "node_definition_id": { "$ref": "#/$defs/identifier" }, "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "goal_revision": { "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615 },
         "option_id": { "$ref": "#/$defs/identifier" }, "effect": { "enum": ["advance", "rework"] }, "target_graph_node_id": { "$ref": "#/$defs/identifier" }, "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
         "actor": { "type": "string", "minLength": 1, "maxLength": 256 }, "recorded_at": { "$ref": "#/$defs/timestamp" },
@@ -237,7 +246,7 @@
       "properties": {
         "source_graph_node_id": { "$ref": "#/$defs/identifier" }, "source_title": { "type": "string", "minLength": 1, "maxLength": 120 },
         "source_attempt_id": { "type": "string", "format": "uuid" }, "source_attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "items_digest": { "$ref": "#/$defs/digest" },
-        "state": { "enum": ["resolved", "unresolved", "skipped", "stale"] },
+        "state": { "enum": ["resolved", "unresolved", "skipped"] },
         "items": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/readbackItem" } },
         "decision_record": { "$ref": "#/$defs/decisionRecord" }
       },
@@ -258,13 +267,15 @@
     },
     "staleAttemptSummary": {
       "type": "object", "additionalProperties": false,
-      "required": ["trace_sequence", "graph_node_id", "node_definition_id", "attempt_id", "attempt_number", "goal_revision", "lifecycle", "validity", "started_at", "finished_at", "terminal_reason", "items", "items_total", "items_truncated"],
+      "required": ["trace_sequence", "graph_node_id", "node_definition_id", "attempt_id", "attempt_number", "goal_revision", "lifecycle", "validity", "started_at", "finished_at", "terminal_reason", "items", "items_total", "items_truncated", "references"],
       "properties": {
         "trace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "node_definition_id": { "$ref": "#/$defs/identifier" },
         "attempt_id": { "type": "string", "format": "uuid" }, "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "goal_revision": { "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615 },
         "lifecycle": { "enum": ["completed", "skipped", "abandoned"] }, "validity": { "const": "stale" }, "started_at": { "$ref": "#/$defs/timestamp" }, "finished_at": { "$ref": "#/$defs/timestamp" },
         "terminal_reason": { "type": ["string", "null"], "maxLength": 2000 }, "items": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/itemProjection" } },
-        "items_total": { "type": "integer", "minimum": 0, "maximum": 64 }, "items_truncated": { "type": "boolean" }, "record_digest": { "$ref": "#/$defs/digest" }
+        "items_total": { "type": "integer", "minimum": 0, "maximum": 64 }, "items_truncated": { "type": "boolean" },
+        "references": { "type": "array", "maxItems": 8, "items": { "allOf": [{ "$ref": "#/$defs/referenceMetadata" }, { "properties": { "state": { "enum": ["unresolved", "stale"] } } }] } },
+        "record_digest": { "$ref": "#/$defs/digest" }
       }
     },
     "staleGoalRevisionSummary": {
@@ -280,7 +291,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["trace_sequence", "session_id", "session_revision", "procedure_snapshot_id", "procedure_digest", "graph_node_id", "node_definition_id", "attempt_id", "attempt_number", "goal_revision", "assessment", "option_id", "effect", "target_graph_node_id", "mode", "outcome", "criterion_statuses", "references", "actor", "recorded_at", "record_digest"],
       "properties": {
-        "trace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "session_id": { "type": "string", "format": "uuid" }, "session_revision": { "$ref": "#/$defs/revision" }, "procedure_snapshot_id": { "type": "string", "format": "uuid" }, "procedure_digest": { "$ref": "#/$defs/digest" },
+        "trace_sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "session_id": { "type": "string", "format": "uuid" }, "session_revision": { "$ref": "#/$defs/sessionRevision" }, "procedure_snapshot_id": { "type": "string", "format": "uuid" }, "procedure_digest": { "$ref": "#/$defs/digest" },
         "graph_node_id": { "$ref": "#/$defs/identifier" }, "node_definition_id": { "$ref": "#/$defs/identifier" }, "attempt_id": { "type": "string", "format": "uuid" },
         "attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
         "goal_revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "assessment": { "const": "session_goal" }, "option_id": { "$ref": "#/$defs/identifier" }, "effect": { "enum": ["advance", "rework"] }, "target_graph_node_id": { "$ref": "#/$defs/identifier" }, "mode": { "enum": ["assessment", "applicability"] },

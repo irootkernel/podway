@@ -234,12 +234,17 @@ fn parse_command_catalog() -> BTreeMap<String, Vec<String>> {
     bindings
 }
 
-fn parse_error_catalog() -> BTreeMap<String, ErrorCatalogEntry> {
+fn parse_legacy_error_fixture_catalog() -> BTreeMap<String, ErrorCatalogEntry> {
     serde_json::from_value::<ErrorCatalog>(read_json("assets/specifications/error-codes.json"))
         .unwrap()
         .errors
         .into_iter()
-        .filter(|entry| entry.details_schema.is_some())
+        .filter(|entry| {
+            entry
+                .details_schema
+                .as_deref()
+                .is_some_and(|schema| schema != "podway.v2-runtime-error-details/v1")
+        })
         .map(|entry| (entry.code.clone(), entry))
         .collect()
 }
@@ -264,7 +269,7 @@ fn mcont006_runtime_and_authoring_catalogs_are_frozen_disjoint_and_decoder_bound
         .iter()
         .map(|entry| entry["code"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
-    assert_eq!(diagnostic_codes.len(), 51);
+    assert_eq!(diagnostic_codes.len(), 52);
     let runtime_codes = expected
         .iter()
         .map(|(code, _, _)| *code)
@@ -849,7 +854,7 @@ fn mcont006_stage_preview_requires_present_nullable_affected_stage_fields() {
 #[test]
 fn mcont006_error_fixtures_lock_catalog_schemas_and_runtime_decoders() {
     let fixture = fixture();
-    let catalog = parse_error_catalog();
+    let catalog = parse_legacy_error_fixture_catalog();
     let observed = fixture
         .error_bindings
         .iter()
@@ -913,7 +918,7 @@ fn mcont006_envelopes_are_additive_while_conflict_details_stay_coupled() {
     assert_schema_valid("schemas/output-v1.schema.json", &output);
     serde_json::from_value::<ResponseEnvelopeV1>(output).unwrap();
 
-    let catalog = parse_error_catalog();
+    let catalog = parse_legacy_error_fixture_catalog();
     let blocker_entry = catalog.get("BLOCKER_LIMIT_REACHED").unwrap();
     let mut error = error_envelope(
         "BLOCKER_LIMIT_REACHED",
@@ -1389,6 +1394,27 @@ fn validate_v2_fixture_catalog(value: &Value) -> Result<(usize, usize), String> 
     }
     let compatibility = read_json(&catalog.source_compatibility_matrix);
     let payload = read_json(&catalog.source_payload_matrix);
+    let existing_route_family_count =
+        compatibility["result_family_inventories"]["existing_route_v2"]
+            .as_array()
+            .ok_or("existing-route v2 family inventory missing")?
+            .len() as u64;
+    let compatibility_fixture = read_json("tests/fixtures/v2/compatibility/v1-boundaries.json");
+    let family_cases = compatibility_fixture["cases"]
+        .as_array()
+        .ok_or("compatibility fixture cases missing")?
+        .iter()
+        .filter(|case| case["id"] == "existing-route-v2-result-family")
+        .collect::<Vec<_>>();
+    if family_cases.len() != 1
+        || family_cases[0]["operation"]
+            != "validate every existing-route v2 result schema listed by the compatibility matrix against its exact command inventory"
+        || family_cases[0]["expected_family_count"] != existing_route_family_count
+    {
+        return Err(
+            "v2 compatibility fixture existing-route family count or operation drift".to_owned(),
+        );
+    }
     let specialized_entries = compatibility["requirements"]
         .as_array()
         .into_iter()
@@ -1547,7 +1573,10 @@ fn validate_v2_fixture_catalog(value: &Value) -> Result<(usize, usize), String> 
         ),
         (
             "V2FIX-PAYLOAD-NEXT".to_owned(),
-            vec!["payload-maximum-next".to_owned()],
+            vec![
+                "payload-maximum-next".to_owned(),
+                "payload-maximum-terminal-receipt".to_owned(),
+            ],
         ),
         (
             "V2FIX-PAYLOAD-STATUS".to_owned(),
@@ -1607,7 +1636,7 @@ fn validate_v2_fixture_catalog(value: &Value) -> Result<(usize, usize), String> 
 #[test]
 fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
     let catalog = read_json("tests/fixtures/contract/v2-fixture-catalog-v1.json");
-    assert_eq!(validate_v2_fixture_catalog(&catalog).unwrap(), (13, 7));
+    assert_eq!(validate_v2_fixture_catalog(&catalog).unwrap(), (14, 7));
     let catalog_cases = catalog["cases"]
         .as_array()
         .unwrap()
@@ -1783,6 +1812,7 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
         recipe_case_ids(&graph_valid),
         [
             "linear-terminal",
+            "terminal-path-through-rework",
             "unbounded-valid-rework-cycle",
             "maximum-reachable-readback",
             "dominance-preservation-property",
@@ -1926,6 +1956,16 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
             &result_fixtures[&schema_id],
         );
     }
+    let expected_counters = json!([{
+        "graph_node_id":"work", "attempt_count":1, "rework_traversal_count":0
+    }]);
+    for schema_id in [
+        "podway.compact-status-result/v2",
+        "podway.status-result/v2",
+        "podway.next-result/v2",
+    ] {
+        assert_eq!(result_fixtures[schema_id]["counters"], expected_counters);
+    }
 
     let maximum_next = read_json("tests/fixtures/v2/payload/maximum-next-recipe.json");
     let payload_matrix = read_json("quality/v2-payload-matrix-v1.json");
@@ -1954,12 +1994,57 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
         maximum_next["construction"],
         json!([
             "materialize every next-result-v2 field from the payload matrix exactly once",
+            "serialize the complete next result directly in one podway.output/v2 envelope",
             "fill procedure-static content to NEXT_STATIC_BUDGET",
             "fill read-back to READBACK_BUDGET",
             "include 16 criteria and their runtime suggestion argv",
             "include 64 blockers, 64 graph-node counters, and maximal warnings",
             "use escape-heavy control characters for the six-byte accounting factor"
         ])
+    );
+
+    let maximum_terminal_receipt =
+        read_json("tests/fixtures/v2/payload/maximum-terminal-receipt-recipe.json");
+    let terminal_receipt_contract = &payload_matrix["terminal_receipt_contract"];
+    assert_eq!(
+        maximum_terminal_receipt["frame_bytes"],
+        payload_matrix["frame_bytes"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["terminal_result_schema"],
+        terminal_receipt_contract["schema"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["terminal_success_ref"],
+        terminal_receipt_contract["terminal_success_ref"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["terminal_error_ref"],
+        terminal_receipt_contract["terminal_error_ref"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["terminal_error_details_ref"],
+        terminal_receipt_contract["terminal_error_details_ref"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["v2_error_message_max_characters"],
+        terminal_receipt_contract["v2_error_message_max_characters"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["maximum_wrapper_depth"],
+        terminal_receipt_contract["maximum_wrapper_depth"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["candidate_error_codes"],
+        terminal_receipt_contract["candidate_error_codes"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["candidate_result_schemas"],
+        terminal_receipt_contract["candidate_result_schemas"]
+    );
+    assert_eq!(
+        maximum_terminal_receipt["forbidden_nested_results"],
+        json!(["query", "authoring", "detached-admission", "job-result"])
     );
 
     let maximum_status = read_json("tests/fixtures/v2/payload/maximum-status-recipe.json");
@@ -1970,6 +2055,46 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
             {"tier":"standard","maximum_bytes":1048576,"status_values_max_bytes":262144,"item_value_max_characters":2048,"value_marker":"value_truncated","window_markers":["items_total","items_truncated"]},
             {"tier":"verbose","maximum_bytes":1048576,"trace_window_max_bytes":65536,"trace_window_count":6,"window_markers":["trace_truncated","trace_window"]}
         ])
+    );
+    let verbose_recipe = maximum_status["projections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|projection| projection["tier"] == "verbose")
+        .unwrap();
+    let verbose_projection = payload_matrix["projection_bounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|projection| projection["projection"] == "verbose-status")
+        .unwrap();
+    assert_eq!(
+        verbose_recipe["trace_window_count"],
+        payload_matrix["status_contract"]["trace_window_count"]
+    );
+    assert_eq!(
+        verbose_projection["window_count"],
+        payload_matrix["status_contract"]["trace_window_count"]
+    );
+    let status_schema = read_json("assets/schemas/status-result-v2.schema.json");
+    let history_fields = [
+        "current_trace_history",
+        "stale_attempt_history",
+        "decision_history",
+        "rework_history",
+        "stale_goal_revision_history",
+        "stale_goal_assessment_history",
+    ];
+    assert_eq!(
+        history_fields.len() as u64,
+        payload_matrix["status_contract"]["trace_window_count"]
+            .as_u64()
+            .unwrap()
+    );
+    assert!(
+        history_fields
+            .iter()
+            .all(|field| status_schema["properties"].get(*field).is_some())
     );
     assert_eq!(
         maximum_status["projections"][0]["excludes"],
@@ -1991,9 +2116,16 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
         maximum_status["verbose_history_shape"],
         json!({"entries":[],"trace_truncated":false,"trace_window":null})
     );
+    assert!(maximum_status["future_assertions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|assertion| assertion
+            == "stale-attempt history carries at most eight stale or unresolved reference metadata entries without read-back values"));
 
     let payload = read_json("tests/fixtures/v2/payload/truncation-and-overflow-recipe.json");
     let expected_domain_bounds = [
+        ("canonical source projection characters", 131_072, 131_073),
         ("goal statement characters", 1000, 1001),
         ("criterion identifier characters", 64, 65),
         ("criterion statement characters", 300, 301),
@@ -2020,6 +2152,7 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
     assert_eq!(
         recipe_case_ids(&payload),
         [
+            "source-projection-budget",
             "item-value-boundary",
             "status-values-window",
             "blocker-window",

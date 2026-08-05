@@ -496,6 +496,57 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("UNSUPPORTED_V2_CAPABILITY", 3, false),
 ];
 
+fn v2_runtime_error_details(code: &str) -> Option<Map<String, Value>> {
+    let fields = match code {
+        "PROCEDURE_V2_SCHEMA_INVALID" => json!({"diagnostic_codes":["AUTHORING_SCHEMA_INVALID"]}),
+        "GRAPH_NODE_NOT_FOUND" | "DECISION_REASON_MISSING" => json!({"graph_node_id":"review"}),
+        "NODE_DEFINITION_NOT_FOUND" => json!({"node_definition_id":"review"}),
+        "GRAPH_NODE_TYPE_MISMATCH" => {
+            json!({"graph_node_id":"review","expected_node_type":"decision","actual_node_type":"action"})
+        }
+        "OPTION_NOT_ALLOWED" => {
+            json!({"graph_node_id":"review","option_id":"reject","allowed_option_ids":["accept"]})
+        }
+        "ROUTE_NOT_ALLOWED" => json!({"graph_node_id":"review","option_id":"accept"}),
+        "EVIDENCE_REFERENCE_UNRESOLVED" => {
+            json!({"graph_node_id":"review","source_graph_node_ids":["build"]})
+        }
+        "EVIDENCE_REFERENCE_STALE" => {
+            json!({"graph_node_id":"review","source_graph_node_id":"build","expected_source_attempt_id":REQUEST_ID,"current_source_attempt_id":null})
+        }
+        "MANUAL_REWORK_TARGET_NOT_ALLOWED"
+        | "MANUAL_REWORK_TARGET_NOT_ON_TRACE"
+        | "GOAL_REVISION_TARGET_NOT_ALLOWED"
+        | "GOAL_REVISION_TARGET_NOT_REVISION_SAFE" => json!({"target_graph_node_id":"build"}),
+        "GOAL_TRACKING_NOT_ENABLED" | "SESSION_GOAL_MISSING" | "REACTIVATION_FLAG_REQUIRED" => {
+            json!({})
+        }
+        "SESSION_GOAL_ALREADY_DEFINED" | "FRESH_GOAL_ASSESSMENT_MISSING" => {
+            json!({"goal_revision":1})
+        }
+        "GOAL_REVISION_STALE" => json!({"expected_goal_revision":1,"actual_goal_revision":2}),
+        "CRITERION_MODE_MIXED" => {
+            json!({"criterion_id":"tests","expected_mode":"assessment","actual_status":"not_applicable"})
+        }
+        "CRITERION_CITATION_INVALID" => {
+            json!({"criterion_id":"tests","citation":{"local_item_id":"evidence"}})
+        }
+        "CRITERION_RESULT_MISSING" => json!({"missing_criterion_ids":["tests"]}),
+        "CRITERION_NOT_FOUND" => json!({"criterion_id":"tests"}),
+        "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED" => {
+            json!({"option_id":"accept","determined_outcome":"achieved","allowed_option_ids":["reject"]})
+        }
+        "DIGEST_CONFIRMATION_REQUIRED" => {
+            json!({"procedure_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})
+        }
+        "UNSUPPORTED_V2_CAPABILITY" => {
+            json!({"capability":"session.decide","required_result_schema":"podway.decision-result/v1"})
+        }
+        _ => return None,
+    };
+    Some(fields.as_object().unwrap().clone())
+}
+
 #[test]
 fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
     assert_eq!(
@@ -572,7 +623,7 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             "IDEMPOTENCY_KEY_REUSED" => {
                 Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
             }
-            _ => Map::new(),
+            _ => v2_runtime_error_details(code).unwrap_or_default(),
         };
         let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
             request_id: RequestIdV1::new(REQUEST_ID).unwrap(),

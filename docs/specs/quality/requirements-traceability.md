@@ -9,11 +9,11 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 | ID | Requirement | Design source | Primary conformance |
 |---|---|---|---|
 | `PRD-001` | One current task session per worktree | Product overview; invariants | E2E start/replace/reset |
-| `PRD-002` | One active stage attempt per running session | Invariants; domain model | Property suite `INV-S02` |
+| `PRD-002` | One active attempt per running session; a v1 stage attempt or v2 graph-node attempt | Invariants; domain model | Property suite `INV-S02`; v2 graph property suite |
 | `PRD-003` | `next` identifies all missing required items | User workflows; CLI | JSON and preset E2E |
 | `PRD-004` | Completion is blocked by missing items or blockers | State transitions | Domain and CLI tests |
-| `PRD-005` | Retry creates a clean same-stage attempt | Rework | Domain scenario |
-| `PRD-006` | Return creates fresh destination and downstream redo | Rework | Model/property scenario |
+| `PRD-005` | Procedure v1 retry creates a clean same-stage attempt | Rework | Domain scenario |
+| `PRD-006` | Procedure v1 return creates fresh destination and downstream redo | Rework | Model/property scenario |
 | `PRD-007` | Product is current-session focused | Goals/non-goals | UX review and command set |
 | `PRD-008` | Four built-in presets ship as data | Presets | Schema and E2E validation |
 
@@ -34,7 +34,7 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 
 | ID | Requirement | Design source | Primary conformance |
 |---|---|---|---|
-| `DOM-001` | Procedure is a linear ordered stage list | Procedure spec | Schema and property tests |
+| `DOM-001` | Procedure v1 is a linear ordered stage list | Procedure spec | Schema and property tests |
 | `DOM-002` | Procedure contains no executable constructs | Procedure spec; security | Malicious fixture suite |
 | `DOM-003` | Snapshot is immutable after start | Procedure spec | Source-drift integration test |
 | `DOM-004` | Six item types have deterministic constraints | Procedure spec | Per-type unit suite |

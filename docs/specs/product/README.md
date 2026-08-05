@@ -50,7 +50,7 @@ Deleting the worktree deletes the task session and all task-local operational da
 | Area | Decision |
 |---|---|
 | Unit of work | One current task session per Git worktree |
-| Procedure concurrency | Exactly one active stage attempt per session |
+| Procedure concurrency | Exactly one active attempt per session: a v1 stage attempt or v2 graph-node attempt |
 | Write authority | `podwayd` is the sole normal writer |
 | Queue | Durable FIFO per worktree |
 | Cross-worktree behavior | Different worktrees may process mutations concurrently |

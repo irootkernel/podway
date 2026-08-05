@@ -840,8 +840,22 @@ fn run_bootstrap_crash_child(root: &Path) {
     )
     .expect("runner");
     let manager = ServiceManagerV1::new(runner, clock, paths.clone());
-    let _ = manager.install(install_spec(&binary, &paths));
-    panic!("bootstrap crash runner must terminate the child");
+    let first = manager.install(install_spec(&binary, &paths));
+    // The crash child shares the production singleton lock with concurrent service tests.
+    // Retry only lock contention; every other pre-bootstrap failure remains immediately visible.
+    if first.as_ref().is_err_and(lifecycle_lock_timed_out) {
+        let retry = manager.install(install_spec(&binary, &paths));
+        panic!("bootstrap crash runner must terminate the child after lock retry: {retry:?}");
+    }
+    panic!("bootstrap crash runner must terminate the child: {first:?}");
+}
+
+fn lifecycle_lock_timed_out(error: &ServiceErrorV1) -> bool {
+    matches!(
+        error,
+        ServiceErrorV1::OperationFailureV1 { source, .. }
+            if matches!(source.as_ref(), ServiceErrorV1::TimeoutV1 { .. })
+    )
 }
 
 #[test]

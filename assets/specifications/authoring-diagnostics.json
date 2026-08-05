@@ -3,6 +3,7 @@
   "diagnostics": [
     {"code": "AUTHORING_SCHEMA_INVALID", "severity": "error", "summary": "The Procedure source violates the closed v2 authoring schema."},
     {"code": "SOURCE_CONSTRUCT_UNSUPPORTED", "severity": "error", "summary": "The source uses an unsupported YAML or JSON construct."},
+    {"code": "SOURCE_PROJECTION_BUDGET_EXCEEDED", "severity": "error", "summary": "The complete canonical source projection exceeds 131,072 characters."},
     {"code": "FORMAT_NOT_CANONICAL", "severity": "error", "summary": "The source is not in canonical authoring form."},
     {"code": "ENTRY_NODE_INVALID", "severity": "error", "summary": "The graph entry is missing or does not name a graph node."},
     {"code": "GRAPH_DEFINITION_UNKNOWN", "severity": "error", "summary": "A graph placement names an unknown node definition."},

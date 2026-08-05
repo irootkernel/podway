@@ -4,7 +4,7 @@
   "title": "Podway Compact Status Result v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "procedure", "session", "current", "goal_tracking", "goal_defined", "trace_length", "counters", "items", "blockers", "queue"],
+  "required": ["schema", "procedure", "session", "current", "goal_tracking", "goal_defined", "trace_length", "counters", "items", "queue"],
   "properties": {
     "schema": { "const": "podway.compact-status-result/v2" },
     "procedure": {
@@ -23,7 +23,7 @@
       "properties": {
         "id": { "type": "string", "format": "uuid" },
         "lifecycle": { "enum": ["running", "completed", "cancelled"] },
-        "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" }
+        "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/sessionRevision" }
       }
     },
     "current": {
@@ -60,18 +60,6 @@
         }
       }
     },
-    "blockers": {
-      "type": "array", "maxItems": 64,
-      "items": {
-        "type": "object", "additionalProperties": false,
-        "required": ["blocker_id", "attempt_id", "state"],
-        "properties": {
-          "blocker_id": { "type": "string", "format": "uuid" },
-          "attempt_id": { "type": "string", "format": "uuid" },
-          "state": { "const": "open" }
-        }
-      }
-    },
     "queue": {
       "allOf": [
         { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/queue" },
@@ -80,7 +68,7 @@
     }
   },
   "allOf": [
-    { "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] } }, "required": ["session"] }, "then": { "properties": { "current": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/currentIdentity" } } }, "else": { "properties": { "current": { "type": "null" }, "items": { "maxItems": 0 }, "blockers": { "maxItems": 0 } } } },
+    { "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] } }, "required": ["session"] }, "then": { "properties": { "current": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/currentIdentity" } } }, "else": { "properties": { "current": { "type": "null" }, "items": { "maxItems": 0 } } } },
     { "if": { "properties": { "goal_tracking": { "const": false } }, "required": ["goal_tracking"] }, "then": { "properties": { "goal_defined": { "const": false } }, "not": { "anyOf": [{ "required": ["goal_revision"] }, { "required": ["latest_goal_outcome"] }] } } },
     { "if": { "properties": { "goal_defined": { "const": false } }, "required": ["goal_defined"] }, "then": { "not": { "anyOf": [{ "required": ["goal_revision"] }, { "required": ["latest_goal_outcome"] }] } } },
     { "if": { "properties": { "goal_defined": { "const": true } }, "required": ["goal_defined"] }, "then": { "required": ["goal_revision"], "properties": { "goal_tracking": { "const": true } } } }

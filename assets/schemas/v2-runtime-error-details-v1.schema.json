@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:v2-runtime-error-details:v1",
+  "title": "Podway v2 Runtime Error Details v1",
+  "oneOf": [
+    { "$ref": "#/$defs/procedureSchemaInvalid" },
+    { "$ref": "#/$defs/graphNodeNotFound" },
+    { "$ref": "#/$defs/nodeDefinitionNotFound" },
+    { "$ref": "#/$defs/graphNodeTypeMismatch" },
+    { "$ref": "#/$defs/optionNotAllowed" },
+    { "$ref": "#/$defs/routeNotAllowed" },
+    { "$ref": "#/$defs/decisionReasonMissing" },
+    { "$ref": "#/$defs/evidenceReferenceUnresolved" },
+    { "$ref": "#/$defs/evidenceReferenceStale" },
+    { "$ref": "#/$defs/manualReworkTargetNotAllowed" },
+    { "$ref": "#/$defs/manualReworkTargetNotOnTrace" },
+    { "$ref": "#/$defs/goalTrackingNotEnabled" },
+    { "$ref": "#/$defs/sessionGoalMissing" },
+    { "$ref": "#/$defs/sessionGoalAlreadyDefined" },
+    { "$ref": "#/$defs/goalRevisionStale" },
+    { "$ref": "#/$defs/goalRevisionTargetNotAllowed" },
+    { "$ref": "#/$defs/goalRevisionTargetNotRevisionSafe" },
+    { "$ref": "#/$defs/reactivationFlagRequired" },
+    { "$ref": "#/$defs/criterionModeMixed" },
+    { "$ref": "#/$defs/criterionCitationInvalid" },
+    { "$ref": "#/$defs/criterionResultMissing" },
+    { "$ref": "#/$defs/criterionNotFound" },
+    { "$ref": "#/$defs/freshGoalAssessmentMissing" },
+    { "$ref": "#/$defs/goalAssessmentOutcomeNotAllowed" },
+    { "$ref": "#/$defs/digestConfirmationRequired" },
+    { "$ref": "#/$defs/unsupportedV2Capability" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["schema", "kind"],
+      "properties": {
+        "schema": { "const": "podway.v2-runtime-error-details/v1" },
+        "kind": { "type": "string" },
+        "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admission" }
+      }
+    },
+    "identifier": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "attemptId": { "type": "string", "format": "uuid" },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+    "identifierSet8": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } },
+    "identifierSet16": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } },
+    "procedureSchemaInvalid": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["diagnostic_codes"], "properties": { "kind": { "const": "PROCEDURE_V2_SCHEMA_INVALID" }, "diagnostic_codes": { "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Z][A-Z0-9_]*$" } } } }],
+      "unevaluatedProperties": false
+    },
+    "graphNodeNotFound": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id"], "properties": { "kind": { "const": "GRAPH_NODE_NOT_FOUND" }, "graph_node_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "nodeDefinitionNotFound": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["node_definition_id"], "properties": { "kind": { "const": "NODE_DEFINITION_NOT_FOUND" }, "node_definition_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "graphNodeTypeMismatch": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id", "expected_node_type", "actual_node_type"], "properties": { "kind": { "const": "GRAPH_NODE_TYPE_MISMATCH" }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "expected_node_type": { "enum": ["action", "decision"] }, "actual_node_type": { "enum": ["action", "decision"] } } }],
+      "unevaluatedProperties": false
+    },
+    "optionNotAllowed": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id", "option_id", "allowed_option_ids"], "properties": { "kind": { "const": "OPTION_NOT_ALLOWED" }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "option_id": { "$ref": "#/$defs/identifier" }, "allowed_option_ids": { "$ref": "#/$defs/identifierSet8" } } }],
+      "unevaluatedProperties": false
+    },
+    "routeNotAllowed": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id", "option_id"], "properties": { "kind": { "const": "ROUTE_NOT_ALLOWED" }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "option_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "decisionReasonMissing": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id"], "properties": { "kind": { "const": "DECISION_REASON_MISSING" }, "graph_node_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "evidenceReferenceUnresolved": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id", "source_graph_node_ids"], "properties": { "kind": { "const": "EVIDENCE_REFERENCE_UNRESOLVED" }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "source_graph_node_ids": { "$ref": "#/$defs/identifierSet8" } } }],
+      "unevaluatedProperties": false
+    },
+    "evidenceReferenceStale": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id", "source_graph_node_id", "expected_source_attempt_id", "current_source_attempt_id"], "properties": { "kind": { "const": "EVIDENCE_REFERENCE_STALE" }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "source_graph_node_id": { "$ref": "#/$defs/identifier" }, "expected_source_attempt_id": { "$ref": "#/$defs/attemptId" }, "current_source_attempt_id": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/attemptId" }] } } }],
+      "unevaluatedProperties": false
+    },
+    "manualReworkTargetNotAllowed": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["target_graph_node_id"], "properties": { "kind": { "const": "MANUAL_REWORK_TARGET_NOT_ALLOWED" }, "target_graph_node_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "manualReworkTargetNotOnTrace": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["target_graph_node_id"], "properties": { "kind": { "const": "MANUAL_REWORK_TARGET_NOT_ON_TRACE" }, "target_graph_node_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "goalTrackingNotEnabled": { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "kind": { "const": "GOAL_TRACKING_NOT_ENABLED" } } }], "unevaluatedProperties": false },
+    "sessionGoalMissing": { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "kind": { "const": "SESSION_GOAL_MISSING" } } }], "unevaluatedProperties": false },
+    "sessionGoalAlreadyDefined": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["goal_revision"], "properties": { "kind": { "const": "SESSION_GOAL_ALREADY_DEFINED" }, "goal_revision": { "$ref": "#/$defs/revision" } } }],
+      "unevaluatedProperties": false
+    },
+    "goalRevisionStale": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["expected_goal_revision", "actual_goal_revision"], "properties": { "kind": { "const": "GOAL_REVISION_STALE" }, "expected_goal_revision": { "$ref": "#/$defs/revision" }, "actual_goal_revision": { "$ref": "#/$defs/revision" } } }],
+      "unevaluatedProperties": false
+    },
+    "goalRevisionTargetNotAllowed": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["target_graph_node_id"], "properties": { "kind": { "const": "GOAL_REVISION_TARGET_NOT_ALLOWED" }, "target_graph_node_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "goalRevisionTargetNotRevisionSafe": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["target_graph_node_id"], "properties": { "kind": { "const": "GOAL_REVISION_TARGET_NOT_REVISION_SAFE" }, "target_graph_node_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "reactivationFlagRequired": { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "kind": { "const": "REACTIVATION_FLAG_REQUIRED" } } }], "unevaluatedProperties": false },
+    "criterionModeMixed": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["criterion_id", "expected_mode", "actual_status"], "properties": { "kind": { "const": "CRITERION_MODE_MIXED" }, "criterion_id": { "$ref": "#/$defs/identifier" }, "expected_mode": { "enum": ["assessment", "applicability"] }, "actual_status": { "enum": ["satisfied", "unsatisfied", "not_applicable"] } } }],
+      "unevaluatedProperties": false
+    },
+    "criterionCitationInvalid": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["criterion_id", "citation"], "properties": { "kind": { "const": "CRITERION_CITATION_INVALID" }, "criterion_id": { "$ref": "#/$defs/identifier" }, "citation": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/citation" } } }],
+      "unevaluatedProperties": false
+    },
+    "criterionResultMissing": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["missing_criterion_ids"], "properties": { "kind": { "const": "CRITERION_RESULT_MISSING" }, "missing_criterion_ids": { "$ref": "#/$defs/identifierSet16" } } }],
+      "unevaluatedProperties": false
+    },
+    "criterionNotFound": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["criterion_id"], "properties": { "kind": { "const": "CRITERION_NOT_FOUND" }, "criterion_id": { "$ref": "#/$defs/identifier" } } }],
+      "unevaluatedProperties": false
+    },
+    "freshGoalAssessmentMissing": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["goal_revision"], "properties": { "kind": { "const": "FRESH_GOAL_ASSESSMENT_MISSING" }, "goal_revision": { "$ref": "#/$defs/revision" } } }],
+      "unevaluatedProperties": false
+    },
+    "goalAssessmentOutcomeNotAllowed": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["option_id", "determined_outcome", "allowed_option_ids"], "properties": { "kind": { "const": "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED" }, "option_id": { "$ref": "#/$defs/identifier" }, "determined_outcome": { "enum": ["achieved", "not_achieved", "superseded"] }, "allowed_option_ids": { "$ref": "#/$defs/identifierSet8" } } }],
+      "unevaluatedProperties": false
+    },
+    "digestConfirmationRequired": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["procedure_digest"], "properties": { "kind": { "const": "DIGEST_CONFIRMATION_REQUIRED" }, "procedure_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" } } }],
+      "unevaluatedProperties": false
+    },
+    "unsupportedV2Capability": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["capability"], "properties": { "kind": { "const": "UNSUPPORTED_V2_CAPABILITY" }, "capability": { "type": "string", "minLength": 1, "maxLength": 128 }, "required_result_schema": { "type": "string", "minLength": 1, "maxLength": 128 }, "contract_manifest_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" } } }],
+      "unevaluatedProperties": false
+    }
+  }
+}

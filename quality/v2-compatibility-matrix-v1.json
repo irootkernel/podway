@@ -12,7 +12,9 @@
       "assets/schemas/compact-status-result-v2.schema.json",
       "assets/schemas/next-result-v2.schema.json",
       "assets/schemas/stage-transition-result-v2.schema.json",
-      "assets/schemas/item-mutation-result-v2.schema.json"
+      "assets/schemas/item-mutation-result-v2.schema.json",
+      "assets/schemas/job-lookup-result-v2.schema.json",
+      "assets/schemas/job-result-v2.schema.json"
     ],
     "new_route_v1": [
       "assets/schemas/procedure-source-result-v1.schema.json",
@@ -239,20 +241,20 @@
     }
   ],
   "v1_frozen_assets": [
-    "assets/schemas/compact-status-result-v1.schema.json",
-    "assets/schemas/daemon-status-result-v1.schema.json",
-    "assets/schemas/detached-admission-result-v1.schema.json",
-    "assets/schemas/error-v1.schema.json",
-    "assets/schemas/item-mutation-result-v1.schema.json",
-    "assets/schemas/job-lookup-result-v1.schema.json",
-    "assets/schemas/job-result-v1.schema.json",
-    "assets/schemas/next-result-v1.schema.json",
-    "assets/schemas/output-v1.schema.json",
-    "assets/schemas/procedure-validation-result-v1.schema.json",
-    "assets/schemas/session-start-result-v1.schema.json",
-    "assets/schemas/stage-transition-result-v1.schema.json",
-    "assets/schemas/status-result-v1.schema.json",
-    "assets/schemas/version-result-v1.schema.json",
-    "assets/schemas/workspace-init-result-v1.schema.json"
+    {"path": "assets/schemas/compact-status-result-v1.schema.json", "sha256": "sha256:2cded139839dafcc20308f85dd9faea720dee9b6e985ead3b0ba05ea0b6aed57"},
+    {"path": "assets/schemas/daemon-status-result-v1.schema.json", "sha256": "sha256:998d14853d3d86b226d9a67f239ee6f0d3e90590ecbd7eaa15c1c91952552486"},
+    {"path": "assets/schemas/detached-admission-result-v1.schema.json", "sha256": "sha256:4ea7b6744261ff08174d6a7c076d9ee9c1adb43e01f5e55234826102bd5ed8e7"},
+    {"path": "assets/schemas/error-v1.schema.json", "sha256": "sha256:371ccd1e07a0f503bc70a5a4b167ff43a0dfbe9ed8e5b78533cd9a7848d06bf8"},
+    {"path": "assets/schemas/item-mutation-result-v1.schema.json", "sha256": "sha256:f62a24e178cc5816bc4c306cb9d5a24d6f2f594704a7b2128e791e49ede726b9"},
+    {"path": "assets/schemas/job-lookup-result-v1.schema.json", "sha256": "sha256:1159cf428e4152554389dc02380fb0a3c84d2e5006c682eeacf24e4d1fd03c3f"},
+    {"path": "assets/schemas/job-result-v1.schema.json", "sha256": "sha256:e7710f80320ef431853a7e7dee4f7e4548030106e056d1cec08e79e09a429541"},
+    {"path": "assets/schemas/next-result-v1.schema.json", "sha256": "sha256:a27e51dad161a9ef8c6de67da6f372a7b3d2337ff3ca2598f1ecb4f1ae627f56"},
+    {"path": "assets/schemas/output-v1.schema.json", "sha256": "sha256:19355e4f256fba8b17a4813f332006603b4e103fd747786f5e13d6447c2c55cd"},
+    {"path": "assets/schemas/procedure-validation-result-v1.schema.json", "sha256": "sha256:fc4b23b6416904bf25a3209218fab730f142295b62803b441ee2bb75563a3fe5"},
+    {"path": "assets/schemas/session-start-result-v1.schema.json", "sha256": "sha256:36137a660d17292619e3eb82abe1cb7dd38f72fd16b5e7836f13c9a83d87dc0d"},
+    {"path": "assets/schemas/stage-transition-result-v1.schema.json", "sha256": "sha256:228ef46d296b34034dfe779d4bd86f2b858aea414234f7f92d29627bf5e4b0ab"},
+    {"path": "assets/schemas/status-result-v1.schema.json", "sha256": "sha256:50e8a1da908dee02751bd70a19b820460925e40b2cb16ee8f6dc749725102032"},
+    {"path": "assets/schemas/version-result-v1.schema.json", "sha256": "sha256:fe92513aa0cb4f75bd02e220b9feb5bf19795105cf364518f4119689e02baf7c"},
+    {"path": "assets/schemas/workspace-init-result-v1.schema.json", "sha256": "sha256:51e68c2f017a576b036d25329e1d86be5ff12c16af5504640ab521eaa396bbc7"}
   ]
 }

@@ -243,3 +243,30 @@ Podway does not decide whether the user's claim is true. A checked confirmation 
 - session and workspace revisions.
 
 The view is derived from relational current state. The bounded journal is not required to reconstruct it.
+
+## Procedure v2 goals and criterion state
+
+Goal tracking exists only when the immutable Procedure v2 snapshot opts in with
+`goal_tracking: true`. One session goal contains a bounded statement, a
+non-empty bounded criterion set, and a monotonic positive goal revision. Earlier
+goal revisions remain immutable and inspectable after revision.
+
+Criterion assessment state belongs to one active goal-assessment decision
+attempt and the current goal revision. Each criterion stores one of
+`satisfied`, `unsatisfied`, or `not_applicable`, a required bounded reason, and
+at most four citations. Citations have exactly two public shapes:
+
+```json
+{"reference_graph_node_id":"build"}
+{"local_item_id":"assessment-note"}
+```
+
+The first identifies a fresh resolved evidence reference of the attempt; the
+second identifies a decision-local item persisted on that attempt. No citation
+contains a separate `item_id`, and the two shapes cannot be combined. An
+applicability-mode `not_applicable` result has no citations.
+
+The first criterion result fixes the attempt to assessment mode or applicability
+mode. Modes cannot be mixed. A completed assessment records an immutable goal
+outcome with the decision record; retry, rework, or goal revision makes prior
+attempt-local assessment state non-satisfying without deleting it.

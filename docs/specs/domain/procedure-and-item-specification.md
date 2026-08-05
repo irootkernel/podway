@@ -339,6 +339,28 @@ waits for multiple branches. Required recorded-item references downstream of a
 convergence point may name only placements that dominate the consumer;
 branch-specific references are optional.
 
+### Graph validation and convergence
+
+V2 semantic validation rejects duplicate definition or placement identities,
+missing entry nodes, unreachable placements, routes to missing placements,
+decision options without routes, and routes for undeclared options. Every
+reachable placement must have a finite route to a terminal placement in the
+complete procedure graph, including declared rework edges.
+
+Every cycle in the complete procedure graph must contain at least one declared
+rework edge, so the advance-only subgraph is acyclic. Rework always creates a
+fresh attempt; it is not a second advance route. A convergence
+placement may have multiple incoming routes, but only one route is traversed and
+one cursor is active. Required evidence sources must dominate their consumer.
+Optional branch-specific evidence is permitted and resolves explicitly as
+unresolved when its source is not on the traversed trace. A required evidence
+source cannot be skippable.
+
+Graph vetting derives dominance, terminal reachability, route completeness, and
+the set of revision-safe goal-rework targets from the immutable normalized
+Procedure. These derived values are deterministic and are not author-supplied
+escape hatches.
+
 An action records work only through the six existing item types. A reference to
 a prior terminal placement binds its exact attempt and complete recorded-item
 digest, and may select a bounded subset of item IDs for read-back. Selection does

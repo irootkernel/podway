@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:job-lookup-result:v2",
+  "title": "Podway Job Lookup Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "found"],
+  "properties": {
+    "schema": { "const": "podway.job-lookup-result/v2" },
+    "found": { "type": "boolean" },
+    "job": {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "sequence", "state", "submitted_at", "finished_at", "command", "request_digest", "terminal_response"],
+          "properties": {
+            "id": { "type": "string", "format": "uuid" }, "sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+            "state": { "enum": ["queued", "running", "succeeded", "failed", "cancelled"] },
+            "submitted_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
+            "claimed_at": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" }] },
+            "finished_at": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" }] },
+            "command": { "enum": ["session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
+            "request_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+            "terminal_response": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:job-result:v2#/$defs/terminalResponse" }] }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "state": { "const": "queued" } }, "required": ["state"] },
+              "then": { "properties": { "claimed_at": { "type": "null" }, "finished_at": { "type": "null" }, "terminal_response": { "type": "null" } } }
+            },
+            {
+              "if": { "properties": { "state": { "const": "running" } }, "required": ["state"] },
+              "then": {
+                "required": ["claimed_at"],
+                "properties": {
+                  "claimed_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
+                  "finished_at": { "type": "null" },
+                  "terminal_response": { "type": "null" }
+                }
+              }
+            },
+            {
+              "if": { "properties": { "state": { "const": "succeeded" } }, "required": ["state"] },
+              "then": {
+                "properties": {
+                  "finished_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
+                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v2#/$defs/terminalSuccessResponse" }
+                }
+              }
+            },
+            {
+              "if": { "properties": { "state": { "const": "failed" } }, "required": ["state"] },
+              "then": {
+                "properties": {
+                  "finished_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
+                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v2#/$defs/terminalErrorResponse" }
+                }
+              }
+            },
+            {
+              "if": { "properties": { "state": { "const": "cancelled" } }, "required": ["state"] },
+              "then": {
+                "properties": {
+                  "finished_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
+                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v2#/$defs/cancelledResponse" }
+                }
+              }
+            }
+          ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "found": { "const": true } }, "required": ["found"] },
+      "then": { "required": ["job"] },
+      "else": { "not": { "required": ["job"] } }
+    }
+  ]
+}
