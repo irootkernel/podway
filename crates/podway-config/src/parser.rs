@@ -128,6 +128,69 @@ fn decode_procedure_document_with_name(
     Ok(value)
 }
 
+/// The version-dispatched result of parsing a YAML procedure document.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ParsedProcedure {
+    V1(ValidatedProcedureV1),
+    V2(crate::procedure_v2_parse::ParsedProcedureV2),
+}
+
+/// Parses a YAML procedure document, dispatching on its exact `schema` field to the unchanged
+/// v1 parser or the v2 parser. The shared bounded decoder is the single admission path; the v2
+/// path is YAML-only (JSON equivalence is owned by V2MOD-005).
+pub fn parse_procedure_yaml(input: &[u8]) -> Result<ParsedProcedure, ConfigError> {
+    let value = decode_procedure_document(input, ProcedureDocumentFormat::Yaml)?;
+    let schema = match value.get("schema") {
+        Some(serde_json::Value::String(schema)) => schema.as_str(),
+        Some(_) => {
+            return Err(ConfigError::InvalidDocument {
+                reason: "procedure schema must be a string".to_owned(),
+            });
+        }
+        None => {
+            return Err(ConfigError::InvalidDocument {
+                reason: "procedure document must declare a schema".to_owned(),
+            });
+        }
+    };
+    match schema {
+        crate::PROCEDURE_SCHEMA_V1 => Ok(ParsedProcedure::V1(parse_procedure_v1(
+            input,
+            ProcedureFormatV1::Yaml,
+        )?)),
+        podway_core::PROCEDURE_SCHEMA_V2 => {
+            if begins_with_flow_collection(input) {
+                return Err(ConfigError::InvalidDocument {
+                    reason: "JSON-form procedure documents are not accepted by the YAML dispatch"
+                        .to_owned(),
+                });
+            }
+            let text =
+                std::str::from_utf8(input).expect("decoded procedure document is valid UTF-8");
+            Ok(ParsedProcedure::V2(
+                crate::procedure_v2_parse::parse_procedure_v2_yaml(text)?,
+            ))
+        }
+        other => Err(ConfigError::InvalidSchema {
+            expected: "podway.procedure/v1 or podway.procedure/v2",
+            actual: other.to_owned(),
+        }),
+    }
+}
+
+/// True when the document's first non-whitespace byte opens a flow collection. A JSON procedure
+/// document (or a top-level YAML flow mapping/sequence) begins with `{` or `[`; block YAML — the
+/// normative v2 authoring form — does not. Nested flow collections are never at the first byte.
+fn begins_with_flow_collection(input: &[u8]) -> bool {
+    matches!(
+        input
+            .iter()
+            .copied()
+            .find(|byte| !byte.is_ascii_whitespace()),
+        Some(b'{' | b'[')
+    )
+}
+
 impl From<WorkspaceConfigParseLimitsV1> for BoundedYamlLimitsV1 {
     fn from(limits: WorkspaceConfigParseLimitsV1) -> Self {
         Self {

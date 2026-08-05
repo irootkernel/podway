@@ -10,17 +10,20 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 mod parser;
+mod procedure_v2_parse;
+mod procedure_v2_wire;
 mod validation;
 
 pub use parser::{
     MAX_PROCEDURE_DOCUMENT_BYTES, MAX_PROCEDURE_DOCUMENT_BYTES_V1, MAX_PROCEDURE_DOCUMENT_DEPTH,
     MAX_PROCEDURE_DOCUMENT_DEPTH_V1, MAX_PROCEDURE_DOCUMENT_NODES, MAX_PROCEDURE_DOCUMENT_NODES_V1,
     MAX_WORKSPACE_CONFIG_BYTES_V1, MAX_WORKSPACE_CONFIG_DEPTH_V1, MAX_WORKSPACE_CONFIG_NODES_V1,
-    ProcedureDocumentFormat, ProcedureDocumentLimits, ProcedureFormatV1, ProcedureParseLimitsV1,
-    WorkspaceConfigParseLimitsV1, decode_procedure_document, decode_procedure_document_with_limits,
-    parse_procedure_v1, parse_procedure_v1_with_limits, parse_workspace_config_v1,
-    parse_workspace_config_v1_with_limits,
+    ParsedProcedure, ProcedureDocumentFormat, ProcedureDocumentLimits, ProcedureFormatV1,
+    ProcedureParseLimitsV1, WorkspaceConfigParseLimitsV1, decode_procedure_document,
+    decode_procedure_document_with_limits, parse_procedure_v1, parse_procedure_v1_with_limits,
+    parse_procedure_yaml, parse_workspace_config_v1, parse_workspace_config_v1_with_limits,
 };
+pub use procedure_v2_parse::{ParsedNodeDefinition, ParsedProcedureV2};
 pub use validation::{
     IntoProcedureSnapshotSourceV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
     ValidatedProcedureV1,
@@ -785,7 +788,7 @@ fn validate_schema(actual: &str, expected: &'static str) -> Result<(), ConfigErr
     }
 }
 
-fn validate_identifier(field: &'static str, value: &str) -> Result<(), ConfigError> {
+pub(crate) fn validate_identifier(field: &'static str, value: &str) -> Result<(), ConfigError> {
     validate_count(field, value.len(), 1, 64)?;
     let bytes = value.as_bytes();
     let valid = bytes.first().is_some_and(u8::is_ascii_lowercase)
@@ -804,7 +807,7 @@ fn validate_identifier(field: &'static str, value: &str) -> Result<(), ConfigErr
     }
 }
 
-fn validate_text(
+pub(crate) fn validate_text(
     field: &'static str,
     value: &str,
     min: usize,
@@ -818,7 +821,7 @@ fn validate_text(
     Ok(())
 }
 
-fn validate_count(
+pub(crate) fn validate_count(
     field: &'static str,
     actual: usize,
     min: usize,
