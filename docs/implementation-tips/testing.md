@@ -9,6 +9,7 @@ make test-unit      # focused library and binary tests
 make test-int       # focused component integration tests
 make test-fuzzing   # bounded deterministic protocol fuzzing
 make test-e2e       # real user journeys through debug product binaries
+make dev-runtime-test # isolated contributor runtime self-test
 make test           # required development gate
 make dist           # complete gate, qualification, handoff, and final verification
 ```
@@ -40,6 +41,10 @@ from or duplicated across aggregate suites.
 - `python3 tools/run_g008_dogfood.py` exercises all four built-in presets.
 - The pinned fuzz targets cover canonical JSON, selectors, response compatibility,
   and procedure parsing.
+
+For an isolated contributor daemon and disposable sandbox that does not hold the
+production singleton lock, use the
+[contributor development runtime](dev-runtime.md).
 
 Optional diagnostics provide investigation support; they do not replace
 `make test` as the development gate or `make dist` as the release gate. See the normative [testing and conformance

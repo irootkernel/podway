@@ -59,6 +59,17 @@ absolute arguments, permissions, atomic publication, and command-runner behavior
 remain covered by static and mocked adapter tests rather than by recreating a macOS
 GUI login domain during distribution packaging.
 
+### Managed contributor development runtime
+
+Contributors who need a disposable daemon that can coexist with an installed
+production service should use `tools/dev_runtime.py` rather than raw
+`podwayd --dev`. The helper derives a short private root under `/private/tmp`,
+snapshots matching debug binaries, and sets debug-only `PODWAY_TEST_ACCOUNT_ROOT`
+together with a separate `PODWAY_DEV_HOME` so the isolated lock is disjoint from
+production. Raw `podwayd --dev` without that account-root override still shares the
+production lock. Procedure v2 admission remains closed until `V2PLT-009`. See the
+[contributor development runtime](../implementation-tips/dev-runtime.md) guide.
+
 ## LaunchAgent configuration
 
 The installed plist MUST:

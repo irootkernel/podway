@@ -37,6 +37,7 @@ REQUIRED_MAKE_TARGETS = (
     "preset-create",
     "preset-import",
     "preset-tool-test",
+    "dev-runtime-test",
     "dist",
     "contract-manifest",
 )
@@ -46,6 +47,7 @@ REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) contract-verifier-test",
     "$(MAKE) test-e2e",
     "$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1",
+    "$(MAKE) dev-runtime-test",
 )
 REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_docs.py",
@@ -623,6 +625,7 @@ def validate_makefile_contract(root: Path) -> int:
         ("preset-create", "tools/manage_presets.py create"),
         ("preset-import", "tools/manage_presets.py import"),
         ("test-fuzzing", "python3 tools/run_fuzzing.py"),
+        ("dev-runtime-test", "python3 tools/dev_runtime.py self-test"),
     ):
         recipe = re.search(rf"^{target}\s*:[^\n]*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
         if recipe is None or command not in recipe.group(1):

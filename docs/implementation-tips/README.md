@@ -5,6 +5,8 @@ Use these guides when changing Podway:
 - [Repository Workflow](repository-workflow.md): prerequisites, code ownership,
   worktrees, and canonical assets.
 - [Testing](testing.md): focused checks and the complete release gate.
+- [Contributor Development Runtime](dev-runtime.md): isolated debug daemon,
+  managed sandbox, and production-safe coexistence.
 - [Documentation](documentation.md): document placement, precedence, and links.
 - [Release](release.md): source readiness, packaging, and publication handoff.
 

@@ -357,13 +357,20 @@ stages sequentially:
 - `contract-verifier-test`: offline feature-gated verifier lint and source/package
   parity plus negative controls;
 - `test-e2e`: serial user journeys through real debug product binaries and shells,
-  including a start/status/next smoke for all four presets.
+  including a start/status/next smoke for all four presets;
+- `preset-tool-test`: contributor preset create/import verification against the
+  prepared debug CLI;
+- `dev-runtime-test`: isolated contributor development-runtime self-test, including
+  path and command-escape sentinels plus a real dual-daemon coexistence check under
+  disjoint synthetic account roots.
 
 The E2E layer builds the debug product binaries once. Preset-tool verification
-runs afterward against that prepared CLI instead of initiating another build.
-`make dist` always runs this gate, all-target Clippy, release helper sentinels,
-fixed-run fuzzing, release builds, one distribution package, qualification, and
-the handoff, followed by independent final bundle verification.
+runs afterward against that prepared CLI instead of initiating another build, and
+`dev-runtime-test` then exercises the managed development-runtime helper without
+touching the installed production singleton. `make dist` always runs this gate,
+all-target Clippy, release helper sentinels, fixed-run fuzzing, release builds,
+one distribution package, qualification, and the handoff, followed by independent
+final bundle verification.
 
 The verifier controls include the captured malformed v0.1.1 daemon envelope,
 every missing required version field, wrong and unknown discriminators or

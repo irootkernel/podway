@@ -16,7 +16,8 @@ export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VA
 
 .PHONY: test test-prepare release-prepare dist-preflight test-rust test-unit test-int test-fuzzing test-e2e contract-verifier-test \
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
-	preset-create preset-import preset-tool-test contract-manifest dist
+	preset-create preset-import preset-tool-test contract-manifest dist \
+	dev-daemon dev-runtime-test
 
 toolchain:
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
@@ -28,6 +29,7 @@ test:
 	$(MAKE) contract-verifier-test
 	$(MAKE) test-e2e
 	$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1
+	$(MAKE) dev-runtime-test
 
 test-prepare: toolchain
 	$(MAKE) format-check
@@ -102,6 +104,12 @@ preset-import: preset-validator
 
 preset-tool-test: preset-validator
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_preset_tooling.py --podway "$$PRESET_VALIDATOR"
+
+dev-daemon:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/dev_runtime.py daemon
+
+dev-runtime-test:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/dev_runtime.py self-test
 
 test-rust:
 	$(RUST_GATE_ENV) cargo test --workspace --lib --bins \
