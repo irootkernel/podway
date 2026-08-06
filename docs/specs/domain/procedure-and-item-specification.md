@@ -388,3 +388,35 @@ These rules do not relax the field and collection bounds of the canonical v2
 schema. Procedure content remains declarative: commands, expressions, plugins,
 remote includes, network endpoints, secrets, Git mutation, and paths outside the
 worktree are invalid.
+
+### Canonical form and digest
+
+Canonical JSON/IR is derived from the validated model, never normalized out of
+the source document. Validation rebuilds an authoring-shaped document from the
+model and serializes it as Podway Canonical JSON v1: object keys sorted by their
+UTF-8 bytes, array order preserved, compact separators, and integer numbers
+only. The digest is `sha256:` followed by the lowercase SHA-256 of exactly those
+canonical bytes.
+
+The rebuilt document is fixed by four rules:
+
+- every documented default is materialized, so authoring a default and omitting
+  it produce identical bytes: text `min_length`, `max_length`, and `multiline`;
+  list `min_items`, `max_items`, `max_item_length`, and `unique`; and evidence
+  reference `required`;
+- absent optional scalars and empty optional collections are omitted, and
+  `goal_tracking` is present exactly when the procedure opts in;
+- author-order-meaningful arrays keep author order: `graph.nodes`, `options`,
+  `items`, `instructions`, `evidence_guidance`, `evidence_from`, selected
+  evidence `items`, `choices`, `allowed_media_types`, and
+  `manual_rework.allowed_targets`;
+- the authoring maps `node_definitions`, decision `routes`, and assessment
+  `outcomes` stay JSON objects, so canonical key sorting normalizes their order
+  away and reordering their keys cannot change the digest.
+
+Semantically equal sources therefore have exactly one digest: comments, mapping
+key order, block or flow style, quoting, and omitted-versus-authored defaults
+never reach it, while every semantic change, including reordering an
+order-bearing array, produces a different digest. The complete canonical source
+projection is at most 131,072 characters; a procedure whose projection exceeds
+that budget is rejected.

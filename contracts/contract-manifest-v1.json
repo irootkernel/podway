@@ -373,7 +373,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/contract/v2-fixture-catalog-v1.json",
-      "sha256": "sha256:b7cb776f257582d8bd34e05e8bc6b2168c3807792af3606c96bbfaa68dd5e83a"
+      "sha256": "sha256:5cbe6a3f5c1fc288e1a2984372ff3dbda436adcd40b7aa811d7ffd5a496cca29"
     },
     {
       "kind": "known_answer_fixture",
@@ -423,7 +423,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/procedures/equivalence-contract.json",
-      "sha256": "sha256:c29c960479a46ce77f8d39d30b5b4c8fa96a6d897441a6fb6df823b54a074aea"
+      "sha256": "sha256:d34bfc97db205d8c0081d571df88053e828692de12a3b1e6cb6081e55e51a494"
     },
     {
       "kind": "known_answer_fixture",
@@ -446,7 +446,7 @@
       "sha256": "sha256:a48cc66ba028a87d450ceaaed1095081f12ddfdc8cec40be72bb4a7b2738606e"
     }
   ],
-  "digest": "sha256:ab25627b7a5c657747ba48bfa72e71e6730faf9d7774997ab012038dd47de345",
+  "digest": "sha256:e255817da4e16eeecc891f15daa9ab88329a21ab540fe31f32b320714a53e80f",
   "product": "podway",
   "product_version": "0.1.2",
   "schema_version": "podway.contract-manifest/v1",

@@ -10,6 +10,7 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 mod parser;
+mod procedure_v2_canonical;
 mod procedure_v2_parse;
 mod procedure_v2_validate;
 mod procedure_v2_wire;

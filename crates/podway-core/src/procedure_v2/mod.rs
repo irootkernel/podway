@@ -23,6 +23,13 @@ use crate::DomainError;
 /// The exact Procedure v2 schema identifier.
 pub const PROCEDURE_SCHEMA_V2: &str = "podway.procedure/v2";
 
+/// The maximum number of Unicode characters a Procedure v2 canonical source projection may hold
+/// (dossier section 5.1, "source document input / canonical source projection / nesting depth /
+/// parsed nodes"). The projection is the model-derived authoring-shaped document produced by
+/// canonicalization; the bound is enforced where that projection is built, and the future stable
+/// diagnostic code for exceeding it is `SOURCE_PROJECTION_BUDGET_EXCEEDED` (sections 11.1, 11.2).
+pub const SOURCE_PROJECTION_MAX_CHARACTERS: usize = 131_072;
+
 const fn invalid(reason: &'static str) -> DomainError {
     DomainError::InvalidState { reason }
 }

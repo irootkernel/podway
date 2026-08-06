@@ -30,35 +30,58 @@ use std::collections::BTreeMap;
 
 use podway_core::{
     ActionOutcomeV2, EvidenceFromListV2, GraphNodeId, GraphPlacementV2, ItemSpecV2,
-    NodeDefinitionId,
+    NodeDefinitionId, Sha256Digest,
 };
 
-use crate::{ConfigError, ParsedNodeDefinition, ParsedProcedureV2};
+use crate::procedure_v2_canonical::canonical_projection;
+use crate::{CanonicalJsonV1, ConfigError, ParsedNodeDefinition, ParsedProcedureV2};
 
-/// A Procedure v2 model that passed closed semantic validation (section 11.2 closed references).
+/// A Procedure v2 model that passed closed semantic validation (section 11.2 closed references),
+/// together with the canonical bytes and digest section 12.1 derives from it.
 ///
 /// The wrapped model is private and the only constructor is [`validate_procedure_v2`], so the type
-/// cannot be forged from an unvalidated document.
+/// cannot be forged from an unvalidated document, and canonical bytes can never disagree with the
+/// model they were produced from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedProcedureV2 {
     parsed: ParsedProcedureV2,
+    canonical_json: CanonicalJsonV1,
+    digest: Sha256Digest,
 }
 
 impl ValidatedProcedureV2 {
     pub fn parsed(&self) -> &ParsedProcedureV2 {
         &self.parsed
     }
+
+    /// The model-derived Canonical JSON/IR document: the validation, digest, snapshot, and runtime
+    /// authority of section 12.1. Mirrors `ValidatedProcedureV1::canonical_json`.
+    pub fn canonical_json(&self) -> &CanonicalJsonV1 {
+        &self.canonical_json
+    }
+
+    /// The SHA-256 digest over the canonical bytes. Mirrors `ValidatedProcedureV1::digest`.
+    pub fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
 }
 
-/// Runs closed semantic validation over an already-parsed Procedure v2 model.
+/// Runs closed semantic validation over an already-parsed Procedure v2 model, then canonicalizes it.
 ///
 /// Parsing and validation are discrete stages (section 13.3 sequences them); this function never
-/// re-decodes source bytes and never mutates the model.
+/// re-decodes source bytes and never mutates the model. Canonicalization runs only after the closed
+/// reference set resolves, so canonical bytes exist for exactly the models that are admissible, and
+/// a closed-reference diagnostic always wins over a canonical-projection one.
 pub fn validate_procedure_v2(
     parsed: ParsedProcedureV2,
 ) -> Result<ValidatedProcedureV2, ConfigError> {
     validate_closed_references(&parsed)?;
-    Ok(ValidatedProcedureV2 { parsed })
+    let (canonical_json, digest) = canonical_projection(&parsed)?;
+    Ok(ValidatedProcedureV2 {
+        parsed,
+        canonical_json,
+        digest,
+    })
 }
 
 /// Node definitions indexed by identifier. Read-only lookup: never iterated for diagnostics.

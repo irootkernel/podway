@@ -5,7 +5,7 @@
   "implementation_status": "planned",
   "json_path": "tests/fixtures/v2/procedures/equivalent-procedure.json",
   "yaml_path": "tests/fixtures/v2/procedures/equivalent-procedure.yaml",
-  "canonical_sha256": "sha256:3a3b497bd34756f4df9d85c286240134f593f495ae715b1cfe2b82f6689ad247",
+  "canonical_sha256": "sha256:1c1f7c216ae0790a880613c61ad5aa7ef19e0c437d391c72df008ae8205617d1",
   "future_assertions": [
     "YAML and JSON parse to the same structural value and canonical bytes",
     "field ordering and non-semantic formatting preserve canonical_sha256",

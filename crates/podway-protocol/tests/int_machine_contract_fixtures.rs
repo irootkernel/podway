@@ -1704,10 +1704,22 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
     assert_eq!(yaml_document, json_document);
     assert_schema_valid("schemas/procedure-v2.schema.json", &json_document);
     let equivalence_contract = read_json("tests/fixtures/v2/procedures/equivalence-contract.json");
-    let canonical = podway_core::canonicalize_json_v1(&json_document).unwrap();
-    assert_eq!(
-        equivalence_contract["canonical_sha256"],
-        json!(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+    // `canonical_sha256` is taken over the model-derived canonical document (dossier section 12.1:
+    // source -> parsed Procedure v2 model -> Canonical JSON/IR -> digest), not over the raw fixture
+    // document, so it cannot be recomputed from these bytes — and cannot be recomputed here at all:
+    // producing the model requires `podway-config`, which `podway-protocol` must not depend on (the
+    // crate adjacency contract in `tools/verify_contracts.py`). This test therefore owns only the
+    // digest's shape. The exact value is owned by `podway-config`'s canonical golden test,
+    // `int_v2_procedure_canonical.rs::the_fixture_pair_has_one_canonical_form_and_the_contract_digest`,
+    // which parses and validates this very fixture pair and compares its digest against this field.
+    let canonical_sha256 = equivalence_contract["canonical_sha256"].as_str().unwrap();
+    let hexadecimal = canonical_sha256.strip_prefix("sha256:").unwrap();
+    assert_eq!(hexadecimal.len(), 64);
+    assert!(
+        hexadecimal
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
+        "canonical_sha256 must be lowercase hexadecimal: {canonical_sha256}"
     );
     assert_eq!(
         equivalence_contract["future_assertions"],
