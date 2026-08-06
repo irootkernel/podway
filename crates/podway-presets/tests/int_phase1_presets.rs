@@ -487,3 +487,42 @@ fn pac_068_071_built_in_preset_table_conformance() {
         );
     }
 }
+
+/// V2MOD-008: pins every shipped preset's digest as a released canonical result (dossier §19.2
+/// "released canonical results remain byte-for-byte stable"). Each digest was computed from the
+/// current `validate()` output and is pinned here, not derived at assertion time from anything
+/// else in this suite, so a change to preset content, canonicalization, or digesting shows up as
+/// a failing literal instead of silently repinning itself.
+#[test]
+fn shipped_preset_digests_are_pinned_as_released_canonical_results() {
+    let expected: [(&str, &str); 4] = [
+        (
+            "analysis",
+            "sha256:1754756936e12ab08db804bccdeb86f2dd3e1cf8c671cec3a2a9ecde571cf101",
+        ),
+        (
+            "bug-fix",
+            "sha256:a514fc66672a49ead2cfdc01c4de0b8a676736af3d4e2b7d981f3866656ffc5a",
+        ),
+        (
+            "docs-only",
+            "sha256:1de77395be656d288e0934d9f1d2ac110c1ec16c75d4bd67faea38ec4184ae6c",
+        ),
+        (
+            "sw-dev",
+            "sha256:9de78ea70f36ee9f19f8f8db4145398593f1d06f32c7bfa30cb9cbc3b7b23720",
+        ),
+    ];
+
+    for (preset, (expected_id, expected_digest)) in catalog_v1().list().iter().zip(expected) {
+        assert_eq!(preset.metadata.id, expected_id);
+        let validated = preset
+            .validate()
+            .expect("shipped preset must validate before its digest is a released result");
+        assert_eq!(
+            validated.digest().as_str(),
+            expected_digest,
+            "{expected_id} digest is a released canonical result and must not move"
+        );
+    }
+}

@@ -80,7 +80,7 @@ Dependencies: `V2CTR`.
 | `V2MOD-005` | Parse v2 JSON | Completed | Produce semantics identical to equivalent YAML. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
 | `V2MOD-006` | Validate v2 semantics | Completed | Reject invalid identities, references, routes, selectors, goal mappings, and bounds. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
 | `V2MOD-007` | Canonicalize and digest v2 | Completed | Produce deterministic IR, ordering, snapshots, and digests. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
-| `V2MOD-008` | Lock v1 configuration compatibility | Planned | Keep released v1 parsing and canonical identities unchanged. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
+| `V2MOD-008` | Lock v1 configuration compatibility | Completed | Keep released v1 parsing and canonical identities unchanged. | [V2MOD plan](../todo/TODO-podway-v2-full-feature-ga.md#192-epic-v2mod-procedure-model-and-configuration) |
 
 ## V2AUT — Authoring Toolchain
 
