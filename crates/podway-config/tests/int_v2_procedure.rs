@@ -28,6 +28,26 @@ fn v2_doc_extra(extra: &str, node_defs: &str, graph_nodes: &str) -> String {
     )
 }
 
+fn v2_doc_scalars(version: &str, name: &str, purpose: &str, description: Option<&str>) -> String {
+    let description_line = match description {
+        Some(value) => format!("description: \"{value}\"\n"),
+        None => String::new(),
+    };
+    format!(
+        "schema: podway.procedure/v2\nid: p\nversion: \"{version}\"\nname: \"{name}\"\npurpose: \"{purpose}\"\n{description_line}node_definitions:\n{ACTION_A}graph:\n  entry: n\n  nodes:\n{TERMINAL_N}",
+    )
+}
+
+fn many_action_node_definitions(count: usize) -> String {
+    (0..count)
+        .map(|index| format!("  a{index}:\n    type: action\n    title: A\n    intent: I\n"))
+        .collect()
+}
+
+fn terminal_using(definition_id: &str) -> String {
+    format!("    - id: n\n      use: {definition_id}\n      terminal: true\n")
+}
+
 fn minimal_v2() -> &'static str {
     concat!(
         "schema: podway.procedure/v2\n",
@@ -600,4 +620,94 @@ fn v2_does_not_perform_semantic_or_canonical_validation() {
         "      next: start\n",
     );
     v2(yaml).expect("syntactically valid but semantically invalid still maps");
+}
+
+#[test]
+fn v2_procedure_version_accepts_at_limit_and_rejects_one_over() {
+    let at_limit = "v".repeat(64);
+    v2(&v2_doc_scalars(&at_limit, "P", "P.", None)).expect("64-char version parses");
+
+    let over = "v".repeat(65);
+    assert!(matches!(
+        err(&v2_doc_scalars(&over, "P", "P.", None)),
+        ConfigError::OutOfBounds { field, actual, .. }
+            if field == "procedure.version" && actual == 65
+    ));
+}
+
+#[test]
+fn v2_procedure_name_accepts_at_limit_and_rejects_one_over() {
+    let at_limit = "n".repeat(120);
+    v2(&v2_doc_scalars("1", &at_limit, "P.", None)).expect("120-char name parses");
+
+    let over = "n".repeat(121);
+    assert!(matches!(
+        err(&v2_doc_scalars("1", &over, "P.", None)),
+        ConfigError::OutOfBounds { field, actual, .. }
+            if field == "procedure.name" && actual == 121
+    ));
+}
+
+#[test]
+fn v2_procedure_purpose_accepts_at_limit_and_rejects_one_over() {
+    let at_limit = "p".repeat(500);
+    v2(&v2_doc_scalars("1", "P", &at_limit, None)).expect("500-char purpose parses");
+
+    let over = "p".repeat(501);
+    assert!(matches!(
+        err(&v2_doc_scalars("1", "P", &over, None)),
+        ConfigError::OutOfBounds { field, actual, .. }
+            if field == "procedure.purpose" && actual == 501
+    ));
+}
+
+#[test]
+fn v2_procedure_description_accepts_at_limit_and_rejects_one_over() {
+    let at_limit = "d".repeat(1_000);
+    v2(&v2_doc_scalars("1", "P", "P.", Some(at_limit.as_str())))
+        .expect("1000-char description parses");
+
+    let over = "d".repeat(1_001);
+    assert!(matches!(
+        err(&v2_doc_scalars("1", "P", "P.", Some(over.as_str()))),
+        ConfigError::OutOfBounds { field, actual, .. }
+            if field == "procedure.description" && actual == 1_001
+    ));
+}
+
+#[test]
+fn v2_node_definitions_count_accepts_64_and_rejects_65() {
+    let sixty_four = many_action_node_definitions(64);
+    v2(&v2_doc(&sixty_four, &terminal_using("a0")))
+        .expect("64 node definitions at the ceiling parse");
+
+    let sixty_five = many_action_node_definitions(65);
+    assert!(matches!(
+        err(&v2_doc(&sixty_five, &terminal_using("a0"))),
+        ConfigError::OutOfBounds { field, actual, .. }
+            if field == "node_definitions" && actual == 65
+    ));
+}
+
+#[test]
+fn v2_rejects_empty_node_definitions_map() {
+    let yaml = concat!(
+        "schema: podway.procedure/v2\n",
+        "id: p\n",
+        "version: \"1\"\n",
+        "name: P\n",
+        "purpose: P.\n",
+        "node_definitions: {}\n",
+        "graph:\n",
+        "  entry: n\n",
+        "  nodes:\n",
+        "    - id: n\n",
+        "      use: a\n",
+        "      terminal: true\n",
+    );
+    assert!(matches!(
+        err(yaml),
+        ConfigError::OutOfBounds { field, actual, .. }
+            if field == "node_definitions" && actual == 0
+    ));
 }
