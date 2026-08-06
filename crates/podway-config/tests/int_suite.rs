@@ -8,3 +8,5 @@ mod int_procedure_v1;
 mod int_v2_procedure;
 #[path = "int_v2_procedure_equivalence.rs"]
 mod int_v2_procedure_equivalence;
+#[path = "int_v2_procedure_validate.rs"]
+mod int_v2_procedure_validate;

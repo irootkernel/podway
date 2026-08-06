@@ -11,6 +11,7 @@ use thiserror::Error;
 
 mod parser;
 mod procedure_v2_parse;
+mod procedure_v2_validate;
 mod procedure_v2_wire;
 mod validation;
 
@@ -25,6 +26,7 @@ pub use parser::{
     parse_workspace_config_v1_with_limits,
 };
 pub use procedure_v2_parse::{ParsedNodeDefinition, ParsedProcedureV2};
+pub use procedure_v2_validate::{ValidatedProcedureV2, validate_procedure_v2};
 pub use validation::{
     IntoProcedureSnapshotSourceV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
     ValidatedProcedureV1,
@@ -66,6 +68,20 @@ pub enum ConfigError {
     DuplicateValue { field: &'static str, value: String },
     #[error("return target `{stage_id}` is not a procedure stage")]
     UnknownReturnTarget { stage_id: String },
+    /// A Procedure v2 closed reference names a declaration the same document does not make
+    /// (dossier section 11.2). `field` is a static authored path; `value` is the offending
+    /// identifier.
+    #[error("unknown procedure v2 {field} reference `{value}`")]
+    UnknownV2Reference { field: &'static str, value: String },
+    /// A Procedure v2 declaration is internally inconsistent with the declaration set it resolves
+    /// against — a placement/definition kind disagreement, a route table that does not match its
+    /// definition's option set, or an assessment contract that does not fit its definition or its
+    /// procedure (dossier section 11.2).
+    #[error("invalid procedure v2 {field}: {reason}")]
+    V2ShapeMismatch {
+        field: &'static str,
+        reason: &'static str,
+    },
     #[error("canonical JSON serialization failed: {0}")]
     Serialization(String),
     #[error("canonical JSON cannot contain a non-integer number")]
