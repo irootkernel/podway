@@ -6,3 +6,5 @@ mod int_procedure_document;
 mod int_procedure_v1;
 #[path = "int_v2_procedure.rs"]
 mod int_v2_procedure;
+#[path = "int_v2_procedure_equivalence.rs"]
+mod int_v2_procedure_equivalence;

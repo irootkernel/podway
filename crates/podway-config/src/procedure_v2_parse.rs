@@ -81,14 +81,121 @@ impl ParsedProcedureV2 {
 }
 
 /// Maps an already-admitted Procedure v2 YAML `text` into the core v2 authoring model. The
-/// caller (`parse_procedure_yaml`) is responsible for the single bounded admission; this
+/// caller (`parse_procedure_document`) is responsible for the single bounded admission; this
 /// function performs only order-preserving DTO deserialization and constructor mapping.
 pub(crate) fn parse_procedure_v2_yaml(text: &str) -> Result<ParsedProcedureV2, ConfigError> {
-    let document: ProcedureV2DocumentWire =
-        serde_yaml::from_str(text).map_err(|error| ConfigError::InvalidDocument {
-            reason: error.to_string(),
-        })?;
+    let document: ProcedureV2DocumentWire = serde_yaml::from_str(text).map_err(wire_error)?;
     map_document(document)
+}
+
+/// Maps an already-admitted Procedure v2 JSON `text` into the core v2 authoring model, mirroring
+/// [`parse_procedure_v2_yaml`] exactly. The caller (`parse_procedure_document`) is responsible
+/// for the single bounded admission: duplicate keys, non-canonical numbers, oversize input, and
+/// excess depth/node count are already rejected upstream by the shared bounded decoder before
+/// this runs, so — like the YAML path — this function performs only order-preserving DTO
+/// deserialization (`serde_json`'s streaming deserializer still drives [`OrderedMap`]'s
+/// `MapAccess` visitor, so author order survives even though the workspace's `serde_json::Value`
+/// is built without `preserve_order`) and constructor mapping.
+pub(crate) fn parse_procedure_v2_json(text: &str) -> Result<ParsedProcedureV2, ConfigError> {
+    let document: ProcedureV2DocumentWire = serde_json::from_str(text).map_err(wire_error)?;
+    map_document(document)
+}
+
+/// Wraps a wire-deserialization failure from either serde front-end into
+/// `ConfigError::InvalidDocument`, normalizing away format-specific location/context annotations
+/// so the same structural violation against [`ProcedureV2DocumentWire`] produces the same reason
+/// string for YAML and JSON input — the equivalence the acceptance gate requires.
+///
+/// Two independent, mechanical trims are applied, both derived from the two crates' own error
+/// formatting code (not guessed):
+///
+/// - A trailing `" at line <n> column <n>"` suffix, which both `serde_yaml` and `serde_json`
+///   append to every `Error::custom`-style message that has position info. `serde_yaml`'s
+///   libyaml layer can separately format a bare `" at position <n>"` (when a mark carries a byte
+///   offset but no line/column); it is not reachable from this call site given the upstream
+///   bounded decoder already rejects raw YAML syntax hazards, but is still trimmed defensively.
+/// - A leading structural-path prefix that `serde_yaml` (only) prepends whenever the failure
+///   happens while deserializing the value of a struct field, e.g. `"node_definitions: unknown
+///   field ..."` or `"graph.nodes[0].terminal: invalid type ..."`. This is `serde_yaml::Path`'s
+///   own `ident(.ident|[<digits>])*` rendering (see its `Display` impl); `serde_json` never adds
+///   it. The prefix is recognized by that exact closed grammar, so stripping it is a mechanical
+///   trim of format-specific context, not a rewrite of the message body — but it is a real, if
+///   narrow, deviation from trimming only a trailing suffix, made because without it the two
+///   formats disagree on `ConfigError` for ordinary field-level violations (an unknown field
+///   inside a node definition, a wrong-typed `goal_tracking`), which the acceptance gate treats
+///   as one structural violation that must diagnose identically.
+fn wire_error(error: impl std::fmt::Display) -> ConfigError {
+    let message = error.to_string();
+    let without_path = strip_yaml_path_prefix(&message);
+    let reason = strip_location_suffix(without_path).to_owned();
+    ConfigError::InvalidDocument { reason }
+}
+
+/// Strips a leading `serde_yaml` structural path (`ident(.ident|[<digits>])*`) immediately
+/// followed by `": "`, when present; a no-op for `serde_json` messages, which never carry one.
+fn strip_yaml_path_prefix(message: &str) -> &str {
+    let Some(prefix_end) = message.find(": ") else {
+        return message;
+    };
+    let (candidate, rest) = message.split_at(prefix_end);
+    if is_yaml_structural_path(candidate) {
+        &rest[2..]
+    } else {
+        message
+    }
+}
+
+/// True for a non-empty `ident(.ident|[<digits>])*` token: an ASCII letter or underscore, then
+/// any run of ASCII alphanumerics, underscores, `.` separators, and `[<digits>]` index groups.
+/// This is exactly `serde_yaml::path::Path`'s `Display` grammar, so it can only match a path
+/// `serde_yaml` itself generated — never organic content from either serde front-end's own
+/// message text (verified against every message shape reachable here: `missing field`, `unknown
+/// field`, `unknown variant`, `duplicate field`, `invalid length`, `invalid type`/`invalid
+/// value`; the latter two are the only ones containing `": "` natively, and both fail this
+/// grammar on their embedded space before reaching a colon).
+fn is_yaml_structural_path(candidate: &str) -> bool {
+    let Some(&first) = candidate.as_bytes().first() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return false;
+    }
+    let mut in_index = false;
+    for byte in candidate.bytes() {
+        match (in_index, byte) {
+            (true, b']') => in_index = false,
+            (true, byte) if byte.is_ascii_digit() => {}
+            (true, _) => return false,
+            (false, b'[') => in_index = true,
+            (false, byte) if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.' => {}
+            (false, _) => return false,
+        }
+    }
+    !in_index
+}
+
+/// Strips a trailing `" at line <n> column <n>"` or `" at position <n>"` location suffix, when
+/// present.
+fn strip_location_suffix(message: &str) -> &str {
+    strip_line_column_suffix(message)
+        .or_else(|| strip_position_suffix(message))
+        .unwrap_or(message)
+}
+
+fn strip_line_column_suffix(message: &str) -> Option<&str> {
+    let (body, tail) = message.rsplit_once(" at line ")?;
+    let (line, column) = tail.split_once(" column ")?;
+    let valid = !line.is_empty()
+        && line.bytes().all(|byte| byte.is_ascii_digit())
+        && !column.is_empty()
+        && column.bytes().all(|byte| byte.is_ascii_digit());
+    valid.then_some(body)
+}
+
+fn strip_position_suffix(message: &str) -> Option<&str> {
+    let (body, tail) = message.rsplit_once(" at position ")?;
+    let valid = !tail.is_empty() && tail.bytes().all(|byte| byte.is_ascii_digit());
+    valid.then_some(body)
 }
 
 fn map_domain_error(error: DomainError) -> ConfigError {
@@ -505,4 +612,127 @@ fn map_manual_rework(wire: ManualReworkWire) -> Result<ManualReworkTargetListV2,
         .map(|target| GraphNodeId::new(target).map_err(map_domain_error))
         .collect::<Result<Vec<_>, _>>()?;
     ManualReworkTargetListV2::new(targets).map_err(map_domain_error)
+}
+
+#[cfg(test)]
+mod wire_error_tests {
+    use super::*;
+
+    // Exact `Display` strings captured from `serde_yaml` 0.9.34 / `serde_json` 1.0.150 for a
+    // handful of structural violations against `ProcedureV2DocumentWire`. These pin the two
+    // trims in `wire_error` against the real quirks they exist to normalize: `serde_yaml`
+    // sometimes omits the trailing location (a root-level `missing field`), and prepends a
+    // structural path for anything nested one struct-field deeper (`node_definitions: `,
+    // `graph.nodes[0].terminal: `) that `serde_json` never adds.
+
+    #[test]
+    fn strips_line_column_suffix_shared_by_both_formats() {
+        assert_eq!(
+            strip_location_suffix(
+                "unknown field `unknown`, expected one of `schema`, `id` at line 3 column 1"
+            ),
+            "unknown field `unknown`, expected one of `schema`, `id`"
+        );
+        assert_eq!(
+            strip_location_suffix(
+                "unknown field `unknown`, expected one of `schema`, `id` at line 1 column 50"
+            ),
+            "unknown field `unknown`, expected one of `schema`, `id`"
+        );
+    }
+
+    #[test]
+    fn leaves_root_level_missing_field_message_that_yaml_never_suffixes() {
+        // serde_yaml: no Mark is available for a structural "field never appeared" check, so
+        // there is no " at line/column" to trim in the first place.
+        assert_eq!(
+            strip_location_suffix("missing field `name`"),
+            "missing field `name`"
+        );
+        // serde_json always attaches one; wire_error must still land on the same text.
+        assert_eq!(
+            strip_location_suffix("missing field `name` at line 1 column 207"),
+            "missing field `name`"
+        );
+    }
+
+    #[test]
+    fn strips_position_suffix() {
+        assert_eq!(
+            strip_location_suffix("unexpected end at position 4"),
+            "unexpected end"
+        );
+        assert_eq!(strip_location_suffix("no suffix here"), "no suffix here");
+    }
+
+    #[test]
+    fn strips_single_segment_yaml_structural_path() {
+        assert_eq!(
+            strip_yaml_path_prefix(
+                "node_definitions: unknown variant `bogus`, expected one of `confirm`, `text`"
+            ),
+            "unknown variant `bogus`, expected one of `confirm`, `text`"
+        );
+        assert_eq!(
+            strip_yaml_path_prefix(
+                "goal_tracking: invalid type: string \"true\", expected a boolean"
+            ),
+            "invalid type: string \"true\", expected a boolean"
+        );
+    }
+
+    #[test]
+    fn strips_dotted_and_indexed_yaml_structural_path() {
+        assert_eq!(
+            strip_yaml_path_prefix("graph.nodes[0]: missing field `id`"),
+            "missing field `id`"
+        );
+        assert_eq!(
+            strip_yaml_path_prefix(
+                "graph.nodes[0].terminal: invalid type: string \"true\", expected a boolean"
+            ),
+            "invalid type: string \"true\", expected a boolean"
+        );
+    }
+
+    #[test]
+    fn never_strips_message_bodies_serde_json_actually_produces() {
+        // serde_json's own "invalid type"/"invalid value" messages are the only ones containing
+        // ": " natively; the embedded space in the phrase before the colon must fail the path
+        // grammar so they pass through untouched.
+        let json_like = "invalid type: string \"true\", expected a boolean";
+        assert_eq!(strip_yaml_path_prefix(json_like), json_like);
+        let no_colon = "unknown field `unknown`, expected one of `schema`, `id`";
+        assert_eq!(strip_yaml_path_prefix(no_colon), no_colon);
+    }
+
+    #[test]
+    fn yaml_and_json_wire_errors_agree_after_full_normalization() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "node_definitions: unknown variant `bogus`, expected one of `confirm`, `text` at line 7 column 3",
+                "unknown variant `bogus`, expected one of `confirm`, `text` at line 1 column 161",
+            ),
+            (
+                "goal_tracking: invalid type: string \"true\", expected a boolean at line 3 column 16",
+                "invalid type: string \"true\", expected a boolean at line 1 column 63",
+            ),
+            (
+                "graph.nodes[0].terminal: invalid type: string \"true\", expected a boolean at line 16 column 17",
+                "invalid type: string \"true\", expected a boolean at line 1 column 200",
+            ),
+            (
+                "missing field `name`",
+                "missing field `name` at line 1 column 207",
+            ),
+        ];
+        for (yaml_like, json_like) in cases {
+            let yaml_reason = strip_location_suffix(strip_yaml_path_prefix(yaml_like));
+            let json_reason = strip_location_suffix(strip_yaml_path_prefix(json_like));
+            assert_eq!(
+                yaml_reason, json_reason,
+                "yaml: {yaml_like:?} json: {json_like:?}"
+            );
+        }
+    }
 }

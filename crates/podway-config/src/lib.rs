@@ -20,8 +20,9 @@ pub use parser::{
     MAX_WORKSPACE_CONFIG_BYTES_V1, MAX_WORKSPACE_CONFIG_DEPTH_V1, MAX_WORKSPACE_CONFIG_NODES_V1,
     ParsedProcedure, ProcedureDocumentFormat, ProcedureDocumentLimits, ProcedureFormatV1,
     ProcedureParseLimitsV1, WorkspaceConfigParseLimitsV1, decode_procedure_document,
-    decode_procedure_document_with_limits, parse_procedure_v1, parse_procedure_v1_with_limits,
-    parse_procedure_yaml, parse_workspace_config_v1, parse_workspace_config_v1_with_limits,
+    decode_procedure_document_with_limits, parse_procedure_document, parse_procedure_v1,
+    parse_procedure_v1_with_limits, parse_procedure_yaml, parse_workspace_config_v1,
+    parse_workspace_config_v1_with_limits,
 };
 pub use procedure_v2_parse::{ParsedNodeDefinition, ParsedProcedureV2};
 pub use validation::{

@@ -135,11 +135,19 @@ pub enum ParsedProcedure {
     V2(crate::procedure_v2_parse::ParsedProcedureV2),
 }
 
-/// Parses a YAML procedure document, dispatching on its exact `schema` field to the unchanged
-/// v1 parser or the v2 parser. The shared bounded decoder is the single admission path; the v2
-/// path is YAML-only (JSON equivalence is owned by V2MOD-005).
-pub fn parse_procedure_yaml(input: &[u8]) -> Result<ParsedProcedure, ConfigError> {
-    let value = decode_procedure_document(input, ProcedureDocumentFormat::Yaml)?;
+/// Parses a Procedure document in either source encoding, dispatching on its exact `schema`
+/// field to the unchanged v1 parser or the v2 parser. The shared bounded decoder
+/// (`decode_procedure_document`) is the single admission path for both `Yaml` and `Json`; from
+/// there v1 dispatches to [`parse_procedure_v1`] with the matching [`ProcedureFormatV1`], and v2
+/// dispatches to the format-matched wire parser (`parse_procedure_v2_yaml` /
+/// `parse_procedure_v2_json`). The YAML dispatch additionally rejects a top-level flow-collection
+/// document (JSON written where block YAML is expected); the JSON dispatch has no such
+/// restriction since `Json` is exactly that form.
+pub fn parse_procedure_document(
+    input: &[u8],
+    format: ProcedureDocumentFormat,
+) -> Result<ParsedProcedure, ConfigError> {
+    let value = decode_procedure_document(input, format)?;
     let schema = match value.get("schema") {
         Some(serde_json::Value::String(schema)) => schema.as_str(),
         Some(_) => {
@@ -153,29 +161,38 @@ pub fn parse_procedure_yaml(input: &[u8]) -> Result<ParsedProcedure, ConfigError
             });
         }
     };
+    let text = std::str::from_utf8(input).expect("decoded procedure document is valid UTF-8");
     match schema {
-        crate::PROCEDURE_SCHEMA_V1 => Ok(ParsedProcedure::V1(parse_procedure_v1(
-            input,
-            ProcedureFormatV1::Yaml,
-        )?)),
-        podway_core::PROCEDURE_SCHEMA_V2 => {
-            if begins_with_flow_collection(input) {
-                return Err(ConfigError::InvalidDocument {
-                    reason: "JSON-form procedure documents are not accepted by the YAML dispatch"
-                        .to_owned(),
-                });
+        crate::PROCEDURE_SCHEMA_V1 => Ok(ParsedProcedure::V1(parse_procedure_v1(input, format)?)),
+        podway_core::PROCEDURE_SCHEMA_V2 => match format {
+            ProcedureDocumentFormat::Yaml => {
+                if begins_with_flow_collection(input) {
+                    return Err(ConfigError::InvalidDocument {
+                        reason:
+                            "JSON-form procedure documents are not accepted by the YAML dispatch"
+                                .to_owned(),
+                    });
+                }
+                Ok(ParsedProcedure::V2(
+                    crate::procedure_v2_parse::parse_procedure_v2_yaml(text)?,
+                ))
             }
-            let text =
-                std::str::from_utf8(input).expect("decoded procedure document is valid UTF-8");
-            Ok(ParsedProcedure::V2(
-                crate::procedure_v2_parse::parse_procedure_v2_yaml(text)?,
-            ))
-        }
+            ProcedureDocumentFormat::Json => Ok(ParsedProcedure::V2(
+                crate::procedure_v2_parse::parse_procedure_v2_json(text)?,
+            )),
+        },
         other => Err(ConfigError::InvalidSchema {
             expected: "podway.procedure/v1 or podway.procedure/v2",
             actual: other.to_owned(),
         }),
     }
+}
+
+/// Parses a YAML procedure document. Equivalent to
+/// [`parse_procedure_document`]`(input, `[`ProcedureDocumentFormat::Yaml`]`)`; kept as a
+/// dedicated entry point since it is the long-standing, widely used YAML-only call site.
+pub fn parse_procedure_yaml(input: &[u8]) -> Result<ParsedProcedure, ConfigError> {
+    parse_procedure_document(input, ProcedureDocumentFormat::Yaml)
 }
 
 /// True when the document's first non-whitespace byte opens a flow collection. A JSON procedure
