@@ -189,8 +189,8 @@ pub fn parse_procedure_document(
 }
 
 /// Parses a YAML procedure document. Equivalent to
-/// [`parse_procedure_document`]`(input, `[`ProcedureDocumentFormat::Yaml`]`)`; kept as a
-/// dedicated entry point since it is the long-standing, widely used YAML-only call site.
+/// [`parse_procedure_document`]`(input, `[`ProcedureDocumentFormat::Yaml`]`)`; kept as the
+/// dedicated YAML entry point, mirroring [`parse_procedure_v1`]'s format-specific style.
 pub fn parse_procedure_yaml(input: &[u8]) -> Result<ParsedProcedure, ConfigError> {
     parse_procedure_document(input, ProcedureDocumentFormat::Yaml)
 }

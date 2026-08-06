@@ -1375,7 +1375,7 @@
       ],
       "test_class": "compatibility-e2e",
       "owning_tasks": [
-        "V2MOD-008"
+        "V2REL-001"
       ],
       "implementation_status": "planned",
       "contract_refs": [

@@ -634,10 +634,25 @@ fn the_canonical_projection_budget_accepts_the_limit_and_rejects_one_filler_item
 
 #[test]
 fn canonical_output_is_canonical_json_v1_and_re_canonicalizing_it_reaches_a_fixpoint() {
-    for source in [BASE_YAML, BRANCH_YAML] {
+    // An action placement with a skip policy where `BASE_YAML` has none, pinning the skip
+    // canonical shape into the same fixpoint proof the other two sources exercise.
+    let skip_yaml = edited(
+        "      use: work\n      next: decide\n",
+        "      use: work\n      skip:\n        allowed: true\n        reason_required: true\n      next: decide\n",
+    );
+    for source in [BASE_YAML, BRANCH_YAML, skip_yaml.as_str()] {
         let validated = yaml(source);
         let canonical = validated.canonical_json().as_str().to_owned();
         assert_eq!(verify_canonical_json_v1(canonical.as_bytes()), Ok(()));
+
+        if source == skip_yaml.as_str() {
+            // Pin the skip policy's canonical shape: a closed two-field object in byte-sorted
+            // key order, proven below to re-parse and re-canonicalize to these exact bytes.
+            assert!(
+                canonical.contains(r#""skip":{"allowed":true,"reason_required":true}"#),
+                "canonical skip shape must be `{{\"allowed\":..,\"reason_required\":..}}`: {canonical}"
+            );
+        }
 
         // The canonical document is itself a valid Procedure v2 JSON document, and canonicalizing
         // it again is the identity — the property a formatter, a preview, and a confirmed digest

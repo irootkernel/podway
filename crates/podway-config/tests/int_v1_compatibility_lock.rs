@@ -249,7 +249,7 @@ const V1_BOUNDARIES_FIXTURE: &str =
 ///     CLI/daemon command dispatch; this file's `dispatch_v1_*` tests above are the
 ///     config-crate-ownable slice of that same V2ACC-069 substance (the call-site argument), not
 ///     the full end-to-end case.
-///   - `"v1-reopen"` -> V2COMP-005 / V2COMP-SURFACE-007, both filed under V2MOD-008 but scoped to
+///   - `"v1-reopen"` -> V2COMP-005 / V2COMP-SURFACE-007, both filed under V2REL-001 but scoped to
 ///     session-command reopen/reactivation handling in `podway-core` / `podway-daemon` — outside
 ///     this task's config-crate file scope (`crates/podway-config/tests/**`,
 ///     `crates/podway-presets/tests/**` only).

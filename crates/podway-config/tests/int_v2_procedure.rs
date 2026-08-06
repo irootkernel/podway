@@ -1,5 +1,6 @@
 use podway_config::{
     ConfigError, ParsedProcedure, ParsedProcedureV2, parse_procedure_v1, parse_procedure_yaml,
+    validate_procedure_v2,
 };
 use podway_core::TransitionEffectV2;
 
@@ -590,6 +591,26 @@ fn constructor_bounds_fail_closed_during_mapping() {
         )),
         ConfigError::InvalidValue { .. }
     ));
+
+    // A decision placement's `routes` is mutually exclusive with each action-only field
+    // (`skip`, `next`, `terminal`); every half of that guard fails closed with the same
+    // diagnostic (procedure_v2_parse.rs's `map_placement`).
+    let decision_only_routes = "  d:\n    type: decision\n    title: D\n    objective: O\n    prompt: P\n    options:\n      - { id: a, label: A }\n    reason: { required: true }\n";
+    let routes_placements_with_action_fields = [
+        "    - id: n\n      use: d\n      skip: { allowed: true, reason_required: false }\n      routes:\n        a: { to: n, effect: advance }\n",
+        "    - id: n\n      use: d\n      next: n\n      routes:\n        a: { to: n, effect: advance }\n",
+        "    - id: n\n      use: d\n      terminal: true\n      routes:\n        a: { to: n, effect: advance }\n",
+    ];
+    for graph in routes_placements_with_action_fields {
+        assert!(
+            matches!(
+                err(&v2_doc(decision_only_routes, graph)),
+                ConfigError::InvalidValue { field, reason }
+                    if field == "graph.nodes" && reason == "a decision placement declares only routes"
+            ),
+            "expected the decision-routes-only guard for: {graph}"
+        );
+    }
 }
 
 #[test]
@@ -620,6 +641,45 @@ fn v2_does_not_perform_semantic_or_canonical_validation() {
         "      next: start\n",
     );
     v2(yaml).expect("syntactically valid but semantically invalid still maps");
+
+    // The canonical half of the same claim: parsing also defers the canonical projection budget
+    // (dossier V2ACC-002) to validation, so a closed-reference-valid document that is merely
+    // oversized still parses, and only `validate_procedure_v2` rejects it.
+    //
+    // Reuses `int_v2_procedure_canonical.rs`'s linear filler-item technique — maximal `choice`
+    // items whose canonical size scales linearly with item count — sized generously past the
+    // budget rather than pinned to its exact edge.
+    fn oversized_projection_document(count: usize) -> String {
+        let choices: String = (0..32)
+            .map(|index| format!("          - \"{:c<118}{index:02}\"\n", ""))
+            .collect();
+        let items: String = (0..count)
+            .map(|index| {
+                format!(
+                    "      - id: i{index:02}\n        type: choice\n        prompt: \"{}\"\n        help: \"{}\"\n        required: true\n        choices:\n{choices}",
+                    "p".repeat(300),
+                    "h".repeat(1_000),
+                )
+            })
+            .collect();
+        format!(
+            "schema: podway.procedure/v2\nid: projection\nversion: \"1\"\nname: Projection\npurpose: Exceed the canonical projection budget.\nnode_definitions:\n  bulk:\n    type: action\n    title: Bulk\n    intent: Hold the filler items.\n    items:\n{items}graph:\n  entry: n\n  nodes:\n    - id: n\n      use: bulk\n      terminal: true\n",
+        )
+    }
+
+    let oversized = oversized_projection_document(40);
+    let parsed =
+        v2(&oversized).expect("closed-reference-valid but oversized document still parses");
+    assert!(
+        matches!(
+            validate_procedure_v2(parsed),
+            Err(ConfigError::OutOfBounds {
+                field: "canonical source projection",
+                ..
+            })
+        ),
+        "closed-reference-valid but oversized document must fail validation on the projection budget"
+    );
 }
 
 #[test]

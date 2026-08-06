@@ -342,10 +342,10 @@ branch-specific references are optional.
 ### Graph validation and convergence
 
 V2 semantic validation rejects duplicate definition or placement identities,
-missing entry nodes, unreachable placements, routes to missing placements,
-decision options without routes, and routes for undeclared options. Every
-reachable placement must have a finite route to a terminal placement in the
-complete procedure graph, including declared rework edges.
+missing entry nodes, routes to missing placements, decision options without
+routes, and routes for undeclared options. Graph vetting rejects unreachable
+placements; every reachable placement must have a finite route to a terminal
+placement in the complete procedure graph, including declared rework edges.
 
 Every cycle in the complete procedure graph must contain at least one declared
 rework edge, so the advance-only subgraph is acyclic. Rework always creates a

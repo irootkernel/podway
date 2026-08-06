@@ -401,8 +401,8 @@ impl GraphPlacementV2 {
 /// The declarative single-cursor Procedure v2 graph: one entry placement, the bounded set of placed
 /// nodes, and the optional manual rework target list. Construction enforces only structural
 /// assembly — one to 64 placements, unique graph node ids, and the entry present. Branches, declared
-/// rework cycles, and convergence are accepted as declarative data; topology and reference vetting
-/// is owned by V2MOD-006 and V2GRF-001.
+/// rework cycles, and convergence are accepted as declarative data; closed-reference validation
+/// lives in podway-config (delivered), and graph vetting is owned by V2GRF-001.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcedureGraphV2 {
     entry: GraphNodeId,
