@@ -36,6 +36,16 @@ fn item_specs_enforce_v2_bounds_while_keeping_v1_unchanged() {
         }
     );
 
+    // item help is capped at 1000 characters.
+    assert!(
+        ItemCommonV2::new(ItemId::new("i").unwrap(), "p", Some("h".repeat(1000)), true).is_ok()
+    );
+    assert_eq!(
+        ItemCommonV2::new(ItemId::new("i").unwrap(), "p", Some("h".repeat(1001)), true)
+            .unwrap_err(),
+        invalid("item help")
+    );
+
     // text max length hard cap is 16_384; one over fails.
     assert!(TextItemSpecV2::new(common("t"), 0, 16_384, true).is_ok());
     assert_eq!(
@@ -50,6 +60,13 @@ fn item_specs_enforce_v2_bounds_while_keeping_v1_unchanged() {
     assert_eq!(
         ChoiceItemSpecV2::new(common("c"), too_many).unwrap_err(),
         invalid("choice count must be between one and 32")
+    );
+
+    // each choice value is capped at 120 characters.
+    assert!(ChoiceItemSpecV2::new(common("c"), vec!["v".repeat(120)]).is_ok());
+    assert_eq!(
+        ChoiceItemSpecV2::new(common("c"), vec!["v".repeat(121)]).unwrap_err(),
+        invalid("choice")
     );
 
     // list bounds cap at 100 entries of 1_000 characters.

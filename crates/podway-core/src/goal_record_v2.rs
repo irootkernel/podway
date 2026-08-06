@@ -526,6 +526,19 @@ mod tests {
 
     #[test]
     fn criterion_result_bounds_citations_and_forbids_them_for_not_applicable() {
+        let four: Vec<CriterionCitationV2> = (0..4)
+            .map(|i| CriterionCitationV2::Item(ItemId::new(format!("note-{i}")).unwrap()))
+            .collect();
+        assert!(
+            CriterionAssessmentResultV2::new(
+                criterion_id("c"),
+                CriterionStatusV2::Satisfied,
+                crate::procedure_v2::CriterionAssessmentReasonV2::new("ok").unwrap(),
+                four,
+            )
+            .is_ok()
+        );
+
         let many: Vec<CriterionCitationV2> = (0..5)
             .map(|i| CriterionCitationV2::Item(ItemId::new(format!("note-{i}")).unwrap()))
             .collect();
@@ -803,6 +816,14 @@ mod tests {
             assessment_attempt(GoalOutcome::Achieved, oversize).unwrap_err(),
             invalid("a goal assessment records between one and sixteen criterion results")
         );
+    }
+
+    #[test]
+    fn goal_assessment_accepts_the_sixteen_result_ceiling() {
+        let sixteen: Vec<CriterionAssessmentResultV2> = (0..16)
+            .map(|i| assessment_result(&format!("c-{i}"), CriterionStatusV2::Satisfied))
+            .collect();
+        assert!(assessment_attempt(GoalOutcome::Achieved, sixteen).is_ok());
     }
 
     #[test]

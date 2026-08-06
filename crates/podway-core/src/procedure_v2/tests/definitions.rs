@@ -189,6 +189,10 @@ fn decision_definition_enforces_decision_shape_and_bounds() {
     assert_eq!(decision.options().len(), 2);
     assert!(decision.reason().required());
 
+    // the one-option floor is accepted (decision_input's default single option).
+    let single_option = DecisionDefinitionV2::new(decision_input()).unwrap();
+    assert_eq!(single_option.options().len(), 1);
+
     let objective_at_limit = "o".repeat(300);
     let prompt_at_limit = "p".repeat(500);
     let guidance = vec!["g".repeat(200); 8];
@@ -264,6 +268,24 @@ fn decision_option_identifiers_must_be_unique() {
             ..decision_input()
         }),
         Err(invalid("decision option identifiers must be unique"))
+    );
+}
+
+#[test]
+fn decision_option_enforces_label_and_criteria_length_bounds() {
+    let label_at_limit = DecisionOptionV2::new(opt_id("opt"), "l".repeat(120), None).unwrap();
+    assert_eq!(label_at_limit.label(), "l".repeat(120));
+    assert_eq!(
+        DecisionOptionV2::new(opt_id("opt"), "l".repeat(121), None),
+        Err(invalid("option label"))
+    );
+
+    let criteria_at_limit =
+        DecisionOptionV2::new(opt_id("opt"), "label", Some("c".repeat(500))).unwrap();
+    assert_eq!(criteria_at_limit.criteria(), Some("c".repeat(500).as_str()));
+    assert_eq!(
+        DecisionOptionV2::new(opt_id("opt"), "label", Some("c".repeat(501))),
+        Err(invalid("option criteria"))
     );
 }
 

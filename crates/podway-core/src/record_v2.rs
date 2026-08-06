@@ -856,6 +856,7 @@ mod tests {
             RecordedItemValueV2::list(vec!["".to_owned()]).unwrap_err(),
             invalid("recorded list entry")
         );
+        assert!(RecordedItemValueV2::list(vec!["x".repeat(1_000)]).is_ok());
         assert_eq!(
             RecordedItemValueV2::list(vec!["x".repeat(1_001)]).unwrap_err(),
             invalid("recorded list entry")
@@ -924,6 +925,10 @@ mod tests {
     #[test]
     fn resolved_evidence_set_bounds_the_ordered_collection() {
         assert!(ResolvedEvidenceSetV2::new(Vec::new()).is_ok());
+        let eight: Vec<ResolvedEvidenceReferenceV2> = (0..8)
+            .map(|i| ResolvedEvidenceReferenceV2::unresolved(node(&format!("n-{i}"))))
+            .collect();
+        assert!(ResolvedEvidenceSetV2::new(eight).is_ok());
         let nine: Vec<ResolvedEvidenceReferenceV2> = (0..9)
             .map(|i| ResolvedEvidenceReferenceV2::unresolved(node(&format!("n-{i}"))))
             .collect();

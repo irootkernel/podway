@@ -16,6 +16,8 @@ fn identifiers_enforce_kebab_bounds_and_reuse_v1_rule() {
             field: "GraphNodeId"
         })
     );
+    let at_limit = "a".repeat(64);
+    assert!(OptionId::new(at_limit).is_ok());
     let overlong = "a".repeat(65);
     assert_eq!(
         OptionId::new(overlong.clone()),
