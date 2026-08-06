@@ -64,6 +64,12 @@ def main() -> int:
     podwayd = (target / "debug" / "podwayd").resolve()
     if not podway.is_file() or not podwayd.is_file():
         raise SystemExit("cargo build did not produce both Podway binaries")
+    # macOS validates a newly built executable on its first launch and serializes that
+    # validation machine-wide, so a busy machine can stall a first exec beyond the
+    # bounded daemon-install windows. One launch per binary absorbs that cost before
+    # any test pays it inside a bounded window.
+    run([str(podway), "version"])
+    run([str(podwayd), "version"])
     environment = os.environ.copy()
     environment["PODWAYD_TEST_BINARY"] = str(podwayd)
     if arguments.exact_test is None:

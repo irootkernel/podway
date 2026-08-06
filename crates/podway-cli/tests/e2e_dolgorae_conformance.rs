@@ -82,6 +82,14 @@ impl ControlledPathFixtureV1 {
                 .expect("fake launchctl executable must be written");
             fs::set_permissions(&launchctl, fs::Permissions::from_mode(0o700))
                 .expect("fake launchctl executable must be executable");
+            // An unknown subcommand exits 64 without touching any service state, so it completes
+            // the first launch of the freshly written script before the product invokes it under
+            // its bounded launchctl timeout.
+            let mut warm = Command::new(&launchctl);
+            warm.env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("PODWAY_TEST_LAUNCHCTL_STATE", &launchctl_state);
+            complete_first_launch(&mut warm, &launchctl, 64);
             launchctl
         };
         Self {
@@ -430,6 +438,34 @@ fn copy_executable(source: &Path, destination: &Path) {
     fs::copy(source, destination).expect("product executable must be copied");
     fs::set_permissions(destination, fs::Permissions::from_mode(0o700))
         .expect("copied product executable must be executable");
+    // `version` reports the build identity without touching any service state, so it completes the
+    // first launch of the copy before the product executes it under a bounded window.
+    let mut warm = Command::new(destination);
+    warm.arg("version").env_clear().env("PATH", "/usr/bin:/bin");
+    complete_first_launch(&mut warm, destination, 0);
+}
+
+/// Completes the macOS first-launch validation of a freshly written executable.
+///
+/// macOS validates every newly written executable the first time it is launched, and that
+/// validation is serialized for the whole machine. A loaded machine that keeps producing new
+/// executables therefore stalls a first launch for tens of seconds. The product bounds both its
+/// daemon identity probe and every launchctl invocation, so an unabsorbed first launch expires
+/// those windows and fails `daemon install`. Paying that one-time cost here keeps it outside them.
+fn complete_first_launch(command: &mut Command, executable: &Path, expected_exit_code: i32) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let observed = command.output();
+        if matches!(&observed, Ok(output) if output.status.code() == Some(expected_exit_code)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first launch of {} never completed: {observed:?}",
+            executable.display()
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn assert_json_success<'a>(output: Output, arguments: impl IntoIterator<Item = &'a str>) -> Value {
