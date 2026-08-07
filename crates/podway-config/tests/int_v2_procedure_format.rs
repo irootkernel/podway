@@ -1071,6 +1071,198 @@ fn v2aut001_multiple_construct_violations_are_reported_in_line_and_column_order(
 }
 
 // ---------------------------------------------------------------------------------------------
+// 6b. Marker lines that anchor no node (V2AUT-003)
+//
+// `--write` turns a silent comment relocation into a silent edit of the author's file, so the two
+// styles whose lines carry a marker but no node are refused rather than reformatted. Neither style
+// is one the emitter can produce, so refusing them costs the round trip nothing.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn v2aut003_a_bare_sequence_marker_is_rejected_rather_than_relocating_the_comment_above_it() {
+    // The hazard, exactly: the element anchors at its first key one line *below* the marker, so the
+    // marker line owns no path and the block above it would be re-emitted at the end of the
+    // document instead of where the author put it.
+    let source = MINIMAL_YAML.replace(
+        "    - id: only\n",
+        "    # About the only placement.\n    -\n      id: only\n",
+    );
+    let diagnostics = diagnostics(&source, ProcedureDocumentFormat::Yaml);
+
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(
+        diagnostics[0].code(),
+        AuthoringDiagnosticCode::SourceConstructUnsupported
+    );
+    assert_eq!(diagnostics[0].severity(), AuthoringSeverity::Error);
+    assert_eq!(
+        (
+            diagnostics[0].location().line(),
+            diagnostics[0].location().column()
+        ),
+        (15, 5),
+        "{:?}",
+        diagnostics[0]
+    );
+    assert_eq!(
+        diagnostics[0].message(),
+        "This source uses a sequence marker whose entry does not start on the marker line, which \
+         canonical authoring form cannot represent."
+    );
+    // The `field` is the document root precisely because the marker line anchors nothing — the
+    // absence this diagnostic exists to report.
+    assert_eq!(diagnostics[0].field(), "$");
+}
+
+#[test]
+fn v2aut003_a_document_marker_line_is_rejected_at_column_one() {
+    for (name, source, line) in [
+        (
+            "document start",
+            format!("# Leading note.\n---\n{MINIMAL_YAML}"),
+            2,
+        ),
+        ("document end", format!("{MINIMAL_YAML}...\n"), 17),
+    ] {
+        let diagnostics = diagnostics(&source, ProcedureDocumentFormat::Yaml);
+        assert_eq!(diagnostics.len(), 1, "{name}: {diagnostics:?}");
+        assert_eq!(
+            diagnostics[0].code(),
+            AuthoringDiagnosticCode::SourceConstructUnsupported,
+            "{name}"
+        );
+        assert_eq!(
+            (
+                diagnostics[0].location().line(),
+                diagnostics[0].location().column()
+            ),
+            (line, 1),
+            "{name}: {:?}",
+            diagnostics[0]
+        );
+        assert_eq!(
+            diagnostics[0].message(),
+            "This source uses a document start or end marker, which canonical authoring form \
+             cannot represent.",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn v2aut003_a_dash_that_is_content_rather_than_a_marker_stays_supported() {
+    // The canonical style — the element's first key on the marker line — is the whole corpus, and
+    // it keeps formatting. A `-` or `---` written as a *value* is content the lexer reads in a
+    // quoted state, never a marker.
+    let corpus = format_yaml(MINIMAL_YAML);
+    assert!(corpus.document().contains("    - id: only\n"));
+
+    let source = MINIMAL_YAML
+        .replace("name: Minimal\n", "name: \"---\"\n")
+        .replace("    title: Work\n", "    title: \"-\"\n");
+    let formatted = format_yaml(&source);
+    assert!(
+        formatted.document().contains("name: \"---\"\n")
+            && formatted.document().contains("    title: \"-\"\n"),
+        "{}",
+        formatted.document()
+    );
+    assert_eq!(
+        format_yaml(formatted.document()).document(),
+        formatted.document(),
+        "the quoted forms are a fixpoint of the scan that rejects the marker forms"
+    );
+}
+
+/// The general closure of the relocation class the two marker kinds belong to: a comment above
+/// *any* content line that anchors no node — a mapping value written below its key, a quoted value
+/// on its own line, a folded plain scalar's continuation — is rejected rather than silently
+/// re-emitted at the end of the document. Block scalars are already rejected, which pushes long
+/// prose toward exactly these layouts, so this is the case a real author hits first.
+#[test]
+fn v2aut003_a_comment_above_an_unanchored_content_line_is_rejected_rather_than_relocated() {
+    for (name, replacement, line, column) in [
+        (
+            "value below its key",
+            "    intent:\n      # Why the work matters.\n      Do the work.\n",
+            12,
+            7,
+        ),
+        (
+            "quoted value below its key",
+            "    intent:\n      # Why the work matters.\n      \"Do the work.\"\n",
+            12,
+            7,
+        ),
+    ] {
+        let source = MINIMAL_YAML.replace("    intent: Do the work.\n", replacement);
+        let diagnostics = diagnostics(&source, ProcedureDocumentFormat::Yaml);
+        assert_eq!(diagnostics.len(), 1, "{name}: {diagnostics:?}");
+        assert_eq!(
+            diagnostics[0].code(),
+            AuthoringDiagnosticCode::SourceConstructUnsupported,
+            "{name}"
+        );
+        assert_eq!(
+            (
+                diagnostics[0].location().line(),
+                diagnostics[0].location().column()
+            ),
+            (line, column),
+            "{name}: {:?}",
+            diagnostics[0]
+        );
+        assert_eq!(
+            diagnostics[0].message(),
+            "This source uses a comment attached to a line that does not begin a node, which \
+             canonical authoring form cannot represent.",
+            "{name}"
+        );
+    }
+}
+
+/// A comment *inside* a folded plain scalar has no relocation path at all: YAML ends the scalar at
+/// the comment line, so the continuation below it is a parse error, reported as an unsupported
+/// construct before comment attachment ever runs.
+#[test]
+fn v2aut003_a_comment_inside_a_folded_scalar_is_a_parse_rejection_not_a_relocation() {
+    let source = MINIMAL_YAML.replace(
+        "    intent: Do the work.\n",
+        "    intent: Do the work\n      # Folded onward.\n      end to end.\n",
+    );
+    let diagnostics = diagnostics(&source, ProcedureDocumentFormat::Yaml);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(
+        diagnostics[0].code(),
+        AuthoringDiagnosticCode::SourceConstructUnsupported,
+        "{:?}",
+        diagnostics[0]
+    );
+}
+
+/// The same layouts stay supported when no comment attaches to them: there is nothing to lose, so
+/// the emitter simply normalizes the layout and reports drift.
+#[test]
+fn v2aut003_an_unanchored_content_line_without_a_comment_still_formats() {
+    for (name, replacement) in [
+        ("value below its key", "    intent:\n      Do the work.\n"),
+        (
+            "folded continuation line",
+            "    intent: Do the\n      work.\n",
+        ),
+    ] {
+        let source = MINIMAL_YAML.replace("    intent: Do the work.\n", replacement);
+        let formatted = format_yaml(&source);
+        assert!(formatted.changed(), "{name}: layout must normalize");
+        assert_eq!(
+            format_yaml(formatted.document()).document(),
+            formatted.document(),
+            "{name}: the normalized form is a fixpoint"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // 7. The emitted-document budget
 // ---------------------------------------------------------------------------------------------
 

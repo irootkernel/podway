@@ -404,6 +404,10 @@ fn emit_yaml_sequence(
                 push_indent(out, indent);
                 out.push_str("- []\n");
             }
+            // A sequence directly inside a sequence, which the Procedure v2 model has no field for:
+            // every authoring sequence holds scalars or mappings. The arm exists only to keep the
+            // match total, and the bare `-` it would write is the one layout the construct scan
+            // rejects — unreachable in both directions, so the two cannot actually disagree.
             AuthoringValue::Seq(nested) => {
                 push_indent(out, indent);
                 out.push_str("-\n");

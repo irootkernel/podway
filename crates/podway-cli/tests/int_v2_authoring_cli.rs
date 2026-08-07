@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
@@ -93,6 +94,9 @@ impl FixtureDirectory {
 
 impl Drop for FixtureDirectory {
     fn drop(&mut self) {
+        // A test that panics between restricting the directory and restoring it must not strand
+        // an unremovable tree under the temp root.
+        let _ = fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700));
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -134,6 +138,22 @@ fn identity(path: &Path) -> (Vec<u8>, SystemTime) {
         .modified()
         .expect("fixture modification time must be readable");
     (bytes, modified)
+}
+
+/// Every name in a directory, sorted: the proof that a command created nothing it did not report.
+fn entry_names(directory: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(directory)
+        .expect("the fixture directory must be readable")
+        .map(|entry| {
+            entry
+                .expect("the fixture directory entry must be readable")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
 }
 
 #[test]
@@ -290,51 +310,6 @@ fn v2aut001_an_unrepresentable_source_construct_is_a_structured_diagnostic_succe
                 .expect("the diagnostic must carry a message"),
         ),
     );
-}
-
-#[test]
-fn v2aut001_write_is_a_registered_capability_this_build_does_not_serve() {
-    let fixture = FixtureDirectory::new("write");
-    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
-    let before = identity(&path);
-
-    let output = run(&[
-        "--json",
-        "procedure",
-        "format",
-        &path.display().to_string(),
-        "--write",
-    ]);
-    assert_eq!(output.status.code(), Some(3), "{output:?}");
-    assert!(output.stderr.is_empty());
-    let envelope = one_json(&output);
-    assert_eq!(envelope["schema"], "podway.error/v1");
-    assert_eq!(envelope["command"], "procedure.format");
-    assert_eq!(envelope["code"], "UNSUPPORTED_V2_CAPABILITY");
-    assert_eq!(envelope["exit_code"], 3);
-    assert_eq!(envelope["retryable"], false);
-    assert_eq!(
-        envelope["details"]["schema"],
-        "podway.v2-runtime-error-details/v1"
-    );
-    assert_eq!(envelope["details"]["kind"], "UNSUPPORTED_V2_CAPABILITY");
-    assert_eq!(
-        envelope["details"]["capability"],
-        "procedure.format --write"
-    );
-
-    // The renderer falls back to INTERNAL_ERROR when it cannot build a valid typed envelope, so the
-    // decode is the proof that the closed v2 detail family accepted this failure as authored.
-    let typed: ResponseEnvelopeV1 =
-        serde_json::from_value(envelope).expect("the capability failure must be a typed envelope");
-    let ResponseEnvelopeV1::Error(typed) = typed else {
-        panic!("an unimplemented capability is an error envelope");
-    };
-    assert_eq!(typed.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
-    assert_eq!(typed.exit_code().get(), 3);
-    assert_eq!(typed.command().as_str(), "procedure.format");
-
-    assert_eq!(identity(&path), before, "--write must not touch the file");
 }
 
 #[test]
@@ -630,19 +605,8 @@ fn v2aut002_check_never_touches_the_file_it_reads() {
         drifted_source(),
         "--check must not rewrite the drifted file it reports on"
     );
-    let mut entries: Vec<String> = fs::read_dir(&fixture.root)
-        .expect("the fixture directory must be readable")
-        .map(|entry| {
-            entry
-                .expect("the fixture directory entry must be readable")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    entries.sort();
     assert_eq!(
-        entries,
+        entry_names(&fixture.root),
         vec!["drifted.yaml".to_owned(), "minimal.yaml".to_owned()],
         "--check must not leave a temporary file behind"
     );
@@ -714,4 +678,442 @@ fn v2aut002_check_on_an_unformattable_document_reports_only_the_earlier_stage() 
         .expect("the diagnostics result must carry an array");
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0]["code"], "SOURCE_CONSTRUCT_UNSUPPORTED");
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2AUT-003: `--write`
+// ---------------------------------------------------------------------------------------------
+
+/// The pinned human summary for a file the rewrite actually replaced.
+///
+/// A clean file reuses `canonical_summary` instead, so the two lines together tell an author which
+/// of the two things happened without reading the JSON.
+fn rewritten_summary(path: &Path) -> String {
+    format!("{} rewritten in canonical authoring form\n", path.display())
+}
+
+/// A Procedure v2 document whose sequence entry starts one line *below* its `- ` marker.
+///
+/// The marker line anchors no node, so the comment above it has nothing to re-attach to and would
+/// silently move to the end of the document. Under `--write` that is an unannounced edit of the
+/// author's file, so the source is refused instead.
+const BARE_MARKER_V2_YAML: &str = r#"schema: podway.procedure/v2
+id: minimal
+version: "1"
+name: Minimal
+purpose: The smallest legal Procedure v2 document.
+node_definitions:
+  work:
+    type: action
+    title: Work
+    intent: Do the work.
+graph:
+  entry: only
+  nodes:
+    # About the only placement.
+    -
+      id: only
+      use: work
+      terminal: true
+"#;
+
+fn format_write_json(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "format",
+        &path.display().to_string(),
+        "--write",
+    ])
+}
+
+fn format_write_text(path: &Path) -> Output {
+    run(&[
+        "procedure",
+        "format",
+        &path.display().to_string(),
+        "--write",
+    ])
+}
+
+fn mode_bits(path: &Path) -> u32 {
+    fs::metadata(path)
+        .expect("fixture metadata must be readable")
+        .permissions()
+        .mode()
+        & 0o7777
+}
+
+/// The message every "the rejection reached the filesystem" assertion shares.
+const NO_STAGING_FILE: &str = "a refused --write must leave no staging file behind";
+
+#[test]
+fn v2aut003_write_replaces_a_drifted_file_with_the_bytes_format_would_have_printed() {
+    let fixture = FixtureDirectory::new("write-drift");
+    let path = fixture.write("drifted.yaml", &drifted_source());
+    let sibling = fixture.write("sibling.yaml", MINIMAL_V2_YAML);
+    let sibling_before = identity(&sibling);
+
+    // The canonical bytes, obtained from the non-writing mode first so the comparison below is
+    // against an independently produced answer rather than against the write's own output.
+    let rendered = format_text(&path);
+    assert_eq!(rendered.status.code(), Some(0), "{rendered:?}");
+
+    let output = format_write_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.format");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-source-result/v1");
+    assert_eq!(result["operation"], "format");
+    assert_eq!(result["target_schema"], "podway.procedure/v2");
+    assert_eq!(result["file"], path.display().to_string());
+    assert_eq!(result["mode"], "write");
+    assert_eq!(result["changed"], true);
+    assert_eq!(result["document"], MINIMAL_V2_YAML);
+    assert!(
+        result["target_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71),
+        "{result}"
+    );
+
+    assert_eq!(
+        fs::read(&path).expect("the rewritten file must be readable"),
+        rendered.stdout,
+        "the file must hold exactly the bytes `procedure format` prints"
+    );
+    assert_eq!(
+        identity(&sibling),
+        sibling_before,
+        "--write names one file and touches only that file"
+    );
+    assert_eq!(
+        entry_names(&fixture.root),
+        vec!["drifted.yaml".to_owned(), "sibling.yaml".to_owned()],
+        "the staging file must not survive a successful rewrite"
+    );
+}
+
+#[test]
+fn v2aut003_write_reports_the_rewrite_in_one_summary_line() {
+    let fixture = FixtureDirectory::new("write-summary");
+    let drifted = fixture.write("drifted.yaml", &drifted_source());
+    let canonical = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let rewrite = format_write_text(&drifted);
+    assert_eq!(rewrite.status.code(), Some(0), "{rewrite:?}");
+    assert!(rewrite.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(rewrite.stdout).expect("the summary must be UTF-8"),
+        rewritten_summary(&drifted)
+    );
+
+    // A clean file reports the same verdict `--check` reports, because the same thing happened:
+    // nothing.
+    let clean = format_write_text(&canonical);
+    assert_eq!(clean.status.code(), Some(0), "{clean:?}");
+    assert_eq!(
+        String::from_utf8(clean.stdout).expect("the summary must be UTF-8"),
+        canonical_summary(&canonical)
+    );
+}
+
+#[test]
+fn v2aut003_write_preserves_the_permission_bits_of_the_file_it_replaces() {
+    // 0o664 is the discriminating case: under the prevailing 022 umask, creating the staging file
+    // with the captured mode alone would yield 0o644, so only the explicit fchmod reproduces it.
+    for bits in [0o644, 0o600, 0o664] {
+        let fixture = FixtureDirectory::new("write-mode");
+        let path = fixture.write("drifted.yaml", &drifted_source());
+        fs::set_permissions(&path, fs::Permissions::from_mode(bits))
+            .expect("the fixture permissions must be settable");
+
+        let output = format_write_json(&path);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(one_json(&output)["result"]["changed"], true);
+        assert_eq!(
+            mode_bits(&path),
+            bits,
+            "a rewrite carries the original mode, not the process umask's opinion of it"
+        );
+    }
+}
+
+#[test]
+fn v2aut003_write_on_a_canonical_file_writes_nothing_at_all() {
+    let fixture = FixtureDirectory::new("write-canonical");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let before = identity(&path);
+
+    let output = format_write_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let result = one_json(&output)["result"].clone();
+    assert_eq!(result["schema"], "podway.procedure-source-result/v1");
+    assert_eq!(result["mode"], "write");
+    assert_eq!(result["changed"], false);
+    assert_eq!(result["document"], MINIMAL_V2_YAML);
+
+    // Not "rewritten with identical bytes": not written. The modification time is the observable
+    // difference, and a build system watching the tree depends on it.
+    assert_eq!(
+        identity(&path),
+        before,
+        "an already-canonical file keeps its bytes and its modification time"
+    );
+    assert_eq!(entry_names(&fixture.root), vec!["minimal.yaml".to_owned()]);
+}
+
+#[test]
+fn v2aut003_write_preserves_full_line_comments_and_lands_in_canonical_form() {
+    let fixture = FixtureDirectory::new("write-comments");
+    // Drift the commented document so the rewrite has something to do.
+    let path = fixture.write(
+        "commented.yaml",
+        &COMMENTED_V2_YAML.replace("name: Commented\n", "name:   Commented\n"),
+    );
+
+    let output = format_write_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(one_json(&output)["result"]["changed"], true);
+
+    let rewritten = fs::read_to_string(&path).expect("the rewritten file must be readable");
+    for comment in [
+        "# Podway procedure, annotated.",
+        "  # The reusable contract every placement below uses.",
+        "# Nothing follows; this is the trailing block.",
+    ] {
+        assert!(
+            rewritten.lines().any(|line| line == comment),
+            "--write must not discard {comment:?}: {rewritten}"
+        );
+    }
+
+    // The file it left behind is one `--check` accepts, which is the round trip the mode promises.
+    let check = format_check_text(&path);
+    assert_eq!(check.status.code(), Some(0), "{check:?}");
+    assert_eq!(
+        String::from_utf8(check.stdout).expect("the summary must be UTF-8"),
+        canonical_summary(&path)
+    );
+}
+
+#[test]
+fn v2aut003_write_is_idempotent_across_processes() {
+    let fixture = FixtureDirectory::new("write-idempotent");
+    let path = fixture.write("drifted.yaml", &drifted_source());
+
+    let first = format_write_json(&path);
+    assert_eq!(first.status.code(), Some(0), "{first:?}");
+    assert_eq!(one_json(&first)["result"]["changed"], true);
+    let after_first = identity(&path);
+
+    let second = format_write_json(&path);
+    assert_eq!(second.status.code(), Some(0), "{second:?}");
+    assert_eq!(
+        one_json(&second)["result"]["changed"],
+        false,
+        "the second run has nothing to do"
+    );
+    assert_eq!(
+        identity(&path),
+        after_first,
+        "a fixpoint is not rewritten, so even its modification time is stable"
+    );
+}
+
+/// An inline trailing comment is a construct canonical authoring form cannot represent. The
+/// rejection has to arrive before the filesystem is touched — a partially rewritten file that drops
+/// the author's comment is the exact failure `--write` exists to make impossible.
+#[test]
+fn v2aut003_an_unsupported_source_construct_is_refused_before_any_write() {
+    let fixture = FixtureDirectory::new("write-inline-comment");
+    let path = fixture.write(
+        "inline-comment.yaml",
+        &MINIMAL_V2_YAML.replace("id: minimal\n", "id: minimal # the identifier\n"),
+    );
+    let before = identity(&path);
+    let names = entry_names(&fixture.root);
+
+    let output = format_write_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(
+        envelope["result"]["schema"],
+        "podway.procedure-diagnostics-result/v1"
+    );
+    let diagnostics = envelope["result"]["diagnostics"]
+        .as_array()
+        .expect("the diagnostics result must carry an array");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["code"], "SOURCE_CONSTRUCT_UNSUPPORTED");
+
+    assert_eq!(identity(&path), before, "a refused --write changes nothing");
+    assert_eq!(entry_names(&fixture.root), names, "{NO_STAGING_FILE}");
+}
+
+/// The F2 case end to end: a comment above a bare `- ` marker. The formatter could render this
+/// document, but only by moving the comment somewhere the author did not put it, so the source is
+/// refused with a located finding instead.
+#[test]
+fn v2aut003_a_bare_sequence_marker_is_refused_before_any_write() {
+    let fixture = FixtureDirectory::new("write-bare-marker");
+    let path = fixture.write("bare-marker.yaml", BARE_MARKER_V2_YAML);
+    let before = identity(&path);
+    let names = entry_names(&fixture.root);
+
+    let output = format_write_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    let diagnostics = envelope["result"]["diagnostics"]
+        .as_array()
+        .expect("the diagnostics result must carry an array");
+    assert_eq!(diagnostics.len(), 1, "{envelope}");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic["code"], "SOURCE_CONSTRUCT_UNSUPPORTED");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["location"]["line"], 15);
+    assert_eq!(diagnostic["location"]["column"], 5);
+    assert_eq!(
+        diagnostic["message"],
+        "This source uses a sequence marker whose entry does not start on the marker line, which \
+         canonical authoring form cannot represent."
+    );
+
+    assert_eq!(identity(&path), before, "a refused --write changes nothing");
+    assert_eq!(entry_names(&fixture.root), names, "{NO_STAGING_FILE}");
+}
+
+/// The general relocation guard, end to end: a comment above a mapping value written on the line
+/// below its key would re-emit at the end of the document, so `--write` refuses it and the file is
+/// untouched.
+#[test]
+fn v2aut003_a_comment_above_an_unanchored_line_is_refused_before_any_write() {
+    let fixture = FixtureDirectory::new("write-unanchored-comment");
+    let source = MINIMAL_V2_YAML.replace(
+        "    intent: Do the work.\n",
+        "    intent:\n      # Why the work matters.\n      Do the work.\n",
+    );
+    let path = fixture.write("unanchored.yaml", &source);
+    let before = identity(&path);
+    let names = entry_names(&fixture.root);
+
+    let output = format_write_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    let diagnostics = envelope["result"]["diagnostics"]
+        .as_array()
+        .expect("the diagnostics result must carry an array");
+    assert_eq!(diagnostics.len(), 1, "{envelope}");
+    assert_eq!(diagnostics[0]["code"], "SOURCE_CONSTRUCT_UNSUPPORTED");
+    assert_eq!(
+        diagnostics[0]["message"],
+        "This source uses a comment attached to a line that does not begin a node, which \
+         canonical authoring form cannot represent."
+    );
+
+    assert_eq!(identity(&path), before, "a refused --write changes nothing");
+    assert_eq!(entry_names(&fixture.root), names, "{NO_STAGING_FILE}");
+}
+
+#[test]
+fn v2aut003_a_v1_document_is_refused_before_any_write() {
+    let fixture = FixtureDirectory::new("write-v1");
+    let path = fixture.write("v1.yaml", V1_YAML);
+    let before = identity(&path);
+    let names = entry_names(&fixture.root);
+
+    let output = format_write_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["code"], "PROCEDURE_SCHEMA_UNSUPPORTED");
+    assert_eq!(envelope["exit_code"], 1);
+
+    assert_eq!(identity(&path), before, "a refused --write changes nothing");
+    assert_eq!(entry_names(&fixture.root), names, "{NO_STAGING_FILE}");
+}
+
+/// The leaf is opened `O_NOFOLLOW`, so a symlink named as the procedure is refused at the read —
+/// long before the rewrite would have had a descriptor to rename over.
+#[test]
+fn v2aut003_a_symlinked_target_is_refused_and_neither_the_link_nor_its_target_changes() {
+    let fixture = FixtureDirectory::new("write-symlink");
+    let target = fixture.write("drifted.yaml", &drifted_source());
+    let link = fixture.root.join("link.yaml");
+    std::os::unix::fs::symlink(&target, &link).expect("the fixture symlink must be creatable");
+    let before = identity(&target);
+
+    let output = format_write_json(&link);
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.format");
+    assert_eq!(envelope["code"], "PATH_OUTSIDE_WORKTREE");
+    assert_eq!(envelope["exit_code"], 5);
+
+    assert_eq!(
+        identity(&target),
+        before,
+        "the symlink's target must be untouched"
+    );
+    assert!(
+        fs::symlink_metadata(&link)
+            .expect("the link must still exist")
+            .file_type()
+            .is_symlink(),
+        "the link itself must not be replaced by a regular file"
+    );
+    assert_eq!(
+        entry_names(&fixture.root),
+        vec!["drifted.yaml".to_owned(), "link.yaml".to_owned()]
+    );
+}
+
+/// A directory the process cannot write is the one failure that reaches the filesystem, and the
+/// answer is a catalogued error rather than a panic or a truncated file. `INTERNAL_ERROR` is the
+/// code this CLI already uses for a local I/O failure that says nothing about the request.
+#[test]
+fn v2aut003_an_unwritable_directory_is_a_catalogued_failure_that_leaves_the_original_intact() {
+    let fixture = FixtureDirectory::new("write-unwritable");
+    let path = fixture.write("drifted.yaml", &drifted_source());
+    let before = identity(&path);
+
+    fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o500))
+        .expect("the fixture directory permissions must be settable");
+    let output = format_write_json(&path);
+    // Restored before any assertion so a failure here still leaves a removable fixture behind.
+    fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o700))
+        .expect("the fixture directory permissions must be restorable");
+
+    assert_eq!(output.status.code(), Some(6), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.format");
+    assert_eq!(envelope["code"], "INTERNAL_ERROR");
+    assert_eq!(envelope["exit_code"], 6);
+    assert_eq!(envelope["retryable"], false);
+
+    // The renderer falls back to a generic failure when it cannot build a valid typed envelope, so
+    // decoding it is the proof that this failure is well formed as authored.
+    let typed: ResponseEnvelopeV1 =
+        serde_json::from_value(envelope).expect("the write failure must be a typed envelope");
+    let ResponseEnvelopeV1::Error(typed) = typed else {
+        panic!("a refused write is an error envelope");
+    };
+    assert_eq!(typed.code().as_str(), "INTERNAL_ERROR");
+    assert_eq!(typed.exit_code().get(), 6);
+    assert_eq!(typed.command().as_str(), "procedure.format");
+
+    assert_eq!(
+        identity(&path),
+        before,
+        "the original must survive a failed rewrite byte for byte"
+    );
+    assert_eq!(entry_names(&fixture.root), vec!["drifted.yaml".to_owned()]);
 }

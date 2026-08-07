@@ -7,9 +7,12 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, File},
     io::{self, IsTerminal, Read, Seek, SeekFrom, Write},
-    os::unix::{
-        ffi::OsStrExt,
-        fs::{FileTypeExt, MetadataExt},
+    os::{
+        fd::OwnedFd,
+        unix::{
+            ffi::OsStrExt,
+            fs::{FileTypeExt, MetadataExt},
+        },
     },
     path::{Component, Path, PathBuf},
     thread,
@@ -19,9 +22,9 @@ use std::{
 use clap::{ArgAction, ArgMatches, Args, CommandFactory, Parser, Subcommand};
 use nix::{
     errno::Errno,
-    fcntl::{OFlag, open, openat},
-    sys::stat::Mode,
-    unistd::geteuid,
+    fcntl::{OFlag, open, openat, renameat},
+    sys::stat::{Mode, fchmod, mode_t},
+    unistd::{UnlinkatFlags, fsync, geteuid, unlinkat},
 };
 use podway_cli::client::{
     DEFAULT_DAEMON_CONNECT_TIMEOUT_V1, DEFAULT_DAEMON_WRITE_TIMEOUT_V1, DaemonClientErrorV1,
@@ -911,6 +914,10 @@ impl LocalFailure {
                 (LOCAL_DAEMON_EXIT, false)
             }
             "DAEMON_UNAVAILABLE" => (LOCAL_DAEMON_EXIT, true),
+            // A registered v2 route this build does not serve. No local command produces it now
+            // that `procedure format --write` is implemented; the entry stays because this match is
+            // the CLI's copy of the frozen exit classes in `assets/specifications/error-codes.json`,
+            // not a list of the failures it happens to raise today.
             "UNSUPPORTED_V2_CAPABILITY" => (LOCAL_DAEMON_EXIT, false),
             "MUTATION_OUTCOME_UNKNOWN" => (4, true),
             "PRESET_NOT_FOUND"
@@ -986,22 +993,6 @@ impl LocalFailure {
 
     fn preset_not_found(message: impl Into<String>) -> Self {
         Self::catalog("PRESET_NOT_FOUND", message, "preset")
-    }
-
-    /// A registered v2 capability this build does not serve yet.
-    ///
-    /// The shared closed detail family auto-fills `schema` and `kind` while rendering; the
-    /// capability label is the only field this builder owns.
-    fn unsupported_v2_capability(capability: &str, command: &str) -> Self {
-        Self::catalog(
-            "UNSUPPORTED_V2_CAPABILITY",
-            format!("{capability} is a registered contract that this build does not serve yet"),
-            command,
-        )
-        .with_details(Map::from_iter([(
-            "capability".to_owned(),
-            Value::String(capability.to_owned()),
-        )]))
     }
 
     fn procedure_digest_mismatch(
@@ -1567,6 +1558,14 @@ fn read_worktree_procedure(
 }
 
 fn read_offline_procedure(procedure: &Path) -> Result<Vec<u8>, LocalFailure> {
+    open_offline_procedure(procedure).map(|opened| opened.bytes)
+}
+
+/// Opens a procedure named by an ordinary filesystem path, keeping everything a rewrite needs.
+///
+/// The path is split into a canonicalized parent and a leaf so the hardened descriptor walk applies
+/// to a command-line path exactly as it applies to a worktree-relative one.
+fn open_offline_procedure(procedure: &Path) -> Result<OpenedProcedure, LocalFailure> {
     let parent = procedure
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1576,11 +1575,28 @@ fn read_offline_procedure(procedure: &Path) -> Result<Vec<u8>, LocalFailure> {
         .ok_or_else(|| LocalFailure::procedure_not_found("procedure file is not specified"))?;
     let root = fs::canonicalize(parent)
         .map_err(|_| LocalFailure::procedure_not_found("cannot read procedure file"))?;
-    read_descriptor_relative_procedure(
+    open_descriptor_relative_procedure(
         &root,
         Path::new(file_name),
         LocalFailure::procedure_not_found("cannot read procedure file"),
     )
+}
+
+/// A procedure file the hardened walk has opened and read, left addressable for a rewrite.
+///
+/// Holding the parent descriptor is what lets `format --write` replace the file without ever
+/// re-resolving a name: every later operation is `*at`-relative to this one directory, so no
+/// component of the path can be swapped between the read and the rename.
+struct OpenedProcedure {
+    /// The directory the leaf lives in, reached by opening every component `O_NOFOLLOW`.
+    parent: OwnedFd,
+    /// The final path component, exactly as the request spelled it.
+    leaf: OsString,
+    /// The document bytes.
+    bytes: Vec<u8>,
+    /// The leaf's permission bits, taken from the descriptor the bytes were read through — the mode
+    /// therefore belongs to the content, with no second lookup for anything to race.
+    mode: Mode,
 }
 
 fn read_descriptor_relative_procedure(
@@ -1588,6 +1604,21 @@ fn read_descriptor_relative_procedure(
     procedure: &Path,
     root_failure: LocalFailure,
 ) -> Result<Vec<u8>, LocalFailure> {
+    open_descriptor_relative_procedure(root, procedure, root_failure).map(|opened| opened.bytes)
+}
+
+/// Opens the directory holding a descriptor-relative procedure path and returns it with the leaf
+/// name, so reading and rewriting share one component walk rather than two that can drift.
+///
+/// Every component is opened `O_CLOEXEC|O_DIRECTORY|O_NOFOLLOW|O_RDONLY`, only
+/// [`Component::Normal`] components are accepted — `..`, a root, and a prefix are all
+/// `PATH_OUTSIDE_WORKTREE` — and every open failure maps through [`procedure_open_failure`], which
+/// turns the `ELOOP` of a symlinked component into the same path rejection.
+fn open_descriptor_relative_parent(
+    root: &Path,
+    procedure: &Path,
+    root_failure: LocalFailure,
+) -> Result<(OwnedFd, OsString), LocalFailure> {
     let mut directory = open(
         root,
         OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
@@ -1603,51 +1634,78 @@ fn read_descriptor_relative_procedure(
                 "procedure",
             ));
         };
-        if components.peek().is_some() {
-            directory = openat(
-                &directory,
-                component,
-                OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
-                Mode::empty(),
-            )
-            .map_err(procedure_open_failure)?;
-            continue;
+        if components.peek().is_none() {
+            return Ok((directory, component.to_owned()));
         }
-        let descriptor = openat(
+        directory = openat(
             &directory,
             component,
-            OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_RDONLY,
+            OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
             Mode::empty(),
         )
         .map_err(procedure_open_failure)?;
-        let file = fs::File::from(descriptor);
-        let metadata = file
-            .metadata()
-            .map_err(|_| LocalFailure::procedure_not_found("cannot read procedure file"))?;
-        if !metadata.file_type().is_file() {
-            return Err(LocalFailure::procedure_invalid(
-                "procedure must be a regular file",
-            ));
-        }
-        if metadata.len() > MAX_PROCEDURE_DOCUMENT_BYTES_V1 as u64 {
-            return Err(LocalFailure::procedure_invalid(
-                "procedure exceeds the maximum document size",
-            ));
-        }
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.take(MAX_PROCEDURE_DOCUMENT_BYTES_V1 as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| LocalFailure::procedure_not_found("cannot read procedure file"))?;
-        if bytes.len() > MAX_PROCEDURE_DOCUMENT_BYTES_V1 {
-            return Err(LocalFailure::procedure_invalid(
-                "procedure exceeds the maximum document size",
-            ));
-        }
-        return Ok(bytes);
     }
     Err(LocalFailure::procedure_not_found(
         "procedure file is not specified",
     ))
+}
+
+/// Opens, size-bounds, and reads a descriptor-relative procedure file.
+///
+/// The leaf is opened `O_NOFOLLOW`, so a symlink named as the procedure is refused rather than
+/// followed, and the descriptor the bytes come from is the descriptor its permission bits come
+/// from.
+fn open_descriptor_relative_procedure(
+    root: &Path,
+    procedure: &Path,
+    root_failure: LocalFailure,
+) -> Result<OpenedProcedure, LocalFailure> {
+    let (parent, leaf) = open_descriptor_relative_parent(root, procedure, root_failure)?;
+    let descriptor = openat(
+        &parent,
+        leaf.as_os_str(),
+        OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_RDONLY,
+        Mode::empty(),
+    )
+    .map_err(procedure_open_failure)?;
+    let file = fs::File::from(descriptor);
+    let metadata = file
+        .metadata()
+        .map_err(|_| LocalFailure::procedure_not_found("cannot read procedure file"))?;
+    if !metadata.file_type().is_file() {
+        return Err(LocalFailure::procedure_invalid(
+            "procedure must be a regular file",
+        ));
+    }
+    if metadata.len() > MAX_PROCEDURE_DOCUMENT_BYTES_V1 as u64 {
+        return Err(LocalFailure::procedure_invalid(
+            "procedure exceeds the maximum document size",
+        ));
+    }
+    let mode = permission_bits(&metadata);
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_PROCEDURE_DOCUMENT_BYTES_V1 as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| LocalFailure::procedure_not_found("cannot read procedure file"))?;
+    if bytes.len() > MAX_PROCEDURE_DOCUMENT_BYTES_V1 {
+        return Err(LocalFailure::procedure_invalid(
+            "procedure exceeds the maximum document size",
+        ));
+    }
+    Ok(OpenedProcedure {
+        parent,
+        leaf,
+        bytes,
+        mode,
+    })
+}
+
+/// The twelve permission bits of a file, as the mode argument the `*at` calls take.
+///
+/// `mode_t` is 16 bits on some targets and 32 on others; masking first means the value always fits,
+/// so the fallback is unreachable and only exists to keep the conversion total.
+fn permission_bits(metadata: &fs::Metadata) -> Mode {
+    Mode::from_bits_truncate(mode_t::try_from(metadata.mode() & 0o7777).unwrap_or(0o600))
 }
 
 fn procedure_open_failure(error: Errno) -> LocalFailure {
@@ -2926,6 +2984,12 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
 /// decides between a source result that says "already canonical" and the single
 /// `FORMAT_NOT_CANONICAL` finding. Nothing on either path touches the filesystem after the read, so
 /// `--check` is observably non-writing rather than merely intended to be.
+///
+/// `--write` adds one step after that comparison and nothing before it. The read, the parse, the
+/// validation, the construct scan, the emission, and the projection bound all run first, so every
+/// way this command can refuse a document is a refusal that has already happened by the time any
+/// filesystem mutation is possible: a rejected file is byte-identical afterwards and no temporary
+/// file was ever created.
 fn execute_procedure_format(
     file: &Path,
     check: bool,
@@ -2933,16 +2997,10 @@ fn execute_procedure_format(
 ) -> Result<RunResult, LocalFailure> {
     const NAME: &str = PROCEDURE_FORMAT_COMMAND;
 
-    let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
-    let source = std::str::from_utf8(&bytes).map_err(|_| {
+    let opened = open_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
+    let source = std::str::from_utf8(&opened.bytes).map_err(|_| {
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
     })?;
-    if write {
-        return Err(LocalFailure::unsupported_v2_capability(
-            "procedure.format --write",
-            NAME,
-        ));
-    }
 
     let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
         ProcedureFormatV1::Json
@@ -2965,10 +3023,11 @@ fn execute_procedure_format(
                     &source_path,
                     &formatted,
                     "check",
-                    format!("{source_path} is in canonical authoring form\n"),
+                    canonical_form_summary(&source_path),
                 )),
             }
         }
+        Ok(formatted) if write => procedure_format_write(&source_path, &formatted, &opened),
         Ok(formatted) => {
             let document = formatted.document().to_owned();
             Ok(procedure_format_source(
@@ -2992,6 +3051,143 @@ fn execute_procedure_format(
 /// The route every `procedure format` result reports under, named once so the three result
 /// builders below cannot disagree with the route the failure paths use.
 const PROCEDURE_FORMAT_COMMAND: &str = "procedure.format";
+
+/// How many numbered temporary names a rewrite tries after the unnumbered one.
+///
+/// The base name already contains the process id, so a collision means two rewrites of the same
+/// file are in flight inside one process. Sixteen retries settle that and nothing else; an
+/// unbounded search would turn a wedged directory into a hang.
+const PROCEDURE_TEMP_NAME_RETRIES: u32 = 16;
+
+/// The pinned one-line verdict for a source that is already in canonical authoring form.
+///
+/// `--check` and `--write` share it deliberately: a clean file gets the same answer whether or not
+/// the caller was prepared to rewrite it, because in both cases nothing happened.
+fn canonical_form_summary(source_path: &str) -> String {
+    format!("{source_path} is in canonical authoring form\n")
+}
+
+/// Rewrites a drifted procedure file in canonical authoring form, or leaves a clean one alone.
+///
+/// The no-op is a real no-op: an already-canonical file is not rewritten with identical bytes, it
+/// is not opened for writing, and no temporary file is created, so its modification time survives
+/// and a build system watching the tree sees no work. `changed` reports which of the two happened.
+fn procedure_format_write(
+    source_path: &str,
+    formatted: &FormattedProcedureV2,
+    opened: &OpenedProcedure,
+) -> Result<RunResult, LocalFailure> {
+    if !formatted.changed() {
+        return Ok(procedure_format_source(
+            source_path,
+            formatted,
+            "write",
+            canonical_form_summary(source_path),
+        ));
+    }
+    replace_procedure_document(opened, formatted.document().as_bytes())?;
+    Ok(procedure_format_source(
+        source_path,
+        formatted,
+        "write",
+        format!("{source_path} rewritten in canonical authoring form\n"),
+    ))
+}
+
+/// Replaces one procedure file with `document`, atomically and in place.
+///
+/// The sequence is the standard durable replace, with every step named relative to the directory
+/// descriptor the read already holds: stage the bytes in a sibling temporary file, `fchmod` it to
+/// the original's permissions, flush it to the device, rename it over the target, then flush the
+/// directory entry. A reader of the target therefore sees either the whole old document or the
+/// whole new one, never a truncated file, and the rename can only ever affect the one name the
+/// request already resolved.
+///
+/// Any failure before the rename removes the temporary file and leaves the original untouched.
+fn replace_procedure_document(
+    opened: &OpenedProcedure,
+    document: &[u8],
+) -> Result<(), LocalFailure> {
+    let (name, file) = create_procedure_temp(opened)?;
+    let staged = write_procedure_temp(file, opened.mode, document).and_then(|()| {
+        renameat(
+            &opened.parent,
+            name.as_os_str(),
+            &opened.parent,
+            opened.leaf.as_os_str(),
+        )
+        .map_err(|_| procedure_write_failure())
+    });
+    if let Err(failure) = staged {
+        // Best effort by definition: the write already failed, and a leftover temporary file is a
+        // smaller problem than reporting a second failure about the cleanup of the first.
+        let _ = unlinkat(&opened.parent, name.as_os_str(), UnlinkatFlags::NoRemoveDir);
+        return Err(failure);
+    }
+    // The rename is only durable once the directory entry is. Reporting a failure here is honest
+    // even though the content is already in place: re-running `--write` is idempotent and will
+    // report the file as already canonical.
+    fsync(&opened.parent).map_err(|_| procedure_write_failure())
+}
+
+/// Creates the sibling temporary file a rewrite stages into, and returns its name.
+///
+/// `O_EXCL` means an existing entry is never clobbered and `O_NOFOLLOW` means a symlink planted
+/// under the temporary name is never followed, so this can only ever create a fresh regular file
+/// next to the target. The leading `.` keeps a half-written document out of an ordinary listing.
+fn create_procedure_temp(opened: &OpenedProcedure) -> Result<(OsString, fs::File), LocalFailure> {
+    let mut base = OsString::from(".");
+    base.push(&opened.leaf);
+    base.push(format!(".{}.podway-tmp", std::process::id()));
+    let numbered = (0..PROCEDURE_TEMP_NAME_RETRIES).map(|attempt| {
+        let mut name = base.clone();
+        name.push(format!(".{attempt}"));
+        name
+    });
+    for name in std::iter::once(base.clone()).chain(numbered) {
+        match openat(
+            &opened.parent,
+            name.as_os_str(),
+            OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_WRONLY,
+            opened.mode,
+        ) {
+            Ok(descriptor) => return Ok((name, fs::File::from(descriptor))),
+            Err(Errno::EEXIST) => {}
+            Err(_) => return Err(procedure_write_failure()),
+        }
+    }
+    Err(procedure_write_failure())
+}
+
+/// Fills the staged temporary file and makes its bytes durable.
+fn write_procedure_temp(
+    mut file: fs::File,
+    mode: Mode,
+    document: &[u8],
+) -> Result<(), LocalFailure> {
+    // `openat`'s mode argument is filtered by the process umask; `fchmod` is not. Without this a
+    // `0o664` procedure rewritten under a `0o022` umask would come back `0o644`.
+    fchmod(&file, mode).map_err(|_| procedure_write_failure())?;
+    file.write_all(document)
+        .map_err(|_| procedure_write_failure())?;
+    // Flushing before the rename is what makes the replace atomic against a crash rather than only
+    // against a concurrent reader: the name never points at bytes that are not on the device.
+    file.sync_all().map_err(|_| procedure_write_failure())
+}
+
+/// The failure a rewrite reports when the operating system refuses an I/O operation.
+///
+/// `INTERNAL_ERROR` is the code this CLI already uses for a local I/O failure that says nothing
+/// about the request — `render_write_failure` reports a failed stdout write through the same code.
+/// Every procedure code would be a false statement here: the document was found, is valid, and is
+/// renderable, and the only thing that went wrong is that the filesystem would not take it.
+fn procedure_write_failure() -> LocalFailure {
+    LocalFailure::catalog(
+        "INTERNAL_ERROR",
+        "cannot write the procedure file",
+        PROCEDURE_FORMAT_COMMAND,
+    )
+}
 
 /// The `procedure format` success result: the canonical document plus the mode that produced it.
 ///
@@ -4677,7 +4873,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway procedure show <file> [--canonical]\n\nExample:\n  podway procedure show .podway/procedures/custom.yaml --canonical"
         }
         "procedure.format" => {
-            "Usage:\n  podway procedure format <file> [--check] [--write]\n\nFormats a Procedure v2 document to stdout. --check and --write are registered\ncontracts that this build does not serve yet.\n\nExample:\n  podway procedure format .podway/procedures/custom.yaml"
+            "Usage:\n  podway procedure format <file> [--check] [--write]\n\nRenders a Procedure v2 document in canonical authoring form on stdout. --check\nreports drift and writes nothing; --write replaces the named file atomically.\n\nExample:\n  podway procedure format .podway/procedures/custom.yaml"
         }
         "preset.list" => "Usage:\n  podway preset list\n\nExample:\n  podway preset list",
         "preset.show" => {

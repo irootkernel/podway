@@ -10,7 +10,12 @@
 //!    `Marker::col()` is 0-indexed, so a column is `col() + 1`.
 //! 2. **A supported-construct verdict.** [`scan_source`] rejects the constructs that would make
 //!    comment attribution ambiguous or byte-preserving rewriting impossible. The invariant it
-//!    enforces is one sentence: *every YAML node begins and ends on one source line.*
+//!    enforces is one sentence: *every YAML node begins and ends on one source line, and every
+//!    comment block attaches to a line that begins a node — or follows the last content line and
+//!    is the trailing block.* A bare `-` marker line, a `---`/`...` document marker, and a comment
+//!    above any other unanchored content line (a mapping value on the line below its key, a folded
+//!    scalar continuation) are therefore rejections rather than silent comment relocations.
+//!    Unanchored content lines without a comment stay supported; the emitter just normalizes them.
 //! 3. **A comment side table.** Full-line comments only. A run of consecutive full-line comment
 //!    lines is one block; a block attaches to the next content line, and re-emits immediately above
 //!    that line's anchor. Blank lines are not preserved — the formatter owns vertical whitespace.
@@ -474,6 +479,9 @@ pub(crate) enum SourceConstructKind {
     BlockScalar,
     MultiLineQuotedScalar,
     MultiLineFlowCollection,
+    EmptySequenceMarker,
+    DocumentMarker,
+    CommentOnUnanchoredLine,
 }
 
 impl SourceConstructKind {
@@ -489,6 +497,13 @@ impl SourceConstructKind {
             Self::BlockScalar => "a block scalar",
             Self::MultiLineQuotedScalar => "a quoted scalar that spans more than one line",
             Self::MultiLineFlowCollection => "a flow collection that spans more than one line",
+            Self::EmptySequenceMarker => {
+                "a sequence marker whose entry does not start on the marker line"
+            }
+            Self::DocumentMarker => "a document start or end marker",
+            Self::CommentOnUnanchoredLine => {
+                "a comment attached to a line that does not begin a node"
+            }
         }
     }
 }
@@ -572,7 +587,7 @@ pub(crate) fn scan_source(
         return Err(violations);
     }
 
-    Ok(attach_comments(&classes, index))
+    attach_comments(&lines, &classes, index)
 }
 
 /// What one source line contributes to the comment table.
@@ -604,8 +619,23 @@ fn classify_line(
     }
 }
 
-fn attach_comments(classes: &[LineClass], index: &SourceIndex) -> SourceComments {
+/// Attaches each comment block to the node its following content line begins.
+///
+/// A block whose following content line anchors no node — a mapping value written on the line
+/// below its key, or a folded plain scalar's continuation line — is a
+/// [`SourceConstructKind::CommentOnUnanchoredLine`] violation rather than a best-effort guess:
+/// re-emission could only relocate such a comment away from what it annotates, and under
+/// `--write` that relocation would silently rewrite the author's file. Content lines that anchor
+/// nothing remain supported when no comment attaches to them; the emitter simply normalizes the
+/// layout. A block with no following content line at all is the trailing block, which re-emits at
+/// the end of the document by definition.
+fn attach_comments(
+    lines: &[&str],
+    classes: &[LineClass],
+    index: &SourceIndex,
+) -> Result<SourceComments, Vec<SourceConstructViolation>> {
     let mut comments = SourceComments::default();
+    let mut violations = Vec::new();
     let mut block: Vec<String> = Vec::new();
     for (offset, class) in classes.iter().enumerate() {
         match class {
@@ -622,13 +652,35 @@ fn attach_comments(classes: &[LineClass], index: &SourceIndex) -> SourceComments
                         .entry(path.clone())
                         .or_default()
                         .append(&mut block),
-                    None => comments.trailing.append(&mut block),
+                    None => {
+                        let column = lines
+                            .get(offset)
+                            .map_or(1, |line| first_content_column(line));
+                        violations.push(SourceConstructViolation {
+                            line: number,
+                            column,
+                            kind: SourceConstructKind::CommentOnUnanchoredLine,
+                        });
+                        block.clear();
+                    }
                 }
             }
         }
     }
+    if !violations.is_empty() {
+        return Err(violations);
+    }
     comments.trailing.append(&mut block);
-    comments
+    Ok(comments)
+}
+
+/// The one-based column of a line's first non-whitespace character.
+fn first_content_column(line: &str) -> u32 {
+    let leading = line
+        .chars()
+        .take_while(|character| character.is_whitespace())
+        .count();
+    u32::try_from(leading).unwrap_or(u32::MAX).saturating_add(1)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -653,7 +705,22 @@ struct LineOutcome {
 /// start (line start, or after whitespace or an indicator), so `don't` stays plain text; a `#` is a
 /// comment only as the first non-whitespace character of the line or after whitespace, so `a#b`
 /// stays plain text. Both rules exist to avoid false positives on ordinary authored prose.
+///
+/// Two of the rejections are about *anchoring* rather than about spanning. A `-` alone on its line
+/// opens a sequence entry whose first node starts one or more lines below, and a `---`/`...` marker
+/// is a node-free line the emitter never writes; in both cases the line owns no path, so a comment
+/// block above it would be re-emitted somewhere else entirely. These two get their own named
+/// rejections because the lexer can see them; [`attach_comments`] closes the remainder of the same
+/// class — a comment above *any* line that anchors no node — which together makes comment
+/// placement under `--write` total rather than best-effort.
 fn lex_line(line: &str) -> LineOutcome {
+    if is_document_marker(line) {
+        return LineOutcome {
+            is_comment_line: false,
+            violations: vec![(1, SourceConstructKind::DocumentMarker)],
+        };
+    }
+
     let characters = line.chars().collect::<Vec<_>>();
     let mut state = LexState::Out;
     let mut depth = 0usize;
@@ -692,6 +759,13 @@ fn lex_line(line: &str) -> LineOutcome {
                 }
                 '|' | '>' if is_block_scalar_header(&characters, cursor) => {
                     violations.push((column_of(cursor), SourceConstructKind::BlockScalar));
+                }
+                '-' if !seen_content
+                    && characters[cursor + 1..]
+                        .iter()
+                        .all(|character| character.is_whitespace()) =>
+                {
+                    violations.push((column_of(cursor), SourceConstructKind::EmptySequenceMarker));
                 }
                 _ => {}
             },
@@ -735,6 +809,17 @@ fn lex_line(line: &str) -> LineOutcome {
 
 fn column_of(offset: usize) -> u32 {
     u32::try_from(offset).unwrap_or(u32::MAX).saturating_add(1)
+}
+
+/// True when the line is a YAML document start (`---`) or document end (`...`) marker.
+///
+/// Both markers are recognized only at column one and only when nothing but whitespace or a further
+/// token follows the three characters, which is exactly YAML's own rule — so `intent: "---"` and a
+/// sequence entry rendered as `- "---"` are ordinary content, not markers.
+fn is_document_marker(line: &str) -> bool {
+    line.strip_prefix("---")
+        .or_else(|| line.strip_prefix("..."))
+        .is_some_and(|rest| rest.chars().next().is_none_or(char::is_whitespace))
 }
 
 /// A quote opens a quoted scalar only where a token can start: line start, after whitespace, or
@@ -1008,6 +1093,32 @@ mod tests {
                 kind: SourceConstructKind::ByteOrderMark,
             }
         );
+        // A marker line that carries no node owns no path, so a comment above it has nowhere to
+        // re-attach. Both cases are rejected rather than silently relocated.
+        assert_eq!(
+            violations("nodes:\n  -\n    id: sample\n")[0],
+            SourceConstructViolation {
+                line: 2,
+                column: 3,
+                kind: SourceConstructKind::EmptySequenceMarker,
+            }
+        );
+        assert_eq!(
+            violations("---\nid: sample\n")[0],
+            SourceConstructViolation {
+                line: 1,
+                column: 1,
+                kind: SourceConstructKind::DocumentMarker,
+            }
+        );
+        assert_eq!(
+            violations("id: sample\n...\n")[0],
+            SourceConstructViolation {
+                line: 2,
+                column: 1,
+                kind: SourceConstructKind::DocumentMarker,
+            }
+        );
     }
 
     #[test]
@@ -1020,6 +1131,14 @@ mod tests {
             "intent: a > b",
             "intent: choose [a] or [b]",
             "intent: 'quoted value'",
+            // A `-` that is a value, a quoted scalar, or the marker of an entry that starts on the
+            // marker line is ordinary supported content.
+            "intent: -",
+            "intent: \"-\"",
+            "intent: \"---\"",
+            "  - id: sample",
+            "  - \"-\"",
+            "  - a - b",
         ] {
             let outcome = lex_line(line);
             assert!(
