@@ -1,4 +1,5 @@
-//! Process-boundary contracts for the Procedure v2 authoring surface (`procedure format`).
+//! Process-boundary contracts for the Procedure v2 authoring surface (`procedure format` and
+//! `procedure lint`).
 
 use std::{
     fs,
@@ -1116,4 +1117,332 @@ fn v2aut003_an_unwritable_directory_is_a_catalogued_failure_that_leaves_the_orig
         "the original must survive a failed rewrite byte for byte"
     );
     assert_eq!(entry_names(&fixture.root), vec!["drifted.yaml".to_owned()]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2AUT-004: `procedure lint`
+// ---------------------------------------------------------------------------------------------
+
+/// A Procedure v2 document that fires no lint rule, mirroring the config-side clean base.
+const CLEAN_V2_YAML: &str = r#"schema: podway.procedure/v2
+id: lint-clean
+version: "1"
+name: Lint clean
+purpose: Exercise the lint command with a document that has no findings.
+node_definitions:
+  gather:
+    type: action
+    title: Gather the inputs
+    intent: Collect every input the review needs.
+    items:
+      - id: notes
+        type: text
+        prompt: Record the gathered notes.
+        required: true
+  review:
+    type: decision
+    title: Review the work
+    objective: Decide whether the gathered work is complete.
+    prompt: Is the gathered work complete?
+    evidence_guidance:
+      - Read the gathered notes before deciding.
+    options:
+      - id: complete
+        label: Work is complete
+        criteria: Every gathered input is present and correct.
+      - id: incomplete
+        label: Work is incomplete
+        criteria: Some gathered input is missing or wrong.
+    reason:
+      required: true
+      prompt: Explain why the work is or is not complete.
+  publish:
+    type: action
+    title: Publish the result
+    intent: Record the published outcome.
+graph:
+  entry: gather-inputs
+  nodes:
+    - id: gather-inputs
+      use: gather
+      next: review-work
+    - id: review-work
+      use: review
+      routes:
+        complete:
+          to: publish-result
+          effect: advance
+        incomplete:
+          to: gather-inputs
+          effect: rework
+    - id: publish-result
+      use: publish
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - gather-inputs
+"#;
+
+/// The pinned human summary for a document with no advisory findings.
+fn no_findings_summary(path: &Path) -> String {
+    format!("{}: no lint findings\n", path.display())
+}
+
+fn lint_json(path: &Path) -> Output {
+    run(&["--json", "procedure", "lint", &path.display().to_string()])
+}
+
+fn lint_json_strict(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "lint",
+        &path.display().to_string(),
+        "--warnings-as-errors",
+    ])
+}
+
+/// The catalog's twenty-three warning codes, read from the frozen specification rather than
+/// restated here, so a lint finding outside the catalog fails this file rather than passing it.
+fn catalog_warning_codes() -> Vec<String> {
+    let specification = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/specifications/authoring-diagnostics.json"),
+    )
+    .expect("the frozen authoring diagnostics catalog must be readable");
+    let catalog: Value =
+        serde_json::from_str(&specification).expect("the diagnostics catalog must be valid JSON");
+    let codes = catalog["diagnostics"]
+        .as_array()
+        .expect("the catalog lists diagnostics")
+        .iter()
+        .filter(|entry| entry["severity"] == "warning")
+        .filter_map(|entry| entry["code"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(codes.len(), 23, "the lint catalog must carry 23 warnings");
+    codes
+}
+
+#[test]
+fn v2aut004_a_clean_document_lints_to_an_empty_advisory_report() {
+    let fixture = FixtureDirectory::new("lint-clean");
+    let path = fixture.write("clean.yaml", CLEAN_V2_YAML);
+
+    let output = lint_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.lint");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+    assert_eq!(result["operation"], "lint");
+    assert_eq!(result["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(result["file"], path.display().to_string());
+    assert_eq!(result["valid"], true);
+    assert_eq!(result["diagnostics"], serde_json::json!([]));
+    assert_eq!(result["diagnostics_truncated"], false);
+    assert_eq!(result["diagnostics_total"], 0);
+    assert!(
+        result["digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")),
+        "a validated document reports its digest: {result}"
+    );
+
+    let text = run(&["procedure", "lint", &path.display().to_string()]);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&text.stdout),
+        no_findings_summary(&path)
+    );
+    assert!(text.stderr.is_empty());
+}
+
+#[test]
+fn v2aut004_a_clean_document_stays_at_exit_zero_under_warnings_as_errors() {
+    let fixture = FixtureDirectory::new("lint-clean-strict");
+    let path = fixture.write("clean.yaml", CLEAN_V2_YAML);
+
+    let output = lint_json_strict(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(one_json(&output)["result"]["diagnostics_total"], 0);
+}
+
+#[test]
+fn v2aut004_a_document_with_findings_reports_catalogued_warnings_at_exit_zero() {
+    let fixture = FixtureDirectory::new("lint-warnings");
+    // The smallest legal document declares no manual rework targets, which section 11.4 asks lint
+    // to surface as an advisory so the author confirms the choice was intended.
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let output = lint_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let envelope = one_json(&output);
+    let result = &envelope["result"];
+    assert_eq!(result["valid"], true, "warnings never invalidate: {result}");
+    assert_eq!(result["diagnostics_total"], 1);
+    assert_eq!(result["diagnostics_truncated"], false);
+
+    let catalog = catalog_warning_codes();
+    let diagnostics = result["diagnostics"]
+        .as_array()
+        .expect("diagnostics are an array");
+    assert!(!diagnostics.is_empty());
+    for diagnostic in diagnostics {
+        assert_eq!(diagnostic["severity"], "warning");
+        assert_eq!(diagnostic["schema"], "podway.procedure/v2");
+        assert_eq!(diagnostic["source_path"], path.display().to_string());
+        let code = diagnostic["code"]
+            .as_str()
+            .expect("a diagnostic has a code");
+        assert!(
+            catalog.iter().any(|candidate| candidate == code),
+            "{code} is not a catalogued lint warning"
+        );
+    }
+
+    let text = run(&["procedure", "lint", &path.display().to_string()]);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    let rendered = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        rendered.starts_with(&format!("{}:", path.display())),
+        "the text report is position-first: {rendered}"
+    );
+    assert!(
+        rendered.contains("warning NO_REACTIVATION_PATH"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn v2aut004_warnings_as_errors_moves_only_the_exit_code() {
+    let fixture = FixtureDirectory::new("lint-strict");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let permissive = lint_json(&path);
+    let strict = lint_json_strict(&path);
+    assert_eq!(permissive.status.code(), Some(0), "{permissive:?}");
+    assert_eq!(strict.status.code(), Some(1), "{strict:?}");
+
+    // The envelope carries a per-invocation request id and timestamp; the result body is the
+    // document's own answer and must not move at all.
+    assert_eq!(
+        one_json(&permissive)["result"],
+        one_json(&strict)["result"],
+        "the result body must be identical under both flag values"
+    );
+    assert!(strict.stderr.is_empty());
+}
+
+#[test]
+fn v2aut004_an_invalid_document_reports_one_error_and_is_never_linted() {
+    let fixture = FixtureDirectory::new("lint-invalid");
+    // A dangling `use`: the document parses and then fails closed-reference validation.
+    let path = fixture.write(
+        "invalid.yaml",
+        &MINIMAL_V2_YAML.replace("      use: work\n", "      use: absent\n"),
+    );
+
+    let output = lint_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.lint");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+    assert_eq!(result["operation"], "lint");
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["diagnostics_total"], 1);
+    assert!(
+        result.get("digest").is_none(),
+        "an inadmissible document has no digest: {result}"
+    );
+    let diagnostics = result["diagnostics"]
+        .as_array()
+        .expect("diagnostics are an array");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["severity"], "error");
+
+    // The advisory rules never ran, so no lint warning can appear beside the rejection.
+    let catalog = catalog_warning_codes();
+    let code = diagnostics[0]["code"].as_str().expect("a code");
+    assert!(!catalog.iter().any(|candidate| candidate == code));
+}
+
+#[test]
+fn v2aut004_a_v1_document_is_a_schema_failure_rather_than_a_lint_report() {
+    let fixture = FixtureDirectory::new("lint-v1");
+    let path = fixture.write("v1.yaml", V1_YAML);
+
+    let output = lint_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.lint");
+    assert_eq!(envelope["code"], "PROCEDURE_SCHEMA_UNSUPPORTED");
+    assert_eq!(envelope["exit_code"], 1);
+    assert_eq!(envelope["retryable"], false);
+}
+
+#[test]
+fn v2aut004_a_missing_file_is_a_path_failure() {
+    let fixture = FixtureDirectory::new("lint-missing");
+    let path = fixture.root.join("absent.yaml");
+
+    let output = lint_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.lint");
+    assert_eq!(envelope["code"], "PROCEDURE_NOT_FOUND");
+    assert_eq!(envelope["exit_code"], 1);
+}
+
+#[test]
+fn v2aut004_quiet_reports_only_through_the_exit_code() {
+    let fixture = FixtureDirectory::new("lint-quiet");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let permissive = run(&["--quiet", "procedure", "lint", &path.display().to_string()]);
+    assert_eq!(permissive.status.code(), Some(0), "{permissive:?}");
+    assert!(permissive.stdout.is_empty());
+    assert!(permissive.stderr.is_empty());
+
+    let strict = run(&[
+        "--quiet",
+        "procedure",
+        "lint",
+        &path.display().to_string(),
+        "--warnings-as-errors",
+    ]);
+    assert_eq!(strict.status.code(), Some(1), "{strict:?}");
+    assert!(strict.stdout.is_empty());
+    assert!(strict.stderr.is_empty());
+}
+
+#[test]
+fn v2aut004_lint_never_touches_the_file_it_reads() {
+    let fixture = FixtureDirectory::new("lint-readonly");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let before = identity(&path);
+
+    assert_eq!(lint_json(&path).status.code(), Some(0));
+    assert_eq!(lint_json_strict(&path).status.code(), Some(1));
+
+    assert_eq!(identity(&path), before);
+    assert_eq!(entry_names(&fixture.root), vec!["minimal.yaml".to_owned()]);
+}
+
+#[test]
+fn v2aut004_lint_is_deterministic_across_processes() {
+    let fixture = FixtureDirectory::new("lint-deterministic");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let baseline = one_json(&lint_json(&path))["result"].clone();
+    for _ in 0..5 {
+        assert_eq!(one_json(&lint_json(&path))["result"], baseline);
+    }
 }

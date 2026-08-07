@@ -693,7 +693,7 @@ commands:
   result_schemas:
   - podway.procedure-diagnostics-result/v1
 - name: procedure.lint
-  availability: reserved_contract
+  availability: executable
   cli:
   - procedure
   - lint

@@ -14,5 +14,7 @@ mod int_v2_procedure_canonical;
 mod int_v2_procedure_equivalence;
 #[path = "int_v2_procedure_format.rs"]
 mod int_v2_procedure_format;
+#[path = "int_v2_procedure_lint.rs"]
+mod int_v2_procedure_lint;
 #[path = "int_v2_procedure_validate.rs"]
 mod int_v2_procedure_validate;

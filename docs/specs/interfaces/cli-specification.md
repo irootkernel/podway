@@ -58,10 +58,11 @@ podway preset explain <name>
 podway procedure validate <file>
 podway procedure show <file>
 podway procedure format <file> [--check] [--write]
+podway procedure lint <file> [--warnings-as-errors]
 podway daemon ...
 ```
 
-`procedure validate`, `procedure show`, and `procedure format` use the same Rust schema and canonicalization library as the daemon.
+`procedure validate`, `procedure show`, `procedure format`, and `procedure lint` use the same Rust schema and canonicalization library as the daemon.
 `podway version --json` emits only the compact `name` and `version` summary. The
 target machine identity form is `podway version --json --identity`; it retains the
 versioned output envelope and requires no worktree, daemon, `HOME`, or `TMPDIR`.
@@ -238,11 +239,14 @@ Repair updates a moved worktree's minimal daemon registry after proving identity
 podway procedure validate <file> [--warnings-as-errors]
 podway procedure show <file> [--canonical]
 podway procedure format <file> [--check] [--write]
+podway procedure lint <file> [--warnings-as-errors]
 ```
 
 `--canonical` prints Podway Canonical JSON v1. With `--json`, validation returns digest, warnings, normalized metadata, and errors.
 
 `procedure format` renders a Procedure v2 document in canonical authoring form. The default mode and `--check` print to stdout and never write the file; only `--write` replaces it. Authoring successes — including the structured findings that describe a document Podway cannot render — use the `podway.output/v2` envelope: a rendered document carries `podway.procedure-source-result/v1`, and findings carry the shared `podway.procedure-diagnostics-result/v1` family with the exit code 1 that a document-level error implies. Process failures keep `podway.error/v1`: a missing or unsafe path, a Procedure v1 input (`PROCEDURE_SCHEMA_UNSUPPORTED`), and invalid usage all report there. `--check` reads the file and never writes it: an already-canonical source reports `podway.procedure-source-result/v1` with `mode: "check"`, `changed: false`, and exit code 0, while a drifted source reports the diagnostics family with exactly one `FORMAT_NOT_CANONICAL` error located at the first line that differs and exit code 1. `--write` rewrites the named file and only that file. Every stage that can refuse a document — the hardened path walk, the parse, validation, the supported-construct scan, and the projection bound — completes in memory before the filesystem is touched, so a refused document is byte-identical afterwards and no staging file is left behind. Supported full-line comments are carried into the rewritten document. An already-canonical source is not written at all: the result is `podway.procedure-source-result/v1` with `mode: "write"`, `changed: false`, exit code 0, and an unchanged modification time. A drifted source is replaced atomically inside its own directory — the canonical bytes are staged in a sibling temporary file that carries the original's permission bits, flushed to the device, then renamed over the target — and reports the same family with `changed: true` and exit code 0. When the filesystem refuses the write before the rename, the original survives intact, the staging file is removed, and the failure reports `INTERNAL_ERROR` in `podway.error/v1`; a failure to flush the directory entry after the rename reports the same error even though the replacement already took effect. `--check` and `--write` are mutually exclusive.
+
+`procedure lint` reports advisory authoring findings for a Procedure v2 document and never writes anything. It parses and validates first: a document that fails either stage reports that single error in `podway.procedure-diagnostics-result/v1` with `valid: false`, no `digest`, and exit code 1, and is not linted, because every rule reads a resolved model. A document that validates is linted and reports the same family with `operation: "lint"`, the validated `digest`, `valid: true`, and the findings sorted by source position. Every lint finding is a warning: severity is bound to the diagnostic code, so lint can never make a document invalid, and a clean document reports zero findings and prints one summary line. `--warnings-as-errors` is a policy about the invocation rather than a statement about the document — it changes the exit code from 0 to 1 when at least one finding is present, and changes nothing in the result body, so the same document produces byte-identical results with and without it. Process failures keep `podway.error/v1`: a missing or unsafe path and a Procedure v1 input (`PROCEDURE_SCHEMA_UNSUPPORTED`) report there.
 
 ## Preset commands
 

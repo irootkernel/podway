@@ -32,9 +32,10 @@ use podway_cli::client::{
 };
 use podway_config::{
     AuthoringContext, AuthoringStage, ConfigError, FormatFailure, FormatRequest,
-    FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES_V1, ProcedureFormatV1,
-    ProcedureWarningPolicyV1, ProcedureWarningV1, finalize_diagnostics, format_procedure_v2,
-    parse_procedure_v1,
+    FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES_V1, PROCEDURE_SCHEMA_V1, ParsedProcedure,
+    ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1, config_error_diagnostic,
+    finalize_diagnostics, format_procedure_v2, lint_procedure_v2, parse_procedure_document,
+    parse_procedure_v1, sniff_procedure_schema, validate_procedure_v2,
 };
 use podway_core::{AttemptId, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId};
 use podway_presets::{PresetError, catalog_v1};
@@ -394,6 +395,12 @@ enum ProcedureCommand {
         #[arg(long, action = ArgAction::SetTrue, conflicts_with = "check")]
         write: bool,
     },
+    Lint {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, action = ArgAction::SetTrue)]
+        warnings_as_errors: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -529,6 +536,9 @@ impl Command {
             Self::Procedure {
                 command: ProcedureCommand::Format { .. },
             } => "procedure.format",
+            Self::Procedure {
+                command: ProcedureCommand::Lint { .. },
+            } => "procedure.lint",
             Self::Preset {
                 command: PresetCommand::List,
             } => "preset.list",
@@ -1111,6 +1121,7 @@ fn parse_failure_command_context_from_matches(
                 ("validate", "procedure.validate"),
                 ("show", "procedure.show"),
                 ("format", "procedure.format"),
+                ("lint", "procedure.lint"),
             ],
         )?,
         "preset" => nested_parse_failure_context(
@@ -2926,6 +2937,12 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         ProcedureCommand::Format { file, check, write } => {
             return execute_procedure_format(file, *check, *write);
         }
+        ProcedureCommand::Lint {
+            file,
+            warnings_as_errors,
+        } => {
+            return execute_procedure_lint(file, *warnings_as_errors);
+        }
     };
     let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(name))?;
     std::str::from_utf8(&bytes).map_err(|_| {
@@ -2966,8 +2983,8 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         } => String::from_utf8(bytes).map_err(|_| {
             LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(name)
         })?,
-        ProcedureCommand::Format { .. } => {
-            unreachable!("format dispatches to its own v2 execution path")
+        ProcedureCommand::Format { .. } | ProcedureCommand::Lint { .. } => {
+            unreachable!("the v2 authoring commands dispatch to their own execution paths")
         }
     };
     Ok(local_result(name, result, text))
@@ -3240,6 +3257,149 @@ fn procedure_format_diagnostics(
         unreachable!("the static diagnostics result is a JSON object");
     };
     local_result_v2(PROCEDURE_FORMAT_COMMAND, result, text, 1)
+}
+
+/// The route every `procedure lint` result reports under, named once so the two result builders
+/// below cannot disagree with the route the failure paths use.
+const PROCEDURE_LINT_COMMAND: &str = "procedure.lint";
+
+/// Reports the advisory authoring findings of a Procedure v2 document.
+///
+/// Lint is a read: the hardened descriptor-relative walk that `procedure format` uses opens the
+/// file, and nothing afterwards touches the filesystem at all.
+///
+/// The pipeline is deliberately shorter than the formatter's. Parsing and closed-reference
+/// validation run, and then the rules run on the validated model; the supported-construct scan and
+/// the comment pass do not, because lint never re-emits the document, so a source construct the
+/// formatter could not reproduce is still a source lint can read. A document that fails parsing or
+/// validation is reported through that failure and is *not* linted: every rule reads a resolved
+/// model, and advisory findings about a document Podway is already rejecting would bury the
+/// rejection.
+///
+/// `--warnings-as-errors` is a policy about the invocation, not a statement about the document. It
+/// moves the exit code from 0 to 1 and changes nothing else: the result body, every `severity`, and
+/// `valid` are byte-identical with and without it.
+fn execute_procedure_lint(
+    file: &Path,
+    warnings_as_errors: bool,
+) -> Result<RunResult, LocalFailure> {
+    const NAME: &str = PROCEDURE_LINT_COMMAND;
+
+    let opened = open_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
+    let source = std::str::from_utf8(&opened.bytes).map_err(|_| {
+        LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
+    })?;
+    let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
+        ProcedureFormatV1::Json
+    } else {
+        ProcedureFormatV1::Yaml
+    };
+    let source_path = file.display().to_string();
+
+    // A document that declares the v1 schema is refused before the dispatching parser runs, so a
+    // malformed v1 document is a wrong-schema command failure rather than a v2 authoring finding
+    // about a document that never claimed to be v2.
+    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V1) {
+        return Err(procedure_lint_schema_failure());
+    }
+
+    let context = AuthoringContext::new(&source_path, source, format);
+    let parsed = match parse_procedure_document(source.as_bytes(), format) {
+        Ok(ParsedProcedure::V2(parsed)) => parsed,
+        Ok(ParsedProcedure::V1(_)) => return Err(procedure_lint_schema_failure()),
+        Err(error) => {
+            return Ok(procedure_lint_diagnostics(
+                &source_path,
+                None,
+                AuthoringStage::Validate,
+                vec![config_error_diagnostic(&error, &context)],
+                1,
+            ));
+        }
+    };
+    let validated = match validate_procedure_v2(parsed) {
+        Ok(validated) => validated,
+        Err(error) => {
+            return Ok(procedure_lint_diagnostics(
+                &source_path,
+                None,
+                AuthoringStage::Validate,
+                vec![config_error_diagnostic(&error, &context)],
+                1,
+            ));
+        }
+    };
+
+    let findings = lint_procedure_v2(&validated, &context);
+    let exit_code = i32::from(warnings_as_errors && !findings.is_empty());
+    Ok(procedure_lint_diagnostics(
+        &source_path,
+        Some(validated.digest()),
+        AuthoringStage::Lint,
+        findings,
+        exit_code,
+    ))
+}
+
+/// The failure a Procedure v1 input reports. The diagnostics result schema pins
+/// `procedure_schema` to `podway.procedure/v2`, so a v1 document has no representable findings
+/// document and must be refused as a wrong-schema command failure instead.
+fn procedure_lint_schema_failure() -> LocalFailure {
+    LocalFailure::catalog(
+        "PROCEDURE_SCHEMA_UNSUPPORTED",
+        "procedure lint requires a podway.procedure/v2 document; run podway procedure convert first",
+        PROCEDURE_LINT_COMMAND,
+    )
+}
+
+/// The pinned one-line verdict for a document with no advisory findings.
+fn no_lint_findings_summary(source_path: &str) -> String {
+    format!("{source_path}: no lint findings\n")
+}
+
+/// The `procedure lint` result, shared by the advisory report and by the two document-level
+/// failures that stop the pipeline before the rules run.
+///
+/// `digest` is present exactly when validation produced one, which is exactly when the findings are
+/// advisory: a client can therefore tell "these warnings describe procedure `sha256:…`" from "this
+/// document has no digest because it is not admissible" without inspecting severities.
+fn procedure_lint_diagnostics(
+    source_path: &str,
+    digest: Option<&Sha256Digest>,
+    stage: AuthoringStage,
+    diagnostics: Vec<podway_core::AuthoringDiagnostic>,
+    exit_code: i32,
+) -> RunResult {
+    let report = finalize_diagnostics(
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| (stage, diagnostic))
+            .collect(),
+    );
+    let text = if report.diagnostics().is_empty() {
+        no_lint_findings_summary(source_path)
+    } else {
+        render_authoring_diagnostics(report.diagnostics())
+    };
+    let Value::Object(mut result) = json!({
+        "schema": "podway.procedure-diagnostics-result/v1",
+        "operation": "lint",
+        "procedure_schema": "podway.procedure/v2",
+        "file": source_path,
+        "valid": report.valid(),
+        "diagnostics": report.diagnostics(),
+        "diagnostics_truncated": report.truncated(),
+        "diagnostics_total": report.total(),
+    }) else {
+        unreachable!("the static diagnostics result is a JSON object");
+    };
+    if let Some(digest) = digest {
+        result.insert(
+            "digest".to_owned(),
+            Value::String(digest.as_str().to_owned()),
+        );
+    }
+    local_result_v2(PROCEDURE_LINT_COMMAND, result, text, exit_code)
 }
 
 /// The stable one-line-per-finding authoring report.
@@ -4874,6 +5034,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "procedure.format" => {
             "Usage:\n  podway procedure format <file> [--check] [--write]\n\nRenders a Procedure v2 document in canonical authoring form on stdout. --check\nreports drift and writes nothing; --write replaces the named file atomically.\n\nExample:\n  podway procedure format .podway/procedures/custom.yaml"
+        }
+        "procedure.lint" => {
+            "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v2 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"
         }
         "preset.list" => "Usage:\n  podway preset list\n\nExample:\n  podway preset list",
         "preset.show" => {

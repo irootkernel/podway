@@ -193,7 +193,12 @@ pub(crate) fn authoring_document_value(parsed: &ParsedProcedureV2) -> AuthoringV
     document.finish()
 }
 
-fn node_definition_value(definition: &ParsedNodeDefinition) -> AuthoringValue {
+/// One node definition's authoring subtree.
+///
+/// The subtree carries no identifier — the identifier is the definition's key in the
+/// `node_definitions` map — so two definitions with equal subtrees are identical except for their
+/// identifiers, which is exactly what the `DUPLICATED_NODE_DEFINITION` lint rule asks.
+pub(crate) fn node_definition_value(definition: &ParsedNodeDefinition) -> AuthoringValue {
     match definition {
         ParsedNodeDefinition::Action(action) => action_definition_value(action),
         ParsedNodeDefinition::Decision(decision) => decision_definition_value(decision),
