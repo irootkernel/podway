@@ -12,10 +12,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use podway_config::{
-    ConfigError, MAX_PROCEDURE_DOCUMENT_BYTES, MAX_PROCEDURE_DOCUMENT_DEPTH,
+    AuthoringContext, ConfigError, MAX_PROCEDURE_DOCUMENT_BYTES, MAX_PROCEDURE_DOCUMENT_DEPTH,
     MAX_PROCEDURE_DOCUMENT_NODES, ParsedProcedure, ParsedProcedureV2, ProcedureDocumentFormat,
-    ValidatedProcedureV2, decode_procedure_document, parse_procedure_document,
-    validate_procedure_v2,
+    ValidatedProcedureV2, config_error_diagnostic, decode_procedure_document,
+    parse_procedure_document, validate_procedure_v2,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -575,6 +575,8 @@ struct CrossReferenceCase {
     rejected_yaml: String,
     rejected_json: String,
     expected: ConfigError,
+    /// The catalog code `config_error_diagnostic` reports for `expected` (V2AUT-008).
+    expected_code: &'static str,
     accepted_yaml: String,
     accepted_json: String,
 }
@@ -699,6 +701,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.use",
                 value: "ghost".to_owned(),
             },
+            expected_code: "GRAPH_DEFINITION_UNKNOWN",
             accepted_yaml: yaml_document("", ACTION_ACT, START_TERMINAL, ""),
             accepted_json: json_document(
                 false,
@@ -726,6 +729,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.use",
                 reason: "a decision placement must use a decision definition",
             },
+            expected_code: "AUTHORING_SCHEMA_INVALID",
             accepted_yaml: yaml_document(
                 "",
                 decision_pick_yaml,
@@ -758,6 +762,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.use",
                 reason: "an action placement must use an action definition",
             },
+            expected_code: "AUTHORING_SCHEMA_INVALID",
             accepted_yaml: yaml_document("", ACTION_ACT, START_TERMINAL, ""),
             accepted_json: json_document(
                 false,
@@ -785,6 +790,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.next",
                 value: "nowhere".to_owned(),
             },
+            expected_code: "ROUTE_TARGET_NOT_FOUND",
             accepted_yaml: yaml_document(
                 "",
                 ACTION_ACT,
@@ -820,6 +826,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.routes.to",
                 value: "nowhere".to_owned(),
             },
+            expected_code: "ROUTE_TARGET_NOT_FOUND",
             accepted_yaml: yaml_document(
                 "",
                 decision_pick_yaml,
@@ -852,6 +859,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.routes",
                 reason: "every declared decision option must have exactly one route",
             },
+            expected_code: "DECISION_OPTION_ROUTE_MISSING",
             accepted_yaml: yaml_document(
                 "",
                 two_option_pick_yaml,
@@ -891,6 +899,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.routes",
                 reason: "a route names an option the decision definition does not declare",
             },
+            expected_code: "DECISION_ROUTE_OPTION_UNDEFINED",
             accepted_yaml: yaml_document(
                 "",
                 decision_pick_yaml,
@@ -923,6 +932,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.evidence_from.node",
                 value: "ghost".to_owned(),
             },
+            expected_code: "EVIDENCE_SOURCE_UNKNOWN",
             accepted_yaml: yaml_document(
                 "",
                 ACTION_ACT,
@@ -959,6 +969,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.evidence_from.node",
                 reason: "an evidence reference must not name its consuming placement",
             },
+            expected_code: "EVIDENCE_SOURCE_SELF_REFERENCE",
             accepted_yaml: yaml_document(
                 "",
                 ACTION_ACT,
@@ -1003,6 +1014,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "graph.nodes.evidence_from.items",
                 value: "ghost-item".to_owned(),
             },
+            expected_code: "EVIDENCE_SELECTOR_UNKNOWN_ITEM",
             accepted_yaml: yaml_document(
                 "",
                 "  act:\n    type: action\n    title: Act\n    intent: Do the work.\n    items:\n      - id: note\n        type: text\n        prompt: Note?\n        required: true\n",
@@ -1043,6 +1055,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "node_definitions.assessment.outcomes",
                 reason: "an assessment outcome names an option the decision definition does not declare",
             },
+            expected_code: "AUTHORING_SCHEMA_INVALID",
             accepted_yaml: yaml_document(
                 "goal_tracking: true\n",
                 &assess_yaml("achieved"),
@@ -1071,6 +1084,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "node_definitions.assessment",
                 reason: "a session-goal assessment requires the procedure to declare goal_tracking: true",
             },
+            expected_code: "GOAL_ASSESSMENT_REQUIRES_GOAL_TRACKING",
             accepted_yaml: yaml_document(
                 "goal_tracking: true\n",
                 &assess_yaml("achieved"),
@@ -1099,6 +1113,7 @@ fn cross_reference_cases() -> Vec<CrossReferenceCase> {
                 field: "manual_rework.allowed_targets",
                 value: "ghost".to_owned(),
             },
+            expected_code: "MANUAL_REWORK_TARGET_UNKNOWN",
             accepted_yaml: yaml_document(
                 "",
                 ACTION_ACT,
@@ -1133,9 +1148,37 @@ fn closed_cross_reference_checks_reject_yaml_and_json_with_identical_diagnostics
         let json_error = reject_validation(&case.rejected_json, ProcedureDocumentFormat::Json);
         assert_eq!(yaml_error, json_error, "check {}", case.check);
         assert_eq!(yaml_error, case.expected, "check {}", case.check);
+
+        // The production mapping turns each rejection into its catalog code. Ten of the thirteen
+        // checks have an exact code; the remaining three are closed-shape violations the catalog
+        // does not name, and stay `AUTHORING_SCHEMA_INVALID` (see the mapping's own comments).
+        // Both encodings must land on the same one, since both raise the same `ConfigError`.
+        let yaml_context = AuthoringContext::new(
+            "case.yaml",
+            &case.rejected_yaml,
+            ProcedureDocumentFormat::Yaml,
+        );
+        let diagnostic = config_error_diagnostic(&yaml_error, &yaml_context);
         assert_eq!(
-            diagnostic_class(&yaml_error),
-            AUTHORING_SCHEMA_INVALID,
+            diagnostic.code().as_str(),
+            case.expected_code,
+            "check {}",
+            case.check,
+        );
+        assert_eq!(
+            diagnostic_code(
+                &json_error,
+                &case.rejected_json,
+                ProcedureDocumentFormat::Json
+            ),
+            case.expected_code,
+            "check {}: both encodings classify identically",
+            case.check,
+        );
+        // Refinement changes the code, never the path the author has to edit.
+        assert_eq!(
+            diagnostic.field(),
+            rejected_field(&yaml_error),
             "check {}",
             case.check,
         );
@@ -1162,54 +1205,32 @@ fn the_accepted_counterpart_of_every_cross_reference_check_validates_in_both_enc
 // ---------------------------------------------------------------------------------------------
 
 const AUTHORING_SCHEMA_INVALID: &str = "AUTHORING_SCHEMA_INVALID";
-const SOURCE_CONSTRUCT_UNSUPPORTED: &str = "SOURCE_CONSTRUCT_UNSUPPORTED";
 
-/// Message prefixes owned by the wire deserializer and the schema dispatch. `serde`'s `de::Error`
-/// constructors produce exactly this closed set of shapes, so an `InvalidDocument` carrying one of
-/// them is a violation of the closed v2 authoring schema; every other `InvalidDocument` comes from
-/// the shared bounded decoder (UTF-8, multi-document, trailing data, JSON syntax, explicit null,
-/// YAML binary, non-string mapping keys, JSON-form-as-YAML) and is an unsupported source
-/// construct.
-const SCHEMA_REASON_PREFIXES: &[&str] = &[
-    "unknown field ",
-    "unknown variant ",
-    "missing field ",
-    "duplicate field ",
-    "invalid type: ",
-    "invalid value: ",
-    "invalid length ",
-    "procedure schema must be a string",
-    "procedure document must declare a schema",
-];
+/// The catalog code the production mapping reports for a rejection of `source`.
+///
+/// V2AUT-008 retired this file's prototype classifier: the mapping is
+/// `podway_config::config_error_diagnostic`, and these tests assert against it rather than against
+/// a second copy of its rules that could agree with the catalog while disagreeing with the shipped
+/// command. The full truth table, its raise-site evidence, and the location and message contracts
+/// live in `int_v2_authoring_diagnostics.rs`; what this file adds is that every rejection *it*
+/// pins carries the code the reader of that rejection would see.
+fn diagnostic_code(error: &ConfigError, source: &str, format: ProcedureDocumentFormat) -> String {
+    let context = AuthoringContext::new("fixture.yaml", source, format);
+    config_error_diagnostic(error, &context)
+        .code()
+        .as_str()
+        .to_owned()
+}
 
-fn diagnostic_class(error: &ConfigError) -> &'static str {
+/// The authored field a rejection names, or `"$"` when it names none.
+///
+/// The production diagnostic must report exactly this: classification refines the *code*, never the
+/// path the author has to edit.
+fn rejected_field(error: &ConfigError) -> &'static str {
     match error {
-        ConfigError::DuplicateKey { .. }
-        | ConfigError::UnsupportedYamlFeature { .. }
-        | ConfigError::NonCanonicalNumber
-        | ConfigError::InputTooLarge { .. }
-        | ConfigError::InputTooDeep { .. }
-        | ConfigError::InputTooComplex { .. } => SOURCE_CONSTRUCT_UNSUPPORTED,
-        ConfigError::InvalidDocument { reason } => {
-            if SCHEMA_REASON_PREFIXES
-                .iter()
-                .any(|prefix| reason.starts_with(prefix))
-            {
-                AUTHORING_SCHEMA_INVALID
-            } else {
-                SOURCE_CONSTRUCT_UNSUPPORTED
-            }
-        }
-        ConfigError::InvalidSchema { .. }
-        | ConfigError::InvalidIdentifier { .. }
-        | ConfigError::InvalidValue { .. }
-        | ConfigError::OutOfBounds { .. }
-        | ConfigError::DuplicateValue { .. }
-        | ConfigError::UnknownV2Reference { .. }
-        | ConfigError::V2ShapeMismatch { .. } => AUTHORING_SCHEMA_INVALID,
-        // v1-only and canonicalization failures are unreachable from the v2 parse/validate stages;
-        // no authoring diagnostic family covers them, so they must not be silently classified.
-        other => panic!("no v2 authoring diagnostic family covers {other:?}"),
+        ConfigError::UnknownV2Reference { field, .. }
+        | ConfigError::V2ShapeMismatch { field, .. } => field,
+        other => panic!("case rejections name an authored field: {other:?}"),
     }
 }
 
@@ -1292,8 +1313,9 @@ fn every_malformed_input_fixture_case_is_rejected_and_classified() {
         };
         for format in formats {
             let error = admit_bytes(&bytes, *format, &case.id);
+            let source = String::from_utf8_lossy(&bytes).into_owned();
             assert_eq!(
-                diagnostic_class(&error),
+                diagnostic_code(&error, &source, *format),
                 case.expected_code,
                 "case {} ({format:?}): {error:?}",
                 case.id,
@@ -1819,8 +1841,14 @@ fn document_bound_dimensions_accept_the_limit_and_reject_one_over_deterministica
             case.dimension
         );
         assert_eq!(first, case.rejection, "{}", case.dimension);
+        // A bound violation is a closed-schema violation: no catalog code names an individual
+        // bound, so the production mapping reports the generic schema code for every dimension.
         assert_eq!(
-            diagnostic_class(&first),
+            diagnostic_code(
+                &first,
+                &case.one_over_document,
+                ProcedureDocumentFormat::Yaml
+            ),
             AUTHORING_SCHEMA_INVALID,
             "{}: {first:?}",
             case.dimension,

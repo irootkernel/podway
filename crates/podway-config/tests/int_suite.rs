@@ -6,6 +6,8 @@ mod int_procedure_document;
 mod int_procedure_v1;
 #[path = "int_v1_compatibility_lock.rs"]
 mod int_v1_compatibility_lock;
+#[path = "int_v2_authoring_diagnostics.rs"]
+mod int_v2_authoring_diagnostics;
 #[path = "int_v2_procedure.rs"]
 mod int_v2_procedure;
 #[path = "int_v2_procedure_canonical.rs"]

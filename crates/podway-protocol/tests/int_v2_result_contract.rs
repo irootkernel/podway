@@ -11,8 +11,9 @@ use podway_core::{AuthoringDiagnostic, AuthoringDiagnosticCode, SourceLocation};
 use podway_protocol::{
     CommandNameV1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, ErrorEnvelopeV1, MAX_V2_OUTPUT_WARNINGS,
     MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1, NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V2,
-    OutputEnvelopeInputV2, OutputEnvelopeV2, ProtocolError, RequestIdV1, Rfc3339MillisV1,
-    V2_RUNTIME_ERROR_CODES_V1, decode_result_schema_contract_v2, result_schema_top_level_fields_v2,
+    OutputEnvelopeInputV2, OutputEnvelopeV2, PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ProtocolError,
+    RequestIdV1, Rfc3339MillisV1, V2_RUNTIME_ERROR_CODES_V1, decode_result_schema_contract_v2,
+    ensure_command_result_schema_v1, result_schema_top_level_fields_v2, validate_command_result_v1,
     validate_command_result_v2, validate_frame_payload_length, validate_v2_output_warnings,
 };
 use serde_json::{Map, Value, json};
@@ -1724,4 +1725,96 @@ fn v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes
     let mut missing = source;
     missing.remove("schema");
     assert!(validate_command_result_v2("procedure.format", &missing).is_err());
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2AUT-008: `procedure.validate` carries two closed families
+// ---------------------------------------------------------------------------------------------
+
+/// A real `podway.procedure-validation-result/v1` body: the family `procedure validate` reports for
+/// a Procedure v1 document, unchanged by V2AUT-008.
+///
+/// Captured verbatim from `podway --json procedure validate` on the smallest legal v1 document, so
+/// its `canonical_json`, `procedure`, and `digest` genuinely agree — the three the v1 validator
+/// re-derives and cross-checks. A hand-written body would only ever prove the validator rejects it.
+fn validation_result_v1() -> Map<String, Value> {
+    result_map(&json!({
+        "schema": "podway.procedure-validation-result/v1",
+        "file": "workflow.yaml",
+        "digest": "sha256:40265a5ce34cd76f257b1c7cbc783b30ebaa6702bc00dc161954975fed1dee77",
+        "procedure": {
+            "id": "release",
+            "name": "Release",
+            "rework": {"allow_return_to": ["prepare"]},
+            "schema": "podway.procedure/v1",
+            "stages": [{
+                "id": "prepare",
+                "instructions": [],
+                "items": [],
+                "title": "Prepare",
+            }],
+            "version": "1",
+        },
+        "warnings": [{
+            "code": "stage_has_no_required_items",
+            "message": "procedure warning: stage_has_no_required_items",
+            "path": "stages/prepare",
+        }],
+        "canonical_json": "{\"id\":\"release\",\"name\":\"Release\",\"rework\":{\"allow_return_to\":[\"prepare\"]},\"schema\":\"podway.procedure/v1\",\"stages\":[{\"id\":\"prepare\",\"instructions\":[],\"items\":[],\"title\":\"Prepare\"}],\"version\":\"1\"}",
+    }))
+}
+
+#[test]
+fn v2aut008_the_v1_selector_abstains_on_a_procedure_validate_diagnostics_result() {
+    // `procedure validate` reports the v1 validation family for a Procedure v1 document and the
+    // shared authoring diagnostics family for a Procedure v2 one. The v1 selector must not claim
+    // the second: stamping `podway.procedure-validation-result/v1` onto a diagnostics body, or
+    // decoding one as a v1 result, would both corrupt a correct result.
+    let diagnostics = result_map(&diagnostics_result("validate"));
+
+    let mut stamped = diagnostics.clone();
+    ensure_command_result_schema_v1("procedure.validate", &mut stamped);
+    assert_eq!(
+        stamped.get("schema").and_then(Value::as_str),
+        Some(PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1),
+        "the diagnostics family survives the v1 schema stamp untouched",
+    );
+    assert_eq!(stamped, diagnostics, "nothing else is added either");
+
+    assert!(
+        validate_command_result_v1("procedure.validate", &diagnostics).is_ok(),
+        "the v1 validator abstains rather than rejecting a family it does not own",
+    );
+    // The family is still validated — by the v2 registry, which binds it to this route.
+    assert!(validate_command_result_v2("procedure.validate", &diagnostics).is_ok());
+}
+
+#[test]
+fn v2aut008_the_v1_selector_still_owns_the_procedure_validate_v1_family() {
+    // The other direction: abstention is conditional on the diagnostics discriminator, so a v1
+    // validation result is selected, stamped, and validated exactly as before.
+    let expected = validation_result_v1();
+
+    let mut without_schema = expected.clone();
+    without_schema.remove("schema");
+    ensure_command_result_schema_v1("procedure.validate", &mut without_schema);
+    assert_eq!(
+        without_schema.get("schema").and_then(Value::as_str),
+        Some("podway.procedure-validation-result/v1"),
+    );
+    assert!(validate_command_result_v1("procedure.validate", &expected).is_ok());
+
+    // A v1 body carrying the wrong known v1 schema is still a rejection, and a diagnostics body is
+    // still not admissible as the v1 family under any other route.
+    let mut wrong_family = expected;
+    wrong_family.insert("schema".to_owned(), json!("podway.version-result/v1"));
+    assert!(validate_command_result_v1("procedure.validate", &wrong_family).is_err());
+    assert!(
+        validate_command_result_v2(
+            "procedure.show",
+            &result_map(&diagnostics_result("validate"))
+        )
+        .is_err(),
+        "abstention does not make the diagnostics family routable anywhere",
+    );
 }

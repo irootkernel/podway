@@ -2262,3 +2262,231 @@ fn v2aut007_quiet_suppresses_the_candidate_without_changing_the_exit_code() {
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
+
+// ---------------------------------------------------------------------------------------------
+// V2AUT-008: `procedure validate` dispatches on the declared schema
+// ---------------------------------------------------------------------------------------------
+
+fn validate_text(path: &Path) -> Output {
+    run(&["procedure", "validate", &path.display().to_string()])
+}
+
+fn validate_json(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "validate",
+        &path.display().to_string(),
+    ])
+}
+
+/// The exact stdout and exit code `procedure validate` produced for `V1_YAML` before the v2
+/// dispatch existed, captured from the binary at the parent commit.
+///
+/// This is the byte-identity pin. The dispatch inserts a decode-only schema sniff between the
+/// format decision and the v1 parser, and only a document that positively declares Procedure v2
+/// leaves the v1 path — so a v1 document must produce these bytes, not merely an equivalent result.
+const V1_VALIDATE_TEXT: &str =
+    "Release (sha256:40265a5ce34cd76f257b1c7cbc783b30ebaa6702bc00dc161954975fed1dee77)\n";
+
+#[test]
+fn v2aut008_a_v1_document_keeps_its_exact_validate_output() {
+    let fixtures = FixtureDirectory::new("v1-validate");
+    let path = fixtures.write("release.yaml", V1_YAML);
+
+    let text = validate_text(&path);
+    assert_eq!(text.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&text.stdout), V1_VALIDATE_TEXT);
+    assert!(text.stderr.is_empty());
+
+    // JSON mode keeps the v1 envelope and the v1 result family; only `request_id` and
+    // `generated_at` are per-run.
+    let json = validate_json(&path);
+    assert_eq!(json.status.code(), Some(0));
+    let value = one_json(&json);
+    assert_eq!(value["schema"], "podway.output/v1");
+    assert_eq!(value["command"], "procedure.validate");
+    let result = &value["result"];
+    assert_eq!(result["schema"], "podway.procedure-validation-result/v1");
+    assert_eq!(
+        result["digest"],
+        "sha256:40265a5ce34cd76f257b1c7cbc783b30ebaa6702bc00dc161954975fed1dee77"
+    );
+    assert_eq!(result["procedure"]["id"], "release");
+    assert!(
+        result.get("diagnostics").is_none(),
+        "v1 reports no findings"
+    );
+}
+
+#[test]
+fn v2aut008_a_document_declaring_no_known_schema_stays_on_the_v1_path() {
+    let fixtures = FixtureDirectory::new("v1-fallthrough");
+    // A missing schema, an unknown schema, and an undecodable document are all `None` from the
+    // sniff, which is not a positive dispatch signal: each must reach the v1 parser and report the
+    // v1 failure surface it always reported.
+    for (name, contents) in [
+        ("no-schema.yaml", "id: nothing\nname: Nothing\n"),
+        (
+            "unknown-schema.yaml",
+            "schema: podway.procedure/v9\nid: x\nname: X\n",
+        ),
+        ("undecodable.yaml", "schema: [\n"),
+    ] {
+        let path = fixtures.write(name, contents);
+        let output = validate_text(&path);
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(output.stdout.is_empty(), "{name}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.starts_with("error: "), "{name}: {stderr}");
+
+        let json = one_json(&validate_json(&path));
+        assert_eq!(json["schema"], "podway.error/v1", "{name}");
+        assert_eq!(json["command"], "procedure.validate", "{name}");
+    }
+}
+
+#[test]
+fn v2aut008_a_v2_document_validates_into_the_diagnostics_family() {
+    let fixtures = FixtureDirectory::new("v2-validate-ok");
+    let path = fixtures.write("workflow.yaml", MINIMAL_V2_YAML);
+
+    let output = validate_json(&path);
+    assert_eq!(output.status.code(), Some(0));
+    let value = one_json(&output);
+    assert_eq!(value["schema"], "podway.output/v2");
+    assert_eq!(value["command"], "procedure.validate");
+
+    let result = &value["result"];
+    assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+    assert_eq!(result["operation"], "validate");
+    assert_eq!(result["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(result["file"], path.display().to_string());
+    assert_eq!(result["valid"], true);
+    assert_eq!(result["diagnostics"], Value::Array(Vec::new()));
+    assert_eq!(result["diagnostics_truncated"], false);
+    assert_eq!(result["diagnostics_total"], 0);
+    assert!(
+        result["digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")),
+        "an admissible document reports its digest"
+    );
+
+    let text = validate_text(&path);
+    assert_eq!(text.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&text.stdout),
+        format!(
+            "{}: valid ({})\n",
+            path.display(),
+            result["digest"].as_str().expect("digest is a string")
+        )
+    );
+    assert!(text.stderr.is_empty());
+}
+
+/// Three negative graph recipes taken to the process boundary.
+///
+/// The config-level suite proves the whole mapping; these prove the command really carries it —
+/// that the code, the field, the location, and the exit code survive the CLI, the envelope, and
+/// JSON serialization.
+#[test]
+fn v2aut008_negative_recipes_reach_the_process_boundary_with_their_codes() {
+    let fixtures = FixtureDirectory::new("v2-validate-negative");
+    let cases: &[(&str, String, &str, &str)] = &[
+        (
+            // negative-cases.json: "set graph.entry to an undefined node"
+            "unknown-entry",
+            MINIMAL_V2_YAML.replace("  entry: only\n", "  entry: ghost\n"),
+            "ENTRY_NODE_INVALID",
+            "graph.entry",
+        ),
+        (
+            // negative-cases.json: "make two graph references resolve ambiguously"
+            "ambiguous-placement-id",
+            MINIMAL_V2_YAML.replace(
+                "    - id: only\n",
+                "    - id: only\n      use: work\n      terminal: true\n    - id: only\n",
+            ),
+            "AMBIGUOUS_GRAPH_REFERENCE",
+            "graph.nodes",
+        ),
+        (
+            // negative-cases.json: "allow manual rework to an undefined placement"
+            "manual-rework-target-invalid",
+            format!("{MINIMAL_V2_YAML}manual_rework:\n  allowed_targets:\n    - ghost\n"),
+            "MANUAL_REWORK_TARGET_UNKNOWN",
+            "manual_rework.allowed_targets",
+        ),
+    ];
+
+    for (id, source, code, field) in cases {
+        let path = fixtures.write(&format!("{id}.yaml"), source);
+        let output = validate_json(&path);
+        assert_eq!(output.status.code(), Some(1), "{id}");
+
+        let value = one_json(&output);
+        assert_eq!(value["schema"], "podway.output/v2", "{id}");
+        let result = &value["result"];
+        assert_eq!(result["valid"], false, "{id}");
+        assert_eq!(result["diagnostics_total"], 1, "{id}");
+        assert_eq!(result["diagnostics_truncated"], false, "{id}");
+        assert!(result.get("digest").is_none(), "{id}: no digest exists");
+
+        let diagnostics = result["diagnostics"].as_array().expect("an array");
+        assert_eq!(diagnostics.len(), 1, "{id}: validate is single-error");
+        assert_eq!(diagnostics[0]["code"], *code, "{id}");
+        assert_eq!(diagnostics[0]["field"], *field, "{id}");
+        assert_eq!(diagnostics[0]["severity"], "error", "{id}");
+        assert_eq!(diagnostics[0]["source_path"], path.display().to_string());
+        assert!(
+            diagnostics[0]["location"]["line"]
+                .as_u64()
+                .is_some_and(|line| line >= 1),
+            "{id}"
+        );
+        assert!(
+            !diagnostics[0]["hint"].as_str().expect("a hint").is_empty(),
+            "{id}"
+        );
+
+        // Text mode renders the same finding on one line and exits the same way.
+        let text = validate_text(&path);
+        assert_eq!(text.status.code(), Some(1), "{id}");
+        let rendered = String::from_utf8_lossy(&text.stdout);
+        assert_eq!(rendered.lines().count(), 1, "{id}: {rendered}");
+        assert!(rendered.contains(code), "{id}: {rendered}");
+    }
+}
+
+#[test]
+fn v2aut008_warnings_as_errors_is_a_no_op_for_a_v2_document() {
+    let fixtures = FixtureDirectory::new("v2-validate-wae");
+    // Validate emits only error-severity findings, so the policy has nothing to promote: the
+    // result body and the exit code are identical with and without the flag, for an admissible
+    // document and for a rejected one alike.
+    for (name, contents) in [
+        ("clean.yaml", MINIMAL_V2_YAML.to_owned()),
+        (
+            "rejected.yaml",
+            MINIMAL_V2_YAML.replace("      use: work\n", "      use: absent\n"),
+        ),
+    ] {
+        let path = fixtures.write(name, &contents);
+        let plain = validate_json(&path);
+        let flagged = run(&[
+            "--json",
+            "procedure",
+            "validate",
+            &path.display().to_string(),
+            "--warnings-as-errors",
+        ]);
+        assert_eq!(plain.status.code(), flagged.status.code(), "{name}");
+        assert_eq!(
+            one_json(&plain)["result"],
+            one_json(&flagged)["result"],
+            "{name}"
+        );
+    }
+}

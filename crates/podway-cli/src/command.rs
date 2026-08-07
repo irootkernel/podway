@@ -2966,7 +2966,7 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         ProcedureCommand::Validate {
             file,
             warnings_as_errors,
-        } => (file, *warnings_as_errors, "procedure.validate"),
+        } => (file, *warnings_as_errors, PROCEDURE_VALIDATE_COMMAND),
         ProcedureCommand::Show { file, .. } => (file, false, "procedure.show"),
         ProcedureCommand::Format { file, check, write } => {
             return execute_procedure_format(file, *check, *write);
@@ -2999,6 +2999,17 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
     } else {
         ProcedureFormatV1::Yaml
     };
+    // Versioned dispatch for `procedure validate`, placed after the read, the UTF-8 check, and the
+    // format decision the v1 path already made and before the v1 parser, so no step of the v1 path
+    // moves. The sniff is decode-only and its only positive signal is a document that declares
+    // Procedure v2; a v1 document, an unknown schema, and an undecodable one all fall through to
+    // `parse_procedure_v1` below, which is why the v1 surface — success bytes and every failure
+    // alike — is unchanged by this arm existing.
+    if matches!(command, ProcedureCommand::Validate { .. })
+        && sniff_procedure_schema(&bytes, format) == Some(PROCEDURE_SCHEMA_V2)
+    {
+        return Ok(execute_procedure_validate_v2(file, &bytes, format));
+    }
     let validated = parse_procedure_v1(&bytes, format)
         .map_err(|error| procedure_config_failure(error).with_command(name))?;
     if warnings_as_errors {
@@ -3038,6 +3049,101 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         }
     };
     Ok(local_result(name, result, text))
+}
+
+/// The route every `procedure validate` result reports under, named once so the v2 result builder
+/// cannot disagree with the route the v1 path reports under.
+const PROCEDURE_VALIDATE_COMMAND: &str = "procedure.validate";
+
+/// Validates a Procedure v2 document and reports one bounded diagnostics result.
+///
+/// Reached only when the schema sniff positively identified Procedure v2, so this never sees a v1
+/// document and never has to choose an error surface for one.
+///
+/// Validate is a two-stage, single-error pipeline: parsing maps the document into the model and
+/// validation resolves its closed reference set, and the first failure of either is the whole
+/// report. The result therefore carries zero diagnostics or exactly one, and `valid` is the
+/// difference between them. `digest` is present exactly when validation produced one, which is
+/// exactly when the document is admissible.
+///
+/// `--warnings-as-errors` is accepted and does nothing here: every diagnostic validate can emit is
+/// catalogued as an error, so there is no warning for the policy to promote. The advisory stages
+/// that do emit warnings are `procedure lint` and `procedure check`.
+fn execute_procedure_validate_v2(
+    file: &Path,
+    bytes: &[u8],
+    format: ProcedureFormatV1,
+) -> RunResult {
+    let source = std::str::from_utf8(bytes)
+        .expect("execute_procedure rejects a non-UTF-8 document before dispatching");
+    let source_path = file.display().to_string();
+    let context = AuthoringContext::new(&source_path, source, format);
+
+    let admitted = match parse_procedure_document(bytes, format) {
+        Ok(ParsedProcedure::V2(parsed)) => validate_procedure_v2(parsed),
+        // Unreachable: the sniff and the dispatcher read the same decoded `schema`. Reported as a
+        // schema violation rather than a panic, because a diagnostic path must not be able to abort
+        // the process even on an impossible branch.
+        Ok(ParsedProcedure::V1(_)) => Err(ConfigError::InvalidSchema {
+            expected: PROCEDURE_SCHEMA_V2,
+            actual: PROCEDURE_SCHEMA_V1.to_owned(),
+        }),
+        Err(error) => Err(error),
+    };
+
+    match admitted {
+        Ok(validated) => {
+            procedure_validate_v2_diagnostics(&source_path, Some(validated.digest()), Vec::new())
+        }
+        Err(error) => procedure_validate_v2_diagnostics(
+            &source_path,
+            None,
+            vec![config_error_diagnostic(&error, &context)],
+        ),
+    }
+}
+
+/// The `procedure validate` result for a Procedure v2 document.
+///
+/// Exit code 0 when the document is admissible and 1 when it is not, which for this command is the
+/// same thing as the presence of a diagnostic: validate emits nothing but errors.
+fn procedure_validate_v2_diagnostics(
+    source_path: &str,
+    digest: Option<&Sha256Digest>,
+    diagnostics: Vec<podway_core::AuthoringDiagnostic>,
+) -> RunResult {
+    let report = finalize_diagnostics(
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| (AuthoringStage::Validate, diagnostic))
+            .collect(),
+    );
+    let text = match digest {
+        Some(digest) if report.diagnostics().is_empty() => {
+            format!("{source_path}: valid ({})\n", digest.as_str())
+        }
+        _ => render_authoring_diagnostics(report.diagnostics()),
+    };
+    let exit_code = i32::from(!report.valid());
+    let Value::Object(mut result) = json!({
+        "schema": "podway.procedure-diagnostics-result/v1",
+        "operation": "validate",
+        "procedure_schema": PROCEDURE_SCHEMA_V2,
+        "file": source_path,
+        "valid": report.valid(),
+        "diagnostics": report.diagnostics(),
+        "diagnostics_truncated": report.truncated(),
+        "diagnostics_total": report.total(),
+    }) else {
+        unreachable!("the static diagnostics result is a JSON object");
+    };
+    if let Some(digest) = digest {
+        result.insert(
+            "digest".to_owned(),
+            Value::String(digest.as_str().to_owned()),
+        );
+    }
+    local_result_v2(PROCEDURE_VALIDATE_COMMAND, result, text, exit_code)
 }
 
 /// Renders a Procedure v2 source document in canonical authoring form.

@@ -239,6 +239,10 @@ impl SourceIndex {
     /// `ConfigError` variants name a *shape* (`graph.nodes.use`) plus the offending value but carry
     /// no index, so this recovers a precise span from the pair. Source order makes the answer
     /// deterministic; the caller falls back to the longest-present-prefix rule when it misses.
+    ///
+    /// This is the *heuristic* form, used where the diagnostic carries no declared shape: it keys on
+    /// the last path segment alone, so a leaf of the right name anywhere in the document can answer.
+    /// [`Self::locate_shape`] is the precise form and is preferred wherever a shape is known.
     pub(crate) fn find_scalar(&self, field: &str, value: &str) -> Option<(u32, u32)> {
         let leaf = field.rsplit('.').next()?;
         self.entries
@@ -252,6 +256,46 @@ impl SourceIndex {
             })
             .map(|entry| (entry.line, entry.column))
     }
+
+    /// The first leaf in source order whose full structural path matches `shape` and whose scalar
+    /// text is `value`.
+    ///
+    /// A shape segment is either a literal key or [`SHAPE_WILDCARD`], which matches exactly one
+    /// segment of any kind — the array index of a `graph.nodes` element, or the author-chosen map
+    /// key of a route or a node definition. The match is over the *whole* path, so
+    /// `["graph", "nodes", "*", "use"]` can only answer with a placement's `use`, never with a `use`
+    /// nested somewhere else.
+    ///
+    /// This is what turns a shape-plus-value `ConfigError` into a span on the exact offending line:
+    /// `ROUTE_TARGET_NOT_FOUND` lands on the `to:` naming the missing node rather than on the route
+    /// table. Deterministic by source order; `None` when the source does not spell the value out, in
+    /// which case the caller falls back to the longest-present-prefix rule.
+    pub(crate) fn locate_shape(&self, shape: &[&str], value: &str) -> Option<(u32, u32)> {
+        self.entries
+            .iter()
+            .find(|entry| {
+                entry.scalar.as_deref() == Some(value) && path_matches(&entry.path, shape)
+            })
+            .map(|entry| (entry.line, entry.column))
+    }
+}
+
+/// The shape segment matching exactly one path segment of any kind.
+pub(crate) const SHAPE_WILDCARD: &str = "*";
+
+/// True when `path` has one segment per shape segment and every literal shape segment names the
+/// corresponding path key.
+fn path_matches(path: &FieldPath, shape: &[&str]) -> bool {
+    let segments = path.segments();
+    segments.len() == shape.len()
+        && segments
+            .iter()
+            .zip(shape)
+            .all(|(segment, expected)| match segment {
+                _ if *expected == SHAPE_WILDCARD => true,
+                PathSegment::Key(key) => key == expected,
+                PathSegment::Index(_) => false,
+            })
 }
 
 /// The value slot a node is about to occupy.

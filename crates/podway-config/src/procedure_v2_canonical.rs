@@ -55,9 +55,9 @@ pub(crate) const CANONICAL_PROJECTION_FIELD: &str = "canonical source projection
 ///
 /// The projection bound of section 5.1 is enforced here because this is where the projection first
 /// exists: no earlier stage can measure a document that is only produced by canonicalization. The
-/// future stable diagnostic code for this rejection is `SOURCE_PROJECTION_BUDGET_EXCEEDED`
-/// (sections 11.1 and 11.2); binding `ConfigError` values to the catalog in
-/// `assets/specifications/authoring-diagnostics.json` is V2AUT-008's task.
+/// rejection is reported as `SOURCE_PROJECTION_BUDGET_EXCEEDED` (sections 11.1 and 11.2) by the
+/// production mapping in [`crate::procedure_v2_diagnostics::config_error_diagnostic`], which selects
+/// it by the [`CANONICAL_PROJECTION_FIELD`] constant this check reports under.
 pub(crate) fn canonical_projection(
     parsed: &ParsedProcedureV2,
 ) -> Result<(CanonicalJsonV1, Sha256Digest), ConfigError> {

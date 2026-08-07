@@ -26,8 +26,9 @@ pub const PROCEDURE_SCHEMA_V2: &str = "podway.procedure/v2";
 /// The maximum number of Unicode characters a Procedure v2 canonical source projection may hold
 /// (dossier section 5.1, "source document input / canonical source projection / nesting depth /
 /// parsed nodes"). The projection is the model-derived authoring-shaped document produced by
-/// canonicalization; the bound is enforced where that projection is built, and the future stable
-/// diagnostic code for exceeding it is `SOURCE_PROJECTION_BUDGET_EXCEEDED` (sections 11.1, 11.2).
+/// canonicalization; the bound is enforced where that projection is built, and exceeding it is
+/// reported as `SOURCE_PROJECTION_BUDGET_EXCEEDED` (sections 11.1, 11.2) by the production mapping
+/// in `podway-config`'s `procedure_v2_diagnostics::config_error_diagnostic`.
 pub const SOURCE_PROJECTION_MAX_CHARACTERS: usize = 131_072;
 
 const fn invalid(reason: &'static str) -> DomainError {

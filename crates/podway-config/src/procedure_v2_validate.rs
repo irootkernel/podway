@@ -23,8 +23,12 @@
 //! first failure wins. Lookups go through ordered maps that are read, never iterated, so two
 //! validations of the same parsed model always produce the identical `ConfigError`.
 //!
-//! Future stable diagnostic codes are named in comments only; binding `ConfigError` values to the
-//! catalog in `assets/specifications/authoring-diagnostics.json` is V2AUT-008's task.
+//! Diagnostic binding. Every rejection below is classified into
+//! `assets/specifications/authoring-diagnostics.json` by
+//! [`crate::procedure_v2_diagnostics::config_error_diagnostic`]. That classifier distinguishes the
+//! checks by the `field` and `reason` constants declared here, so the codes it reports and the
+//! rejections raised here are the same closed set by construction: a check cannot change the shape
+//! it reports without moving the constant the classifier matches on.
 
 use std::collections::BTreeMap;
 
@@ -84,6 +88,58 @@ pub fn validate_procedure_v2(
     })
 }
 
+// -------------------------------------------------------------------------------------------
+// Shared rejection vocabulary
+//
+// The authored field shapes and the static reasons below are the only content a closed-reference
+// rejection carries, and `procedure_v2_diagnostics` switches on exactly these constants to select
+// the catalog code. They are declared once and read from both places so a raise site and its
+// classification cannot drift apart.
+// -------------------------------------------------------------------------------------------
+
+/// A placement's `use`: unknown here is `GRAPH_DEFINITION_UNKNOWN`, a kind disagreement is a closed
+/// shape violation.
+pub(crate) const PLACEMENT_USE_FIELD: &str = "graph.nodes.use";
+/// An action placement's `next` target: `ROUTE_TARGET_NOT_FOUND`.
+pub(crate) const PLACEMENT_NEXT_FIELD: &str = "graph.nodes.next";
+/// A decision placement's route table, as a whole: the two option/route coverage failures.
+pub(crate) const PLACEMENT_ROUTES_FIELD: &str = "graph.nodes.routes";
+/// One route's target graph node: `ROUTE_TARGET_NOT_FOUND`.
+pub(crate) const PLACEMENT_ROUTE_TARGET_FIELD: &str = "graph.nodes.routes.to";
+/// An evidence reference's source placement: unknown is `EVIDENCE_SOURCE_UNKNOWN`, naming the
+/// consumer is `EVIDENCE_SOURCE_SELF_REFERENCE`.
+pub(crate) const EVIDENCE_SOURCE_FIELD: &str = "graph.nodes.evidence_from.node";
+/// One selected evidence item: `EVIDENCE_SELECTOR_UNKNOWN_ITEM`.
+pub(crate) const EVIDENCE_SELECTOR_FIELD: &str = "graph.nodes.evidence_from.items";
+/// A declared manual rework target: `MANUAL_REWORK_TARGET_UNKNOWN`.
+pub(crate) const MANUAL_REWORK_TARGETS_FIELD: &str = "manual_rework.allowed_targets";
+/// A session-goal assessment's outcome table.
+pub(crate) const ASSESSMENT_OUTCOMES_FIELD: &str = "node_definitions.assessment.outcomes";
+/// A session-goal assessment contract as a whole: `GOAL_ASSESSMENT_REQUIRES_GOAL_TRACKING`.
+pub(crate) const ASSESSMENT_FIELD: &str = "node_definitions.assessment";
+
+/// Check 2, action half. A closed-shape violation: no catalog code names a kind disagreement.
+pub(crate) const ACTION_PLACEMENT_KIND_REASON: &str =
+    "an action placement must use an action definition";
+/// Check 2, decision half. As above.
+pub(crate) const DECISION_PLACEMENT_KIND_REASON: &str =
+    "a decision placement must use a decision definition";
+/// Check 4a: `DECISION_ROUTE_OPTION_UNDEFINED`.
+pub(crate) const ROUTE_OPTION_UNDECLARED_REASON: &str =
+    "a route names an option the decision definition does not declare";
+/// Check 4b: `DECISION_OPTION_ROUTE_MISSING`.
+pub(crate) const OPTION_ROUTE_MISSING_REASON: &str =
+    "every declared decision option must have exactly one route";
+/// Check 5b: `EVIDENCE_SOURCE_SELF_REFERENCE`.
+pub(crate) const EVIDENCE_SELF_REFERENCE_REASON: &str =
+    "an evidence reference must not name its consuming placement";
+/// Check 7a. A closed-shape violation; see `procedure_v2_diagnostics` for why no catalog code fits.
+pub(crate) const ASSESSMENT_OUTCOME_UNDECLARED_OPTION_REASON: &str =
+    "an assessment outcome names an option the decision definition does not declare";
+/// Check 7b: `GOAL_ASSESSMENT_REQUIRES_GOAL_TRACKING`.
+pub(crate) const ASSESSMENT_REQUIRES_GOAL_TRACKING_REASON: &str =
+    "a session-goal assessment requires the procedure to declare goal_tracking: true";
+
 /// Node definitions indexed by identifier. Read-only lookup: never iterated for diagnostics.
 type DefinitionIndex<'a> = BTreeMap<&'a str, &'a ParsedNodeDefinition>;
 /// Graph placements indexed by graph node identifier. Read-only lookup, as above.
@@ -129,7 +185,7 @@ fn validate_closed_references(parsed: &ParsedProcedureV2) -> Result<(), ConfigEr
         for target in manual_rework.targets() {
             if !placements.contains_key(target.as_str()) {
                 return Err(unknown_reference(
-                    "manual_rework.allowed_targets",
+                    MANUAL_REWORK_TARGETS_FIELD,
                     target.as_str(),
                 ));
             }
@@ -162,8 +218,8 @@ fn validate_definition(
             .any(|option| option.id() == mapping.option_id())
         {
             return Err(shape_mismatch(
-                "node_definitions.assessment.outcomes",
-                "an assessment outcome names an option the decision definition does not declare",
+                ASSESSMENT_OUTCOMES_FIELD,
+                ASSESSMENT_OUTCOME_UNDECLARED_OPTION_REASON,
             ));
         }
     }
@@ -173,8 +229,8 @@ fn validate_definition(
     // opt-in whose only accepted value is `true`, so its presence is its enablement.
     if !goal_tracking {
         return Err(shape_mismatch(
-            "node_definitions.assessment",
-            "a session-goal assessment requires the procedure to declare goal_tracking: true",
+            ASSESSMENT_FIELD,
+            ASSESSMENT_REQUIRES_GOAL_TRACKING_REASON,
         ));
     }
     Ok(())
@@ -195,7 +251,7 @@ fn validate_placement(
             if let ActionOutcomeV2::Next(target) = action.outcome()
                 && !placements.contains_key(target.as_str())
             {
-                return Err(unknown_reference("graph.nodes.next", target.as_str()));
+                return Err(unknown_reference(PLACEMENT_NEXT_FIELD, target.as_str()));
             }
             Ok(())
         }
@@ -215,15 +271,18 @@ fn validate_placement(
                     .any(|option| option.id() == entry.option_id())
                 {
                     return Err(shape_mismatch(
-                        "graph.nodes.routes",
-                        "a route names an option the decision definition does not declare",
+                        PLACEMENT_ROUTES_FIELD,
+                        ROUTE_OPTION_UNDECLARED_REASON,
                     ));
                 }
                 // Check 3 (decision half): every route target names an existing placement
                 // (ROUTE_TARGET_NOT_FOUND).
                 let target = entry.route().to();
                 if !placements.contains_key(target.as_str()) {
-                    return Err(unknown_reference("graph.nodes.routes.to", target.as_str()));
+                    return Err(unknown_reference(
+                        PLACEMENT_ROUTE_TARGET_FIELD,
+                        target.as_str(),
+                    ));
                 }
             }
             // Check 4b: every declared option is routed (DECISION_OPTION_ROUTE_MISSING). Route
@@ -237,8 +296,8 @@ fn validate_placement(
                     .any(|entry| entry.option_id() == option.id())
                 {
                     return Err(shape_mismatch(
-                        "graph.nodes.routes",
-                        "every declared decision option must have exactly one route",
+                        PLACEMENT_ROUTES_FIELD,
+                        OPTION_ROUTE_MISSING_REASON,
                     ));
                 }
             }
@@ -248,12 +307,12 @@ fn validate_placement(
         // placement with `routes` is a decision, one with `next`/`terminal` is an action), so a
         // mismatch is only observable once the used definition is resolved.
         (GraphPlacementV2::Action(_), ParsedNodeDefinition::Decision(_)) => Err(shape_mismatch(
-            "graph.nodes.use",
-            "an action placement must use an action definition",
+            PLACEMENT_USE_FIELD,
+            ACTION_PLACEMENT_KIND_REASON,
         )),
         (GraphPlacementV2::Decision(_), ParsedNodeDefinition::Action(_)) => Err(shape_mismatch(
-            "graph.nodes.use",
-            "a decision placement must use a decision definition",
+            PLACEMENT_USE_FIELD,
+            DECISION_PLACEMENT_KIND_REASON,
         )),
     }
 }
@@ -272,18 +331,15 @@ fn validate_evidence(
         let source_id = reference.source_node();
         // Check 5a: the named source placement exists (EVIDENCE_SOURCE_UNKNOWN).
         let Some(source) = placements.get(source_id.as_str()) else {
-            return Err(unknown_reference(
-                "graph.nodes.evidence_from.node",
-                source_id.as_str(),
-            ));
+            return Err(unknown_reference(EVIDENCE_SOURCE_FIELD, source_id.as_str()));
         };
         // Check 5b: an entry never names its own consuming placement
         // (EVIDENCE_SOURCE_SELF_REFERENCE, section 8.1). Reported as a shape mismatch rather than
         // an unknown reference because the named placement does exist.
         if source_id == placement_id {
             return Err(shape_mismatch(
-                "graph.nodes.evidence_from.node",
-                "an evidence reference must not name its consuming placement",
+                EVIDENCE_SOURCE_FIELD,
+                EVIDENCE_SELF_REFERENCE_REASON,
             ));
         }
         let Some(selected) = reference.selected_items() else {
@@ -303,10 +359,7 @@ fn validate_evidence(
                 .iter()
                 .any(|specification| specification.id() == item)
             {
-                return Err(unknown_reference(
-                    "graph.nodes.evidence_from.items",
-                    item.as_str(),
-                ));
+                return Err(unknown_reference(EVIDENCE_SELECTOR_FIELD, item.as_str()));
             }
         }
     }
@@ -321,7 +374,7 @@ fn lookup_definition<'a>(
     definitions
         .get(definition_id.as_str())
         .copied()
-        .ok_or_else(|| unknown_reference("graph.nodes.use", definition_id.as_str()))
+        .ok_or_else(|| unknown_reference(PLACEMENT_USE_FIELD, definition_id.as_str()))
 }
 
 fn placement_definition(placement: &GraphPlacementV2) -> &NodeDefinitionId {

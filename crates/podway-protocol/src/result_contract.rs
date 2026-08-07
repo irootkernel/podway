@@ -139,6 +139,14 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
     ),
 ];
 
+/// The shared authoring diagnostics family.
+///
+/// Named because two selectors read it: the v2 registry below binds it to every authoring route,
+/// and the *v1* selector [`command_result_schema_v1`] abstains on it for `procedure.validate`, the
+/// one route that can report either a v1 result or a v2 diagnostics result. One constant keeps the
+/// registration and the abstention from drifting apart.
+pub const PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1: &str = "podway.procedure-diagnostics-result/v1";
+
 /// Result families for v2-only routes. New command surfaces begin at `/v1`.
 pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
@@ -151,7 +159,7 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         ],
     ),
     result_schema_v2(
-        "podway.procedure-diagnostics-result/v1",
+        PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1,
         "schemas/procedure-diagnostics-result-v1.schema.json",
         &[
             "procedure.format",
@@ -1102,6 +1110,18 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
     match command {
         "version" => Some(VERSION_RESULT_SCHEMA_V1),
         "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
+        // `procedure.validate` carries two closed families: the v1 validation result, and — for a
+        // document that declares Procedure v2 — the shared authoring diagnostics family. The v1
+        // selector abstains on the second rather than claiming it, so `ensure_command_result_schema_v1`
+        // never stamps the v1 schema onto a diagnostics result and `validate_command_result_v1` never
+        // decodes one as a v1 result. A diagnostics result is validated by the v2 registry
+        // (`validate_command_result_v2`), which already binds this family to this route.
+        "procedure.validate"
+            if result.get("schema").and_then(Value::as_str)
+                == Some(PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1) =>
+        {
+            None
+        }
         "procedure.validate" => Some(PROCEDURE_VALIDATION_RESULT_SCHEMA_V1),
         "workspace.init" => Some(WORKSPACE_INIT_RESULT_SCHEMA_V1),
         "session.status" if result.contains_key("procedure") => {

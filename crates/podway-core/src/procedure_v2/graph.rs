@@ -18,6 +18,22 @@ const MIN_MANUAL_REWORK_TARGETS: usize = 1;
 const MAX_MANUAL_REWORK_TARGETS: usize = 64;
 const MAX_GRAPH_NODES_PER_PROCEDURE: usize = 64;
 
+/// The exact `DomainError::InvalidState` reason [`ProcedureGraphV2::new`] reports when `graph.entry`
+/// names no declared placement.
+///
+/// Published because `podway-config`'s authoring-diagnostic mapping switches on it to emit
+/// `ENTRY_NODE_INVALID`: the rejection travels as a `DomainError::InvalidState` whose only
+/// distinguishing content is this static reason, so the raise site and the classifier must read the
+/// same constant. Two literals could drift; one constant cannot.
+pub const GRAPH_ENTRY_ABSENT_REASON: &str = "the entry graph node must be present in the graph";
+
+/// The exact `DomainError::InvalidState` reason [`ProcedureGraphV2::new`] reports when two
+/// placements declare the same graph node identifier.
+///
+/// Published for the same reason as [`GRAPH_ENTRY_ABSENT_REASON`]: every reference naming that
+/// identifier resolves to two placements, which is `AMBIGUOUS_GRAPH_REFERENCE`.
+pub const GRAPH_NODE_ID_NOT_UNIQUE_REASON: &str = "graph node identifiers must be unique";
+
 /// The transition effect carried by a declared decision route (dossier section 9.2).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransitionEffectV2 {
@@ -423,14 +439,14 @@ impl ProcedureGraphV2 {
         let mut entry_present = false;
         for placement in &placements {
             if !seen.insert(placement.id().clone()) {
-                return Err(invalid("graph node identifiers must be unique"));
+                return Err(invalid(GRAPH_NODE_ID_NOT_UNIQUE_REASON));
             }
             if placement.id() == &entry {
                 entry_present = true;
             }
         }
         if !entry_present {
-            return Err(invalid("the entry graph node must be present in the graph"));
+            return Err(invalid(GRAPH_ENTRY_ABSENT_REASON));
         }
         Ok(Self {
             entry,

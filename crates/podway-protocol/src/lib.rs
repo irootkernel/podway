@@ -34,11 +34,11 @@ pub use release_contract::{
 pub use result_contract::{
     EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_V2_OUTPUT_WARNINGS, MAX_V2_WARNING_CODE_CHARS,
     MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS, NEW_ROUTE_RESULT_SCHEMAS_V1,
-    OUTPUT_SCHEMA_V2, OutputEnvelopeInputV2, OutputEnvelopeV2, ResultSchemaContractV2,
-    SUPPORTED_OUTPUT_SCHEMAS_V2, SUPPORTED_RESULT_SCHEMAS_V1, V2_MUTATION_COMMANDS,
-    decode_result_schema_contract_v2, ensure_command_result_schema_v1,
-    result_schema_top_level_fields_v2, validate_command_result_v1, validate_command_result_v2,
-    validate_v2_output_warnings,
+    OUTPUT_SCHEMA_V2, OutputEnvelopeInputV2, OutputEnvelopeV2,
+    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2, SUPPORTED_OUTPUT_SCHEMAS_V2,
+    SUPPORTED_RESULT_SCHEMAS_V1, V2_MUTATION_COMMANDS, decode_result_schema_contract_v2,
+    ensure_command_result_schema_v1, result_schema_top_level_fields_v2, validate_command_result_v1,
+    validate_command_result_v2, validate_v2_output_warnings,
 };
 pub use slice::*;
 

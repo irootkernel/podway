@@ -592,12 +592,21 @@ fn constructor_bounds_fail_closed_during_mapping() {
         ConfigError::InvalidValue { .. }
     ));
 
-    // A decision placement's `routes` is mutually exclusive with each action-only field
-    // (`skip`, `next`, `terminal`); every half of that guard fails closed with the same
-    // diagnostic (procedure_v2_parse.rs's `map_placement`).
+    // A decision placement's `routes` is mutually exclusive with each action-only field.
+    // `skip` has its own catalogued rejection (`DECISION_SKIP_NOT_ALLOWED`, V2AUT-008); a stray
+    // `next`/`terminal` fails closed with the shared only-routes diagnostic
+    // (procedure_v2_parse.rs's `map_placement`).
     let decision_only_routes = "  d:\n    type: decision\n    title: D\n    objective: O\n    prompt: P\n    options:\n      - { id: a, label: A }\n    reason: { required: true }\n";
+    let skip_on_decision = "    - id: n\n      use: d\n      skip: { allowed: true, reason_required: false }\n      routes:\n        a: { to: n, effect: advance }\n";
+    assert!(
+        matches!(
+            err(&v2_doc(decision_only_routes, skip_on_decision)),
+            ConfigError::InvalidValue { field, reason }
+                if field == "graph.nodes" && reason == "a decision placement does not declare skip"
+        ),
+        "expected the decision-skip guard for: {skip_on_decision}"
+    );
     let routes_placements_with_action_fields = [
-        "    - id: n\n      use: d\n      skip: { allowed: true, reason_required: false }\n      routes:\n        a: { to: n, effect: advance }\n",
         "    - id: n\n      use: d\n      next: n\n      routes:\n        a: { to: n, effect: advance }\n",
         "    - id: n\n      use: d\n      terminal: true\n      routes:\n        a: { to: n, effect: advance }\n",
     ];

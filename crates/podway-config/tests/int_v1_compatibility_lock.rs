@@ -155,12 +155,12 @@ fn golden_v1_resource_bounds_are_unchanged() {
 //
 // Structural argument this file encodes in tests, not just prose: every production call site
 // that admits a v1 procedure document calls `parse_procedure_v1` directly. Verified by grep
-// across `crates/*/src` while writing this file, and re-run at V2AUT-007:
+// across `crates/*/src` while writing this file, and re-run at V2AUT-008:
 //   - crates/podway-cli/src/command.rs:1539     (fn execute_start_dry_run — workspace-path
 //     branch of `session.start`)
-//   - crates/podway-cli/src/command.rs:3002     (fn execute_procedure — `procedure.validate` /
+//   - crates/podway-cli/src/command.rs:3013     (fn execute_procedure — `procedure.validate` /
 //     `procedure.show`)
-//   - crates/podway-cli/src/command.rs:3636     (fn execute_procedure_convert —
+//   - crates/podway-cli/src/command.rs:3748     (fn execute_procedure_convert —
 //     `procedure.convert`, V2AUT-007. Convert's *input* is a v1 document, so it is a v1 admission
 //     call site like any other: it refuses a declared-v2 document up front via
 //     `sniff_procedure_schema` and then hands everything else to the direct v1 parser, which is
@@ -173,18 +173,30 @@ fn golden_v1_resource_bounds_are_unchanged() {
 // A further textual match, crates/podway-daemon/src/production.rs:3107, sits inside that file's
 // own `#[cfg(test)] mod tests` (opened at line 2777) and is not a production call site.
 //
-// Three production call sites of the schema-dispatching `parse_procedure_document` exist, and
-// none of them admits v1:
+// V2AUT-008 added a `sniff_procedure_schema` call to `execute_procedure` (command.rs:3009), not a
+// new admission. The sniff is decode-only and returns no procedure: it reads the declared `schema`
+// and dispatches `procedure.validate` to the v2 pipeline on `Some(PROCEDURE_SCHEMA_V2)` alone.
+// Every other outcome — a declared v1 document, an unknown schema, a document that does not decode
+// — falls through to the `parse_procedure_v1` call at command.rs:3013 that was always there, after
+// the same read, the same UTF-8 check, and the same format decision. So the v1 admission call-site
+// count is unchanged and the v1 output bytes are too, which
+// `int_v2_authoring_cli.rs::v2aut008_a_v1_document_keeps_its_exact_validate_output` pins directly.
+//
+// Four production call sites of the schema-dispatching `parse_procedure_document` exist, and none
+// of them admits v1:
 //   - crates/podway-config/src/procedure_v2_format.rs:238 (fn admit_procedure_v2, V2AUT-001 —
 //     also the path `procedure format` and `procedure check` reach it by)
-//   - crates/podway-cli/src/command.rs:3357               (fn execute_procedure_lint, V2AUT-004)
-//   - crates/podway-cli/src/command.rs:3576               (fn execute_procedure_scaffold,
+//   - crates/podway-cli/src/command.rs:3082               (fn execute_procedure_validate_v2,
+//     V2AUT-008 — reached only behind the `Some(PROCEDURE_SCHEMA_V2)` sniff above)
+//   - crates/podway-cli/src/command.rs:3463               (fn execute_procedure_lint, V2AUT-004)
+//   - crates/podway-cli/src/command.rs:3682               (fn execute_procedure_scaffold,
 //     V2AUT-006 — its input is a checked-in v2 template, never a file)
-// The first two sniff the decoded `schema` field (`sniff_procedure_schema`) before dispatching and
-// refuse a declared-v1 document — malformed or not — as a wrong-schema command failure, so a v1
-// document reaching `podway procedure format`, `lint`, or `check` is never reinterpreted as a v2
+// The first three sniff the decoded `schema` field (`sniff_procedure_schema`) before dispatching —
+// the format and lint paths refuse a declared-v1 document as a wrong-schema command failure, and
+// the validate path never enters unless the document declared v2 — so a v1 document reaching
+// `podway procedure validate`, `format`, `lint`, or `check` is never reinterpreted as a v2
 // authoring finding; the dispatcher's `V1` arm remains only as the total-match backstop behind
-// that sniff. No other module under `crates/*/src` calls `parse_procedure_v1`,
+// those sniffs. No other module under `crates/*/src` calls `parse_procedure_v1`,
 // `parse_procedure_document`, or `parse_procedure_yaml` (the remaining matches are `parser.rs`'s
 // own definitions and `parse_procedure_yaml`'s one-line delegation).
 //

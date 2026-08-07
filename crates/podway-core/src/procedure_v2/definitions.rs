@@ -301,6 +301,15 @@ impl GoalOutcome {
     }
 }
 
+/// The exact `DomainError::InvalidState` reason [`GoalOutcome`]'s `FromStr` reports for a value
+/// outside the closed outcome set.
+///
+/// Published because `podway-config`'s authoring-diagnostic mapping switches on it to emit
+/// `GOAL_ASSESSMENT_OUTCOME_UNKNOWN`. The v2 parse pipeline reaches this conversion from exactly one
+/// authored position — an `assessment.outcomes` mapping value — so the reason pins the meaning that
+/// the `DomainError`'s field cannot.
+pub const UNKNOWN_GOAL_OUTCOME_REASON: &str = "unknown goal outcome";
+
 impl std::str::FromStr for GoalOutcome {
     type Err = DomainError;
 
@@ -309,7 +318,7 @@ impl std::str::FromStr for GoalOutcome {
             "achieved" => Ok(Self::Achieved),
             "not_achieved" => Ok(Self::NotAchieved),
             "superseded" => Ok(Self::Superseded),
-            _ => Err(invalid("unknown goal outcome")),
+            _ => Err(invalid(UNKNOWN_GOAL_OUTCOME_REASON)),
         }
     }
 }

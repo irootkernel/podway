@@ -24,6 +24,30 @@ const MAX_PROCEDURE_DESCRIPTION_CHARS: usize = 1_000;
 const MIN_NODE_DEFINITIONS: usize = 1;
 const MAX_NODE_DEFINITIONS: usize = 64;
 
+/// The `field` [`map_domain_error`] reports when a core constructor rejects a value without naming
+/// an authored path.
+///
+/// It is a sentinel, not a path: the rejection's only distinguishing content is then its static
+/// reason. `procedure_v2_diagnostics` reads this constant to recognize that case and to switch on
+/// the reason instead.
+pub(crate) const DOMAIN_SENTINEL_FIELD: &str = "procedure v2";
+
+/// The authored shape a placement-level mapping failure reports.
+///
+/// The three constants below are read both here, where the rejection is raised, and by
+/// `procedure_v2_diagnostics`, which switches on them to select the catalog code. Declaring them
+/// once is what makes the raise site and its classification unable to drift.
+pub(crate) const PLACEMENT_FIELD: &str = "graph.nodes";
+/// `ACTION_DISPOSITION_INVALID`: an action placement declared both dispositions.
+pub(crate) const ACTION_OUTCOME_BOTH_REASON: &str =
+    "an action placement declares either next or terminal, not both";
+/// `ACTION_DISPOSITION_INVALID`: an action placement declared neither disposition.
+pub(crate) const ACTION_OUTCOME_ABSENT_REASON: &str =
+    "an action placement must declare next or terminal";
+/// `DECISION_SKIP_NOT_ALLOWED`: a decision placement declared a skip policy (dossier section 6.2 —
+/// skip belongs to action placements only, and the schema rejects it here too).
+pub(crate) const DECISION_SKIP_REASON: &str = "a decision placement does not declare skip";
+
 /// One mapped reusable node definition, preserving the discriminated action/decision kind.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ParsedNodeDefinition {
@@ -222,7 +246,7 @@ fn map_domain_error(error: DomainError) -> ConfigError {
         // types) as InvalidState, whose static reason is preserved verbatim. No other variant is
         // reachable from v2 mapping; the wildcard forwards its Display rather than guessing.
         DomainError::InvalidState { reason } => ConfigError::InvalidValue {
-            field: "procedure v2",
+            field: DOMAIN_SENTINEL_FIELD,
             reason,
         },
         other => ConfigError::InvalidDocument {
@@ -515,9 +539,17 @@ fn map_placement(wire: GraphPlacementWire) -> Result<GraphPlacementV2, ConfigErr
     let evidence_from = map_evidence_from(wire.evidence_from)?;
 
     if let Some(routes) = wire.routes {
-        if wire.skip.is_some() || wire.next.is_some() || wire.terminal.is_some() {
+        // Skip has its own catalogued rejection; a stray `next`/`terminal` stays the generic
+        // only-routes shape violation because no catalog code claims those.
+        if wire.skip.is_some() {
             return Err(ConfigError::InvalidValue {
-                field: "graph.nodes",
+                field: PLACEMENT_FIELD,
+                reason: DECISION_SKIP_REASON,
+            });
+        }
+        if wire.next.is_some() || wire.terminal.is_some() {
+            return Err(ConfigError::InvalidValue {
+                field: PLACEMENT_FIELD,
                 reason: "a decision placement declares only routes",
             });
         }
@@ -570,12 +602,12 @@ fn map_action_outcome(
             reason: "terminal must be true",
         }),
         (Some(_), Some(_)) => Err(ConfigError::InvalidValue {
-            field: "graph.nodes",
-            reason: "an action placement declares either next or terminal, not both",
+            field: PLACEMENT_FIELD,
+            reason: ACTION_OUTCOME_BOTH_REASON,
         }),
         (None, None) => Err(ConfigError::InvalidValue {
-            field: "graph.nodes",
-            reason: "an action placement must declare next or terminal",
+            field: PLACEMENT_FIELD,
+            reason: ACTION_OUTCOME_ABSENT_REASON,
         }),
     }
 }

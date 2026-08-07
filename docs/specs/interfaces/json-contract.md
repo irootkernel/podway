@@ -68,7 +68,8 @@ The thirteen v2-only routes are prepared by nine `/v1` families. Format,
 scaffold, and convert share `procedure-source-result/v1` on success. Every v2
 authoring route, including the existing `procedure.validate` route, selects
 `procedure-diagnostics-result/v1` when it must return structured diagnostics;
-vet, lint, and check also use that family for successful diagnostic reports.
+validate, vet, lint, and check also use that family for successful diagnostic
+reports.
 Graph, preview, decide, rework, goal definition, goal revision, and criterion
 assessment otherwise select the correspondingly named closed family.
 `authoring-diagnostic/v1` is the standalone diagnostic object used by bounded

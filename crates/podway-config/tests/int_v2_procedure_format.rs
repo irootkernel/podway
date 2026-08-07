@@ -1594,8 +1594,14 @@ fn v2aut001_every_emitted_diagnostic_satisfies_the_authoring_diagnostic_schema()
     }
     assert_eq!(
         seen,
-        BTreeSet::from(["AUTHORING_SCHEMA_INVALID", "SOURCE_CONSTRUCT_UNSUPPORTED"]),
-        "the base mapping classifies into exactly these two families"
+        BTreeSet::from([
+            "AUTHORING_SCHEMA_INVALID",
+            "GRAPH_DEFINITION_UNKNOWN",
+            "MANUAL_REWORK_TARGET_UNKNOWN",
+            "SOURCE_CONSTRUCT_UNSUPPORTED",
+        ]),
+        "the production mapping (V2AUT-008) refines the closed-reference sources in this corpus \
+         into their catalog codes and leaves the rest in the two generic families"
     );
 }
 
@@ -1607,7 +1613,7 @@ fn v2aut001_a_closed_reference_failure_is_located_at_the_offending_scalar() {
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(
         diagnostics[0].code(),
-        AuthoringDiagnosticCode::AuthoringSchemaInvalid
+        AuthoringDiagnosticCode::GraphDefinitionUnknown
     );
     assert_eq!(diagnostics[0].field(), "graph.nodes.use");
     // Line 15 is `      use: absent`; column 7 is where its key starts.
