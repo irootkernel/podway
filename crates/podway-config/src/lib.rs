@@ -11,6 +11,7 @@ use thiserror::Error;
 
 mod parser;
 mod procedure_v2_canonical;
+mod procedure_v2_check;
 mod procedure_v2_diagnostics;
 mod procedure_v2_document;
 mod procedure_v2_format;
@@ -19,6 +20,7 @@ mod procedure_v2_lint;
 mod procedure_v2_parse;
 mod procedure_v2_source;
 mod procedure_v2_validate;
+mod procedure_v2_vet;
 mod procedure_v2_wire;
 mod validation;
 
@@ -32,6 +34,7 @@ pub use parser::{
     parse_procedure_v1_with_limits, parse_procedure_yaml, parse_workspace_config_v1,
     parse_workspace_config_v1_with_limits, sniff_procedure_schema,
 };
+pub use procedure_v2_check::{ProcedureCheckReport, check_procedure_v2};
 pub use procedure_v2_diagnostics::{
     AuthoringContext, AuthoringStage, FinalizedDiagnostics, config_error_diagnostic,
     finalize_diagnostics,
@@ -42,6 +45,7 @@ pub use procedure_v2_format::{
 pub use procedure_v2_lint::lint_procedure_v2;
 pub use procedure_v2_parse::{ParsedNodeDefinition, ParsedProcedureV2};
 pub use procedure_v2_validate::{ValidatedProcedureV2, validate_procedure_v2};
+pub use procedure_v2_vet::vet_procedure_v2;
 pub use validation::{
     IntoProcedureSnapshotSourceV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
     ValidatedProcedureV1,

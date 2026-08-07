@@ -1,5 +1,5 @@
-//! Process-boundary contracts for the Procedure v2 authoring surface (`procedure format` and
-//! `procedure lint`).
+//! Process-boundary contracts for the Procedure v2 authoring surface (`procedure format`,
+//! `procedure lint`, and `procedure check`).
 
 use std::{
     fs,
@@ -1444,5 +1444,381 @@ fn v2aut004_lint_is_deterministic_across_processes() {
     let baseline = one_json(&lint_json(&path))["result"].clone();
     for _ in 0..5 {
         assert_eq!(one_json(&lint_json(&path))["result"], baseline);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2AUT-005: `procedure check`
+// ---------------------------------------------------------------------------------------------
+
+/// A document every authoring stage accepts: canonical authoring form *and* lint-clean.
+///
+/// It differs from [`CLEAN_V2_YAML`] in one way that matters here — every item is a `confirm`,
+/// because canonical form materializes a `text` item's `min_length`, `max_length`, and `multiline`
+/// and a fixture that omitted them would drift.
+const CHECK_CLEAN_V2_YAML: &str = r#"schema: podway.procedure/v2
+id: check-clean
+version: "1"
+name: Check clean
+purpose: Exercise the aggregate authoring gate with a document that has no findings.
+node_definitions:
+  gather:
+    type: action
+    title: Gather the inputs
+    intent: Collect every input the review needs.
+    items:
+      - id: notes
+        type: confirm
+        prompt: The gathered notes are recorded.
+        required: true
+  review:
+    type: decision
+    title: Review the work
+    objective: Decide whether the gathered work is complete.
+    prompt: Is the gathered work complete?
+    evidence_guidance:
+      - Read the gathered notes before deciding.
+    options:
+      - id: complete
+        label: Work is complete
+        criteria: Every gathered input is present and correct.
+      - id: incomplete
+        label: Work is incomplete
+        criteria: Some gathered input is missing or wrong.
+    reason:
+      required: true
+      prompt: Explain why the work is or is not complete.
+  publish:
+    type: action
+    title: Publish the result
+    intent: Record the published outcome.
+graph:
+  entry: gather-inputs
+  nodes:
+    - id: gather-inputs
+      use: gather
+      next: review-work
+    - id: review-work
+      use: review
+      routes:
+        complete:
+          to: publish-result
+          effect: advance
+        incomplete:
+          to: gather-inputs
+          effect: rework
+    - id: publish-result
+      use: publish
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - gather-inputs
+"#;
+
+/// The pinned one-line verdict for a document every authoring stage accepted.
+fn all_checks_passed_summary(path: &Path) -> String {
+    format!("{}: all authoring checks passed\n", path.display())
+}
+
+fn check_json(path: &Path) -> Output {
+    run(&["--json", "procedure", "check", &path.display().to_string()])
+}
+
+fn check_json_strict(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "check",
+        &path.display().to_string(),
+        "--warnings-as-errors",
+    ])
+}
+
+/// The codes of a check result, in reported order.
+fn check_codes(output: &Output) -> Vec<String> {
+    one_json(output)["result"]["diagnostics"]
+        .as_array()
+        .expect("diagnostics are an array")
+        .iter()
+        .map(|diagnostic| {
+            diagnostic["code"]
+                .as_str()
+                .expect("a diagnostic has a code")
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn v2aut005_a_clean_document_passes_every_stage_at_exit_zero() {
+    let fixture = FixtureDirectory::new("check-clean");
+    let path = fixture.write("clean.yaml", CHECK_CLEAN_V2_YAML);
+
+    let output = check_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.check");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+    assert_eq!(result["operation"], "check");
+    assert_eq!(result["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(result["file"], path.display().to_string());
+    assert_eq!(result["valid"], true);
+    assert_eq!(result["diagnostics"], serde_json::json!([]));
+    assert_eq!(result["diagnostics_truncated"], false);
+    assert_eq!(result["diagnostics_total"], 0);
+    assert!(
+        result["digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")),
+        "an admissible document reports its digest: {result}"
+    );
+
+    // The digest the gate reports is the one `procedure format` derives from the same bytes.
+    let formatted = one_json(&format_json(&path));
+    assert_eq!(result["digest"], formatted["result"]["target_digest"]);
+
+    let text = run(&["procedure", "check", &path.display().to_string()]);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&text.stdout),
+        all_checks_passed_summary(&path)
+    );
+    assert!(text.stderr.is_empty());
+
+    // The clean verdict survives the strict policy: there is nothing to escalate.
+    assert_eq!(check_json_strict(&path).status.code(), Some(0));
+}
+
+/// Drift alone fails the gate, and it does so because the catalog says the code is an error — not
+/// because check decided formatting is fatal.
+#[test]
+fn v2aut005_a_drifted_document_fails_because_drift_is_catalogued_as_an_error() {
+    let fixture = FixtureDirectory::new("check-drifted");
+    // One quoted scalar canonical form writes plain: the model, and therefore every later stage's
+    // verdict, is untouched, so `FORMAT_NOT_CANONICAL` is the only possible finding.
+    let path = fixture.write(
+        "drifted.yaml",
+        &CHECK_CLEAN_V2_YAML.replace("name: Check clean\n", "name: \"Check clean\"\n"),
+    );
+
+    let output = check_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.check");
+
+    let result = &envelope["result"];
+    assert_eq!(result["operation"], "check");
+    assert_eq!(result["valid"], false, "drift is an error: {result}");
+    assert_eq!(result["diagnostics_total"], 1);
+    assert!(
+        result["digest"].as_str().is_some(),
+        "a drifted document is still admissible and still has a digest: {result}"
+    );
+
+    let diagnostics = result["diagnostics"]
+        .as_array()
+        .expect("diagnostics are an array");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["code"], "FORMAT_NOT_CANONICAL");
+    assert_eq!(diagnostics[0]["severity"], "error");
+
+    // `format --check` sees the same drift, in the same place, through the same constructor.
+    let drift = run(&[
+        "--json",
+        "procedure",
+        "format",
+        &path.display().to_string(),
+        "--check",
+    ]);
+    assert_eq!(drift.status.code(), Some(1), "{drift:?}");
+    assert_eq!(
+        one_json(&drift)["result"]["diagnostics"],
+        result["diagnostics"],
+        "check and format --check must report byte-identical drift"
+    );
+}
+
+/// A warning-only document is valid, and the exit code is the only thing the strict policy moves.
+#[test]
+fn v2aut005_a_warning_only_document_exits_zero_until_warnings_are_errors() {
+    let fixture = FixtureDirectory::new("check-warnings");
+    // Canonical already, and lint-dirty: the smallest legal document declares no manual rework.
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let permissive = check_json(&path);
+    assert_eq!(permissive.status.code(), Some(0), "{permissive:?}");
+    let result = one_json(&permissive)["result"].clone();
+    assert_eq!(result["valid"], true, "warnings never invalidate: {result}");
+    assert_eq!(result["diagnostics_total"], 1);
+    assert_eq!(check_codes(&permissive), vec!["NO_REACTIVATION_PATH"]);
+    assert!(
+        !check_codes(&permissive).contains(&"FORMAT_NOT_CANONICAL".to_owned()),
+        "the fixture is already canonical"
+    );
+
+    let strict = check_json_strict(&path);
+    assert_eq!(strict.status.code(), Some(1), "{strict:?}");
+    assert!(strict.stderr.is_empty());
+    assert_eq!(
+        one_json(&strict)["result"],
+        result,
+        "the flag is a policy about the invocation, not a statement about the document"
+    );
+}
+
+#[test]
+fn v2aut005_an_invalid_document_reports_one_error_without_a_digest() {
+    let fixture = FixtureDirectory::new("check-invalid");
+    let path = fixture.write(
+        "invalid.yaml",
+        &MINIMAL_V2_YAML.replace("      use: work\n", "      use: absent\n"),
+    );
+
+    let output = check_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let result = one_json(&output)["result"].clone();
+    assert_eq!(result["operation"], "check");
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["diagnostics_total"], 1);
+    assert!(
+        result.get("digest").is_none(),
+        "an inadmissible document has no digest: {result}"
+    );
+
+    // No model means no formatting comparison and no advisory findings beside the rejection.
+    let codes = check_codes(&output);
+    assert_eq!(codes.len(), 1);
+    assert!(!codes.contains(&"FORMAT_NOT_CANONICAL".to_owned()));
+    assert!(!codes.contains(&"NO_REACTIVATION_PATH".to_owned()));
+}
+
+/// The reported order is the section 11.5 pipeline, not source position.
+///
+/// The fixture makes the two disagree on purpose: `NO_REACTIVATION_PATH` is anchored at the
+/// document start and the drift sits nine lines further down, so a report ordered by position alone
+/// would lead with the advisory finding.
+#[test]
+fn v2aut005_the_report_leads_with_the_format_stage_at_the_process_boundary() {
+    let fixture = FixtureDirectory::new("check-ordering");
+    let path = fixture.write(
+        "drifted.yaml",
+        &MINIMAL_V2_YAML.replace("    title: Work\n", "    title: \"Work\"\n"),
+    );
+
+    let output = check_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        check_codes(&output),
+        vec!["FORMAT_NOT_CANONICAL", "NO_REACTIVATION_PATH"],
+    );
+
+    let result = one_json(&output)["result"].clone();
+    let diagnostics = result["diagnostics"]
+        .as_array()
+        .expect("diagnostics are an array");
+    assert_eq!(result["valid"], false, "one of the two is an error");
+    assert_eq!(result["diagnostics_total"], 2);
+    assert!(
+        diagnostics[0]["location"]["line"].as_u64() > diagnostics[1]["location"]["line"].as_u64(),
+        "the ordering proof needs the advisory finding to sit above the drift: {result}"
+    );
+
+    // The human report is the same order, one line per finding, position first.
+    let text = run(&["procedure", "check", &path.display().to_string()]);
+    assert_eq!(text.status.code(), Some(1), "{text:?}");
+    let rendered = String::from_utf8_lossy(&text.stdout);
+    let lines: Vec<&str> = rendered.lines().collect();
+    assert_eq!(lines.len(), 2, "{rendered}");
+    assert!(
+        lines[0].contains("error FORMAT_NOT_CANONICAL"),
+        "{rendered}"
+    );
+    assert!(
+        lines[1].contains("warning NO_REACTIVATION_PATH"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn v2aut005_a_v1_document_is_a_schema_failure_rather_than_a_check_report() {
+    let fixture = FixtureDirectory::new("check-v1");
+    let path = fixture.write("v1.yaml", V1_YAML);
+
+    let output = check_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.check");
+    assert_eq!(envelope["code"], "PROCEDURE_SCHEMA_UNSUPPORTED");
+    assert_eq!(envelope["exit_code"], 1);
+    assert_eq!(envelope["retryable"], false);
+}
+
+#[test]
+fn v2aut005_a_missing_file_is_a_path_failure() {
+    let fixture = FixtureDirectory::new("check-missing");
+    let path = fixture.root.join("absent.yaml");
+
+    let output = check_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.check");
+    assert_eq!(envelope["code"], "PROCEDURE_NOT_FOUND");
+    assert_eq!(envelope["exit_code"], 1);
+}
+
+#[test]
+fn v2aut005_quiet_reports_only_through_the_exit_code() {
+    let fixture = FixtureDirectory::new("check-quiet");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let permissive = run(&["--quiet", "procedure", "check", &path.display().to_string()]);
+    assert_eq!(permissive.status.code(), Some(0), "{permissive:?}");
+    assert!(permissive.stdout.is_empty());
+    assert!(permissive.stderr.is_empty());
+
+    let strict = run(&[
+        "--quiet",
+        "procedure",
+        "check",
+        &path.display().to_string(),
+        "--warnings-as-errors",
+    ]);
+    assert_eq!(strict.status.code(), Some(1), "{strict:?}");
+    assert!(strict.stdout.is_empty());
+    assert!(strict.stderr.is_empty());
+}
+
+#[test]
+fn v2aut005_check_never_touches_the_file_it_reads() {
+    let fixture = FixtureDirectory::new("check-readonly");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let before = identity(&path);
+
+    assert_eq!(check_json(&path).status.code(), Some(0));
+    assert_eq!(check_json_strict(&path).status.code(), Some(1));
+
+    assert_eq!(identity(&path), before);
+    assert_eq!(entry_names(&fixture.root), vec!["minimal.yaml".to_owned()]);
+}
+
+#[test]
+fn v2aut005_check_is_deterministic_across_processes() {
+    let fixture = FixtureDirectory::new("check-deterministic");
+    let path = fixture.write(
+        "drifted.yaml",
+        &MINIMAL_V2_YAML.replace("    title: Work\n", "    title: \"Work\"\n"),
+    );
+
+    let baseline = one_json(&check_json(&path))["result"].clone();
+    for _ in 0..5 {
+        assert_eq!(one_json(&check_json(&path))["result"], baseline);
     }
 }

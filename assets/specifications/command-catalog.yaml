@@ -705,7 +705,7 @@ commands:
   result_schemas:
   - podway.procedure-diagnostics-result/v1
 - name: procedure.check
-  availability: reserved_contract
+  availability: executable
   cli:
   - procedure
   - check

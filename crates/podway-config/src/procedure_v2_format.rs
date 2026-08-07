@@ -39,6 +39,14 @@
 //! and, when they differ, reports the one `FORMAT_NOT_CANONICAL` finding that locates the first
 //! divergence. A document that cannot be rendered at all never reaches that comparison, so an
 //! unformattable source is reported by its own stage and is never also called non-canonical.
+//!
+//! The pipeline is published to the crate in two halves — [`admit_procedure_v2`] (dispatch, parse,
+//! validate) and [`render_procedure_v2`] (construct scan, emission, projection bound) — because
+//! section 11.5's aggregate check runs the same stages under different short-circuit rules: it
+//! stops when there is no model, but it carries on to vet and lint when there is a model that
+//! merely cannot be rendered. Composing the two halves *is* [`format_procedure_v2`], so the two
+//! commands cannot drift apart on what parsing, validation, the supported-construct grammar, or the
+//! projection bound mean.
 
 use podway_core::{
     AuthoringDiagnostic, AuthoringDiagnosticCode, SOURCE_PROJECTION_MAX_CHARACTERS, Sha256Digest,
@@ -52,7 +60,8 @@ use crate::procedure_v2_source::{
     plain_scalar_is_lexically_inert, scan_source,
 };
 use crate::{
-    ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document, validate_procedure_v2,
+    ParsedProcedure, ProcedureDocumentFormat, ValidatedProcedureV2, parse_procedure_document,
+    validate_procedure_v2,
 };
 
 /// Characters that may never open a plain scalar: every YAML indicator, plus the quote characters.
@@ -202,37 +211,62 @@ pub fn format_procedure_v2(
     request: FormatRequest<'_>,
 ) -> Result<FormattedProcedureV2, FormatFailure> {
     let context = AuthoringContext::new(request.source_path, request.source, request.format);
+    let validated = admit_procedure_v2(&context)?;
+    render_procedure_v2(&validated, &context).map_err(FormatFailure::Diagnostics)
+}
 
+/// Dispatches, parses, and validates one source document: the stages that decide whether a model
+/// exists at all.
+///
+/// A failure here is a stop for every caller. There is nothing to render, nothing to vet, and
+/// nothing to lint, because each of those reads a resolved model; reporting advisory findings
+/// beside a rejection would bury the rejection.
+pub(crate) fn admit_procedure_v2(
+    context: &AuthoringContext<'_>,
+) -> Result<ValidatedProcedureV2, FormatFailure> {
     // A document that *declares* the v1 schema is refused before the dispatching parser runs, so
     // a malformed v1 document is a wrong-schema command failure, never a v2 authoring finding
     // about a document that does not claim to be v2. The `V1` arm below stays as the total-match
     // backstop, but the sniff and the dispatcher read the same decoded `schema` field, so a
     // declared-v1 document cannot reach it.
-    if crate::parser::sniff_procedure_schema(request.source.as_bytes(), request.format)
+    if crate::parser::sniff_procedure_schema(context.source().as_bytes(), context.format())
         == Some(crate::PROCEDURE_SCHEMA_V1)
     {
         return Err(FormatFailure::NotProcedureV2);
     }
 
-    let parsed = match parse_procedure_document(request.source.as_bytes(), request.format) {
+    let parsed = match parse_procedure_document(context.source().as_bytes(), context.format()) {
         Ok(ParsedProcedure::V2(parsed)) => parsed,
         Ok(ParsedProcedure::V1(_)) => return Err(FormatFailure::NotProcedureV2),
         Err(error) => {
             return Err(FormatFailure::Diagnostics(vec![config_error_diagnostic(
-                &error, &context,
+                &error, context,
             )]));
         }
     };
-    let validated = validate_procedure_v2(parsed).map_err(|error| {
-        FormatFailure::Diagnostics(vec![config_error_diagnostic(&error, &context)])
-    })?;
+    validate_procedure_v2(parsed)
+        .map_err(|error| FormatFailure::Diagnostics(vec![config_error_diagnostic(&error, context)]))
+}
 
+/// Renders a validated model in canonical authoring form: the supported-construct scan and comment
+/// pass (YAML only), the emission itself, and the emitted-document bound.
+///
+/// Every diagnostic this can return belongs to the format stage, and every one of them means the
+/// same thing: this model has no canonical authoring text. A caller that only wanted the text stops
+/// here; section 11.5's check keeps going, because a document Podway cannot *write* is still a
+/// document Podway can vet and lint.
+///
+/// `context` must wrap the very source `validated` was parsed from — the comment table is read out
+/// of it, and [`FormattedProcedureV2::changed`] compares against it.
+pub(crate) fn render_procedure_v2(
+    validated: &ValidatedProcedureV2,
+    context: &AuthoringContext<'_>,
+) -> Result<FormattedProcedureV2, Vec<AuthoringDiagnostic>> {
     let authoring = authoring_document_value(validated.parsed());
-    let rendered = match request.format {
+    let rendered = match context.format() {
         ProcedureDocumentFormat::Yaml => {
-            let comments = scan_source(request.source, context.index()).map_err(|violations| {
-                FormatFailure::Diagnostics(construct_diagnostics(&violations, &context, &authoring))
-            })?;
+            let comments = scan_source(context.source(), context.index())
+                .map_err(|violations| construct_diagnostics(&violations, context, &authoring))?;
             emit_yaml(&authoring, comments)
         }
         ProcedureDocumentFormat::Json => emit_json(&authoring),
@@ -240,13 +274,11 @@ pub fn format_procedure_v2(
 
     let characters = rendered.chars().count();
     if characters > SOURCE_PROJECTION_MAX_CHARACTERS {
-        return Err(FormatFailure::Diagnostics(vec![
-            projection_budget_diagnostic(&context, characters),
-        ]));
+        return Err(vec![projection_budget_diagnostic(context, characters)]);
     }
 
     Ok(FormattedProcedureV2 {
-        changed: request.source.as_bytes() != rendered.as_bytes(),
+        changed: context.source().as_bytes() != rendered.as_bytes(),
         document: rendered,
         document_value: authoring,
         digest: validated.digest().clone(),

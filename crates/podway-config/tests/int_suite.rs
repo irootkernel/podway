@@ -10,6 +10,8 @@ mod int_v1_compatibility_lock;
 mod int_v2_procedure;
 #[path = "int_v2_procedure_canonical.rs"]
 mod int_v2_procedure_canonical;
+#[path = "int_v2_procedure_check.rs"]
+mod int_v2_procedure_check;
 #[path = "int_v2_procedure_equivalence.rs"]
 mod int_v2_procedure_equivalence;
 #[path = "int_v2_procedure_format.rs"]
