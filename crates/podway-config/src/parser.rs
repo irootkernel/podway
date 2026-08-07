@@ -188,6 +188,28 @@ pub fn parse_procedure_document(
     }
 }
 
+/// Reads a Procedure document's declared `schema` without admitting it.
+///
+/// Returns the matching schema constant — [`crate::PROCEDURE_SCHEMA_V1`] or
+/// [`podway_core::PROCEDURE_SCHEMA_V2`] — and `None` for anything else: a decode failure, a missing
+/// or non-string `schema`, or a schema string this build does not know. It never panics.
+///
+/// This exists so a caller can route a document to the version-specific pipeline *before* choosing
+/// an error surface, without letting a v1 document reach a v2 admission path or vice versa. Because
+/// a `None` outcome carries no claim, the caller's existing behaviour is the correct fallback for
+/// it; only `Some` is a positive dispatch signal.
+pub fn sniff_procedure_schema(
+    input: &[u8],
+    format: ProcedureDocumentFormat,
+) -> Option<&'static str> {
+    let value = decode_procedure_document(input, format).ok()?;
+    match value.get("schema")?.as_str()? {
+        crate::PROCEDURE_SCHEMA_V1 => Some(crate::PROCEDURE_SCHEMA_V1),
+        podway_core::PROCEDURE_SCHEMA_V2 => Some(podway_core::PROCEDURE_SCHEMA_V2),
+        _ => None,
+    }
+}
+
 /// Parses a YAML procedure document. Equivalent to
 /// [`parse_procedure_document`]`(input, `[`ProcedureDocumentFormat::Yaml`]`)`; kept as the
 /// dedicated YAML entry point, mirroring [`parse_procedure_v1`]'s format-specific style.
@@ -809,7 +831,12 @@ fn yaml_source_character(source: &[char], marker: yaml_rust2::scanner::Marker) -
     source.get(marker.index()).copied()
 }
 
-fn reject_noncanonical_yaml_scalar(value: &str) -> Result<(), ConfigError> {
+/// Rejects a plain YAML scalar whose text resolves to a non-canonical number.
+///
+/// Crate-visible because the Procedure v2 emitter consults the *same* rule when deciding whether a
+/// string may be written as a plain scalar: emission and preflight admission therefore cannot
+/// drift, and the formatter can never produce a document its own parser refuses.
+pub(crate) fn reject_noncanonical_yaml_scalar(value: &str) -> Result<(), ConfigError> {
     match Yaml::from_str(value) {
         Yaml::Integer(_) | Yaml::Real(_) if !is_canonical_i64(value) => {
             Err(ConfigError::NonCanonicalNumber)

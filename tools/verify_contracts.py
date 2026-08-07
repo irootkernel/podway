@@ -155,6 +155,9 @@ V2_ROUTE_DELTA = {
     "session.decide", "session.rework", "goal.define", "goal.revise",
     "goal.assess_criterion",
 }
+# V2_ROUTE_DELTA members whose owning task has landed. The delta itself never shrinks: a route
+# stays registered forever, and this set records only which of them the build now serves.
+V2_EXECUTABLE_ROUTES = frozenset({"procedure.format"})
 V1_ROUTE_BASELINE = {
     "help", "version", "completions", "procedure.validate", "procedure.show",
     "preset.list", "preset.show", "preset.explain", "daemon.install", "daemon.uninstall",
@@ -287,17 +290,23 @@ def catalog_commands(root: Path) -> set[str]:
     return set(catalog_route_availability(root))
 
 
+def expected_route_availability(command: str) -> str:
+    """The single derivation both availability surfaces must agree with."""
+    if command in V2_EXECUTABLE_ROUTES:
+        return "executable"
+    if command in V2_ROUTE_DELTA:
+        return "reserved_contract"
+    return "executable"
+
+
 def validate_v2_catalog_delta(root: Path) -> int:
     availability = catalog_route_availability(root)
     commands = set(availability)
     if commands != V1_ROUTE_BASELINE | V2_ROUTE_DELTA:
         fail("command catalog must contain the 46-route baseline plus exactly 13 v2 routes")
-    expected_availability = {
-        **dict.fromkeys(V1_ROUTE_BASELINE, "executable"),
-        **dict.fromkeys(V2_ROUTE_DELTA, "reserved_contract"),
-    }
+    expected_availability = {command: expected_route_availability(command) for command in commands}
     if availability != expected_availability:
-        fail("command catalog must mark the 46 v1 routes executable and 13 v2 routes reserved_contract")
+        fail("command catalog availability must match the served v1 baseline and v2 delta exactly")
 
     runtime = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
     if set(runtime) != {"schema", "exit_codes", "errors"}:
@@ -545,7 +554,7 @@ def validate_routes(root: Path) -> int:
             fail(f"route capabilities are invalid for {command}")
         if capabilities or set(capabilities) & PROHIBITED_CAPABILITIES:
             fail(f"route capabilities violate the no-runner/no-Git-mutation/no-network policy: {command}")
-        expected_availability = "reserved_contract" if command in V2_ROUTE_DELTA else "executable"
+        expected_availability = expected_route_availability(command)
         if availability != expected_availability:
             fail(f"route availability is invalid for {command}")
         if command in LOCAL_COMMANDS:

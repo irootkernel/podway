@@ -67,7 +67,7 @@ fn registered_command_catalog_route_availability() -> BTreeMap<String, String> {
     assert_eq!(
         routes.len(),
         59,
-        "the registered command catalog must contain the 46 executable routes and 13 reserved v2 routes"
+        "the registered command catalog must contain the 47 executable routes and 12 reserved v2 routes"
     );
     routes
 }
@@ -1096,6 +1096,28 @@ const DAEMON_CONTRACTS: &[DaemonContract] = &[
         detachable: false,
     },
 ];
+/// The smallest legal Procedure v2 document, already in canonical authoring form.
+///
+/// Held here rather than under `tests/fixtures/` because that tree is a manifest-tracked contract
+/// surface; an executable-route success fixture belongs to the test, not to the frozen catalog.
+const MINIMAL_PROCEDURE_V2_YAML: &str = r#"schema: podway.procedure/v2
+id: minimal
+version: "1"
+name: Minimal
+purpose: The smallest legal Procedure v2 document.
+node_definitions:
+  work:
+    type: action
+    title: Work
+    intent: Do the work.
+graph:
+  entry: only
+  nodes:
+    - id: only
+      use: work
+      terminal: true
+"#;
+
 #[derive(Clone, Copy)]
 struct RouteSurface {
     route: &'static str,
@@ -1357,6 +1379,14 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         flags: &["--json", "--no-color", "--quiet", "--canonical"],
         values: &[],
         help_tokens: &["--canonical"],
+        dynamic: None,
+    },
+    RouteSurface {
+        route: "procedure.format",
+        parser: &["procedure", "format", "missing.yaml"],
+        flags: &["--json", "--no-color", "--quiet", "--check", "--write"],
+        values: &[],
+        help_tokens: &["--check", "--write"],
         dynamic: None,
     },
     RouteSurface {
@@ -2322,7 +2352,7 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
         .collect::<BTreeSet<_>>();
     assert_eq!(
         executable_routes, executable_surfaces,
-        "availability must identify exactly the current 46-route CLI surface",
+        "availability must identify exactly the current 47-route CLI surface",
     );
     let reserved_v2_routes = registered_routes
         .iter()
@@ -2338,7 +2368,6 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
             "goal.revise",
             "procedure.check",
             "procedure.convert",
-            "procedure.format",
             "procedure.graph",
             "procedure.lint",
             "procedure.preview",
@@ -2347,7 +2376,7 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
             "session.decide",
             "session.rework",
         ]),
-        "the contract-only v2 delta must stay absent from the executable CLI until V2PLT-008",
+        "a registered v2 route stays absent from the executable CLI until its owning task lands",
     );
     assert_eq!(DAEMON_CONTRACTS.len(), 30);
     for contract in DAEMON_CONTRACTS {
@@ -2478,6 +2507,9 @@ rework:
 "#,
     )
     .expect("offline procedure fixture must be writable");
+    let v2_procedure_path = fixture.root.join("causal-procedure-v2.yaml");
+    fs::write(&v2_procedure_path, MINIMAL_PROCEDURE_V2_YAML)
+        .expect("offline Procedure v2 fixture must be writable");
     let local_successes = [
         ("help", vec!["--json".to_owned(), "help".to_owned()]),
         (
@@ -2515,6 +2547,15 @@ rework:
             ],
         ),
         (
+            "procedure.format",
+            vec![
+                "--json".to_owned(),
+                "procedure".to_owned(),
+                "format".to_owned(),
+                v2_procedure_path.display().to_string(),
+            ],
+        ),
+        (
             "preset.list",
             vec!["--json".to_owned(), "preset".to_owned(), "list".to_owned()],
         ),
@@ -2537,14 +2578,41 @@ rework:
             ],
         ),
     ];
+    // Local routes whose success is the v2 envelope rather than the v1 typed decoder; extend this
+    // as later tasks land more v2-only static commands.
+    const V2_ENVELOPE_ROUTES: &[&str] = &["procedure.format"];
     for (route, arguments) in &local_successes {
         let output = fixture.run_in(&fixture.root, arguments);
         assert!(
             output.status.success(),
             "{route} must execute its concrete fixture successfully: {output:?}"
         );
+        let envelope = one_json(&output);
+        // Route identity, not envelope content, decides which decoder applies: a v1 route that
+        // regressed into a v2-shaped envelope must fail the strict typed decode below rather than
+        // silently pass through this branch, and a v2 route is asserted to carry exactly the v2
+        // schema rather than merely branching on whatever schema it happened to emit.
+        if V2_ENVELOPE_ROUTES.contains(route) {
+            assert_eq!(
+                envelope["schema"], "podway.output/v2",
+                "{route} must carry the v2 success envelope: {envelope}"
+            );
+            assert_eq!(envelope["command"], *route);
+            assert!(
+                envelope["result"]["schema"]
+                    .as_str()
+                    .is_some_and(|schema| schema.starts_with("podway.procedure-")
+                        && schema.ends_with("-result/v1")),
+                "{route} must carry a registered v2 result family: {envelope}"
+            );
+            assert!(
+                envelope["warnings"].is_array(),
+                "{route} must always serialize the required v2 warnings array"
+            );
+            continue;
+        }
         let response: ResponseEnvelopeV1 =
-            serde_json::from_slice(&output.stdout).expect("local success must be typed JSON");
+            serde_json::from_value(envelope).expect("local success must be typed JSON");
         let ResponseEnvelopeV1::Output(response) = response else {
             panic!("{route} must emit an output envelope");
         };
@@ -2604,7 +2672,7 @@ rework:
     assert_eq!(
         executed_routes,
         executable_routes.into_iter().collect::<BTreeSet<_>>(),
-        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 46 current executable routes"
+        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 47 current executable routes"
     );
 }
 
@@ -2747,6 +2815,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
             &["procedure", "validate", "missing.yaml"],
         ),
         ("procedure.show", &["procedure", "show", "missing.yaml"]),
+        ("procedure.format", &["procedure", "format", "missing.yaml"]),
         ("preset.list", &["preset", "list"]),
         ("preset.show", &["preset", "show", "sw-dev"]),
         ("preset.explain", &["preset", "explain", "sw-dev"]),
@@ -2886,7 +2955,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
             &["job", "cancel", "123e4567-e89b-42d3-a456-426614174003"],
         ),
     ];
-    assert_eq!(routes.len(), 46);
+    assert_eq!(routes.len(), 47);
 
     for (route, arguments) in routes {
         let mut argv = vec!["--json"];
@@ -2919,7 +2988,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
                 );
                 assert_eq!(response["schema"], "podway.output/v1");
             }
-            "procedure.validate" | "procedure.show" => {
+            "procedure.validate" | "procedure.show" | "procedure.format" => {
                 assert_eq!(output.status.code(), Some(1));
                 assert_eq!(response["schema"], "podway.error/v1");
                 assert_eq!(response["code"], "PROCEDURE_NOT_FOUND");
@@ -3002,7 +3071,7 @@ fn completion_route(surface: &RouteSurface) -> String {
 
 #[test]
 fn public_route_surface_table_keeps_parser_help_and_completion_in_lockstep() {
-    assert_eq!(ROUTE_SURFACES.len(), 46);
+    assert_eq!(ROUTE_SURFACES.len(), 47);
     let bash = run(&["completions", "bash"]);
     let zsh = run(&["completions", "zsh"]);
     let fish = run(&["completions", "fish"]);
@@ -3108,6 +3177,7 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "completions",
         "procedure.validate",
         "procedure.show",
+        "procedure.format",
         "preset.list",
         "preset.show",
         "preset.explain",
@@ -3150,7 +3220,7 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "job.wait",
         "job.cancel",
     ];
-    assert_eq!(routes.len(), 46);
+    assert_eq!(routes.len(), 47);
 
     for route in routes {
         let output = run(&["--json", "help", route]);

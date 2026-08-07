@@ -377,7 +377,7 @@
     },
     {
       "command": "procedure.format",
-      "availability": "reserved_contract",
+      "availability": "executable",
       "owner": "podway-cli",
       "path": ["podway-cli"],
       "execution": "local",

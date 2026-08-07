@@ -7,11 +7,13 @@ use std::{
 };
 
 use jsonschema::{Retrieve, Uri};
+use podway_core::{AuthoringDiagnostic, AuthoringDiagnosticCode, SourceLocation};
 use podway_protocol::{
-    EXISTING_ROUTE_RESULT_SCHEMAS_V2, ErrorEnvelopeV1, MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1,
-    NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V2, V2_RUNTIME_ERROR_CODES_V1,
-    decode_result_schema_contract_v2, result_schema_top_level_fields_v2,
-    validate_frame_payload_length, validate_v2_output_warnings,
+    CommandNameV1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, ErrorEnvelopeV1, MAX_V2_OUTPUT_WARNINGS,
+    MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1, NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V2,
+    OutputEnvelopeInputV2, OutputEnvelopeV2, ProtocolError, RequestIdV1, Rfc3339MillisV1,
+    V2_RUNTIME_ERROR_CODES_V1, decode_result_schema_contract_v2, result_schema_top_level_fields_v2,
+    validate_command_result_v2, validate_frame_payload_length, validate_v2_output_warnings,
 };
 use serde_json::{Map, Value, json};
 
@@ -1503,4 +1505,223 @@ fn v2ctr003_retained_envelope_warnings_are_bounded_and_framing_is_separate() {
     oversized["padding"] = json!("x".repeat(1_048_576));
     assert_valid("schemas/output-v2.schema.json", &oversized);
     assert!(validate_frame_payload_length(serde_json::to_vec(&oversized).unwrap().len()).is_err());
+}
+
+fn result_map(value: &Value) -> Map<String, Value> {
+    value.as_object().expect("result object").clone()
+}
+
+fn warning(code: &str) -> Map<String, Value> {
+    result_map(&json!({
+        "code": code, "path": "workflow.yaml", "message": "Review this field."
+    }))
+}
+
+fn authoring_input(command: &str, result: &Value) -> OutputEnvelopeInputV2 {
+    OutputEnvelopeInputV2 {
+        request_id: RequestIdV1::new(UUID).unwrap(),
+        command: CommandNameV1::new(command).unwrap(),
+        generated_at: Rfc3339MillisV1::new("2026-08-04T00:00:00.000Z").unwrap(),
+        workspace: None,
+        job: None,
+        session: None,
+        result: result_map(result),
+        warnings: Vec::new(),
+    }
+}
+
+fn diagnostics_result(operation: &str) -> Value {
+    let mut result = examples()["podway.procedure-diagnostics-result/v1"].clone();
+    result["operation"] = json!(operation);
+    result
+}
+
+#[test]
+fn v2aut001_output_v2_envelope_emits_schema_valid_authoring_results() {
+    for (command, result) in [
+        (
+            "procedure.format",
+            examples()["podway.procedure-source-result/v1"].clone(),
+        ),
+        ("procedure.lint", diagnostics_result("lint")),
+    ] {
+        let mut input = authoring_input(command, &result);
+        input.warnings = vec![warning("ADVISORY")];
+        let envelope = OutputEnvelopeV2::new(input).unwrap();
+        assert_eq!(envelope.command().as_str(), command);
+        assert_eq!(envelope.result(), &result_map(&result));
+        assert_eq!(envelope.warnings(), &[warning("ADVISORY")]);
+
+        let line = serde_json::to_string(&envelope).unwrap();
+        assert!(
+            line.starts_with(&format!(
+                "{{\"schema\":\"{OUTPUT_SCHEMA_V2}\",\"request_id\":\"{UUID}\",\"command\":\"{command}\",\"generated_at\":"
+            )),
+            "unexpected canonical field order: {line}"
+        );
+        assert!(validate_frame_payload_length(line.len()).is_ok());
+
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_valid("schemas/output-v2.schema.json", &value);
+        for absent in ["workspace", "job", "session"] {
+            assert!(
+                value.get(absent).is_none(),
+                "local authoring output must omit {absent}"
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<OutputEnvelopeV2>(&line).unwrap(),
+            envelope
+        );
+    }
+}
+
+/// A representative `podway_core::AuthoringDiagnostic`, populated with its optional
+/// `node_definition_id`, `graph_node_id`, and `related_graph_node_ids` fields — unlike the
+/// hand-written JSON fixture in `v2ctr003_authoring_diagnostic_is_standalone_closed_and_bounded`,
+/// which leaves `node_definition_id` absent.
+fn representative_authoring_diagnostic() -> AuthoringDiagnostic {
+    AuthoringDiagnostic::new(
+        AuthoringDiagnosticCode::EvidenceSourceDoesNotDominateConsumer,
+        "workflow.yaml",
+        SourceLocation::new(1, 1, 1, 8),
+        "graph.nodes[review].evidence_from[build]",
+        "Evidence does not dominate.",
+        "Use a dominating source.",
+    )
+    .with_node_definition_id("review")
+    .with_graph_node_id("review")
+    .with_related_graph_node_ids(["build".to_owned()])
+}
+
+#[test]
+fn v2aut001_output_v2_envelope_embeds_a_real_authoring_diagnostic() {
+    let diagnostic = representative_authoring_diagnostic();
+    let diagnostic_value = serde_json::to_value(&diagnostic).expect("diagnostics serialize");
+    for optional in [
+        "node_definition_id",
+        "graph_node_id",
+        "related_graph_node_ids",
+    ] {
+        assert!(
+            diagnostic_value.get(optional).is_some(),
+            "the representative diagnostic must exercise {optional}"
+        );
+    }
+    // The lone diagnostic object validates on its own terms, independent of any result it rides in.
+    assert_valid(
+        "schemas/authoring-diagnostic-v1.schema.json",
+        &diagnostic_value,
+    );
+
+    let mut result = diagnostics_result("lint");
+    result["valid"] = json!(false);
+    result["diagnostics"] = json!([diagnostic_value.clone()]);
+    result["diagnostics_total"] = json!(1);
+
+    let envelope = OutputEnvelopeV2::new(authoring_input("procedure.lint", &result)).unwrap();
+    let value = serde_json::to_value(&envelope).unwrap();
+    // And it round-trips intact through the full v2 output envelope, resolving the schema's
+    // cross-file `$ref` from `procedure-diagnostics-result-v1` into `authoring-diagnostic-v1`.
+    assert_valid("schemas/output-v2.schema.json", &value);
+    assert_eq!(value["result"]["diagnostics"], json!([diagnostic_value]));
+}
+
+#[test]
+fn v2aut001_output_v2_envelope_rejects_unbound_results_and_open_warnings() {
+    let source = examples()["podway.procedure-source-result/v1"].clone();
+    let valid = serde_json::to_value(
+        OutputEnvelopeV2::new(authoring_input("procedure.format", &source)).unwrap(),
+    )
+    .unwrap();
+    assert_valid("schemas/output-v2.schema.json", &valid);
+
+    let mut legacy = valid.clone();
+    legacy["schema"] = json!("podway.output/v1");
+    assert_invalid("schemas/output-v2.schema.json", &legacy);
+    assert!(serde_json::from_value::<OutputEnvelopeV2>(legacy).is_err());
+
+    let mut unknown_family = source.clone();
+    unknown_family["schema"] = json!("podway.procedure-source-result/v2");
+    let mut extra_field = source.clone();
+    extra_field["unknown"] = json!(true);
+    let mut released_v1_family = source.clone();
+    released_v1_family["schema"] = json!("podway.procedure-validation-result/v1");
+    for (command, result) in [
+        ("procedure.lint", source.clone()),
+        ("session.status", source.clone()),
+        (
+            "procedure.format",
+            examples()["podway.status-result/v2"].clone(),
+        ),
+        ("procedure.format", unknown_family),
+        ("procedure.format", extra_field),
+        ("procedure.format", released_v1_family),
+    ] {
+        assert_eq!(
+            OutputEnvelopeV2::new(authoring_input(command, &result)),
+            Err(ProtocolError::InvalidCommandResult {
+                command: command.to_owned()
+            }),
+            "{command} accepted {result}"
+        );
+        let mut rejected = valid.clone();
+        rejected["command"] = json!(command);
+        rejected["result"] = result;
+        assert_invalid("schemas/output-v2.schema.json", &rejected);
+    }
+
+    let mut oversized = authoring_input("procedure.format", &source);
+    oversized.warnings = vec![warning("ADVISORY"); MAX_V2_OUTPUT_WARNINGS + 1];
+    let mut open = authoring_input("procedure.format", &source);
+    let mut open_warning = warning("ADVISORY");
+    open_warning.insert("unknown".to_owned(), json!(true));
+    open.warnings = vec![open_warning];
+    for input in [oversized, open] {
+        let warnings = Value::Array(input.warnings.iter().cloned().map(Value::Object).collect());
+        assert_eq!(
+            OutputEnvelopeV2::new(input),
+            Err(ProtocolError::InvalidOutputWarnings)
+        );
+        let mut rejected = valid.clone();
+        rejected["warnings"] = warnings;
+        assert_invalid("schemas/output-v2.schema.json", &rejected);
+    }
+}
+
+#[test]
+fn v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes() {
+    let examples = examples();
+    for contract in EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+    {
+        let result = result_map(&examples[contract.schema]);
+        for command in contract.commands {
+            assert!(
+                validate_command_result_v2(command, &result).is_ok(),
+                "{command} rejected {}",
+                contract.schema
+            );
+        }
+    }
+
+    let source = result_map(&examples["podway.procedure-source-result/v1"]);
+    let diagnostics = result_map(&diagnostics_result("format"));
+    assert!(validate_command_result_v2("procedure.format", &source).is_ok());
+    assert!(validate_command_result_v2("procedure.format", &diagnostics).is_ok());
+    assert!(validate_command_result_v2("procedure.lint", &diagnostics).is_ok());
+    assert!(validate_command_result_v2("procedure.lint", &source).is_err());
+    assert!(validate_command_result_v2("procedure.graph", &source).is_err());
+
+    let mut released_v1_family = source.clone();
+    released_v1_family.insert(
+        "schema".to_owned(),
+        json!("podway.procedure-validation-result/v1"),
+    );
+    assert!(validate_command_result_v2("procedure.validate", &released_v1_family).is_err());
+
+    let mut missing = source;
+    missing.remove("schema");
+    assert!(validate_command_result_v2("procedure.format", &missing).is_err());
 }

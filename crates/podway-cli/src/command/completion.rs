@@ -109,6 +109,14 @@ const CANONICAL: Flag = Flag {
     long: "canonical",
     takes_value: false,
 };
+const CHECK: Flag = Flag {
+    long: "check",
+    takes_value: false,
+};
+const WRITE: Flag = Flag {
+    long: "write",
+    takes_value: false,
+};
 const DAEMON_PATH: Flag = Flag {
     long: "daemon-path",
     takes_value: true,
@@ -316,6 +324,12 @@ const ROUTES: &[Route] = &[
     Route {
         words: "procedure show",
         flags: &[&JSON, &NO_COLOR, &QUIET, &CANONICAL],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "procedure format",
+        flags: &[&JSON, &NO_COLOR, &QUIET, &CHECK, &WRITE],
         values: "",
         dynamic: None,
     },

@@ -57,10 +57,11 @@ podway preset show <name>
 podway preset explain <name>
 podway procedure validate <file>
 podway procedure show <file>
+podway procedure format <file> [--check] [--write]
 podway daemon ...
 ```
 
-`procedure validate` and `procedure show` use the same Rust schema and canonicalization library as the daemon.
+`procedure validate`, `procedure show`, and `procedure format` use the same Rust schema and canonicalization library as the daemon.
 `podway version --json` emits only the compact `name` and `version` summary. The
 target machine identity form is `podway version --json --identity`; it retains the
 versioned output envelope and requires no worktree, daemon, `HOME`, or `TMPDIR`.
@@ -236,9 +237,12 @@ Repair updates a moved worktree's minimal daemon registry after proving identity
 ```bash
 podway procedure validate <file> [--warnings-as-errors]
 podway procedure show <file> [--canonical]
+podway procedure format <file> [--check] [--write]
 ```
 
 `--canonical` prints Podway Canonical JSON v1. With `--json`, validation returns digest, warnings, normalized metadata, and errors.
+
+`procedure format` renders a Procedure v2 document in canonical authoring form on stdout and never writes the file. Authoring successes — including the structured findings that describe a document Podway cannot render — use the `podway.output/v2` envelope: a rendered document carries `podway.procedure-source-result/v1`, and findings carry the shared `podway.procedure-diagnostics-result/v1` family with the exit code 1 that a document-level error implies. Process failures keep `podway.error/v1`: a missing or unsafe path, a Procedure v1 input (`PROCEDURE_SCHEMA_UNSUPPORTED`), and invalid usage all report there. `--check` and `--write` are registered contract flags that this build rejects with `UNSUPPORTED_V2_CAPABILITY` and exit code 3 until V2AUT-002 and V2AUT-003 implement them; the rejection carries `details.capability` naming the exact flag and leaves the file untouched.
 
 ## Preset commands
 

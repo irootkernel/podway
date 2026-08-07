@@ -4,12 +4,14 @@ use podway_core::{
     AttemptId, CanonicalProcedureJsonV1, ItemId, JobId, Revision, Sha256Digest, StageId,
     verify_canonical_procedure_document_v1,
 };
-use serde::{Deserialize, Deserializer, de::Error as _};
+use serde::{Deserialize, Deserializer, Serialize, de, de::Error as _};
 use serde_json::{Map, Value};
 
 use crate::{
-    CompactStatusResultV1, JobStateV1, NextResultV1, ProtocolError, ResponseEnvelopeV1,
-    Rfc3339MillisV1, StatusResultV1,
+    CommandNameV1, CompactStatusResultV1, JobOutputV1, JobStateV1, NextResultV1, OptionalField,
+    ProtocolError, RequestIdV1, ResponseEnvelopeV1, Rfc3339MillisV1, SessionOutputV1,
+    StatusResultV1, WorkspaceOutputV1, validate_admission_metadata_v1,
+    validate_json_document_depth, validate_json_map_depth,
 };
 
 /// A closed result family reserved by the Procedure v2 public contract.
@@ -723,6 +725,7 @@ pub const MAX_V2_WARNING_CODE_CHARS: usize = 64;
 pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
 pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
 pub const OUTPUT_SCHEMA_V2: &str = "podway.output/v2";
+pub const SUPPORTED_OUTPUT_SCHEMAS_V2: &[&str] = &[OUTPUT_SCHEMA_V2];
 
 /// Checks the production warning bound for the open v2 success envelope.
 pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
@@ -751,6 +754,196 @@ pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
                         !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_MESSAGE_CHARS
                     })
         })
+}
+
+/// Validates the closed v2 result family selected by a public command name.
+///
+/// A route bound to more than one registered family accepts any of them. Unlike
+/// the v1 twin this never infers a discriminator: the caller must set the
+/// result `schema` because a v2 route can carry two families.
+pub fn validate_command_result_v2(
+    command: &str,
+    result: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    if decode_result_schema_contract_v2(result)
+        .is_some_and(|contract| contract.commands.contains(&command))
+    {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        })
+    }
+}
+
+/// Validated fields used to construct one v2 success envelope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutputEnvelopeInputV2 {
+    pub request_id: RequestIdV1,
+    pub command: CommandNameV1,
+    pub generated_at: Rfc3339MillisV1,
+    pub workspace: Option<WorkspaceOutputV1>,
+    pub job: Option<JobOutputV1>,
+    pub session: Option<SessionOutputV1>,
+    pub result: Map<String, Value>,
+    pub warnings: Vec<Map<String, Value>>,
+}
+
+/// A validated `podway.output/v2` response envelope.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OutputEnvelopeV2 {
+    schema: String,
+    request_id: RequestIdV1,
+    command: CommandNameV1,
+    generated_at: Rfc3339MillisV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<WorkspaceOutputV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job: Option<JobOutputV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<SessionOutputV1>,
+    result: Map<String, Value>,
+    warnings: Vec<Map<String, Value>>,
+}
+
+impl OutputEnvelopeV2 {
+    pub fn new(input: OutputEnvelopeInputV2) -> Result<Self, ProtocolError> {
+        let OutputEnvelopeInputV2 {
+            request_id,
+            command,
+            generated_at,
+            workspace,
+            job,
+            session,
+            result,
+            warnings,
+        } = input;
+        let output = Self {
+            schema: OUTPUT_SCHEMA_V2.to_owned(),
+            request_id,
+            command,
+            generated_at,
+            workspace,
+            job,
+            session,
+            result,
+            warnings,
+        };
+        output.validate()?;
+        Ok(output)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema != OUTPUT_SCHEMA_V2 {
+            return Err(ProtocolError::UnsupportedProtocol {
+                received: self.schema.clone(),
+                supported: SUPPORTED_OUTPUT_SCHEMAS_V2,
+            });
+        }
+        self.request_id.validate()?;
+        self.command.validate()?;
+        self.generated_at.validate()?;
+        if let Some(workspace) = &self.workspace {
+            workspace.validate()?;
+        }
+        if let Some(job) = &self.job {
+            job.validate()?;
+        }
+        if let Some(session) = &self.session {
+            session.validate()?;
+        }
+        validate_json_map_depth(&self.result, 1)?;
+        validate_command_result_v2(self.command.as_str(), &self.result)?;
+        if let Some(admission) = self.result.get("admission") {
+            let (job_id, sequence) = validate_admission_metadata_v1(admission, false)?
+                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
+            let job = self
+                .job
+                .as_ref()
+                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
+            if job.id() != &job_id || job.sequence() != sequence {
+                return Err(ProtocolError::InvalidAdmissionMetadata);
+            }
+        }
+        if !validate_v2_output_warnings(&self.warnings) {
+            return Err(ProtocolError::InvalidOutputWarnings);
+        }
+        for warning in &self.warnings {
+            validate_json_map_depth(warning, 2)?;
+        }
+        Ok(())
+    }
+
+    pub fn request_id(&self) -> &RequestIdV1 {
+        &self.request_id
+    }
+
+    pub fn command(&self) -> &CommandNameV1 {
+        &self.command
+    }
+
+    pub fn generated_at(&self) -> &Rfc3339MillisV1 {
+        &self.generated_at
+    }
+
+    pub fn workspace(&self) -> Option<&WorkspaceOutputV1> {
+        self.workspace.as_ref()
+    }
+
+    pub fn job(&self) -> Option<&JobOutputV1> {
+        self.job.as_ref()
+    }
+
+    pub fn session(&self) -> Option<&SessionOutputV1> {
+        self.session.as_ref()
+    }
+
+    pub fn result(&self) -> &Map<String, Value> {
+        &self.result
+    }
+
+    pub fn warnings(&self) -> &[Map<String, Value>] {
+        &self.warnings
+    }
+}
+impl<'de> Deserialize<'de> for OutputEnvelopeV2 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawOutputEnvelopeV2 {
+            schema: String,
+            request_id: RequestIdV1,
+            command: CommandNameV1,
+            generated_at: Rfc3339MillisV1,
+            #[serde(default)]
+            workspace: OptionalField<WorkspaceOutputV1>,
+            #[serde(default)]
+            job: OptionalField<JobOutputV1>,
+            #[serde(default)]
+            session: OptionalField<SessionOutputV1>,
+            result: Map<String, Value>,
+            warnings: Vec<Map<String, Value>>,
+        }
+
+        let value = Value::deserialize(deserializer)?;
+        validate_json_document_depth(&value).map_err(de::Error::custom)?;
+        let raw = RawOutputEnvelopeV2::deserialize(value).map_err(de::Error::custom)?;
+        let output = Self {
+            schema: raw.schema,
+            request_id: raw.request_id,
+            command: raw.command,
+            generated_at: raw.generated_at,
+            workspace: raw.workspace.0,
+            job: raw.job.0,
+            session: raw.session.0,
+            result: raw.result,
+            warnings: raw.warnings,
+        };
+        output.validate().map_err(de::Error::custom)?;
+        Ok(output)
+    }
 }
 
 macro_rules! define_result_schemas_v1 {

@@ -28,18 +28,20 @@ use podway_cli::client::{
     DaemonClientTimeoutsV1, DaemonClientV1,
 };
 use podway_config::{
-    ConfigError, MAX_PROCEDURE_DOCUMENT_BYTES_V1, ProcedureFormatV1, ProcedureWarningPolicyV1,
-    ProcedureWarningV1, parse_procedure_v1,
+    AuthoringStage, ConfigError, FormatFailure, FormatRequest, MAX_PROCEDURE_DOCUMENT_BYTES_V1,
+    ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1, finalize_diagnostics,
+    format_procedure_v2, parse_procedure_v1,
 };
 use podway_core::{AttemptId, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId};
 use podway_presets::{PresetError, catalog_v1};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1, JobOutputV1, JobStateV1,
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
-    OutputEnvelopeInputV1, OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1,
-    StatusResultV1, WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
-    ensure_command_result_schema_v1, ensure_error_details_schema_v1, validate_command_result_v1,
+    OutputEnvelopeInputV1, OutputEnvelopeInputV2, OutputEnvelopeV1, OutputEnvelopeV2,
+    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
+    ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
+    WorktreeSelectorWireV1, build_identity_v1, ensure_command_result_schema_v1,
+    ensure_error_details_schema_v1, validate_command_result_v1, validate_command_result_v2,
 };
 use podway_service::{
     DaemonContractVerifierV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
@@ -380,6 +382,14 @@ enum ProcedureCommand {
         #[arg(long, action = ArgAction::SetTrue)]
         canonical: bool,
     },
+    Format {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "write")]
+        check: bool,
+        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "check")]
+        write: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -512,6 +522,9 @@ impl Command {
             Self::Procedure {
                 command: ProcedureCommand::Show { .. },
             } => "procedure.show",
+            Self::Procedure {
+                command: ProcedureCommand::Format { .. },
+            } => "procedure.format",
             Self::Preset {
                 command: PresetCommand::List,
             } => "preset.list",
@@ -897,6 +910,7 @@ impl LocalFailure {
                 (LOCAL_DAEMON_EXIT, false)
             }
             "DAEMON_UNAVAILABLE" => (LOCAL_DAEMON_EXIT, true),
+            "UNSUPPORTED_V2_CAPABILITY" => (LOCAL_DAEMON_EXIT, false),
             "MUTATION_OUTCOME_UNKNOWN" => (4, true),
             "PRESET_NOT_FOUND"
             | "PROCEDURE_NOT_FOUND"
@@ -973,6 +987,22 @@ impl LocalFailure {
         Self::catalog("PRESET_NOT_FOUND", message, "preset")
     }
 
+    /// A registered v2 capability this build does not serve yet.
+    ///
+    /// The shared closed detail family auto-fills `schema` and `kind` while rendering; the
+    /// capability label is the only field this builder owns.
+    fn unsupported_v2_capability(capability: &str, command: &str) -> Self {
+        Self::catalog(
+            "UNSUPPORTED_V2_CAPABILITY",
+            format!("{capability} is a registered contract that this build does not serve yet"),
+            command,
+        )
+        .with_details(Map::from_iter([(
+            "capability".to_owned(),
+            Value::String(capability.to_owned()),
+        )]))
+    }
+
     fn procedure_digest_mismatch(
         expected: &Sha256Digest,
         actual: &Sha256Digest,
@@ -1038,6 +1068,17 @@ enum RunResult {
         result: Map<String, Value>,
         text: String,
     },
+    /// A local success carried by the v2 output envelope.
+    ///
+    /// Unlike [`RunResult::Local`] this can exit non-zero: an authoring command reports findings
+    /// about a well-formed document as a success envelope with a domain exit code.
+    LocalV2 {
+        command: String,
+        result: Map<String, Value>,
+        /// The exact bytes the text renderer writes, newline included.
+        text: String,
+        exit_code: i32,
+    },
     LogFollow {
         path: PathBuf,
         initial: String,
@@ -1077,6 +1118,7 @@ fn parse_failure_command_context_from_matches(
             &[
                 ("validate", "procedure.validate"),
                 ("show", "procedure.show"),
+                ("format", "procedure.format"),
             ],
         )?,
         "preset" => nested_parse_failure_context(
@@ -2699,6 +2741,30 @@ fn local_result(command: &str, result: Value, text: String) -> RunResult {
     }
 }
 
+/// Builds one v2 local success.
+///
+/// The v2 registry never infers a discriminator — a single route can carry two closed families —
+/// so the caller sets `result["schema"]` and this asserts the choice against the contract.
+fn local_result_v2(
+    command: &str,
+    result: Map<String, Value>,
+    text: String,
+    exit_code: i32,
+) -> RunResult {
+    validate_command_result_v2(command, &result)
+        .expect("local v2 results must satisfy their closed contract");
+    assert!(
+        exit_code == 0 || exit_code == 1,
+        "a v2 success envelope exits clean or domain, never usage or higher",
+    );
+    RunResult::LocalV2 {
+        command: command.to_owned(),
+        result,
+        text,
+        exit_code,
+    }
+}
+
 fn procedure_warning_output(warnings: &[ProcedureWarningV1]) -> Vec<Value> {
     warnings
         .iter()
@@ -2798,6 +2864,9 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
             warnings_as_errors,
         } => (file, *warnings_as_errors, "procedure.validate"),
         ProcedureCommand::Show { file, .. } => (file, false, "procedure.show"),
+        ProcedureCommand::Format { file, check, write } => {
+            return execute_procedure_format(file, *check, *write);
+        }
     };
     let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(name))?;
     std::str::from_utf8(&bytes).map_err(|_| {
@@ -2838,8 +2907,122 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         } => String::from_utf8(bytes).map_err(|_| {
             LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(name)
         })?,
+        ProcedureCommand::Format { .. } => {
+            unreachable!("format dispatches to its own v2 execution path")
+        }
     };
     Ok(local_result(name, result, text))
+}
+
+/// Renders a Procedure v2 source document in canonical authoring form.
+///
+/// The read is the same hardened descriptor-relative walk `procedure validate` uses, and it runs
+/// before the unimplemented-flag rejections so a missing or unsafe path always reports the path
+/// failure rather than a capability failure.
+fn execute_procedure_format(
+    file: &Path,
+    check: bool,
+    write: bool,
+) -> Result<RunResult, LocalFailure> {
+    const NAME: &str = "procedure.format";
+
+    let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
+    let source = std::str::from_utf8(&bytes).map_err(|_| {
+        LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
+    })?;
+    if check {
+        return Err(LocalFailure::unsupported_v2_capability(
+            "procedure.format --check",
+            NAME,
+        ));
+    }
+    if write {
+        return Err(LocalFailure::unsupported_v2_capability(
+            "procedure.format --write",
+            NAME,
+        ));
+    }
+
+    let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
+        ProcedureFormatV1::Json
+    } else {
+        ProcedureFormatV1::Yaml
+    };
+    let source_path = file.display().to_string();
+    match format_procedure_v2(FormatRequest {
+        source,
+        source_path: &source_path,
+        format,
+    }) {
+        Ok(formatted) => {
+            let Value::Object(result) = json!({
+                "schema": "podway.procedure-source-result/v1",
+                "operation": "format",
+                "target_schema": "podway.procedure/v2",
+                "target_digest": formatted.digest().as_str(),
+                "document": formatted.document(),
+                "file": source_path,
+                "mode": "stdout",
+                "changed": formatted.changed(),
+            }) else {
+                unreachable!("the static source result is a JSON object");
+            };
+            Ok(local_result_v2(
+                NAME,
+                result,
+                formatted.document().to_owned(),
+                0,
+            ))
+        }
+        Err(FormatFailure::NotProcedureV2) => Err(LocalFailure::catalog(
+            "PROCEDURE_SCHEMA_UNSUPPORTED",
+            "procedure format requires a podway.procedure/v2 document; run podway procedure convert first",
+            NAME,
+        )),
+        Err(FormatFailure::Diagnostics(diagnostics)) => {
+            let report = finalize_diagnostics(
+                diagnostics
+                    .into_iter()
+                    .map(|diagnostic| (AuthoringStage::Format, diagnostic))
+                    .collect(),
+            );
+            let text = render_authoring_diagnostics(report.diagnostics());
+            let Value::Object(result) = json!({
+                "schema": "podway.procedure-diagnostics-result/v1",
+                "operation": "format",
+                "procedure_schema": "podway.procedure/v2",
+                "file": source_path,
+                "valid": report.valid(),
+                "diagnostics": report.diagnostics(),
+                "diagnostics_truncated": report.truncated(),
+                "diagnostics_total": report.total(),
+            }) else {
+                unreachable!("the static diagnostics result is a JSON object");
+            };
+            Ok(local_result_v2(NAME, result, text, 1))
+        }
+    }
+}
+
+/// The stable one-line-per-finding authoring report.
+///
+/// The format is `<source_path>:<line>:<column> <severity> <code> <message>`, mirroring the
+/// position-first convention every editor's error parser already understands. The machine-readable
+/// form — locations, hints, and graph identities included — is the JSON result.
+fn render_authoring_diagnostics(diagnostics: &[podway_core::AuthoringDiagnostic]) -> String {
+    let mut text = String::new();
+    for diagnostic in diagnostics {
+        text.push_str(&format!(
+            "{}:{}:{} {} {} {}\n",
+            diagnostic.source_path(),
+            diagnostic.location().line(),
+            diagnostic.location().column(),
+            diagnostic.severity().as_str(),
+            diagnostic.code().as_str(),
+            diagnostic.message(),
+        ));
+    }
+    text
 }
 
 fn daemon_command_name(command: &DaemonCommand) -> &'static str {
@@ -3747,6 +3930,44 @@ fn render_result_with_clock_and_writers(
             }
             0
         }
+        RunResult::LocalV2 {
+            command,
+            result,
+            text,
+            exit_code,
+        } => {
+            if json_output {
+                let generated_at = match local_generated_at(clock) {
+                    Ok(timestamp) => timestamp,
+                    Err(failure) => return render_clock_failure_to(failure, stderr),
+                };
+                let request_id = RequestIdV1::new(Uuid::new_v4().to_string())
+                    .expect("UUID-v4 request identifiers satisfy the public protocol");
+                let command = CommandNameV1::new(command.clone())
+                    .expect("local command names satisfy the public protocol");
+                let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                    request_id,
+                    command,
+                    generated_at,
+                    workspace: None,
+                    job: None,
+                    session: None,
+                    result: result.clone(),
+                    warnings: Vec::new(),
+                })
+                .expect("local v2 results satisfy the public output protocol");
+                if serde_json::to_writer(&mut *stdout, &output).is_err()
+                    || writeln!(stdout).is_err()
+                {
+                    return LOCAL_CLIENT_EXIT;
+                }
+            // The text payload is the exact byte projection — a formatted document already ends in
+            // its own newline — so it is written verbatim rather than through `writeln!`.
+            } else if !quiet && !text.is_empty() && write!(stdout, "{text}").is_err() {
+                return LOCAL_CLIENT_EXIT;
+            }
+            *exit_code
+        }
         RunResult::LogFollow { path, initial } => {
             if json_output {
                 return render_local_failure_with_clock_and_writers(
@@ -4412,6 +4633,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "procedure.show" => {
             "Usage:\n  podway procedure show <file> [--canonical]\n\nExample:\n  podway procedure show .podway/procedures/custom.yaml --canonical"
+        }
+        "procedure.format" => {
+            "Usage:\n  podway procedure format <file> [--check] [--write]\n\nFormats a Procedure v2 document to stdout. --check and --write are registered\ncontracts that this build does not serve yet.\n\nExample:\n  podway procedure format .podway/procedures/custom.yaml"
         }
         "preset.list" => "Usage:\n  podway preset list\n\nExample:\n  podway preset list",
         "preset.show" => {

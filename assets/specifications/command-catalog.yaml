@@ -668,7 +668,7 @@ commands:
   preconditions:
   - job_state
 - name: procedure.format
-  availability: reserved_contract
+  availability: executable
   cli:
   - procedure
   - format

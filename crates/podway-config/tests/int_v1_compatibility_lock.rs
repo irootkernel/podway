@@ -156,20 +156,33 @@ fn golden_v1_resource_bounds_are_unchanged() {
 // Structural argument this file encodes in tests, not just prose: every production call site
 // that admits a v1 procedure document calls `parse_procedure_v1` directly. Verified by grep
 // across `crates/*/src` while writing this file:
-//   - crates/podway-cli/src/command.rs:1460     (fn execute_start_dry_run — workspace-path
+//   - crates/podway-cli/src/command.rs:1502     (fn execute_start_dry_run — workspace-path
 //     branch of `session.start`)
-//   - crates/podway-cli/src/command.rs:2811     (fn execute_procedure — `procedure.validate` /
+//   - crates/podway-cli/src/command.rs:2880     (fn execute_procedure — `procedure.validate` /
 //     `procedure.show`)
 //   - crates/podway-daemon/src/execution.rs:217 (fn workspace_procedure_snapshot_from_bytes_v1)
 //   - crates/podway-presets/src/lib.rs:48        (impl EmbeddedPreset::validate)
-// A fifth textual match, crates/podway-daemon/src/production.rs:3107, sits inside that file's own
-// `#[cfg(test)] mod tests` (opened at line 2777) and is not a production call site. No other
-// crate under `crates/*/src` calls `parse_procedure_v1`, `parse_procedure_document`, or
-// `parse_procedure_yaml`. Because none of the four real call sites route through the
-// schema-dispatching function, no v1 runtime command can be silently reinterpreted as v2 —
-// that's V2ACC-069's config-level substance. The two tests below close the loop the call-site
-// survey opens: the direct and dispatched parses agree for v1 input, and the direct v1 parser
-// itself refuses a v2-declared schema.
+//   - crates/podway-config/src/parser.rs         (the `PROCEDURE_SCHEMA_V1` arm inside
+//     `parse_procedure_document` itself — the dispatcher delegates to the direct parser, so both
+//     paths admit v1 through the same function)
+// A further textual match, crates/podway-daemon/src/production.rs:3107, sits inside that file's
+// own `#[cfg(test)] mod tests` (opened at line 2777) and is not a production call site.
+//
+// Exactly one production call site of the schema-dispatching `parse_procedure_document` exists:
+//   - crates/podway-config/src/procedure_v2_format.rs (fn format_procedure_v2, V2AUT-001)
+// It never admits v1. Before dispatching it sniffs the decoded `schema` field
+// (`sniff_procedure_schema`) and refuses a declared-v1 document — malformed or not — as
+// `FormatFailure::NotProcedureV2`, so a v1 document reaching `podway procedure format` is a
+// wrong-schema command failure rather than a v2 authoring finding; the dispatcher's `V1` arm
+// remains only as the total-match backstop behind that sniff. No other module under
+// `crates/*/src` calls `parse_procedure_v1`, `parse_procedure_document`, or
+// `parse_procedure_yaml` (the remaining matches are `parser.rs`'s own definitions and
+// `parse_procedure_yaml`'s one-line delegation).
+//
+// Because no runtime v1 admission path routes through the schema-dispatching function, no v1
+// runtime command can be silently reinterpreted as v2 — that's V2ACC-069's config-level substance.
+// The two tests below close the loop the call-site survey opens: the direct and dispatched parses
+// agree for v1 input, and the direct v1 parser itself refuses a v2-declared schema.
 
 /// `ValidatedProcedureV1` derives `Eq`/`PartialEq` over all four of its fields — `definition`,
 /// `canonical_json`, `digest`, `warnings` (`crates/podway-config/src/validation.rs`) — and so
