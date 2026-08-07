@@ -1,5 +1,5 @@
 //! Process-boundary contracts for the Procedure v2 authoring surface (`procedure format`,
-//! `procedure lint`, and `procedure check`).
+//! `procedure lint`, `procedure check`, and `procedure scaffold`).
 
 use std::{
     fs,
@@ -10,6 +10,7 @@ use std::{
     time::SystemTime,
 };
 
+use podway_config::SCAFFOLD_TEMPLATE_MINIMAL;
 use podway_protocol::ResponseEnvelopeV1;
 use serde_json::Value;
 
@@ -1821,4 +1822,152 @@ fn v2aut005_check_is_deterministic_across_processes() {
     for _ in 0..5 {
         assert_eq!(one_json(&check_json(&path))["result"], baseline);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2AUT-006: `procedure scaffold`
+// ---------------------------------------------------------------------------------------------
+
+fn scaffold_json(arguments: &[&str]) -> Output {
+    let mut argv = vec!["--json", "procedure", "scaffold"];
+    argv.extend_from_slice(arguments);
+    run(&argv)
+}
+
+fn scaffold_text(arguments: &[&str]) -> Output {
+    let mut argv = vec!["procedure", "scaffold"];
+    argv.extend_from_slice(arguments);
+    run(&argv)
+}
+
+#[test]
+fn v2aut006_scaffold_emits_the_template_as_a_source_result_with_no_file_fields() {
+    let output = scaffold_json(&[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.scaffold");
+    assert!(envelope["warnings"].is_array());
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-source-result/v1");
+    assert_eq!(result["operation"], "scaffold");
+    assert_eq!(result["target_schema"], "podway.procedure/v2");
+    assert_eq!(result["template"], "minimal");
+    assert_eq!(result["document"], SCAFFOLD_TEMPLATE_MINIMAL);
+    assert!(
+        result["target_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71),
+        "the source result must carry the canonical semantic digest: {result}"
+    );
+
+    // The source result schema's `scaffold` branch forbids all four: a scaffold names no file, was
+    // produced in no mode, changed nothing, and converted nothing.
+    for absent in ["file", "mode", "changed", "source_schema", "source_digest"] {
+        assert!(
+            result.get(absent).is_none(),
+            "a scaffold result must not carry {absent}: {result}"
+        );
+    }
+
+    // `--template minimal` is the default spelled out, so it must produce the identical result.
+    let explicit = one_json(&scaffold_json(&["--template", "minimal"]));
+    assert_eq!(explicit["result"], *result);
+}
+
+#[test]
+fn v2aut006_scaffold_text_mode_writes_the_template_bytes_exactly() {
+    let output = scaffold_text(&[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        output.stdout,
+        SCAFFOLD_TEMPLATE_MINIMAL.as_bytes(),
+        "text stdout must be the template with no added newline"
+    );
+}
+
+/// The roadmap gate, executed end to end: what `scaffold` writes is what the rest of the toolchain
+/// accepts, with no editing step in between.
+#[test]
+fn v2aut006_a_scaffolded_file_passes_format_check_and_the_aggregate_gate() {
+    let fixture = FixtureDirectory::new("scaffold-pipeline");
+    let scaffolded = scaffold_text(&[]);
+    assert_eq!(scaffolded.status.code(), Some(0), "{scaffolded:?}");
+    let path = fixture.root.join("scaffolded.yaml");
+    fs::write(&path, &scaffolded.stdout).expect("the scaffolded document must be writable");
+
+    let formatted = format_check_text(&path);
+    assert_eq!(
+        formatted.status.code(),
+        Some(0),
+        "a scaffolded file is already canonical: {formatted:?}"
+    );
+    assert_eq!(formatted.stdout, canonical_summary(&path).into_bytes());
+
+    let checked = run(&[
+        "procedure",
+        "check",
+        &path.display().to_string(),
+        "--warnings-as-errors",
+    ]);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "a scaffolded file must report no finding at all: {checked:?}"
+    );
+
+    // The file is a real procedure, not merely a well-formed one: `validate` is a v1 route, so the
+    // proof that the document is usable is that the v2 gate reports a digest for it.
+    let envelope = one_json(&run(&[
+        "--json",
+        "procedure",
+        "check",
+        &path.display().to_string(),
+    ]));
+    assert_eq!(envelope["result"]["valid"], true);
+    assert_eq!(envelope["result"]["diagnostics_total"], 0);
+    assert_eq!(
+        envelope["result"]["digest"],
+        one_json(&scaffold_json(&[]))["result"]["target_digest"],
+        "the digest scaffold advertises must be the digest the file has"
+    );
+}
+
+#[test]
+fn v2aut006_an_unknown_template_is_a_usage_failure() {
+    let output = scaffold_json(&["--template", "kitchen-sink"]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.scaffold");
+    assert_eq!(envelope["code"], "REQUEST_INVALID");
+    assert_eq!(envelope["exit_code"], 2);
+    assert_eq!(envelope["retryable"], false);
+
+    // Nothing is emitted on the way to a usage failure, in either mode.
+    let text = scaffold_text(&["--template", "kitchen-sink"]);
+    assert_eq!(text.status.code(), Some(2), "{text:?}");
+    assert!(text.stdout.is_empty());
+}
+
+#[test]
+fn v2aut006_scaffold_is_deterministic_across_processes() {
+    let baseline = scaffold_text(&[]).stdout;
+    let result = one_json(&scaffold_json(&[]))["result"].clone();
+    for _ in 0..5 {
+        assert_eq!(scaffold_text(&[]).stdout, baseline);
+        assert_eq!(one_json(&scaffold_json(&[]))["result"], result);
+    }
+}
+
+#[test]
+fn v2aut006_quiet_suppresses_the_template_without_changing_the_exit_code() {
+    let output = run(&["--quiet", "procedure", "scaffold"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }

@@ -93,7 +93,7 @@ Dependencies: `V2MOD`.
 | `V2AUT-003` | Write formatting safely | Completed | Update only the named file while preserving supported comments. | [V2AUT plan](../todo/TODO-podway-v2-full-feature-ga.md#193-epic-v2aut-authoring-toolchain) |
 | `V2AUT-004` | Lint Procedure v2 | Completed | Emit stable advisory authoring diagnostics. | [V2AUT plan](../todo/TODO-podway-v2-full-feature-ga.md#193-epic-v2aut-authoring-toolchain) |
 | `V2AUT-005` | Check Procedure v2 | Completed | Aggregate validate, vet, lint, digest, and summary results. | [V2AUT plan](../todo/TODO-podway-v2-full-feature-ga.md#193-epic-v2aut-authoring-toolchain) |
-| `V2AUT-006` | Scaffold Procedure v2 | Planned | Generate a minimal bounded reviewable authoring starting point. | [V2AUT plan](../todo/TODO-podway-v2-full-feature-ga.md#193-epic-v2aut-authoring-toolchain) |
+| `V2AUT-006` | Scaffold Procedure v2 | Completed | Generate a minimal bounded reviewable authoring starting point. | [V2AUT plan](../todo/TODO-podway-v2-full-feature-ga.md#193-epic-v2aut-authoring-toolchain) |
 | `V2AUT-007` | Convert v1 to v2 | Planned | Produce a deterministic review-required action-only v2 candidate. | [V2AUT plan](../todo/TODO-podway-v2-full-feature-ga.md#193-epic-v2aut-authoring-toolchain) |
 | `V2AUT-008` | Close authoring diagnostics | Planned | Stabilize diagnostic codes, locations, ordering, bounds, and JSON. | [V2AUT plan](../todo/TODO-podway-v2-full-feature-ga.md#193-epic-v2aut-authoring-toolchain) |
 

@@ -33,9 +33,10 @@ use podway_cli::client::{
 use podway_config::{
     AuthoringContext, AuthoringStage, ConfigError, FormatFailure, FormatRequest,
     FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES_V1, PROCEDURE_SCHEMA_V1, ParsedProcedure,
-    ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1, check_procedure_v2,
-    config_error_diagnostic, finalize_diagnostics, format_procedure_v2, lint_procedure_v2,
-    parse_procedure_document, parse_procedure_v1, sniff_procedure_schema, validate_procedure_v2,
+    ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1, ScaffoldTemplate,
+    check_procedure_v2, config_error_diagnostic, finalize_diagnostics, format_procedure_v2,
+    lint_procedure_v2, parse_procedure_document, parse_procedure_v1, scaffold_procedure_v2,
+    sniff_procedure_schema, validate_procedure_v2,
 };
 use podway_core::{AttemptId, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId};
 use podway_presets::{PresetError, catalog_v1};
@@ -407,6 +408,13 @@ enum ProcedureCommand {
         #[arg(long, action = ArgAction::SetTrue)]
         warnings_as_errors: bool,
     },
+    Scaffold {
+        /// The template to emit. The closed list is `ScaffoldTemplate::NAMES`, so an unknown value
+        /// is a Clap parse failure — a usage error — rather than a runtime rejection this command
+        /// would have to invent a result shape for.
+        #[arg(long, default_value = "minimal", value_parser = ScaffoldTemplate::NAMES)]
+        template: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -548,6 +556,9 @@ impl Command {
             Self::Procedure {
                 command: ProcedureCommand::Check { .. },
             } => "procedure.check",
+            Self::Procedure {
+                command: ProcedureCommand::Scaffold { .. },
+            } => "procedure.scaffold",
             Self::Preset {
                 command: PresetCommand::List,
             } => "preset.list",
@@ -1134,6 +1145,7 @@ fn parse_failure_command_context_from_matches(
                 // The nested table maps `podway procedure <word>`; the bare `check` word is the
                 // top-level `item.check` arm below and is deliberately left alone.
                 ("check", "procedure.check"),
+                ("scaffold", "procedure.scaffold"),
             ],
         )?,
         "preset" => nested_parse_failure_context(
@@ -2961,6 +2973,9 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         } => {
             return execute_procedure_check(file, *warnings_as_errors);
         }
+        ProcedureCommand::Scaffold { template } => {
+            return Ok(execute_procedure_scaffold(template));
+        }
     };
     let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(name))?;
     std::str::from_utf8(&bytes).map_err(|_| {
@@ -3003,7 +3018,8 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         })?,
         ProcedureCommand::Format { .. }
         | ProcedureCommand::Lint { .. }
-        | ProcedureCommand::Check { .. } => {
+        | ProcedureCommand::Check { .. }
+        | ProcedureCommand::Scaffold { .. } => {
             unreachable!("the v2 authoring commands dispatch to their own execution paths")
         }
     };
@@ -3519,6 +3535,48 @@ fn execute_procedure_check(
 /// The pinned one-line verdict for a document every authoring stage accepted.
 fn all_checks_passed_summary(source_path: &str) -> String {
     format!("{source_path}: all authoring checks passed\n")
+}
+
+/// The route every `procedure scaffold` result reports under.
+const PROCEDURE_SCAFFOLD_COMMAND: &str = "procedure.scaffold";
+
+/// Emits one authoring starting point.
+///
+/// This is the only local procedure command that reads nothing: there is no file argument, so there
+/// is no path to resolve, no descriptor to open, and no way for the command to fail. It always
+/// exits 0.
+///
+/// `--template` is closed at the parser, so `template` is always a name
+/// [`ScaffoldTemplate::from_name`] resolves; an unknown value never reaches here, it is a usage
+/// failure Clap reports with exit code 2.
+///
+/// The digest is derived from the emitted text through the same parse-and-validate path every other
+/// Procedure v2 digest comes from rather than being carried beside the template as a second
+/// constant. That makes the command self-checking — a template edited into something inadmissible
+/// fails here instead of shipping a document whose advertised digest describes nothing — and it
+/// keeps one derivation of the digest in the build.
+fn execute_procedure_scaffold(template: &str) -> RunResult {
+    let template =
+        ScaffoldTemplate::from_name(template).expect("the parser closes --template to known names");
+    let document = scaffold_procedure_v2(template);
+    let parsed = match parse_procedure_document(document.as_bytes(), ProcedureFormatV1::Yaml) {
+        Ok(ParsedProcedure::V2(parsed)) => parsed,
+        Ok(ParsedProcedure::V1(_)) => unreachable!("a scaffold template declares the v2 schema"),
+        Err(error) => unreachable!("a scaffold template must parse: {error}"),
+    };
+    let validated =
+        validate_procedure_v2(parsed).expect("a scaffold template is a valid Procedure v2 model");
+    let Value::Object(result) = json!({
+        "schema": "podway.procedure-source-result/v1",
+        "operation": "scaffold",
+        "target_schema": "podway.procedure/v2",
+        "target_digest": validated.digest().as_str(),
+        "document": document,
+        "template": template.name(),
+    }) else {
+        unreachable!("the static source result is a JSON object");
+    };
+    local_result_v2(PROCEDURE_SCAFFOLD_COMMAND, result, document.to_owned(), 0)
 }
 
 /// The stable one-line-per-finding authoring report.
@@ -5159,6 +5217,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "procedure.check" => {
             "Usage:\n  podway procedure check <file> [--warnings-as-errors]\n\nRuns every authoring stage over a Procedure v2 document — canonical formatting,\nvalidation, graph vetting, and lint — and reports one merged result. Exits 1 on\nany error, including formatting drift; --warnings-as-errors also fails on\nadvisory findings.\n\nExample:\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors"
+        }
+        "procedure.scaffold" => {
+            "Usage:\n  podway procedure scaffold [--template minimal]\n\nWrites a minimal Procedure v2 authoring starting point to stdout and reads\nnothing. The emitted document is already in canonical authoring form and already\npasses every authoring stage, so redirecting it to a file and running\nprocedure check on that file reports nothing.\n\nExample:\n  podway procedure scaffold --template minimal > .podway/procedures/custom.yaml"
         }
         "preset.list" => "Usage:\n  podway preset list\n\nExample:\n  podway preset list",
         "preset.show" => {

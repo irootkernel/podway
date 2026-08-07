@@ -18,5 +18,7 @@ mod int_v2_procedure_equivalence;
 mod int_v2_procedure_format;
 #[path = "int_v2_procedure_lint.rs"]
 mod int_v2_procedure_lint;
+#[path = "int_v2_procedure_scaffold.rs"]
+mod int_v2_procedure_scaffold;
 #[path = "int_v2_procedure_validate.rs"]
 mod int_v2_procedure_validate;

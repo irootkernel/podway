@@ -117,6 +117,10 @@ const WRITE: Flag = Flag {
     long: "write",
     takes_value: false,
 };
+const TEMPLATE: Flag = Flag {
+    long: "template",
+    takes_value: true,
+};
 const DAEMON_PATH: Flag = Flag {
     long: "daemon-path",
     takes_value: true,
@@ -343,6 +347,12 @@ const ROUTES: &[Route] = &[
         words: "procedure check",
         flags: &[&JSON, &NO_COLOR, &QUIET, &WARNINGS_AS_ERRORS],
         values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "procedure scaffold",
+        flags: &[&JSON, &NO_COLOR, &QUIET, &TEMPLATE],
+        values: "minimal",
         dynamic: None,
     },
     Route {

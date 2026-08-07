@@ -18,6 +18,7 @@ mod procedure_v2_format;
 mod procedure_v2_graph;
 mod procedure_v2_lint;
 mod procedure_v2_parse;
+mod procedure_v2_scaffold;
 mod procedure_v2_source;
 mod procedure_v2_validate;
 mod procedure_v2_vet;
@@ -44,6 +45,9 @@ pub use procedure_v2_format::{
 };
 pub use procedure_v2_lint::lint_procedure_v2;
 pub use procedure_v2_parse::{ParsedNodeDefinition, ParsedProcedureV2};
+pub use procedure_v2_scaffold::{
+    SCAFFOLD_TEMPLATE_MINIMAL, ScaffoldTemplate, scaffold_procedure_v2,
+};
 pub use procedure_v2_validate::{ValidatedProcedureV2, validate_procedure_v2};
 pub use procedure_v2_vet::vet_procedure_v2;
 pub use validation::{

@@ -743,7 +743,7 @@ commands:
   - podway.procedure-preview-result/v1
   - podway.procedure-diagnostics-result/v1
 - name: procedure.scaffold
-  availability: reserved_contract
+  availability: executable
   cli:
   - procedure
   - scaffold
