@@ -15,9 +15,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use podway_config::{
-    AuthoringStage, ConfigError, FormatFailure, FormatRequest, FormattedProcedureV2,
-    ParsedProcedure, ProcedureDocumentFormat, ValidatedProcedureV2, finalize_diagnostics,
-    format_procedure_v2, parse_procedure_document, sniff_procedure_schema, validate_procedure_v2,
+    AuthoringContext, AuthoringStage, ConfigError, FormatFailure, FormatRequest,
+    FormattedProcedureV2, ParsedProcedure, ProcedureDocumentFormat, ValidatedProcedureV2,
+    finalize_diagnostics, format_procedure_v2, parse_procedure_document, sniff_procedure_schema,
+    validate_procedure_v2,
 };
 use podway_core::{
     AuthoringDiagnostic, AuthoringDiagnosticCode, AuthoringSeverity, MAX_AUTHORING_DIAGNOSTICS,
@@ -2000,5 +2001,266 @@ fn v2aut001_emitted_key_order_matches_the_procedure_schema_properties_order() {
                 shape.schema_key_order()
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 12. V2AUT-002: the drift diagnostic `format --check` reports
+// ---------------------------------------------------------------------------------------------
+//
+// `--check` asks one question — is this source already the canonical rendering? — so the answer is
+// one diagnostic or none, never a list of edits. These tests pin where that diagnostic points,
+// because the position is the only part of the answer a reader cannot re-derive from the canonical
+// document the same result already carries.
+
+/// The drift verdict for a source that formats successfully.
+fn drift(source: &str, format: ProcedureDocumentFormat) -> Option<AuthoringDiagnostic> {
+    let formatted = format_ok(source, format);
+    let context = AuthoringContext::new("workflow.yaml", source, format);
+    let diagnostic = formatted.drift_diagnostic(&context);
+    assert_eq!(
+        diagnostic.is_some(),
+        formatted.changed(),
+        "the drift verdict and the `changed` flag are the same byte comparison"
+    );
+    diagnostic
+}
+
+fn drift_yaml(source: &str) -> AuthoringDiagnostic {
+    drift(source, ProcedureDocumentFormat::Yaml).expect("the source must be reported as drifted")
+}
+
+/// Every drifted source used below, so the invariants can be asserted once over all of them.
+fn drifted_yaml_corpus() -> Vec<(&'static str, String)> {
+    let minimal = MINIMAL_YAML.to_owned();
+    let commented = format_yaml(COMMENTED_YAML).document().to_owned();
+    vec![
+        (
+            "reordered root keys",
+            minimal.replace(
+                "schema: podway.procedure/v2\nid: minimal\n",
+                "id: minimal\nschema: podway.procedure/v2\n",
+            ),
+        ),
+        (
+            "dedented comment",
+            commented.replace(
+                "  # The reusable contract every placement below uses.\n",
+                "# The reusable contract every placement below uses.\n",
+            ),
+        ),
+        (
+            "extra space after a colon",
+            minimal.replace("      use: work\n", "      use:  work\n"),
+        ),
+        (
+            "missing trailing newline",
+            minimal
+                .strip_suffix('\n')
+                .expect("the corpus document ends in a newline")
+                .to_owned(),
+        ),
+        ("doubled trailing newline", format!("{minimal}\n")),
+        ("crlf line endings", minimal.replace('\n', "\r\n")),
+        (
+            "blank line",
+            minimal.replace("graph:\n", "\ngraph:\n").to_owned(),
+        ),
+    ]
+}
+
+#[test]
+fn v2aut002_a_canonical_source_has_no_drift_diagnostic() {
+    for (name, source) in yaml_corpus() {
+        let canonical = format_yaml(&source).document().to_owned();
+        assert_eq!(
+            drift(&canonical, ProcedureDocumentFormat::Yaml),
+            None,
+            "{name}: the canonical rendering of a document is not drifted from itself"
+        );
+    }
+
+    let json = format_ok(
+        &fixture("tests/fixtures/v2/procedures/equivalent-procedure.json"),
+        ProcedureDocumentFormat::Json,
+    )
+    .document()
+    .to_owned();
+    assert_eq!(
+        drift(&json, ProcedureDocumentFormat::Json),
+        None,
+        "canonical JSON authoring text is not drifted from itself either"
+    );
+}
+
+#[test]
+fn v2aut002_drift_on_the_first_line_is_reported_at_the_first_divergent_column() {
+    let diagnostic = drift_yaml(&MINIMAL_YAML.replace(
+        "schema: podway.procedure/v2\nid: minimal\n",
+        "id: minimal\nschema: podway.procedure/v2\n",
+    ));
+
+    assert_eq!(
+        diagnostic.code(),
+        AuthoringDiagnosticCode::FormatNotCanonical
+    );
+    assert_eq!(diagnostic.severity(), AuthoringSeverity::Error);
+    assert_eq!(
+        diagnostic.message(),
+        "The source is not in canonical authoring form at this line."
+    );
+    assert_eq!(
+        diagnostic.hint(),
+        "Run `podway procedure format <file> --write` to rewrite the file in canonical form."
+    );
+    assert_eq!(diagnostic.source_path(), "workflow.yaml");
+    // `id: minimal` and `schema: ...` share no leading character, so the divergence is the whole
+    // line, and the span reaches the end of the source line rather than of the canonical one.
+    assert_eq!(diagnostic.location().line(), 1);
+    assert_eq!(diagnostic.location().column(), 1);
+    assert_eq!(diagnostic.location().end_line(), 1);
+    assert_eq!(diagnostic.location().end_column(), 12);
+    assert_eq!(diagnostic.field(), "id");
+}
+
+#[test]
+fn v2aut002_drift_in_the_middle_of_a_document_names_the_line_that_moved() {
+    let canonical = format_yaml(COMMENTED_YAML).document().to_owned();
+    const NESTED: &str = "  # The reusable contract every placement below uses.";
+    let expected_line = canonical
+        .lines()
+        .position(|line| line == NESTED)
+        .expect("the canonical rendering indents the nested comment block")
+        + 1;
+    assert!(
+        expected_line > 1 && expected_line < canonical.lines().count(),
+        "the moved line must sit in the middle of the document"
+    );
+
+    // A full-line comment belongs to the node it precedes and is re-emitted at that node's indent,
+    // so dedenting it is drift even though the comment text itself survives verbatim.
+    let diagnostic = drift_yaml(&canonical.replace(
+        &format!("{NESTED}\n"),
+        "# The reusable contract every placement below uses.\n",
+    ));
+
+    assert_eq!(
+        diagnostic.location().line(),
+        u32::try_from(expected_line).expect("the corpus document is short")
+    );
+    assert_eq!(diagnostic.location().column(), 1);
+    // A comment line declares no node, so no path anchors there and the document root is the
+    // honest answer.
+    assert_eq!(diagnostic.field(), "$");
+}
+
+#[test]
+fn v2aut002_a_missing_trailing_newline_is_drift_located_on_the_last_source_line() {
+    let source = MINIMAL_YAML
+        .strip_suffix('\n')
+        .expect("the corpus document ends in a newline");
+    let diagnostic = drift_yaml(source);
+
+    // The source's lines are a strict prefix of the canonical rendering's, so the divergence is
+    // past the source's end and clamps back onto its last line.
+    let last = u32::try_from(source.lines().count()).expect("the corpus document is short");
+    assert_eq!(diagnostic.location().line(), last);
+    assert_eq!(diagnostic.location().column(), 1);
+    assert_eq!(diagnostic.location().end_column(), 21);
+    assert_eq!(diagnostic.field(), "graph.nodes[only].terminal");
+}
+
+#[test]
+fn v2aut002_a_doubled_trailing_newline_is_drift_located_past_the_last_content_line() {
+    let source = format!("{MINIMAL_YAML}\n");
+    let diagnostic = drift_yaml(&source);
+
+    // The canonical rendering's lines are the strict prefix this time. The position clamps to the
+    // source's own newline-split count, which counts the empty segment the extra newline opens.
+    let segments = u32::try_from(source.split('\n').count()).expect("the corpus document is short");
+    assert_eq!(diagnostic.location().line(), segments);
+    assert_eq!(diagnostic.location().column(), 1);
+    assert_eq!(diagnostic.location().end_column(), 1);
+    assert_eq!(diagnostic.field(), "$");
+}
+
+#[test]
+fn v2aut002_crlf_line_endings_are_drift_at_the_first_carriage_return() {
+    let diagnostic = drift_yaml(&MINIMAL_YAML.replace('\n', "\r\n"));
+
+    // A CRLF source parses to the same model and formats to LF, so every line differs — at the
+    // character after the last shared one, which is the `\r`.
+    assert_eq!(diagnostic.location().line(), 1);
+    assert_eq!(diagnostic.location().column(), 28);
+    assert_eq!(diagnostic.location().end_column(), 28);
+    assert_eq!(diagnostic.field(), "schema");
+}
+
+#[test]
+fn v2aut002_every_drifted_source_yields_exactly_one_bounded_diagnostic() {
+    for (name, source) in drifted_yaml_corpus() {
+        let diagnostic = drift_yaml(&source);
+        assert_eq!(
+            diagnostic.code(),
+            AuthoringDiagnosticCode::FormatNotCanonical,
+            "{name}"
+        );
+        assert_diagnostic_shape(&diagnostic);
+
+        let location = diagnostic.location();
+        assert!(
+            (1..=1_048_576).contains(&location.line())
+                && (1..=1_048_576).contains(&location.column())
+                && location.end_line() == location.line()
+                && location.end_column() >= location.column(),
+            "{name}: {location:?} is not a bounded single-line span"
+        );
+
+        // One document, one verdict: the report a caller renders carries a single finding.
+        let report = finalize_diagnostics(vec![(AuthoringStage::Format, diagnostic)]);
+        assert_eq!(report.diagnostics().len(), 1, "{name}");
+        assert_eq!(report.total(), 1, "{name}");
+        assert!(!report.truncated(), "{name}");
+        assert!(!report.valid(), "{name}");
+    }
+}
+
+#[test]
+fn v2aut002_the_drift_diagnostic_is_deterministic() {
+    for (name, source) in drifted_yaml_corpus() {
+        let first = drift_yaml(&source);
+        for _ in 0..8 {
+            assert_eq!(drift_yaml(&source), first, "{name}");
+        }
+    }
+}
+
+#[test]
+fn v2aut002_a_document_that_cannot_be_formatted_is_never_also_called_non_canonical() {
+    // Each of these fails at a different stage — parse, validate, and the source-construct scan —
+    // and none of them reaches the byte comparison, so none of them can report drift on top of the
+    // failure that stopped it.
+    for (name, source) in [
+        (
+            "unknown field",
+            MINIMAL_YAML.replace("id: minimal\n", "id: minimal\nbogus: 1\n"),
+        ),
+        (
+            "unknown reference",
+            MINIMAL_YAML.replace("      use: work\n", "      use: absent\n"),
+        ),
+        (
+            "inline comment",
+            MINIMAL_YAML.replace("id: minimal\n", "id: minimal # the identifier\n"),
+        ),
+    ] {
+        let reported = diagnostics(&source, ProcedureDocumentFormat::Yaml);
+        assert!(!reported.is_empty(), "{name}");
+        assert!(
+            reported
+                .iter()
+                .all(|diagnostic| diagnostic.code() != AuthoringDiagnosticCode::FormatNotCanonical),
+            "{name}: an unformattable document reports its own stage, never drift: {reported:?}"
+        );
     }
 }

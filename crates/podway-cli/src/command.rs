@@ -28,9 +28,10 @@ use podway_cli::client::{
     DaemonClientTimeoutsV1, DaemonClientV1,
 };
 use podway_config::{
-    AuthoringStage, ConfigError, FormatFailure, FormatRequest, MAX_PROCEDURE_DOCUMENT_BYTES_V1,
-    ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1, finalize_diagnostics,
-    format_procedure_v2, parse_procedure_v1,
+    AuthoringContext, AuthoringStage, ConfigError, FormatFailure, FormatRequest,
+    FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES_V1, ProcedureFormatV1,
+    ProcedureWarningPolicyV1, ProcedureWarningV1, finalize_diagnostics, format_procedure_v2,
+    parse_procedure_v1,
 };
 use podway_core::{AttemptId, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId};
 use podway_presets::{PresetError, catalog_v1};
@@ -2919,23 +2920,23 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
 /// The read is the same hardened descriptor-relative walk `procedure validate` uses, and it runs
 /// before the unimplemented-flag rejections so a missing or unsafe path always reports the path
 /// failure rather than a capability failure.
+///
+/// `--check` answers the same question the default mode answers and reports it differently: the
+/// pipeline runs identically, and only the last step — comparing the rendering against the source —
+/// decides between a source result that says "already canonical" and the single
+/// `FORMAT_NOT_CANONICAL` finding. Nothing on either path touches the filesystem after the read, so
+/// `--check` is observably non-writing rather than merely intended to be.
 fn execute_procedure_format(
     file: &Path,
     check: bool,
     write: bool,
 ) -> Result<RunResult, LocalFailure> {
-    const NAME: &str = "procedure.format";
+    const NAME: &str = PROCEDURE_FORMAT_COMMAND;
 
     let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
     let source = std::str::from_utf8(&bytes).map_err(|_| {
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
     })?;
-    if check {
-        return Err(LocalFailure::unsupported_v2_capability(
-            "procedure.format --check",
-            NAME,
-        ));
-    }
     if write {
         return Err(LocalFailure::unsupported_v2_capability(
             "procedure.format --write",
@@ -2954,24 +2955,27 @@ fn execute_procedure_format(
         source_path: &source_path,
         format,
     }) {
+        Ok(formatted) if check => {
+            let context = AuthoringContext::new(&source_path, source, format);
+            match formatted.drift_diagnostic(&context) {
+                Some(diagnostic) => {
+                    Ok(procedure_format_diagnostics(&source_path, vec![diagnostic]))
+                }
+                None => Ok(procedure_format_source(
+                    &source_path,
+                    &formatted,
+                    "check",
+                    format!("{source_path} is in canonical authoring form\n"),
+                )),
+            }
+        }
         Ok(formatted) => {
-            let Value::Object(result) = json!({
-                "schema": "podway.procedure-source-result/v1",
-                "operation": "format",
-                "target_schema": "podway.procedure/v2",
-                "target_digest": formatted.digest().as_str(),
-                "document": formatted.document(),
-                "file": source_path,
-                "mode": "stdout",
-                "changed": formatted.changed(),
-            }) else {
-                unreachable!("the static source result is a JSON object");
-            };
-            Ok(local_result_v2(
-                NAME,
-                result,
-                formatted.document().to_owned(),
-                0,
+            let document = formatted.document().to_owned();
+            Ok(procedure_format_source(
+                &source_path,
+                &formatted,
+                "stdout",
+                document,
             ))
         }
         Err(FormatFailure::NotProcedureV2) => Err(LocalFailure::catalog(
@@ -2980,28 +2984,66 @@ fn execute_procedure_format(
             NAME,
         )),
         Err(FormatFailure::Diagnostics(diagnostics)) => {
-            let report = finalize_diagnostics(
-                diagnostics
-                    .into_iter()
-                    .map(|diagnostic| (AuthoringStage::Format, diagnostic))
-                    .collect(),
-            );
-            let text = render_authoring_diagnostics(report.diagnostics());
-            let Value::Object(result) = json!({
-                "schema": "podway.procedure-diagnostics-result/v1",
-                "operation": "format",
-                "procedure_schema": "podway.procedure/v2",
-                "file": source_path,
-                "valid": report.valid(),
-                "diagnostics": report.diagnostics(),
-                "diagnostics_truncated": report.truncated(),
-                "diagnostics_total": report.total(),
-            }) else {
-                unreachable!("the static diagnostics result is a JSON object");
-            };
-            Ok(local_result_v2(NAME, result, text, 1))
+            Ok(procedure_format_diagnostics(&source_path, diagnostics))
         }
     }
+}
+
+/// The route every `procedure format` result reports under, named once so the three result
+/// builders below cannot disagree with the route the failure paths use.
+const PROCEDURE_FORMAT_COMMAND: &str = "procedure.format";
+
+/// The `procedure format` success result: the canonical document plus the mode that produced it.
+///
+/// `document` is present in every mode because the source result schema requires it, which is the
+/// right requirement: a `--check` client that learns the file has drifted with no way to see the
+/// canonical form would have to run the command a second time to act on the answer.
+fn procedure_format_source(
+    source_path: &str,
+    formatted: &FormattedProcedureV2,
+    mode: &str,
+    text: String,
+) -> RunResult {
+    let Value::Object(result) = json!({
+        "schema": "podway.procedure-source-result/v1",
+        "operation": "format",
+        "target_schema": "podway.procedure/v2",
+        "target_digest": formatted.digest().as_str(),
+        "document": formatted.document(),
+        "file": source_path,
+        "mode": mode,
+        "changed": formatted.changed(),
+    }) else {
+        unreachable!("the static source result is a JSON object");
+    };
+    local_result_v2(PROCEDURE_FORMAT_COMMAND, result, text, 0)
+}
+
+/// The `procedure format` findings result, shared by every stage that can produce one.
+fn procedure_format_diagnostics(
+    source_path: &str,
+    diagnostics: Vec<podway_core::AuthoringDiagnostic>,
+) -> RunResult {
+    let report = finalize_diagnostics(
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| (AuthoringStage::Format, diagnostic))
+            .collect(),
+    );
+    let text = render_authoring_diagnostics(report.diagnostics());
+    let Value::Object(result) = json!({
+        "schema": "podway.procedure-diagnostics-result/v1",
+        "operation": "format",
+        "procedure_schema": "podway.procedure/v2",
+        "file": source_path,
+        "valid": report.valid(),
+        "diagnostics": report.diagnostics(),
+        "diagnostics_truncated": report.truncated(),
+        "diagnostics_total": report.total(),
+    }) else {
+        unreachable!("the static diagnostics result is a JSON object");
+    };
+    local_result_v2(PROCEDURE_FORMAT_COMMAND, result, text, 1)
 }
 
 /// The stable one-line-per-finding authoring report.

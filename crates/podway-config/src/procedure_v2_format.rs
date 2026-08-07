@@ -33,6 +33,12 @@
 //! single-line, byte-sorted, and reachable through `procedure show --canonical`. JSON has no comment
 //! syntax, so the comment pass and the supported-construct scan (whose "one node per line" invariant
 //! a flow document cannot satisfy) apply to YAML only.
+//!
+//! Drift is the same rendering read the other way round:
+//! [`FormattedProcedureV2::drift_diagnostic`] compares the source against this document as bytes
+//! and, when they differ, reports the one `FORMAT_NOT_CANONICAL` finding that locates the first
+//! divergence. A document that cannot be rendered at all never reaches that comparison, so an
+//! unformattable source is reported by its own stage and is never also called non-canonical.
 
 use podway_core::{
     AuthoringDiagnostic, AuthoringDiagnosticCode, SOURCE_PROJECTION_MAX_CHARACTERS, Sha256Digest,
@@ -72,6 +78,10 @@ pub struct FormatRequest<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FormattedProcedureV2 {
     document: String,
+    /// The authoring tree the document was rendered from, kept so a drift diagnostic names its
+    /// field exactly the way every other format-stage diagnostic does — with graph identifiers
+    /// rather than array offsets.
+    document_value: AuthoringValue,
     digest: Sha256Digest,
     changed: bool,
 }
@@ -93,6 +103,79 @@ impl FormattedProcedureV2 {
     pub const fn changed(&self) -> bool {
         self.changed
     }
+
+    /// The single `FORMAT_NOT_CANONICAL` diagnostic describing a source that is not in canonical
+    /// authoring form, or `None` when it already is.
+    ///
+    /// `format --check` and section 11.5's check pipeline both report drift through this
+    /// constructor, so the two can never disagree about whether a document has drifted or about
+    /// where. Exactly one diagnostic: drift is a property of the document, not a list of edits, and
+    /// the canonical rendering the caller already holds is the complete remedy.
+    ///
+    /// `context` must wrap the very source this document was formatted from. The comparison reads
+    /// [`AuthoringContext::source`] rather than the recorded [`Self::changed`] flag so the verdict
+    /// and the reported position always describe the same text; for the intended context the two
+    /// agree by construction.
+    pub fn drift_diagnostic(&self, context: &AuthoringContext<'_>) -> Option<AuthoringDiagnostic> {
+        let source = context.source();
+        if source.as_bytes() == self.document.as_bytes() {
+            return None;
+        }
+
+        let (line, column) = drift_position(source, &self.document);
+        let field = context.index().anchor_at_line(line).map_or_else(
+            || "$".to_owned(),
+            |path| field_string(path, Some(&self.document_value)),
+        );
+        Some(AuthoringDiagnostic::new(
+            AuthoringDiagnosticCode::FormatNotCanonical,
+            context.source_path(),
+            context.span(line, column),
+            field,
+            "The source is not in canonical authoring form at this line.",
+            diagnostic_hint(AuthoringDiagnosticCode::FormatNotCanonical),
+        ))
+    }
+}
+
+/// The one-based `(line, column)` where a source first diverges from its canonical rendering.
+///
+/// Both texts are split on `\n` — not on the source-line rule, which folds CRLF away — because the
+/// comparison is over bytes: a source whose only defect is its line endings must report the column
+/// where the first `\r` sits, not "no difference". The line is clamped to the source's own
+/// newline-split count so the position never runs off the end of the text it describes, and a
+/// divergence past the end of either side reports column 1, since the whole line is the difference.
+fn drift_position(source: &str, formatted: &str) -> (u32, u32) {
+    let source_lines: Vec<&str> = source.split('\n').collect();
+    let formatted_lines: Vec<&str> = formatted.split('\n').collect();
+    let shared = source_lines.len().min(formatted_lines.len());
+    let offset = (0..shared)
+        .find(|offset| source_lines[*offset] != formatted_lines[*offset])
+        .unwrap_or(shared);
+
+    let source_line_count = u32::try_from(source_lines.len()).unwrap_or(u32::MAX);
+    let line = u32::try_from(offset.saturating_add(1))
+        .unwrap_or(u32::MAX)
+        .min(source_line_count)
+        .max(1);
+    let column = match (source_lines.get(offset), formatted_lines.get(offset)) {
+        (Some(source_line), Some(formatted_line)) => {
+            common_prefix_characters(source_line, formatted_line).saturating_add(1)
+        }
+        _ => 1,
+    };
+    (line, column)
+}
+
+/// The number of leading characters — not bytes; columns are character positions — the two lines
+/// share.
+fn common_prefix_characters(left: &str, right: &str) -> u32 {
+    let shared = left
+        .chars()
+        .zip(right.chars())
+        .take_while(|(left, right)| left == right)
+        .count();
+    u32::try_from(shared).unwrap_or(u32::MAX)
 }
 
 /// Why a format request produced no document.
@@ -144,15 +227,15 @@ pub fn format_procedure_v2(
         FormatFailure::Diagnostics(vec![config_error_diagnostic(&error, &context)])
     })?;
 
-    let document = authoring_document_value(validated.parsed());
+    let authoring = authoring_document_value(validated.parsed());
     let rendered = match request.format {
         ProcedureDocumentFormat::Yaml => {
             let comments = scan_source(request.source, context.index()).map_err(|violations| {
-                FormatFailure::Diagnostics(construct_diagnostics(&violations, &context, &document))
+                FormatFailure::Diagnostics(construct_diagnostics(&violations, &context, &authoring))
             })?;
-            emit_yaml(&document, comments)
+            emit_yaml(&authoring, comments)
         }
-        ProcedureDocumentFormat::Json => emit_json(&document),
+        ProcedureDocumentFormat::Json => emit_json(&authoring),
     };
 
     let characters = rendered.chars().count();
@@ -165,6 +248,7 @@ pub fn format_procedure_v2(
     Ok(FormattedProcedureV2 {
         changed: request.source.as_bytes() != rendered.as_bytes(),
         document: rendered,
+        document_value: authoring,
         digest: validated.digest().clone(),
     })
 }

@@ -293,8 +293,8 @@ fn v2aut001_an_unrepresentable_source_construct_is_a_structured_diagnostic_succe
 }
 
 #[test]
-fn v2aut001_check_is_a_registered_capability_this_build_does_not_serve() {
-    let fixture = FixtureDirectory::new("check");
+fn v2aut001_write_is_a_registered_capability_this_build_does_not_serve() {
+    let fixture = FixtureDirectory::new("write");
     let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
     let before = identity(&path);
 
@@ -303,7 +303,7 @@ fn v2aut001_check_is_a_registered_capability_this_build_does_not_serve() {
         "procedure",
         "format",
         &path.display().to_string(),
-        "--check",
+        "--write",
     ]);
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     assert!(output.stderr.is_empty());
@@ -320,7 +320,7 @@ fn v2aut001_check_is_a_registered_capability_this_build_does_not_serve() {
     assert_eq!(envelope["details"]["kind"], "UNSUPPORTED_V2_CAPABILITY");
     assert_eq!(
         envelope["details"]["capability"],
-        "procedure.format --check"
+        "procedure.format --write"
     );
 
     // The renderer falls back to INTERNAL_ERROR when it cannot build a valid typed envelope, so the
@@ -333,30 +333,6 @@ fn v2aut001_check_is_a_registered_capability_this_build_does_not_serve() {
     assert_eq!(typed.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
     assert_eq!(typed.exit_code().get(), 3);
     assert_eq!(typed.command().as_str(), "procedure.format");
-
-    assert_eq!(identity(&path), before, "--check must not touch the file");
-}
-
-#[test]
-fn v2aut001_write_is_a_registered_capability_this_build_does_not_serve() {
-    let fixture = FixtureDirectory::new("write");
-    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
-    let before = identity(&path);
-
-    let output = run(&[
-        "--json",
-        "procedure",
-        "format",
-        &path.display().to_string(),
-        "--write",
-    ]);
-    assert_eq!(output.status.code(), Some(3), "{output:?}");
-    let envelope = one_json(&output);
-    assert_eq!(envelope["code"], "UNSUPPORTED_V2_CAPABILITY");
-    assert_eq!(
-        envelope["details"]["capability"],
-        "procedure.format --write"
-    );
 
     assert_eq!(identity(&path), before, "--write must not touch the file");
 }
@@ -490,4 +466,252 @@ fn v2aut001_daemon_only_globals_are_rejected_before_execution() {
     assert_eq!(envelope["command"], "procedure.format");
     assert_eq!(envelope["code"], "REQUEST_INVALID");
     assert_eq!(envelope["exit_code"], 2);
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2AUT-002: `--check`
+// ---------------------------------------------------------------------------------------------
+
+/// The pinned human summary for a source that is already in canonical authoring form.
+///
+/// `--check` on a clean file must say so in one line and say nothing else: the whole point of the
+/// mode is that it is quiet enough to run in a loop over a tree.
+fn canonical_summary(path: &Path) -> String {
+    format!("{} is in canonical authoring form\n", path.display())
+}
+
+fn format_check_json(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "format",
+        &path.display().to_string(),
+        "--check",
+    ])
+}
+
+fn format_check_text(path: &Path) -> Output {
+    run(&[
+        "procedure",
+        "format",
+        &path.display().to_string(),
+        "--check",
+    ])
+}
+
+/// `MINIMAL_V2_YAML` with one extra space after a key, which is drift and nothing else: the
+/// document still parses, validates, and renders.
+fn drifted_source() -> String {
+    MINIMAL_V2_YAML.replace("name: Minimal\n", "name:   Minimal\n")
+}
+
+#[test]
+fn v2aut002_check_reports_a_canonical_file_as_a_source_result_with_no_drift() {
+    let fixture = FixtureDirectory::new("check-canonical");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let output = format_check_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.format");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-source-result/v1");
+    assert_eq!(result["operation"], "format");
+    assert_eq!(result["target_schema"], "podway.procedure/v2");
+    assert_eq!(result["file"], path.display().to_string());
+    assert_eq!(result["mode"], "check");
+    assert_eq!(result["changed"], false);
+    assert!(
+        result["target_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71),
+        "{result}"
+    );
+    // The source result schema requires `document` in every mode, and requiring it is right: a
+    // client that learns a file has drifted can act on the answer without a second invocation.
+    assert_eq!(result["document"], MINIMAL_V2_YAML);
+
+    // Text mode is the one-line verdict, not the document.
+    let text = format_check_text(&path);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    assert!(text.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(text.stdout).expect("the summary must be UTF-8"),
+        canonical_summary(&path)
+    );
+}
+
+#[test]
+fn v2aut002_check_reports_a_drifted_file_as_one_format_not_canonical_finding() {
+    let fixture = FixtureDirectory::new("check-drift");
+    let path = fixture.write("drifted.yaml", &drifted_source());
+
+    let output = format_check_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        output.stderr.is_empty(),
+        "authoring findings are stdout data, never stderr diagnostics"
+    );
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.format");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+    assert_eq!(result["operation"], "format");
+    assert_eq!(result["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(result["file"], path.display().to_string());
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["diagnostics_truncated"], false);
+    assert_eq!(result["diagnostics_total"], 1);
+
+    let diagnostics = result["diagnostics"]
+        .as_array()
+        .expect("the diagnostics result must carry an array");
+    assert_eq!(diagnostics.len(), 1, "drift is one verdict, not a diff");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic["code"], "FORMAT_NOT_CANONICAL");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["schema"], "podway.procedure/v2");
+    assert_eq!(diagnostic["source_path"], path.display().to_string());
+    assert_eq!(diagnostic["field"], "name");
+    // `name:   Minimal` and `name: Minimal` share six characters on the fourth line.
+    assert_eq!(diagnostic["location"]["line"], 4);
+    assert_eq!(diagnostic["location"]["column"], 7);
+    assert_eq!(diagnostic["location"]["end_line"], 4);
+    assert_eq!(diagnostic["location"]["end_column"], 16);
+    assert_eq!(
+        diagnostic["message"],
+        "The source is not in canonical authoring form at this line."
+    );
+    assert_eq!(
+        diagnostic["hint"],
+        "Run `podway procedure format <file> --write` to rewrite the file in canonical form."
+    );
+
+    // The human report is the same one-line-per-finding render every authoring command uses.
+    let text = format_check_text(&path);
+    assert_eq!(text.status.code(), Some(1), "{text:?}");
+    assert!(text.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(text.stdout).expect("the report must be UTF-8"),
+        format!(
+            "{}:4:7 error FORMAT_NOT_CANONICAL The source is not in canonical authoring form at \
+             this line.\n",
+            path.display()
+        )
+    );
+}
+
+#[test]
+fn v2aut002_check_never_touches_the_file_it_reads() {
+    let fixture = FixtureDirectory::new("check-readonly");
+    let canonical = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let drifted = fixture.write("drifted.yaml", &drifted_source());
+    let before = (identity(&canonical), identity(&drifted));
+
+    // Both verdicts, in both renderings: nothing on any of the four paths opens the file for
+    // writing, so the bytes and the modification time are the proof rather than the intent.
+    for path in [&canonical, &drifted] {
+        format_check_json(path);
+        format_check_text(path);
+    }
+
+    assert_eq!(
+        (identity(&canonical), identity(&drifted)),
+        before,
+        "--check must leave every byte and every mtime exactly as it found them"
+    );
+    assert_eq!(
+        fs::read_to_string(&drifted).expect("the drifted fixture must still be readable"),
+        drifted_source(),
+        "--check must not rewrite the drifted file it reports on"
+    );
+    let mut entries: Vec<String> = fs::read_dir(&fixture.root)
+        .expect("the fixture directory must be readable")
+        .map(|entry| {
+            entry
+                .expect("the fixture directory entry must be readable")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        vec!["drifted.yaml".to_owned(), "minimal.yaml".to_owned()],
+        "--check must not leave a temporary file behind"
+    );
+}
+
+#[test]
+fn v2aut002_quiet_check_reports_only_through_its_exit_code() {
+    let fixture = FixtureDirectory::new("check-quiet");
+    let canonical = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let drifted = fixture.write("drifted.yaml", &drifted_source());
+
+    for (path, expected) in [(&canonical, 0), (&drifted, 1)] {
+        let output = run(&[
+            "--quiet",
+            "procedure",
+            "format",
+            &path.display().to_string(),
+            "--check",
+        ]);
+        assert_eq!(output.status.code(), Some(expected), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+}
+
+#[test]
+fn v2aut002_check_is_deterministic_across_processes() {
+    let fixture = FixtureDirectory::new("check-determinism");
+    let drifted = fixture.write("drifted.yaml", &drifted_source());
+
+    let first = format_check_text(&drifted);
+    let second = format_check_text(&drifted);
+    assert_eq!(first.status.code(), second.status.code());
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(first.stderr, second.stderr);
+}
+
+/// A v1 document is refused for being the wrong schema before `--check` gets a say, because the
+/// diagnostics family it would have to answer in is pinned to `podway.procedure/v2`.
+#[test]
+fn v2aut002_check_on_a_v1_document_is_still_a_schema_failure() {
+    let fixture = FixtureDirectory::new("check-v1");
+    let path = fixture.write("v1.yaml", V1_YAML);
+
+    let output = format_check_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.format");
+    assert_eq!(envelope["code"], "PROCEDURE_SCHEMA_UNSUPPORTED");
+    assert_eq!(envelope["exit_code"], 1);
+}
+
+/// A document that cannot be rendered reports the stage that stopped it. `--check` adds nothing:
+/// "not canonical" is not a statement anyone can act on when the canonical form does not exist.
+#[test]
+fn v2aut002_check_on_an_unformattable_document_reports_only_the_earlier_stage() {
+    let fixture = FixtureDirectory::new("check-unformattable");
+    let path = fixture.write(
+        "inline-comment.yaml",
+        &MINIMAL_V2_YAML.replace("id: minimal\n", "id: minimal # the identifier\n"),
+    );
+
+    let output = format_check_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    let diagnostics = envelope["result"]["diagnostics"]
+        .as_array()
+        .expect("the diagnostics result must carry an array");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["code"], "SOURCE_CONSTRUCT_UNSUPPORTED");
 }
