@@ -11,15 +11,28 @@ fn digest_is_canonical(value: &str) -> bool {
         && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Detaches a spawned product process from the developer's own account state.
+///
+/// Account resolution reads the operating-system account database (ADR-0012), so clearing the
+/// environment does not detach it. Neither override path is ever created: identity probes must not
+/// reach account state or `launchctl` at all, so an unexpected attempt fails loudly.
+fn configure_test_isolation(command: &mut Command) {
+    let root = std::env::temp_dir().join(format!("pci-{}", std::process::id()));
+    command
+        .env("PODWAY_TEST_ACCOUNT_ROOT", &root)
+        .env("PODWAY_TEST_LAUNCHCTL", root.join("launchctl-must-not-run"));
+}
+
 #[test]
 fn version_identity_is_static_complete_and_manifest_bound() {
-    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_podway"));
+    command
         .args(["--json", "version", "--identity"])
         .current_dir(std::env::temp_dir())
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .output()
-        .expect("podway version probe must run");
+        .env("PATH", "/usr/bin:/bin");
+    configure_test_isolation(&mut command);
+    let output = command.output().expect("podway version probe must run");
     assert!(output.status.success(), "version probe failed: {output:?}");
     assert!(output.stderr.is_empty());
     assert_eq!(String::from_utf8_lossy(&output.stdout).lines().count(), 1);
@@ -33,11 +46,14 @@ fn version_identity_is_static_complete_and_manifest_bound() {
     assert_eq!(cli_envelope.result()["schema"], "podway.version-result/v1");
 
     let daemon = Path::new(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd");
-    let daemon_output = Command::new(daemon)
+    let mut daemon_command = Command::new(daemon);
+    daemon_command
         .args(["version", "--json", "--identity"])
         .current_dir(std::env::temp_dir())
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", "/usr/bin:/bin");
+    configure_test_isolation(&mut daemon_command);
+    let daemon_output = daemon_command
         .output()
         .expect("podwayd version probe must run");
     assert!(
@@ -121,13 +137,14 @@ fn version_identity_is_static_complete_and_manifest_bound() {
 
 #[test]
 fn public_version_json_matches_the_compact_name_and_version_contract() {
-    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_podway"));
+    command
         .args(["version", "--json"])
         .current_dir(std::env::temp_dir())
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .output()
-        .expect("podway version summary must run");
+        .env("PATH", "/usr/bin:/bin");
+    configure_test_isolation(&mut command);
+    let output = command.output().expect("podway version summary must run");
     assert!(
         output.status.success(),
         "version summary failed: {output:?}"

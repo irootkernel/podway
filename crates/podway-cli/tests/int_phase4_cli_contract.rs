@@ -44,7 +44,9 @@ static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     root: PathBuf,
+    home: PathBuf,
     socket_path: PathBuf,
+    launchctl: PathBuf,
 }
 
 impl Fixture {
@@ -65,33 +67,47 @@ impl Fixture {
         )
         .expect("fixture runtime directory must be private");
         Self {
+            // Never created: this suite reaches no lifecycle route, so any `launchctl` invocation
+            // must fail the run instead of reaching the developer's own `launchd` domain.
+            launchctl: root.join("launchctl-must-not-run"),
             root,
+            home,
             socket_path: paths.socket_path().as_path().to_path_buf(),
         }
     }
 
-    fn run(&self, arguments: &[&str]) -> Output {
-        let arguments = self.arguments_with_explicit_endpoint(arguments);
-        Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(&arguments)
+    /// Binds a spawned product process to this fixture on both account-state axes.
+    ///
+    /// Account resolution reads the operating-system account database (ADR-0012), so removing
+    /// `HOME` leaves a spawned process attached to the developer's own account root and to the
+    /// fixed `dev.podway.podwayd` label in their live `launchd` domain. Only the two debug
+    /// overrides detach it.
+    fn configure_test_isolation(&self, command: &mut Command) {
+        command
+            .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
+            .env("PODWAY_TEST_LAUNCHCTL", &self.launchctl)
             .env_remove("HOME")
             .env_remove("TMPDIR")
-            .env_remove("XDG_CONFIG_HOME")
-            .output()
-            .expect("podway binary must run")
+            .env_remove("XDG_CONFIG_HOME");
+    }
+
+    fn run(&self, arguments: &[&str]) -> Output {
+        let arguments = self.arguments_with_explicit_endpoint(arguments);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_podway"));
+        command.args(&arguments);
+        self.configure_test_isolation(&mut command);
+        command.output().expect("podway binary must run")
     }
     fn run_with_stdin(&self, arguments: &[&str], input: &[u8]) -> Output {
         let arguments = self.arguments_with_explicit_endpoint(arguments);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_podway"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_podway"));
+        command
             .args(&arguments)
-            .env_remove("HOME")
-            .env_remove("TMPDIR")
-            .env_remove("XDG_CONFIG_HOME")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("podway binary must start");
+            .stderr(Stdio::piped());
+        self.configure_test_isolation(&mut command);
+        let mut child = command.spawn().expect("podway binary must start");
         let mut stdin = child.stdin.take().expect("podway stdin must be piped");
         stdin
             .write_all(input)

@@ -185,32 +185,28 @@ fn generated_dynamic_candidates(
                 "source \"$1\"\nCOMP_WORDS=({rendered_words})\nCOMP_CWORD={}\n_podway\nprintf '%s\\n' \"${{COMPREPLY[@]}}\"\n",
                 effective_words.len() - 1
             );
-            Command::new("bash")
+            let mut command = Command::new("bash");
+            command
                 .args(["-c", &program, "bash"])
                 .arg(&script.path)
                 .current_dir(current_dir)
-                .env("PATH", &path)
-                .env_remove("HOME")
-                .env_remove("TMPDIR")
-                .env_remove("XDG_CONFIG_HOME")
-                .output()
-                .expect("bash must run")
+                .env("PATH", &path);
+            fixture.configure_test_isolation(&mut command);
+            command.output().expect("bash must run")
         }
         "zsh" => {
             let program = format!(
                 "autoload -Uz compinit\ncompinit -D -i\nsource \"$1\"\nwords=({rendered_words})\nCURRENT={}\nroute=$(_podway_route)\n_podway_candidates \"$route\"\n",
                 effective_words.len()
             );
-            Command::new("zsh")
+            let mut command = Command::new("zsh");
+            command
                 .args(["-fc", &program, "zsh"])
                 .arg(&script.path)
                 .current_dir(current_dir)
-                .env("PATH", &path)
-                .env_remove("HOME")
-                .env_remove("TMPDIR")
-                .env_remove("XDG_CONFIG_HOME")
-                .output()
-                .expect("zsh must run")
+                .env("PATH", &path);
+            fixture.configure_test_isolation(&mut command);
+            command.output().expect("zsh must run")
         }
         "fish" => {
             let command_line = format!(
@@ -222,17 +218,15 @@ fn generated_dynamic_candidates(
                     .collect::<Vec<_>>()
                     .join(" ")
             );
-            Command::new("fish")
+            let mut command = Command::new("fish");
+            command
                 .args(["-c", "source $argv[1]; complete -C \"$argv[2]\""])
                 .arg(&script.path)
                 .arg(command_line)
                 .current_dir(current_dir)
-                .env("PATH", &path)
-                .env_remove("HOME")
-                .env_remove("TMPDIR")
-                .env_remove("XDG_CONFIG_HOME")
-                .output()
-                .expect("fish must run")
+                .env("PATH", &path);
+            fixture.configure_test_isolation(&mut command);
+            command.output().expect("fish must run")
         }
         _ => panic!("unsupported completion shell {shell}"),
     };
@@ -259,8 +253,14 @@ fn generated_dynamic_candidates(
 
 struct DynamicCompletionFixture {
     root: PathBuf,
+    home: PathBuf,
     socket_path: PathBuf,
+    launch_agent_path: PathBuf,
+    metadata_index_path: PathBuf,
+    log_path: PathBuf,
     dev_home: PathBuf,
+    launchctl: PathBuf,
+    launchctl_state: PathBuf,
 }
 
 impl DynamicCompletionFixture {
@@ -268,7 +268,9 @@ impl DynamicCompletionFixture {
         let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("pdc-{}-{sequence}", std::process::id()));
         let home = root.join("home");
+        let launchctl_state = root.join("lc");
         fs::create_dir_all(&home).expect("fixture home must be created");
+        fs::create_dir_all(&launchctl_state).expect("fixture launchctl state must be created");
         let paths = ServiceRuntimePathsV1::for_account_home(&home, geteuid().as_raw())
             .expect("fixture paths must be valid");
         fs::create_dir_all(paths.runtime_directory().as_path())
@@ -280,37 +282,74 @@ impl DynamicCompletionFixture {
             fs::Permissions::from_mode(0o700),
         )
         .expect("fixture runtime directory must be private");
+        let launchctl = root.join("fake-launchctl");
+        fs::write(&launchctl, FAKE_LAUNCHCTL_SCRIPT)
+            .expect("fixture fake launchctl must be written");
+        fs::set_permissions(&launchctl, fs::Permissions::from_mode(0o700))
+            .expect("fixture fake launchctl must be executable");
+        // macOS validates a freshly written executable on its first launch, and the product bounds
+        // every launchctl invocation. Paying that one-time cost here keeps it outside the bound.
+        Command::new(&launchctl)
+            .env("PODWAY_TEST_LAUNCHCTL_STATE", &launchctl_state)
+            .output()
+            .expect("fixture fake launchctl must run");
+        fs::remove_file(launchctl_state.join(LAUNCHCTL_INVOCATION_LOG)).ok();
         Self {
             dev_home: root.join("dev"),
             root,
+            home,
             socket_path: paths.socket_path().as_path().to_path_buf(),
+            launch_agent_path: paths.launch_agent_path().as_path().to_path_buf(),
+            metadata_index_path: paths.metadata_index_path().as_path().to_path_buf(),
+            log_path: paths.log_path().as_path().to_path_buf(),
+            launchctl,
+            launchctl_state,
         }
+    }
+
+    /// Binds a spawned product process to this fixture on both account-state axes.
+    ///
+    /// Account resolution reads the operating-system account database (ADR-0012), so removing
+    /// `HOME` does not detach a spawned process from the developer's own account root. Only
+    /// `PODWAY_TEST_ACCOUNT_ROOT` redirects the published plist, metadata index, and socket, and
+    /// only `PODWAY_TEST_LAUNCHCTL` keeps the fixed `dev.podway.podwayd` label off the real
+    /// `launchd` domain. Both are required: either one alone still reaches live account state.
+    fn configure_test_isolation(&self, command: &mut Command) {
+        command
+            .env("PODWAY_DEV_HOME", &self.dev_home)
+            .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
+            .env("PODWAY_TEST_LAUNCHCTL", &self.launchctl)
+            .env("PODWAY_TEST_LAUNCHCTL_STATE", &self.launchctl_state)
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME");
     }
 
     fn run(&self, arguments: &[&str]) -> Output {
         let arguments = self.arguments_with_explicit_endpoint(arguments);
-        Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(&arguments)
-            .env("PODWAY_DEV_HOME", &self.dev_home)
-            .env_remove("HOME")
-            .env_remove("TMPDIR")
-            .env_remove("XDG_CONFIG_HOME")
-            .output()
-            .expect("podway binary must run")
+        let mut command = Command::new(env!("CARGO_BIN_EXE_podway"));
+        command.args(&arguments);
+        self.configure_test_isolation(&mut command);
+        command.output().expect("podway binary must run")
     }
     fn run_in(&self, directory: &Path, arguments: &[String]) -> Output {
         let arguments = self.arguments_with_explicit_endpoint(
             &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
         );
-        Command::new(env!("CARGO_BIN_EXE_podway"))
-            .args(&arguments)
-            .current_dir(directory)
-            .env("PODWAY_DEV_HOME", &self.dev_home)
-            .env_remove("HOME")
-            .env_remove("TMPDIR")
-            .env_remove("XDG_CONFIG_HOME")
-            .output()
-            .expect("podway binary must run")
+        let mut command = Command::new(env!("CARGO_BIN_EXE_podway"));
+        command.args(&arguments).current_dir(directory);
+        self.configure_test_isolation(&mut command);
+        command.output().expect("podway binary must run")
+    }
+
+    /// Replays every `launchctl` invocation the fake recorded, one argument vector per entry.
+    fn launchctl_invocations(&self) -> Vec<Vec<String>> {
+        let recorded = fs::read_to_string(self.launchctl_state.join(LAUNCHCTL_INVOCATION_LOG))
+            .unwrap_or_default();
+        recorded
+            .lines()
+            .map(|line| line.split('\t').map(str::to_owned).collect())
+            .collect()
     }
 
     fn arguments_with_explicit_endpoint(&self, arguments: &[&str]) -> Vec<String> {
@@ -354,9 +393,89 @@ fn command_accepts_explicit_socket(arguments: &[&str]) -> bool {
 
 impl Drop for DynamicCompletionFixture {
     fn drop(&mut self) {
+        if let Ok(pid) = fs::read_to_string(self.launchctl_state.join("pid")) {
+            let _ = Command::new("/bin/kill").arg(pid.trim()).status();
+        }
         let _ = fs::remove_dir_all(&self.root);
     }
 }
+
+/// File in which the fake `launchctl` records one tab-separated argument vector per invocation.
+///
+/// [`FAKE_LAUNCHCTL_SCRIPT`] repeats this name literally, so the two must stay in step.
+const LAUNCHCTL_INVOCATION_LOG: &str = "invocations";
+
+/// A cooperative `launchctl` replacement scoped to one fixture.
+///
+/// It records every invocation, then serves exactly the three subcommands the service adapter
+/// issues: `print` reports the loaded state of the fixture's own daemon, `bootstrap` starts the
+/// daemon named by the fixture-scoped plist, and `bootout` stops it. Anything else exits 64, so an
+/// unmodelled subcommand fails loudly instead of silently succeeding.
+const FAKE_LAUNCHCTL_SCRIPT: &[u8] = br##"#!/bin/sh
+set -eu
+state=${PODWAY_TEST_LAUNCHCTL_STATE:?}
+if [ "$#" -gt 0 ]; then
+  ( IFS=$(printf '\t'); printf '%s\n' "$*" ) >> "$state/invocations"
+fi
+pid_file="$state/pid"
+target="gui/$(/usr/bin/id -u)/dev.podway.podwayd"
+case "${1:-}" in
+  print)
+    if [ -f "$pid_file" ] && /bin/kill -0 "$(/bin/cat "$pid_file")" 2>/dev/null; then
+      echo "$target = {"
+      echo "    pid = $(/bin/cat "$pid_file")"
+      echo "}"
+      exit 0
+    fi
+    echo "Bad request." >&2
+    echo "Could not find service \"dev.podway.podwayd\" in domain for user gui: $(/usr/bin/id -u)" >&2
+    exit 113
+    ;;
+  bootstrap)
+    plist=${3:?}
+    daemon=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist")
+    socket=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:3' "$plist")
+    daemon_log="$state/daemon.log"
+    /usr/bin/python3 - "$daemon" "$socket" "$pid_file" "$daemon_log" <<'PY'
+import subprocess
+import sys
+
+daemon, socket, pid_file, daemon_log = sys.argv[1:]
+with open(daemon_log, "ab", buffering=0) as log:
+    child = subprocess.Popen(
+        [daemon, "--service", "--socket", socket],
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+with open(pid_file, "w", encoding="ascii") as destination:
+    destination.write(str(child.pid))
+PY
+    /bin/sleep 0.1
+    if ! /bin/kill -0 "$(/bin/cat "$pid_file")" 2>/dev/null; then
+      /bin/cat "$daemon_log" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  bootout)
+    if [ -f "$pid_file" ]; then
+      pid=$(/bin/cat "$pid_file")
+      /bin/kill -TERM "$pid" 2>/dev/null || true
+      i=0
+      while /bin/kill -0 "$pid" 2>/dev/null && [ "$i" -lt 200 ]; do
+        /bin/sleep 0.01
+        i=$((i + 1))
+      done
+      /bin/rm -f "$pid_file"
+    fi
+    exit 0
+    ;;
+esac
+exit 64
+"##;
 
 struct DynamicCompletionServer {
     handle: JoinHandle<io::Result<(String, OperationV1)>>,
@@ -2708,31 +2827,117 @@ rework:
             vec!["--json", "daemon", "logs", "--lines", "1"],
         ),
     ];
+    // The fixture owns its account root and its `launchctl`, so the lifecycle is deterministic:
+    // `install` reaches a verified running service, `uninstall` tears it down, and every route
+    // after that observes an uninstalled service. Each route therefore has one expected success
+    // envelope rather than a success-or-error alternative that a destroyed real service satisfies.
     for (route, arguments) in &service_routes {
         let output = fixture.run(arguments);
         let response: ResponseEnvelopeV1 =
             serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
                 panic!("{route} must produce a typed JSON service proof: {error}; {output:?}")
             });
-        match response {
-            ResponseEnvelopeV1::Output(response) => {
+        let ResponseEnvelopeV1::Output(response) = response else {
+            panic!("{route} must succeed against the fixture's own service state: {output:?}");
+        };
+        assert!(
+            output.status.success(),
+            "{route} output must exit successfully"
+        );
+        assert_eq!(response.command().as_str(), *route);
+        let result = response.result();
+        match *route {
+            "daemon.install" => {
+                assert_eq!(result["outcome"], "changed", "{route}: {result:?}");
                 assert!(
-                    output.status.success(),
-                    "{route} output must exit successfully"
+                    fixture.launch_agent_path.is_file(),
+                    "daemon.install must publish the fixture launch agent"
                 );
-                assert_eq!(response.command().as_str(), *route);
+                assert!(
+                    fixture.metadata_index_path.is_file(),
+                    "daemon.install must publish the fixture metadata index"
+                );
             }
-            ResponseEnvelopeV1::Error(response) => {
+            "daemon.uninstall" => {
+                assert_eq!(result["outcome"], "changed", "{route}: {result:?}");
                 assert!(
-                    !output.status.success(),
-                    "{route} error must fail the process"
+                    !fixture.launch_agent_path.exists(),
+                    "daemon.uninstall must remove the fixture launch agent"
                 );
-                assert_eq!(response.command().as_str(), *route);
                 assert!(
-                    !response.code().as_str().is_empty(),
-                    "{route} typed service failure must retain a public error code"
+                    !fixture.metadata_index_path.exists(),
+                    "daemon.uninstall must remove the fixture metadata index"
                 );
             }
+            "daemon.start" | "daemon.stop" | "daemon.restart" => {
+                assert_eq!(result["outcome"], "not_installed", "{route}: {result:?}");
+            }
+            "daemon.status" => {
+                assert_eq!(result["status"], "not_installed", "{route}: {result:?}");
+                assert_eq!(result["installed"], false, "{route}: {result:?}");
+                assert_eq!(result["loaded"], false, "{route}: {result:?}");
+                assert_eq!(result["reachable"], false, "{route}: {result:?}");
+            }
+            "daemon.terminate" => {
+                assert_eq!(result["mode"], "dev", "{route}: {result:?}");
+                assert_eq!(result["termination"], "completed", "{route}: {result:?}");
+            }
+            "daemon.logs" => {
+                assert_eq!(
+                    result["path"],
+                    fixture.log_path.display().to_string(),
+                    "daemon.logs must read the fixture log, never the account log"
+                );
+                assert!(
+                    result["content"]
+                        .as_str()
+                        .is_some_and(|content| !content.is_empty()),
+                    "daemon.logs must return the line the fixture service wrote: {result:?}"
+                );
+            }
+            unmodelled => panic!("{unmodelled} has no expected fixture lifecycle outcome"),
+        }
+    }
+
+    // Regression proof for the isolation the routes above depend on. Before it existed the fixture
+    // set only `PODWAY_DEV_HOME`, and removing `HOME` did not detach account resolution (ADR-0012),
+    // so this loop booted the shared `dev.podway.podwayd` label out of the developer's live
+    // `launchd` domain and deleted their installed service — silently, because the assertions
+    // accepted an error envelope. Every recorded `launchctl` argument naming a launch agent must be
+    // the fixture's own, which is evidence independent of whatever the machine has installed.
+    let invocations = fixture.launchctl_invocations();
+    let expected_plist = fixture.launch_agent_path.display().to_string();
+    assert!(
+        fixture.launch_agent_path.starts_with(&fixture.home),
+        "the fixture launch agent must live under the fixture account root: {expected_plist}"
+    );
+    let bootstrapped = invocations
+        .iter()
+        .filter(|invocation| invocation.first().is_some_and(|word| word == "bootstrap"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bootstrapped,
+        vec![&vec![
+            "bootstrap".to_owned(),
+            format!("gui/{}", geteuid().as_raw()),
+            expected_plist.clone(),
+        ]],
+        "the lifecycle must bootstrap the fixture launch agent exactly once"
+    );
+    assert_eq!(
+        invocations
+            .iter()
+            .filter(|invocation| invocation.first().is_some_and(|word| word == "bootout"))
+            .count(),
+        1,
+        "the lifecycle must boot out the fixture service exactly once: {invocations:?}"
+    );
+    for invocation in &invocations {
+        for argument in invocation {
+            assert!(
+                !argument.ends_with(".plist") || *argument == expected_plist,
+                "launchctl must never be handed a launch agent outside the fixture: {invocation:?}"
+            );
         }
     }
 
@@ -3820,6 +4025,9 @@ fn hidden_dynamic_completion_silently_degrades_without_a_daemon() {
         .args(["__complete", "items"])
         .env("HOME", &unique)
         .env("TMPDIR", &unique)
+        // `HOME` is inert for account resolution (ADR-0012), so only the account-root override
+        // makes "without a daemon" true instead of probing the developer's own installed service.
+        .env("PODWAY_TEST_ACCOUNT_ROOT", &unique)
         .output()
         .expect("podway binary must run");
     assert!(output.status.success());
@@ -3837,6 +4045,9 @@ fn daemon_install_rejects_non_native_executables_before_launchctl() {
     let home = unique_short_fixture_path();
     fs::create_dir_all(&home).expect("invalid daemon HOME fixture directory");
     let temporary = unique_short_fixture_path();
+    // Never created, so any `launchctl` invocation fails the run with a launchctl error instead of
+    // reaching the real `launchd` domain — the version rejection below is what must happen first.
+    let forbidden_launchctl = root.join("launchctl-must-not-run");
 
     let matching_version_script = format!(
         "#!/bin/sh\nprintf 'podwayd {}\\n'\n",
@@ -3867,6 +4078,10 @@ fn daemon_install_rejects_non_native_executables_before_launchctl() {
             ])
             .env("HOME", &home)
             .env("TMPDIR", &temporary)
+            // `HOME` does not steer account resolution (ADR-0012); the account-root override is
+            // what makes the `LaunchAgents` assertion below observe the root this run publishes to.
+            .env("PODWAY_TEST_ACCOUNT_ROOT", &home)
+            .env("PODWAY_TEST_LAUNCHCTL", &forbidden_launchctl)
             .output()
             .expect("podway binary must run");
         let response = one_json(&output);
