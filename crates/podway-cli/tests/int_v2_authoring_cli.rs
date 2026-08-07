@@ -2051,37 +2051,42 @@ fn v2aut007_convert_reports_both_digests_and_the_source_digest_is_the_v1_validat
 #[test]
 fn v2aut007_a_converted_document_is_canonical_and_passes_the_aggregate_gate() {
     let fixture = FixtureDirectory::new("convert-pipeline");
-    let source = fixture.write("sw-dev.yaml", &shipped_preset("sw-dev"));
+    // `analysis` is here as well as `sw-dev` because it is the preset that sits closest to a v2
+    // bound: its `max_items: 200` is exactly the v2 list cap, so the pipeline is proved at the
+    // ceiling and not only in the middle of the range.
+    for preset in ["analysis", "sw-dev"] {
+        let source = fixture.write(&format!("{preset}.yaml"), &shipped_preset(preset));
 
-    let converted = convert_text(&source);
-    assert_eq!(converted.status.code(), Some(0), "{converted:?}");
-    let candidate = fixture.root.join("sw-dev-v2.yaml");
-    fs::write(&candidate, &converted.stdout).expect("the candidate must be writable");
+        let converted = convert_text(&source);
+        assert_eq!(converted.status.code(), Some(0), "{preset}: {converted:?}");
+        let candidate = fixture.root.join(format!("{preset}-v2.yaml"));
+        fs::write(&candidate, &converted.stdout).expect("the candidate must be writable");
 
-    let formatted = format_check_text(&candidate);
-    assert_eq!(
-        formatted.status.code(),
-        Some(0),
-        "a converted document is already canonical: {formatted:?}"
-    );
-    assert_eq!(formatted.stdout, canonical_summary(&candidate).into_bytes());
+        let formatted = format_check_text(&candidate);
+        assert_eq!(
+            formatted.status.code(),
+            Some(0),
+            "{preset}: a converted document is already canonical: {formatted:?}"
+        );
+        assert_eq!(formatted.stdout, canonical_summary(&candidate).into_bytes());
 
-    let checked = run(&[
-        "procedure",
-        "check",
-        &candidate.display().to_string(),
-        "--warnings-as-errors",
-    ]);
-    assert_eq!(
-        checked.status.code(),
-        Some(0),
-        "a converted document must report no finding at all: {checked:?}"
-    );
-    assert_eq!(
-        one_json(&check_json(&candidate))["result"]["digest"],
-        one_json(&convert_json(&source))["result"]["target_digest"],
-        "the digest convert advertises must be the digest the written file has"
-    );
+        let checked = run(&[
+            "procedure",
+            "check",
+            &candidate.display().to_string(),
+            "--warnings-as-errors",
+        ]);
+        assert_eq!(
+            checked.status.code(),
+            Some(0),
+            "{preset}: a converted document must report no finding at all: {checked:?}"
+        );
+        assert_eq!(
+            one_json(&check_json(&candidate))["result"]["digest"],
+            one_json(&convert_json(&source))["result"]["target_digest"],
+            "{preset}: the digest convert advertises must be the digest the written file has"
+        );
+    }
 }
 
 /// Text mode writes the candidate bytes and nothing else, so `> file` is the documented usage.
@@ -2175,12 +2180,13 @@ fn v2aut007_a_malformed_v1_document_reports_the_same_failure_procedure_validate_
 }
 
 /// A v1 value Procedure v2 cannot hold is a diagnostics result against the v1 path that carries it.
-/// `assets/presets/analysis.yaml` is the shipped example: it declares `max_items: 200` on one list
-/// item, and Procedure v2 caps a list at 100 entries.
+/// v1 admits `max_items` up to 1,000 and Procedure v2 caps a list at 200 entries, so the shipped
+/// `analysis` preset — which sits exactly on the v2 cap and converts — is pushed one bound past it.
 #[test]
 fn v2aut007_a_v1_value_v2_cannot_hold_is_reported_against_its_v1_path() {
     let fixture = FixtureDirectory::new("convert-overflow");
-    let path = fixture.write("analysis.yaml", &shipped_preset("analysis"));
+    let oversized = shipped_preset("analysis").replace("max_items: 200", "max_items: 1000");
+    let path = fixture.write("analysis.yaml", &oversized);
 
     let output = convert_json(&path);
     assert_eq!(output.status.code(), Some(1), "{output:?}");

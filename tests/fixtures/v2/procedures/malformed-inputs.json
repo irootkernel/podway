@@ -42,7 +42,7 @@
     {"dimension": "item prompt characters", "at_limit": 300, "one_over": 301},
     {"dimension": "item help characters", "at_limit": 1000, "one_over": 1001},
     {"dimension": "text item max_length", "at_limit": 16384, "one_over": 16385},
-    {"dimension": "list entries", "at_limit": 100, "one_over": 101},
+    {"dimension": "list entries", "at_limit": 200, "one_over": 201},
     {"dimension": "list entry characters", "at_limit": 1000, "one_over": 1001},
     {"dimension": "choice count", "at_limit": 32, "one_over": 33},
     {"dimension": "choice characters", "at_limit": 120, "one_over": 121},

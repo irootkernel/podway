@@ -620,7 +620,7 @@ them and MUST NOT relax them. The v2 authoring bounds are:
 | items per definition | 64 |
 | item prompt / item help | 300 / 1,000 characters |
 | text item `max_length` | default 4,000; hard maximum 16,384 |
-| list item | default 50 entries of 500; hard maximum 100 entries of 1,000 characters |
+| list item | default 50 entries of 500; hard maximum 200 entries of 1,000 characters |
 | choice item | at most 32 choices, each at most 120 characters |
 | `evidence_from` entries per placement | 8 |
 | selected items per `evidence_from` entry | 16 |

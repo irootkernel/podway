@@ -78,7 +78,7 @@ const V2_MAX_TEXT_LENGTH: u32 = 16_384;
 /// Values in a choice item. v1 allows 64.
 const V2_MAX_CHOICES: usize = 32;
 /// Both list-item count constraints. v1 allows 1,000 and defaults to 100.
-const V2_MAX_LIST_ITEMS: u16 = 100;
+const V2_MAX_LIST_ITEMS: u16 = 200;
 /// Characters in one list entry. v1 allows 4,000 and defaults to 500.
 const V2_MAX_LIST_ITEM_LENGTH: u16 = 1_000;
 
@@ -729,7 +729,7 @@ impl<'a> OverflowScan<'a> {
                 ..
             } => {
                 // O10 and O11, with the same relationship O7 has to O8: v2 bounds `max_items` at
-                // 100 and requires `min_items` not to exceed it, so O10 never fires alone.
+                // 200 and requires `min_items` not to exceed it, so O10 never fires alone.
                 if *min_items > V2_MAX_LIST_ITEMS {
                     self.report(
                         &path.child_key("min_items"),

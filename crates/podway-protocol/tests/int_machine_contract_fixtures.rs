@@ -1755,7 +1755,7 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_not_runtime_evidence() {
         ("item prompt characters", 300, 301),
         ("item help characters", 1000, 1001),
         ("text item max_length", 16_384, 16_385),
-        ("list entries", 100, 101),
+        ("list entries", 200, 201),
         ("list entry characters", 1000, 1001),
         ("choice count", 32, 33),
         ("choice characters", 120, 121),
@@ -2340,7 +2340,7 @@ fn v2ctr002_procedure_v2_schema_accepts_exact_authoring_boundaries() {
             .map(|index| format!("{index:02}{}", "c".repeat(118)))
             .collect::<Vec<_>>()
     );
-    maximum["node_definitions"]["work"]["items"][4]["max_items"] = json!(100);
+    maximum["node_definitions"]["work"]["items"][4]["max_items"] = json!(200);
     maximum["node_definitions"]["work"]["items"][4]["max_item_length"] = json!(1000);
     maximum["node_definitions"]["work"]["items"][5]["allowed_media_types"] = json!(
         (0..64)
@@ -2528,7 +2528,7 @@ fn v2ctr002_procedure_v2_schema_enforces_collection_and_string_bounds() {
     text_too_large["node_definitions"]["work"]["items"][1]["max_length"] = json!(16385);
     invalid_cases.push(text_too_large);
     let mut list_too_large = valid.clone();
-    list_too_large["node_definitions"]["work"]["items"][4]["max_items"] = json!(101);
+    list_too_large["node_definitions"]["work"]["items"][4]["max_items"] = json!(201);
     invalid_cases.push(list_too_large);
     let mut list_item_too_large = valid.clone();
     list_item_too_large["node_definitions"]["work"]["items"][4]["max_item_length"] = json!(1001);

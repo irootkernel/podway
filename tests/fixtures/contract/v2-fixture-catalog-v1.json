@@ -20,7 +20,7 @@
     {"id": "procedure-equivalence-contract", "path": "tests/fixtures/v2/procedures/equivalence-contract.json", "media_type": "application/json", "sha256": "sha256:d34bfc97db205d8c0081d571df88053e828692de12a3b1e6cb6081e55e51a494"},
     {"id": "procedure-equivalent-json", "path": "tests/fixtures/v2/procedures/equivalent-procedure.json", "media_type": "application/json", "sha256": "sha256:4199d47619fd71b4a4cfee131d1b9971dfb773e3c3f37aca43f7f41eba39d88d"},
     {"id": "procedure-equivalent-yaml", "path": "tests/fixtures/v2/procedures/equivalent-procedure.yaml", "media_type": "application/yaml", "sha256": "sha256:8714682bd21c5301db431846202826e13b5f8021a0ee3961540d28c69465db79"},
-    {"id": "procedure-malformed-inputs", "path": "tests/fixtures/v2/procedures/malformed-inputs.json", "media_type": "application/json", "sha256": "sha256:ec1a6d041fee422df83a514a5430b09293fa01fd141a61c65bedf1f2816d6ec4"}
+    {"id": "procedure-malformed-inputs", "path": "tests/fixtures/v2/procedures/malformed-inputs.json", "media_type": "application/json", "sha256": "sha256:7497fa365c60d28a9a578d88612ebcab8968d698f4856be3e6d5edac31218969"}
   ],
   "cases": [
     {

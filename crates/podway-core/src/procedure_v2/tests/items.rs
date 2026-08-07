@@ -69,10 +69,10 @@ fn item_specs_enforce_v2_bounds_while_keeping_v1_unchanged() {
         invalid("choice")
     );
 
-    // list bounds cap at 100 entries of 1_000 characters.
-    assert!(ListItemSpecV2::new(common("l"), 0, 100, 1_000, true).is_ok());
+    // list bounds cap at 200 entries of 1_000 characters.
+    assert!(ListItemSpecV2::new(common("l"), 0, 200, 1_000, true).is_ok());
     assert_eq!(
-        ListItemSpecV2::new(common("l"), 0, 101, 500, true).unwrap_err(),
+        ListItemSpecV2::new(common("l"), 0, 201, 500, true).unwrap_err(),
         invalid("invalid list item count constraints")
     );
     assert_eq!(

@@ -18,11 +18,11 @@
 //!   and the bound constants the converter pre-checks with are pinned against the v2 constructors
 //!   that actually enforce them, so the two cannot drift.
 //!
-//! **A shipped preset does not convert, and that is a finding, not a test bug.**
-//! `assets/presets/analysis.yaml` declares `max_items: 200` on one list item; Procedure v2 caps a
-//! list at 100 entries (`assets/schemas/procedure-v2.schema.json` `$defs/list_item`). It is
-//! asserted below as the overflow it is. Converting it would require editing a digest-locked
-//! contract asset, which is a product decision and not this task's to make.
+//! **Every shipped preset converts.** `assets/presets/analysis.yaml` declares `max_items: 200` on
+//! one list item, which Procedure v2 admits because its list cap is 200 entries
+//! (`assets/schemas/procedure-v2.schema.json` `$defs/list_item`). v1 still allows up to 1,000, so
+//! the refusal path is a real one — it is exercised below by a fixture rather than by a shipped
+//! asset.
 
 use std::path::{Path, PathBuf};
 
@@ -43,9 +43,8 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The shipped presets that convert. `analysis` is the fourth and is covered by
-/// [`v2aut007_the_analysis_preset_does_not_convert_because_v2_caps_a_list_at_one_hundred`].
-const CONVERTIBLE_PRESETS: [&str; 3] = ["bug-fix", "docs-only", "sw-dev"];
+/// Every shipped preset. All four convert.
+const CONVERTIBLE_PRESETS: [&str; 4] = ["analysis", "bug-fix", "docs-only", "sw-dev"];
 
 fn preset_source(name: &str) -> String {
     std::fs::read_to_string(repo_root().join(format!("assets/presets/{name}.yaml")))
@@ -152,7 +151,11 @@ fn v1_with_item(item: &str) -> String {
 /// asserts that the converter equals itself. These pin what a converted procedure *means*, so a
 /// mapping change — dropping a materialized default, rewording a synthesized intent, reordering
 /// rework targets — fails here and has to be justified rather than absorbed.
-const CONVERTED_PRESET_DIGESTS: [(&str, &str); 3] = [
+const CONVERTED_PRESET_DIGESTS: [(&str, &str); 4] = [
+    (
+        "analysis",
+        "sha256:0c9e7ae0082fcd3d8cbf6f4e9961d9d06975fcc67114de1024fcc2062c893d72",
+    ),
     (
         "bug-fix",
         "sha256:771ab15301b316494cdd2b3cfaa17f50308713bb090bd0bd466ac2670d683f05",
@@ -244,47 +247,53 @@ fn v2aut007_converting_a_preset_a_hundred_times_produces_identical_bytes() {
 /// and YAML forms of one procedure must produce the same candidate, byte for byte.
 #[test]
 fn v2aut007_the_json_and_yaml_encodings_of_one_v1_document_convert_identically() {
-    let yaml_source = preset_source("sw-dev");
-    let document: Value =
-        serde_yaml::from_str(&yaml_source).expect("the preset must decode as a value");
-    let json_source = serde_json::to_string_pretty(&document).expect("a v1 document re-encodes");
-    assert_ne!(
-        json_source, yaml_source,
-        "the two encodings must actually differ, or the parity claim is vacuous"
-    );
+    for preset in CONVERTIBLE_PRESETS {
+        let yaml_source = preset_source(preset);
+        let document: Value =
+            serde_yaml::from_str(&yaml_source).expect("the preset must decode as a value");
+        let json_source =
+            serde_json::to_string_pretty(&document).expect("a v1 document re-encodes");
+        assert_ne!(
+            json_source, yaml_source,
+            "{preset}: the two encodings must actually differ, or the parity claim is vacuous"
+        );
 
-    let json_validated = parse_procedure_v1(&json_source, ProcedureDocumentFormat::Json)
-        .expect("the JSON encoding must parse as v1");
-    let json_context =
-        AuthoringContext::new("sw-dev.json", &json_source, ProcedureDocumentFormat::Json);
-    let from_json = convert_procedure_v1_to_v2(&json_validated, &json_context)
-        .expect("the JSON encoding must convert");
-    let from_yaml = converted(&yaml_source);
+        let json_validated = parse_procedure_v1(&json_source, ProcedureDocumentFormat::Json)
+            .expect("the JSON encoding must parse as v1");
+        let json_path = format!("{preset}.json");
+        let json_context =
+            AuthoringContext::new(&json_path, &json_source, ProcedureDocumentFormat::Json);
+        let from_json = convert_procedure_v1_to_v2(&json_validated, &json_context)
+            .expect("the JSON encoding must convert");
+        let from_yaml = converted(&yaml_source);
 
-    assert_eq!(from_json.document(), from_yaml.document());
-    assert_eq!(from_json.digest(), from_yaml.digest());
-    assert_eq!(
-        from_json.source_digest(),
-        from_yaml.source_digest(),
-        "the v1 digest is canonical over the model, so it is already encoding-independent"
-    );
+        assert_eq!(from_json.document(), from_yaml.document(), "{preset}");
+        assert_eq!(from_json.digest(), from_yaml.digest(), "{preset}");
+        assert_eq!(
+            from_json.source_digest(),
+            from_yaml.source_digest(),
+            "{preset}: the v1 digest is canonical over the model, so it is already \
+             encoding-independent"
+        );
+    }
 }
 
-/// The fourth preset, and the reason it is not in [`CONVERTIBLE_PRESETS`].
+/// The v1 list bound that v2 still refuses, with its message pinned in full.
 ///
-/// `assets/presets/analysis.yaml` declares a list item with `max_items: 200`. Procedure v2 caps a
-/// list at 100 entries. This is a real product finding rather than a fixture defect, so it is
-/// asserted as the exact refusal it produces: silently rewriting the shipped preset to make a test
-/// pass would change a digest-locked contract asset.
+/// v1 admits `max_items` up to 1,000 and v2 caps a list at 200, so the gap is real even though no
+/// shipped preset falls in it. The other list assertions in this file pin `(code, field)`; this one
+/// pins the rendered sentence, because the number it quotes is the contract an author reads.
 #[test]
-fn v2aut007_the_analysis_preset_does_not_convert_because_v2_caps_a_list_at_one_hundred() {
-    let report = overflow_report(&preset_source("analysis"));
+fn v2aut007_a_v1_list_over_the_v2_cap_is_refused_against_its_v1_path() {
+    let source = v1_with_item(
+        "      - id: sources\n        type: list\n        prompt: List them.\n        required: true\n        max_items: 1000\n",
+    );
     assert_eq!(
-        report,
+        overflow_report(&source),
         vec![(
             "AUTHORING_SCHEMA_INVALID",
-            "stages[collect-sources].items[sources].max_items".to_owned(),
-            "The v1 list item allows up to 200 entries, over the Procedure v2 maximum of 100."
+            "stages[only].items[sources].max_items".to_owned(),
+            "The v1 list item allows up to 1000 entries, over the Procedure v2 maximum of 200."
                 .to_owned(),
         )],
         "the only obstacle is the one oversized bound, reported against the v1 path that carries it"
@@ -655,14 +664,14 @@ fn v2aut007_empty_v1_collections_are_omitted_rather_than_written_as_empty_ones()
 //   O6  item help              v1 4,000 -> v2 1,000
 //   O8  text max_length        v1 65,536 -> v2 16,384
 //   O9  choice values          v1    64 -> v2    32
-//   O11 list max_items         v1 1,000 -> v2   100
+//   O11 list max_items         v1 1,000 -> v2   200
 //   O12 list max_item_length   v1 4,000 -> v2 1,000
 //   O13 emitted document / canonical projection over SOURCE_PROJECTION_MAX_CHARACTERS
 //
 // Reachable only jointly, never alone — reported anyway, because both values need editing:
 //   O7  text min_length. v2 requires `min_length <= max_length <= 16,384`, so a `min_length` past
 //       16,384 drags a `max_length` past 16,384 with it, and O8 always fires beside it.
-//   O10 list min_items. Same shape: v2 requires `min_items <= max_items <= 100`.
+//   O10 list min_items. Same shape: v2 requires `min_items <= max_items <= 200`.
 //
 // Not reachable at all, because v1 is at least as strict as v2:
 //   procedure id/version/name, stage id/title, item id (identical bounds); stage count (1..64 on
@@ -853,23 +862,23 @@ fn v2aut007_o10_o11_and_o12_bound_the_list_constraints() {
         ))
     };
 
-    assert!(convert(&list(0, 100, 1_000)).is_ok(), "the v2 bounds");
+    assert!(convert(&list(0, 200, 1_000)).is_ok(), "the v2 bounds");
     assert_eq!(
-        overflow_codes(&list(0, 101, 500)),
+        overflow_codes(&list(0, 201, 500)),
         [(
             "AUTHORING_SCHEMA_INVALID",
             "stages[only].items[field].max_items".to_owned()
         )]
     );
     assert_eq!(
-        overflow_codes(&list(0, 100, 1_001)),
+        overflow_codes(&list(0, 200, 1_001)),
         [(
             "AUTHORING_SCHEMA_INVALID",
             "stages[only].items[field].max_item_length".to_owned()
         )]
     );
     assert_eq!(
-        overflow_codes(&list(101, 101, 500)),
+        overflow_codes(&list(201, 201, 500)),
         [
             (
                 "AUTHORING_SCHEMA_INVALID",
@@ -880,7 +889,7 @@ fn v2aut007_o10_o11_and_o12_bound_the_list_constraints() {
                 "stages[only].items[field].max_items".to_owned()
             ),
         ],
-        "v2 requires min_items <= max_items <= 100, so O10 can only ever arrive with O11"
+        "v2 requires min_items <= max_items <= 200, so O10 can only ever arrive with O11"
     );
 }
 
@@ -1006,8 +1015,8 @@ fn v2aut007_every_pre_checked_bound_matches_the_v2_constructor_that_enforces_it(
         (
             "list max_items",
             "stages[only].items[field].max_items".to_owned(),
-            text_item("list", "        max_items: 100\n".to_owned()),
-            text_item("list", "        max_items: 101\n".to_owned()),
+            text_item("list", "        max_items: 200\n".to_owned()),
+            text_item("list", "        max_items: 201\n".to_owned()),
         ),
         (
             "list max_item_length",

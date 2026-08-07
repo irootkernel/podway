@@ -1663,8 +1663,8 @@ fn document_bound_cases() -> Vec<BoundCase> {
         ),
         bound_case(
             "list entries",
-            100,
-            101,
+            200,
+            201,
             bound_violation("invalid list item count constraints"),
             |maximum| {
                 item_document(&format!(
