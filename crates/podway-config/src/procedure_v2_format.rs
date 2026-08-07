@@ -272,10 +272,7 @@ pub(crate) fn render_procedure_v2(
         ProcedureDocumentFormat::Json => emit_json(&authoring),
     };
 
-    let characters = rendered.chars().count();
-    if characters > SOURCE_PROJECTION_MAX_CHARACTERS {
-        return Err(vec![projection_budget_diagnostic(context, characters)]);
-    }
+    bound_projection(&rendered, context)?;
 
     Ok(FormattedProcedureV2 {
         changed: context.source().as_bytes() != rendered.as_bytes(),
@@ -283,6 +280,44 @@ pub(crate) fn render_procedure_v2(
         document_value: authoring,
         digest: validated.digest().clone(),
     })
+}
+
+/// Renders a validated model as canonical authoring YAML from a comment table the caller supplies.
+///
+/// The seam section 11.6's `convert` enters through. A converted document has no v2 source, so
+/// there is nothing to scan for comments and nothing to compare against for drift — but everything
+/// downstream of the scan is identical, and it must be: the authoring tree, the emitter, and the
+/// projection bound here are the very ones [`render_procedure_v2`] uses, so a converted document is
+/// in canonical authoring form by construction rather than by a second implementation that could
+/// disagree with the first.
+///
+/// `context` supplies only the diagnostic geography for the projection bound; nothing is read out
+/// of its source text.
+pub(crate) fn emit_procedure_v2_yaml(
+    validated: &ValidatedProcedureV2,
+    comments: SourceComments,
+    context: &AuthoringContext<'_>,
+) -> Result<String, Vec<AuthoringDiagnostic>> {
+    let rendered = emit_yaml(&authoring_document_value(validated.parsed()), comments);
+    bound_projection(&rendered, context)?;
+    Ok(rendered)
+}
+
+/// Enforces the emitted-document budget, shared by every caller that produces authoring text.
+///
+/// The bound is over the *emitted* document, not over the canonical JSON projection validation
+/// already checked: block YAML is materially larger than compact JSON, and
+/// `procedure-source-result-v1.schema.json` bounds `document` at the same number, so a document
+/// that renders past it has no reportable result.
+fn bound_projection(
+    rendered: &str,
+    context: &AuthoringContext<'_>,
+) -> Result<(), Vec<AuthoringDiagnostic>> {
+    let characters = rendered.chars().count();
+    if characters > SOURCE_PROJECTION_MAX_CHARACTERS {
+        return Err(vec![projection_budget_diagnostic(context, characters)]);
+    }
+    Ok(())
 }
 
 fn construct_diagnostics(

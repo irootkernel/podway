@@ -524,6 +524,20 @@ pub(crate) struct SourceComments {
 }
 
 impl SourceComments {
+    /// Builds a table from blocks a caller attached itself, with no trailing block.
+    ///
+    /// The seam `procedure_v2_convert` needs: a converted document has no v2 source to scan, and its
+    /// review comments are synthesized rather than carried across. Anchoring them to structural
+    /// paths — the same addresses [`scan_source`] produces — is what makes the converted document a
+    /// fixpoint of the formatter for its comments too: re-scanning the emitted text recovers the
+    /// same blocks at the same anchors.
+    pub(crate) fn from_attached(blocks: Vec<(FieldPath, Vec<String>)>) -> Self {
+        Self {
+            attached: blocks.into_iter().collect(),
+            trailing: Vec::new(),
+        }
+    }
+
     /// Removes and returns the block attached to `path`, if any. The emitter consumes blocks as it
     /// visits paths so that whatever is left over can be recovered rather than lost.
     pub(crate) fn take(&mut self, path: &FieldPath) -> Option<Vec<String>> {

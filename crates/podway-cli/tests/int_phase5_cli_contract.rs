@@ -67,7 +67,7 @@ fn registered_command_catalog_route_availability() -> BTreeMap<String, String> {
     assert_eq!(
         routes.len(),
         59,
-        "the registered command catalog must contain the 50 executable routes and 9 reserved v2 routes"
+        "the registered command catalog must contain the 51 executable routes and 8 reserved v2 routes"
     );
     routes
 }
@@ -1414,6 +1414,14 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         dynamic: None,
     },
     RouteSurface {
+        route: "procedure.convert",
+        parser: &["procedure", "convert", "missing.yaml"],
+        flags: &["--json", "--no-color", "--quiet"],
+        values: &[],
+        help_tokens: &["<file>"],
+        dynamic: None,
+    },
+    RouteSurface {
         route: "preset.list",
         parser: &["preset", "list"],
         flags: DISPLAY_FLAGS,
@@ -2376,7 +2384,7 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
         .collect::<BTreeSet<_>>();
     assert_eq!(
         executable_routes, executable_surfaces,
-        "availability must identify exactly the current 50-route CLI surface",
+        "availability must identify exactly the current 51-route CLI surface",
     );
     let reserved_v2_routes = registered_routes
         .iter()
@@ -2390,7 +2398,6 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
             "goal.assess_criterion",
             "goal.define",
             "goal.revise",
-            "procedure.convert",
             "procedure.graph",
             "procedure.preview",
             "procedure.vet",
@@ -2604,6 +2611,17 @@ rework:
                 "scaffold".to_owned(),
             ],
         ),
+        // Convert is the one authoring route whose input is a *v1* document, so it reuses the v1
+        // fixture the validate and show rows read rather than the v2 one.
+        (
+            "procedure.convert",
+            vec![
+                "--json".to_owned(),
+                "procedure".to_owned(),
+                "convert".to_owned(),
+                procedure_path.display().to_string(),
+            ],
+        ),
         (
             "preset.list",
             vec!["--json".to_owned(), "preset".to_owned(), "list".to_owned()],
@@ -2634,6 +2652,7 @@ rework:
         "procedure.lint",
         "procedure.check",
         "procedure.scaffold",
+        "procedure.convert",
     ];
     for (route, arguments) in &local_successes {
         let output = fixture.run_in(&fixture.root, arguments);
@@ -2726,7 +2745,7 @@ rework:
     assert_eq!(
         executed_routes,
         executable_routes.into_iter().collect::<BTreeSet<_>>(),
-        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 50 current executable routes"
+        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 51 current executable routes"
     );
 }
 
@@ -2873,6 +2892,10 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
         ("procedure.lint", &["procedure", "lint", "missing.yaml"]),
         ("procedure.check", &["procedure", "check", "missing.yaml"]),
         ("procedure.scaffold", &["procedure", "scaffold"]),
+        (
+            "procedure.convert",
+            &["procedure", "convert", "missing.yaml"],
+        ),
         ("preset.list", &["preset", "list"]),
         ("preset.show", &["preset", "show", "sw-dev"]),
         ("preset.explain", &["preset", "explain", "sw-dev"]),
@@ -3012,7 +3035,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
             &["job", "cancel", "123e4567-e89b-42d3-a456-426614174003"],
         ),
     ];
-    assert_eq!(routes.len(), 50);
+    assert_eq!(routes.len(), 51);
 
     for (route, arguments) in routes {
         let mut argv = vec!["--json"];
@@ -3046,7 +3069,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
                 assert_eq!(response["schema"], "podway.output/v1");
             }
             "procedure.validate" | "procedure.show" | "procedure.format" | "procedure.lint"
-            | "procedure.check" => {
+            | "procedure.check" | "procedure.convert" => {
                 assert_eq!(output.status.code(), Some(1));
                 assert_eq!(response["schema"], "podway.error/v1");
                 assert_eq!(response["code"], "PROCEDURE_NOT_FOUND");
@@ -3139,7 +3162,7 @@ fn completion_route(surface: &RouteSurface) -> String {
 
 #[test]
 fn public_route_surface_table_keeps_parser_help_and_completion_in_lockstep() {
-    assert_eq!(ROUTE_SURFACES.len(), 50);
+    assert_eq!(ROUTE_SURFACES.len(), 51);
     let bash = run(&["completions", "bash"]);
     let zsh = run(&["completions", "zsh"]);
     let fish = run(&["completions", "fish"]);
@@ -3249,6 +3272,7 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "procedure.lint",
         "procedure.check",
         "procedure.scaffold",
+        "procedure.convert",
         "preset.list",
         "preset.show",
         "preset.explain",
@@ -3291,7 +3315,7 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "job.wait",
         "job.cancel",
     ];
-    assert_eq!(routes.len(), 50);
+    assert_eq!(routes.len(), 51);
 
     for route in routes {
         let output = run(&["--json", "help", route]);

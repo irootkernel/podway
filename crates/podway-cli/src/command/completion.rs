@@ -356,6 +356,12 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
+        words: "procedure convert",
+        flags: DISPLAY_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
         words: "preset list",
         flags: DISPLAY_FLAGS,
         values: "",

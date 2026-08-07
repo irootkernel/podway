@@ -31,14 +31,16 @@ use podway_cli::client::{
     DaemonClientTimeoutsV1, DaemonClientV1,
 };
 use podway_config::{
-    AuthoringContext, AuthoringStage, ConfigError, FormatFailure, FormatRequest,
-    FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES_V1, PROCEDURE_SCHEMA_V1, ParsedProcedure,
-    ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1, ScaffoldTemplate,
-    check_procedure_v2, config_error_diagnostic, finalize_diagnostics, format_procedure_v2,
-    lint_procedure_v2, parse_procedure_document, parse_procedure_v1, scaffold_procedure_v2,
-    sniff_procedure_schema, validate_procedure_v2,
+    AuthoringContext, AuthoringStage, ConfigError, ConvertedProcedureV2, FormatFailure,
+    FormatRequest, FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES_V1, PROCEDURE_SCHEMA_V1,
+    ParsedProcedure, ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
+    ScaffoldTemplate, check_procedure_v2, config_error_diagnostic, convert_procedure_v1_to_v2,
+    finalize_diagnostics, format_procedure_v2, lint_procedure_v2, parse_procedure_document,
+    parse_procedure_v1, scaffold_procedure_v2, sniff_procedure_schema, validate_procedure_v2,
 };
-use podway_core::{AttemptId, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId};
+use podway_core::{
+    AttemptId, PROCEDURE_SCHEMA_V2, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId,
+};
 use podway_presets::{PresetError, catalog_v1};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1, JobOutputV1, JobStateV1,
@@ -415,6 +417,10 @@ enum ProcedureCommand {
         #[arg(long, default_value = "minimal", value_parser = ScaffoldTemplate::NAMES)]
         template: String,
     },
+    Convert {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -559,6 +565,9 @@ impl Command {
             Self::Procedure {
                 command: ProcedureCommand::Scaffold { .. },
             } => "procedure.scaffold",
+            Self::Procedure {
+                command: ProcedureCommand::Convert { .. },
+            } => "procedure.convert",
             Self::Preset {
                 command: PresetCommand::List,
             } => "preset.list",
@@ -1146,6 +1155,7 @@ fn parse_failure_command_context_from_matches(
                 // top-level `item.check` arm below and is deliberately left alone.
                 ("check", "procedure.check"),
                 ("scaffold", "procedure.scaffold"),
+                ("convert", "procedure.convert"),
             ],
         )?,
         "preset" => nested_parse_failure_context(
@@ -2976,6 +2986,9 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         ProcedureCommand::Scaffold { template } => {
             return Ok(execute_procedure_scaffold(template));
         }
+        ProcedureCommand::Convert { file } => {
+            return execute_procedure_convert(file);
+        }
     };
     let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(name))?;
     std::str::from_utf8(&bytes).map_err(|_| {
@@ -3019,7 +3032,8 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         ProcedureCommand::Format { .. }
         | ProcedureCommand::Lint { .. }
         | ProcedureCommand::Check { .. }
-        | ProcedureCommand::Scaffold { .. } => {
+        | ProcedureCommand::Scaffold { .. }
+        | ProcedureCommand::Convert { .. } => {
             unreachable!("the v2 authoring commands dispatch to their own execution paths")
         }
     };
@@ -3577,6 +3591,121 @@ fn execute_procedure_scaffold(template: &str) -> RunResult {
         unreachable!("the static source result is a JSON object");
     };
     local_result_v2(PROCEDURE_SCAFFOLD_COMMAND, result, document.to_owned(), 0)
+}
+
+/// The route every `procedure convert` result reports under, named once so the two result builders
+/// below cannot disagree with the route the failure paths use.
+const PROCEDURE_CONVERT_COMMAND: &str = "procedure.convert";
+
+/// Renders a Procedure v1 document as a Procedure v2 authoring candidate.
+///
+/// Convert reads and never writes. It does not touch the v1 file, does not create the v2 file, and
+/// does not start a session: the candidate goes to stdout, and deciding where it belongs — and
+/// whether the synthesized `purpose` and `intent` values say the right thing — is the author's
+/// review step, not this command's.
+///
+/// Two schema gates bracket the pipeline, and they are deliberately asymmetric. A document that
+/// already declares v2 is refused outright: there is nothing to convert, and reporting the refusal
+/// as an authoring finding would claim the document is defective when it is simply finished. A
+/// document that declares anything else — v1, an unknown schema, or nothing readable at all — goes
+/// to `parse_procedure_v1`, which is the byte-locked v1 admission path every other v1 command uses,
+/// so a malformed v1 file reports exactly the error `procedure validate` reports for it.
+///
+/// There is no `--warnings-as-errors`, and the default v1 warning policy applies: a v1 semantic
+/// warning describes the v1 procedure, and refusing to *show* an author what their procedure looks
+/// like in v2 because v1 already had an advisory finding about it would help nobody. The warnings
+/// are still reachable — `podway procedure validate` reports them for the same file — and the
+/// candidate has its own, better-targeted advisory pass in `podway procedure check`.
+fn execute_procedure_convert(file: &Path) -> Result<RunResult, LocalFailure> {
+    const NAME: &str = PROCEDURE_CONVERT_COMMAND;
+
+    let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
+    let source = std::str::from_utf8(&bytes).map_err(|_| {
+        LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
+    })?;
+    let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
+        ProcedureFormatV1::Json
+    } else {
+        ProcedureFormatV1::Yaml
+    };
+
+    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V2) {
+        return Err(LocalFailure::catalog(
+            "PROCEDURE_SCHEMA_UNSUPPORTED",
+            "procedure convert requires a podway.procedure/v1 document; this document already declares podway.procedure/v2",
+            NAME,
+        ));
+    }
+
+    // Not the schema-dispatching parser: a v1 document is admitted by the v1 parser directly, which
+    // is what keeps the v1 error surface byte-identical to `procedure validate`'s for the same file.
+    let validated = parse_procedure_v1(&bytes, format)
+        .map_err(|error| procedure_config_failure(error).with_command(NAME))?;
+
+    let source_path = file.display().to_string();
+    let context = AuthoringContext::new(&source_path, source, format);
+    match convert_procedure_v1_to_v2(&validated, &context) {
+        Ok(converted) => Ok(procedure_convert_source(&converted)),
+        Err(diagnostics) => Ok(procedure_convert_diagnostics(&source_path, diagnostics)),
+    }
+}
+
+/// The `procedure convert` success result: the candidate, and the digest of each end of the
+/// conversion.
+///
+/// It names no file, carries no `mode`, and reports no `changed` flag — the source result schema's
+/// `convert` branch forbids all three, correctly: the candidate did not come from a v2 file, was
+/// not written to one, and has nothing to have changed against.
+fn procedure_convert_source(converted: &ConvertedProcedureV2) -> RunResult {
+    let Value::Object(result) = json!({
+        "schema": "podway.procedure-source-result/v1",
+        "operation": "convert",
+        "target_schema": "podway.procedure/v2",
+        "target_digest": converted.digest().as_str(),
+        "document": converted.document(),
+        "source_schema": PROCEDURE_SCHEMA_V1,
+        "source_digest": converted.source_digest().as_str(),
+    }) else {
+        unreachable!("the static source result is a JSON object");
+    };
+    local_result_v2(
+        PROCEDURE_CONVERT_COMMAND,
+        result,
+        converted.document().to_owned(),
+        0,
+    )
+}
+
+/// The `procedure convert` findings result: every v1 value Procedure v2 will not accept.
+///
+/// `procedure_schema` is `podway.procedure/v2` because the candidate is what is being diagnosed —
+/// these are the reasons no admissible v2 document exists — even though every `field` names a path
+/// in the v1 source, which is the document the author has to edit. No `digest` is reported: there
+/// is no procedure to have one.
+fn procedure_convert_diagnostics(
+    source_path: &str,
+    diagnostics: Vec<podway_core::AuthoringDiagnostic>,
+) -> RunResult {
+    let report = finalize_diagnostics(
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| (AuthoringStage::Validate, diagnostic))
+            .collect(),
+    );
+    let text = render_authoring_diagnostics(report.diagnostics());
+    let Value::Object(result) = json!({
+        "schema": "podway.procedure-diagnostics-result/v1",
+        "operation": "convert",
+        "procedure_schema": "podway.procedure/v2",
+        "file": source_path,
+        "valid": report.valid(),
+        "diagnostics": report.diagnostics(),
+        "diagnostics_truncated": report.truncated(),
+        "diagnostics_total": report.total(),
+    }) else {
+        unreachable!("the static diagnostics result is a JSON object");
+    };
+    local_result_v2(PROCEDURE_CONVERT_COMMAND, result, text, 1)
 }
 
 /// The stable one-line-per-finding authoring report.
@@ -5220,6 +5349,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "procedure.scaffold" => {
             "Usage:\n  podway procedure scaffold [--template minimal]\n\nWrites a minimal Procedure v2 authoring starting point to stdout and reads\nnothing. The emitted document is already in canonical authoring form and already\npasses every authoring stage, so redirecting it to a file and running\nprocedure check on that file reports nothing.\n\nExample:\n  podway procedure scaffold --template minimal > .podway/procedures/custom.yaml"
+        }
+        "procedure.convert" => {
+            "Usage:\n  podway procedure convert <file>\n\nRenders a Procedure v1 document as a Procedure v2 authoring candidate on stdout.\nReads only; never writes a file and never starts a session. Each stage becomes\none action node in a linear chain, and the synthesized purpose and intent values\nare marked with review comments. A v1 value Procedure v2 cannot hold is reported\nagainst its v1 path instead of being truncated.\n\nExample:\n  podway procedure convert legacy.yaml > .podway/procedures/legacy-v2.yaml"
         }
         "preset.list" => "Usage:\n  podway preset list\n\nExample:\n  podway preset list",
         "preset.show" => {

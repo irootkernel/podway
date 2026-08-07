@@ -158,7 +158,13 @@ V2_ROUTE_DELTA = {
 # V2_ROUTE_DELTA members whose owning task has landed. The delta itself never shrinks: a route
 # stays registered forever, and this set records only which of them the build now serves.
 V2_EXECUTABLE_ROUTES = frozenset(
-    {"procedure.format", "procedure.lint", "procedure.check", "procedure.scaffold"}
+    {
+        "procedure.format",
+        "procedure.lint",
+        "procedure.check",
+        "procedure.scaffold",
+        "procedure.convert",
+    }
 )
 V1_ROUTE_BASELINE = {
     "help", "version", "completions", "procedure.validate", "procedure.show",

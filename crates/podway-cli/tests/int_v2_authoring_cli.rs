@@ -1,5 +1,5 @@
 //! Process-boundary contracts for the Procedure v2 authoring surface (`procedure format`,
-//! `procedure lint`, `procedure check`, and `procedure scaffold`).
+//! `procedure lint`, `procedure check`, `procedure scaffold`, and `procedure convert`).
 
 use std::{
     fs,
@@ -1967,6 +1967,297 @@ fn v2aut006_scaffold_is_deterministic_across_processes() {
 #[test]
 fn v2aut006_quiet_suppresses_the_template_without_changing_the_exit_code() {
     let output = run(&["--quiet", "procedure", "scaffold"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2AUT-007: `procedure convert`
+// ---------------------------------------------------------------------------------------------
+
+fn convert_json(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "convert",
+        &path.display().to_string(),
+    ])
+}
+
+fn convert_text(path: &Path) -> Output {
+    run(&["procedure", "convert", &path.display().to_string()])
+}
+
+/// A shipped v1 preset, copied into the fixture directory so the conversion's read-only claim can
+/// be checked against a directory the test owns.
+fn shipped_preset(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(format!("assets/presets/{name}.yaml"));
+    fs::read_to_string(path).expect("a shipped preset must be readable")
+}
+
+#[test]
+fn v2aut007_convert_reports_both_digests_and_the_source_digest_is_the_v1_validate_digest() {
+    let fixture = FixtureDirectory::new("convert");
+    let path = fixture.write("sw-dev.yaml", &shipped_preset("sw-dev"));
+
+    let output = convert_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.convert");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-source-result/v1");
+    assert_eq!(result["operation"], "convert");
+    assert_eq!(result["source_schema"], "podway.procedure/v1");
+    assert_eq!(result["target_schema"], "podway.procedure/v2");
+    assert!(
+        result["document"]
+            .as_str()
+            .is_some_and(|document| document.starts_with("schema: podway.procedure/v2\n")),
+        "the candidate declares the v2 schema: {result}"
+    );
+
+    // The reported source digest must be the digest the v1 command reports for the same file, or
+    // the two ends of the conversion cannot be pinned against each other.
+    let validated = one_json(&run(&[
+        "--json",
+        "procedure",
+        "validate",
+        &path.display().to_string(),
+    ]));
+    assert_eq!(
+        result["source_digest"], validated["result"]["digest"],
+        "convert's source_digest is `procedure validate`'s digest for the same document"
+    );
+    assert_ne!(result["target_digest"], result["source_digest"]);
+
+    // The source result schema's `convert` branch forbids all four.
+    for absent in ["file", "mode", "changed", "template"] {
+        assert!(
+            result.get(absent).is_none(),
+            "a convert result must not carry {absent}: {result}"
+        );
+    }
+}
+
+/// The documented pipeline, executed end to end: what convert writes is what the rest of the
+/// toolchain accepts, with no editing step in between.
+#[test]
+fn v2aut007_a_converted_document_is_canonical_and_passes_the_aggregate_gate() {
+    let fixture = FixtureDirectory::new("convert-pipeline");
+    let source = fixture.write("sw-dev.yaml", &shipped_preset("sw-dev"));
+
+    let converted = convert_text(&source);
+    assert_eq!(converted.status.code(), Some(0), "{converted:?}");
+    let candidate = fixture.root.join("sw-dev-v2.yaml");
+    fs::write(&candidate, &converted.stdout).expect("the candidate must be writable");
+
+    let formatted = format_check_text(&candidate);
+    assert_eq!(
+        formatted.status.code(),
+        Some(0),
+        "a converted document is already canonical: {formatted:?}"
+    );
+    assert_eq!(formatted.stdout, canonical_summary(&candidate).into_bytes());
+
+    let checked = run(&[
+        "procedure",
+        "check",
+        &candidate.display().to_string(),
+        "--warnings-as-errors",
+    ]);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "a converted document must report no finding at all: {checked:?}"
+    );
+    assert_eq!(
+        one_json(&check_json(&candidate))["result"]["digest"],
+        one_json(&convert_json(&source))["result"]["target_digest"],
+        "the digest convert advertises must be the digest the written file has"
+    );
+}
+
+/// Text mode writes the candidate bytes and nothing else, so `> file` is the documented usage.
+#[test]
+fn v2aut007_text_mode_writes_the_candidate_bytes_exactly() {
+    let fixture = FixtureDirectory::new("convert-text");
+    let path = fixture.write("v1.yaml", V1_YAML);
+
+    let output = convert_text(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        output.stdout,
+        one_json(&convert_json(&path))["result"]["document"]
+            .as_str()
+            .expect("the result carries the document")
+            .as_bytes(),
+        "text stdout and the JSON `document` are the same bytes"
+    );
+}
+
+/// Convert reads. It creates nothing, rewrites nothing, and leaves the v1 file byte-identical.
+#[test]
+fn v2aut007_convert_never_writes_anything() {
+    let fixture = FixtureDirectory::new("convert-readonly");
+    let path = fixture.write("sw-dev.yaml", &shipped_preset("sw-dev"));
+    let before = identity(&path);
+
+    assert_eq!(convert_json(&path).status.code(), Some(0));
+    assert_eq!(convert_text(&path).status.code(), Some(0));
+
+    assert_eq!(
+        identity(&path),
+        before,
+        "the v1 source is neither rewritten nor touched"
+    );
+    assert_eq!(
+        entry_names(&fixture.root),
+        vec!["sw-dev.yaml".to_owned()],
+        "convert creates no candidate file and no staging file"
+    );
+}
+
+/// A document that already declares v2 has nothing to convert. It is a wrong-schema command
+/// failure rather than an authoring finding: the document is finished, not defective.
+#[test]
+fn v2aut007_a_v2_document_is_a_schema_failure_rather_than_a_conversion() {
+    let fixture = FixtureDirectory::new("convert-v2");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let output = convert_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.convert");
+    assert_eq!(envelope["code"], "PROCEDURE_SCHEMA_UNSUPPORTED");
+    assert_eq!(envelope["exit_code"], 1);
+    assert_eq!(envelope["retryable"], false);
+
+    let text = convert_text(&path);
+    assert_eq!(text.status.code(), Some(1));
+    assert!(text.stdout.is_empty());
+    assert!(!text.stderr.is_empty());
+}
+
+/// A malformed v1 document reports exactly what `procedure validate` reports for it: convert
+/// admits v1 through the same `parse_procedure_v1` entry point, so the v1 error surface is shared
+/// rather than reimplemented.
+#[test]
+fn v2aut007_a_malformed_v1_document_reports_the_same_failure_procedure_validate_reports() {
+    let fixture = FixtureDirectory::new("convert-malformed");
+    let path = fixture.write("broken.yaml", "schema: podway.procedure/v1\nid: broken\n");
+
+    let converted = one_json(&convert_json(&path));
+    let validated = one_json(&run(&[
+        "--json",
+        "procedure",
+        "validate",
+        &path.display().to_string(),
+    ]));
+
+    assert_eq!(converted["schema"], "podway.error/v1");
+    assert_eq!(converted["command"], "procedure.convert");
+    assert_eq!(converted["code"], "PROCEDURE_INVALID");
+    assert_eq!(converted["exit_code"], 1);
+    assert_eq!(
+        converted["code"], validated["code"],
+        "the v1 admission failure is the same failure both commands report"
+    );
+    assert_eq!(converted["message"], validated["message"]);
+}
+
+/// A v1 value Procedure v2 cannot hold is a diagnostics result against the v1 path that carries it.
+/// `assets/presets/analysis.yaml` is the shipped example: it declares `max_items: 200` on one list
+/// item, and Procedure v2 caps a list at 100 entries.
+#[test]
+fn v2aut007_a_v1_value_v2_cannot_hold_is_reported_against_its_v1_path() {
+    let fixture = FixtureDirectory::new("convert-overflow");
+    let path = fixture.write("analysis.yaml", &shipped_preset("analysis"));
+
+    let output = convert_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.convert");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+    assert_eq!(result["operation"], "convert");
+    // The candidate is what is being diagnosed, so the family's `procedure_schema` names v2 even
+    // though every `field` below points into the v1 source the author has to edit.
+    assert_eq!(result["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(result["file"], path.display().to_string());
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["diagnostics_total"], 1);
+    assert_eq!(result["diagnostics_truncated"], false);
+    assert!(
+        result.get("digest").is_none(),
+        "there is no procedure for a digest to describe: {result}"
+    );
+
+    let diagnostic = &result["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "AUTHORING_SCHEMA_INVALID");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["schema"], "podway.procedure/v2");
+    assert_eq!(diagnostic["source_path"], path.display().to_string());
+    assert_eq!(
+        diagnostic["field"],
+        "stages[collect-sources].items[sources].max_items"
+    );
+    assert!(
+        diagnostic["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("Procedure v1 source")),
+        "the remedy is an edit to the v1 file, not to a v2 file that does not exist: {diagnostic}"
+    );
+}
+
+#[test]
+fn v2aut007_a_missing_file_is_a_path_failure() {
+    let fixture = FixtureDirectory::new("convert-missing");
+    let path = fixture.root.join("absent.yaml");
+
+    let output = convert_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.convert");
+    assert_eq!(envelope["code"], "PROCEDURE_NOT_FOUND");
+    assert_eq!(envelope["exit_code"], 1);
+}
+
+#[test]
+fn v2aut007_convert_is_deterministic_across_processes() {
+    let fixture = FixtureDirectory::new("convert-determinism");
+    let path = fixture.write("sw-dev.yaml", &shipped_preset("sw-dev"));
+
+    let baseline = convert_text(&path).stdout;
+    let result = one_json(&convert_json(&path))["result"].clone();
+    for _ in 0..2 {
+        assert_eq!(convert_text(&path).stdout, baseline);
+        assert_eq!(one_json(&convert_json(&path))["result"], result);
+    }
+}
+
+#[test]
+fn v2aut007_quiet_suppresses_the_candidate_without_changing_the_exit_code() {
+    let fixture = FixtureDirectory::new("convert-quiet");
+    let path = fixture.write("v1.yaml", V1_YAML);
+
+    let output = run(&[
+        "--quiet",
+        "procedure",
+        "convert",
+        &path.display().to_string(),
+    ]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());

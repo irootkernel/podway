@@ -231,7 +231,15 @@ fn map_domain_error(error: DomainError) -> ConfigError {
     }
 }
 
-fn map_document(document: ProcedureV2DocumentWire) -> Result<ParsedProcedureV2, ConfigError> {
+/// Maps one wire document into the core v2 authoring model.
+///
+/// Published to the crate rather than kept private because `procedure_v2_convert` builds its
+/// candidate as a [`ProcedureV2DocumentWire`] and enters here: a conversion is then admitted by
+/// exactly the identifier rules, text bounds, and collection bounds an authored document is
+/// admitted by, and there is no second mapping to drift from this one.
+pub(crate) fn map_document(
+    document: ProcedureV2DocumentWire,
+) -> Result<ParsedProcedureV2, ConfigError> {
     if document.schema != PROCEDURE_SCHEMA_V2 {
         return Err(ConfigError::InvalidSchema {
             expected: PROCEDURE_SCHEMA_V2,

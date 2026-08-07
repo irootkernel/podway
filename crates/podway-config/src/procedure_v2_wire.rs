@@ -44,6 +44,16 @@ pub(crate) struct OrderedMap<K, V> {
 }
 
 impl<K, V> OrderedMap<K, V> {
+    /// Builds a map from pairs that are already in the order they must be authored in.
+    ///
+    /// The seam `procedure_v2_convert` needs: a converted document is constructed in memory rather
+    /// than deserialized, and it must reach [`crate::procedure_v2_parse::map_document`] through the
+    /// same DTO an authored document does, so the conversion inherits every bound check instead of
+    /// re-implementing one.
+    pub(crate) fn from_entries(entries: Vec<(K, V)>) -> Self {
+        Self { entries }
+    }
+
     pub(crate) fn entries(self) -> Vec<(K, V)> {
         self.entries
     }
