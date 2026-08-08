@@ -118,7 +118,7 @@ Dependencies: `V2CTR` and `V2MOD`.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2PLT-001` | Add SQLite schema v3 | Planned | Add parallel v2 tables through an atomic v1-preserving migration. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
+| `V2PLT-001` | Add SQLite schema v3 | Completed | Add parallel v2 tables through an atomic v1-preserving migration. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-002` | Persist graph and action state | Planned | Persist snapshots, cursor, trace, counters, and action attempts. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-003` | Persist workflow memory | Planned | Persist items, references, decisions, rework, validity, and history. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-004` | Persist goal state | Planned | Persist goal revisions, criteria, results, and assessments. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |

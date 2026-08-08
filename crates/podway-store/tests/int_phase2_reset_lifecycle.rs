@@ -14,8 +14,9 @@ use podway_core::{
     DomainCommand, DomainResult, JobId, Revision, Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_store::schema::{
-    SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2, SQLITE_SCHEMA_VERSION_CURRENT,
-    SQLITE_SCHEMA_VERSION_V2, sqlite_v2_ddl_checksum,
+    SQLITE_PROCEDURE_V2_STATE_MIGRATION_NAME_V3, SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2,
+    SQLITE_SCHEMA_VERSION_CURRENT, SQLITE_SCHEMA_VERSION_V2, SQLITE_SCHEMA_VERSION_V3,
+    sqlite_v2_ddl_checksum, sqlite_v3_ddl_checksum,
 };
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, ClaimedExecutionV1, DurableWorktreeIdentityV1,
@@ -713,10 +714,20 @@ fn assert_exact_initialized_destination(
             ("index".to_owned(), "ix_jobs_state_sequence".to_owned()),
             ("index".to_owned(), "ix_jobs_terminal_time".to_owned()),
             ("index".to_owned(), "ix_operational_journal_time".to_owned(),),
+            ("index".to_owned(), "ix_v2_attempts_trace".to_owned()),
+            (
+                "index".to_owned(),
+                "ix_v2_blockers_attempt_state".to_owned(),
+            ),
             ("index".to_owned(), "ux_attempts_one_active".to_owned()),
             (
                 "index".to_owned(),
                 "ux_stage_progress_one_current".to_owned(),
+            ),
+            ("index".to_owned(), "ux_v2_attempts_one_active".to_owned()),
+            (
+                "index".to_owned(),
+                "ux_v2_attempts_one_valid_per_node".to_owned(),
             ),
             ("table".to_owned(), "attempts".to_owned()),
             ("table".to_owned(), "blockers".to_owned()),
@@ -728,6 +739,28 @@ fn assert_exact_initialized_destination(
             ("table".to_owned(), "schema_migrations".to_owned()),
             ("table".to_owned(), "stage_progress".to_owned()),
             ("table".to_owned(), "task_sessions".to_owned()),
+            ("table".to_owned(), "v2_attempts".to_owned()),
+            ("table".to_owned(), "v2_blockers".to_owned()),
+            (
+                "table".to_owned(),
+                "v2_criterion_assessment_results".to_owned(),
+            ),
+            ("table".to_owned(), "v2_criterion_citations".to_owned()),
+            ("table".to_owned(), "v2_decision_records".to_owned()),
+            ("table".to_owned(), "v2_goal_assessments".to_owned()),
+            ("table".to_owned(), "v2_goal_criteria".to_owned()),
+            ("table".to_owned(), "v2_goal_revisions".to_owned()),
+            ("table".to_owned(), "v2_graph_node_counters".to_owned()),
+            ("table".to_owned(), "v2_graph_nodes".to_owned()),
+            ("table".to_owned(), "v2_item_slots".to_owned()),
+            ("table".to_owned(), "v2_procedure_snapshots".to_owned()),
+            (
+                "table".to_owned(),
+                "v2_resolved_evidence_references".to_owned(),
+            ),
+            ("table".to_owned(), "v2_rework_records".to_owned()),
+            ("table".to_owned(), "v2_task_sessions".to_owned()),
+            ("table".to_owned(), "v2_workspace_state".to_owned()),
             ("table".to_owned(), "workspace_state".to_owned()),
         ]
     );
@@ -736,7 +769,7 @@ fn assert_exact_initialized_destination(
             row.get::<_, i64>(0)
         })
         .unwrap();
-    assert_eq!(migration_count, 2);
+    assert_eq!(migration_count, 3);
     let migration = connection
         .query_row(
             "SELECT version, name, checksum, applied_at_ms FROM schema_migrations WHERE version = 2",
@@ -750,6 +783,22 @@ fn assert_exact_initialized_destination(
             i64::from(SQLITE_SCHEMA_VERSION_V2),
             SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2.to_owned(),
             sqlite_v2_ddl_checksum(),
+            now as i64,
+        )
+    );
+    let v3_migration = connection
+        .query_row(
+            "SELECT version, name, checksum, applied_at_ms FROM schema_migrations WHERE version = 3",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        v3_migration,
+        (
+            i64::from(SQLITE_SCHEMA_VERSION_V3),
+            SQLITE_PROCEDURE_V2_STATE_MIGRATION_NAME_V3.to_owned(),
+            sqlite_v3_ddl_checksum(),
             now as i64,
         )
     );

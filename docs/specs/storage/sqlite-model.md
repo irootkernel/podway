@@ -14,11 +14,16 @@ The worktree-local SQLite database is the authoritative state for:
 - idempotency records;
 - bounded operational journal.
 
+For Procedure v2, the same database additionally owns the immutable graph snapshot, single
+cursor and append-only execution trace, workflow-memory records, and optional goal history.
+
 Podway does not use event sourcing. The journal is diagnostic and cannot be used as the only reconstruction source.
 
 Reference DDL and migrations: [`../../../assets/specifications/sqlite-v1.sql`](../../../assets/specifications/sqlite-v1.sql)
-followed by [`../../../assets/specifications/sqlite-v2.sql`](../../../assets/specifications/sqlite-v2.sql). Schema v2 adds
-the bounded admission-time response context used by durable reconciliation.
+followed by [`../../../assets/specifications/sqlite-v2.sql`](../../../assets/specifications/sqlite-v2.sql)
+and [`../../../assets/specifications/sqlite-v3.sql`](../../../assets/specifications/sqlite-v3.sql).
+Schema v2 adds the bounded admission-time response context used by durable reconciliation. Schema
+v3 adds parallel `v2_` tables without altering or reinterpreting retained v1 session rows.
 
 ## Database location
 
@@ -135,6 +140,24 @@ Binds an idempotency key to one request digest and job ID. It retains the termin
 
 Stores bounded diagnostic events such as daemon recovery, job claim, transition success, transition failure, migration, and pruning. It MUST NOT store item values or artifact locations by default.
 
+### Procedure v2 parallel state
+
+Schema v3 keeps Procedure v2 state separate from the released v1 domain tables:
+
+- `v2_workspace_state`, `v2_procedure_snapshots`, and `v2_graph_nodes` own workspace revision,
+  canonical snapshot identity, and immutable placement metadata;
+- `v2_task_sessions`, `v2_graph_node_counters`, and `v2_attempts` own the single cursor, trace
+  assignment state, attempt counts, lifecycle, validity, and goal-revision binding;
+- `v2_item_slots`, `v2_blockers`, and `v2_resolved_evidence_references` own attempt-local values
+  and exact evidence-resolution snapshots;
+- `v2_decision_records` and `v2_rework_records` preserve immutable workflow history;
+- `v2_goal_revisions`, `v2_goal_criteria`, `v2_criterion_assessment_results`,
+  `v2_criterion_citations`, and `v2_goal_assessments` preserve optional goal history.
+
+The existing `jobs`, `idempotency_records`, and `operational_journal` remain shared infrastructure.
+Schema v2 already made terminal envelopes version-neutral, so schema v3 does not duplicate their
+queue, receipt, or idempotency state.
+
 ## Constraints
 
 The relational schema enforces as much as practical:
@@ -150,6 +173,10 @@ The relational schema enforces as much as practical:
 - non-negative revisions and counts;
 - valid JSON where JSON is stored;
 - foreign-key cleanup on session reset.
+- at most one active Procedure v2 attempt per session;
+- at most one valid Procedure v2 attempt per graph node;
+- unique Procedure v2 trace sequence and per-node attempt number;
+- closed Procedure v2 lifecycle, validity, node, reference, assessment, and route values.
 
 Cross-row invariants such as exactly one active attempt are enforced by transactions and verified by integrity checks. SQLite triggers MAY be used only when their behavior is fully tested and documented; application-level transitions remain the primary source of semantics.
 
@@ -193,7 +220,10 @@ Artifact metadata is stored in an `artifact` item slot value. No blob table exis
 - Migrations are forward-only.
 - The initial migration uses the non-file fixture identity `uninitialized-database`: predecessor `schema-0-uninitialized` and result `schema-v1`.
 - Initialization and every migration MUST first apply and verify the required connection pragmas: foreign keys ON, WAL journal mode, FULL synchronous, 5000 ms busy timeout, and trusted schema OFF.
-- Each migration runs inside an exclusive transaction when SQLite permits.
+- Each migration runs inside an immediate transaction. Upgrading schema v1 directly to the current
+  schema applies both later migrations and their checksum rows in one transaction.
+- The same transaction verifies the predecessor version, exact schema objects, migration checksums,
+  quick check, and foreign keys before applying any forward DDL.
 - The daemon backs no database up globally.
 - A migration either commits completely or leaves the prior schema intact.
 - Migration code validates invariants before declaring success and MUST preserve user task state, durable mutation and idempotency state, and attempt and lifecycle semantics without duplicating a mutation.
