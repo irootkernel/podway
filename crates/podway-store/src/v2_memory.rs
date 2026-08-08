@@ -369,6 +369,18 @@ pub struct WorkflowMemoryStateV2 {
     reworks: Vec<ReworkRecordV2>,
 }
 
+/// Goal-state change that supplies the causal record for a workflow transition.
+///
+/// Goal revisions intentionally do not synthesize [`ReworkRecordV2`] rows. The goal-state
+/// validator establishes the revision-specific invariants before this context is passed to the
+/// workflow-memory successor validator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkflowGoalTransitionV2<'a> {
+    None,
+    InitialBinding { attempt_id: &'a AttemptId },
+    Rework { target_attempt_id: &'a AttemptId },
+}
+
 impl WorkflowMemoryStateV2 {
     pub fn new(
         attempts: Vec<AttemptWorkflowMemoryV2>,
@@ -1025,6 +1037,7 @@ pub(crate) fn validate_workflow_memory_v2(
     trace: &SessionTraceV2,
     metadata: &[AttemptMetadataV2],
     memory: &WorkflowMemoryStateV2,
+    goal_rework_target_attempt_ids: &BTreeSet<AttemptId>,
 ) -> Result<(), StoreValueErrorV1> {
     if memory.attempts().len() != trace.attempts().len() || metadata.len() != trace.attempts().len()
     {
@@ -1158,7 +1171,13 @@ pub(crate) fn validate_workflow_memory_v2(
     }
 
     validate_decision_history_v2(snapshot, trace, metadata, memory, &model)?;
-    validate_rework_history_v2(trace, metadata, memory, &model)?;
+    validate_rework_history_v2(
+        trace,
+        metadata,
+        memory,
+        &model,
+        goal_rework_target_attempt_ids,
+    )?;
     let _ = metadata_by_id;
     Ok(())
 }
@@ -1322,6 +1341,7 @@ fn validate_rework_history_v2(
     metadata: &[AttemptMetadataV2],
     memory: &WorkflowMemoryStateV2,
     model: &SnapshotMemoryModelV2,
+    goal_rework_target_attempt_ids: &BTreeSet<AttemptId>,
 ) -> Result<(), StoreValueErrorV1> {
     let attempts_by_trace: BTreeMap<_, _> = trace
         .attempts()
@@ -1342,6 +1362,18 @@ fn validate_rework_history_v2(
         .iter()
         .map(ReworkRecordV2::target_attempt_id)
         .collect();
+    for target_attempt_id in goal_rework_target_attempt_ids {
+        let target = trace
+            .attempts()
+            .iter()
+            .find(|attempt| attempt.attempt_id() == target_attempt_id)
+            .ok_or_else(|| invalid("Procedure v2 goal rework target is absent"))?;
+        if target.number() == AttemptNumberV2::FIRST || rework_targets.contains(target_attempt_id) {
+            return Err(invalid(
+                "Procedure v2 goal rework target cause is inconsistent",
+            ));
+        }
+    }
     for attempt in trace.attempts() {
         if attempt.number() == AttemptNumberV2::FIRST {
             continue;
@@ -1364,7 +1396,11 @@ fn validate_rework_history_v2(
                         && decision.route_target() == attempt.graph_node_id()
                 }),
         };
-        if !retry && !ordinary_advance && !rework_targets.contains(attempt.attempt_id()) {
+        if !retry
+            && !ordinary_advance
+            && !rework_targets.contains(attempt.attempt_id())
+            && !goal_rework_target_attempt_ids.contains(attempt.attempt_id())
+        {
             return Err(invalid("Procedure v2 rework history is incomplete"));
         }
     }
@@ -1430,6 +1466,7 @@ pub(crate) fn validate_workflow_memory_successor_v2(
     previous: &WorkflowMemoryStateV2,
     next_trace: &SessionTraceV2,
     next: &WorkflowMemoryStateV2,
+    goal_transition: WorkflowGoalTransitionV2<'_>,
 ) -> Result<(), StoreValueErrorV1> {
     if next.attempts().len() < previous.attempts().len()
         || next.attempts().len() > previous.attempts().len() + 1
@@ -1536,13 +1573,41 @@ pub(crate) fn validate_workflow_memory_successor_v2(
         }
         cursor_stable_changed |= old_memory.blockers().len() != new_memory.blockers().len();
     }
-    let cursor_stable = previous_trace
-        .active_attempt()
-        .is_some_and(|old| next_trace.active_attempt() == Some(old));
+    let cursor_stable = previous_trace.active_attempt().is_some_and(|old| {
+        next_trace
+            .active_attempt()
+            .is_some_and(|new| new.attempt_id() == old.attempt_id())
+    });
+    let initial_goal_binding = match goal_transition {
+        WorkflowGoalTransitionV2::InitialBinding { attempt_id } => {
+            let old = previous_trace.active_attempt().ok_or_else(|| {
+                invalid("Procedure v2 initial goal binding has no active attempt")
+            })?;
+            let new = next_trace.active_attempt().ok_or_else(|| {
+                invalid("Procedure v2 initial goal binding has no successor active attempt")
+            })?;
+            if old.attempt_id() != attempt_id
+                || new.attempt_id() != attempt_id
+                || old.goal_revision().is_some()
+                || new.goal_revision() != Some(GoalRevisionNumberV2::FIRST)
+                || previous_trace.attempts().len() != next_trace.attempts().len()
+                || cursor_stable_changed
+                || previous.decisions() != next.decisions()
+                || previous.reworks() != next.reworks()
+            {
+                return Err(invalid(
+                    "Procedure v2 initial goal binding is not cursor-stable",
+                ));
+            }
+            true
+        }
+        WorkflowGoalTransitionV2::None | WorkflowGoalTransitionV2::Rework { .. } => false,
+    };
     if cursor_stable
         && !cursor_stable_changed
         && previous.decisions() == next.decisions()
         && previous.reworks() == next.reworks()
+        && !initial_goal_binding
     {
         return Err(invalid(
             "Procedure v2 cursor-stable replacement changed no workflow memory",
@@ -1593,11 +1658,30 @@ pub(crate) fn validate_workflow_memory_successor_v2(
                 }),
         };
         let appended_rework = next.reworks().get(previous.reworks().len());
+        let prior_target = previous_trace.attempts().iter().find(|attempt| {
+            attempt.graph_node_id() == fresh_attempt.graph_node_id()
+                && attempt.validity() == AttemptValidityV2::Valid
+        });
+        let goal_rework = match goal_transition {
+            WorkflowGoalTransitionV2::Rework { target_attempt_id } => {
+                if target_attempt_id != fresh_attempt.attempt_id()
+                    || appended_rework.is_some()
+                    || prior_target.is_none()
+                {
+                    return Err(invalid(
+                        "Procedure v2 goal rework is not bound to its fresh target",
+                    ));
+                }
+                true
+            }
+            WorkflowGoalTransitionV2::None => false,
+            WorkflowGoalTransitionV2::InitialBinding { .. } => {
+                return Err(invalid(
+                    "Procedure v2 initial goal binding cannot append an attempt",
+                ));
+            }
+        };
         if let Some(record) = appended_rework {
-            let prior_target = previous_trace.attempts().iter().find(|attempt| {
-                attempt.graph_node_id() == fresh_attempt.graph_node_id()
-                    && attempt.validity() == AttemptValidityV2::Valid
-            });
             if prior_target.is_none()
                 || record.target_attempt_id() != fresh_attempt.attempt_id()
                 || record.trace() != fresh_attempt.trace()
@@ -1610,12 +1694,16 @@ pub(crate) fn validate_workflow_memory_successor_v2(
                     "new Procedure v2 rework record is not bound to its transition",
                 ));
             }
-        } else if !retry && !ordinary_advance {
+        } else if !retry && !ordinary_advance && !goal_rework {
             return Err(invalid("Procedure v2 rework transition has no record"));
         }
     } else if next.reworks().len() != previous.reworks().len() {
         return Err(invalid(
             "Procedure v2 rework history requires a fresh target attempt",
+        ));
+    } else if matches!(goal_transition, WorkflowGoalTransitionV2::Rework { .. }) {
+        return Err(invalid(
+            "Procedure v2 goal rework requires a fresh target attempt",
         ));
     }
     Ok(())

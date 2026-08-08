@@ -26,6 +26,7 @@ pub mod sqlite_store;
 pub mod state_rows;
 #[doc(hidden)]
 pub mod test_support;
+pub mod v2_goal;
 pub mod v2_memory;
 pub mod v2_state;
 
@@ -34,6 +35,7 @@ pub use codec::{
     PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
 };
 pub use sqlite_store::SqliteStoreV1;
+pub use v2_goal::{AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2};
 pub use v2_memory::{
     AttemptWorkflowMemoryV2, BlockerStateV2, EvidenceReadbackV2, EvidenceResolutionStateV2,
     ItemSlotStateV2, WorkflowMemoryStateV2, canonical_recorded_items_json_v2,

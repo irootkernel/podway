@@ -182,7 +182,8 @@ blocker, and evidence rows immutable;
 decision and rework records are append-only and bound to the exact successor revision and fresh
 target attempt, while conservative invalidation changes only attempt validity. Rework requires a
 prior valid attempt of its target node. Completed-session reactivation requires an appended
-manual-rework record that identifies the fresh target attempt and carries `reactivated: true`.
+manual-rework record that identifies the fresh target attempt and carries `reactivated: true`, or an
+appended goal revision whose binding trace identifies that target and carries `reactivated: true`.
 
 `items_digest` is SHA-256 over Podway Canonical JSON v1 for an array in item-definition order. The
 array contains only recorded slots, with each member shaped as `{"id": <item-id>, "value":
@@ -192,6 +193,16 @@ definition, requires byte-canonical typed values and selector JSON, recomputes e
 skipped reference digest, and rejects valid consumers whose resolved source attempt is stale.
 Graph-session selected read-back derives its `stale` marker from the bound consumer and source
 attempt validity without rewriting the immutable reference snapshot.
+
+`v2_goal_assessments.record_digest` is SHA-256 over Podway Canonical JSON v1 for one complete
+assessment object. Its fields are `session_id`, `goal_revision`, `outcome`, `mode`,
+`selected_option_id`, `route_effect`, `route_target_graph_node_id`, `decision_attempt_id`,
+`decision_graph_node_id`, `decision_trace_sequence`, `actor`, `recorded_at_ms`,
+`criterion_results`, and `evidence`. `criterion_results` remains in goal-definition order; each
+member contains `criterion_id`, `status`, `reason`, and its citation-order `citations` array.
+`evidence` remains in declaration order and contains the exact slim resolved, skipped, or unresolved
+reference fields recorded by the decision. The digest binds the assessment to its ordinary decision
+and complete immutable evidence snapshot without depending on relational query order.
 
 ## Constraints
 

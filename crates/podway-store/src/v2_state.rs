@@ -14,9 +14,14 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
+use crate::v2_goal::{
+    GoalStateV2, insert_goal_state_v2, load_goal_state_v2, replace_goal_state_v2,
+    validate_goal_state_successor_v2, validate_goal_state_v2,
+};
 use crate::v2_memory::{
-    EvidenceReadbackV2, WorkflowMemoryStateV2, insert_workflow_memory_v2, load_workflow_memory_v2,
-    replace_workflow_memory_v2, validate_workflow_memory_successor_v2, validate_workflow_memory_v2,
+    EvidenceReadbackV2, WorkflowGoalTransitionV2, WorkflowMemoryStateV2, insert_workflow_memory_v2,
+    load_workflow_memory_v2, replace_workflow_memory_v2, validate_workflow_memory_successor_v2,
+    validate_workflow_memory_v2,
 };
 use crate::{
     DurableWorktreeIdentityV1, RusqliteErrorContextV1, StoreErrorV1, StoreInvariantV1,
@@ -543,7 +548,7 @@ impl ProcedureSnapshotV2 {
         self.created_at
     }
 
-    fn graph_node(&self, id: &GraphNodeId) -> Option<&GraphNodeSnapshotV2> {
+    pub(crate) fn graph_node(&self, id: &GraphNodeId) -> Option<&GraphNodeSnapshotV2> {
         self.graph_nodes
             .iter()
             .find(|node| node.graph_node_id() == id)
@@ -634,6 +639,7 @@ pub struct GraphSessionStateV2 {
     counters: Vec<GraphNodeCounterV2>,
     attempt_metadata: Vec<AttemptMetadataV2>,
     workflow_memory: WorkflowMemoryStateV2,
+    goal_state: GoalStateV2,
     created_at: UnixMillis,
     completed_at: Option<UnixMillis>,
     cancelled_at: Option<UnixMillis>,
@@ -686,6 +692,37 @@ impl GraphSessionStateV2 {
         cancelled_at: Option<UnixMillis>,
         cancel_reason: Option<String>,
     ) -> Result<Self, StoreValueErrorV1> {
+        Self::new_with_goal_state(
+            workspace_revision,
+            task_title,
+            snapshot,
+            trace,
+            counters,
+            attempt_metadata,
+            workflow_memory,
+            GoalStateV2::empty(),
+            created_at,
+            completed_at,
+            cancelled_at,
+            cancel_reason,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_goal_state(
+        workspace_revision: Revision,
+        task_title: impl Into<String>,
+        snapshot: ProcedureSnapshotV2,
+        trace: SessionTraceV2,
+        counters: Vec<GraphNodeCounterV2>,
+        attempt_metadata: Vec<AttemptMetadataV2>,
+        workflow_memory: WorkflowMemoryStateV2,
+        goal_state: GoalStateV2,
+        created_at: UnixMillis,
+        completed_at: Option<UnixMillis>,
+        cancelled_at: Option<UnixMillis>,
+        cancel_reason: Option<String>,
+    ) -> Result<Self, StoreValueErrorV1> {
         let task_title = task_title.into();
         if task_title.trim().is_empty() || task_title.chars().count() > MAX_TASK_TITLE_CHARACTERS_V2
         {
@@ -693,15 +730,6 @@ impl GraphSessionStateV2 {
         }
         if workspace_revision == Revision::ZERO || trace.revision() == Revision::ZERO {
             return Err(invalid("Procedure v2 persisted revisions must be nonzero"));
-        }
-        if trace
-            .attempts()
-            .iter()
-            .any(|attempt| attempt.goal_revision().is_some())
-        {
-            return Err(invalid(
-                "Procedure v2 goal state is not part of graph persistence",
-            ));
         }
         validate_session_metadata(
             trace.lifecycle(),
@@ -711,7 +739,20 @@ impl GraphSessionStateV2 {
             cancel_reason.as_deref(),
         )?;
         validate_graph_state_members(&snapshot, &trace, &counters, &attempt_metadata)?;
-        validate_workflow_memory_v2(&snapshot, &trace, &attempt_metadata, &workflow_memory)?;
+        validate_goal_state_v2(
+            &snapshot,
+            &trace,
+            &attempt_metadata,
+            &workflow_memory,
+            &goal_state,
+        )?;
+        validate_workflow_memory_v2(
+            &snapshot,
+            &trace,
+            &attempt_metadata,
+            &workflow_memory,
+            &goal_state.goal_rework_target_attempt_ids(&trace),
+        )?;
         Ok(Self {
             workspace_revision,
             task_title,
@@ -720,6 +761,7 @@ impl GraphSessionStateV2 {
             counters,
             attempt_metadata,
             workflow_memory,
+            goal_state,
             created_at,
             completed_at,
             cancelled_at,
@@ -747,6 +789,9 @@ impl GraphSessionStateV2 {
     }
     pub fn workflow_memory(&self) -> &WorkflowMemoryStateV2 {
         &self.workflow_memory
+    }
+    pub fn goal_state(&self) -> &GoalStateV2 {
+        &self.goal_state
     }
     pub fn selected_evidence_readback(
         &self,
@@ -985,6 +1030,12 @@ pub(crate) fn create_graph_session_transaction_v2(
         state.trace().session_id(),
         state.workflow_memory(),
     )?;
+    insert_goal_state_v2(
+        transaction,
+        state.trace().session_id(),
+        state.workflow_memory(),
+        state.goal_state(),
+    )?;
     Ok(())
 }
 
@@ -1008,21 +1059,37 @@ pub(crate) fn replace_graph_session_transaction_v2(
             actual: Some(previous.trace().revision()),
         });
     }
+    let goal_transition = validate_goal_state_successor_v2(
+        previous.trace(),
+        previous.workflow_memory(),
+        previous.goal_state(),
+        next.trace(),
+        next.workflow_memory(),
+        next.goal_state(),
+    )
+    .map_err(StoreErrorV1::InvalidStateV1)?;
     validate_successor_v2(
         &previous,
         next,
         expected_workspace_revision,
         expected_session_revision,
+        &goal_transition,
     )
     .map_err(StoreErrorV1::InvalidStateV1)?;
-    validate_workflow_memory_successor_v2(
-        previous.snapshot(),
-        previous.trace(),
-        previous.workflow_memory(),
-        next.trace(),
-        next.workflow_memory(),
-    )
-    .map_err(StoreErrorV1::InvalidStateV1)?;
+    if previous.workflow_memory() != next.workflow_memory()
+        || previous.goal_state() == next.goal_state()
+        || !matches!(&goal_transition, WorkflowGoalTransitionV2::None)
+    {
+        validate_workflow_memory_successor_v2(
+            previous.snapshot(),
+            previous.trace(),
+            previous.workflow_memory(),
+            next.trace(),
+            next.workflow_memory(),
+            goal_transition,
+        )
+        .map_err(StoreErrorV1::InvalidStateV1)?;
+    }
 
     for ((old_attempt, old_metadata), (new_attempt, new_metadata)) in previous
         .trace()
@@ -1034,18 +1101,27 @@ pub(crate) fn replace_graph_session_transaction_v2(
         let changed = transaction
             .execute(
                 "UPDATE v2_attempts SET lifecycle = ?1, validity = ?2, ended_at_ms = ?3, \
-                 terminal_reason = ?4 WHERE attempt_id = ?5 AND lifecycle = ?6 AND validity = ?7 \
-                 AND ended_at_ms IS ?8 AND terminal_reason IS ?9",
+                 terminal_reason = ?4, goal_revision = ?5 WHERE attempt_id = ?6 AND lifecycle = ?7 \
+                 AND validity = ?8 AND ended_at_ms IS ?9 AND terminal_reason IS ?10 \
+                 AND goal_revision IS ?11",
                 params![
                     attempt_lifecycle_text(new_attempt.lifecycle()),
                     validity_text(new_attempt.validity()),
                     optional_sqlite_time(new_metadata.ended_at(), "Procedure v2 attempt end")?,
                     new_metadata.terminal_reason(),
+                    new_attempt
+                        .goal_revision()
+                        .map(|value| sqlite_u64(value.get(), "Procedure v2 attempt goal revision"))
+                        .transpose()?,
                     old_attempt.attempt_id().as_str(),
                     attempt_lifecycle_text(old_attempt.lifecycle()),
                     validity_text(old_attempt.validity()),
                     optional_sqlite_time(old_metadata.ended_at(), "Procedure v2 attempt end")?,
                     old_metadata.terminal_reason(),
+                    old_attempt
+                        .goal_revision()
+                        .map(|value| sqlite_u64(value.get(), "Procedure v2 attempt goal revision"))
+                        .transpose()?,
                 ],
             )
             .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
@@ -1091,6 +1167,13 @@ pub(crate) fn replace_graph_session_transaction_v2(
         next.trace().session_id(),
         previous.workflow_memory(),
         next.workflow_memory(),
+    )?;
+    replace_goal_state_v2(
+        transaction,
+        next.trace().session_id(),
+        previous.goal_state(),
+        next.workflow_memory(),
+        next.goal_state(),
     )?;
     update_session_row_v2(transaction, &previous, next)?;
     let changed = transaction
@@ -1187,9 +1270,14 @@ pub(crate) fn load_graph_session_connection_v2(
                      (SELECT COUNT(*) FROM v2_attempts) + \
                      (SELECT COUNT(*) FROM v2_item_slots) + \
                      (SELECT COUNT(*) FROM v2_blockers) + \
-                     (SELECT COUNT(*) FROM v2_resolved_evidence_references) + \
+                    (SELECT COUNT(*) FROM v2_resolved_evidence_references) + \
                      (SELECT COUNT(*) FROM v2_decision_records) + \
-                     (SELECT COUNT(*) FROM v2_rework_records)",
+                     (SELECT COUNT(*) FROM v2_rework_records) + \
+                     (SELECT COUNT(*) FROM v2_goal_revisions) + \
+                     (SELECT COUNT(*) FROM v2_goal_criteria) + \
+                     (SELECT COUNT(*) FROM v2_criterion_assessment_results) + \
+                     (SELECT COUNT(*) FROM v2_criterion_citations) + \
+                     (SELECT COUNT(*) FROM v2_goal_assessments)",
                     [],
                     |row| row.get(0),
                 )
@@ -1219,7 +1307,7 @@ fn load_present_graph_session_v2(
             row.get(0)
         })
         .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-    if current_v1 != 0 || snapshot_count != 1 || persisted.current_goal_revision.is_some() {
+    if current_v1 != 0 || snapshot_count != 1 {
         return Err(corrupt(StoreRecordKindV1::Session));
     }
     let snapshot = load_snapshot_v2(connection, &persisted.snapshot_id)?;
@@ -1244,7 +1332,19 @@ fn load_present_graph_session_v2(
     let counters = load_counters_v2(connection, trace.session_id(), &snapshot)?;
     let metadata = load_attempt_metadata_v2(connection, trace.session_id())?;
     let workflow_memory = load_workflow_memory_v2(connection, &snapshot, &trace, &metadata)?;
-    let state = GraphSessionStateV2::new_with_workflow_memory(
+    let current_goal_revision = persisted
+        .current_goal_revision
+        .map(|value| {
+            persisted_u64(value, StoreRecordKindV1::Session).map(GoalRevisionNumberV2::new)
+        })
+        .transpose()?;
+    let goal_state = load_goal_state_v2(
+        connection,
+        trace.session_id(),
+        current_goal_revision,
+        &workflow_memory,
+    )?;
+    let state = GraphSessionStateV2::new_with_goal_state(
         Revision::new(persisted_u64(
             workspace_revision,
             StoreRecordKindV1::Workspace,
@@ -1255,6 +1355,7 @@ fn load_present_graph_session_v2(
         counters,
         metadata,
         workflow_memory,
+        goal_state,
         persisted_time_v2(persisted.created_at, StoreRecordKindV1::Session)?,
         optional_persisted_time_v2(persisted.completed_at, StoreRecordKindV1::Session)?,
         optional_persisted_time_v2(persisted.cancelled_at, StoreRecordKindV1::Session)?,
@@ -1575,6 +1676,7 @@ fn validate_successor_v2(
     next: &GraphSessionStateV2,
     expected_workspace_revision: Revision,
     expected_session_revision: Revision,
+    goal_transition: &WorkflowGoalTransitionV2<'_>,
 ) -> Result<(), StoreValueErrorV1> {
     if previous.trace().session_id() != next.trace().session_id()
         || previous.snapshot() != next.snapshot()
@@ -1613,7 +1715,12 @@ fn validate_successor_v2(
                         .last()
                         .is_some_and(|attempt| attempt.attempt_id() == record.target_attempt_id())
             });
-    if (previous.trace().lifecycle() != SessionLifecycle::Running && !manual_reactivation)
+    let goal_reactivation = previous.trace().lifecycle() == SessionLifecycle::Completed
+        && next.trace().lifecycle() == SessionLifecycle::Running
+        && matches!(goal_transition, WorkflowGoalTransitionV2::Rework { .. });
+    if (previous.trace().lifecycle() != SessionLifecycle::Running
+        && !manual_reactivation
+        && !goal_reactivation)
         || next.trace().attempts().len() < previous.trace().attempts().len()
         || next.trace().attempts().len() > previous.trace().attempts().len() + 1
     {
@@ -1627,11 +1734,20 @@ fn validate_successor_v2(
         .zip(previous.attempt_metadata())
         .zip(next.trace().attempts().iter().zip(next.attempt_metadata()))
     {
+        let initial_goal_binding = matches!(
+            goal_transition,
+            WorkflowGoalTransitionV2::InitialBinding { attempt_id }
+                if *attempt_id == old_attempt.attempt_id()
+                    && old_attempt.lifecycle() == AttemptLifecycle::Active
+                    && new_attempt.lifecycle() == AttemptLifecycle::Active
+                    && old_attempt.goal_revision().is_none()
+                    && new_attempt.goal_revision() == Some(GoalRevisionNumberV2::FIRST)
+        );
         if old_attempt.attempt_id() != new_attempt.attempt_id()
             || old_attempt.graph_node_id() != new_attempt.graph_node_id()
             || old_attempt.number() != new_attempt.number()
             || old_attempt.trace() != new_attempt.trace()
-            || old_attempt.goal_revision() != new_attempt.goal_revision()
+            || (old_attempt.goal_revision() != new_attempt.goal_revision() && !initial_goal_binding)
             || old_metadata.attempt_id() != new_metadata.attempt_id()
             || old_metadata.started_at() != new_metadata.started_at()
         {
@@ -1653,7 +1769,10 @@ fn validate_successor_v2(
         }
         if old_attempt.lifecycle() == AttemptLifecycle::Active
             && new_attempt.lifecycle() == AttemptLifecycle::Active
-            && (old_attempt != new_attempt || old_metadata != new_metadata)
+            && ((!initial_goal_binding && old_attempt != new_attempt)
+                || old_attempt.lifecycle() != new_attempt.lifecycle()
+                || old_attempt.validity() != new_attempt.validity()
+                || old_metadata != new_metadata)
         {
             return Err(invalid(
                 "Procedure v2 cursor-stable mutation changed the active attempt",
@@ -1661,10 +1780,11 @@ fn validate_successor_v2(
         }
     }
     let cursor_stable = previous.trace().attempts().len() == next.trace().attempts().len()
-        && previous
-            .trace()
-            .active_attempt()
-            .is_some_and(|old| next.trace().active_attempt() == Some(old));
+        && previous.trace().active_attempt().is_some_and(|old| {
+            next.trace()
+                .active_attempt()
+                .is_some_and(|new| new.attempt_id() == old.attempt_id())
+        });
     if cursor_stable
         && (next.trace().lifecycle() != SessionLifecycle::Running
             || previous.counters() != next.counters()
@@ -1694,19 +1814,29 @@ fn validate_successor_v2(
             return Err(invalid("Procedure v2 counters must be monotonic"));
         }
     }
-    let rework_target = if next.workflow_memory().reworks().len()
-        == previous.workflow_memory().reworks().len() + 1
-    {
-        Some(
-            next.workflow_memory()
-                .reworks()
-                .last()
-                .ok_or_else(|| invalid("Procedure v2 rework counter target is absent"))?
-                .to_node(),
-        )
-    } else {
-        None
-    };
+    let rework_target =
+        if let WorkflowGoalTransitionV2::Rework { target_attempt_id } = goal_transition {
+            Some(
+                next.trace()
+                    .attempts()
+                    .iter()
+                    .find(|attempt| attempt.attempt_id() == *target_attempt_id)
+                    .ok_or_else(|| invalid("Procedure v2 goal rework counter target is absent"))?
+                    .graph_node_id(),
+            )
+        } else if next.workflow_memory().reworks().len()
+            == previous.workflow_memory().reworks().len() + 1
+        {
+            Some(
+                next.workflow_memory()
+                    .reworks()
+                    .last()
+                    .ok_or_else(|| invalid("Procedure v2 rework counter target is absent"))?
+                    .to_node(),
+            )
+        } else {
+            None
+        };
     for old in previous.counters() {
         let new = next_counters[old.graph_node_id()];
         let expected = if rework_target == Some(old.graph_node_id()) {
@@ -1816,7 +1946,7 @@ fn insert_session_row_v2(
              lifecycle, session_revision, latest_trace_sequence, active_graph_node_id, \
              active_attempt_id, active_trace_sequence, goal_tracking, current_goal_revision, \
              created_at_ms, completed_at_ms, cancelled_at_ms, cancel_reason) \
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13, ?14)",
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 state.trace().session_id().as_str(),
                 state.task_title(),
@@ -1828,6 +1958,11 @@ fn insert_session_row_v2(
                 active_attempt,
                 active_trace,
                 i64::from(state.snapshot().goal_tracking()),
+                state
+                    .goal_state()
+                    .current_revision()
+                    .map(|value| sqlite_u64(value.get(), "Procedure v2 current goal revision"))
+                    .transpose()?,
                 sqlite_u64(state.created_at().get(), "Procedure v2 session timestamp")?,
                 optional_sqlite_time(state.completed_at(), "Procedure v2 completion timestamp")?,
                 optional_sqlite_time(state.cancelled_at(), "Procedure v2 cancellation timestamp")?,
@@ -1848,15 +1983,26 @@ fn update_session_row_v2(
         .execute(
             "UPDATE v2_task_sessions SET lifecycle = ?1, session_revision = ?2, \
              latest_trace_sequence = ?3, active_graph_node_id = ?4, active_attempt_id = ?5, \
-             active_trace_sequence = ?6, completed_at_ms = ?7, cancelled_at_ms = ?8, \
-             cancel_reason = ?9 WHERE singleton = 1 AND session_id = ?10 AND session_revision = ?11",
+             active_trace_sequence = ?6, current_goal_revision = ?7, completed_at_ms = ?8, \
+             cancelled_at_ms = ?9, cancel_reason = ?10 WHERE singleton = 1 AND session_id = ?11 \
+             AND session_revision = ?12 AND current_goal_revision IS ?13",
             params![
                 session_lifecycle_text(next.trace().lifecycle()),
-                sqlite_u64(next.trace().revision().get(), "Procedure v2 session revision")?,
-                sqlite_u64(latest_trace(next.trace()).get(), "Procedure v2 trace sequence")?,
+                sqlite_u64(
+                    next.trace().revision().get(),
+                    "Procedure v2 session revision"
+                )?,
+                sqlite_u64(
+                    latest_trace(next.trace()).get(),
+                    "Procedure v2 trace sequence"
+                )?,
                 active_node,
                 active_attempt,
                 active_trace,
+                next.goal_state()
+                    .current_revision()
+                    .map(|value| sqlite_u64(value.get(), "Procedure v2 current goal revision"))
+                    .transpose()?,
                 optional_sqlite_time(next.completed_at(), "Procedure v2 completion timestamp")?,
                 optional_sqlite_time(next.cancelled_at(), "Procedure v2 cancellation timestamp")?,
                 next.cancel_reason(),
@@ -1865,6 +2011,11 @@ fn update_session_row_v2(
                     previous.trace().revision().get(),
                     "Procedure v2 session revision",
                 )?,
+                previous
+                    .goal_state()
+                    .current_revision()
+                    .map(|value| sqlite_u64(value.get(), "Procedure v2 current goal revision"))
+                    .transpose()?,
             ],
         )
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
@@ -1916,7 +2067,7 @@ fn insert_attempt_v2(
             "INSERT INTO v2_attempts (attempt_id, session_id, snapshot_id, graph_node_id, \
              node_definition_id, attempt_number, trace_sequence, lifecycle, validity, \
              goal_revision, started_at_ms, ended_at_ms, terminal_reason) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 attempt.attempt_id().as_str(),
                 state.trace().session_id().as_str(),
@@ -1927,6 +2078,10 @@ fn insert_attempt_v2(
                 sqlite_u64(attempt.trace().get(), "Procedure v2 trace sequence")?,
                 attempt_lifecycle_text(attempt.lifecycle()),
                 validity_text(attempt.validity()),
+                attempt
+                    .goal_revision()
+                    .map(|value| sqlite_u64(value.get(), "Procedure v2 attempt goal revision"))
+                    .transpose()?,
                 sqlite_u64(metadata.started_at().get(), "Procedure v2 attempt start")?,
                 optional_sqlite_time(metadata.ended_at(), "Procedure v2 attempt end")?,
                 metadata.terminal_reason(),
