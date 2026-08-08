@@ -107,7 +107,7 @@ Dependencies: `V2MOD`.
 | `V2GRF-002` | Vet liveness and budgets | Completed | Enforce static and read-back budgets without limiting valid traversal. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-003` | Project graph JSON | Completed | Emit a deterministic canonical machine projection. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-004` | Project Mermaid | Completed | Emit the required human review projection. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
-| `V2GRF-005` | Project PlantUML | Planned | Emit deterministic PlantUML without invoking a renderer. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
+| `V2GRF-005` | Project PlantUML | Completed | Emit deterministic PlantUML without invoking a renderer. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-006` | Project DOT | Planned | Emit deterministic DOT without invoking Graphviz. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-007` | Preview Procedure v2 | Planned | Present read-only checks, summary, Mermaid, digest, and confirmed start argv. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-008` | Close projection conformance | Planned | Prove all formats agree and exclude runtime or sensitive state. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |

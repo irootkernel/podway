@@ -2728,6 +2728,27 @@ fn graph_mermaid_text(path: &Path) -> Output {
     ])
 }
 
+fn graph_plantuml(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "puml",
+    ])
+}
+
+fn graph_plantuml_text(path: &Path) -> Output {
+    run(&[
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "puml",
+    ])
+}
+
 fn oversized_graph_projection_source() -> String {
     let option_ids = (0..8)
         .map(|index| format!("option-{index:02}-{}", "x".repeat(54)))
@@ -2910,7 +2931,15 @@ fn v2grf003_graph_preserves_process_failures_quiet_mode_and_closed_format_usage(
             "graph",
             &v2_path.display().to_string(),
             "--format",
-            "puml",
+            "plantuml",
+        ],
+        vec![
+            "--json",
+            "procedure",
+            "graph",
+            &v2_path.display().to_string(),
+            "--format",
+            "dot",
         ],
     ] {
         let output = run(&arguments);
@@ -2920,6 +2949,51 @@ fn v2grf003_graph_preserves_process_failures_quiet_mode_and_closed_format_usage(
         assert_eq!(error["command"], "procedure.graph");
         assert_eq!(error["code"], "REQUEST_INVALID");
     }
+}
+
+#[test]
+fn v2grf005_plantuml_is_digest_bound_deterministic_and_read_only() {
+    let fixture = FixtureDirectory::new("graph-plantuml");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let before = identity(&path);
+    let entries = entry_names(&fixture.root);
+
+    let first = graph_plantuml(&path);
+    let second = graph_plantuml(&path);
+    for output in [&first, &second] {
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty());
+    }
+    let first = one_json(&first);
+    let second = one_json(&second);
+    let result = &first["result"];
+    assert_eq!(result, &second["result"]);
+    assert_eq!(result["schema"], "podway.procedure-graph-result/v1");
+    assert_eq!(result["format"], "plantuml");
+    let procedure_digest = result["procedure_digest"]
+        .as_str()
+        .expect("graph result must carry a procedure digest");
+    let projection = result["projection"]
+        .as_str()
+        .expect("graph result must carry PlantUML text");
+    assert_eq!(
+        projection,
+        format!(
+            "@startuml\n' podway.procedure/v2\n' procedure-digest: {procedure_digest}\nhide empty description\ntop to bottom direction\n\nstate \"Work · entry · terminal\" as n_only\n\n@enduml"
+        )
+    );
+    assert_eq!(
+        result["projection_digest"],
+        format!("sha256:{:x}", Sha256::digest(projection.as_bytes()))
+    );
+    assert!(!projection.ends_with('\n'));
+
+    let text = graph_plantuml_text(&path);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    assert!(text.stderr.is_empty());
+    assert_eq!(text.stdout, format!("{projection}\n").as_bytes());
+    assert_eq!(identity(&path), before);
+    assert_eq!(entry_names(&fixture.root), entries);
 }
 
 #[test]

@@ -26,6 +26,8 @@ mod int_v2_procedure_graph_projection;
 mod int_v2_procedure_lint;
 #[path = "int_v2_procedure_mermaid_projection.rs"]
 mod int_v2_procedure_mermaid_projection;
+#[path = "int_v2_procedure_plantuml_projection.rs"]
+mod int_v2_procedure_plantuml_projection;
 #[path = "int_v2_procedure_scaffold.rs"]
 mod int_v2_procedure_scaffold;
 #[path = "int_v2_procedure_validate.rs"]

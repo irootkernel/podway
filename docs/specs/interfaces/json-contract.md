@@ -167,6 +167,39 @@ newline, and its `projection_digest` hashes those exact UTF-8 bytes. The
 131,072-character bound applies independently to the selected graph format, so
 generating Mermaid does not first require the JSON projection to fit.
 
+The CLI spelling `puml` selects a result whose public `format` is `plantuml`.
+That projection is a deterministic PlantUML state diagram with the exact header
+`@startuml`, the metadata comments `' podway.procedure/v2` and
+`' procedure-digest: <procedure_digest>`, `hide empty description`, and
+`top to bottom direction`. It ends with `@enduml`. The projection itself has no
+trailing newline.
+
+PlantUML aliases are `n_` followed by the graph node ID with `-` replaced by
+`_`. Because Procedure identifiers cannot contain `_`, the prefix and mapping
+are injective and cannot collide with PlantUML keywords. Every node uses
+`state "<label>" as <alias>`. General decision nodes additionally carry the
+sole stereotype `<<decision>>`, while goal-assessment decision nodes carry the
+sole stereotype `<<goal_assessment>>`. These remain labelled regular states so
+PlantUML does not discard their title or annotations as it does for choice
+pseudo-states. Labels append enabled annotations in the fixed order
+`entry`, `terminal`, `skippable`, `decision`, `goal assessment`, and
+`manual rework target`. Authored title characters pass through only when they
+are ASCII alphanumeric, ASCII space, one of `.,:;?()`, or a non-ASCII scalar
+that is neither control nor whitespace. Every other scalar is encoded using
+uppercase PlantUML Unicode notation such as `<U+0022>`, with at least four hex
+digits. This prevents authored text from terminating a quoted label or invoking
+the preprocessor, HTML, links, images, or Creole markup without relying on the
+deprecated backslash escapes.
+
+Action-next transitions are unlabeled arrows. Decision transitions append
+`: option_id · effect`, preserve normalized edge order, and are the only
+labelled arrows. Entry, terminal, assessment, and manual-rework state remain
+annotations rather than synthetic transitions; evidence references never
+render as flow. Node and edge blocks are separated by one blank line, and an
+edge-free graph omits the empty edge block. `projection_digest` hashes the exact
+UTF-8 PlantUML bytes, and the shared graph projection cap applies independently
+to this selected format.
+
 Preview is one closed report rather than a loose graph summary. Every result
 contains the source file, admissibility, validate/vet/lint checks, and bounded
 diagnostics. An admissible result additionally contains procedure identity and
