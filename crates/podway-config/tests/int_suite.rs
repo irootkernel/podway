@@ -20,6 +20,8 @@ mod int_v2_procedure_convert;
 mod int_v2_procedure_equivalence;
 #[path = "int_v2_procedure_format.rs"]
 mod int_v2_procedure_format;
+#[path = "int_v2_procedure_graph_projection.rs"]
+mod int_v2_procedure_graph_projection;
 #[path = "int_v2_procedure_lint.rs"]
 mod int_v2_procedure_lint;
 #[path = "int_v2_procedure_scaffold.rs"]

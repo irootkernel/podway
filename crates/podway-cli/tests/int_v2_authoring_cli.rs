@@ -14,6 +14,7 @@ use std::{
 use podway_config::SCAFFOLD_TEMPLATE_MINIMAL;
 use podway_protocol::ResponseEnvelopeV1;
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 
 /// The smallest legal Procedure v2 document, already in canonical authoring form.
 const MINIMAL_V2_YAML: &str = r#"schema: podway.procedure/v2
@@ -2683,4 +2684,247 @@ fn v2aut008_warnings_as_errors_is_a_no_op_for_a_v2_document() {
             "{name}"
         );
     }
+}
+
+fn graph_json(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "json",
+    ])
+}
+
+fn graph_text(path: &Path) -> Output {
+    run(&[
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "json",
+    ])
+}
+
+fn oversized_graph_projection_source() -> String {
+    let option_ids = (0..8)
+        .map(|index| format!("option-{index:02}-{}", "x".repeat(54)))
+        .collect::<Vec<_>>();
+    let node_ids = (0..63)
+        .map(|index| format!("node-{index:02}-{}", "x".repeat(56)))
+        .collect::<Vec<_>>();
+    let terminal_id = format!("terminal-{}", "x".repeat(55));
+    let options = option_ids
+        .iter()
+        .map(|id| format!("      - id: {id}\n        label: Choice\n"))
+        .collect::<String>();
+    let nodes = node_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let target = node_ids.get(index + 1).unwrap_or(&terminal_id);
+            let routes = option_ids
+                .iter()
+                .map(|option| {
+                    format!(
+                        "        {option}:\n          to: {target}\n          effect: advance\n"
+                    )
+                })
+                .collect::<String>();
+            format!("    - id: {id}\n      use: choose\n      routes:\n{routes}")
+        })
+        .collect::<String>();
+    format!(
+        "schema: podway.procedure/v2\nid: projection-cap\nversion: \"1\"\nname: Projection cap\npurpose: Prove graph projections are independently bounded.\nnode_definitions:\n  choose:\n    type: decision\n    title: Choose\n    objective: Select a route.\n    prompt: Which route?\n    options:\n{options}    reason:\n      required: true\n  finish:\n    type: action\n    title: Finish\n    intent: Finish.\ngraph:\n  entry: {}\n  nodes:\n{nodes}    - id: {terminal_id}\n      use: finish\n      terminal: true\n",
+        node_ids[0]
+    )
+}
+
+#[test]
+fn v2grf003_graph_json_is_deterministic_digest_bound_and_read_only() {
+    let fixture = FixtureDirectory::new("graph-success");
+    let yaml_path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let json_path = fixture.write(
+        "minimal.json",
+        r#"{"schema":"podway.procedure/v2","id":"minimal","version":"1","name":"Minimal","purpose":"The smallest legal Procedure v2 document.","node_definitions":{"work":{"type":"action","title":"Work","intent":"Do the work."}},"graph":{"entry":"only","nodes":[{"id":"only","use":"work","terminal":true}]}}"#,
+    );
+    let yaml_identity = identity(&yaml_path);
+    let json_identity = identity(&json_path);
+    let entries = entry_names(&fixture.root);
+
+    let first = graph_json(&yaml_path);
+    let second = graph_json(&yaml_path);
+    let from_json = graph_json(&json_path);
+    for output in [&first, &second, &from_json] {
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty());
+    }
+    let first = one_json(&first);
+    let second = one_json(&second);
+    let from_json = one_json(&from_json);
+    assert_eq!(first["schema"], "podway.output/v2");
+    assert_eq!(first["command"], "procedure.graph");
+    let result = &first["result"];
+    assert_eq!(result["schema"], "podway.procedure-graph-result/v1");
+    assert_eq!(result["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(result["format"], "json");
+    assert_eq!(result, &second["result"]);
+    assert_eq!(result, &from_json["result"]);
+
+    let projection = result["projection"]
+        .as_str()
+        .expect("graph result must contain the projection");
+    assert!(!projection.ends_with('\n'));
+    let graph: Value = serde_json::from_str(projection).expect("projection must be JSON");
+    assert_eq!(graph["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(graph["procedure_digest"], result["procedure_digest"]);
+    assert_eq!(graph["entry_graph_node_id"], "only");
+    assert_eq!(
+        graph["terminal_graph_node_ids"],
+        serde_json::json!(["only"])
+    );
+    assert_eq!(graph["nodes"].as_array().map(Vec::len), Some(1));
+    assert_eq!(graph["edges"].as_array().map(Vec::len), Some(0));
+    assert!(graph.get("schema").is_none());
+    assert!(graph["nodes"][0].get("title").is_none());
+    assert_eq!(
+        result["projection_digest"],
+        format!("sha256:{:x}", Sha256::digest(projection.as_bytes()))
+    );
+
+    let text = graph_text(&yaml_path);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    assert!(text.stderr.is_empty());
+    assert_eq!(text.stdout, format!("{projection}\n").as_bytes());
+
+    assert_eq!(identity(&yaml_path), yaml_identity);
+    assert_eq!(identity(&json_path), json_identity);
+    assert_eq!(entry_names(&fixture.root), entries);
+}
+
+#[test]
+fn v2grf003_graph_stops_at_validation_or_vet_and_binds_only_validated_digests() {
+    let fixture = FixtureDirectory::new("graph-rejections");
+    let parse_path = fixture.write("parse.yaml", "schema: podway.procedure/v2\ngraph: [\n");
+    let validate_path = fixture.write(
+        "validate.yaml",
+        &MINIMAL_V2_YAML.replace("      use: work\n", "      use: absent\n"),
+    );
+    let vet_path = fixture.write(
+        "vet.yaml",
+        &MINIMAL_V2_YAML.replace(
+            "    - id: only\n      use: work\n      terminal: true\n",
+            "    - id: only\n      use: work\n      terminal: true\n    - id: unreachable\n      use: work\n      terminal: true\n",
+        ),
+    );
+
+    for (path, expected_code, has_digest) in [
+        (&parse_path, "SOURCE_CONSTRUCT_UNSUPPORTED", false),
+        (&validate_path, "GRAPH_DEFINITION_UNKNOWN", false),
+        (&vet_path, "UNREACHABLE_GRAPH_NODE", true),
+    ] {
+        let output = graph_json(path);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty());
+        let envelope = one_json(&output);
+        assert_eq!(envelope["schema"], "podway.output/v2");
+        assert_eq!(envelope["command"], "procedure.graph");
+        let result = &envelope["result"];
+        assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+        assert_eq!(result["operation"], "graph");
+        assert_eq!(result["valid"], false);
+        assert_eq!(result["diagnostics"][0]["code"], expected_code);
+        assert_eq!(result.get("digest").is_some(), has_digest);
+        assert!(result.get("projection").is_none());
+    }
+}
+
+#[test]
+fn v2grf003_graph_preserves_process_failures_quiet_mode_and_closed_format_usage() {
+    let fixture = FixtureDirectory::new("graph-process");
+    let v2_path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let v1_path = fixture.write("legacy.yaml", V1_YAML);
+
+    for (path, code) in [
+        (
+            v1_path.display().to_string(),
+            "PROCEDURE_SCHEMA_UNSUPPORTED",
+        ),
+        (
+            fixture.root.join("missing.yaml").display().to_string(),
+            "PROCEDURE_NOT_FOUND",
+        ),
+    ] {
+        let output = run(&["--json", "procedure", "graph", &path, "--format", "json"]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let error = one_json(&output);
+        assert_eq!(error["schema"], "podway.error/v1");
+        assert_eq!(error["command"], "procedure.graph");
+        assert_eq!(error["code"], code);
+    }
+
+    let quiet = run(&[
+        "--quiet",
+        "procedure",
+        "graph",
+        &v2_path.display().to_string(),
+        "--format",
+        "json",
+    ]);
+    assert_eq!(quiet.status.code(), Some(0), "{quiet:?}");
+    assert!(quiet.stdout.is_empty());
+    assert!(quiet.stderr.is_empty());
+
+    for arguments in [
+        vec![
+            "--json",
+            "procedure",
+            "graph",
+            &v2_path.display().to_string(),
+        ],
+        vec![
+            "--json",
+            "procedure",
+            "graph",
+            &v2_path.display().to_string(),
+            "--format",
+            "mermaid",
+        ],
+    ] {
+        let output = run(&arguments);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let error = one_json(&output);
+        assert_eq!(error["schema"], "podway.error/v1");
+        assert_eq!(error["command"], "procedure.graph");
+        assert_eq!(error["code"], "REQUEST_INVALID");
+    }
+}
+
+#[test]
+fn v2grf003_graph_reports_its_projection_budget_after_vetting() {
+    let fixture = FixtureDirectory::new("graph-projection-cap");
+    let path = fixture.write("large.yaml", &oversized_graph_projection_source());
+
+    let output = graph_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.graph");
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+    assert_eq!(result["operation"], "graph");
+    assert_eq!(result["valid"], false);
+    assert!(
+        result["digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:"))
+    );
+    assert_eq!(
+        result["diagnostics"][0]["code"],
+        "GRAPH_PROJECTION_BUDGET_EXCEEDED"
+    );
+    assert_eq!(result["diagnostics"][0]["field"], "$");
+    assert!(result.get("projection").is_none());
 }

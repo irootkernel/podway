@@ -52,7 +52,7 @@ Static commands MAY run without a worktree:
 - `podway version`;
 - `podway daemon ...`;
 - `podway preset list/show/explain`;
-- `podway procedure validate/show/format/lint/check/convert <file>`;
+- `podway procedure validate/show/format/vet/graph/lint/check/convert <file>`;
 - `podway procedure scaffold`.
 
 All other commands require a valid Git worktree and fail closed otherwise.

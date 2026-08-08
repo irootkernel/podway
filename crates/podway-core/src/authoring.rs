@@ -102,6 +102,7 @@ authoring_diagnostic_catalog! {
     AuthoringSchemaInvalid => ("AUTHORING_SCHEMA_INVALID", Error),
     SourceConstructUnsupported => ("SOURCE_CONSTRUCT_UNSUPPORTED", Error),
     SourceProjectionBudgetExceeded => ("SOURCE_PROJECTION_BUDGET_EXCEEDED", Error),
+    GraphProjectionBudgetExceeded => ("GRAPH_PROJECTION_BUDGET_EXCEEDED", Error),
     FormatNotCanonical => ("FORMAT_NOT_CANONICAL", Error),
     EntryNodeInvalid => ("ENTRY_NODE_INVALID", Error),
     GraphDefinitionUnknown => ("GRAPH_DEFINITION_UNKNOWN", Error),
@@ -410,8 +411,8 @@ mod tests {
             );
             assert_eq!(code.severity(), (*code).severity());
         }
-        assert_eq!(codes.len(), 52);
-        assert_eq!(AuthoringDiagnosticCode::ALL.len(), 52);
+        assert_eq!(codes.len(), 53);
+        assert_eq!(AuthoringDiagnosticCode::ALL.len(), 53);
     }
 
     #[test]
@@ -424,7 +425,7 @@ mod tests {
             .iter()
             .filter(|code| code.severity() == AuthoringSeverity::Warning)
             .count();
-        assert_eq!(errors, 29);
+        assert_eq!(errors, 30);
         assert_eq!(warnings, 23);
     }
 

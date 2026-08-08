@@ -214,7 +214,7 @@ or usage behavior; the exact contract-manifest digest is the machine-readable
 capability signal.
 
 The version-aware result registry reserves the complete Procedure v2 family set
-without registering seven of the thirteen future command routes; `procedure.format`, `procedure.vet`, `procedure.lint`, `procedure.check`, `procedure.scaffold`, and `procedure.convert` are registered and served. It validates required
+without registering six of the thirteen future command routes; `procedure.format`, `procedure.vet`, `procedure.graph`, `procedure.lint`, `procedure.check`, `procedure.scaffold`, and `procedure.convert` are registered and served. It validates required
 family shape before later typed decoding. V2 producers must also enforce the
 bounded-warning guard defined by the JSON contract and the existing complete
 frame limit; the open outer v2 envelope is not permission for unbounded warnings

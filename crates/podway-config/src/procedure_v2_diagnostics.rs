@@ -27,6 +27,7 @@ use podway_core::{
 };
 
 use crate::procedure_v2_canonical::CANONICAL_PROJECTION_FIELD;
+use crate::procedure_v2_graph_projection::GRAPH_PROJECTION_FIELD;
 use crate::procedure_v2_parse::{
     ACTION_OUTCOME_ABSENT_REASON, ACTION_OUTCOME_BOTH_REASON, DECISION_SKIP_REASON,
     DOMAIN_SENTINEL_FIELD, PLACEMENT_FIELD,
@@ -293,7 +294,8 @@ const SHAPE_MANUAL_REWORK_TARGET: &[&str] = &["manual_rework", "allowed_targets"
 /// **Nothing here matches a free-typed string.** A refinement keys on the same `field` or `reason`
 /// constant its raise site reads, so a check cannot change what it reports without moving the
 /// constant this switches on. The constants live next to their raise sites in
-/// `procedure_v2_validate`, `procedure_v2_parse`, `procedure_v2_canonical`, and `podway_core`.
+/// `procedure_v2_validate`, `procedure_v2_parse`, `procedure_v2_canonical`,
+/// `procedure_v2_graph_projection`, and `podway_core`.
 ///
 /// Never panics and never falls through silently: the match over `ConfigError` is exhaustive, and
 /// the variants unreachable from v2 classify defensively rather than aborting a diagnostic path.
@@ -404,6 +406,16 @@ fn classify(error: &ConfigError) -> Classification<'_> {
         ConfigError::OutOfBounds { field, .. } if *field == CANONICAL_PROJECTION_FIELD => {
             Classification {
                 code: Code::SourceProjectionBudgetExceeded,
+                field: None,
+                shape: None,
+                value: None,
+            }
+        }
+        // The generated graph text is a separate complete-document projection from canonical
+        // source, so its identical numeric cap has a distinct stable diagnostic code.
+        ConfigError::OutOfBounds { field, .. } if *field == GRAPH_PROJECTION_FIELD => {
+            Classification {
+                code: Code::GraphProjectionBudgetExceeded,
                 field: None,
                 shape: None,
                 value: None,
@@ -600,6 +612,9 @@ fn lead_sentence(code: AuthoringDiagnosticCode) -> &'static str {
         Code::SourceProjectionBudgetExceeded => {
             "The canonical source projection exceeds its budget:"
         }
+        Code::GraphProjectionBudgetExceeded => {
+            "The generated graph text projection exceeds its budget:"
+        }
         Code::EntryNodeInvalid => "The graph entry does not name a declared graph node:",
         Code::GraphDefinitionUnknown => {
             "A graph placement uses a node definition the procedure does not declare:"
@@ -664,6 +679,9 @@ pub(crate) const fn diagnostic_hint(code: AuthoringDiagnosticCode) -> &'static s
         }
         Code::SourceProjectionBudgetExceeded => {
             "Split the procedure or shorten its longest values to fit the source projection budget."
+        }
+        Code::GraphProjectionBudgetExceeded => {
+            "Split the graph or shorten its generated text to fit the graph projection budget."
         }
         Code::FormatNotCanonical => {
             "Run `podway procedure format <file> --write` to rewrite the file in canonical form."

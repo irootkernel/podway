@@ -165,11 +165,12 @@ and v2 runtime error messages are bounded to 512 characters without changing the
 released `podway.error/v1` schema.
 
 Authoring diagnostics never use runtime error codes. The authoring catalog
-separately enumerates every validate, vet, and lint condition from Procedure v2,
+separately enumerates every validate, vet, graph-projection, and lint condition from Procedure v2,
 including the mandatory stable codes
 `EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER`, `SKIPPABLE_EVIDENCE_SOURCE`,
 `EVIDENCE_SELECTOR_UNKNOWN_ITEM`, `READBACK_BUDGET_EXCEEDED`,
-`NEXT_STATIC_BUDGET_EXCEEDED`, `REWORK_TARGET_NOT_DOMINATING`, and
+`NEXT_STATIC_BUDGET_EXCEEDED`, `GRAPH_PROJECTION_BUDGET_EXCEEDED`,
+`REWORK_TARGET_NOT_DOMINATING`, and
 `NO_REACTIVATION_PATH`.
 
 `INTERNAL_ERROR` is never marked retryable, and its details include a diagnostic ID. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation.

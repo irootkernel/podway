@@ -594,6 +594,15 @@ fn every_config_error_variant() -> Vec<(&'static str, ConfigError)> {
             },
         ),
         (
+            "OutOfBounds at the graph projection bound",
+            ConfigError::OutOfBounds {
+                field: "graph projection",
+                min: 1,
+                max: 131_072,
+                actual: 131_073,
+            },
+        ),
+        (
             "DuplicateValue",
             ConfigError::DuplicateValue {
                 field: "stage.id",
@@ -839,6 +848,38 @@ fn v2aut008_a_diagnostic_about_a_path_no_source_declares_lands_on_the_document_s
     assert_eq!(diagnostic.location().column(), 1);
     assert_eq!(diagnostic.location().end_line(), 1);
     assert_eq!(diagnostic.location().end_column(), 1);
+}
+
+#[test]
+fn v2grf003_graph_projection_budget_has_its_own_document_level_diagnostic() {
+    let diagnostic = diagnose_error(
+        &ConfigError::OutOfBounds {
+            field: "graph projection",
+            min: 1,
+            max: 131_072,
+            actual: 131_073,
+        },
+        BASE,
+    );
+
+    assert_eq!(
+        diagnostic.code(),
+        AuthoringDiagnosticCode::GraphProjectionBudgetExceeded
+    );
+    assert_eq!(diagnostic.severity(), AuthoringSeverity::Error);
+    assert_eq!(diagnostic.field(), "$");
+    assert_eq!(diagnostic.location().line(), 1);
+    assert_eq!(diagnostic.location().column(), 1);
+    assert!(
+        diagnostic
+            .message()
+            .starts_with("The generated graph text projection exceeds its budget:")
+    );
+    assert_eq!(
+        diagnostic.hint(),
+        "Split the graph or shorten its generated text to fit the graph projection budget."
+    );
+    assert_diagnostic_shape(&diagnostic);
 }
 
 #[test]

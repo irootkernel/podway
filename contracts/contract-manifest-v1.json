@@ -3,7 +3,7 @@
     {
       "kind": "catalog",
       "path": "contracts/command-routes.json",
-      "sha256": "sha256:8995482868f27e8c754026b113f01b5d2cbcf4771455616fb672a5249f3b88b8"
+      "sha256": "sha256:60de6b0dccb44868a2648dd1591904e704025ab928fe649f3260ab0c6df744ff"
     },
     {
       "kind": "known_answer_fixture",
@@ -73,7 +73,7 @@
     {
       "kind": "schema",
       "path": "schemas/authoring-diagnostic-v1.schema.json",
-      "sha256": "sha256:311798fa3bac64cb1a20911175ea9a13d64e8feb6fd8524c40b37b215209fdf6"
+      "sha256": "sha256:660d2d1e1e7a1decc8f0bc4fbdf713edb01bcc0f6599a659f80385ffebb723e4"
     },
     {
       "kind": "schema",
@@ -333,7 +333,7 @@
     {
       "kind": "catalog",
       "path": "spec/authoring-diagnostics.json",
-      "sha256": "sha256:5400e8dd4136fce612f6f0e37f3040e13b9d2dd02fd390826b51eb95055c64e6"
+      "sha256": "sha256:e847734d1afe632766fd44d5f444a7ba86909e6c8c521e3661aecca81b48b3e8"
     },
     {
       "kind": "canonicalization_rules",
@@ -343,7 +343,7 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:4e222fc92f05f20a85403e9501f3a05d2f18e8dd4eb82d7aed077866967a9ca8"
+      "sha256": "sha256:084b2ad65fbcf182b747e8ce09280ba92045e166d1a4521333b92b223e1f96e0"
     },
     {
       "kind": "catalog",
@@ -446,7 +446,7 @@
       "sha256": "sha256:a48cc66ba028a87d450ceaaed1095081f12ddfdc8cec40be72bb4a7b2738606e"
     }
   ],
-  "digest": "sha256:416cc912e4f9ff3adc9f42713e802f789a157f4bc84e09c9ed80c56bf17f6459",
+  "digest": "sha256:48785433825bbed0d334fe000a253a1adc4296d7e3dde39198f76ff4adcead81",
   "product": "podway",
   "product_version": "0.1.2",
   "schema_version": "podway.contract-manifest/v1",

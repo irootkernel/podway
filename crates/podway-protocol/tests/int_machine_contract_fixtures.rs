@@ -269,7 +269,7 @@ fn mcont006_runtime_and_authoring_catalogs_are_frozen_disjoint_and_decoder_bound
         .iter()
         .map(|entry| entry["code"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
-    assert_eq!(diagnostic_codes.len(), 52);
+    assert_eq!(diagnostic_codes.len(), 53);
     let runtime_codes = expected
         .iter()
         .map(|(code, _, _)| *code)
@@ -281,6 +281,7 @@ fn mcont006_runtime_and_authoring_catalogs_are_frozen_disjoint_and_decoder_bound
         "EVIDENCE_SELECTOR_UNKNOWN_ITEM",
         "READBACK_BUDGET_EXCEEDED",
         "NEXT_STATIC_BUDGET_EXCEEDED",
+        "GRAPH_PROJECTION_BUDGET_EXCEEDED",
         "REWORK_TARGET_NOT_DOMINATING",
         "NO_REACTIVATION_PATH",
     ] {

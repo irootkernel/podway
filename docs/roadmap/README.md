@@ -105,7 +105,7 @@ Dependencies: `V2MOD`.
 |---|---|---|---|---|
 | `V2GRF-001` | Vet graph semantics | Completed | Prove topology, routing, dominance, evidence, skip, rework, and goal rules. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-002` | Vet liveness and budgets | Completed | Enforce static and read-back budgets without limiting valid traversal. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
-| `V2GRF-003` | Project graph JSON | Planned | Emit a deterministic canonical machine projection. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
+| `V2GRF-003` | Project graph JSON | Completed | Emit a deterministic canonical machine projection. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-004` | Project Mermaid | Planned | Emit the required human review projection. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-005` | Project PlantUML | Planned | Emit deterministic PlantUML without invoking a renderer. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |
 | `V2GRF-006` | Project DOT | Planned | Emit deterministic DOT without invoking Graphviz. | [V2GRF plan](../todo/TODO-podway-v2-full-feature-ga.md#194-epic-v2grf-graph-vetting-and-projections) |

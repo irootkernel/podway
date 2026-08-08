@@ -14,6 +14,7 @@
                 "AUTHORING_SCHEMA_INVALID",
                 "SOURCE_CONSTRUCT_UNSUPPORTED",
                 "SOURCE_PROJECTION_BUDGET_EXCEEDED",
+                "GRAPH_PROJECTION_BUDGET_EXCEEDED",
                 "FORMAT_NOT_CANONICAL",
                 "ENTRY_NODE_INVALID",
                 "GRAPH_DEFINITION_UNKNOWN",

@@ -97,8 +97,48 @@ validation success is metadata-only (`file`, Procedure schema, digest, and
 retained output envelope. Source projections use the normative
 `SOURCE_PROJECTION_MAX_CHARACTERS` budget of 131,072 characters and fail with
 `SOURCE_PROJECTION_BUDGET_EXCEEDED` before output; graph text projections use
-the same scalar cap. Production encoding must still reject an oversized complete
-serialized output.
+the same scalar cap and fail with the distinct
+`GRAPH_PROJECTION_BUDGET_EXCEEDED` diagnostic before output. Production
+encoding must still reject an oversized complete serialized output.
+
+The `json` graph projection is Podway Canonical JSON v1 over one normalized
+graph object. Its closed semantic shape is:
+
+```json
+{
+  "procedure_schema": "podway.procedure/v2",
+  "procedure_digest": "sha256:...",
+  "entry_graph_node_id": "...",
+  "terminal_graph_node_ids": ["..."],
+  "nodes": [{
+    "graph_node_id": "...",
+    "node_definition_id": "...",
+    "node_type": "action",
+    "goal_assessment": false,
+    "entry": true,
+    "terminal": false,
+    "skippable": false,
+    "manual_rework_target": false
+  }],
+  "edges": [{
+    "from_graph_node_id": "...",
+    "to_graph_node_id": "...",
+    "effect": "advance",
+    "option_id": "..."
+  }]
+}
+```
+
+`node_type` is `action` or `decision`. Action edges omit `option_id`; decision
+edges require it and preserve the corresponding node definition's authored
+option order. Nodes and terminal IDs preserve graph placement order. Object
+member order is nonsemantic and canonical serialization sorts it; no route-map
+or allocator iteration order may affect the bytes. The inner projection
+deliberately carries no result-family `schema`, title, item content, evidence,
+attempt, actor, artifact location, or other runtime state. `projection_digest`
+is SHA-256 over the exact UTF-8 projection bytes without a trailing newline.
+The enclosing graph result binds those bytes to the same canonical
+`procedure_digest`; only text rendering appends one newline.
 
 Preview is one closed report rather than a loose graph summary. Every result
 contains the source file, admissibility, validate/vet/lint checks, and bounded

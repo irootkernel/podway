@@ -19,6 +19,7 @@ mod procedure_v2_diagnostics;
 mod procedure_v2_document;
 mod procedure_v2_format;
 mod procedure_v2_graph;
+mod procedure_v2_graph_projection;
 mod procedure_v2_lint;
 mod procedure_v2_parse;
 mod procedure_v2_scaffold;
@@ -47,6 +48,10 @@ pub use procedure_v2_diagnostics::{
 };
 pub use procedure_v2_format::{
     FormatFailure, FormatRequest, FormattedProcedureV2, format_procedure_v2,
+};
+pub use procedure_v2_graph_projection::{
+    GraphProjectionNodeTypeV2, ProcedureGraphEdgeV2, ProcedureGraphModelV2, ProcedureGraphNodeV2,
+    ProcedureGraphProjectionV2, project_procedure_v2_graph,
 };
 pub use procedure_v2_lint::lint_procedure_v2;
 pub use procedure_v2_parse::{ParsedNodeDefinition, ParsedProcedureV2};

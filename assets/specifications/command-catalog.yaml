@@ -717,7 +717,7 @@ commands:
   result_schemas:
   - podway.procedure-diagnostics-result/v1
 - name: procedure.graph
-  availability: reserved_contract
+  availability: executable
   cli:
   - procedure
   - graph

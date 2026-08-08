@@ -117,6 +117,10 @@ const WRITE: Flag = Flag {
     long: "write",
     takes_value: false,
 };
+const FORMAT: Flag = Flag {
+    long: "format",
+    takes_value: true,
+};
 const TEMPLATE: Flag = Flag {
     long: "template",
     takes_value: true,
@@ -341,6 +345,12 @@ const ROUTES: &[Route] = &[
         words: "procedure vet",
         flags: DISPLAY_FLAGS,
         values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "procedure graph",
+        flags: &[&JSON, &NO_COLOR, &QUIET, &FORMAT],
+        values: "json",
         dynamic: None,
     },
     Route {
