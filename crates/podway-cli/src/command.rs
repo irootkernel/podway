@@ -36,9 +36,9 @@ use podway_config::{
     ParsedProcedure, ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
     ScaffoldTemplate, check_procedure_v2, config_error_diagnostic, convert_procedure_v1_to_v2,
     finalize_diagnostics, format_procedure_v2, lint_procedure_v2, normalize_procedure_v2_graph,
-    parse_procedure_document, parse_procedure_v1, project_procedure_v2_graph,
-    project_procedure_v2_mermaid, project_procedure_v2_plantuml, scaffold_procedure_v2,
-    sniff_procedure_schema, validate_procedure_v2, vet_procedure_v2,
+    parse_procedure_document, parse_procedure_v1, project_procedure_v2_dot,
+    project_procedure_v2_graph, project_procedure_v2_mermaid, project_procedure_v2_plantuml,
+    scaffold_procedure_v2, sniff_procedure_schema, validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
     AttemptId, PROCEDURE_SCHEMA_V2, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId,
@@ -407,7 +407,7 @@ enum ProcedureCommand {
     Graph {
         #[arg(value_name = "FILE")]
         file: PathBuf,
-        #[arg(long, required = true, value_parser = ["json", "mermaid", "puml"])]
+        #[arg(long, required = true, value_parser = ["json", "mermaid", "puml", "dot"])]
         format: String,
     },
     Lint {
@@ -3563,7 +3563,7 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
     const NAME: &str = PROCEDURE_GRAPH_COMMAND;
 
     debug_assert!(
-        matches!(format_name, "json" | "mermaid" | "puml"),
+        matches!(format_name, "json" | "mermaid" | "puml" | "dot"),
         "Clap admits only implemented graph formats"
     );
     let opened = open_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
@@ -3641,6 +3641,17 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
             "plantuml",
             normalize_procedure_v2_graph(&validated)
                 .and_then(|graph| project_procedure_v2_plantuml(&graph))
+                .map(|projection| {
+                    (
+                        projection.projection().to_owned(),
+                        projection.projection_digest().clone(),
+                    )
+                }),
+        ),
+        "dot" => (
+            "dot",
+            normalize_procedure_v2_graph(&validated)
+                .and_then(|graph| project_procedure_v2_dot(&graph))
                 .map(|projection| {
                     (
                         projection.projection().to_owned(),
@@ -5752,7 +5763,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway procedure vet <file>\n\nRuns mandatory graph-wide semantic and resource-budget checks over a Procedure\nv2 document without writing anything.\n\nExample:\n  podway procedure vet .podway/procedures/custom.yaml"
         }
         "procedure.graph" => {
-            "Usage:\n  podway procedure graph <file> --format <json|mermaid|puml>\n\nEmits a deterministic JSON, Mermaid, or PlantUML projection of a validated and\nvetted Procedure v2 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format puml"
+            "Usage:\n  podway procedure graph <file> --format <json|mermaid|puml|dot>\n\nEmits a deterministic JSON, Mermaid, PlantUML, or DOT projection of a validated\nand vetted Procedure v2 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format dot"
         }
         "procedure.lint" => {
             "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v2 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"

@@ -2749,6 +2749,27 @@ fn graph_plantuml_text(path: &Path) -> Output {
     ])
 }
 
+fn graph_dot(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "dot",
+    ])
+}
+
+fn graph_dot_text(path: &Path) -> Output {
+    run(&[
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "dot",
+    ])
+}
+
 fn oversized_graph_projection_source() -> String {
     let option_ids = (0..8)
         .map(|index| format!("option-{index:02}-{}", "x".repeat(54)))
@@ -2933,14 +2954,6 @@ fn v2grf003_graph_preserves_process_failures_quiet_mode_and_closed_format_usage(
             "--format",
             "plantuml",
         ],
-        vec![
-            "--json",
-            "procedure",
-            "graph",
-            &v2_path.display().to_string(),
-            "--format",
-            "dot",
-        ],
     ] {
         let output = run(&arguments);
         assert_eq!(output.status.code(), Some(2), "{output:?}");
@@ -2949,6 +2962,63 @@ fn v2grf003_graph_preserves_process_failures_quiet_mode_and_closed_format_usage(
         assert_eq!(error["command"], "procedure.graph");
         assert_eq!(error["code"], "REQUEST_INVALID");
     }
+}
+
+#[test]
+fn v2grf006_dot_is_digest_bound_deterministic_and_read_only() {
+    let fixture = FixtureDirectory::new("graph-dot");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let before = identity(&path);
+    let entries = entry_names(&fixture.root);
+
+    let first = graph_dot(&path);
+    let second = graph_dot(&path);
+    for output in [&first, &second] {
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty());
+    }
+    let first = one_json(&first);
+    let second = one_json(&second);
+    let result = &first["result"];
+    assert_eq!(result, &second["result"]);
+    assert_eq!(result["schema"], "podway.procedure-graph-result/v1");
+    assert_eq!(result["format"], "dot");
+    let procedure_digest = result["procedure_digest"]
+        .as_str()
+        .expect("graph result must carry a procedure digest");
+    let projection = result["projection"]
+        .as_str()
+        .expect("graph result must carry DOT text");
+    assert_eq!(
+        projection,
+        format!(
+            "digraph podway {{\n    // podway.procedure/v2\n    // procedure-digest: {procedure_digest}\n    rankdir=TB;\n\n    \"only\" [label=\"Work · entry · terminal\", shape=box];\n\n}}"
+        )
+    );
+    assert_eq!(
+        result["projection_digest"],
+        format!("sha256:{:x}", Sha256::digest(projection.as_bytes()))
+    );
+    assert!(!projection.ends_with('\n'));
+
+    let text = graph_dot_text(&path);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    assert!(text.stderr.is_empty());
+    assert_eq!(text.stdout, format!("{projection}\n").as_bytes());
+
+    let quiet = run(&[
+        "--quiet",
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "dot",
+    ]);
+    assert_eq!(quiet.status.code(), Some(0), "{quiet:?}");
+    assert!(quiet.stdout.is_empty());
+    assert!(quiet.stderr.is_empty());
+    assert_eq!(identity(&path), before);
+    assert_eq!(entry_names(&fixture.root), entries);
 }
 
 #[test]

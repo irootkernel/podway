@@ -200,6 +200,38 @@ edge-free graph omits the empty edge block. `projection_digest` hashes the exact
 UTF-8 PlantUML bytes, and the shared graph projection cap applies independently
 to this selected format.
 
+The `dot` graph projection is a non-strict `digraph podway` in Graphviz DOT
+syntax. After opening `digraph podway {`, it emits the metadata comments
+`// podway.procedure/v2` and `// procedure-digest: <procedure_digest>`, then
+sets `rankdir=TB`. Non-strict
+form is required because distinct decision options may produce parallel edges
+between the same placements and every option transition must remain visible.
+Graph node IDs remain their exact authored values and are always double-quoted;
+nodes and edges preserve normalized graph order.
+
+Every node declaration lists attributes in the fixed order `label`, `shape`,
+and optional `style`. Actions use `shape=box`, general decisions use
+`shape=diamond`, and session-goal assessments use `shape=hexagon`. A
+manual-rework target alone adds `style=dashed`; no manual-rework edge is
+invented. Labels append enabled annotations in the fixed order `entry`,
+`terminal`, `skippable`, `decision`, `goal assessment`, and
+`manual rework target`. Authored title characters use the same closed scalar
+encoding as PlantUML: ASCII alphanumeric, ASCII space, `.,:;?()`, and
+non-ASCII scalars that are neither control nor whitespace pass through; every
+other scalar becomes uppercase `<U+XXXX>` notation with at least four hex
+digits. The generated notation remains literal inside a quoted DOT label, so
+authored quotes, backslashes, line breaks, comments, and HTML-like text cannot
+terminate a declaration or trigger Graphviz label substitutions.
+
+Action-next edges have no attributes. Decision edges carry only
+`label="option_id · effect"`; the graph is topology-only, so evidence references
+never render as edges. Statements use semicolons and four-space indentation.
+Nonempty node and edge blocks are separated by one blank line, an empty edge
+block is omitted, and one blank line precedes the closing brace. The projection
+has no trailing newline. `projection_digest` hashes those exact UTF-8 DOT bytes,
+and the shared graph projection cap applies independently to the selected DOT
+format. Podway emits this text without invoking Graphviz.
+
 Preview is one closed report rather than a loose graph summary. Every result
 contains the source file, admissibility, validate/vet/lint checks, and bounded
 diagnostics. An admissible result additionally contains procedure identity and

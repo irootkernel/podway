@@ -228,6 +228,14 @@ fn v2grf005_graph_result_uses_plantuml_as_the_machine_format_name() {
 }
 
 #[test]
+fn v2grf006_graph_result_admits_the_dot_machine_format() {
+    let mut result = examples()["podway.procedure-graph-result/v1"].clone();
+    result["format"] = json!("dot");
+    result["projection"] = json!("digraph podway {}");
+    assert_valid("schemas/procedure-graph-result-v1.schema.json", &result);
+}
+
+#[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 10);
     assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 9);

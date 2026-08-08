@@ -16,6 +16,8 @@ mod int_v2_procedure_canonical;
 mod int_v2_procedure_check;
 #[path = "int_v2_procedure_convert.rs"]
 mod int_v2_procedure_convert;
+#[path = "int_v2_procedure_dot_projection.rs"]
+mod int_v2_procedure_dot_projection;
 #[path = "int_v2_procedure_equivalence.rs"]
 mod int_v2_procedure_equivalence;
 #[path = "int_v2_procedure_format.rs"]
