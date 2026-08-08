@@ -158,6 +158,18 @@ The existing `jobs`, `idempotency_records`, and `operational_journal` remain sha
 Schema v2 already made terminal envelopes version-neutral, so schema v3 does not duplicate their
 queue, receipt, or idempotency state.
 
+The additive Procedure v2 store boundary creates a complete graph session or replaces its current
+state under exact workspace and session revision preconditions. Each write is one immediate
+transaction over the immutable snapshot, derived graph placements, singleton cursor, append-only
+attempt trace, and per-node counters. Replacement advances both revisions exactly once, preserves
+snapshot and trace identities, terminalizes the prior active attempt, and may append at most one
+fresh active attempt. Loading reconstructs the domain trace and verifies its cursor, lifecycle,
+validity, per-node numbering, trace sequencing, timestamps, snapshot digest, placement metadata,
+and counters. Snapshot reconstruction also verifies the canonical bytes against the canonical
+Procedure v2 JSON Schema; configuration remains responsible for source parsing, closed-reference
+validation, and graph vetting before admission. The same reconstruction runs during fast startup
+integrity checks, so inconsistent Procedure v2 graph state fails closed after reopen.
+
 ## Constraints
 
 The relational schema enforces as much as practical:

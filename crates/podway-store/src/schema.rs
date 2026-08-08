@@ -26,6 +26,7 @@ use crate::codec::{
     validate_persisted_terminal_result_for_command_v1,
 };
 use crate::state_rows::load_current_session;
+use crate::v2_state::verify_v2_graph_state_connection_v2;
 use crate::{
     DurableWorktreeIdentityV1, EpochMillisV1, IdempotencyKeyV1, IntegrityCheckResultV1,
     IntegrityModeV1, IntegrityReportV1, JobIdV1, MAX_SQLITE_BUSY_TIMEOUT_MS_V1,
@@ -434,7 +435,10 @@ fn verify_integrity_connection_inner_v1(
     record_integrity_check_v1(
         &mut checks,
         StoreIntegrityCheckV1::SessionCursor,
-        verify_normalized_session_v1(connection),
+        verify_normalized_session_v1(connection).and_then(|()| {
+            verify_v2_graph_state_connection_v2(connection)
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SessionCursor))
+        }),
     )?;
     record_integrity_check_v1(
         &mut checks,

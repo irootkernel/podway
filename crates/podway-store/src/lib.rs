@@ -26,12 +26,17 @@ pub mod sqlite_store;
 pub mod state_rows;
 #[doc(hidden)]
 pub mod test_support;
+pub mod v2_state;
 
 pub use codec::{
     PersistedResponseContextV1, PersistedStartIdentityV1, PersistedTerminalJobProjectionV1,
     PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
 };
 pub use sqlite_store::SqliteStoreV1;
+pub use v2_state::{
+    AttemptMetadataV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphSessionStateV2,
+    ProcedureSnapshotV2, StoreGraphStateContractV2,
+};
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
 pub const MAX_WORKER_ID_BYTES_V1: usize = 128;
@@ -374,6 +379,7 @@ pub enum StoreFailpointV1 {
     ResetAfterSeedCommitBeforePublication,
     ResetAfterPublicationBeforeResponse,
     ResetAfterPublicationBeforeResponseAndTemporaryCleanup,
+    V2GraphStateBeforeCommit,
 }
 
 /// Explicit behavior for a configured Store test failpoint.
@@ -1848,6 +1854,9 @@ pub enum StoreValueErrorV1 {
     JobListLimitOutOfRange {
         maximum: u32,
     },
+    InvalidProcedureV2State {
+        reason: &'static str,
+    },
 }
 
 /// Typed storage failures. None of these variants is a public protocol envelope.
@@ -2024,6 +2033,7 @@ pub enum StoreInvariantV1 {
     ResetSeed,
     Publication,
     SchemaDefinition,
+    ProcedureV2GraphState,
 }
 
 impl fmt::Display for StoreValueErrorV1 {
@@ -2069,6 +2079,7 @@ impl fmt::Display for StoreValueErrorV1 {
             Self::JobListLimitOutOfRange { maximum } => {
                 write!(formatter, "job list limit must be between 1 and {maximum}")
             }
+            Self::InvalidProcedureV2State { reason } => formatter.write_str(reason),
         }
     }
 }

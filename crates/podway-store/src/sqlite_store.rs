@@ -31,6 +31,10 @@ use crate::schema::{
 use crate::state_rows::{
     load_current_session, load_workspace_state, persist_snapshot, replace_current_session,
 };
+use crate::v2_state::{
+    GraphSessionStateV2, StoreGraphStateContractV2, create_graph_session_transaction_v2,
+    load_graph_session_connection_v2, replace_graph_session_transaction_v2,
+};
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
     ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, EpochMillisV1,
@@ -338,6 +342,54 @@ impl SqliteStoreV1 {
     }
     fn trigger_failpoint(&self, failpoint: StoreFailpointV1) -> Result<(), StoreErrorV1> {
         self.options.trigger_failpoint(failpoint)
+    }
+}
+
+impl StoreGraphStateContractV2 for SqliteStoreV1 {
+    fn create_graph_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        state: GraphSessionStateV2,
+    ) -> Result<(), StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        create_graph_session_transaction_v2(&transaction, &state)?;
+        self.trigger_failpoint(StoreFailpointV1::V2GraphStateBeforeCommit)?;
+        transaction.commit().map_err(storage)
+    }
+
+    fn replace_graph_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        state: GraphSessionStateV2,
+    ) -> Result<(), StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        replace_graph_session_transaction_v2(
+            &transaction,
+            expected_workspace_revision,
+            expected_session_revision,
+            &state,
+        )?;
+        self.trigger_failpoint(StoreFailpointV1::V2GraphStateBeforeCommit)?;
+        transaction.commit().map_err(storage)
+    }
+
+    fn read_graph_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        load_graph_session_connection_v2(&connection)
     }
 }
 
