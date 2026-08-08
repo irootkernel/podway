@@ -170,6 +170,29 @@ Procedure v2 JSON Schema; configuration remains responsible for source parsing, 
 validation, and graph vetting before admission. The same reconstruction runs during fast startup
 integrity checks, so inconsistent Procedure v2 graph state fails closed after reopen.
 
+Workflow memory is part of that same complete-state transaction. Every attempt materializes one
+item slot per item in the referenced node definition, in definition order, together with bounded
+blockers and the placement's evidence-resolution snapshot in declaration order. A cursor-stable
+replacement may advance item revisions or resolve and append blockers without changing the active
+attempt. Recorded values must satisfy their immutable item declarations, a completed attempt must
+contain every required item and no open blocker, and a skipped attempt contains no recorded value.
+References resolve exactly at consumer activation: an optional reference remains unresolved only
+when no earlier valid terminal source exists. Cursor-moving replacements keep terminal item,
+blocker, and evidence rows immutable;
+decision and rework records are append-only and bound to the exact successor revision and fresh
+target attempt, while conservative invalidation changes only attempt validity. Rework requires a
+prior valid attempt of its target node. Completed-session reactivation requires an appended
+manual-rework record that identifies the fresh target attempt and carries `reactivated: true`.
+
+`items_digest` is SHA-256 over Podway Canonical JSON v1 for an array in item-definition order. The
+array contains only recorded slots, with each member shaped as `{"id": <item-id>, "value":
+<compact-typed-value>}`. Selectors never alter this complete-source digest; they only restrict the
+recorded values returned by selected read-back. Loading reorders relational slots from the immutable
+definition, requires byte-canonical typed values and selector JSON, recomputes every resolved or
+skipped reference digest, and rejects valid consumers whose resolved source attempt is stale.
+Graph-session selected read-back derives its `stale` marker from the bound consumer and source
+attempt validity without rewriting the immutable reference snapshot.
+
 ## Constraints
 
 The relational schema enforces as much as practical:

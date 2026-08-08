@@ -1,7 +1,7 @@
 use crate::procedure_v2::invalid;
 use crate::{
-    ArtifactItemSpecV2, ChoiceItemSpecV2, IntegerItemSpecV2, ItemCommonV2, ItemId, ItemTypeV1,
-    ListItemSpecV2, TextItemSpecV2,
+    ArtifactItemSpecV2, ArtifactValueV1, ChoiceItemSpecV2, IntegerItemSpecV2, ItemCommonV2, ItemId,
+    ItemSpecV2, ItemTypeV1, ListItemSpecV2, RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
 };
 
 use super::helpers::item;
@@ -121,4 +121,39 @@ fn artifact_item_spec_enforces_count_format_and_uniqueness() {
         ArtifactItemSpecV2::new(common("art"), vec!["Not/Lower".to_owned()]).unwrap_err(),
         invalid("media type must be lowercase ASCII without parameters")
     );
+}
+
+#[test]
+fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
+    let text = ItemSpecV2::text(common("text"), 2, 4, true).unwrap();
+    assert!(text.admits_recorded_value(&RecordedItemValueV2::text("okay").unwrap()));
+    assert!(!text.admits_recorded_value(&RecordedItemValueV2::text("x").unwrap()));
+
+    let choice = ItemSpecV2::choice(common("choice"), vec!["green".to_owned()]).unwrap();
+    assert!(choice.admits_recorded_value(&RecordedItemValueV2::choice("green").unwrap()));
+    assert!(!choice.admits_recorded_value(&RecordedItemValueV2::choice("blue").unwrap()));
+
+    let integer = ItemSpecV2::integer(common("integer"), Some(2), Some(4)).unwrap();
+    assert!(integer.admits_recorded_value(&RecordedItemValueV2::integer(3)));
+    assert!(!integer.admits_recorded_value(&RecordedItemValueV2::integer(5)));
+
+    let list = ItemSpecV2::list(common("list"), 1, 2, 3, true).unwrap();
+    assert!(list.admits_recorded_value(
+        &RecordedItemValueV2::list(vec!["one".to_owned(), "two".to_owned()]).unwrap()
+    ));
+    assert!(!list.admits_recorded_value(
+        &RecordedItemValueV2::list(vec!["one".to_owned(), "one".to_owned()]).unwrap()
+    ));
+
+    let artifact = ItemSpecV2::artifact(common("artifact"), vec!["text/plain".to_owned()]).unwrap();
+    let value = RecordedItemValueV2::artifact(
+        ArtifactValueV1::external_reference(
+            "urn:example:result",
+            Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            1,
+            "application/json",
+        )
+        .unwrap(),
+    );
+    assert!(!artifact.admits_recorded_value(&value));
 }

@@ -14,6 +14,10 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
+use crate::v2_memory::{
+    EvidenceReadbackV2, WorkflowMemoryStateV2, insert_workflow_memory_v2, load_workflow_memory_v2,
+    replace_workflow_memory_v2, validate_workflow_memory_successor_v2, validate_workflow_memory_v2,
+};
 use crate::{
     DurableWorktreeIdentityV1, RusqliteErrorContextV1, StoreErrorV1, StoreInvariantV1,
     StoreRecordKindV1, StoreValueErrorV1, map_rusqlite_error_v1,
@@ -629,6 +633,7 @@ pub struct GraphSessionStateV2 {
     trace: SessionTraceV2,
     counters: Vec<GraphNodeCounterV2>,
     attempt_metadata: Vec<AttemptMetadataV2>,
+    workflow_memory: WorkflowMemoryStateV2,
     created_at: UnixMillis,
     completed_at: Option<UnixMillis>,
     cancelled_at: Option<UnixMillis>,
@@ -644,6 +649,38 @@ impl GraphSessionStateV2 {
         trace: SessionTraceV2,
         counters: Vec<GraphNodeCounterV2>,
         attempt_metadata: Vec<AttemptMetadataV2>,
+        created_at: UnixMillis,
+        completed_at: Option<UnixMillis>,
+        cancelled_at: Option<UnixMillis>,
+        cancel_reason: Option<String>,
+    ) -> Result<Self, StoreValueErrorV1> {
+        let task_title = task_title.into();
+        let workflow_memory =
+            WorkflowMemoryStateV2::empty_for_trace(&snapshot, &trace, &attempt_metadata)?;
+        Self::new_with_workflow_memory(
+            workspace_revision,
+            task_title,
+            snapshot,
+            trace,
+            counters,
+            attempt_metadata,
+            workflow_memory,
+            created_at,
+            completed_at,
+            cancelled_at,
+            cancel_reason,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_workflow_memory(
+        workspace_revision: Revision,
+        task_title: impl Into<String>,
+        snapshot: ProcedureSnapshotV2,
+        trace: SessionTraceV2,
+        counters: Vec<GraphNodeCounterV2>,
+        attempt_metadata: Vec<AttemptMetadataV2>,
+        workflow_memory: WorkflowMemoryStateV2,
         created_at: UnixMillis,
         completed_at: Option<UnixMillis>,
         cancelled_at: Option<UnixMillis>,
@@ -674,6 +711,7 @@ impl GraphSessionStateV2 {
             cancel_reason.as_deref(),
         )?;
         validate_graph_state_members(&snapshot, &trace, &counters, &attempt_metadata)?;
+        validate_workflow_memory_v2(&snapshot, &trace, &attempt_metadata, &workflow_memory)?;
         Ok(Self {
             workspace_revision,
             task_title,
@@ -681,6 +719,7 @@ impl GraphSessionStateV2 {
             trace,
             counters,
             attempt_metadata,
+            workflow_memory,
             created_at,
             completed_at,
             cancelled_at,
@@ -705,6 +744,16 @@ impl GraphSessionStateV2 {
     }
     pub fn attempt_metadata(&self) -> &[AttemptMetadataV2] {
         &self.attempt_metadata
+    }
+    pub fn workflow_memory(&self) -> &WorkflowMemoryStateV2 {
+        &self.workflow_memory
+    }
+    pub fn selected_evidence_readback(
+        &self,
+        attempt_id: &AttemptId,
+    ) -> Result<Vec<EvidenceReadbackV2>, StoreValueErrorV1> {
+        self.workflow_memory
+            .selected_readback(&self.trace, attempt_id)
     }
     pub const fn created_at(&self) -> UnixMillis {
         self.created_at
@@ -931,6 +980,11 @@ pub(crate) fn create_graph_session_transaction_v2(
     {
         insert_attempt_v2(transaction, state, attempt, metadata)?;
     }
+    insert_workflow_memory_v2(
+        transaction,
+        state.trace().session_id(),
+        state.workflow_memory(),
+    )?;
     Ok(())
 }
 
@@ -959,6 +1013,14 @@ pub(crate) fn replace_graph_session_transaction_v2(
         next,
         expected_workspace_revision,
         expected_session_revision,
+    )
+    .map_err(StoreErrorV1::InvalidStateV1)?;
+    validate_workflow_memory_successor_v2(
+        previous.snapshot(),
+        previous.trace(),
+        previous.workflow_memory(),
+        next.trace(),
+        next.workflow_memory(),
     )
     .map_err(StoreErrorV1::InvalidStateV1)?;
 
@@ -1024,6 +1086,12 @@ pub(crate) fn replace_graph_session_transaction_v2(
             });
         }
     }
+    replace_workflow_memory_v2(
+        transaction,
+        next.trace().session_id(),
+        previous.workflow_memory(),
+        next.workflow_memory(),
+    )?;
     update_session_row_v2(transaction, &previous, next)?;
     let changed = transaction
         .execute(
@@ -1116,7 +1184,12 @@ pub(crate) fn load_graph_session_connection_v2(
                     "SELECT (SELECT COUNT(*) FROM v2_procedure_snapshots) + \
                      (SELECT COUNT(*) FROM v2_graph_nodes) + \
                      (SELECT COUNT(*) FROM v2_graph_node_counters) + \
-                     (SELECT COUNT(*) FROM v2_attempts)",
+                     (SELECT COUNT(*) FROM v2_attempts) + \
+                     (SELECT COUNT(*) FROM v2_item_slots) + \
+                     (SELECT COUNT(*) FROM v2_blockers) + \
+                     (SELECT COUNT(*) FROM v2_resolved_evidence_references) + \
+                     (SELECT COUNT(*) FROM v2_decision_records) + \
+                     (SELECT COUNT(*) FROM v2_rework_records)",
                     [],
                     |row| row.get(0),
                 )
@@ -1170,7 +1243,8 @@ fn load_present_graph_session_v2(
     .map_err(|_| corrupt(StoreRecordKindV1::Session))?;
     let counters = load_counters_v2(connection, trace.session_id(), &snapshot)?;
     let metadata = load_attempt_metadata_v2(connection, trace.session_id())?;
-    let state = GraphSessionStateV2::new(
+    let workflow_memory = load_workflow_memory_v2(connection, &snapshot, &trace, &metadata)?;
+    let state = GraphSessionStateV2::new_with_workflow_memory(
         Revision::new(persisted_u64(
             workspace_revision,
             StoreRecordKindV1::Workspace,
@@ -1180,6 +1254,7 @@ fn load_present_graph_session_v2(
         trace,
         counters,
         metadata,
+        workflow_memory,
         persisted_time_v2(persisted.created_at, StoreRecordKindV1::Session)?,
         optional_persisted_time_v2(persisted.completed_at, StoreRecordKindV1::Session)?,
         optional_persisted_time_v2(persisted.cancelled_at, StoreRecordKindV1::Session)?,
@@ -1521,7 +1596,24 @@ fn validate_successor_v2(
             "Procedure v2 successor revisions must advance exactly once",
         ));
     }
-    if previous.trace().lifecycle() != SessionLifecycle::Running
+    let manual_reactivation = previous.trace().lifecycle() == SessionLifecycle::Completed
+        && next.trace().lifecycle() == SessionLifecycle::Running
+        && next.trace().attempts().len() == previous.trace().attempts().len() + 1
+        && next.workflow_memory().reworks().len() == previous.workflow_memory().reworks().len() + 1
+        && next
+            .workflow_memory()
+            .reworks()
+            .last()
+            .is_some_and(|record| {
+                record.kind() == podway_core::ReworkKindV2::Manual
+                    && record.reactivated()
+                    && next
+                        .trace()
+                        .attempts()
+                        .last()
+                        .is_some_and(|attempt| attempt.attempt_id() == record.target_attempt_id())
+            });
+    if (previous.trace().lifecycle() != SessionLifecycle::Running && !manual_reactivation)
         || next.trace().attempts().len() < previous.trace().attempts().len()
         || next.trace().attempts().len() > previous.trace().attempts().len() + 1
     {
@@ -1561,11 +1653,31 @@ fn validate_successor_v2(
         }
         if old_attempt.lifecycle() == AttemptLifecycle::Active
             && new_attempt.lifecycle() == AttemptLifecycle::Active
+            && (old_attempt != new_attempt || old_metadata != new_metadata)
         {
             return Err(invalid(
-                "Procedure v2 active attempt changed without terminalizing",
+                "Procedure v2 cursor-stable mutation changed the active attempt",
             ));
         }
+    }
+    let cursor_stable = previous.trace().attempts().len() == next.trace().attempts().len()
+        && previous
+            .trace()
+            .active_attempt()
+            .is_some_and(|old| next.trace().active_attempt() == Some(old));
+    if cursor_stable
+        && (next.trace().lifecycle() != SessionLifecycle::Running
+            || previous.counters() != next.counters()
+            || previous.completed_at() != next.completed_at()
+            || previous.cancelled_at() != next.cancelled_at()
+            || previous.cancel_reason() != next.cancel_reason())
+    {
+        return Err(invalid(
+            "Procedure v2 cursor-stable mutation changed graph state",
+        ));
+    }
+    if next.trace().attempts().len() == previous.trace().attempts().len() + 1 {
+        validate_trace_invalidation_successor_v2(previous.trace(), next.trace())?;
     }
     let next_counters: BTreeMap<_, _> = next
         .counters()
@@ -1580,6 +1692,65 @@ fn validate_successor_v2(
             || new.rework_traversal_count() < old.rework_traversal_count()
         {
             return Err(invalid("Procedure v2 counters must be monotonic"));
+        }
+    }
+    let rework_target = if next.workflow_memory().reworks().len()
+        == previous.workflow_memory().reworks().len() + 1
+    {
+        Some(
+            next.workflow_memory()
+                .reworks()
+                .last()
+                .ok_or_else(|| invalid("Procedure v2 rework counter target is absent"))?
+                .to_node(),
+        )
+    } else {
+        None
+    };
+    for old in previous.counters() {
+        let new = next_counters[old.graph_node_id()];
+        let expected = if rework_target == Some(old.graph_node_id()) {
+            old.rework_traversal_count()
+                .checked_add(1)
+                .ok_or_else(|| invalid("Procedure v2 rework counter overflowed"))?
+        } else {
+            old.rework_traversal_count()
+        };
+        if new.rework_traversal_count() != expected {
+            return Err(invalid(
+                "Procedure v2 rework counters do not match the traversal",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_trace_invalidation_successor_v2(
+    previous: &SessionTraceV2,
+    next: &SessionTraceV2,
+) -> Result<(), StoreValueErrorV1> {
+    let fresh = next
+        .attempts()
+        .last()
+        .ok_or_else(|| invalid("Procedure v2 fresh attempt is absent"))?;
+    let prior_target = previous.attempts().iter().find(|attempt| {
+        attempt.graph_node_id() == fresh.graph_node_id()
+            && attempt.validity() == podway_core::AttemptValidityV2::Valid
+    });
+    for (old, new) in previous.attempts().iter().zip(next.attempts()) {
+        let expected_validity = prior_target.map_or(old.validity(), |target| {
+            if old.validity() == podway_core::AttemptValidityV2::Valid
+                && old.trace() >= target.trace()
+            {
+                podway_core::AttemptValidityV2::Stale
+            } else {
+                old.validity()
+            }
+        });
+        if new.validity() != expected_validity {
+            return Err(invalid(
+                "Procedure v2 successor does not apply conservative suffix invalidation",
+            ));
         }
     }
     Ok(())

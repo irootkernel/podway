@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::procedure::validate_media_type;
-use crate::{DomainError, ItemId, ItemTypeV1, validate_text};
+use crate::{DomainError, ItemId, ItemTypeV1, RecordedItemValueV2, validate_text};
 
 use super::invalid;
 
@@ -386,6 +386,46 @@ impl ItemSpecV2 {
             Self::Integer(_) => ItemTypeV1::Integer,
             Self::List(_) => ItemTypeV1::List,
             Self::Artifact(_) => ItemTypeV1::Artifact,
+        }
+    }
+
+    /// Returns whether a bounded recorded value satisfies this item's immutable declaration.
+    pub fn admits_recorded_value(&self, value: &RecordedItemValueV2) -> bool {
+        match self {
+            Self::Confirm(_) => value.item_type() == ItemTypeV1::Confirm,
+            Self::Text(specification) => value.as_text().is_some_and(|value| {
+                let length = value.chars().count();
+                length >= specification.min_length() as usize
+                    && length <= specification.max_length() as usize
+            }),
+            Self::Choice(specification) => value
+                .as_choice()
+                .is_some_and(|value| specification.choices().iter().any(|choice| choice == value)),
+            Self::Integer(specification) => value.as_integer().is_some_and(|value| {
+                specification
+                    .minimum()
+                    .is_none_or(|minimum| value >= minimum)
+                    && specification
+                        .maximum()
+                        .is_none_or(|maximum| value <= maximum)
+            }),
+            Self::List(specification) => value.as_list().is_some_and(|values| {
+                let length = values.len();
+                length >= specification.min_items() as usize
+                    && length <= specification.max_items() as usize
+                    && values.iter().all(|value| {
+                        value.chars().count() <= specification.max_item_length() as usize
+                    })
+                    && (!specification.unique()
+                        || values.iter().collect::<BTreeSet<_>>().len() == values.len())
+            }),
+            Self::Artifact(specification) => value.as_artifact().is_some_and(|value| {
+                specification.allowed_media_types().is_empty()
+                    || specification
+                        .allowed_media_types()
+                        .iter()
+                        .any(|media_type| media_type == value.media_type())
+            }),
         }
     }
 }

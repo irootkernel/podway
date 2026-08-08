@@ -120,7 +120,7 @@ Dependencies: `V2CTR` and `V2MOD`.
 |---|---|---|---|---|
 | `V2PLT-001` | Add SQLite schema v3 | Completed | Add parallel v2 tables through an atomic v1-preserving migration. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-002` | Persist graph and action state | Completed | Persist snapshots, cursor, trace, counters, and action attempts. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
-| `V2PLT-003` | Persist workflow memory | Planned | Persist items, references, decisions, rework, validity, and history. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
+| `V2PLT-003` | Persist workflow memory | Completed | Persist items, references, decisions, rework, validity, and history. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-004` | Persist goal state | Planned | Persist goal revisions, criteria, results, and assessments. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-005` | Harden store lifecycle | Planned | Close upgrade, reopen, recovery, reset, and downgrade behavior. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-006` | Add bounded v2 protocol | Planned | Decode and serialize closed compatible bounded v2 envelopes. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |

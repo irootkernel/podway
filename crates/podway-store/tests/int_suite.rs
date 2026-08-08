@@ -14,3 +14,5 @@ mod int_phase4_command_execution_codec;
 mod int_phase4_store_transactions;
 #[path = "int_v2_graph_state.rs"]
 mod int_v2_graph_state;
+#[path = "int_v2_workflow_memory.rs"]
+mod int_v2_workflow_memory;

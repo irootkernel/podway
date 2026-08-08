@@ -4,15 +4,15 @@ use std::path::{Path, PathBuf};
 
 use podway_core::{
     AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, CanonicalProcedureJsonV1,
-    GraphNodeId, ProcedureSnapshotId, ProcedureSourceLabelV1, Revision, SessionAttemptV2,
-    SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
-    WorkspaceId, canonicalize_json_v1,
+    GraphNodeId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2, Revision, ReworkKindV2,
+    ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId, SessionLifecycle,
+    SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_store::{
-    AttemptMetadataV2, DurableWorktreeIdentityV1, GraphNodeCounterV2, GraphSessionStateV2,
-    ProcedureSnapshotV2, SqliteStoreOptionsV1, SqliteStoreV1, StoreErrorV1, StoreFailpointV1,
-    StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1,
-    ValidatedWorkspaceRootV1,
+    AttemptMetadataV2, AttemptWorkflowMemoryV2, DurableWorktreeIdentityV1, GraphNodeCounterV2,
+    GraphSessionStateV2, ProcedureSnapshotV2, SqliteStoreOptionsV1, SqliteStoreV1, StoreErrorV1,
+    StoreFailpointV1, StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1,
+    ValidatedWorkspaceRootV1, WorkflowMemoryStateV2,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -79,7 +79,8 @@ fn snapshot() -> ProcedureSnapshotV2 {
                 {"id": "draft", "use": "draft", "next": "review"},
                 {"id": "review", "use": "review", "terminal": true}
             ]
-        }
+        },
+        "manual_rework": {"allowed_targets": ["draft"]}
     });
     let canonical = canonicalize_json_v1(&document).unwrap();
     let digest =
@@ -232,7 +233,7 @@ fn reworked_state() -> GraphSessionStateV2 {
         ],
     )
     .unwrap();
-    GraphSessionStateV2::new(
+    GraphSessionStateV2::new_with_workflow_memory(
         Revision::new(3),
         "Persist this task",
         snapshot(),
@@ -258,6 +259,7 @@ fn reworked_state() -> GraphSessionStateV2 {
             .unwrap(),
             AttemptMetadataV2::new(attempt_id(3), UnixMillis::new(30), None, None).unwrap(),
         ],
+        workflow_memory(3),
         UnixMillis::new(10),
         None,
         None,
@@ -299,7 +301,7 @@ fn completed_state() -> GraphSessionStateV2 {
         ],
     )
     .unwrap();
-    GraphSessionStateV2::new(
+    GraphSessionStateV2::new_with_workflow_memory(
         Revision::new(4),
         "Persist this task",
         snapshot(),
@@ -331,12 +333,35 @@ fn completed_state() -> GraphSessionStateV2 {
             )
             .unwrap(),
         ],
+        workflow_memory(3),
         UnixMillis::new(10),
         Some(UnixMillis::new(40)),
         None,
         None,
     )
     .unwrap()
+}
+
+fn workflow_memory(attempt_count: u64) -> WorkflowMemoryStateV2 {
+    let attempts = (1..=attempt_count)
+        .map(|number| {
+            AttemptWorkflowMemoryV2::new(attempt_id(number), Vec::new(), Vec::new(), Vec::new())
+                .unwrap()
+        })
+        .collect();
+    let rework = ReworkRecordV2::new(ReworkRecordInputV2 {
+        trace: TraceSequenceV2::new(3),
+        kind: ReworkKindV2::Manual,
+        from_node: node("review"),
+        to_node: node("draft"),
+        target_attempt_id: attempt_id(3),
+        reason: ReasonV2::new("Rework the draft.").unwrap(),
+        reactivated: false,
+        actor: None,
+        recorded_at: UnixMillis::new(30),
+    })
+    .unwrap();
+    WorkflowMemoryStateV2::new(attempts, Vec::new(), vec![rework]).unwrap()
 }
 
 #[test]

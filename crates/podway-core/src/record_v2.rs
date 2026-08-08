@@ -28,7 +28,7 @@ const MAX_ACTOR_ATTRIBUTION_CHARS: usize = 256;
 // Recorded-item bounds fixed by dossier section 5.1 (v2 hard limits).
 const MAX_RECORDED_TEXT_CHARS: usize = 16_384;
 const MAX_RECORDED_CHOICE_CHARS: usize = 120;
-const MAX_RECORDED_LIST_ENTRIES: usize = 100;
+const MAX_RECORDED_LIST_ENTRIES: usize = 200;
 const MAX_RECORDED_LIST_ENTRY_CHARS: usize = 1_000;
 const MAX_RECORDED_ITEMS_PER_ATTEMPT: usize = 64;
 
@@ -847,9 +847,9 @@ mod tests {
             invalid("recorded choice value")
         );
         assert!(RecordedItemValueV2::list(Vec::new()).is_ok());
-        assert!(RecordedItemValueV2::list(vec!["x".to_owned(); 100]).is_ok());
+        assert!(RecordedItemValueV2::list(vec!["x".to_owned(); 200]).is_ok());
         assert_eq!(
-            RecordedItemValueV2::list(vec!["x".to_owned(); 101]).unwrap_err(),
+            RecordedItemValueV2::list(vec!["x".to_owned(); 201]).unwrap_err(),
             invalid("recorded list value exceeds the v2 entry maximum")
         );
         assert_eq!(
