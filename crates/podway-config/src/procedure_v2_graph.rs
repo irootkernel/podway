@@ -310,6 +310,23 @@ impl<'a> GraphIndex<'a> {
         self.components(true)
     }
 
+    /// Number of cyclic regions in the complete transition graph, including a singleton SCC with
+    /// a self-loop. Preview reports regions rather than simple cycles: the latter can grow
+    /// exponentially while an SCC is the bounded unit a reviewer can usefully inspect.
+    pub(crate) fn cyclic_component_count(&self) -> usize {
+        self.strongly_connected_components()
+            .into_iter()
+            .filter(|component| {
+                component.len() > 1
+                    || component.first().is_some_and(|node| {
+                        self.successors(*node)
+                            .iter()
+                            .any(|edge| edge.target() == *node)
+                    })
+            })
+            .count()
+    }
+
     /// Cyclic regions in the graph after declared rework edges are removed. The v2 cycle rule is
     /// exactly that this advance-only subgraph is acyclic; checking full-graph components would
     /// miss an advance-only subcycle inside a larger component that also contains rework.

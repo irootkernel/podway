@@ -1,6 +1,6 @@
 //! Process-boundary contracts for the Procedure v2 authoring surface (`procedure format`,
-//! `procedure vet`, `procedure lint`, `procedure check`, `procedure scaffold`, and
-//! `procedure convert`).
+//! `procedure vet`, `procedure graph`, `procedure preview`, `procedure lint`, `procedure check`,
+//! `procedure scaffold`, and `procedure convert`).
 
 use std::{
     fs,
@@ -107,6 +107,20 @@ impl Drop for FixtureDirectory {
 
 fn run(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_podway"))
+        .args(arguments)
+        .env(
+            "PODWAY_TEST_ACCOUNT_ROOT",
+            format!("/tmp/podway-cli-v2aut001-{}", std::process::id()),
+        )
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("podway binary must run")
+}
+
+fn run_in(directory: &Path, arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_podway"))
+        .current_dir(directory)
         .args(arguments)
         .env(
             "PODWAY_TEST_ACCOUNT_ROOT",
@@ -3177,4 +3191,256 @@ fn v2grf004_mermaid_budget_is_independent_from_the_json_projection() {
     );
     assert!(over["result"]["digest"].is_string());
     assert!(over["result"].get("projection").is_none());
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2GRF-007: `procedure preview`
+// ---------------------------------------------------------------------------------------------
+
+fn preview_json(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "preview",
+        &path.display().to_string(),
+    ])
+}
+
+#[test]
+fn v2grf007_preview_is_complete_deterministic_and_strictly_read_only() {
+    let fixture = FixtureDirectory::new("preview-success");
+    let path = fixture.write("review's workflow.yaml", CLEAN_V2_YAML);
+    let before = identity(&path);
+    let entries = entry_names(&fixture.root);
+
+    let first = run_in(
+        &fixture.root,
+        &["--json", "procedure", "preview", "review's workflow.yaml"],
+    );
+    let second = run_in(
+        &fixture.root,
+        &["--json", "procedure", "preview", "review's workflow.yaml"],
+    );
+    for output in [&first, &second] {
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty());
+    }
+    let first = one_json(&first);
+    let second = one_json(&second);
+    assert_eq!(first["schema"], "podway.output/v2");
+    assert_eq!(first["command"], "procedure.preview");
+    let result = &first["result"];
+    assert_eq!(result, &second["result"]);
+    assert_eq!(result["schema"], "podway.procedure-preview-result/v1");
+    assert_eq!(result["file"], "review's workflow.yaml");
+    assert_eq!(result["admissible"], true);
+    assert_eq!(
+        result["checks"],
+        serde_json::json!({"validate": true, "vet": true, "lint": true})
+    );
+    assert_eq!(result["diagnostics_total"], 0);
+    assert_eq!(result["diagnostics_truncated"], false);
+    assert_eq!(result["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(result["procedure_id"], "lint-clean");
+    assert_eq!(result["goal_tracking"], false);
+    assert_eq!(
+        result["goal_assessment_graph_node_ids"],
+        serde_json::json!([])
+    );
+    assert_eq!(result["summary"]["definition_count"], 3);
+    assert_eq!(result["summary"]["graph_node_count"], 3);
+    assert_eq!(result["summary"]["action_node_count"], 2);
+    assert_eq!(result["summary"]["decision_node_count"], 1);
+    assert_eq!(
+        result["summary"]["route_count"], 2,
+        "route_count excludes the action next edge"
+    );
+    assert_eq!(result["summary"]["cycle_count"], 1);
+    assert_eq!(result["graph"]["edges"].as_array().map(Vec::len), Some(3));
+    assert_eq!(result["graph"]["entry_graph_node_id"], "gather-inputs");
+    assert_eq!(
+        result["graph"]["terminal_graph_node_ids"],
+        serde_json::json!(["publish-result"])
+    );
+    let digest = result["procedure_digest"]
+        .as_str()
+        .expect("an admissible preview is digest-bound");
+    assert_eq!(
+        result["start_suggestion"],
+        serde_json::json!({
+            "command": "session.start",
+            "argv": [
+                "podway", "start", "--procedure", "review's workflow.yaml",
+                "--expect-procedure-digest", digest, "--task", "<title>"
+            ]
+        })
+    );
+    let mermaid = result["mermaid"]
+        .as_str()
+        .expect("an admissible preview includes Mermaid");
+    assert!(mermaid.starts_with("%% podway.procedure/v2\n"));
+    assert!(mermaid.contains(digest));
+
+    let text = run_in(
+        &fixture.root,
+        &["procedure", "preview", "review's workflow.yaml"],
+    );
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    let text = String::from_utf8(text.stdout).expect("preview text must be UTF-8");
+    assert!(text.contains(mermaid));
+    assert!(text.contains(&format!(
+        "start: podway start --procedure 'review'\\''s workflow.yaml' --expect-procedure-digest {digest} --task '<title>'\n"
+    )));
+    assert_eq!(identity(&path), before);
+    assert_eq!(entry_names(&fixture.root), entries);
+    assert!(!fixture.root.join(".podway").exists());
+}
+
+#[test]
+fn v2grf007_lint_warnings_remain_advisory_to_preview_admission() {
+    let fixture = FixtureDirectory::new("preview-warning");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let output = preview_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let envelope = one_json(&output);
+    let result = &envelope["result"];
+    assert_eq!(result["admissible"], true);
+    assert_eq!(result["checks"]["validate"], true);
+    assert_eq!(result["checks"]["vet"], true);
+    assert_eq!(result["checks"]["lint"], false);
+    assert!(result["diagnostics_total"].as_u64().is_some_and(|n| n > 0));
+    assert!(result["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["severity"] == "warning")
+    }));
+    assert!(result["start_suggestion"].is_object());
+}
+
+#[test]
+fn v2grf007_preview_stops_details_at_validation_or_vet_rejection() {
+    let fixture = FixtureDirectory::new("preview-rejections");
+    let parse = fixture.write("parse.yaml", "schema: podway.procedure/v2\ngraph: [\n");
+    let validate = fixture.write(
+        "validate.yaml",
+        &MINIMAL_V2_YAML.replace("      use: work\n", "      use: absent\n"),
+    );
+    let vet = fixture.write(
+        "vet.yaml",
+        &MINIMAL_V2_YAML.replace(
+            "    - id: only\n      use: work\n      terminal: true\n",
+            "    - id: only\n      use: work\n      terminal: true\n    - id: stranded\n      use: work\n      terminal: true\n",
+        ),
+    );
+
+    for (path, checks, code) in [
+        (
+            &parse,
+            serde_json::json!({"validate": false, "vet": false, "lint": false}),
+            "SOURCE_CONSTRUCT_UNSUPPORTED",
+        ),
+        (
+            &validate,
+            serde_json::json!({"validate": false, "vet": false, "lint": false}),
+            "GRAPH_DEFINITION_UNKNOWN",
+        ),
+        (
+            &vet,
+            serde_json::json!({"validate": true, "vet": false, "lint": false}),
+            "UNREACHABLE_GRAPH_NODE",
+        ),
+    ] {
+        let output = preview_json(path);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let envelope = one_json(&output);
+        assert_eq!(envelope["command"], "procedure.preview");
+        let result = &envelope["result"];
+        assert_eq!(result["admissible"], false);
+        assert_eq!(result["checks"], checks);
+        assert!(result["diagnostics"].as_array().is_some_and(|diagnostics| {
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == code)
+        }));
+        for success_only in [
+            "procedure_digest",
+            "summary",
+            "graph",
+            "mermaid",
+            "start_suggestion",
+        ] {
+            assert!(
+                result.get(success_only).is_none(),
+                "{success_only} must be omitted from {result}"
+            );
+        }
+    }
+}
+
+#[test]
+fn v2grf007_equivalent_yaml_and_json_share_preview_semantics() {
+    let fixture = FixtureDirectory::new("preview-equivalent");
+    let yaml = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let json = fixture.write(
+        "minimal.json",
+        r#"{"schema":"podway.procedure/v2","id":"minimal","version":"1","name":"Minimal","purpose":"The smallest legal Procedure v2 document.","node_definitions":{"work":{"type":"action","title":"Work","intent":"Do the work."}},"graph":{"entry":"only","nodes":[{"id":"only","use":"work","terminal":true}]}}"#,
+    );
+
+    let yaml = one_json(&preview_json(&yaml));
+    let json = one_json(&preview_json(&json));
+    for field in [
+        "procedure_digest",
+        "goal_tracking",
+        "goal_assessment_graph_node_ids",
+        "summary",
+        "graph",
+        "mermaid",
+        "checks",
+    ] {
+        assert_eq!(yaml["result"][field], json["result"][field], "{field}");
+    }
+    let diagnostic_codes = |result: &Value| {
+        result["result"]["diagnostics"]
+            .as_array()
+            .expect("preview diagnostics are an array")
+            .iter()
+            .map(|diagnostic| diagnostic["code"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(diagnostic_codes(&yaml), diagnostic_codes(&json));
+    assert_ne!(
+        yaml["result"]["start_suggestion"]["argv"][3],
+        json["result"]["start_suggestion"]["argv"][3]
+    );
+}
+
+#[test]
+fn v2grf007_preview_preserves_process_failures_and_quiet_mode() {
+    let fixture = FixtureDirectory::new("preview-process");
+    let v2 = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let v1 = fixture.write("legacy.yaml", V1_YAML);
+    let before = entry_names(&fixture.root);
+
+    for (path, code) in [
+        (v1.display().to_string(), "PROCEDURE_SCHEMA_UNSUPPORTED"),
+        (
+            fixture.root.join("missing.yaml").display().to_string(),
+            "PROCEDURE_NOT_FOUND",
+        ),
+    ] {
+        let output = run(&["--json", "procedure", "preview", &path]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let error = one_json(&output);
+        assert_eq!(error["schema"], "podway.error/v1");
+        assert_eq!(error["command"], "procedure.preview");
+        assert_eq!(error["code"], code);
+    }
+
+    let quiet = run(&["--quiet", "procedure", "preview", &v2.display().to_string()]);
+    assert_eq!(quiet.status.code(), Some(0), "{quiet:?}");
+    assert!(quiet.stdout.is_empty());
+    assert!(quiet.stderr.is_empty());
+    assert_eq!(entry_names(&fixture.root), before);
+    assert!(!fixture.root.join(".podway").exists());
 }

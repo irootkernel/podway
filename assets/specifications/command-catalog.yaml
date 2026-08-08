@@ -730,7 +730,7 @@ commands:
   - podway.procedure-graph-result/v1
   - podway.procedure-diagnostics-result/v1
 - name: procedure.preview
-  availability: reserved_contract
+  availability: executable
   cli:
   - procedure
   - preview

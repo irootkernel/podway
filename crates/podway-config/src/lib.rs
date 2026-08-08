@@ -25,6 +25,7 @@ mod procedure_v2_lint;
 mod procedure_v2_mermaid_projection;
 mod procedure_v2_parse;
 mod procedure_v2_plantuml_projection;
+mod procedure_v2_preview;
 mod procedure_v2_scaffold;
 mod procedure_v2_source;
 mod procedure_v2_validate;
@@ -64,6 +65,11 @@ pub use procedure_v2_mermaid_projection::{
 pub use procedure_v2_parse::{ParsedNodeDefinition, ParsedProcedureV2};
 pub use procedure_v2_plantuml_projection::{
     ProcedurePlantUmlProjectionV2, project_procedure_v2_plantuml,
+};
+pub use procedure_v2_preview::{
+    ProcedurePreviewChecksV2, ProcedurePreviewDetailsV2, ProcedurePreviewGraphEdgeV2,
+    ProcedurePreviewGraphNodeV2, ProcedurePreviewGraphV2, ProcedurePreviewReportV2,
+    ProcedurePreviewStartSuggestionV2, ProcedurePreviewSummaryV2, preview_procedure_v2,
 };
 pub use procedure_v2_scaffold::{
     SCAFFOLD_TEMPLATE_MINIMAL, ScaffoldTemplate, scaffold_procedure_v2,

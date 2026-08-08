@@ -234,11 +234,32 @@ format. Podway emits this text without invoking Graphviz.
 
 Preview is one closed report rather than a loose graph summary. Every result
 contains the source file, admissibility, validate/vet/lint checks, and bounded
-diagnostics. An admissible result additionally contains procedure identity and
-purpose, the canonical digest, goal policy, the complete bounded summary,
-normalized graph, Mermaid, and a structured `session.start` suggestion whose
-argv contains that digest. An inadmissible result cannot contain a start
-suggestion.
+diagnostics. Parse or closed-reference validation failure makes all three checks
+false and stops model-dependent work. After validation, vet and lint run
+independently: lint warnings make `checks.lint=false` but do not make the report
+inadmissible, while any vet error or inability to produce the required bounded
+Mermaid projection makes `checks.vet=false` and the report inadmissible.
+
+An admissible result additionally contains procedure identity and purpose, the
+canonical digest, goal policy, assessment-placement IDs in graph author order,
+the complete bounded summary, normalized graph, Mermaid, and a structured
+`session.start` suggestion. `definition_count` includes unused definitions;
+action and decision counts are placement counts; `route_count` counts decision
+route entries and excludes action `next` edges; `cycle_count` counts cyclic SCC
+regions in the complete graph, including singleton self-loops; evidence count
+counts declared reference entries. The preview graph retains normalized node
+and edge author order but projects only the fields admitted by
+`procedure-preview-result/v1`.
+
+The start suggestion is exactly
+`["podway","start","--procedure",<input-file>,"--expect-procedure-digest",<digest>,"--task","<title>"]`.
+The input file spelling is preserved, the digest is the previewed canonical
+digest, and `<title>` remains a caller-supplied placeholder. Text mode renders
+the same array as POSIX shell source, single-quoting unsafe arguments so paths
+with whitespace or quotes remain copyable. An inadmissible
+result omits all success-only identity, summary, graph, Mermaid, and start
+fields. Preview is local and read-only: it does not contact the daemon, create a
+session, or write procedure or runtime state.
 
 Verbose `status-result/v2` adds six independently bounded, newest-first history
 windows: current trace, stale attempts, decisions, rework, stale goal revisions,

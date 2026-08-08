@@ -36,7 +36,7 @@ use podway_config::{
     ParsedProcedure, ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
     ScaffoldTemplate, check_procedure_v2, config_error_diagnostic, convert_procedure_v1_to_v2,
     finalize_diagnostics, format_procedure_v2, lint_procedure_v2, normalize_procedure_v2_graph,
-    parse_procedure_document, parse_procedure_v1, project_procedure_v2_dot,
+    parse_procedure_document, parse_procedure_v1, preview_procedure_v2, project_procedure_v2_dot,
     project_procedure_v2_graph, project_procedure_v2_mermaid, project_procedure_v2_plantuml,
     scaffold_procedure_v2, sniff_procedure_schema, validate_procedure_v2, vet_procedure_v2,
 };
@@ -410,6 +410,10 @@ enum ProcedureCommand {
         #[arg(long, required = true, value_parser = ["json", "mermaid", "puml", "dot"])]
         format: String,
     },
+    Preview {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
     Lint {
         #[arg(value_name = "FILE")]
         file: PathBuf,
@@ -574,6 +578,9 @@ impl Command {
             Self::Procedure {
                 command: ProcedureCommand::Graph { .. },
             } => "procedure.graph",
+            Self::Procedure {
+                command: ProcedureCommand::Preview { .. },
+            } => "procedure.preview",
             Self::Procedure {
                 command: ProcedureCommand::Lint { .. },
             } => "procedure.lint",
@@ -1170,6 +1177,7 @@ fn parse_failure_command_context_from_matches(
                 ("format", "procedure.format"),
                 ("vet", "procedure.vet"),
                 ("graph", "procedure.graph"),
+                ("preview", "procedure.preview"),
                 ("lint", "procedure.lint"),
                 // The nested table maps `podway procedure <word>`; the bare `check` word is the
                 // top-level `item.check` arm below and is deliberately left alone.
@@ -2997,6 +3005,9 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         ProcedureCommand::Graph { file, format } => {
             return execute_procedure_graph(file, format);
         }
+        ProcedureCommand::Preview { file } => {
+            return execute_procedure_preview(file);
+        }
         ProcedureCommand::Lint {
             file,
             warnings_as_errors,
@@ -3069,6 +3080,7 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         ProcedureCommand::Format { .. }
         | ProcedureCommand::Vet { .. }
         | ProcedureCommand::Graph { .. }
+        | ProcedureCommand::Preview { .. }
         | ProcedureCommand::Lint { .. }
         | ProcedureCommand::Check { .. }
         | ProcedureCommand::Scaffold { .. }
@@ -3726,6 +3738,159 @@ fn procedure_graph_diagnostics(
         );
     }
     local_result_v2(PROCEDURE_GRAPH_COMMAND, result, text, 1)
+}
+
+/// The route every `procedure preview` result reports under.
+const PROCEDURE_PREVIEW_COMMAND: &str = "procedure.preview";
+
+/// Aggregates the complete local admission preview without touching daemon or runtime state.
+fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
+    const NAME: &str = PROCEDURE_PREVIEW_COMMAND;
+
+    let opened = open_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
+    let source = std::str::from_utf8(&opened.bytes).map_err(|_| {
+        LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
+    })?;
+    let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
+        ProcedureFormatV1::Json
+    } else {
+        ProcedureFormatV1::Yaml
+    };
+    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V1) {
+        return Err(LocalFailure::catalog(
+            "PROCEDURE_SCHEMA_UNSUPPORTED",
+            "procedure preview requires a podway.procedure/v2 document; run podway procedure convert first",
+            NAME,
+        ));
+    }
+
+    let source_path = file.display().to_string();
+    let report = preview_procedure_v2(FormatRequest {
+        source,
+        source_path: &source_path,
+        format,
+    });
+    let checks = report.checks();
+    let Value::Object(mut result) = json!({
+        "schema": "podway.procedure-preview-result/v1",
+        "file": source_path,
+        "admissible": report.admissible(),
+        "checks": {
+            "validate": checks.validate(),
+            "vet": checks.vet(),
+            "lint": checks.lint(),
+        },
+        "diagnostics": report.diagnostics(),
+        "diagnostics_truncated": report.diagnostics_truncated(),
+        "diagnostics_total": report.diagnostics_total(),
+    }) else {
+        unreachable!("the static preview result is a JSON object");
+    };
+
+    let text = if let Some(details) = report.details() {
+        let summary = details.summary();
+        let graph = details.graph();
+        let nodes = graph
+            .nodes()
+            .iter()
+            .map(|node| {
+                json!({
+                    "graph_node_id": node.graph_node_id(),
+                    "node_definition_id": node.node_definition_id(),
+                    "node_type": node.node_type().as_str(),
+                    "terminal": node.terminal(),
+                    "skippable": node.skippable(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let edges = graph
+            .edges()
+            .iter()
+            .map(|edge| {
+                let mut edge_value = json!({
+                    "from_graph_node_id": edge.from_graph_node_id(),
+                    "to_graph_node_id": edge.to_graph_node_id(),
+                    "effect": edge.effect(),
+                });
+                if let Some(option_id) = edge.option_id() {
+                    edge_value["option_id"] = Value::String(option_id.to_owned());
+                }
+                edge_value
+            })
+            .collect::<Vec<_>>();
+        let start_suggestion = details.start_suggestion();
+        result.extend(
+            json!({
+                "procedure_schema": details.procedure_schema(),
+                "procedure_id": details.procedure_id(),
+                "procedure_version": details.procedure_version(),
+                "purpose": details.purpose(),
+                "procedure_digest": details.procedure_digest().as_str(),
+                "goal_tracking": details.goal_tracking(),
+                "goal_assessment_graph_node_ids": details.goal_assessment_graph_node_ids(),
+                "summary": {
+                    "definition_count": summary.definition_count(),
+                    "graph_node_count": summary.graph_node_count(),
+                    "action_node_count": summary.action_node_count(),
+                    "decision_node_count": summary.decision_node_count(),
+                    "route_count": summary.route_count(),
+                    "cycle_count": summary.cycle_count(),
+                    "evidence_reference_count": summary.evidence_reference_count(),
+                    "skippable_node_count": summary.skippable_node_count(),
+                    "manual_rework_target_count": summary.manual_rework_target_count(),
+                },
+                "graph": {
+                    "entry_graph_node_id": graph.entry_graph_node_id(),
+                    "terminal_graph_node_ids": graph.terminal_graph_node_ids(),
+                    "nodes": nodes,
+                    "edges": edges,
+                },
+                "mermaid": details.mermaid(),
+                "start_suggestion": {
+                    "command": start_suggestion.command(),
+                    "argv": start_suggestion.argv(),
+                },
+            })
+            .as_object()
+            .expect("the static preview details are a JSON object")
+            .clone(),
+        );
+
+        let mut text = render_authoring_diagnostics(report.diagnostics());
+        text.push_str(&format!(
+            "{}: Procedure v2 preview admissible\nprocedure-digest: {}\nnodes: {}, decision-routes: {}, cyclic-regions: {}\n\n{}\n\nstart: {}\n",
+            file.display(),
+            details.procedure_digest().as_str(),
+            summary.graph_node_count(),
+            summary.route_count(),
+            summary.cycle_count(),
+            details.mermaid(),
+            render_preview_start_command(start_suggestion.argv()),
+        ));
+        text
+    } else {
+        render_authoring_diagnostics(report.diagnostics())
+    };
+    let exit_code = i32::from(!report.admissible());
+    Ok(local_result_v2(NAME, result, text, exit_code))
+}
+
+/// Renders a structured preview suggestion as copyable POSIX shell source for human output.
+fn render_preview_start_command(argv: &[String]) -> String {
+    argv.iter()
+        .map(|argument| {
+            if !argument.is_empty()
+                && argument
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"@%_+=:,./-".contains(&byte))
+            {
+                argument.clone()
+            } else {
+                format!("'{}'", argument.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The route every `procedure lint` result reports under, named once so the two result builders
@@ -5764,6 +5929,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "procedure.graph" => {
             "Usage:\n  podway procedure graph <file> --format <json|mermaid|puml|dot>\n\nEmits a deterministic JSON, Mermaid, PlantUML, or DOT projection of a validated\nand vetted Procedure v2 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format dot"
+        }
+        "procedure.preview" => {
+            "Usage:\n  podway procedure preview <file>\n\nRuns validation, graph vetting, and advisory lint in memory, then prints the\nnormalized graph, Mermaid review projection, and an exact session start suggestion\nwhen the Procedure v2 document is admissible. Reads only and never contacts the daemon.\n\nExample:\n  podway procedure preview .podway/procedures/custom.yaml"
         }
         "procedure.lint" => {
             "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v2 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"

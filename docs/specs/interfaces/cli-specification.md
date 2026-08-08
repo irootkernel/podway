@@ -60,6 +60,7 @@ podway procedure show <file>
 podway procedure format <file> [--check] [--write]
 podway procedure vet <file>
 podway procedure graph <file> --format <json|mermaid|puml|dot>
+podway procedure preview <file>
 podway procedure lint <file> [--warnings-as-errors]
 podway procedure check <file> [--warnings-as-errors]
 podway procedure scaffold [--template minimal]
@@ -67,7 +68,7 @@ podway procedure convert <file>
 podway daemon ...
 ```
 
-`procedure validate`, `procedure show`, `procedure format`, `procedure vet`, `procedure graph`, `procedure lint`, `procedure check`, `procedure scaffold`, and `procedure convert` use the same Rust schema and canonicalization library as the daemon.
+`procedure validate`, `procedure show`, `procedure format`, `procedure vet`, `procedure graph`, `procedure preview`, `procedure lint`, `procedure check`, `procedure scaffold`, and `procedure convert` use the same Rust schema and canonicalization library as the daemon.
 `podway version --json` emits only the compact `name` and `version` summary. The
 target machine identity form is `podway version --json --identity`; it retains the
 versioned output envelope and requires no worktree, daemon, `HOME`, or `TMPDIR`.
@@ -94,15 +95,8 @@ This subsection records adopted, non-executable v2 grammar. It does not expand
 the implemented v0.1.2 command surface.
 
 ```text
-podway procedure preview <file> [--json]
 podway status --verbose [--history-before <trace-sequence>]
 ```
-
-`procedure preview` is unconditionally read-only. Its JSON result always reports
-admissibility, validate/vet/lint checks, and bounded diagnostics. When admissible,
-it also returns the normalized graph, Mermaid, canonical digest, and a structured
-`session.start` suggestion whose argv contains the same digest. It returns no
-start suggestion when validation or vetting fails.
 
 All Procedure v2 authoring commands use the shared structured diagnostic family
 for failures. `status --verbose` returns the six trace-sequenced history windows
@@ -112,14 +106,32 @@ each window. Standard status does not return history windows.
 ## Procedure v2 preview and confirmation
 
 `procedure preview` never admits a job, creates a session, or writes state. A
-successful admissible preview reports the same canonical Procedure digest that
-`session.start` will validate and returns a structured start suggestion carrying
-that digest. Invalid or non-vetted input returns bounded diagnostics and no start
-suggestion.
+preview first applies the same bounded parse and semantic validation as
+`procedure validate`, then the same structural, liveness, and resource-budget
+analysis as `procedure vet`, and finally the same advisory rules as the lint
+command. The result always reports `admissible`, the three check outcomes, and
+bounded ordered diagnostics. Validation or vet failure makes the preview
+inadmissible and exits 1. Lint warnings set the lint check false but remain
+advisory: they do not make an otherwise valid and vetted Procedure inadmissible
+or change the successful exit status, and preview has no warnings-as-errors mode.
 
-Starting a custom Procedure v2 requires `--confirm-digest <digest>` equal to the
-validated canonical digest. Semantic edits invalidate an earlier confirmation;
-formatting and ordering changes that preserve canonical semantics do not.
+Only an admissible success reports Procedure identity, summary, normalized graph,
+Mermaid, and the SHA-256 digest of the same canonical semantics that a custom
+`session.start` admission validates. It also returns exactly this structured start
+suggestion, leaving only the caller-owned title as a placeholder:
+
+```text
+podway start --procedure <file> --expect-procedure-digest <digest> --task <title>
+```
+
+An inadmissible result returns no digest, graph, Mermaid, or start suggestion.
+Preview remains unconditionally read-only on both paths: it never admits a job,
+creates or resumes a session, mutates the source, or persists workspace state.
+
+Starting a custom Procedure v2 requires `--expect-procedure-digest <digest>`
+equal to the validated canonical digest. Semantic edits invalidate an earlier
+confirmation; formatting and ordering changes that preserve canonical semantics
+do not.
 Built-in v2 presets use their shipped digest and do not require interactive
 confirmation, but a shipped-digest mismatch fails closed. Preview remains
 read-only regardless of confirmation or admissibility.

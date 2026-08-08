@@ -164,6 +164,7 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "procedure.lint",
         "procedure.check",
         "procedure.graph",
+        "procedure.preview",
         "procedure.scaffold",
         "procedure.convert",
     }
