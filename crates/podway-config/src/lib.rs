@@ -21,6 +21,7 @@ mod procedure_v2_format;
 mod procedure_v2_graph;
 mod procedure_v2_graph_projection;
 mod procedure_v2_lint;
+mod procedure_v2_mermaid_projection;
 mod procedure_v2_parse;
 mod procedure_v2_scaffold;
 mod procedure_v2_source;
@@ -51,9 +52,12 @@ pub use procedure_v2_format::{
 };
 pub use procedure_v2_graph_projection::{
     GraphProjectionNodeTypeV2, ProcedureGraphEdgeV2, ProcedureGraphModelV2, ProcedureGraphNodeV2,
-    ProcedureGraphProjectionV2, project_procedure_v2_graph,
+    ProcedureGraphProjectionV2, normalize_procedure_v2_graph, project_procedure_v2_graph,
 };
 pub use procedure_v2_lint::lint_procedure_v2;
+pub use procedure_v2_mermaid_projection::{
+    ProcedureMermaidProjectionV2, project_procedure_v2_mermaid,
+};
 pub use procedure_v2_parse::{ParsedNodeDefinition, ParsedProcedureV2};
 pub use procedure_v2_scaffold::{
     SCAFFOLD_TEMPLATE_MINIMAL, ScaffoldTemplate, scaffold_procedure_v2,

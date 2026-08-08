@@ -59,7 +59,7 @@ podway procedure validate <file>
 podway procedure show <file>
 podway procedure format <file> [--check] [--write]
 podway procedure vet <file>
-podway procedure graph <file> --format json
+podway procedure graph <file> --format <json|mermaid>
 podway procedure lint <file> [--warnings-as-errors]
 podway procedure check <file> [--warnings-as-errors]
 podway procedure scaffold [--template minimal]
@@ -245,7 +245,7 @@ podway procedure validate <file> [--warnings-as-errors]
 podway procedure show <file> [--canonical]
 podway procedure format <file> [--check] [--write]
 podway procedure vet <file>
-podway procedure graph <file> --format json
+podway procedure graph <file> --format <json|mermaid>
 podway procedure lint <file> [--warnings-as-errors]
 podway procedure check <file> [--warnings-as-errors]
 podway procedure scaffold [--template minimal]
@@ -260,7 +260,7 @@ podway procedure convert <file>
 
 `procedure vet` is an unconditionally read-only Procedure v2 graph gate. It parses and validates before running the complete graph-wide structural, liveness, and resource-budget analysis. A parse or validation failure stops the pipeline and reports that single error in `podway.procedure-diagnostics-result/v1` with `operation: "vet"`, `valid: false`, no `digest`, and exit code 1. Once validation succeeds, the result always carries the validated canonical digest; a clean document has no diagnostics, `valid: true`, and exit code 0, while any vet finding is a catalogued error and produces `valid: false` and exit code 1. Findings are deterministically ordered, bounded at 256 diagnostics, and retain the pre-truncation total. Process failures keep `podway.error/v1`: a missing or unsafe path and a Procedure v1 input (`PROCEDURE_SCHEMA_UNSUPPORTED`) report there.
 
-`procedure graph <file> --format json` emits the deterministic canonical JSON projection of a Procedure v2 graph and never writes anything. The command opens the source through the hardened read-only path walk, then parses, validates, vets, and projects those exact bytes. A parse or validation failure reports `podway.procedure-diagnostics-result/v1` with `operation: "graph"`, no `digest`, and exit code 1. A vet or projection-budget rejection reports the same family with the validated canonical `digest` and exit code 1, so no invalid graph can be projected. Success reports `podway.procedure-graph-result/v1` in `podway.output/v2`, binding the canonical `projection` to both its `procedure_digest` and `projection_digest`; text mode writes the projection followed by exactly one newline. Only `json` is currently accepted by `--format`; Mermaid, PlantUML, and DOT remain absent until their owning tasks land. Process failures keep `podway.error/v1`: a missing or unsafe path and a Procedure v1 input (`PROCEDURE_SCHEMA_UNSUPPORTED`) report there.
+`procedure graph <file> --format <json|mermaid>` emits either the deterministic canonical JSON projection or the deterministic Mermaid review projection of a Procedure v2 graph and never writes anything. The command opens the source through the hardened read-only path walk, then parses, validates, vets, and projects those exact bytes. A parse or validation failure reports `podway.procedure-diagnostics-result/v1` with `operation: "graph"`, no `digest`, and exit code 1. A vet or projection-budget rejection reports the same family with the validated canonical `digest` and exit code 1, so no invalid graph can be projected. Success reports `podway.procedure-graph-result/v1` in `podway.output/v2`, binding the selected `projection` to both its `procedure_digest` and exact-byte `projection_digest`; text mode writes the projection followed by exactly one newline. Mermaid carries the canonical procedure digest as metadata, distinguishes action, decision, and goal-assessment nodes, labels entry, terminal, and skippable placements, labels decision routes with option and effect, and marks manual-rework targets with node style rather than invented flow edges. PlantUML and DOT remain absent until their owning tasks land. Process failures keep `podway.error/v1`: a missing or unsafe path and a Procedure v1 input (`PROCEDURE_SCHEMA_UNSUPPORTED`) report there.
 
 `procedure lint` reports advisory authoring findings for a Procedure v2 document and never writes anything. It parses and validates first: a document that fails either stage reports that single error in `podway.procedure-diagnostics-result/v1` with `valid: false`, no `digest`, and exit code 1, and is not linted, because every rule reads a resolved model. A document that validates is linted and reports the same family with `operation: "lint"`, the validated `digest`, `valid: true`, and the findings sorted by source position. Every lint finding is a warning: severity is bound to the diagnostic code, so lint can never make a document invalid, and a clean document reports zero findings and prints one summary line. `--warnings-as-errors` is a policy about the invocation rather than a statement about the document — it changes the exit code from 0 to 1 when at least one finding is present, and changes nothing in the result body, so the same document produces byte-identical results with and without it. Process failures keep `podway.error/v1`: a missing or unsafe path and a Procedure v1 input (`PROCEDURE_SCHEMA_UNSUPPORTED`) report there.
 

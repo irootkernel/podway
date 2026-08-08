@@ -35,8 +35,9 @@ use podway_config::{
     FormatRequest, FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES_V1, PROCEDURE_SCHEMA_V1,
     ParsedProcedure, ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
     ScaffoldTemplate, check_procedure_v2, config_error_diagnostic, convert_procedure_v1_to_v2,
-    finalize_diagnostics, format_procedure_v2, lint_procedure_v2, parse_procedure_document,
-    parse_procedure_v1, project_procedure_v2_graph, scaffold_procedure_v2, sniff_procedure_schema,
+    finalize_diagnostics, format_procedure_v2, lint_procedure_v2, normalize_procedure_v2_graph,
+    parse_procedure_document, parse_procedure_v1, project_procedure_v2_graph,
+    project_procedure_v2_mermaid, scaffold_procedure_v2, sniff_procedure_schema,
     validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
@@ -406,7 +407,7 @@ enum ProcedureCommand {
     Graph {
         #[arg(value_name = "FILE")]
         file: PathBuf,
-        #[arg(long, required = true, value_parser = ["json"])]
+        #[arg(long, required = true, value_parser = ["json", "mermaid"])]
         format: String,
     },
     Lint {
@@ -3552,7 +3553,7 @@ fn procedure_vet_diagnostics(
 /// The route every `procedure graph` result reports under.
 const PROCEDURE_GRAPH_COMMAND: &str = "procedure.graph";
 
-/// Projects a validated and vetted Procedure v2 graph as deterministic canonical JSON.
+/// Projects a validated and vetted Procedure v2 graph in the selected deterministic format.
 ///
 /// This route is unconditionally read-only. It deliberately repeats vetting against the exact
 /// bytes opened for this invocation: a previous successful `procedure vet` result cannot admit a
@@ -3561,9 +3562,9 @@ const PROCEDURE_GRAPH_COMMAND: &str = "procedure.graph";
 fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, LocalFailure> {
     const NAME: &str = PROCEDURE_GRAPH_COMMAND;
 
-    debug_assert_eq!(
-        format_name, "json",
-        "Clap admits only the implemented format"
+    debug_assert!(
+        matches!(format_name, "json" | "mermaid"),
+        "Clap admits only implemented graph formats"
     );
     let opened = open_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
     let source = std::str::from_utf8(&opened.bytes).map_err(|_| {
@@ -3615,7 +3616,24 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
         ));
     }
 
-    let projection = match project_procedure_v2_graph(&validated) {
+    let projection = match format_name {
+        "json" => project_procedure_v2_graph(&validated).map(|projection| {
+            (
+                projection.projection().to_owned(),
+                projection.projection_digest().clone(),
+            )
+        }),
+        "mermaid" => normalize_procedure_v2_graph(&validated)
+            .and_then(|graph| project_procedure_v2_mermaid(&graph))
+            .map(|projection| {
+                (
+                    projection.projection().to_owned(),
+                    projection.projection_digest().clone(),
+                )
+            }),
+        _ => unreachable!("Clap admits only implemented graph formats"),
+    };
+    let (projection, projection_digest) = match projection {
         Ok(projection) => projection,
         Err(error) => {
             return Ok(procedure_graph_diagnostics(
@@ -3626,14 +3644,14 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
             ));
         }
     };
-    let text = format!("{}\n", projection.projection());
+    let text = format!("{projection}\n");
     let Value::Object(result) = json!({
         "schema": "podway.procedure-graph-result/v1",
         "procedure_schema": PROCEDURE_SCHEMA_V2,
         "procedure_digest": validated.digest().as_str(),
         "format": format_name,
-        "projection_digest": projection.projection_digest().as_str(),
-        "projection": projection.projection(),
+        "projection_digest": projection_digest.as_str(),
+        "projection": projection,
     }) else {
         unreachable!("the static graph result is a JSON object");
     };
@@ -5717,7 +5735,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway procedure vet <file>\n\nRuns mandatory graph-wide semantic and resource-budget checks over a Procedure\nv2 document without writing anything.\n\nExample:\n  podway procedure vet .podway/procedures/custom.yaml"
         }
         "procedure.graph" => {
-            "Usage:\n  podway procedure graph <file> --format json\n\nEmits the deterministic canonical JSON projection of a validated and vetted\nProcedure v2 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format json"
+            "Usage:\n  podway procedure graph <file> --format <json|mermaid>\n\nEmits a deterministic JSON or Mermaid projection of a validated and vetted\nProcedure v2 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format mermaid"
         }
         "procedure.lint" => {
             "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v2 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"

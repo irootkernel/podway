@@ -350,7 +350,7 @@ const ROUTES: &[Route] = &[
     Route {
         words: "procedure graph",
         flags: &[&JSON, &NO_COLOR, &QUIET, &FORMAT],
-        values: "json",
+        values: "json mermaid",
         dynamic: None,
     },
     Route {

@@ -1520,7 +1520,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         route: "procedure.graph",
         parser: &["procedure", "graph", "missing.yaml", "--format", "json"],
         flags: &["--json", "--no-color", "--quiet", "--format"],
-        values: &["json"],
+        values: &["json", "mermaid"],
         help_tokens: &["--format"],
         dynamic: None,
     },

@@ -140,6 +140,33 @@ is SHA-256 over the exact UTF-8 projection bytes without a trailing newline.
 The enclosing graph result binds those bytes to the same canonical
 `procedure_digest`; only text rendering appends one newline.
 
+The `mermaid` graph projection is deterministic text over the same normalized
+graph. Its first two lines are `%% podway.procedure/v2` and
+`%% procedure-digest: <procedure_digest>`, followed by one blank line and
+`flowchart TD`. Nodes preserve graph placement order. Their Mermaid identifiers
+replace each `-` in the graph node ID with `_`. A normalized ID equal to the
+flowchart keyword `call`, `click`, `href`, `style`, `interpolate`, `class`,
+`graph`, `flowchart`, `subgraph`, or `end` additionally receives the prefix
+`n__`; the
+closed Procedure identifier grammar cannot otherwise produce a double
+underscore, so this mapping remains injective. Actions use `["..."]`, general decisions
+use `{"..."}`, and session-goal assessments use `{{"..."}}`. Labels append the
+fixed annotations `entry`, `terminal`, and `skippable` in that order when the
+placement has them. Authored titles escape `&`, `"`, `<`, and `>` as HTML
+entities and encode line breaks, tabs, and other control characters as numeric
+entities, so authored text cannot add Mermaid statements.
+
+Edges preserve normalized graph order. Action-next edges are plain arrows;
+decision edges carry `option_id · effect`, where effect is `advance` or
+`rework`. Evidence references never render as flow edges. If manual-rework
+targets exist, the projection emits
+`classDef manual_rework_target stroke-dasharray:4 3` and one placement-ordered
+`class` declaration; no manual-rework edge is invented. Nonempty node, edge,
+and style blocks are separated by one blank line. The projection has no trailing
+newline, and its `projection_digest` hashes those exact UTF-8 bytes. The
+131,072-character bound applies independently to the selected graph format, so
+generating Mermaid does not first require the JSON projection to fit.
+
 Preview is one closed report rather than a loose graph summary. Every result
 contains the source file, admissibility, validate/vet/lint checks, and bounded
 diagnostics. An admissible result additionally contains procedure identity and

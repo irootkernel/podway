@@ -193,7 +193,7 @@ impl ProcedureGraphProjectionV2 {
 pub fn project_procedure_v2_graph(
     procedure: &ValidatedProcedureV2,
 ) -> Result<ProcedureGraphProjectionV2, ConfigError> {
-    let graph = normalized_graph(procedure)?;
+    let graph = normalize_procedure_v2_graph(procedure)?;
     let projection = canonical_json_from_serializable(&graph)?;
     let characters = projection.as_str().chars().count();
     validate_projection_characters(characters)?;
@@ -210,7 +210,7 @@ pub fn project_procedure_v2_graph(
     })
 }
 
-fn validate_projection_characters(characters: usize) -> Result<(), ConfigError> {
+pub(super) fn validate_projection_characters(characters: usize) -> Result<(), ConfigError> {
     if characters <= SOURCE_PROJECTION_MAX_CHARACTERS {
         return Ok(());
     }
@@ -222,7 +222,12 @@ fn validate_projection_characters(characters: usize) -> Result<(), ConfigError> 
     })
 }
 
-fn normalized_graph(
+/// Builds the immutable topology model shared by every graph renderer.
+///
+/// The caller must successfully vet `procedure` before publishing a renderer's output. This
+/// operation has no output-format budget: each renderer applies that budget independently to its
+/// own exact bytes.
+pub fn normalize_procedure_v2_graph(
     procedure: &ValidatedProcedureV2,
 ) -> Result<ProcedureGraphModelV2, ConfigError> {
     let parsed = procedure.parsed();

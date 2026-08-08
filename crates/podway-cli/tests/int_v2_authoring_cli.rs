@@ -2707,6 +2707,27 @@ fn graph_text(path: &Path) -> Output {
     ])
 }
 
+fn graph_mermaid(path: &Path) -> Output {
+    run(&[
+        "--json",
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "mermaid",
+    ])
+}
+
+fn graph_mermaid_text(path: &Path) -> Output {
+    run(&[
+        "procedure",
+        "graph",
+        &path.display().to_string(),
+        "--format",
+        "mermaid",
+    ])
+}
+
 fn oversized_graph_projection_source() -> String {
     let option_ids = (0..8)
         .map(|index| format!("option-{index:02}-{}", "x".repeat(54)))
@@ -2889,7 +2910,7 @@ fn v2grf003_graph_preserves_process_failures_quiet_mode_and_closed_format_usage(
             "graph",
             &v2_path.display().to_string(),
             "--format",
-            "mermaid",
+            "puml",
         ],
     ] {
         let output = run(&arguments);
@@ -2927,4 +2948,89 @@ fn v2grf003_graph_reports_its_projection_budget_after_vetting() {
     );
     assert_eq!(result["diagnostics"][0]["field"], "$");
     assert!(result.get("projection").is_none());
+}
+
+#[test]
+fn v2grf004_mermaid_is_digest_bound_deterministic_and_read_only() {
+    let fixture = FixtureDirectory::new("graph-mermaid");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    let before = identity(&path);
+    let entries = entry_names(&fixture.root);
+
+    let first = graph_mermaid(&path);
+    let second = graph_mermaid(&path);
+    for output in [&first, &second] {
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty());
+    }
+    let first = one_json(&first);
+    let second = one_json(&second);
+    let result = &first["result"];
+    assert_eq!(result, &second["result"]);
+    assert_eq!(result["schema"], "podway.procedure-graph-result/v1");
+    assert_eq!(result["format"], "mermaid");
+    let procedure_digest = result["procedure_digest"]
+        .as_str()
+        .expect("graph result must carry a procedure digest");
+    let projection = result["projection"]
+        .as_str()
+        .expect("graph result must carry Mermaid text");
+    assert_eq!(
+        projection,
+        format!(
+            "%% podway.procedure/v2\n%% procedure-digest: {procedure_digest}\n\nflowchart TD\n    only[\"Work · entry · terminal\"]"
+        )
+    );
+    assert_eq!(
+        result["projection_digest"],
+        format!("sha256:{:x}", Sha256::digest(projection.as_bytes()))
+    );
+    assert!(!projection.ends_with('\n'));
+
+    let text = graph_mermaid_text(&path);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    assert!(text.stderr.is_empty());
+    assert_eq!(text.stdout, format!("{projection}\n").as_bytes());
+    assert_eq!(identity(&path), before);
+    assert_eq!(entry_names(&fixture.root), entries);
+}
+
+#[test]
+fn v2grf004_mermaid_budget_is_independent_from_the_json_projection() {
+    let fixture = FixtureDirectory::new("graph-mermaid-independent-cap");
+    let path = fixture.write("large.yaml", &oversized_graph_projection_source());
+
+    let json = graph_json(&path);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    assert_eq!(
+        one_json(&json)["result"]["diagnostics"][0]["code"],
+        "GRAPH_PROJECTION_BUDGET_EXCEEDED"
+    );
+
+    let mermaid = graph_mermaid(&path);
+    assert_eq!(mermaid.status.code(), Some(0), "{mermaid:?}");
+    assert!(mermaid.stderr.is_empty());
+    let envelope = one_json(&mermaid);
+    assert_eq!(envelope["result"]["format"], "mermaid");
+    let projection = envelope["result"]["projection"]
+        .as_str()
+        .expect("Mermaid result must carry projection text");
+    assert!(projection.chars().count() <= 131_072);
+
+    let over_path = fixture.write(
+        "mermaid-over.yaml",
+        &oversized_graph_projection_source().replace(
+            "    title: Choose\n",
+            &format!("    title: '{}'\n", "&".repeat(120)),
+        ),
+    );
+    let over = graph_mermaid(&over_path);
+    assert_eq!(over.status.code(), Some(1), "{over:?}");
+    let over = one_json(&over);
+    assert_eq!(
+        over["result"]["diagnostics"][0]["code"],
+        "GRAPH_PROJECTION_BUDGET_EXCEEDED"
+    );
+    assert!(over["result"]["digest"].is_string());
+    assert!(over["result"].get("projection").is_none());
 }
