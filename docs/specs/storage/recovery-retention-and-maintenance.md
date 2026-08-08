@@ -14,8 +14,8 @@ On startup:
 2. load the minimal workspace registry;
 3. validate each registered root;
 4. open supported databases;
-5. transactionally move all `running` jobs to `queued` and record recovery;
-6. validate one-active-attempt and cursor invariants;
+5. validate the complete retained task state, including one-active-attempt and cursor invariants;
+6. transactionally move all `running` jobs to `queued` and record recovery;
 7. start schedulers for workspaces with queued jobs;
 8. remove registry entries for missing roots.
 
@@ -103,7 +103,11 @@ On startup, an existing marker causes the daemon to finish the reset before serv
 ### Sessions and attempts
 
 - the current completed or cancelled session remains until reset;
-- all attempts and item slots for that session remain until reset;
+- all v1 attempts and item slots for that session remain until reset;
+- the complete Procedure v2 current-task state remains until reset, including its immutable
+  snapshot, graph placements, trace, workflow memory, and goal history;
+- a normal session reset removes that complete v1 or v2 current-task state together while
+  preserving the initialized workspace identity, schema history, and workspace-scoped receipts;
 - no session archive is created;
 - reset removes session-scoped idempotency records.
 

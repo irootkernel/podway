@@ -264,7 +264,9 @@ Artifact metadata is stored in an `artifact` item slot value. No blob table exis
 ## Migration policy
 
 - Migrations are forward-only.
-- The initial migration uses the non-file fixture identity `uninitialized-database`: predecessor `schema-0-uninitialized` and result `schema-v1`.
+- The first migration uses the non-file fixture identity `uninitialized-database`: predecessor
+  `schema-0-uninitialized` and result `schema-v1`. A new current database applies the canonical
+  schema-v1, schema-v2, and schema-v3 migrations together before publication.
 - Initialization and every migration MUST first apply and verify the required connection pragmas: foreign keys ON, WAL journal mode, FULL synchronous, 5000 ms busy timeout, and trusted schema OFF.
 - Each migration runs inside an immediate transaction. Upgrading schema v1 directly to the current
   schema applies both later migrations and their checksum rows in one transaction.
@@ -293,11 +295,19 @@ Fast startup checks:
 
 ### Creation
 
-Initialization from `uninitialized-database` creates a temporary database in `.podway/runtime/`, applies and verifies the required connection pragmas, and runs `schema-0-uninitialized` to `schema-v1` in a transaction. It writes workspace identity, validates invariants, commits, fsyncs as required, and atomically installs the result as `state.sqlite3`. A failure leaves an existing `state.sqlite3` intact or installs no database; it never leaves a partial installation.
+Initialization from `uninitialized-database` creates a temporary database in `.podway/runtime/`,
+applies and verifies the required connection pragmas, and runs the canonical schema-v1,
+schema-v2, and schema-v3 migrations in one transaction. It writes workspace identity, validates
+invariants, commits, fsyncs as required, and atomically installs the schema-v3 result as
+`state.sqlite3`. A failure leaves an existing `state.sqlite3` intact or installs no database; it
+never leaves a partial installation.
 
 ### Normal reset
 
-Session reset runs as a destructive queue barrier. It deletes session domain rows and old session-scoped job/idempotency payloads while preserving workspace schema and the workspace-scoped reset receipt.
+Session reset runs as a destructive queue barrier. The store's revision-fenced Procedure v2 clear
+helper validates and removes the complete relational current-task state; the daemon composes that
+helper with old session-scoped job/idempotency cleanup and the workspace-scoped reset receipt in
+the barrier transaction. Workspace identity and schema history remain intact.
 
 ### Reset all
 

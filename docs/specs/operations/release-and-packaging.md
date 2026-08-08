@@ -191,7 +191,9 @@ Upgrade procedure:
 4. verify protocol health;
 5. migrate worktree databases lazily on first access.
 
-New worktree databases begin in schema-0/uninitialized state; on first access, the daemon transactionally initializes or migrates each database to canonical schema-v1.
+New worktree databases begin in schema-0/uninitialized state; on first access, the daemon
+transactionally initializes them to canonical schema-v3. Existing canonical schema-v1 and
+schema-v2 databases migrate forward lazily to schema-v3 on first access.
 
 The daemon handles one workspace migration failure without disabling other workspaces.
 

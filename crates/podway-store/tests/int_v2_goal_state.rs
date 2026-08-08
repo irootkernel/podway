@@ -6,20 +6,22 @@ use podway_core::{
     ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
     CanonicalProcedureJsonV1, CriterionAssessmentReasonV2, CriterionAssessmentResultV2,
     CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
-    EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2, GoalCriterionV2, GoalDefinitionV2,
-    GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalRevisionRecordV2, GoalStatementV2,
-    GraphNodeId, ItemId, ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId,
-    ProcedureSourceLabelV1, ReasonV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
-    ResolvedEvidenceSetV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2,
-    Sha256Digest, TraceSequenceV2, TransitionEffectV2, UnixMillis, WorkspaceId,
-    canonicalize_json_v1,
+    DomainCommand, EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2, GoalCriterionV2,
+    GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2,
+    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, ItemTypeV1, JobId,
+    NodeDefinitionId, OptionId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2,
+    RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
+    SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
+    TransitionEffectV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_store::{
-    AttemptCriterionAssessmentStateV2, AttemptMetadataV2, AttemptWorkflowMemoryV2,
-    CriterionAssessmentStateV2, DurableWorktreeIdentityV1, EvidenceResolutionStateV2, GoalStateV2,
-    GraphNodeCounterV2, GraphSessionStateV2, ItemSlotStateV2, ProcedureSnapshotV2,
-    SqliteStoreOptionsV1, SqliteStoreV1, StoreErrorV1, StoreFailpointV1, StoreGraphStateContractV2,
-    StoreUnavailableReasonV1, ValidatedWorkspaceRootV1, WorkflowMemoryStateV2,
+    AdmitOutcomeV1, AdmitRequestV1, AttemptCriterionAssessmentStateV2, AttemptMetadataV2,
+    AttemptWorkflowMemoryV2, CriterionAssessmentStateV2, DurableWorktreeIdentityV1,
+    EvidenceResolutionStateV2, GoalStateV2, GraphNodeCounterV2, GraphSessionStateV2,
+    IdempotencyKeyV1, ItemSlotStateV2, ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1,
+    SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreFailpointV1,
+    StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1,
+    ValidatedWorkspaceRootV1, WorkerIdV1, WorkflowMemoryStateV2,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -55,6 +57,106 @@ fn open(temporary: &TempDir, options: SqliteStoreOptionsV1) -> SqliteStoreV1 {
         UnixMillis::new(1),
     )
     .unwrap()
+}
+
+const V2_TABLES: [&str; 16] = [
+    "v2_attempts",
+    "v2_blockers",
+    "v2_criterion_assessment_results",
+    "v2_criterion_citations",
+    "v2_decision_records",
+    "v2_goal_assessments",
+    "v2_goal_criteria",
+    "v2_goal_revisions",
+    "v2_graph_node_counters",
+    "v2_graph_nodes",
+    "v2_item_slots",
+    "v2_procedure_snapshots",
+    "v2_resolved_evidence_references",
+    "v2_rework_records",
+    "v2_task_sessions",
+    "v2_workspace_state",
+];
+
+fn v2_table_counts(path: &Path) -> Vec<(String, i64)> {
+    let connection = Connection::open(path).unwrap();
+    V2_TABLES
+        .iter()
+        .map(|table| {
+            let count = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            ((*table).to_owned(), count)
+        })
+        .collect()
+}
+
+fn base_store_identity(
+    path: &Path,
+) -> (
+    (String, String, String, String, i64, i64, i64),
+    Vec<(i64, String, String, i64)>,
+) {
+    let connection = Connection::open(path).unwrap();
+    let workspace = connection
+        .query_row(
+            "SELECT workspace_uuid, git_common_fingerprint, git_worktree_fingerprint, \
+                    last_validated_root, next_workspace_sequence, created_at_ms, updated_at_ms \
+             FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .unwrap();
+    let migrations = connection
+        .prepare(
+            "SELECT version, name, checksum, applied_at_ms \
+             FROM schema_migrations ORDER BY version",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    (workspace, migrations)
+}
+
+fn seed_running_workspace_job(store: &SqliteStoreV1, number: u64) {
+    let job_id = JobId::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap();
+    let request = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new(format!("v2-recovery-{number}")).unwrap(),
+        job_id.clone(),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('d'),
+        UnixMillis::new(20),
+    );
+    assert!(matches!(
+        store.admit(&identity(), request),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    let claimed = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new(format!("v2-recovery-worker-{number}")).unwrap(),
+            UnixMillis::new(21),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.job().job_id(), &job_id);
 }
 
 fn node(value: &str) -> GraphNodeId {
@@ -1188,6 +1290,223 @@ fn goal_revision_failpoint_rolls_back_and_corruption_fails_reopen() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn startup_recovery_preserves_rich_v2_state_across_recovery_commit_boundaries() {
+    for (number, failpoint, expected_requeued_after_retry) in [
+        (501, StoreFailpointV1::RecoveryBeforeCommit, 1),
+        (502, StoreFailpointV1::RecoveryAfterCommitBeforeReturn, 0),
+    ] {
+        let temporary = TempDir::new().unwrap();
+        let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+        persist_through_completed(&store);
+        seed_running_workspace_job(&store, number);
+        let expected = decided_state(9, true);
+        assert_eq!(
+            store.read_graph_session_v2(&identity()).unwrap(),
+            Some(expected.clone())
+        );
+        drop(store);
+
+        let failed = SqliteStoreV1::open(
+            database_path(&temporary),
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8)
+                .unwrap()
+                .with_failpoint(Some(failpoint)),
+            UnixMillis::new(22),
+        );
+        assert!(matches!(
+            failed,
+            Err(StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::Recovery,
+            })
+        ));
+
+        let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+        assert_eq!(
+            reopened.startup_recovery_report().requeued_job_count(),
+            expected_requeued_after_retry
+        );
+        assert_eq!(
+            reopened.read_graph_session_v2(&identity()).unwrap(),
+            Some(expected.clone())
+        );
+        let view = reopened.read_workspace_view(&identity()).unwrap();
+        assert_eq!(view.queued_job_count(), 1);
+        assert!(view.running_job_id().is_none());
+        drop(reopened);
+
+        let reopened_again = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+        assert_eq!(
+            reopened_again
+                .startup_recovery_report()
+                .requeued_job_count(),
+            0
+        );
+        assert_eq!(
+            reopened_again.read_graph_session_v2(&identity()).unwrap(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn v2_session_reset_is_revision_checked_atomic_and_complete() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    persist_through_completed(&store);
+    let expected = decided_state(9, true);
+    let path = database_path(&temporary);
+    let counts_before = v2_table_counts(&path);
+    let base_before = base_store_identity(&path);
+
+    assert_eq!(
+        store.clear_graph_session_v2(&identity(), Revision::new(8), Revision::new(9)),
+        Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(Revision::new(8)),
+            actual: Some(Revision::new(9)),
+        })
+    );
+    assert_eq!(v2_table_counts(&path), counts_before);
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(expected.clone())
+    );
+
+    assert_eq!(
+        store.clear_graph_session_v2(&identity(), Revision::new(9), Revision::new(8)),
+        Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(Revision::new(8)),
+            actual: Some(Revision::new(9)),
+        })
+    );
+    assert_eq!(v2_table_counts(&path), counts_before);
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(expected.clone())
+    );
+    drop(store);
+
+    let failing = open(
+        &temporary,
+        SqliteStoreOptionsV1::new(8)
+            .unwrap()
+            .with_failpoint(Some(StoreFailpointV1::V2GraphStateBeforeCommit)),
+    );
+    assert_eq!(
+        failing.clear_graph_session_v2(&identity(), Revision::new(9), Revision::new(9)),
+        Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Recovery,
+        })
+    );
+    drop(failing);
+    assert_eq!(v2_table_counts(&path), counts_before);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(expected)
+    );
+    reopened
+        .clear_graph_session_v2(&identity(), Revision::new(9), Revision::new(9))
+        .unwrap();
+    assert_eq!(reopened.read_graph_session_v2(&identity()).unwrap(), None);
+    assert_eq!(
+        v2_table_counts(&path),
+        V2_TABLES
+            .iter()
+            .map(|table| ((*table).to_owned(), 0))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(base_store_identity(&path), base_before);
+    drop(reopened);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    assert_eq!(reopened.read_graph_session_v2(&identity()).unwrap(), None);
+    reopened
+        .create_graph_session_v2(&identity(), initial_state())
+        .unwrap();
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(initial_state())
+    );
+}
+
+#[test]
+fn populated_newer_schema_and_downgrade_stamp_fail_without_changing_v2_state() {
+    let newer = TempDir::new().unwrap();
+    let store = open(&newer, SqliteStoreOptionsV1::new(8).unwrap());
+    persist_through_completed(&store);
+    drop(store);
+    let newer_path = database_path(&newer);
+    let newer_counts = v2_table_counts(&newer_path);
+    let newer_base = base_store_identity(&newer_path);
+    let connection = Connection::open(&newer_path).unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
+    drop(connection);
+
+    let newer_error = match SqliteStoreV1::open(
+        newer_path.clone(),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(30),
+    ) {
+        Ok(_) => panic!("a populated newer schema must not open"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        newer_error,
+        StoreErrorV1::NewerStateV1 {
+            found_schema_version: 4,
+            supported_schema_version: 3,
+        }
+    );
+    assert_eq!(v2_table_counts(&newer_path), newer_counts);
+    assert_eq!(base_store_identity(&newer_path), newer_base);
+    let version: i64 = Connection::open(&newer_path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
+
+    let downgrade = TempDir::new().unwrap();
+    let store = open(&downgrade, SqliteStoreOptionsV1::new(8).unwrap());
+    persist_through_completed(&store);
+    drop(store);
+    let downgrade_path = database_path(&downgrade);
+    let downgrade_counts = v2_table_counts(&downgrade_path);
+    let downgrade_base = base_store_identity(&downgrade_path);
+    let connection = Connection::open(&downgrade_path).unwrap();
+    connection.pragma_update(None, "user_version", 2).unwrap();
+    drop(connection);
+
+    let downgrade_error = match SqliteStoreV1::open(
+        downgrade_path.clone(),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(30),
+    ) {
+        Ok(_) => panic!("a v3 database stamped as v2 must not be downgraded or reopened"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        downgrade_error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::RequiredSchemaObjects,
+        }
+    );
+    assert_eq!(v2_table_counts(&downgrade_path), downgrade_counts);
+    assert_eq!(base_store_identity(&downgrade_path), downgrade_base);
+    let version: i64 = Connection::open(&downgrade_path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
 }
 
 #[test]

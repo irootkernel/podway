@@ -936,6 +936,18 @@ pub trait StoreGraphStateContractV2: Send + Sync {
         state: GraphSessionStateV2,
     ) -> Result<(), StoreErrorV1>;
 
+    /// Clears the relational Procedure v2 current-task state under exact revision fences.
+    ///
+    /// This is the Store-owned teardown primitive, not the complete session-reset command. The
+    /// daemon composes the transaction helper with its queue barrier, shared payload cleanup, and
+    /// durable workspace-scoped receipt.
+    fn clear_graph_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+    ) -> Result<(), StoreErrorV1>;
+
     fn read_graph_session_v2(
         &self,
         identity: &DurableWorktreeIdentityV1,
@@ -974,6 +986,19 @@ where
         identity: &DurableWorktreeIdentityV1,
     ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
         (**self).read_graph_session_v2(identity)
+    }
+
+    fn clear_graph_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+    ) -> Result<(), StoreErrorV1> {
+        (**self).clear_graph_session_v2(
+            identity,
+            expected_workspace_revision,
+            expected_session_revision,
+        )
     }
 }
 
@@ -1193,6 +1218,99 @@ pub(crate) fn replace_graph_session_transaction_v2(
         )
         .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
     if changed != 1 {
+        return Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::ProcedureV2GraphState,
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn clear_graph_session_transaction_v2(
+    transaction: &Transaction<'_>,
+    expected_workspace_revision: Revision,
+    expected_session_revision: Revision,
+) -> Result<(), StoreErrorV1> {
+    let previous = load_graph_session_connection_v2(transaction)?
+        .ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
+    if previous.workspace_revision() != expected_workspace_revision {
+        return Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(expected_workspace_revision),
+            actual: Some(previous.workspace_revision()),
+        });
+    }
+    if previous.trace().revision() != expected_session_revision {
+        return Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(expected_session_revision),
+            actual: Some(previous.trace().revision()),
+        });
+    }
+
+    let session_id = previous.trace().session_id().as_str();
+    let snapshot_id = previous.snapshot().snapshot_id().as_str();
+
+    // These cross-attempt and cross-goal references use RESTRICT so that ordinary state changes
+    // cannot erase their sources. Reset removes both sides, but must remove the referencing rows
+    // before deleting the session and letting its remaining session-scoped rows cascade.
+    transaction
+        .execute(
+            "DELETE FROM v2_resolved_evidence_references WHERE attempt_id IN \
+             (SELECT attempt_id FROM v2_attempts WHERE session_id = ?1)",
+            [session_id],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
+    transaction
+        .execute(
+            "DELETE FROM v2_goal_assessments WHERE session_id = ?1",
+            [session_id],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    transaction
+        .execute(
+            "DELETE FROM v2_criterion_assessment_results WHERE session_id = ?1",
+            [session_id],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+
+    let deleted_session = transaction
+        .execute(
+            "DELETE FROM v2_task_sessions WHERE singleton = 1 AND session_id = ?1 \
+             AND session_revision = ?2",
+            params![
+                session_id,
+                sqlite_u64(
+                    expected_session_revision.get(),
+                    "Procedure v2 session revision"
+                )?,
+            ],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    if deleted_session != 1 {
+        return Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::ProcedureV2GraphState,
+        });
+    }
+
+    let deleted_snapshot = transaction
+        .execute(
+            "DELETE FROM v2_procedure_snapshots WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+    let deleted_workspace = transaction
+        .execute(
+            "DELETE FROM v2_workspace_state WHERE singleton = 1 AND workspace_revision = ?1",
+            [sqlite_u64(
+                expected_workspace_revision.get(),
+                "Procedure v2 workspace revision",
+            )?],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
+    if deleted_snapshot != 1 || deleted_workspace != 1 {
+        return Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::ProcedureV2GraphState,
+        });
+    }
+    if load_graph_session_connection_v2(transaction)?.is_some() {
         return Err(StoreErrorV1::InternalInvariantViolationV1 {
             invariant: StoreInvariantV1::ProcedureV2GraphState,
         });

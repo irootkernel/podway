@@ -32,8 +32,9 @@ use crate::state_rows::{
     load_current_session, load_workspace_state, persist_snapshot, replace_current_session,
 };
 use crate::v2_state::{
-    GraphSessionStateV2, StoreGraphStateContractV2, create_graph_session_transaction_v2,
-    load_graph_session_connection_v2, replace_graph_session_transaction_v2,
+    GraphSessionStateV2, StoreGraphStateContractV2, clear_graph_session_transaction_v2,
+    create_graph_session_transaction_v2, load_graph_session_connection_v2,
+    replace_graph_session_transaction_v2,
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
@@ -390,6 +391,26 @@ impl StoreGraphStateContractV2 for SqliteStoreV1 {
         self.require_identity(identity)?;
         let connection = self.lock_connection()?;
         load_graph_session_connection_v2(&connection)
+    }
+
+    fn clear_graph_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+    ) -> Result<(), StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        clear_graph_session_transaction_v2(
+            &transaction,
+            expected_workspace_revision,
+            expected_session_revision,
+        )?;
+        self.trigger_failpoint(StoreFailpointV1::V2GraphStateBeforeCommit)?;
+        transaction.commit().map_err(storage)
     }
 }
 
