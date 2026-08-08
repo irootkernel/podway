@@ -226,6 +226,41 @@ Apply these distinctions as well:
 - After any formatting, generation, test, or release command, inspect `git status`
   and the complete diff so generated or evidence changes are intentional.
 
+### Mulgae Code Review
+
+Use Mulgae only when master explicitly asks for a Mulgae review. Mulgae is an
+advisory reviewer, not an acceptance, merge, or release authority.
+
+- Run Mulgae from the repository root. Before a review, verify that
+  `mulgae version --json` succeeds and that `.mulgae/config.yaml` exists and is
+  admitted by `mulgae config --mode effective --output json`. Do not require or
+  compare a specific Mulgae version.
+- Do not install, upgrade, or initialize Mulgae unless master explicitly asks.
+  When installation is authorized, use
+  `go install github.com/irootkernel/mulgae@latest`; never persist a tool version
+  requirement. Project initialization must configure the `logic`, `security`,
+  `maintainability`, `product`, `documentation`, and `testing` roles with ZCode
+  as their only provider.
+- Select exactly one target matching the requested scope: use
+  `--diff origin/main...HEAD` for a branch or pull request, `--stage` for staged
+  changes, `--dirty` for staged and unstaged changes, or `--workspace` only when
+  master explicitly requests all tracked files. Before spending provider time,
+  run the same target with `--preflight --output json` and confirm the captured
+  paths and ZCode-only role routing.
+- State the review goal with `--objective` and use `--output json`. Preserve the
+  returned run ID and inspect the run with
+  `mulgae status --run <run-id> --output json` and
+  `mulgae findings --run <run-id> --severity low --output json`.
+- Read the JSON result even when Mulgae exits with status 1: status 1 is a policy
+  outcome, not an operational failure. Treat any status other than 0 or 1 as an
+  operational failure and report it instead of bypassing Mulgae.
+- Treat every finding as an advisory hypothesis. Verify it against the captured
+  target and current code before changing anything, and make fixes only within
+  master's authorized scope. After an authorized fix, use the original run and
+  finding IDs with `mulgae followup` against a target containing the fix.
+- Keep the entire `.mulgae/` directory, provider credential directories, raw
+  transcripts, and exported review bundles out of Git and do not share them.
+
 ### Gaori Test Evidence
 
 The repository verification rules above remain authoritative. Gaori is an optional
@@ -256,7 +291,9 @@ not require or compare a specific Gaori version. Configured commands require the
 local `.gaori/tester.yaml`. If the binary or compatible local config is unavailable,
 run the underlying Make or Cargo command documented by the repository and report
 that Gaori evidence compression was unavailable. Do not install or upgrade Gaori
-unless master explicitly asks.
+unless master explicitly asks. When installation is authorized, use
+`go install github.com/irootkernel/gaori@latest`; never persist a tool version
+requirement.
 
 The wrapped command's exit code is authoritative for pass/fail. `extractor_status`
 describes evidence quality only and never changes the result. Tags select project
@@ -275,6 +312,33 @@ summary and raw-log paths, and skipped checks. Gaori evidence alone does not
 establish review acceptance, development readiness, release readiness, or runtime
 activation.
 
+### Commit Messages and Lore
+
+Every commit title must begin with exactly one bracketed header. Inspect the active
+roadmap and the adopted task dossier before choosing it:
+
+- If the commit implements or directly verifies one specific roadmap task, use that
+  task's exact ID, for example `[V2CTR-001] docs: promote v2 decisions` or the
+  retained historical form `[REL12003] fix: repair version identity`.
+- If no specific task owns the change but it designs an epic or corrects epic-level
+  content not covered by a task, use the exact epic ID, for example
+  `[V2MOD] docs: reconcile the procedure model epic`. A task ID takes precedence
+  whenever one task directly owns the work.
+- Do not substitute a release program ID such as `PV2GA` for a task or epic ID. If
+  neither a specific roadmap task nor an epic owns the change, use `[INT]`, for
+  example `[INT] docs: adopt local review tooling`.
+- Keep the remainder of the title concise and imperative, matching the repository's
+  conventional `type: summary` style. The header is required even for trivial
+  commits.
+
+Use the installed `lore-commits` skill whenever preparing a non-trivial commit.
+After the title and any useful body, append only the git trailers that preserve
+decision context not evident from the diff, such as `Constraint:`, `Rejected:`,
+`Confidence:`, `Scope-risk:`, `Reversibility:`, `Directive:`, `Tested:`,
+`Not-tested:`, and `Related:`. Separate trailers from the body with a blank line,
+use `alternative | reason` for each `Rejected:` trailer, and omit Lore trailers for
+trivial changes with no meaningful decision context.
+
 ## Repository Safety and Delivery
 
 - Do not commit, amend, push, tag, publish, release, install, uninstall, start, stop,
@@ -286,10 +350,7 @@ activation.
 - Do not manually edit `.podway/` databases, runtime links, global registry data,
   sockets, service metadata, or LaunchAgent files to simulate supported behavior.
 - Keep `Cargo.lock` committed and use `--locked` in repository-standard Cargo gates.
-- Match commit history when commit copy is requested: prefix task-scoped commits with
-  the roadmap task ID, for example `[V2CTR-001] docs: promote v2 decisions`.
-  Historical compact IDs such as `REL12003` remain unchanged. Keep one logical task
-  and its direct verification in one commit.
+- Keep one logical task and its direct verification in one commit.
 - Keep completion reports compact: state the outcome, changed files, verification
   performed, and actionable remaining risks or blockers. Distinguish development
   gate success from commit, push, release, installation, and runtime activation.
