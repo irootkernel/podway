@@ -60,7 +60,7 @@ podway procedure show <file>
 podway procedure format <file> [--check] [--write]
 podway procedure vet <file>
 podway procedure graph <file> --format <json|mermaid|puml|dot>
-podway procedure preview <file>
+podway procedure preview <worktree-relative-file>
 podway procedure lint <file> [--warnings-as-errors]
 podway procedure check <file> [--warnings-as-errors]
 podway procedure scaffold [--template minimal]
@@ -89,10 +89,11 @@ installation and release qualification to verify the embedded contract. Those
 runtime probes validate the complete typed envelope and reject bare or malformed
 identity results before using any reported field.
 
-## Reserved Procedure v2 contract grammar
+## Procedure v2 contract grammar
 
-This subsection records adopted, non-executable v2 grammar. It does not expand
-the implemented v0.1.2 command surface.
+The `status --verbose` shape below is adopted but not yet executable. Procedure
+v2 authoring and preview commands are executable and are specified in their
+dedicated sections below.
 
 ```text
 podway status --verbose [--history-before <trace-sequence>]
@@ -109,7 +110,9 @@ each window. Standard status does not return history windows.
 preview first applies the same bounded parse and semantic validation as
 `procedure validate`, then the same structural, liveness, and resource-budget
 analysis as `procedure vet`, and finally the same advisory rules as the lint
-command. The result always reports `admissible`, the three check outcomes, and
+command. Its file spelling must be UTF-8 and satisfy the same worktree-relative,
+no-parent rule as `start`, so every emitted start suggestion is accepted by the
+command grammar. The result always reports `admissible`, the three check outcomes, and
 bounded ordered diagnostics. Validation or vet failure makes the preview
 inadmissible and exits 1. Lint warnings set the lint check false but remain
 advisory: they do not make an otherwise valid and vetted Procedure inadmissible
@@ -123,6 +126,10 @@ suggestion, leaving only the caller-owned title as a placeholder:
 ```text
 podway start --procedure <file> --expect-procedure-digest <digest> --task <title>
 ```
+
+Human output renders the complete identity, checks, goal policy, summary,
+normalized nodes and edges, Mermaid, digest, and a POSIX-shell-safe spelling of
+that same suggestion.
 
 An inadmissible result returns no digest, graph, Mermaid, or start suggestion.
 Preview remains unconditionally read-only on both paths: it never admits a job,
@@ -258,6 +265,7 @@ podway procedure show <file> [--canonical]
 podway procedure format <file> [--check] [--write]
 podway procedure vet <file>
 podway procedure graph <file> --format <json|mermaid|puml|dot>
+podway procedure preview <worktree-relative-file>
 podway procedure lint <file> [--warnings-as-errors]
 podway procedure check <file> [--warnings-as-errors]
 podway procedure scaffold [--template minimal]

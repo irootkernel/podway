@@ -741,7 +741,6 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-preview-result/v1
-  - podway.procedure-diagnostics-result/v1
 - name: procedure.scaffold
   availability: executable
   cli:

@@ -20,8 +20,8 @@
 //!   capped at [`PAIRWISE_RULE_MAX_FINDINGS`] findings each, so a pathological document produces a
 //!   report a human can still read.
 //!
-//! Rules that need a path through the graph use [`crate::procedure_v2_graph`], which is also what
-//! vet (V2GRF-001) will read. Lint deliberately reports only the advisory half: an *optional*
+//! Rules that need a path through the graph use [`crate::procedure_v2_graph`], which vet also
+//! reads. Lint deliberately reports only the advisory half: an *optional*
 //! evidence reference no path can resolve is lint's, the required case is vet's
 //! `EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER`; a region with no terminal at all is vet's
 //! `NO_TERMINAL_PATH`, never a lint advisory about a distant assessment.

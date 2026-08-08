@@ -3,8 +3,9 @@
 //! `procedure scaffold`, and `procedure convert`).
 
 use std::{
+    ffi::{OsStr, OsString},
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::{ffi::OsStringExt, fs::PermissionsExt, fs::symlink},
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
@@ -119,6 +120,20 @@ fn run(arguments: &[&str]) -> Output {
 }
 
 fn run_in(directory: &Path, arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_podway"))
+        .current_dir(directory)
+        .args(arguments)
+        .env(
+            "PODWAY_TEST_ACCOUNT_ROOT",
+            format!("/tmp/podway-cli-v2aut001-{}", std::process::id()),
+        )
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("podway binary must run")
+}
+
+fn run_in_os(directory: &Path, arguments: &[&OsStr]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_podway"))
         .current_dir(directory)
         .args(arguments)
@@ -3198,12 +3213,12 @@ fn v2grf004_mermaid_budget_is_independent_from_the_json_projection() {
 // ---------------------------------------------------------------------------------------------
 
 fn preview_json(path: &Path) -> Output {
-    run(&[
-        "--json",
-        "procedure",
-        "preview",
-        &path.display().to_string(),
-    ])
+    let directory = path.parent().expect("fixture path has a parent");
+    let file = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("fixture file name is UTF-8");
+    run_in(directory, &["--json", "procedure", "preview", file])
 }
 
 #[test]
@@ -3287,6 +3302,20 @@ fn v2grf007_preview_is_complete_deterministic_and_strictly_read_only() {
     );
     assert_eq!(text.status.code(), Some(0), "{text:?}");
     let text = String::from_utf8(text.stdout).expect("preview text must be UTF-8");
+    for expected in [
+        "procedure: podway.procedure/v2 lint-clean@1\n",
+        "purpose: Exercise the lint command with a document that has no findings.\n",
+        "checks: validate=true, vet=true, lint=true\n",
+        "goal-tracking: false, goal-assessments: none\n",
+        "summary: definitions=3, graph-nodes=3, actions=2, decisions=1, decision-routes=2, cyclic-regions=1, evidence-references=0, skippable-nodes=0, manual-rework-targets=1\n",
+        "graph: entry=gather-inputs, terminals=publish-result\n",
+        "graph-nodes:\n",
+        "  gather-inputs: definition=gather, type=action, terminal=false, skippable=false\n",
+        "graph-edges:\n",
+        "  review-work -> publish-result: complete · advance\n",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} from {text}");
+    }
     assert!(text.contains(mermaid));
     assert!(text.contains(&format!(
         "start: podway start --procedure 'review'\\''s workflow.yaml' --expect-procedure-digest {digest} --task '<title>'\n"
@@ -3294,6 +3323,118 @@ fn v2grf007_preview_is_complete_deterministic_and_strictly_read_only() {
     assert_eq!(identity(&path), before);
     assert_eq!(entry_names(&fixture.root), entries);
     assert!(!fixture.root.join(".podway").exists());
+}
+
+#[test]
+fn v2grf_preview_rejects_paths_that_the_suggested_start_command_cannot_use() {
+    let fixture = FixtureDirectory::new("preview-path-shape");
+    let path = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+
+    let absolute = run(&[
+        "--json",
+        "procedure",
+        "preview",
+        &path.display().to_string(),
+    ]);
+    assert_eq!(absolute.status.code(), Some(2), "{absolute:?}");
+    let absolute = one_json(&absolute);
+    assert_eq!(absolute["command"], "procedure.preview");
+    assert_eq!(absolute["code"], "REQUEST_INVALID");
+    assert_eq!(absolute["message"], "procedure must be worktree-relative");
+
+    let nested = fixture.root.join("nested");
+    fs::create_dir(&nested).expect("nested fixture directory");
+    let parent = run_in(
+        &nested,
+        &["--json", "procedure", "preview", "../minimal.yaml"],
+    );
+    assert_eq!(parent.status.code(), Some(2), "{parent:?}");
+    let parent = one_json(&parent);
+    assert_eq!(parent["command"], "procedure.preview");
+    assert_eq!(parent["code"], "REQUEST_INVALID");
+    assert_eq!(parent["message"], "procedure must be worktree-relative");
+
+    let current_directory = run_in(
+        &fixture.root,
+        &["--json", "procedure", "preview", "./minimal.yaml"],
+    );
+    assert_eq!(
+        current_directory.status.code(),
+        Some(5),
+        "{current_directory:?}"
+    );
+    let current_directory = one_json(&current_directory);
+    assert_eq!(current_directory["command"], "procedure.preview");
+    assert_eq!(current_directory["code"], "PATH_OUTSIDE_WORKTREE");
+    assert_eq!(
+        current_directory["message"],
+        "procedure must be worktree-relative"
+    );
+
+    let real = fixture.root.join("real");
+    fs::create_dir(&real).expect("real fixture directory");
+    fs::write(real.join("minimal.yaml"), MINIMAL_V2_YAML).expect("nested fixture must be writable");
+    symlink("real", fixture.root.join("link")).expect("fixture symlink must be creatable");
+    let symlinked_parent = run_in(
+        &fixture.root,
+        &["--json", "procedure", "preview", "link/minimal.yaml"],
+    );
+    assert_eq!(
+        symlinked_parent.status.code(),
+        Some(1),
+        "{symlinked_parent:?}"
+    );
+    let symlinked_parent = one_json(&symlinked_parent);
+    assert_eq!(symlinked_parent["command"], "procedure.preview");
+    assert_eq!(symlinked_parent["code"], "PROCEDURE_NOT_FOUND");
+    assert_eq!(symlinked_parent["message"], "cannot read procedure file");
+
+    let non_utf8_name = OsString::from_vec(b"procedure-\xff.yaml".to_vec());
+    let non_utf8 = run_in_os(
+        &fixture.root,
+        &[
+            OsStr::new("--json"),
+            OsStr::new("procedure"),
+            OsStr::new("preview"),
+            non_utf8_name.as_os_str(),
+        ],
+    );
+    assert_eq!(non_utf8.status.code(), Some(2), "{non_utf8:?}");
+    let non_utf8 = one_json(&non_utf8);
+    assert_eq!(non_utf8["command"], "procedure.preview");
+    assert_eq!(non_utf8["code"], "REQUEST_INVALID");
+    assert_eq!(non_utf8["message"], "procedure path must be UTF-8");
+}
+
+#[test]
+fn v2grf_preview_escapes_version_line_separators_in_human_output() {
+    let fixture = FixtureDirectory::new("preview-version-escaping");
+    fixture.write(
+        "minimal.yaml",
+        &MINIMAL_V2_YAML.replace(
+            "version: \"1\"",
+            "version: \"2\\nchecks: validate=false, vet=false, lint=false\"",
+        ),
+    );
+
+    let output = run_in(&fixture.root, &["procedure", "preview", "minimal.yaml"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let text = String::from_utf8(output.stdout).expect("preview text must be UTF-8");
+    assert!(text.contains(
+        "procedure: podway.procedure/v2 minimal@2\\nchecks: validate=false, vet=false, lint=false\n"
+    ));
+    assert_eq!(
+        text.matches("\nchecks: validate=false, vet=false, lint=false\n")
+            .count(),
+        0,
+        "version content must not inject a human-output line: {text}"
+    );
+    assert_eq!(
+        text.matches("\nchecks: validate=true, vet=true, lint=false\n")
+            .count(),
+        1,
+        "the actual check summary remains unambiguous: {text}"
+    );
 }
 
 #[test]
@@ -3418,18 +3559,15 @@ fn v2grf007_equivalent_yaml_and_json_share_preview_semantics() {
 #[test]
 fn v2grf007_preview_preserves_process_failures_and_quiet_mode() {
     let fixture = FixtureDirectory::new("preview-process");
-    let v2 = fixture.write("minimal.yaml", MINIMAL_V2_YAML);
-    let v1 = fixture.write("legacy.yaml", V1_YAML);
+    fixture.write("minimal.yaml", MINIMAL_V2_YAML);
+    fixture.write("legacy.yaml", V1_YAML);
     let before = entry_names(&fixture.root);
 
     for (path, code) in [
-        (v1.display().to_string(), "PROCEDURE_SCHEMA_UNSUPPORTED"),
-        (
-            fixture.root.join("missing.yaml").display().to_string(),
-            "PROCEDURE_NOT_FOUND",
-        ),
+        ("legacy.yaml", "PROCEDURE_SCHEMA_UNSUPPORTED"),
+        ("missing.yaml", "PROCEDURE_NOT_FOUND"),
     ] {
-        let output = run(&["--json", "procedure", "preview", &path]);
+        let output = run_in(&fixture.root, &["--json", "procedure", "preview", path]);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         let error = one_json(&output);
         assert_eq!(error["schema"], "podway.error/v1");
@@ -3437,7 +3575,10 @@ fn v2grf007_preview_preserves_process_failures_and_quiet_mode() {
         assert_eq!(error["code"], code);
     }
 
-    let quiet = run(&["--quiet", "procedure", "preview", &v2.display().to_string()]);
+    let quiet = run_in(
+        &fixture.root,
+        &["--quiet", "procedure", "preview", "minimal.yaml"],
+    );
     assert_eq!(quiet.status.code(), Some(0), "{quiet:?}");
     assert!(quiet.stdout.is_empty());
     assert!(quiet.stderr.is_empty());

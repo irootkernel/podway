@@ -236,6 +236,26 @@ fn v2grf006_graph_result_admits_the_dot_machine_format() {
 }
 
 #[test]
+fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
+    let diagnostics_contract = NEW_ROUTE_RESULT_SCHEMAS_V1
+        .iter()
+        .find(|contract| contract.schema == PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1)
+        .expect("the diagnostics result family is registered");
+    assert!(!diagnostics_contract.commands.contains(&"procedure.preview"));
+
+    let diagnostics = diagnostics_result("preview");
+    assert_invalid(
+        "schemas/procedure-diagnostics-result-v1.schema.json",
+        &diagnostics,
+    );
+    let output = json!({
+        "schema":OUTPUT_SCHEMA_V2,"request_id":UUID,"command":"procedure.preview",
+        "generated_at":"2026-08-04T00:00:00.000Z","result":diagnostics,"warnings":[]
+    });
+    assert_invalid("schemas/output-v2.schema.json", &output);
+}
+
+#[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 10);
     assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 9);
@@ -1352,19 +1372,59 @@ fn v2ctr003_critical_bounds_and_variant_rules_fail_closed() {
     let inadmissible_preview = json!({
         "schema":"podway.procedure-preview-result/v1","file":"workflow.yaml",
         "admissible":false,"checks":{"validate":false,"vet":false,"lint":false},
-        "diagnostics":[],"diagnostics_truncated":false,"diagnostics_total":0
+        "diagnostics":[{
+            "code":"AUTHORING_SCHEMA_INVALID","severity":"error",
+            "schema":"podway.procedure/v2","source_path":"workflow.yaml",
+            "location":{"line":1,"column":1,"end_line":1,"end_column":1},
+            "field":"$","message":"The document is invalid.",
+            "hint":"Correct the document and retry."
+        }],
+        "diagnostics_truncated":false,"diagnostics_total":1
     });
     assert_valid(
         "schemas/procedure-preview-result-v1.schema.json",
         &inadmissible_preview,
     );
-    let mut inadmissible_with_start = inadmissible_preview;
-    inadmissible_with_start["start_suggestion"] =
-        fixtures["podway.procedure-preview-result/v1"]["start_suggestion"].clone();
-    assert_invalid(
-        "schemas/procedure-preview-result-v1.schema.json",
-        &inadmissible_with_start,
-    );
+    for field in [
+        "procedure_schema",
+        "procedure_id",
+        "procedure_version",
+        "purpose",
+        "procedure_digest",
+        "goal_tracking",
+        "goal_assessment_graph_node_ids",
+        "summary",
+        "graph",
+        "mermaid",
+        "start_suggestion",
+    ] {
+        let mut candidate = inadmissible_preview.clone();
+        candidate[field] = fixtures["podway.procedure-preview-result/v1"][field].clone();
+        assert_invalid(
+            "schemas/procedure-preview-result-v1.schema.json",
+            &candidate,
+        );
+    }
+    for checks in [
+        json!({"validate":false,"vet":true,"lint":false}),
+        json!({"validate":false,"vet":false,"lint":true}),
+        json!({"validate":true,"vet":true,"lint":false}),
+    ] {
+        let mut candidate = inadmissible_preview.clone();
+        candidate["checks"] = checks;
+        assert_invalid(
+            "schemas/procedure-preview-result-v1.schema.json",
+            &candidate,
+        );
+    }
+    for (field, value) in [("diagnostics", json!([])), ("diagnostics_total", json!(0))] {
+        let mut candidate = inadmissible_preview.clone();
+        candidate[field] = value;
+        assert_invalid(
+            "schemas/procedure-preview-result-v1.schema.json",
+            &candidate,
+        );
+    }
     let mut false_inadmissible = fixtures["podway.procedure-preview-result/v1"].clone();
     false_inadmissible["admissible"] = json!(false);
     false_inadmissible

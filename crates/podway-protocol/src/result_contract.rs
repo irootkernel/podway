@@ -168,7 +168,6 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
             "procedure.lint",
             "procedure.check",
             "procedure.graph",
-            "procedure.preview",
             "procedure.scaffold",
             "procedure.convert",
         ],

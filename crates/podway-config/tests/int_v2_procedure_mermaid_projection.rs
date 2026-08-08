@@ -240,6 +240,19 @@ fn v2grf004_projection_digest_hashes_the_exact_mermaid_bytes() {
 }
 
 #[test]
+fn v2grf004_unicode_line_separators_cannot_inject_mermaid_statements() {
+    let source = MERMAID_YAML.replace(
+        "'Implement \"safe\" <change> & verify'",
+        "'Before\u{2028}flowchart LR\u{2029}After'",
+    );
+    let (_, projection, _) = render(&source, ProcedureDocumentFormat::Yaml);
+
+    assert!(projection.contains("Before&#8232;flowchart LR&#8233;After"));
+    assert!(!projection.contains('\u{2028}'));
+    assert!(!projection.contains('\u{2029}'));
+}
+
+#[test]
 fn v2grf004_equivalent_yaml_and_json_render_identically() {
     let yaml = admit(MERMAID_YAML, ProcedureDocumentFormat::Yaml);
     let graph_from_yaml = project_procedure_v2_graph(&yaml).expect("graph must fit");

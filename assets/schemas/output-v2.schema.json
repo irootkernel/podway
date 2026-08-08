@@ -108,7 +108,7 @@
     "jobLookup": { "properties": { "command": { "const": "job.lookup" }, "result": { "$ref": "urn:podway:schema:job-lookup-result:v2" } } },
     "jobResult": { "properties": { "command": { "enum": ["job.status", "job.wait"] }, "result": { "$ref": "urn:podway:schema:job-result:v2" } } },
     "procedureSource": { "properties": { "command": { "enum": ["procedure.format", "procedure.scaffold", "procedure.convert"] }, "result": { "$ref": "urn:podway:schema:procedure-source-result:v1" } } },
-    "procedureDiagnostics": { "properties": { "command": { "enum": ["procedure.format", "procedure.validate", "procedure.vet", "procedure.lint", "procedure.check", "procedure.graph", "procedure.preview", "procedure.scaffold", "procedure.convert"] }, "result": { "$ref": "urn:podway:schema:procedure-diagnostics-result:v1" } } },
+    "procedureDiagnostics": { "properties": { "command": { "enum": ["procedure.format", "procedure.validate", "procedure.vet", "procedure.lint", "procedure.check", "procedure.graph", "procedure.scaffold", "procedure.convert"] }, "result": { "$ref": "urn:podway:schema:procedure-diagnostics-result:v1" } } },
     "procedureGraph": { "properties": { "command": { "const": "procedure.graph" }, "result": { "$ref": "urn:podway:schema:procedure-graph-result:v1" } } },
     "procedurePreview": { "properties": { "command": { "const": "procedure.preview" }, "result": { "$ref": "urn:podway:schema:procedure-preview-result:v1" } } },
     "decision": { "required": ["workspace", "job"], "properties": { "command": { "const": "session.decide" }, "result": { "$ref": "urn:podway:schema:decision-result:v1" } } },

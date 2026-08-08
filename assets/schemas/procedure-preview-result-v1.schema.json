@@ -36,11 +36,52 @@
       },
       "else": {
         "allOf": [
-          { "not": { "required": ["start_suggestion"] } },
+          {
+            "not": {
+              "anyOf": [
+                { "required": ["procedure_schema"] },
+                { "required": ["procedure_id"] },
+                { "required": ["procedure_version"] },
+                { "required": ["purpose"] },
+                { "required": ["procedure_digest"] },
+                { "required": ["goal_tracking"] },
+                { "required": ["goal_assessment_graph_node_ids"] },
+                { "required": ["summary"] },
+                { "required": ["graph"] },
+                { "required": ["mermaid"] },
+                { "required": ["start_suggestion"] }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "diagnostics": { "minItems": 1 },
+              "diagnostics_total": { "minimum": 1 }
+            }
+          },
           {
             "anyOf": [
-              { "properties": { "checks": { "properties": { "validate": { "const": false } } } } },
-              { "properties": { "checks": { "properties": { "vet": { "const": false } } } } }
+              {
+                "properties": {
+                  "checks": {
+                    "properties": {
+                      "validate": { "const": false },
+                      "vet": { "const": false },
+                      "lint": { "const": false }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "checks": {
+                    "properties": {
+                      "validate": { "const": true },
+                      "vet": { "const": false }
+                    }
+                  }
+                }
+              }
             ]
           }
         ]

@@ -5,7 +5,7 @@
   "type": "object", "additionalProperties": false,
   "required": ["schema", "operation", "procedure_schema", "file", "valid", "diagnostics", "diagnostics_truncated", "diagnostics_total"],
   "properties": {
-    "schema": { "const": "podway.procedure-diagnostics-result/v1" }, "operation": { "enum": ["format", "validate", "vet", "lint", "check", "graph", "preview", "scaffold", "convert"] },
+    "schema": { "const": "podway.procedure-diagnostics-result/v1" }, "operation": { "enum": ["format", "validate", "vet", "lint", "check", "graph", "scaffold", "convert"] },
     "procedure_schema": { "const": "podway.procedure/v2" }, "file": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/path" },
     "digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }, "valid": { "type": "boolean" },
     "diagnostics": { "type": "array", "maxItems": 256, "items": { "$ref": "urn:podway:schema:authoring-diagnostic:v1" } },

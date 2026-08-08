@@ -3747,7 +3747,22 @@ const PROCEDURE_PREVIEW_COMMAND: &str = "procedure.preview";
 fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
     const NAME: &str = PROCEDURE_PREVIEW_COMMAND;
 
-    let opened = open_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
+    if !is_worktree_relative_procedure_path(file) {
+        return Err(
+            LocalFailure::request_invalid("procedure must be worktree-relative").with_command(NAME),
+        );
+    }
+    let Some(source_path) = file.to_str() else {
+        return Err(
+            LocalFailure::request_invalid("procedure path must be UTF-8").with_command(NAME),
+        );
+    };
+    let opened = open_descriptor_relative_procedure(
+        Path::new("."),
+        file,
+        LocalFailure::catalog("PATH_OUTSIDE_WORKTREE", "cannot open worktree", "procedure"),
+    )
+    .map_err(|failure| failure.with_command(NAME))?;
     let source = std::str::from_utf8(&opened.bytes).map_err(|_| {
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
     })?;
@@ -3764,10 +3779,9 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
         ));
     }
 
-    let source_path = file.display().to_string();
     let report = preview_procedure_v2(FormatRequest {
         source,
-        source_path: &source_path,
+        source_path,
         format,
     });
     let checks = report.checks();
@@ -3857,13 +3871,72 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
         );
 
         let mut text = render_authoring_diagnostics(report.diagnostics());
+        let assessments = if details.goal_assessment_graph_node_ids().is_empty() {
+            "none".to_owned()
+        } else {
+            details.goal_assessment_graph_node_ids().join(",")
+        };
+        let terminals = graph.terminal_graph_node_ids().join(",");
         text.push_str(&format!(
-            "{}: Procedure v2 preview admissible\nprocedure-digest: {}\nnodes: {}, decision-routes: {}, cyclic-regions: {}\n\n{}\n\nstart: {}\n",
+            concat!(
+                "{}: Procedure v2 preview admissible\n",
+                "procedure: {} {}@{}\n",
+                "purpose: {}\n",
+                "procedure-digest: {}\n",
+                "checks: validate={}, vet={}, lint={}\n",
+                "goal-tracking: {}, goal-assessments: {}\n",
+                "summary: definitions={}, graph-nodes={}, actions={}, decisions={}, ",
+                "decision-routes={}, cyclic-regions={}, evidence-references={}, ",
+                "skippable-nodes={}, manual-rework-targets={}\n",
+                "graph: entry={}, terminals={}\n",
+                "graph-nodes:\n"
+            ),
             file.display(),
+            details.procedure_schema(),
+            details.procedure_id(),
+            render_preview_text_value(details.procedure_version()),
+            render_preview_text_value(details.purpose()),
             details.procedure_digest().as_str(),
+            checks.validate(),
+            checks.vet(),
+            checks.lint(),
+            details.goal_tracking(),
+            assessments,
+            summary.definition_count(),
             summary.graph_node_count(),
+            summary.action_node_count(),
+            summary.decision_node_count(),
             summary.route_count(),
             summary.cycle_count(),
+            summary.evidence_reference_count(),
+            summary.skippable_node_count(),
+            summary.manual_rework_target_count(),
+            graph.entry_graph_node_id(),
+            terminals,
+        ));
+        for node in graph.nodes() {
+            text.push_str(&format!(
+                "  {}: definition={}, type={}, terminal={}, skippable={}\n",
+                node.graph_node_id(),
+                node.node_definition_id(),
+                node.node_type().as_str(),
+                node.terminal(),
+                node.skippable(),
+            ));
+        }
+        text.push_str("graph-edges:\n");
+        for edge in graph.edges() {
+            text.push_str(&format!(
+                "  {} -> {}: {}{}\n",
+                edge.from_graph_node_id(),
+                edge.to_graph_node_id(),
+                edge.option_id()
+                    .map_or_else(String::new, |option| format!("{option} · ")),
+                edge.effect(),
+            ));
+        }
+        text.push_str(&format!(
+            "\n{}\n\nstart: {}\n",
             details.mermaid(),
             render_preview_start_command(start_suggestion.argv()),
         ));
@@ -3873,6 +3946,25 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
     };
     let exit_code = i32::from(!report.admissible());
     Ok(local_result_v2(NAME, result, text, exit_code))
+}
+
+fn is_worktree_relative_procedure_path(path: &Path) -> bool {
+    !path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+}
+
+fn render_preview_text_value(value: &str) -> String {
+    let mut rendered = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+            rendered.extend(character.escape_default());
+        } else {
+            rendered.push(character);
+        }
+    }
+    rendered
 }
 
 /// Renders a structured preview suggestion as copyable POSIX shell source for human output.
@@ -4414,11 +4506,7 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
         Command::Start(StartArgs {
             procedure: Some(procedure),
             ..
-        }) if PathBuf::from(procedure).is_absolute()
-            || PathBuf::from(procedure)
-                .components()
-                .any(|component| matches!(component, Component::ParentDir)) =>
-        {
+        }) if !is_worktree_relative_procedure_path(Path::new(procedure)) => {
             return Err(LocalFailure::request_invalid(
                 "procedure must be worktree-relative",
             ));
@@ -5931,7 +6019,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway procedure graph <file> --format <json|mermaid|puml|dot>\n\nEmits a deterministic JSON, Mermaid, PlantUML, or DOT projection of a validated\nand vetted Procedure v2 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format dot"
         }
         "procedure.preview" => {
-            "Usage:\n  podway procedure preview <file>\n\nRuns validation, graph vetting, and advisory lint in memory, then prints the\nnormalized graph, Mermaid review projection, and an exact session start suggestion\nwhen the Procedure v2 document is admissible. Reads only and never contacts the daemon.\n\nExample:\n  podway procedure preview .podway/procedures/custom.yaml"
+            "Usage:\n  podway procedure preview <worktree-relative-file>\n\nRuns validation, graph vetting, and advisory lint in memory, then prints the\nnormalized graph, Mermaid review projection, and an exact session start suggestion\nwhen the Procedure v2 document is admissible. The file must use the same UTF-8,\nworktree-relative, no-parent spelling accepted by start. Reads only and never\ncontacts the daemon.\n\nExample:\n  podway procedure preview .podway/procedures/custom.yaml"
         }
         "procedure.lint" => {
             "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v2 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"

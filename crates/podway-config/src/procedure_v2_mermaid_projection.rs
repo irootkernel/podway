@@ -164,6 +164,8 @@ fn escape_mermaid_label(value: &str) -> String {
             '\n' => escaped.push_str("&#10;"),
             '\r' => escaped.push_str("&#13;"),
             '\t' => escaped.push_str("&#9;"),
+            '\u{2028}' => escaped.push_str("&#8232;"),
+            '\u{2029}' => escaped.push_str("&#8233;"),
             character if character.is_control() => {
                 write!(escaped, "&#{};", u32::from(character))
                     .expect("writing to a String cannot fail");
@@ -183,8 +185,8 @@ mod tests {
     #[test]
     fn mermaid_label_escaping_covers_syntax_and_line_controls() {
         assert_eq!(
-            escape_mermaid_label("A & \"B\" <C>\nD\r\t"),
-            "A &amp; &quot;B&quot; &lt;C&gt;&#10;D&#13;&#9;"
+            escape_mermaid_label("A & \"B\" <C>\nD\r\t\u{2028}\u{2029}"),
+            "A &amp; &quot;B&quot; &lt;C&gt;&#10;D&#13;&#9;&#8232;&#8233;"
         );
     }
 

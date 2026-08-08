@@ -13,8 +13,8 @@
 //!    The unrefined rows are asserted too: leaving a rejection on the generic code is a decision,
 //!    and a decision that is not pinned is a decision that drifts.
 //! 3. **The vet boundary.** The graph fixture's nineteen negative recipes split into the ones
-//!    validate can prove today and the ones that need path analysis. Both halves are asserted, so
-//!    the day V2GRF-001 lands a rule, the boundary test — not a reviewer — notices.
+//!    validate can prove and the ones that need path analysis. Both halves are asserted so future
+//!    ownership drift is caught by the boundary test rather than a reviewer.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -1186,8 +1186,8 @@ fn v2aut008_the_vet_deferred_recipes_are_admitted_by_validate() {
 
     for (id, source) in vet_deferred_documents() {
         // The truthful boundary: validate resolves the closed reference set and nothing else, so
-        // every one of these documents is admissible today. When V2GRF-001 lands a rule, the
-        // rejection arrives from vet, not from here, and this assertion still holds.
+        // every one of these documents is admissible to validate. Its rejection belongs to vet,
+        // not here, and this assertion keeps that stage boundary explicit.
         admit(&source).unwrap_or_else(|error| {
             panic!("{id}: validate must admit a path-analysis defect, got {error:?}")
         });

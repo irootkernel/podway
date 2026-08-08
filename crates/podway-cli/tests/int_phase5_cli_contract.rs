@@ -2749,7 +2749,7 @@ rework:
                 "--json".to_owned(),
                 "procedure".to_owned(),
                 "preview".to_owned(),
-                v2_procedure_path.display().to_string(),
+                "causal-procedure-v2.yaml".to_owned(),
             ],
         ),
         (

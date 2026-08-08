@@ -253,10 +253,13 @@ and edge author order but projects only the fields admitted by
 
 The start suggestion is exactly
 `["podway","start","--procedure",<input-file>,"--expect-procedure-digest",<digest>,"--task","<title>"]`.
-The input file spelling is preserved, the digest is the previewed canonical
-digest, and `<title>` remains a caller-supplied placeholder. Text mode renders
-the same array as POSIX shell source, single-quoting unsafe arguments so paths
-with whitespace or quotes remain copyable. An inadmissible
+The input file must have a UTF-8 spelling, be worktree-relative, and contain no
+parent-directory component, matching `start`; its spelling is preserved, the
+digest is the previewed canonical digest, and `<title>` remains a caller-supplied placeholder.
+Text mode renders the complete identity, checks, goal policy, summary,
+normalized nodes and edges, Mermaid, and the same array as POSIX shell source,
+single-quoting unsafe arguments so paths with whitespace or quotes remain
+copyable. An inadmissible
 result omits all success-only identity, summary, graph, Mermaid, and start
 fields. Preview is local and read-only: it does not contact the daemon, create a
 session, or write procedure or runtime state.

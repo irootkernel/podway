@@ -48,7 +48,7 @@
     {
       "kind": "catalog",
       "path": "quality/v2-acceptance-matrix-v1.json",
-      "sha256": "sha256:8ed2a182a59e973a07f270c885a158b19561e9b63f12dcfb26e962879e1c4136"
+      "sha256": "sha256:7363d735217d3c55e901f355d501e5ef89582345e16fa5f7870ce5a0e051a552"
     },
     {
       "kind": "catalog",
@@ -208,12 +208,12 @@
     {
       "kind": "schema",
       "path": "schemas/output-v2.schema.json",
-      "sha256": "sha256:417ccf619a7e720364323f8216f1aa52dff6c686559b77315b6bfa2a482b2683"
+      "sha256": "sha256:04070ed7f6a4118969a02f4ec01f52d88a54a8fd9cd864b79fba37b26a84a136"
     },
     {
       "kind": "schema",
       "path": "schemas/procedure-diagnostics-result-v1.schema.json",
-      "sha256": "sha256:36beb0556854c4360d540f2cd69469c5f38856b06128cf8e2e61c77169bfef58"
+      "sha256": "sha256:b7a6708ea99ae12bc9d4be686314cdec3fab2e5580abdefd2cec905f1c5e9f67"
     },
     {
       "kind": "schema",
@@ -223,7 +223,7 @@
     {
       "kind": "schema",
       "path": "schemas/procedure-preview-result-v1.schema.json",
-      "sha256": "sha256:537839609fa6cee9f9138200c0a90319c80159067ec1f2ee8d80a2f8bee9c935"
+      "sha256": "sha256:6c622a6521c91fda0445caa8696071cc5cab7651c0d540fce0da94a5f1340b6d"
     },
     {
       "kind": "schema",
@@ -343,7 +343,7 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:e17798b06b427a38587354e95258629011ed204eaf9dbe776a62c82ee206db35"
+      "sha256": "sha256:21361283aa589d51e1391171e2c9485a36b35684254d240552065216e4052a28"
     },
     {
       "kind": "catalog",
@@ -446,7 +446,7 @@
       "sha256": "sha256:17272d36966b32026d408bb0663e3141f4b0ffae837ff3806a255bb258cda907"
     }
   ],
-  "digest": "sha256:7c305419896a36d22a23a564f30b7c158b192c39bbb7b4f0e63f685a8340a3fd",
+  "digest": "sha256:858648a8f8d15cdfcc16c3ed708239013beaa4512216bbeea70fda9f2f6a85b0",
   "product": "podway",
   "product_version": "0.1.2",
   "schema_version": "podway.contract-manifest/v1",

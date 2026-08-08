@@ -981,7 +981,7 @@
       ],
       "implementation_status": "planned",
       "contract_refs": [
-        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"}
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Procedure commands"}
       ]
     },
     {
@@ -1000,7 +1000,7 @@
       ],
       "implementation_status": "planned",
       "contract_refs": [
-        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"}
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Procedure commands"}
       ]
     },
     {
@@ -1019,7 +1019,7 @@
       ],
       "implementation_status": "planned",
       "contract_refs": [
-        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"}
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Procedure commands"}
       ]
     },
     {
@@ -1038,7 +1038,7 @@
       ],
       "implementation_status": "planned",
       "contract_refs": [
-        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"}
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Procedure commands"}
       ]
     },
     {
@@ -1057,7 +1057,7 @@
       ],
       "implementation_status": "planned",
       "contract_refs": [
-        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"}
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Procedure commands"}
       ]
     },
     {
@@ -1076,7 +1076,7 @@
       ],
       "implementation_status": "planned",
       "contract_refs": [
-        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"}
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Procedure commands"}
       ]
     },
     {
@@ -1095,7 +1095,7 @@
       ],
       "implementation_status": "planned",
       "contract_refs": [
-        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Reserved Procedure v2 contract grammar"}
+        {"path": "docs/specs/interfaces/cli-specification.md", "anchor": "## Procedure commands"}
       ]
     },
     {
@@ -1116,7 +1116,7 @@
         },
         {
           "path": "docs/specs/interfaces/cli-specification.md",
-          "anchor": "## Reserved Procedure v2 contract grammar"
+          "anchor": "## Procedure v2 preview and confirmation"
         }
       ],
       "test_class": "confirmation-e2e",
@@ -1182,7 +1182,7 @@
         },
         {
           "path": "docs/specs/interfaces/cli-specification.md",
-          "anchor": "## Reserved Procedure v2 contract grammar"
+          "anchor": "## Procedure v2 preview and confirmation"
         }
       ],
       "test_class": "confirmation-e2e",
