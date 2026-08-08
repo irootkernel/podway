@@ -1,5 +1,6 @@
 //! Process-boundary contracts for the Procedure v2 authoring surface (`procedure format`,
-//! `procedure lint`, `procedure check`, `procedure scaffold`, and `procedure convert`).
+//! `procedure vet`, `procedure lint`, `procedure check`, `procedure scaffold`, and
+//! `procedure convert`).
 
 use std::{
     fs,
@@ -1118,6 +1119,193 @@ fn v2aut003_an_unwritable_directory_is_a_catalogued_failure_that_leaves_the_orig
         "the original must survive a failed rewrite byte for byte"
     );
     assert_eq!(entry_names(&fixture.root), vec!["drifted.yaml".to_owned()]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// V2GRF-002: `procedure vet`
+// ---------------------------------------------------------------------------------------------
+
+fn vet_json(path: &Path) -> Output {
+    run(&["--json", "procedure", "vet", &path.display().to_string()])
+}
+
+fn oversized_static_v2_yaml() -> String {
+    let instructions = (0..16)
+        .map(|_| format!("      - {}\n", "i".repeat(1_000)))
+        .collect::<String>();
+    let items = (0..64)
+        .map(|index| {
+            format!(
+                "      - id: item-{index}-identifier\n        type: text\n        prompt: {}\n        required: true\n        max_length: 1\n",
+                "p".repeat(300),
+            )
+        })
+        .collect::<String>();
+    format!(
+        "schema: podway.procedure/v2\nid: cli-vet-budget\nversion: \"1\"\nname: CLI vet budget\npurpose: Prove the standalone route runs complete resource-budget vetting.\nnode_definitions:\n  work:\n    type: action\n    title: {}\n    intent: {}\n    description: {}\n    instructions:\n{instructions}    items:\n{items}graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n",
+        "t".repeat(120),
+        "n".repeat(300),
+        "d".repeat(1_000),
+    )
+}
+
+#[test]
+fn v2grf002_a_clean_document_passes_the_standalone_vet_without_writing() {
+    let fixture = FixtureDirectory::new("vet-clean");
+    let path = fixture.write("clean.yaml", MINIMAL_V2_YAML);
+    let before = identity(&path);
+
+    let output = vet_json(&path);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.vet");
+
+    let result = &envelope["result"];
+    assert_eq!(result["schema"], "podway.procedure-diagnostics-result/v1");
+    assert_eq!(result["operation"], "vet");
+    assert_eq!(result["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(result["file"], path.display().to_string());
+    assert_eq!(result["valid"], true);
+    assert_eq!(result["diagnostics"], serde_json::json!([]));
+    assert_eq!(result["diagnostics_truncated"], false);
+    assert_eq!(result["diagnostics_total"], 0);
+    assert_eq!(
+        result["digest"],
+        one_json(&format_json(&path))["result"]["target_digest"],
+        "vet and format must bind the same canonical Procedure digest"
+    );
+
+    let text = run(&["procedure", "vet", &path.display().to_string()]);
+    assert_eq!(text.status.code(), Some(0), "{text:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&text.stdout),
+        format!("{}: graph vetting passed\n", path.display())
+    );
+    assert!(text.stderr.is_empty());
+
+    let repeated = one_json(&vet_json(&path));
+    assert_eq!(
+        repeated["result"], *result,
+        "the result must be deterministic"
+    );
+    assert_eq!(
+        identity(&path),
+        before,
+        "vet must not alter the source file"
+    );
+    assert_eq!(entry_names(&fixture.root), vec!["clean.yaml".to_owned()]);
+}
+
+#[test]
+fn v2grf002_a_validated_graph_rejection_keeps_its_digest_and_vet_identity() {
+    let fixture = FixtureDirectory::new("vet-graph-error");
+    let source = MINIMAL_V2_YAML
+        .replace(
+            "graph:\n",
+            "  stranded:\n    type: action\n    title: Stranded\n    intent: Remain unreachable.\ngraph:\n",
+        )
+        .replace(
+            "      terminal: true\n",
+            "      terminal: true\n    - id: stranded\n      use: stranded\n      terminal: true\n",
+        );
+    let path = fixture.write("unreachable.yaml", &source);
+
+    let output = vet_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["command"], "procedure.vet");
+    let result = &envelope["result"];
+    assert_eq!(result["operation"], "vet");
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["diagnostics_total"], 1);
+    assert_eq!(result["diagnostics_truncated"], false);
+    assert!(
+        result["digest"].as_str().is_some(),
+        "a structurally validated graph retains its digest: {result}"
+    );
+    let diagnostic = &result["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "UNREACHABLE_GRAPH_NODE");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["schema"], "podway.procedure/v2");
+    assert_eq!(diagnostic["source_path"], path.display().to_string());
+    assert!(diagnostic["location"]["line"].as_u64().is_some());
+}
+
+#[test]
+fn v2grf002_the_standalone_vet_exposes_resource_budget_rejections() {
+    let fixture = FixtureDirectory::new("vet-budget-error");
+    let path = fixture.write("oversized.yaml", &oversized_static_v2_yaml());
+
+    let output = vet_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["command"], "procedure.vet");
+    let result = &envelope["result"];
+    assert_eq!(result["operation"], "vet");
+    assert_eq!(result["valid"], false);
+    assert!(result["digest"].as_str().is_some());
+    assert!(result["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "NEXT_STATIC_BUDGET_EXCEEDED")
+    }));
+}
+
+#[test]
+fn v2grf002_a_validation_failure_stops_before_vet_and_has_no_digest() {
+    let fixture = FixtureDirectory::new("vet-invalid");
+    let path = fixture.write(
+        "invalid.yaml",
+        &MINIMAL_V2_YAML.replace("      use: work\n", "      use: absent\n"),
+    );
+
+    let output = vet_json(&path);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["command"], "procedure.vet");
+    let result = &envelope["result"];
+    assert_eq!(result["operation"], "vet");
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["diagnostics_total"], 1);
+    assert!(result.get("digest").is_none());
+    assert_ne!(result["diagnostics"][0]["code"], "UNREACHABLE_GRAPH_NODE");
+}
+
+#[test]
+fn v2grf002_v1_and_missing_inputs_keep_the_existing_process_failure_contracts() {
+    let fixture = FixtureDirectory::new("vet-process-errors");
+    let v1 = fixture.write("v1.yaml", V1_YAML);
+
+    let unsupported = vet_json(&v1);
+    assert_eq!(unsupported.status.code(), Some(1), "{unsupported:?}");
+    let envelope = one_json(&unsupported);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.vet");
+    assert_eq!(envelope["code"], "PROCEDURE_SCHEMA_UNSUPPORTED");
+    assert_eq!(envelope["exit_code"], 1);
+    assert_eq!(envelope["retryable"], false);
+
+    let missing = vet_json(&fixture.root.join("absent.yaml"));
+    assert_eq!(missing.status.code(), Some(1), "{missing:?}");
+    let envelope = one_json(&missing);
+    assert_eq!(envelope["schema"], "podway.error/v1");
+    assert_eq!(envelope["command"], "procedure.vet");
+    assert_eq!(envelope["code"], "PROCEDURE_NOT_FOUND");
+    assert_eq!(envelope["exit_code"], 1);
+}
+
+#[test]
+fn v2grf002_quiet_vet_reports_only_through_the_exit_code() {
+    let fixture = FixtureDirectory::new("vet-quiet");
+    let path = fixture.write("clean.yaml", MINIMAL_V2_YAML);
+    let output = run(&["--quiet", "procedure", "vet", &path.display().to_string()]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }
 
 // ---------------------------------------------------------------------------------------------

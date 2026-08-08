@@ -11,6 +11,7 @@ use thiserror::Error;
 
 mod parser;
 mod procedure_v2_authoring;
+mod procedure_v2_budget;
 mod procedure_v2_canonical;
 mod procedure_v2_check;
 mod procedure_v2_convert;
@@ -37,6 +38,7 @@ pub use parser::{
     parse_procedure_v1_with_limits, parse_procedure_yaml, parse_workspace_config_v1,
     parse_workspace_config_v1_with_limits, sniff_procedure_schema,
 };
+pub use procedure_v2_budget::{NEXT_STATIC_BUDGET, READBACK_BUDGET};
 pub use procedure_v2_check::{ProcedureCheckReport, check_procedure_v2};
 pub use procedure_v2_convert::{ConvertedProcedureV2, convert_procedure_v1_to_v2};
 pub use procedure_v2_diagnostics::{

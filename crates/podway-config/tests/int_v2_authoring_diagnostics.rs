@@ -1002,8 +1002,8 @@ fn provable_recipes() -> Vec<(&'static str, String)> {
     ]
 }
 
-/// The recipes whose mutation validate admits, because deciding them needs a path through the
-/// graph. Each is V2GRF-001/V2GRF-002's, and each stays `implementation_status: planned`.
+/// The recipes whose mutation validate admits, because deciding them belongs to the graph vet
+/// stage rather than closed-reference validation.
 fn vet_deferred_documents() -> Vec<(&'static str, String)> {
     vec![
         (

@@ -37,6 +37,7 @@ use podway_config::{
     ScaffoldTemplate, check_procedure_v2, config_error_diagnostic, convert_procedure_v1_to_v2,
     finalize_diagnostics, format_procedure_v2, lint_procedure_v2, parse_procedure_document,
     parse_procedure_v1, scaffold_procedure_v2, sniff_procedure_schema, validate_procedure_v2,
+    vet_procedure_v2,
 };
 use podway_core::{
     AttemptId, PROCEDURE_SCHEMA_V2, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId,
@@ -398,6 +399,10 @@ enum ProcedureCommand {
         #[arg(long, action = ArgAction::SetTrue, conflicts_with = "check")]
         write: bool,
     },
+    Vet {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
     Lint {
         #[arg(value_name = "FILE")]
         file: PathBuf,
@@ -556,6 +561,9 @@ impl Command {
             Self::Procedure {
                 command: ProcedureCommand::Format { .. },
             } => "procedure.format",
+            Self::Procedure {
+                command: ProcedureCommand::Vet { .. },
+            } => "procedure.vet",
             Self::Procedure {
                 command: ProcedureCommand::Lint { .. },
             } => "procedure.lint",
@@ -1150,6 +1158,7 @@ fn parse_failure_command_context_from_matches(
                 ("validate", "procedure.validate"),
                 ("show", "procedure.show"),
                 ("format", "procedure.format"),
+                ("vet", "procedure.vet"),
                 ("lint", "procedure.lint"),
                 // The nested table maps `podway procedure <word>`; the bare `check` word is the
                 // top-level `item.check` arm below and is deliberately left alone.
@@ -2971,6 +2980,9 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         ProcedureCommand::Format { file, check, write } => {
             return execute_procedure_format(file, *check, *write);
         }
+        ProcedureCommand::Vet { file } => {
+            return execute_procedure_vet(file);
+        }
         ProcedureCommand::Lint {
             file,
             warnings_as_errors,
@@ -3041,6 +3053,7 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
             LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(name)
         })?,
         ProcedureCommand::Format { .. }
+        | ProcedureCommand::Vet { .. }
         | ProcedureCommand::Lint { .. }
         | ProcedureCommand::Check { .. }
         | ProcedureCommand::Scaffold { .. }
@@ -3415,6 +3428,113 @@ fn procedure_format_diagnostics(
     local_result_v2(PROCEDURE_FORMAT_COMMAND, result, text, 1)
 }
 
+/// The route every `procedure vet` result reports under.
+const PROCEDURE_VET_COMMAND: &str = "procedure.vet";
+
+/// Runs mandatory graph-wide analysis over a validated Procedure v2 document.
+///
+/// Vet is unconditionally read-only. Parsing or closed-reference validation stops the pipeline
+/// with that single diagnostic; a validated model always carries its digest, including when graph
+/// analysis rejects it. Every vet finding is an error, so no warning policy is part of this route.
+fn execute_procedure_vet(file: &Path) -> Result<RunResult, LocalFailure> {
+    const NAME: &str = PROCEDURE_VET_COMMAND;
+
+    let opened = open_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
+    let source = std::str::from_utf8(&opened.bytes).map_err(|_| {
+        LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
+    })?;
+    let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
+        ProcedureFormatV1::Json
+    } else {
+        ProcedureFormatV1::Yaml
+    };
+    let source_path = file.display().to_string();
+
+    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V1) {
+        return Err(procedure_vet_schema_failure());
+    }
+
+    let context = AuthoringContext::new(&source_path, source, format);
+    let parsed = match parse_procedure_document(source.as_bytes(), format) {
+        Ok(ParsedProcedure::V2(parsed)) => parsed,
+        Ok(ParsedProcedure::V1(_)) => return Err(procedure_vet_schema_failure()),
+        Err(error) => {
+            return Ok(procedure_vet_diagnostics(
+                &source_path,
+                None,
+                AuthoringStage::Validate,
+                vec![config_error_diagnostic(&error, &context)],
+            ));
+        }
+    };
+    let validated = match validate_procedure_v2(parsed) {
+        Ok(validated) => validated,
+        Err(error) => {
+            return Ok(procedure_vet_diagnostics(
+                &source_path,
+                None,
+                AuthoringStage::Validate,
+                vec![config_error_diagnostic(&error, &context)],
+            ));
+        }
+    };
+
+    let findings = vet_procedure_v2(&validated, &context);
+    Ok(procedure_vet_diagnostics(
+        &source_path,
+        Some(validated.digest()),
+        AuthoringStage::Vet,
+        findings,
+    ))
+}
+
+fn procedure_vet_schema_failure() -> LocalFailure {
+    LocalFailure::catalog(
+        "PROCEDURE_SCHEMA_UNSUPPORTED",
+        "procedure vet requires a podway.procedure/v2 document; run podway procedure convert first",
+        PROCEDURE_VET_COMMAND,
+    )
+}
+
+fn procedure_vet_diagnostics(
+    source_path: &str,
+    digest: Option<&Sha256Digest>,
+    stage: AuthoringStage,
+    diagnostics: Vec<podway_core::AuthoringDiagnostic>,
+) -> RunResult {
+    let report = finalize_diagnostics(
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| (stage, diagnostic))
+            .collect(),
+    );
+    let text = if report.diagnostics().is_empty() {
+        format!("{source_path}: graph vetting passed\n")
+    } else {
+        render_authoring_diagnostics(report.diagnostics())
+    };
+    let Value::Object(mut result) = json!({
+        "schema": "podway.procedure-diagnostics-result/v1",
+        "operation": "vet",
+        "procedure_schema": PROCEDURE_SCHEMA_V2,
+        "file": source_path,
+        "valid": report.valid(),
+        "diagnostics": report.diagnostics(),
+        "diagnostics_truncated": report.truncated(),
+        "diagnostics_total": report.total(),
+    }) else {
+        unreachable!("the static diagnostics result is a JSON object");
+    };
+    if let Some(digest) = digest {
+        result.insert(
+            "digest".to_owned(),
+            Value::String(digest.as_str().to_owned()),
+        );
+    }
+    let exit_code = i32::from(!report.valid());
+    local_result_v2(PROCEDURE_VET_COMMAND, result, text, exit_code)
+}
+
 /// The route every `procedure lint` result reports under, named once so the two result builders
 /// below cannot disagree with the route the failure paths use.
 const PROCEDURE_LINT_COMMAND: &str = "procedure.lint";
@@ -3571,9 +3691,8 @@ const PROCEDURE_CHECK_COMMAND: &str = "procedure.check";
 /// same constructor `format --check` uses, so the two commands can never disagree about whether a
 /// file has drifted or about where.
 ///
-/// The vet stage is shared with `procedure vet`: V2GRF-001 supplies structural graph rules and
-/// V2GRF-002 adds the wire-budget proofs before the standalone route becomes executable. Nothing
-/// about this aggregate command changes when that remaining rule set lands.
+/// The vet stage is shared with `procedure vet`: it includes the structural graph rules and
+/// wire-budget proofs, so the aggregate and standalone commands cannot disagree.
 ///
 /// Only the absence of a *model* stops the pipeline. A document that parses and validates is
 /// vetted and linted even when it has drifted or cannot be rendered at all, because a stale format
@@ -5446,6 +5565,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "procedure.format" => {
             "Usage:\n  podway procedure format <file> [--check] [--write]\n\nRenders a Procedure v2 document in canonical authoring form on stdout. --check\nreports drift and writes nothing; --write replaces the named file atomically.\n\nExample:\n  podway procedure format .podway/procedures/custom.yaml"
+        }
+        "procedure.vet" => {
+            "Usage:\n  podway procedure vet <file>\n\nRuns mandatory graph-wide semantic and resource-budget checks over a Procedure\nv2 document without writing anything.\n\nExample:\n  podway procedure vet .podway/procedures/custom.yaml"
         }
         "procedure.lint" => {
             "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v2 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"

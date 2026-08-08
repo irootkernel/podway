@@ -2,8 +2,8 @@
 //!
 //! Vet receives a closed-reference-validated model. It therefore owns only facts that require a
 //! path through the complete graph: reachability, terminal-route existence, the advance-only cycle
-//! rule, assessment coverage, and the three dominance uses (evidence, declared rework, and goal
-//! assessment). V2GRF-002 extends the same pass with the two wire-budget proofs.
+//! rule, assessment coverage, the three dominance uses (evidence, declared rework, and goal
+//! assessment), and the two per-placement wire-budget proofs.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,6 +13,9 @@ use podway_core::{
 
 use crate::procedure_v2_authoring::{
     definition_path, node_path, placement_definition_id, placement_evidence_from,
+};
+use crate::procedure_v2_budget::{
+    NEXT_STATIC_BUDGET, READBACK_BUDGET, exceeds_budget, placement_budget,
 };
 use crate::procedure_v2_diagnostics::{AuthoringContext, diagnostic_hint};
 use crate::procedure_v2_document::{AuthoringValue, authoring_document_value};
@@ -72,6 +75,7 @@ impl<'a> Vet<'a, '_> {
         self.assessment_coverage();
         self.goal_assessment_dominance();
         self.evidence_rules();
+        self.resource_budgets();
         self.advance_only_cycles();
         self.rework_dominance();
 
@@ -331,6 +335,54 @@ impl<'a> Vet<'a, '_> {
                 .with_node_definition_id(placement_definition_id(placement))
                 .with_related_graph_node_ids(related);
             self.findings.push(finding);
+        }
+    }
+
+    fn resource_budgets(&mut self) {
+        for node in 0..self.graph.node_count() {
+            let Some(placement) = self.graph.placement(node) else {
+                continue;
+            };
+            let budget = placement_budget(self.parsed, placement);
+            let graph_node_id = placement.id().as_str().to_owned();
+            let definition_id = placement_definition_id(placement).to_owned();
+            let related_sources: Vec<String> = placement_evidence_from(placement)
+                .into_iter()
+                .flat_map(|references| references.entries())
+                .map(|reference| reference.source_node().as_str().to_owned())
+                .collect();
+
+            if exceeds_budget(budget.next_static, NEXT_STATIC_BUDGET) {
+                let finding = self
+                    .diagnostic(
+                        AuthoringDiagnosticCode::NextStaticBudgetExceeded,
+                        &node_path(node),
+                        format!(
+                            "Graph node `{graph_node_id}` charges {} bytes of procedure-static next content, over the {NEXT_STATIC_BUDGET}-byte budget.",
+                            budget.next_static,
+                        ),
+                    )
+                    .with_graph_node_id(graph_node_id.clone())
+                    .with_node_definition_id(definition_id.clone());
+                self.findings.push(finding);
+            }
+
+            if exceeds_budget(budget.readback, READBACK_BUDGET) {
+                let path = node_path(node).child_key("evidence_from");
+                let finding = self
+                    .diagnostic(
+                        AuthoringDiagnosticCode::ReadbackBudgetExceeded,
+                        &path,
+                        format!(
+                            "Graph node `{graph_node_id}` charges {} bytes of worst-case evidence read-back, over the {READBACK_BUDGET}-byte budget.",
+                            budget.readback,
+                        ),
+                    )
+                    .with_graph_node_id(graph_node_id)
+                    .with_node_definition_id(definition_id)
+                    .with_related_graph_node_ids(related_sources);
+                self.findings.push(finding);
+            }
         }
     }
 

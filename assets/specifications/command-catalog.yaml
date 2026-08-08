@@ -681,7 +681,7 @@ commands:
   - podway.procedure-source-result/v1
   - podway.procedure-diagnostics-result/v1
 - name: procedure.vet
-  availability: reserved_contract
+  availability: executable
   cli:
   - procedure
   - vet

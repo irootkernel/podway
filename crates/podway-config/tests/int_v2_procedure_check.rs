@@ -14,8 +14,6 @@
 //! bound, and the proof that check's drift finding is byte-identical to `format --check`'s — guards
 //! the merge itself.
 
-use std::collections::BTreeSet;
-
 use podway_config::{
     AuthoringContext, FormatRequest, ParsedProcedure, ProcedureCheckReport,
     ProcedureDocumentFormat, ValidatedProcedureV2, check_procedure_v2, format_procedure_v2,
@@ -131,6 +129,26 @@ fn inline_comment_yaml() -> String {
     MINIMAL_YAML.replace("name: Minimal\n", "name: Minimal # the smallest one\n")
 }
 
+fn oversized_static_yaml() -> String {
+    let instructions = (0..16)
+        .map(|_| format!("      - {}\n", "i".repeat(1_000)))
+        .collect::<String>();
+    let items = (0..64)
+        .map(|index| {
+            format!(
+                "      - id: item-{index}-identifier\n        type: text\n        prompt: {}\n        required: true\n        max_length: 1\n",
+                "p".repeat(300),
+            )
+        })
+        .collect::<String>();
+    format!(
+        "schema: podway.procedure/v2\nid: check-budget\nversion: \"1\"\nname: Check budget\npurpose: Prove check carries the complete vet rule set.\nnode_definitions:\n  work:\n    type: action\n    title: {}\n    intent: {}\n    description: {}\n    instructions:\n{instructions}    items:\n{items}graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n",
+        "t".repeat(120),
+        "n".repeat(300),
+        "d".repeat(1_000),
+    )
+}
+
 /// [`MINIMAL_YAML`] with a dangling placement reference: parses, fails closed-reference validation.
 fn invalid_yaml() -> String {
     MINIMAL_YAML.replace("      use: work\n", "      use: absent\n")
@@ -199,8 +217,8 @@ fn serialized(diagnostics: &[AuthoringDiagnostic]) -> Vec<Value> {
         .collect()
 }
 
-/// The nine structural graph codes V2GRF-001 adds to the already-wired vet stage.
-const STRUCTURAL_VET_SUBSET: &[AuthoringDiagnosticCode] = &[
+/// The complete graph-vet code set delivered by V2GRF-001 and V2GRF-002.
+const VET_SUBSET: &[AuthoringDiagnosticCode] = &[
     AuthoringDiagnosticCode::UnreachableGraphNode,
     AuthoringDiagnosticCode::NoTerminalPath,
     AuthoringDiagnosticCode::GoalAssessmentOptionUnmapped,
@@ -210,10 +228,6 @@ const STRUCTURAL_VET_SUBSET: &[AuthoringDiagnosticCode] = &[
     AuthoringDiagnosticCode::SkippableEvidenceSource,
     AuthoringDiagnosticCode::GraphCycleInvalid,
     AuthoringDiagnosticCode::ReworkTargetNotDominating,
-];
-
-/// The two section 10.4 proofs that remain deferred to V2GRF-002.
-const DEFERRED_BUDGET_SUBSET: &[AuthoringDiagnosticCode] = &[
     AuthoringDiagnosticCode::ReadbackBudgetExceeded,
     AuthoringDiagnosticCode::NextStaticBudgetExceeded,
 ];
@@ -406,23 +420,23 @@ fn v2aut005_a_v1_document_is_reported_as_a_schema_violation_with_no_digest() {
 // 2. The vet seam
 // ---------------------------------------------------------------------------------------------
 
-/// The vet stage now carries structural rules while its two budget rules remain deferred.
+/// The check pipeline exposes all structural and budget findings produced by vet.
 #[test]
-fn v2grf001_the_check_pipeline_runs_structural_vet_but_not_budget_rules() {
+fn v2grf002_the_check_pipeline_runs_the_complete_vet_rule_set() {
     for source in [CLEAN_YAML, MINIMAL_YAML] {
         let validated = admit(source);
         assert_eq!(
             vet_procedure_v2(&validated, &context(source)),
             Vec::new(),
-            "both fixtures are structurally vetted clean",
+            "both fixtures are vetted clean",
         );
     }
 
-    let structural: BTreeSet<&str> = STRUCTURAL_VET_SUBSET
+    let codes_owned: std::collections::BTreeSet<&str> = VET_SUBSET
         .iter()
         .map(|code| AuthoringDiagnosticCode::as_str(*code))
         .collect();
-    assert_eq!(structural.len(), 9, "V2GRF-001 owns nine codes");
+    assert_eq!(codes_owned.len(), 11, "vet owns eleven blocking codes");
 
     let source = MINIMAL_YAML.replace(
         "    - id: only\n",
@@ -433,26 +447,10 @@ fn v2grf001_the_check_pipeline_runs_structural_vet_but_not_budget_rules() {
         "check must expose the structural vet findings"
     );
 
-    let deferred: BTreeSet<&str> = DEFERRED_BUDGET_SUBSET
-        .iter()
-        .map(|code| AuthoringDiagnosticCode::as_str(*code))
-        .collect();
-    for source in [
-        CLEAN_YAML.to_owned(),
-        MINIMAL_YAML.to_owned(),
-        drifted_yaml(),
-        inline_comment_yaml(),
-        invalid_yaml(),
-        finding_heavy_document(),
-    ] {
-        let report = check(&source);
-        for code in codes(&report) {
-            assert!(
-                !deferred.contains(code),
-                "{code} remains reserved for V2GRF-002",
-            );
-        }
-    }
+    assert!(
+        codes(&check(&oversized_static_yaml())).contains(&"NEXT_STATIC_BUDGET_EXCEEDED"),
+        "check must carry the resource-budget half of vet as well"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

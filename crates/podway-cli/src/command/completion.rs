@@ -338,6 +338,12 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
+        words: "procedure vet",
+        flags: DISPLAY_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
         words: "procedure lint",
         flags: &[&JSON, &NO_COLOR, &QUIET, &WARNINGS_AS_ERRORS],
         values: "",

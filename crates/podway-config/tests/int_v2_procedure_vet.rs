@@ -121,6 +121,59 @@ fn assert_has(source: &str, expected: AuthoringDiagnosticCode) {
     );
 }
 
+fn oversized_static_document() -> String {
+    let instructions = (0..16)
+        .map(|_| format!("      - {}\n", "i".repeat(1_000)))
+        .collect::<String>();
+    let items = (0..64)
+        .map(|index| {
+            format!(
+                "      - id: item-{index}-identifier\n        type: text\n        prompt: {}\n        required: true\n        max_length: 1\n",
+                "p".repeat(300),
+            )
+        })
+        .collect::<String>();
+    format!(
+        "schema: podway.procedure/v2\nid: static-budget\nversion: \"1\"\nname: Static budget\npurpose: Exercise the complete procedure-static next accounting.\nnode_definitions:\n  work:\n    type: action\n    title: {}\n    intent: {}\n    description: {}\n    instructions:\n{instructions}    items:\n{items}graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n",
+        "t".repeat(120),
+        "n".repeat(300),
+        "d".repeat(1_000),
+    )
+}
+
+fn readback_document(selector: Option<&str>, required: bool, unreachable_consumer: bool) -> String {
+    let evidence = match selector {
+        Some(item) => format!(
+            "        - node: source\n          required: {required}\n          items:\n            - {item}\n"
+        ),
+        None => format!("        - node: source\n          required: {required}\n"),
+    };
+    let source_outcome = if unreachable_consumer {
+        "      terminal: true\n"
+    } else {
+        "      next: consumer\n"
+    };
+    format!(
+        "schema: podway.procedure/v2\nid: readback-budget\nversion: \"1\"\nname: Readback budget\npurpose: Exercise worst-case selected item read-back accounting.\nnode_definitions:\n  producer:\n    type: action\n    title: Producer\n    intent: Record bounded source values.\n    items:\n      - id: huge-list\n        type: list\n        prompt: Record the list.\n        required: false\n        max_items: 200\n        max_item_length: 1000\n      - id: small-confirm\n        type: confirm\n        prompt: Confirm the result.\n        required: false\n  consumer:\n    type: action\n    title: Consumer\n    intent: Read the selected source values.\ngraph:\n  entry: source\n  nodes:\n    - id: source\n      use: producer\n{source_outcome}    - id: consumer\n      use: consumer\n      evidence_from:\n{evidence}      terminal: true\n"
+    )
+}
+
+fn exact_readback_boundary_document(last_item_max_length: u32) -> String {
+    let maxima = [16_384, 16_384, 16_384, 16_384, 16_384, last_item_max_length];
+    let items = maxima
+        .iter()
+        .enumerate()
+        .map(|(index, maximum)| {
+            format!(
+                "      - id: text-{index}\n        type: text\n        prompt: Value {index}.\n        required: false\n        max_length: {maximum}\n"
+            )
+        })
+        .collect::<String>();
+    format!(
+        "schema: podway.procedure/v2\nid: readback-boundary\nversion: \"1\"\nname: Readback boundary\npurpose: Pin exact per-placement read-back accounting at the accepted limit.\nnode_definitions:\n  producer:\n    type: action\n    title: Producer\n    intent: Record six bounded text values.\n    items:\n{items}  consumer:\n    type: action\n    title: Consumer\n    intent: Read every recorded source value.\ngraph:\n  entry: source\n  nodes:\n    - id: source\n      use: producer\n      next: consumer\n    - id: consumer\n      use: consumer\n      evidence_from:\n        - node: source\n      terminal: true\n"
+    )
+}
+
 #[test]
 fn v2grf001_accepts_a_dominating_assessment_and_an_unbounded_declared_rework_cycle() {
     assert_eq!(vet(BASE), Vec::new());
@@ -298,4 +351,79 @@ fn v2grf001_findings_are_byte_stable_and_sorted_by_source_position() {
             right.field(),
         )
     }));
+}
+
+#[test]
+fn v2grf002_rejects_a_placement_whose_complete_static_next_content_is_too_large() {
+    let source = oversized_static_document();
+    let finding = vet(&source)
+        .into_iter()
+        .find(|finding| finding.code() == AuthoringDiagnosticCode::NextStaticBudgetExceeded)
+        .expect("the combined static fields and suggestions must exceed the placement budget");
+    assert_eq!(finding.graph_node_id(), Some("work"));
+    assert_eq!(finding.node_definition_id(), Some("work"));
+    assert_eq!(finding.field(), "graph.nodes[work]");
+}
+
+#[test]
+fn v2grf002_readback_charges_all_items_without_a_selector_and_only_selected_items_with_one() {
+    let all_items = readback_document(None, true, false);
+    let finding = vet(&all_items)
+        .into_iter()
+        .find(|finding| finding.code() == AuthoringDiagnosticCode::ReadbackBudgetExceeded)
+        .expect("a 200 by 1000 list cannot fit in read-back");
+    assert_eq!(finding.graph_node_id(), Some("consumer"));
+    assert_eq!(finding.node_definition_id(), Some("consumer"));
+    assert_eq!(finding.field(), "graph.nodes[consumer].evidence_from");
+    assert_eq!(finding.related_graph_node_ids(), ["source"]);
+
+    let selected = readback_document(Some("small-confirm"), true, false);
+    assert!(
+        !codes(&selected).contains(&"READBACK_BUDGET_EXCEEDED"),
+        "a selector excludes the unselected maximal list value"
+    );
+}
+
+#[test]
+fn v2grf002_accepts_an_exact_readback_budget_and_rejects_the_next_authored_scalar() {
+    // Required array/metadata fields charge 4,604 bytes. Each text item charges 608 bytes plus
+    // six times max_length. Six maxima summing to 86,006 therefore charge exactly 524,288.
+    let exact = exact_readback_boundary_document(4_086);
+    assert!(
+        !codes(&exact).contains(&"READBACK_BUDGET_EXCEEDED"),
+        "equality with READBACK_BUDGET must be accepted"
+    );
+
+    let over = exact_readback_boundary_document(4_087);
+    assert_has(&over, AuthoringDiagnosticCode::ReadbackBudgetExceeded);
+}
+
+#[test]
+fn v2grf002_optional_and_unreachable_readback_is_still_charged_at_its_worst_case() {
+    let optional = readback_document(None, false, false);
+    assert_has(&optional, AuthoringDiagnosticCode::ReadbackBudgetExceeded);
+
+    let unreachable = readback_document(None, false, true);
+    let findings = vet(&unreachable);
+    assert!(findings.iter().any(|finding| {
+        finding.code() == AuthoringDiagnosticCode::UnreachableGraphNode
+            && finding.graph_node_id() == Some("consumer")
+    }));
+    assert!(findings.iter().any(|finding| {
+        finding.code() == AuthoringDiagnosticCode::ReadbackBudgetExceeded
+            && finding.graph_node_id() == Some("consumer")
+    }));
+}
+
+#[test]
+fn v2grf002_valid_declared_rework_does_not_create_a_cumulative_budget() {
+    assert!(
+        !codes(BASE).iter().any(|code| {
+            matches!(
+                *code,
+                "NEXT_STATIC_BUDGET_EXCEEDED" | "READBACK_BUDGET_EXCEEDED"
+            )
+        }),
+        "vet charges one immutable placement projection, never a traversal count"
+    );
 }

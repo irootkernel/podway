@@ -135,8 +135,7 @@ pub fn check_procedure_v2(request: FormatRequest<'_>) -> ProcedureCheckReport {
         ),
     }
 
-    // S4. V2GRF-001 supplies the structural rules; V2GRF-002 adds the two wire-budget proofs
-    // through this same call without changing the aggregate pipeline.
+    // S4. Vet supplies the structural and wire-budget rules through this single call.
     entries.extend(
         vet_procedure_v2(&validated, &context)
             .into_iter()

@@ -160,6 +160,7 @@ V2_ROUTE_DELTA = {
 V2_EXECUTABLE_ROUTES = frozenset(
     {
         "procedure.format",
+        "procedure.vet",
         "procedure.lint",
         "procedure.check",
         "procedure.scaffold",
