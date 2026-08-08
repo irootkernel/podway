@@ -26,3 +26,5 @@ mod int_v2_procedure_lint;
 mod int_v2_procedure_scaffold;
 #[path = "int_v2_procedure_validate.rs"]
 mod int_v2_procedure_validate;
+#[path = "int_v2_procedure_vet.rs"]
+mod int_v2_procedure_vet;

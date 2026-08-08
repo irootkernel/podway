@@ -10,6 +10,7 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 mod parser;
+mod procedure_v2_authoring;
 mod procedure_v2_canonical;
 mod procedure_v2_check;
 mod procedure_v2_convert;

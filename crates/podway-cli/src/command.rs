@@ -3571,9 +3571,9 @@ const PROCEDURE_CHECK_COMMAND: &str = "procedure.check";
 /// same constructor `format --check` uses, so the two commands can never disagree about whether a
 /// file has drifted or about where.
 ///
-/// The vet stage is wired and empty: its rule set arrives with V2GRF-001 and V2GRF-002, and
-/// `procedure vet` stays a reserved contract route until then. Nothing about this command changes
-/// on the day the rules land.
+/// The vet stage is shared with `procedure vet`: V2GRF-001 supplies structural graph rules and
+/// V2GRF-002 adds the wire-budget proofs before the standalone route becomes executable. Nothing
+/// about this aggregate command changes when that remaining rule set lands.
 ///
 /// Only the absence of a *model* stops the pipeline. A document that parses and validates is
 /// vetted and linted even when it has drifted or cannot be rendered at all, because a stale format

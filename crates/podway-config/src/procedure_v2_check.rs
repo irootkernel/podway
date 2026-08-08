@@ -135,8 +135,8 @@ pub fn check_procedure_v2(request: FormatRequest<'_>) -> ProcedureCheckReport {
         ),
     }
 
-    // S4. Empty until V2GRF-001 and V2GRF-002; wired now so the aggregate gate needs no change on
-    // the day it stops being empty.
+    // S4. V2GRF-001 supplies the structural rules; V2GRF-002 adds the two wire-budget proofs
+    // through this same call without changing the aggregate pipeline.
     entries.extend(
         vet_procedure_v2(&validated, &context)
             .into_iter()

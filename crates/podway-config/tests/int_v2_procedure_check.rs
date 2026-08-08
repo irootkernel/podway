@@ -199,24 +199,23 @@ fn serialized(diagnostics: &[AuthoringDiagnostic]) -> Vec<Value> {
         .collect()
 }
 
-/// The graph-semantic error codes section 11.3 reserves for vet, and which no other authoring
-/// stage can produce.
-///
-/// Derived, not guessed: `tests/fixtures/v2/graphs/negative-cases.json` splits the graph negative
-/// recipes into ten parse/validate cases and nine vet cases, and every code below needs the
-/// reachability, dominance, or budget analysis that V2GRF-001/V2GRF-002 own.
-/// `NEXT_STATIC_BUDGET_EXCEEDED` joins them from section 11.3's own list, which the recipe file
-/// does not enumerate.
-const VET_SUBSET: &[AuthoringDiagnosticCode] = &[
+/// The nine structural graph codes V2GRF-001 adds to the already-wired vet stage.
+const STRUCTURAL_VET_SUBSET: &[AuthoringDiagnosticCode] = &[
     AuthoringDiagnosticCode::UnreachableGraphNode,
     AuthoringDiagnosticCode::NoTerminalPath,
+    AuthoringDiagnosticCode::GoalAssessmentOptionUnmapped,
+    AuthoringDiagnosticCode::GoalAssessmentOutcomeUnreachable,
     AuthoringDiagnosticCode::GoalAssessmentNotDominatingTerminal,
     AuthoringDiagnosticCode::EvidenceSourceDoesNotDominateConsumer,
     AuthoringDiagnosticCode::SkippableEvidenceSource,
-    AuthoringDiagnosticCode::ReadbackBudgetExceeded,
-    AuthoringDiagnosticCode::NextStaticBudgetExceeded,
     AuthoringDiagnosticCode::GraphCycleInvalid,
     AuthoringDiagnosticCode::ReworkTargetNotDominating,
+];
+
+/// The two section 10.4 proofs that remain deferred to V2GRF-002.
+const DEFERRED_BUDGET_SUBSET: &[AuthoringDiagnosticCode] = &[
+    AuthoringDiagnosticCode::ReadbackBudgetExceeded,
+    AuthoringDiagnosticCode::NextStaticBudgetExceeded,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -407,29 +406,37 @@ fn v2aut005_a_v1_document_is_reported_as_a_schema_violation_with_no_digest() {
 // 2. The vet seam
 // ---------------------------------------------------------------------------------------------
 
-/// The vet stage is wired and contributes nothing yet.
-///
-/// Both halves matter. The hook is called with the validated model and the same context every other
-/// stage gets, so V2GRF-001 changes one function body and no caller; and until it does, no
-/// vet-owned code can appear in a check report, which is what keeps the reserved `procedure.vet`
-/// route honest.
+/// The vet stage now carries structural rules while its two budget rules remain deferred.
 #[test]
-fn v2aut005_the_vet_stage_is_wired_and_contributes_no_findings_yet() {
+fn v2grf001_the_check_pipeline_runs_structural_vet_but_not_budget_rules() {
     for source in [CLEAN_YAML, MINIMAL_YAML] {
         let validated = admit(source);
         assert_eq!(
             vet_procedure_v2(&validated, &context(source)),
             Vec::new(),
-            "the vet rule set arrives with V2GRF-001/V2GRF-002",
+            "both fixtures are structurally vetted clean",
         );
     }
 
-    let reserved: BTreeSet<&str> = VET_SUBSET
+    let structural: BTreeSet<&str> = STRUCTURAL_VET_SUBSET
         .iter()
         .map(|code| AuthoringDiagnosticCode::as_str(*code))
         .collect();
-    assert_eq!(reserved.len(), 9, "the vet subset is nine codes");
+    assert_eq!(structural.len(), 9, "V2GRF-001 owns nine codes");
 
+    let source = MINIMAL_YAML.replace(
+        "    - id: only\n",
+        "    - id: orphan\n      use: work\n      terminal: true\n    - id: only\n",
+    );
+    assert!(
+        codes(&check(&source)).contains(&"UNREACHABLE_GRAPH_NODE"),
+        "check must expose the structural vet findings"
+    );
+
+    let deferred: BTreeSet<&str> = DEFERRED_BUDGET_SUBSET
+        .iter()
+        .map(|code| AuthoringDiagnosticCode::as_str(*code))
+        .collect();
     for source in [
         CLEAN_YAML.to_owned(),
         MINIMAL_YAML.to_owned(),
@@ -441,8 +448,8 @@ fn v2aut005_the_vet_stage_is_wired_and_contributes_no_findings_yet() {
         let report = check(&source);
         for code in codes(&report) {
             assert!(
-                !reserved.contains(code),
-                "{code} is reserved for the vet stage, which has no rules yet",
+                !deferred.contains(code),
+                "{code} remains reserved for V2GRF-002",
             );
         }
     }
