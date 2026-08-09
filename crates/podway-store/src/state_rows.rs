@@ -1,6 +1,6 @@
 //! Authoritative v1 normalized session-row persistence and hydration.
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::{Value, json};
 
 use podway_core::{
@@ -41,7 +41,7 @@ pub(crate) fn load_workspace_state(
 }
 
 pub(crate) fn load_current_session(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
 ) -> Result<Option<SessionAggregateV1>, StoreErrorV1> {
     let session = transaction
         .query_row(
@@ -230,7 +230,7 @@ pub(crate) fn replace_current_session(
 }
 
 fn load_snapshot(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     snapshot_id: &str,
 ) -> Result<ProcedureSnapshotV1, StoreErrorV1> {
     let snapshot = transaction
@@ -307,7 +307,7 @@ pub(crate) fn persist_snapshot(
 }
 
 fn load_progress(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     session_id: &SessionId,
 ) -> Result<Vec<StageProgressV1>, StoreErrorV1> {
     let mut statement = transaction.prepare(
@@ -341,7 +341,7 @@ fn load_progress(
 }
 
 fn load_attempts(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     session_id: &SessionId,
     snapshot: &ProcedureSnapshotV1,
 ) -> Result<Vec<AttemptV1>, StoreErrorV1> {
@@ -394,7 +394,7 @@ fn load_attempts(
 }
 
 fn load_slots(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     attempt_id: &AttemptId,
     stage: &podway_core::StageSpecV1,
     started_at: UnixMillis,
@@ -466,7 +466,7 @@ fn load_slots(
 }
 
 fn load_blockers(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     attempt_id: &AttemptId,
 ) -> Result<Vec<BlockerV1>, StoreErrorV1> {
     let mut statement = transaction.prepare("SELECT blocker_id, reason, state, created_at_ms, resolved_at_ms FROM blockers WHERE attempt_id = ?1 ORDER BY created_at_ms, blocker_id").map_err(|error| storage(error, StoreRecordKindV1::Blocker))?;

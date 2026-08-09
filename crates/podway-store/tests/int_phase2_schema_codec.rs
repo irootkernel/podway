@@ -510,6 +510,52 @@ fn corrupt_v1_predecessor_is_rejected_without_advancing_the_schema()
 }
 
 #[test]
+fn migration_rejects_mismatched_identity_and_logical_corruption_before_commit()
+-> Result<(), Box<dyn std::error::Error>> {
+    for restore_predecessor in [
+        restore_schema_v1_shape as fn(&Connection) -> rusqlite::Result<()>,
+        restore_schema_v2_shape,
+    ] {
+        let mismatch = TempDir::new()?;
+        let connection = open_temp_database(&mismatch, &root(), &identity())?;
+        restore_predecessor(&connection)?;
+        let predecessor_state = logical_database_state(&connection)?;
+        drop(connection);
+
+        assert!(matches!(
+            opened_error(&mismatch, &root(), &other_identity()),
+            StoreErrorV1::StorageIntegrityV1 {
+                check: StoreIntegrityCheckV1::WorkspaceIdentity
+            }
+        ));
+        let raw = Connection::open(mismatch.path().join("state.sqlite3"))?;
+        assert_eq!(logical_database_state(&raw)?, predecessor_state);
+
+        let corrupt = TempDir::new()?;
+        let connection = open_temp_database(&corrupt, &root(), &identity())?;
+        insert_retained_v1_session(&connection)?;
+        restore_predecessor(&connection)?;
+        connection.execute(
+            "UPDATE procedure_snapshots SET digest = \
+             'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'",
+            [],
+        )?;
+        let predecessor_state = logical_database_state(&connection)?;
+        drop(connection);
+
+        assert!(matches!(
+            opened_error(&corrupt, &root(), &identity()),
+            StoreErrorV1::StorageIntegrityV1 {
+                check: StoreIntegrityCheckV1::SnapshotDigest
+            }
+        ));
+        let raw = Connection::open(corrupt.path().join("state.sqlite3"))?;
+        assert_eq!(logical_database_state(&raw)?, predecessor_state);
+    }
+    Ok(())
+}
+
+#[test]
 fn v2_to_v3_upgrade_rolls_back_and_rejects_corrupt_predecessors_without_changes()
 -> Result<(), Box<dyn std::error::Error>> {
     let rollback = TempDir::new()?;

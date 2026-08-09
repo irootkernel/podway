@@ -126,7 +126,7 @@ Dependencies: `V2CTR` and `V2MOD`.
 | `V2PLT-006` | Add bounded v2 protocol | Completed | Decode and serialize closed compatible bounded v2 envelopes. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-007` | Dispatch v2 daemon routes | Completed | Preserve sole-writer mutation and read-only authoring behavior. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-008` | Add v2 CLI surfaces | Completed | Provide grammar, JSON, human rendering, help, and completion. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
-| `V2PLT-009` | Gate development admission | Completed | Permit v2 dogfood only in explicitly isolated disposable development state. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
+| `V2PLT-009` | Gate development admission | Completed | Provide development-only admission eligibility for explicitly isolated disposable state. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 | `V2PLT-010` | Close persistence and protocol failures | Completed | Prove stale, duplicate, malformed, restart, storage, peer, and downgrade behavior. | [V2PLT plan](../todo/TODO-podway-v2-full-feature-ga.md#195-epic-v2plt-persistence-protocol-cli-and-admission) |
 
 ## V2RUN — Action Runtime

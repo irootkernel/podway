@@ -574,6 +574,22 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
                 .contains("Usage:")
         );
     }
+    let fixture = Fixture::new();
+    let replacement = fixture.run(&[
+        "--json".to_owned(),
+        "help".to_owned(),
+        "session.start_replace".to_owned(),
+    ]);
+    assert!(replacement.status.success(), "{replacement:?}");
+    let replacement_help = one_json(&replacement)["result"]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(replacement_help.contains(
+        "--goal <text> --criterion <id>=<statement>... [--actor <text>] --replace \
+         --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> \
+         [--dry-run] [--yes]"
+    ));
     for shell in ["bash", "zsh", "fish"] {
         let fixture = Fixture::new();
         let output = fixture.run(&["completions".to_owned(), shell.to_owned()]);

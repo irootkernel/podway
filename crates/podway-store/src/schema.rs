@@ -14,9 +14,7 @@ use podway_core::{
     CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1, ProcedureSnapshotId,
     ProcedureSnapshotV1, ProcedureSourceKindV1, ProcedureSourceLabelV1, Sha256Digest, UnixMillis,
 };
-use rusqlite::{
-    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
-};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -186,8 +184,10 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
             }
             initialize_empty_schema_v1(&mut connection, root, identity, options, now)?;
         }
-        SQLITE_SCHEMA_VERSION_V1 => migrate_schema_v1_to_v3(&mut connection, options, now)?,
-        SQLITE_SCHEMA_VERSION_V2 => migrate_schema_v3(&mut connection, options, now)?,
+        SQLITE_SCHEMA_VERSION_V1 => {
+            migrate_schema_v1_to_v3(&mut connection, identity, options, now)?
+        }
+        SQLITE_SCHEMA_VERSION_V2 => migrate_schema_v3(&mut connection, identity, options, now)?,
         SQLITE_SCHEMA_VERSION_V3 => {}
         found if found > SQLITE_SCHEMA_VERSION_CURRENT => {
             return Err(StoreErrorV1::NewerStateV1 {
@@ -375,7 +375,7 @@ pub(crate) fn verify_integrity_connection_v1(
 }
 
 fn verify_integrity_connection_inner_v1(
-    connection: &mut Connection,
+    connection: &Connection,
     expected_identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     mode: IntegrityModeV1,
@@ -776,30 +776,28 @@ fn verify_active_attempts_v1(connection: &Connection) -> Result<(), StoreErrorV1
     }
 }
 
-fn verify_normalized_session_v1(connection: &mut Connection) -> Result<(), StoreErrorV1> {
-    let transaction = connection.transaction().map_err(storage_error)?;
-    let session_count: i64 = transaction
+fn verify_normalized_session_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let session_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM task_sessions", [], |row| row.get(0))
         .map_err(storage_error)?;
     if !(0..=1).contains(&session_count) {
         return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
     }
 
-    verify_latest_attempt_cursors_v1(&transaction)?;
+    verify_latest_attempt_cursors_v1(connection)?;
     if session_count == 1 {
-        verify_active_session_cursor_v1(&transaction)?;
+        verify_active_session_cursor_v1(connection)?;
     }
 
-    load_current_session(&transaction).map_err(|error| match error {
+    load_current_session(connection).map_err(|error| match error {
         StoreErrorV1::StorageUnavailableV1 { .. } => error,
         _ => integrity_error(StoreIntegrityCheckV1::SessionCursor),
     })?;
-    drop(transaction);
     Ok(())
 }
 
-fn verify_latest_attempt_cursors_v1(transaction: &Transaction<'_>) -> Result<(), StoreErrorV1> {
-    let mut statement = transaction
+fn verify_latest_attempt_cursors_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let mut statement = connection
         .prepare(
             "SELECT p.session_id, p.stage_id, p.latest_attempt_number, p.latest_attempt_id, \
              (SELECT MAX(a.attempt_number) FROM attempts a WHERE a.session_id = p.session_id \
@@ -828,13 +826,13 @@ fn verify_latest_attempt_cursors_v1(transaction: &Transaction<'_>) -> Result<(),
     Ok(())
 }
 
-fn verify_active_session_cursor_v1(transaction: &Transaction<'_>) -> Result<(), StoreErrorV1> {
+fn verify_active_session_cursor_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
     let (session_id, lifecycle, active_stage_id, active_attempt_id): (
         String,
         String,
         Option<String>,
         Option<String>,
-    ) = transaction
+    ) = connection
         .query_row(
             "SELECT session_id, lifecycle, active_stage_id, active_attempt_id FROM task_sessions \
              WHERE singleton = 1",
@@ -842,14 +840,14 @@ fn verify_active_session_cursor_v1(transaction: &Transaction<'_>) -> Result<(), 
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(storage_error)?;
-    let current_count: i64 = transaction
+    let current_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM stage_progress WHERE session_id = ?1 AND progress_state = 'current'",
             [&session_id],
             |row| row.get(0),
         )
         .map_err(storage_error)?;
-    let active_count: i64 = transaction
+    let active_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM attempts WHERE session_id = ?1 AND lifecycle = 'active'",
             [&session_id],
@@ -864,7 +862,7 @@ fn verify_active_session_cursor_v1(transaction: &Transaction<'_>) -> Result<(), 
             else {
                 return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
             };
-            let matching_current: i64 = transaction
+            let matching_current: i64 = connection
                 .query_row(
                     "SELECT COUNT(*) FROM stage_progress WHERE session_id = ?1 AND stage_id = ?2 \
                      AND progress_state = 'current'",
@@ -872,7 +870,7 @@ fn verify_active_session_cursor_v1(transaction: &Transaction<'_>) -> Result<(), 
                     |row| row.get(0),
                 )
                 .map_err(storage_error)?;
-            let matching_attempt: i64 = transaction
+            let matching_attempt: i64 = connection
                 .query_row(
                     "SELECT COUNT(*) FROM attempts WHERE session_id = ?1 AND stage_id = ?2 \
                      AND attempt_id = ?3 AND lifecycle = 'active'",
@@ -1398,9 +1396,11 @@ fn migration_schema_statements_v3() -> Result<&'static str, StoreErrorV1> {
 
 fn migrate_schema_v1_to_v3(
     connection: &mut Connection,
+    identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
 ) -> Result<(), StoreErrorV1> {
+    let checked_at = now;
     let now = sqlite_integer_v1(now.get(), "migration timestamp")?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -1439,12 +1439,20 @@ fn migrate_schema_v1_to_v3(
     transaction
         .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V3)
         .map_err(storage_error)?;
+    verify_integrity_connection_inner_v1(
+        &transaction,
+        identity,
+        options,
+        IntegrityModeV1::Fast,
+        checked_at,
+    )?;
     options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
     transaction.commit().map_err(storage_error)
 }
 
 fn migrate_schema_v3(
     connection: &mut Connection,
+    identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
 ) -> Result<(), StoreErrorV1> {
@@ -1470,6 +1478,13 @@ fn migrate_schema_v3(
     transaction
         .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V3)
         .map_err(storage_error)?;
+    verify_integrity_connection_inner_v1(
+        &transaction,
+        identity,
+        options,
+        IntegrityModeV1::Fast,
+        now,
+    )?;
     options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
     transaction.commit().map_err(storage_error)
 }
