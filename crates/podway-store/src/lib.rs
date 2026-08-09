@@ -347,6 +347,11 @@ impl SqliteStoreOptionsV1 {
             StoreFailpointActionV1::ReturnError => Err(StoreErrorV1::StorageUnavailableV1 {
                 reason: StoreUnavailableReasonV1::Recovery,
             }),
+            StoreFailpointActionV1::ReturnInjectedStorageIo => {
+                Err(StoreErrorV1::StorageUnavailableV1 {
+                    reason: StoreUnavailableReasonV1::StorageIo,
+                })
+            }
             StoreFailpointActionV1::AbortProcess => std::process::abort(),
             StoreFailpointActionV1::Barrier(barrier) => {
                 barrier.wait();
@@ -395,6 +400,11 @@ pub enum StoreFailpointV1 {
 pub enum StoreFailpointActionV1 {
     /// Preserve ordinary Store error behavior.
     ReturnError,
+    /// Inject the public storage-I/O classification at the selected pre-commit seam.
+    ///
+    /// This action verifies transactional rollback and error propagation. It does not claim to
+    /// emulate SQLite VFS behavior or physical storage exhaustion.
+    ReturnInjectedStorageIo,
     /// Abort immediately at the configured failpoint; use only in child-process fixtures.
     AbortProcess,
     /// Wait for every participant at this test-only rendezvous, then continue normally.
@@ -405,6 +415,7 @@ impl fmt::Debug for StoreFailpointActionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ReturnError => formatter.write_str("ReturnError"),
+            Self::ReturnInjectedStorageIo => formatter.write_str("ReturnInjectedStorageIo"),
             Self::AbortProcess => formatter.write_str("AbortProcess"),
             Self::Barrier(_) => formatter.write_str("Barrier(..)"),
         }
@@ -414,9 +425,9 @@ impl fmt::Debug for StoreFailpointActionV1 {
 impl PartialEq for StoreFailpointActionV1 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::ReturnError, Self::ReturnError) | (Self::AbortProcess, Self::AbortProcess) => {
-                true
-            }
+            (Self::ReturnError, Self::ReturnError)
+            | (Self::ReturnInjectedStorageIo, Self::ReturnInjectedStorageIo)
+            | (Self::AbortProcess, Self::AbortProcess) => true,
             (Self::Barrier(left), Self::Barrier(right)) => std::sync::Arc::ptr_eq(left, right),
             _ => false,
         }

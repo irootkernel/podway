@@ -19,8 +19,8 @@ use podway_core::{
 };
 use podway_store::codec::{
     PersistedDomainCommandV1, PersistedDomainErrorV1, PersistedDomainResultV1,
-    PersistedSessionLifecycleV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
-    encode_persisted_terminal_receipt_v1,
+    PersistedResponseContextV1, PersistedSessionLifecycleV1, PersistedTerminalResultV1,
+    PersistedTerminalSessionProjectionV1, encode_persisted_terminal_receipt_v1,
 };
 use podway_store::{
     AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1,
@@ -31,7 +31,7 @@ use podway_store::{
     StoreFailpointV1, StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreInvariantV1,
     StoreReadContractV1, StoreReconciliationReadContractV1, StoreRecordKindV1,
     StoreUnavailableReasonV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1,
-    WorkerIdV1,
+    WorkerIdV1, install_terminal_envelope_sealer_v1,
 };
 use tempfile::TempDir;
 
@@ -401,6 +401,70 @@ fn terminal_with_job_projection(
     )
     .unwrap()
 }
+
+fn frozen_v2_item_terminal_envelope(
+    receipt: &PersistedTerminalReceiptV1,
+) -> Result<serde_json::Value, StoreErrorV1> {
+    let context = receipt
+        .response_context()
+        .expect("frozen v2 fixture must retain response context");
+    let job_projection = receipt
+        .job_projection()
+        .expect("frozen v2 fixture must retain terminal job facts");
+    let PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemChanged {
+        item_id,
+        revision_after,
+        changed,
+        ..
+    }) = receipt.result()
+    else {
+        panic!("frozen v2 fixture must be an item mutation success");
+    };
+    assert!(matches!(
+        receipt.lookup_command(),
+        Some(PersistedDomainCommandV1::ItemCheck { item_id: command_item })
+            if command_item == item_id
+    ));
+    let timestamp = |millis: UnixMillis| {
+        assert!(millis.get() < 1_000);
+        format!("1970-01-01T00:00:00.{:03}Z", millis.get())
+    };
+    Ok(serde_json::json!({
+        "schema": "podway.output/v2",
+        "request_id": context.request_id(),
+        "command": context.command(),
+        "generated_at": timestamp(job_projection.finished_at()),
+        "workspace": {
+            "uuid": context.workspace_uuid(),
+            "root": context.workspace_root(),
+            "latest_workspace_sequence": context.workspace_sequence(),
+        },
+        "job": {
+            "id": receipt.job().job_id(),
+            "sequence": receipt.job().identity_sequence(),
+            "state": "succeeded",
+            "submitted_at": timestamp(job_projection.submitted_at()),
+            "claimed_at": job_projection.claimed_at().map(timestamp),
+            "finished_at": timestamp(job_projection.finished_at()),
+        },
+        "result": {
+            "schema": "podway.item-mutation-result/v2",
+            "admission": {
+                "admitted": true,
+                "job_id": receipt.job().job_id(),
+                "workspace_sequence": receipt.job().identity_sequence(),
+            },
+            "changed": changed,
+            "graph_node_id": "first",
+            "attempt_id": "00000000-0000-4000-8000-000000000022",
+            "attempt_number": 1,
+            "item_id": item_id,
+            "revision": revision_after,
+        },
+        "warnings": [],
+    }))
+}
+
 fn assert_job_replay(outcome: Result<AdmitOutcomeV1, StoreErrorV1>, expected: JobReceiptV1) {
     let replay = match outcome {
         Ok(AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt))) => receipt,
@@ -588,6 +652,198 @@ fn session_reset_request(
         digest(digest_nibble),
         UnixMillis::new(now),
     )
+}
+
+#[test]
+fn v2plt010_frozen_v2_receipt_survives_reopen_pruning_and_readonly_reconciliation() {
+    install_terminal_envelope_sealer_v1(frozen_v2_item_terminal_envelope);
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("state.sqlite3");
+    let active = store(&temporary);
+    let initial = aggregate();
+    seed_current_session(&active, &initial, job(240), "v2-receipt-seed", 2);
+
+    let item_id = ItemId::new("done").unwrap();
+    let checked = apply_transition_v1(
+        Some(&initial),
+        &SessionCommandV1::Check(CheckItemV1 {
+            item_id: item_id.clone(),
+            preconditions: ItemMutationPreconditionsV1 {
+                expected_attempt_id: initial.active_attempt_id().unwrap().clone(),
+                expected_item_revision: Revision::ZERO,
+            },
+        }),
+        CommandContextV1 {
+            expected_revision: initial.revision(),
+            now: UnixMillis::new(22),
+        },
+    )
+    .unwrap()
+    .next_aggregate()
+    .unwrap()
+    .clone();
+    let key = IdempotencyKeyV1::new("v2-frozen-terminal").unwrap();
+    let request_digest = digest('f');
+    let request = AdmitRequestV1::new(
+        DomainCommand::ItemCheck {
+            item_id: item_id.clone(),
+        },
+        key.clone(),
+        job(241),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(initial.revision()),
+            initial.active_attempt_id().cloned(),
+            Some(item_id.clone()),
+            Some(Revision::ZERO),
+        )
+        .unwrap(),
+        request_digest.clone(),
+        UnixMillis::new(20),
+    )
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            "00000000-0000-4000-8000-000000000241",
+            "item.check",
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-phase4",
+            2,
+        )
+        .unwrap()
+        .with_frozen_public_terminal_envelope(),
+    );
+    assert!(matches!(
+        active.admit(&identity(), request),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    let claim = active
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-receipt-worker").unwrap(),
+            UnixMillis::new(21),
+        )
+        .unwrap()
+        .unwrap();
+    active
+        .commit_terminal(
+            claim.claim().clone(),
+            initial.revision(),
+            Some(
+                StateTransitionV1::new_persisted(
+                    Some(checked.session_id().clone()),
+                    initial.revision(),
+                    checked.revision(),
+                    PersistedSessionMutationV1::Replace(checked.clone()),
+                )
+                .unwrap(),
+            ),
+            TerminalResultV1::Success(DomainResult::ItemChanged {
+                session_id: checked.session_id().clone(),
+                item_id,
+                revision_before: initial.revision(),
+                revision_after: checked.revision(),
+                changed: true,
+            }),
+            UnixMillis::new(22),
+        )
+        .unwrap();
+    let expected = active
+        .read_job(&identity(), &job(241))
+        .unwrap()
+        .unwrap()
+        .terminal_receipt()
+        .unwrap()
+        .clone();
+    let expected_envelope = expected.public_terminal_envelope().unwrap().clone();
+    assert_eq!(expected_envelope["schema"], "podway.output/v2");
+    assert_eq!(expected_envelope["command"], "item.check");
+    assert_eq!(expected_envelope["job"]["sequence"], 2);
+    assert_eq!(
+        expected_envelope["result"]["admission"]["job_id"],
+        serde_json::json!(job(241))
+    );
+    assert_eq!(
+        expected_envelope["result"]["admission"]["workspace_sequence"],
+        2
+    );
+    drop(active);
+
+    let reopened = store(&temporary);
+    assert_eq!(
+        reopened
+            .read_idempotent_outcome(&identity(), &key, &request_digest)
+            .unwrap(),
+        Some(AdmitOutcomeV1::Existing(
+            JobReceiptOrTerminalV1::TerminalReceipt(expected.clone())
+        ))
+    );
+    for number in 1..=100_u16 {
+        let filler_job = retention_job(2_000 + number);
+        admit(
+            &reopened,
+            filler_job,
+            &format!("v2-receipt-filler-{number}"),
+            'e',
+            23,
+        );
+        let filler = reopened
+            .claim_next(
+                &identity(),
+                WorkerIdV1::new("v2-receipt-filler").unwrap(),
+                UnixMillis::new(23),
+            )
+            .unwrap()
+            .unwrap();
+        reopened
+            .commit_terminal(
+                filler.claim().clone(),
+                checked.revision(),
+                None,
+                TerminalResultV1::Failure(DomainError::InvalidState { reason: "fixture" }),
+                UnixMillis::new(23),
+            )
+            .unwrap();
+    }
+    let report = reopened
+        .prune_terminal_history(&identity(), UnixMillis::new(604_800_024))
+        .unwrap();
+    assert_eq!(report.deleted_terminal_jobs(), 2);
+    assert!(reopened.read_job(&identity(), &job(241)).unwrap().is_none());
+    drop(reopened);
+
+    let artifacts_before = snapshot_database_artifacts(&database).unwrap();
+    let snapshot = SqliteStoreV1::inspect_reconciliation_snapshot(
+        &database,
+        &identity(),
+        &SqliteStoreOptionsV1::new(8).unwrap(),
+        &key,
+        UnixMillis::new(604_800_025),
+    )
+    .unwrap();
+    assert_eq!(
+        snapshot_database_artifacts(&database).unwrap(),
+        artifacts_before
+    );
+    assert!(snapshot.job().is_none());
+    let retained = snapshot
+        .lookup()
+        .and_then(|lookup| lookup.terminal_receipt())
+        .expect("pruned v2 receipt must remain available to read-only reconciliation");
+    assert_eq!(retained, &expected);
+    assert_eq!(
+        retained.public_terminal_envelope(),
+        Some(&expected_envelope)
+    );
+
+    let reopened = store(&temporary);
+    assert_eq!(
+        reopened
+            .read_idempotent_outcome(&identity(), &key, &request_digest)
+            .unwrap(),
+        Some(AdmitOutcomeV1::Existing(
+            JobReceiptOrTerminalV1::TerminalReceipt(expected)
+        )),
+        "active Store replay after pruning must return the exact retained v2 receipt"
+    );
 }
 
 fn admission_rows_and_sequence(path: &Path) -> (i64, i64, i64) {

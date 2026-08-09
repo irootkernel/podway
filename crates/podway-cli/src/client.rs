@@ -295,9 +295,9 @@ impl DaemonClientV1 {
         &self,
         request: &RequestEnvelopeV1,
     ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
-        admit_version_aware_request(request)
+        let requires_output_v2 = admit_version_aware_request(request)
             .map_err(|source| DaemonClientErrorV1::RequestAdmission { source })?;
-        self.exchange_v2(request)
+        self.exchange_v2(request, requires_output_v2)
     }
 
     /// Exchanges the exact read-only daemon process status probe outside the durable command slice.
@@ -372,6 +372,7 @@ impl DaemonClientV1 {
     fn exchange_v2(
         &self,
         request: &RequestEnvelopeV1,
+        requires_output_v2: bool,
     ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
         let response = self.exchange_payload(request)?;
         let response = decode_response_payload_v2(&response)
@@ -379,6 +380,14 @@ impl DaemonClientV1 {
             .map_err(DaemonClientErrorV1::possibly_transmitted)?;
         validate_response_correlation_v2(request, &response)
             .map_err(DaemonClientErrorV1::possibly_transmitted)?;
+        if requires_output_v2 && matches!(response, ResponseEnvelopeV2::OutputV1(_)) {
+            return Err(DaemonClientErrorV1::ResponseMismatch {
+                field: "schema",
+                expected: "podway.output/v2".to_owned(),
+                received: "podway.output/v1".to_owned(),
+            }
+            .possibly_transmitted());
+        }
         Ok(response)
     }
 
@@ -434,17 +443,17 @@ impl DaemonClientV1 {
     }
 }
 
-fn admit_version_aware_request(request: &RequestEnvelopeV1) -> Result<(), SliceErrorV1> {
+fn admit_version_aware_request(request: &RequestEnvelopeV1) -> Result<bool, SliceErrorV1> {
     let legacy_error = match SliceRequestV1::from_envelope(request) {
-        Ok(_) => return Ok(()),
+        Ok(_) => return Ok(false),
         Err(error) => error,
     };
     let command = request.command().as_str();
     if RESERVED_V2_MUTATION_COMMAND_NAMES_V1.contains(&command) {
-        return ProcedureV2MutationRequestV1::from_envelope(request).map(|_| ());
+        return ProcedureV2MutationRequestV1::from_envelope(request).map(|_| true);
     }
     if matches!(command, "session.start" | "session.start_replace") {
-        return ProcedureV2StartRequestV1::from_envelope(request).map(|_| ());
+        return ProcedureV2StartRequestV1::from_envelope(request).map(|_| true);
     }
     Err(legacy_error)
 }

@@ -326,6 +326,141 @@ fn mutation_request(command: &str, payload: Map<String, Value>) -> RequestEnvelo
     .expect("mutation fixture is structurally valid")
 }
 
+fn reserved_v2_cases() -> Vec<(&'static str, Value, Value, &'static str)> {
+    let selector = serde_json::to_value(
+        WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None)
+            .expect("fixture selector is valid"),
+    )
+    .expect("fixture selector must serialize");
+    let session_id = "00000000-0000-4000-8000-000000000104";
+    let attempt_id = "00000000-0000-4000-8000-000000000102";
+
+    vec![
+        (
+            "session.start",
+            json!({}),
+            json!({
+                "selector": selector.clone(),
+                "procedure": "workflow.yaml",
+                "task_title": "Exercise the v2 boundary",
+                "goal": "Keep unsupported admission fail-closed.",
+                "criteria": [{
+                    "criterion_id": "closed",
+                    "statement": "The daemon returns the registered compatibility error."
+                }]
+            }),
+            "podway.session-start-result/v2",
+        ),
+        (
+            "session.start_replace",
+            json!({"session_id": session_id, "session_revision": 7}),
+            json!({
+                "selector": selector.clone(),
+                "procedure": "workflow.yaml",
+                "task_title": "Exercise replacement at the v2 boundary",
+                "confirmed": true,
+                "goal": "Keep replacement admission fail-closed.",
+                "criteria": [{
+                    "criterion_id": "closed",
+                    "statement": "The daemon returns the registered compatibility error."
+                }]
+            }),
+            "podway.session-start-result/v2",
+        ),
+        (
+            "session.decide",
+            json!({
+                "session_id": session_id,
+                "session_revision": 7,
+                "attempt_id": attempt_id
+            }),
+            json!({
+                "selector": selector.clone(),
+                "option_id": "accept",
+                "reason": "The evidence supports this decision."
+            }),
+            "podway.decision-result/v1",
+        ),
+        (
+            "session.rework",
+            json!({
+                "session_id": session_id,
+                "session_revision": 7,
+                "attempt_id": attempt_id
+            }),
+            json!({
+                "selector": selector.clone(),
+                "target_graph_node_id": "implement",
+                "reason": "The implementation needs correction."
+            }),
+            "podway.rework-result/v1",
+        ),
+        (
+            "goal.define",
+            json!({"session_id": session_id, "session_revision": 7}),
+            json!({
+                "selector": selector.clone(),
+                "goal": "Ship the daemon boundary.",
+                "criteria": [{
+                    "criterion_id": "tests",
+                    "statement": "The focused tests pass."
+                }]
+            }),
+            "podway.goal-definition-result/v1",
+        ),
+        (
+            "goal.revise",
+            json!({
+                "session_id": session_id,
+                "session_revision": 7,
+                "goal_revision": 1
+            }),
+            json!({
+                "selector": selector.clone(),
+                "goal": "Ship the daemon boundary safely.",
+                "criteria": [{
+                    "criterion_id": "tests",
+                    "statement": "The focused tests pass."
+                }],
+                "target_graph_node_id": "implement",
+                "reason": "Safety is explicit.",
+                "reactivate": false
+            }),
+            "podway.goal-revision-result/v1",
+        ),
+        (
+            "goal.assess_criterion",
+            json!({
+                "session_id": session_id,
+                "session_revision": 7,
+                "attempt_id": attempt_id,
+                "goal_revision": 1
+            }),
+            json!({
+                "selector": selector,
+                "criterion_id": "tests",
+                "status": "satisfied",
+                "reason": "The tests pass.",
+                "evidence": ["verify"]
+            }),
+            "podway.criterion-assessment-result/v1",
+        ),
+    ]
+}
+
+fn reserved_v2_request(command: &str, preconditions: Value, payload: Value) -> RequestEnvelopeV1 {
+    let mut request = serde_json::to_value(mutation_request(
+        command,
+        payload
+            .as_object()
+            .expect("reserved v2 payload fixture must be an object")
+            .clone(),
+    ))
+    .expect("mutation request must serialize");
+    request["preconditions"] = preconditions;
+    serde_json::from_value(request).expect("reserved v2 request fixture must be valid")
+}
+
 fn daemon_status_request(wait_timeout_ms: u64) -> RequestEnvelopeV1 {
     RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(REQUEST_ID).expect("fixture request ID is valid"),
@@ -470,47 +605,131 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
 }
 
 #[test]
-fn reserved_v2_start_crosses_the_socket_as_a_closed_compatibility_error() {
-    let (mut client, server) =
-        UnixStream::pair().expect("Unix stream fixture pair must be created");
+fn all_registered_unserved_v2_mutations_cross_the_socket_as_closed_errors() {
+    for (command, preconditions, payload, result_schema) in reserved_v2_cases() {
+        let (mut client, server) =
+            UnixStream::pair().expect("Unix stream fixture pair must be created");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let transport = transport(
+            TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+            EXPECTED_UID,
+            ServerTransportTimeoutsV1::default(),
+        );
+        let request = reserved_v2_request(command, preconditions, payload);
+        let handler = {
+            let transport = Arc::clone(&transport);
+            thread::spawn(move || transport.handle_connection(server))
+        };
+
+        send_and_half_close(&mut client, &request_frame(&request));
+        let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
+            panic!("reserved Procedure v2 command {command} must return a compatibility error");
+        };
+        assert_eq!(error.request_id().as_str(), REQUEST_ID);
+        assert_eq!(error.command().as_str(), command);
+        assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+        assert_eq!(error.exit_code().get(), 3);
+        assert!(!error.retryable());
+        assert_eq!(
+            error.details()["schema"],
+            "podway.v2-runtime-error-details/v1"
+        );
+        assert_eq!(error.details()["kind"], "UNSUPPORTED_V2_CAPABILITY");
+        assert_eq!(error.details()["capability"], command);
+        assert_eq!(error.details()["required_result_schema"], result_schema);
+        assert_eq!(
+            error.details()["contract_manifest_digest"],
+            build_identity_v1().contract_manifest_digest()
+        );
+        assert_eq!(error.details()["admission"], json!({"admitted": false}));
+        assert!(handler.join().expect("handler must not panic").is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn malformed_registered_v2_mutations_are_rejected_before_dispatch() {
+    for (command, preconditions, payload, _) in reserved_v2_cases() {
+        let (mut client, server) =
+            UnixStream::pair().expect("Unix stream fixture pair must be created");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let transport = transport(
+            TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+            EXPECTED_UID,
+            ServerTransportTimeoutsV1::default(),
+        );
+        let request = reserved_v2_request(command, preconditions, payload);
+        let mut malformed = serde_json::to_value(request).expect("request must serialize");
+        malformed["payload"]["unknown"] = json!(true);
+        let frame = encode_frame_v1(
+            &serde_json::to_vec(&malformed).expect("malformed request fixture must serialize"),
+        )
+        .expect("malformed request frame must encode");
+        let handler = {
+            let transport = Arc::clone(&transport);
+            thread::spawn(move || transport.handle_connection(server))
+        };
+
+        send_and_half_close(&mut client, &frame);
+        let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
+            panic!("malformed Procedure v2 command {command} must return a request error");
+        };
+        assert_eq!(error.request_id().as_str(), REQUEST_ID);
+        assert_eq!(error.command().as_str(), command);
+        assert_eq!(error.code().as_str(), "REQUEST_INVALID");
+        assert_eq!(error.exit_code().get(), 2);
+        assert!(!error.retryable());
+        assert_eq!(
+            error.details(),
+            &json!({"admission": {"admitted": false}})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        assert!(handler.join().expect("handler must not panic").is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn duplicate_reserved_v2_mutation_key_is_deterministically_unsupported() {
+    let (command, preconditions, payload, _) = reserved_v2_cases()
+        .into_iter()
+        .find(|(command, _, _, _)| *command == "session.decide")
+        .expect("decision fixture must exist");
+    let mut changed_payload = payload.clone();
+    changed_payload["reason"] = json!("A different payload remains unserved.");
+    let payloads = [payload.clone(), payload, changed_payload];
     let calls = Arc::new(AtomicUsize::new(0));
     let transport = transport(
         TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
         EXPECTED_UID,
         ServerTransportTimeoutsV1::default(),
     );
-    let selector =
-        WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None).unwrap();
-    let request = mutation_request(
-        "session.start",
-        json!({
-            "selector": selector,
-            "procedure": "workflow.yaml",
-            "task_title": "Exercise the v2 boundary",
-            "goal": "Keep unsupported admission fail-closed.",
-            "criteria": [{
-                "criterion_id": "closed",
-                "statement": "The daemon returns the registered compatibility error."
-            }]
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-    );
-    let handler = {
-        let transport = Arc::clone(&transport);
-        thread::spawn(move || transport.handle_connection(server))
-    };
+    let mut errors = Vec::new();
 
-    send_and_half_close(&mut client, &request_frame(&request));
-    let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
-        panic!("reserved Procedure v2 start must return a compatibility error");
-    };
-    assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
-    assert_eq!(error.details()["capability"], "session.start");
-    assert_eq!(error.details()["admission"], json!({"admitted": false}));
-    assert!(handler.join().expect("handler must not panic").is_ok());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    for payload in payloads {
+        let (mut client, server) =
+            UnixStream::pair().expect("Unix stream fixture pair must be created");
+        let request = reserved_v2_request(command, preconditions.clone(), payload);
+        let handler = {
+            let transport = Arc::clone(&transport);
+            thread::spawn(move || transport.handle_connection(server))
+        };
+
+        send_and_half_close(&mut client, &request_frame(&request));
+        let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
+            panic!("duplicate reserved mutation must remain unsupported");
+        };
+        assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+        assert_eq!(error.details()["admission"], json!({"admitted": false}));
+        errors.push(serde_json::to_value(error).expect("error response must serialize"));
+        assert!(handler.join().expect("handler must not panic").is_ok());
+    }
+
+    assert_eq!(errors[0], errors[1]);
+    assert_eq!(errors[1], errors[2]);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 
 #[test]

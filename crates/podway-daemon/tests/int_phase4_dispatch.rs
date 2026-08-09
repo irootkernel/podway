@@ -1247,6 +1247,13 @@ fn reserved_v2_mutation_is_closed_and_rejected_without_runtime_or_worker_calls()
             error.details()["contract_manifest_digest"],
             podway_protocol::build_identity_v1().contract_manifest_digest()
         );
+        let first_error = serde_json::to_value(&error).unwrap();
+        let ResponseEnvelopeV2::Error(repeated_error) =
+            dispatcher.dispatch_daemon(&request, &daemon_request)
+        else {
+            panic!("an exact retry of an unserved v2 capability must remain unsupported");
+        };
+        assert_eq!(serde_json::to_value(repeated_error).unwrap(), first_error);
         assert!(runtime.state.lock().unwrap().existing_selectors.is_empty());
         let reads = reads.state.lock().unwrap();
         assert!(reads.status_waits.is_empty());

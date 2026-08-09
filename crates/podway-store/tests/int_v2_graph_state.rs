@@ -1,6 +1,10 @@
 //! Procedure v2 graph/action persistence across transactions and process reopen.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Barrier},
+    thread,
+};
 
 use podway_core::{
     AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, CanonicalProcedureJsonV1,
@@ -467,6 +471,47 @@ fn stale_revision_and_precommit_failure_leave_prior_state_atomic() {
     assert_eq!(
         reopened.read_graph_session_v2(&identity()).unwrap(),
         Some(initial_state())
+    );
+}
+
+#[test]
+fn concurrent_graph_replacements_have_one_winner_and_one_stale_revision() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, options());
+    store
+        .create_graph_session_v2(&identity(), initial_state())
+        .unwrap();
+    drop(store);
+
+    let barrier = Arc::new(Barrier::new(2));
+    let run = |store: SqliteStoreV1, barrier: Arc<Barrier>| {
+        thread::spawn(move || {
+            barrier.wait();
+            store.replace_graph_session_v2(
+                &identity(),
+                Revision::new(1),
+                Revision::new(1),
+                advanced_state(),
+            )
+        })
+    };
+    let left = run(open(&temporary, options()), Arc::clone(&barrier));
+    let right = run(open(&temporary, options()), barrier);
+    let outcomes = [left.join().unwrap(), right.join().unwrap()];
+
+    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|result| matches!(result, Err(StoreErrorV1::PreconditionConflictV1 { .. })))
+            .count(),
+        1
+    );
+
+    let reopened = open(&temporary, options());
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(advanced_state())
     );
 }
 

@@ -319,6 +319,18 @@ fn v2_start_output_payload() -> Vec<u8> {
     .expect("fixture Procedure v2 output must serialize")
 }
 
+fn reserved_v2_mutation_output_v1_payload() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schema": "podway.output/v1",
+        "request_id": REQUEST_ID,
+        "command": "session.decide",
+        "generated_at": "2026-07-15T12:34:56.789Z",
+        "result": {"legacy": true},
+        "warnings": []
+    }))
+    .expect("fixture legacy output must serialize")
+}
+
 fn error_payload() -> Vec<u8> {
     format!(
         r#"{{"schema":"podway.error/v1","request_id":"{REQUEST_ID}","command":"session.status","generated_at":"2026-07-15T12:34:56.789Z","code":"DAEMON_UNAVAILABLE","message":"daemon is restarting","retryable":true,"exit_code":3,"details":{{"schema":"podway.endpoint-error-details/v1"}}}}"#
@@ -601,6 +613,68 @@ fn version_aware_request_admits_typed_v2_start_and_decodes_output_v2() {
         decode_request_payload_v1(request_payload).expect("request wire must use protocol codec");
     ProcedureV2StartRequestV1::from_envelope(&decoded)
         .expect("request must retain the typed Procedure v2 start shape");
+    server.join();
+}
+
+#[test]
+fn version_aware_request_rejects_output_v1_for_goal_bearing_v2_start() {
+    let fixture = RuntimeFixture::new();
+    let frame = encode_frame_v1(&output_payload("session.start"))
+        .expect("legacy output response must frame");
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
+
+    let error = client(&fixture)
+        .request_v2(&v2_start_request())
+        .expect_err("a goal-bearing v2 start must require output/v2");
+    assert!(matches!(
+        transmitted_source(error),
+        DaemonClientErrorV1::ResponseMismatch {
+            field: "schema",
+            ref expected,
+            ref received,
+        } if expected == "podway.output/v2" && received == "podway.output/v1"
+    ));
+
+    let _ = server.request_wire();
+    server.join();
+}
+
+#[test]
+fn version_aware_request_rejects_output_v1_for_reserved_v2_mutation() {
+    let fixture = RuntimeFixture::new();
+    let frame = encode_frame_v1(&reserved_v2_mutation_output_v1_payload())
+        .expect("legacy output must frame");
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
+
+    let error = client(&fixture)
+        .request_v2(&v2_decide_request())
+        .expect_err("a reserved v2 mutation must require output/v2");
+    assert!(matches!(
+        transmitted_source(error),
+        DaemonClientErrorV1::ResponseMismatch {
+            field: "schema",
+            ref expected,
+            ref received,
+        } if expected == "podway.output/v2" && received == "podway.output/v1"
+    ));
+
+    let _ = server.request_wire();
+    server.join();
+}
+
+#[test]
+fn version_aware_request_preserves_output_v1_for_legacy_reads() {
+    let fixture = RuntimeFixture::new();
+    let frame =
+        encode_frame_v1(&output_payload("session.status")).expect("legacy output must frame");
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
+
+    let response = client(&fixture)
+        .request_v2(&request())
+        .expect("legacy reads must retain output/v1 compatibility");
+    assert!(matches!(response, ResponseEnvelopeV2::OutputV1(_)));
+
+    let _ = server.request_wire();
     server.join();
 }
 

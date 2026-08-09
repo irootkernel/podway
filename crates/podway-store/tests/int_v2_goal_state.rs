@@ -1,6 +1,10 @@
 //! Procedure v2 goal revision and assessment persistence evidence.
 
-use std::path::{Path, PathBuf};
+use std::{
+    os::unix::process::ExitStatusExt as _,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use podway_core::{
     ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
@@ -19,8 +23,8 @@ use podway_store::{
     AttemptWorkflowMemoryV2, CriterionAssessmentStateV2, DurableWorktreeIdentityV1,
     EvidenceResolutionStateV2, GoalStateV2, GraphNodeCounterV2, GraphSessionStateV2,
     IdempotencyKeyV1, ItemSlotStateV2, ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1,
-    SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreFailpointV1,
-    StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1,
+    SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreFailpointActionV1,
+    StoreFailpointV1, StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1,
     ValidatedWorkspaceRootV1, WorkerIdV1, WorkflowMemoryStateV2,
 };
 use rusqlite::Connection;
@@ -58,6 +62,9 @@ fn open(temporary: &TempDir, options: SqliteStoreOptionsV1) -> SqliteStoreV1 {
     )
     .unwrap()
 }
+
+const V2_ABORT_DATABASE_PATH_ENV: &str = "PODWAY_V2_GRAPH_ABORT_DATABASE_PATH";
+const V2_ABORT_CHILD_TEST: &str = "int_v2_goal_state::v2plt010_v2_graph_state_replace_abort_child";
 
 const V2_TABLES: [&str; 16] = [
     "v2_attempts",
@@ -1289,6 +1296,156 @@ fn goal_revision_failpoint_rolls_back_and_corruption_fails_reopen() {
             UnixMillis::new(100),
         )
         .is_err()
+    );
+}
+
+#[test]
+fn injected_storage_io_rolls_back_a_rich_goal_revision_and_retry_commits_once() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    persist_through_completed(&store);
+    let path = database_path(&temporary);
+    let expected = decided_state(9, true);
+    let counts_before = v2_table_counts(&path);
+    let base_before = base_store_identity(&path);
+    drop(store);
+
+    let constrained = open(
+        &temporary,
+        SqliteStoreOptionsV1::new(8)
+            .unwrap()
+            .with_failpoint(Some(StoreFailpointV1::V2GraphStateBeforeCommit))
+            .with_failpoint_action(StoreFailpointActionV1::ReturnInjectedStorageIo),
+    );
+    let error = constrained
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(9),
+            Revision::new(9),
+            revised_state(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error,
+        StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::StorageIo,
+        }
+    );
+    assert_eq!(
+        constrained.read_graph_session_v2(&identity()).unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(v2_table_counts(&path), counts_before);
+    assert_eq!(base_store_identity(&path), base_before);
+    drop(constrained);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(expected)
+    );
+    reopened
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(9),
+            Revision::new(9),
+            revised_state(),
+        )
+        .unwrap();
+    drop(reopened);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(revised_state())
+    );
+}
+
+#[test]
+fn v2plt010_v2_graph_state_replace_abort_child() {
+    let Some(database_path) = std::env::var_os(V2_ABORT_DATABASE_PATH_ENV).map(PathBuf::from)
+    else {
+        return;
+    };
+    let store = SqliteStoreV1::open(
+        database_path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8)
+            .unwrap()
+            .with_failpoint(Some(StoreFailpointV1::V2GraphStateBeforeCommit))
+            .with_failpoint_action(StoreFailpointActionV1::AbortProcess),
+        UnixMillis::new(100),
+    )
+    .unwrap();
+    let _ = store.replace_graph_session_v2(
+        &identity(),
+        Revision::new(9),
+        Revision::new(9),
+        revised_state(),
+    );
+    panic!("configured Procedure v2 graph-state failpoint returned instead of aborting");
+}
+
+#[test]
+fn v2plt010_process_abort_preserves_rich_v2_state_and_one_retry_commits() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    persist_through_completed(&store);
+    let predecessor = decided_state(9, true);
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(predecessor.clone())
+    );
+    drop(store);
+
+    let output = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(V2_ABORT_CHILD_TEST)
+        .arg("--nocapture")
+        .env(V2_ABORT_DATABASE_PATH_ENV, database_path(&temporary))
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.signal(),
+        Some(6),
+        "child must abort at the v2 pre-commit seam: status={:?} stdout={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(predecessor),
+        "an aborted rich replacement must expose exactly its predecessor"
+    );
+    let successor = revised_state();
+    reopened
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(9),
+            Revision::new(9),
+            successor.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(successor.clone())
+    );
+    drop(reopened);
+
+    let reopened_again = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    assert_eq!(
+        reopened_again
+            .startup_recovery_report()
+            .requeued_job_count(),
+        0
+    );
+    assert_eq!(
+        reopened_again.read_graph_session_v2(&identity()).unwrap(),
+        Some(successor)
     );
 }
 
