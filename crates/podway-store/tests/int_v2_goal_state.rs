@@ -21,11 +21,12 @@ use podway_core::{
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, AttemptCriterionAssessmentStateV2, AttemptMetadataV2,
     AttemptWorkflowMemoryV2, CriterionAssessmentStateV2, DurableWorktreeIdentityV1,
-    EvidenceResolutionStateV2, GoalStateV2, GraphNodeCounterV2, GraphSessionStateV2,
-    IdempotencyKeyV1, ItemSlotStateV2, ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1,
-    SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreFailpointActionV1,
-    StoreFailpointV1, StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1,
-    ValidatedWorkspaceRootV1, WorkerIdV1, WorkflowMemoryStateV2,
+    EvidenceResolutionStateV2, GoalStateV2, GraphMutationErrorV2, GraphNodeCounterV2,
+    GraphSessionStateV2, IdempotencyKeyV1, ItemSlotStateV2, ProcedureSnapshotV2,
+    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
+    StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1, StoreGraphStateContractV2,
+    StoreIntegrityCheckV1, StoreUnavailableReasonV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    WorkflowMemoryStateV2,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -285,6 +286,35 @@ fn opt_out_snapshot() -> ProcedureSnapshotV2 {
     .unwrap()
 }
 
+fn terminal_goal_snapshot() -> ProcedureSnapshotV2 {
+    let document = json!({
+        "schema":"podway.procedure/v2",
+        "id":"terminal-goal-gate",
+        "version":"1",
+        "name":"Terminal goal gate",
+        "purpose":"Prove terminal completion requires a fresh goal assessment.",
+        "goal_tracking":true,
+        "node_definitions": {
+            "finish-def":{"type":"action","title":"Finish","intent":"Finish."}
+        },
+        "graph":{
+            "entry":"finish",
+            "nodes":[{"id":"finish","use":"finish-def","terminal":true}]
+        }
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000413").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        digest,
+        ProcedureSourceLabelV1::file("terminal-goal.yaml").unwrap(),
+        UnixMillis::new(5),
+    )
+    .unwrap()
+}
+
 fn unsafe_rework_route_snapshot() -> ProcedureSnapshotV2 {
     let assessment = |title: &str| {
         json!({
@@ -484,6 +514,47 @@ fn goal_revision_one() -> GoalRevisionRecordV2 {
         Some(ActorAttributionV2::new("planner").unwrap()),
         TraceSequenceV2::FIRST,
         UnixMillis::new(20),
+    )
+    .unwrap()
+}
+
+fn terminal_goal_state(goal_revision: Option<u64>, goal: GoalStateV2) -> GraphSessionStateV2 {
+    let active = attempt(
+        9,
+        "finish",
+        1,
+        1,
+        AttemptLifecycle::Active,
+        AttemptValidityV2::Valid,
+        goal_revision,
+    );
+    GraphSessionStateV2::new_with_goal_state(
+        Revision::new(1),
+        "Terminal goal gate",
+        terminal_goal_snapshot(),
+        SessionTraceV2::from_parts(
+            session_id(),
+            SessionLifecycle::Running,
+            Revision::new(1),
+            vec![active],
+        )
+        .unwrap(),
+        vec![GraphNodeCounterV2::new(node("finish"), 1, 0)],
+        vec![AttemptMetadataV2::new(attempt_id(9), UnixMillis::new(20), None, None).unwrap()],
+        WorkflowMemoryStateV2::new(
+            vec![
+                AttemptWorkflowMemoryV2::new(attempt_id(9), Vec::new(), Vec::new(), Vec::new())
+                    .unwrap(),
+            ],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+        goal,
+        UnixMillis::new(20),
+        None,
+        None,
+        None,
     )
     .unwrap()
 }
@@ -2080,6 +2151,46 @@ fn stale_goal_assessment_cannot_satisfy_terminal_completion() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn terminal_action_completion_requires_goal_and_fresh_assessment_without_changing_state() {
+    let missing_goal = terminal_goal_state(None, GoalStateV2::empty());
+    let missing_goal_before = missing_goal.clone();
+    assert_eq!(
+        missing_goal.complete_active_action_v2(
+            Revision::new(1),
+            &attempt_id(9),
+            None,
+            UnixMillis::new(30),
+        ),
+        Err(GraphMutationErrorV2::SessionGoalMissing)
+    );
+    assert_eq!(missing_goal, missing_goal_before);
+
+    let missing_assessment = terminal_goal_state(
+        Some(1),
+        GoalStateV2::new(
+            Some(GoalRevisionNumberV2::FIRST),
+            vec![goal_revision_one()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+    );
+    let missing_assessment_before = missing_assessment.clone();
+    assert_eq!(
+        missing_assessment.complete_active_action_v2(
+            Revision::new(1),
+            &attempt_id(9),
+            None,
+            UnixMillis::new(30),
+        ),
+        Err(GraphMutationErrorV2::FreshGoalAssessmentMissing {
+            goal_revision: GoalRevisionNumberV2::FIRST,
+        })
+    );
+    assert_eq!(missing_assessment, missing_assessment_before);
 }
 
 #[test]

@@ -52,3 +52,5 @@ mod int_phase8_observability;
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]
 mod int_v2run002_views;
+#[path = "int_v2run003_runtime.rs"]
+mod int_v2run003_runtime;

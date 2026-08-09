@@ -764,6 +764,76 @@ fn casid002_preserves_session_identity_for_reads_and_canonical_mutations() {
         .unwrap(),
     );
 }
+
+#[test]
+fn v2run003_shared_action_dtos_keep_canonical_identity_across_transport_metadata() {
+    let workspace_id = WorkspaceId::new(WORKSPACE_ID).unwrap();
+    let item_envelope = envelope(
+        "item.set",
+        OperationV1::Mutate,
+        true,
+        json!({"selector": selector(), "item_id": "note", "value": "verified"}),
+        item_preconditions(),
+    );
+    let item = SliceRequestV1::from_envelope(&item_envelope).unwrap();
+    match item.command() {
+        SliceCommandV1::ItemSet(command) => {
+            assert_eq!(command.item_id.as_str(), "note");
+            assert_eq!(command.value, "verified");
+            assert_eq!(
+                command.preconditions.expected_item_revision,
+                Revision::new(2)
+            );
+        }
+        command => panic!("unexpected command {}", command.command_name()),
+    }
+
+    let mut replay = serde_json::to_value(&item_envelope).unwrap();
+    replay["request_id"] = json!("99999999-9999-4999-8999-999999999999");
+    replay["client"]["pid"] = json!(99);
+    replay["options"] = json!({"detach":false,"wait_timeout_ms":1});
+    let replay: RequestEnvelopeV1 = serde_json::from_value(replay).unwrap();
+    let replay = SliceRequestV1::from_envelope(&replay).unwrap();
+    assert_eq!(
+        canonical_mutation_identity_v1(&item, &workspace_id).unwrap(),
+        canonical_mutation_identity_v1(&replay, &workspace_id).unwrap(),
+    );
+
+    let changed = SliceRequestV1::from_envelope(&envelope(
+        "item.set",
+        OperationV1::Mutate,
+        true,
+        json!({"selector": selector(), "item_id": "note", "value": "changed"}),
+        item_preconditions(),
+    ))
+    .unwrap();
+    assert_ne!(
+        canonical_mutation_identity_v1(&item, &workspace_id).unwrap(),
+        canonical_mutation_identity_v1(&changed, &workspace_id).unwrap(),
+    );
+
+    let complete = SliceRequestV1::from_envelope(&envelope(
+        "session.complete",
+        OperationV1::Mutate,
+        true,
+        json!({"selector": selector()}),
+        session_preconditions(),
+    ))
+    .unwrap();
+    assert!(matches!(
+        complete.command(),
+        SliceCommandV1::SessionComplete(_)
+    ));
+    let canonical: Value =
+        serde_json::from_str(&canonical_mutation_identity_v1(&complete, &workspace_id).unwrap())
+            .unwrap();
+    assert_eq!(canonical["command"], "session.complete");
+    assert_eq!(canonical["workspace_id"], WORKSPACE_ID);
+    assert_eq!(canonical["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(canonical["preconditions"]["session_revision"], 3);
+    assert_eq!(canonical["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert_eq!(canonical["payload"], json!({}));
+}
 #[test]
 fn g006_dry_runs_are_query_only_and_excluded_from_mutation_identity() {
     let workspace_id = WorkspaceId::new(WORKSPACE_ID).unwrap();

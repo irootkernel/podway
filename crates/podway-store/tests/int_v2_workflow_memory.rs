@@ -13,11 +13,12 @@ use podway_core::{
     UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_store::{
-    AttemptMetadataV2, AttemptWorkflowMemoryV2, BlockerStateV2, DurableWorktreeIdentityV1,
-    EvidenceResolutionStateV2, GraphNodeCounterV2, GraphSessionStateV2, ItemSlotStateV2,
-    ProcedureSnapshotV2, SqliteStoreOptionsV1, SqliteStoreV1, StoreErrorV1, StoreFailpointV1,
-    StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1, StoreValueErrorV1,
-    ValidatedWorkspaceRootV1, WorkflowMemoryStateV2, canonical_recorded_items_json_v2,
+    ActiveItemMutationV2, AttemptMetadataV2, AttemptWorkflowMemoryV2, BlockerStateV2,
+    DurableWorktreeIdentityV1, EvidenceResolutionStateV2, GraphMutationErrorV2, GraphNodeCounterV2,
+    GraphSessionStateV2, ItemSlotStateV2, ProcedureSnapshotV2, SqliteStoreOptionsV1, SqliteStoreV1,
+    StoreErrorV1, StoreFailpointV1, StoreGraphStateContractV2, StoreIntegrityCheckV1,
+    StoreUnavailableReasonV1, StoreValueErrorV1, ValidatedWorkspaceRootV1, WorkflowMemoryStateV2,
+    canonical_recorded_items_json_v2,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -90,7 +91,7 @@ fn snapshot() -> ProcedureSnapshotV2 {
                 "items": [
                     {"id":"z-summary","type":"text","prompt":"Summary","required":true},
                     {"id":"a-count","type":"integer","prompt":"Count","required":false},
-                    {"id":"m-tags","type":"list","prompt":"Tags","required":false},
+                    {"id":"m-tags","type":"list","prompt":"Tags","required":false,"min_items":1},
                     {"id":"c-confirm","type":"confirm","prompt":"Confirm","required":false},
                     {"id":"b-choice","type":"choice","prompt":"Choice","required":false,"choices":["green","red"]},
                     {"id":"y-artifact","type":"artifact","prompt":"Artifact","required":false,"allowed_media_types":["text/plain"]}
@@ -1465,6 +1466,157 @@ fn failpoint_history_rewrite_and_digest_corruption_fail_closed_atomically() {
             check: StoreIntegrityCheckV1::SessionCursor
         }
     ));
+}
+
+#[test]
+fn active_item_mutations_cover_every_type_and_completion_freezes_activation_evidence() {
+    let mut state = initial_state();
+    let mutations = [
+        ("c-confirm", ActiveItemMutationV2::Check),
+        (
+            "z-summary",
+            ActiveItemMutationV2::Set {
+                value: "ready".to_owned(),
+            },
+        ),
+        (
+            "b-choice",
+            ActiveItemMutationV2::Set {
+                value: "green".to_owned(),
+            },
+        ),
+        (
+            "a-count",
+            ActiveItemMutationV2::Set {
+                value: "7".to_owned(),
+            },
+        ),
+        (
+            "m-tags",
+            ActiveItemMutationV2::Add {
+                value: "locked".to_owned(),
+            },
+        ),
+        (
+            "y-artifact",
+            ActiveItemMutationV2::Attach {
+                value: ArtifactValueV1::local_path(
+                    "reports/result.txt",
+                    digest('c'),
+                    42,
+                    "text/plain",
+                )
+                .unwrap(),
+            },
+        ),
+    ];
+    for (offset, (item_id, mutation)) in mutations.into_iter().enumerate() {
+        let outcome = state
+            .mutate_active_item_v2(
+                &attempt_id(1),
+                &item(item_id),
+                Revision::ZERO,
+                mutation,
+                UnixMillis::new(11 + u64::try_from(offset).unwrap()),
+            )
+            .unwrap();
+        assert!(outcome.changed());
+        assert_eq!(outcome.item_revision(), Revision::new(1));
+        if item_id == "y-artifact" {
+            assert_eq!(outcome.value_digest(), Some(&digest('c')));
+        } else {
+            assert!(outcome.value_digest().is_none());
+        }
+        state = outcome.into_state();
+    }
+    assert_eq!(state.workspace_revision(), Revision::new(7));
+    assert_eq!(state.trace().revision(), Revision::new(7));
+    assert!(
+        state.workflow_memory().attempts()[0]
+            .item_slots()
+            .iter()
+            .all(|slot| slot.value().is_some())
+    );
+
+    let cleared_list = state
+        .mutate_active_item_v2(
+            &attempt_id(1),
+            &item("m-tags"),
+            Revision::new(1),
+            ActiveItemMutationV2::Remove {
+                value: "locked".to_owned(),
+                ignore_missing: false,
+            },
+            UnixMillis::new(20),
+        )
+        .unwrap();
+    assert!(cleared_list.changed());
+    assert!(
+        cleared_list.state().workflow_memory().attempts()[0]
+            .item_slots()
+            .iter()
+            .find(|slot| slot.item_id() == &item("m-tags"))
+            .unwrap()
+            .value()
+            .is_none()
+    );
+
+    let no_op = state
+        .mutate_active_item_v2(
+            &attempt_id(1),
+            &item("c-confirm"),
+            Revision::new(1),
+            ActiveItemMutationV2::Check,
+            UnixMillis::new(20),
+        )
+        .unwrap();
+    assert!(!no_op.changed());
+    assert_eq!(no_op.state(), &state);
+
+    let completed = state
+        .complete_active_action_v2(
+            Revision::new(7),
+            &attempt_id(1),
+            Some(attempt_id(2)),
+            UnixMillis::new(30),
+        )
+        .unwrap();
+    assert_eq!(completed.to_graph_node_id(), Some(&node("gate")));
+    assert_eq!(completed.to_attempt_id(), Some(&attempt_id(2)));
+    assert_eq!(completed.state().trace().revision(), Revision::new(8));
+    let capture = &completed.state().workflow_memory().attempts()[0];
+    let gate = &completed.state().workflow_memory().attempts()[1];
+    assert_eq!(
+        gate.evidence()[0]
+            .resolution()
+            .snapshot()
+            .unwrap()
+            .items_digest(),
+        &capture.recorded_items_digest().unwrap()
+    );
+    let readback = completed
+        .state()
+        .selected_evidence_readback(&attempt_id(2))
+        .unwrap();
+    assert_eq!(readback[0].items().items().len(), 1);
+    assert_eq!(readback[0].items().items()[0].id(), &item("z-summary"));
+}
+
+#[test]
+fn action_completion_rejects_an_open_blocker_without_changing_state() {
+    let state = active_recorded_state(2, BlockerState::Open);
+    let before = state.clone();
+
+    assert_eq!(
+        state.complete_active_action_v2(
+            Revision::new(2),
+            &attempt_id(1),
+            Some(attempt_id(2)),
+            UnixMillis::new(30),
+        ),
+        Err(GraphMutationErrorV2::BlockersPresent)
+    );
+    assert_eq!(state, before);
 }
 
 #[test]

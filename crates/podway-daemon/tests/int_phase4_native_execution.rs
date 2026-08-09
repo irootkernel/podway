@@ -470,6 +470,45 @@ fn artifact_completion_revalidation_detects_content_replacement() {
 }
 
 #[test]
+fn artifact_completion_revalidation_treats_missing_and_non_regular_paths_as_changed() {
+    let fixture = fixture_v1();
+    let artifact_path = fixture.worktree_root.join("report.json");
+    fs::write(&artifact_path, b"{\"state\":\"before\"}\n").expect("original artifact bytes");
+    let verifier = artifact_verifier_v1(fixture.options.clone());
+    let artifact = verifier
+        .hash_local_artifact(&fixture.binding, "report.json", None)
+        .expect("initial artifact hash");
+    let item_id = ItemId::new("proof").expect("valid item identifier");
+
+    fs::remove_file(&artifact_path).expect("remove original artifact");
+    assert_artifact_changed_v1(verifier.revalidate_local_artifact(
+        &fixture.binding,
+        &item_id,
+        &artifact,
+    ));
+
+    fs::create_dir(&artifact_path).expect("replace artifact with directory");
+    assert_artifact_changed_v1(verifier.revalidate_local_artifact(
+        &fixture.binding,
+        &item_id,
+        &artifact,
+    ));
+    fs::remove_dir(&artifact_path).expect("remove replacement directory");
+
+    fs::write(
+        fixture.worktree_root.join("replacement.json"),
+        b"replacement\n",
+    )
+    .expect("symlink target bytes");
+    symlink("replacement.json", &artifact_path).expect("replace artifact with symlink");
+    assert_artifact_changed_v1(verifier.revalidate_local_artifact(
+        &fixture.binding,
+        &item_id,
+        &artifact,
+    ));
+}
+
+#[test]
 fn embedded_media_mapping_is_deterministic_and_has_a_fixed_unknown_fallback() {
     assert_eq!(
         embedded_media_type_v1("reports/summary.json"),

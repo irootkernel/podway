@@ -1,0 +1,89 @@
+schema: podway.procedure/v2
+id: action-readback-runtime
+version: "2"
+name: Action read-back runtime
+purpose: Exercise action item mutations, completion, and selected prior-value read-back.
+node_definitions:
+  capture:
+    type: action
+    title: Capture results
+    intent: Record one value of every supported item type.
+    items:
+      - id: confirmed
+        type: confirm
+        prompt: Confirm the capture is complete.
+        required: true
+      - id: summary
+        type: text
+        prompt: Summarize the capture.
+        required: true
+        min_length: 1
+        max_length: 200
+        multiline: false
+      - id: outcome
+        type: choice
+        prompt: Select the outcome.
+        required: true
+        choices:
+          - accepted
+          - rejected
+      - id: count
+        type: integer
+        prompt: Record the count.
+        required: true
+        minimum: 0
+        maximum: 10
+      - id: findings
+        type: list
+        prompt: Record the findings.
+        required: true
+        min_items: 1
+        max_items: 3
+        max_item_length: 80
+        unique: true
+      - id: report
+        type: artifact
+        prompt: Attach the report.
+        required: true
+        allowed_media_types:
+          - text/plain
+      - id: internal-note
+        type: text
+        prompt: Record a value that the consumer must not read back.
+        required: false
+        max_length: 200
+        multiline: false
+  consume:
+    type: action
+    title: Consume selected results
+    intent: Use only the explicitly selected prior values.
+    items:
+      - id: consumed
+        type: confirm
+        prompt: Confirm the selected values were consumed.
+        required: true
+  finish:
+    type: action
+    title: Finish
+    intent: Complete the runtime fixture.
+graph:
+  entry: capture-results
+  nodes:
+    - id: capture-results
+      use: capture
+      next: consume-results
+    - id: consume-results
+      use: consume
+      evidence_from:
+        - node: capture-results
+          required: true
+          items:
+            - summary
+            - findings
+            - report
+        - node: finish
+          required: false
+      next: finish
+    - id: finish
+      use: finish
+      terminal: true

@@ -12,8 +12,9 @@ use podway_core::{
     LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1, SessionId, UnixMillis,
 };
 use podway_git::{
-    Base64UrlPathBytesV1, DiagnosticPathDisplayV1, GitInvariantViolationV1, GitResolverErrorV1,
-    LosslessPathV1, NativeGitResolverV1, WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
+    Base64UrlPathBytesV1, DiagnosticPathDisplayV1, GitInvariantViolationV1, GitReadOperationV1,
+    GitRepresentationProblemV1, GitResolverErrorV1, LosslessPathV1, NativeGitResolverV1,
+    WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
 };
 use podway_protocol::WorktreeSelectorWireV1;
 use podway_store::WorkspaceBindingV1;
@@ -370,13 +371,20 @@ where
         workspace: &WorkspaceBindingV1,
         path: &str,
         media_type: &str,
+        revalidation: bool,
     ) -> Result<ArtifactValueV1, ExecutionBoundaryErrorV1> {
         let resolved = self.resolve_bound_workspace(workspace)?;
         let candidate = artifact_path_from_root_v1(resolved.workspace_root(), path)?;
         let hashed = self
             .git_resolver
             .hash_local_artifact(resolved.worktree(), &candidate)
-            .map_err(git_resolution_boundary_error_v1)?;
+            .map_err(|error| {
+                if revalidation {
+                    artifact_revalidation_boundary_error_v1(error)
+                } else {
+                    git_resolution_boundary_error_v1(error)
+                }
+            })?;
         if hashed.canonical_path() != &candidate {
             return Err(domain_invalid_state_v1(
                 "artifact resolver returned a path outside the requested worktree location",
@@ -404,7 +412,7 @@ where
         requested_media_type: Option<&str>,
     ) -> Result<ArtifactValueV1, ExecutionBoundaryErrorV1> {
         let media_type = requested_media_type.unwrap_or_else(|| embedded_media_type_v1(path));
-        self.hash_verified_local_artifact(workspace, path, media_type)
+        self.hash_verified_local_artifact(workspace, path, media_type, false)
     }
 
     fn revalidate_local_artifact(
@@ -422,6 +430,7 @@ where
             workspace,
             artifact.location(),
             artifact.media_type(),
+            true,
         )?;
         if observed.location() != artifact.location()
             || observed.digest() != artifact.digest()
@@ -578,6 +587,22 @@ fn git_resolution_boundary_error_v1(error: GitResolverErrorV1) -> ExecutionBound
         | GitResolverErrorV1::Invariant { .. } => domain_invalid_state_v1(
             "workspace or local artifact does not satisfy Git safety checks",
         ),
+    }
+}
+
+fn artifact_revalidation_boundary_error_v1(error: GitResolverErrorV1) -> ExecutionBoundaryErrorV1 {
+    match error {
+        GitResolverErrorV1::Io {
+            operation: GitReadOperationV1::OpenLocalArtifact,
+        }
+        | GitResolverErrorV1::SymlinkEscape { .. }
+        | GitResolverErrorV1::Representation {
+            problem: GitRepresentationProblemV1::NonRegularArtifact,
+        }
+        | GitResolverErrorV1::Invariant {
+            problem: GitInvariantViolationV1::MetadataChangedDuringArtifactHash,
+        } => ExecutionBoundaryErrorV1::domain(DomainError::ArtifactChanged),
+        error => git_resolution_boundary_error_v1(error),
     }
 }
 

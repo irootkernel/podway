@@ -151,6 +151,17 @@ where
     ) -> Result<Option<AdmitOutcomeV1>, ProcedureV2StartPreparationErrorV1> {
         Ok(None)
     }
+
+    fn admit_procedure_v2_mutation(
+        &self,
+        _workspace: &Context,
+        _binding: &WorkspaceBindingV1,
+        _request: &SliceRequestV1,
+        _idempotency_key: IdempotencyKeyV1,
+        _response_context: Option<&PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        Ok(None)
+    }
 }
 
 /// A directly injected engine remains useful for deterministic worker tests. Production uses a
@@ -473,6 +484,43 @@ where
                 })
                 .ok_or(WorkerErrorV1::RetirementRejected)?
                 .map_err(WorkerErrorV1::ProcedureV2Preparation)
+        })?;
+        let Some(outcome) = outcome else {
+            return Ok(None);
+        };
+        self.complete_submission(scheduler, outcome, completion_mode)
+            .map(Some)
+    }
+
+    /// Attempts the additive Procedure v2 action/item admission path. `None` preserves the v1
+    /// fallback contract when the workspace does not own a Procedure v2 current task.
+    pub fn submit_procedure_v2_mutation_with_response_context(
+        &self,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+        request: &SliceRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: PersistedResponseContextV1,
+        completion_mode: WorkerCompletionModeV1,
+    ) -> Result<Option<WorkerSubmissionV1>, WorkerErrorV1> {
+        if scheduler.context_snapshot().recovery_required() {
+            return Err(WorkerErrorV1::RetirementRejected);
+        }
+        let outcome = scheduler.with_serialized(|context| {
+            if context.recovery_required() {
+                return Err(WorkerErrorV1::RetirementRejected);
+            }
+            context
+                .with_claim_permission(|binding| {
+                    self.inner.execution.admit_procedure_v2_mutation(
+                        context.as_ref(),
+                        binding,
+                        request,
+                        idempotency_key,
+                        Some(&response_context),
+                    )
+                })
+                .ok_or(WorkerErrorV1::RetirementRejected)?
+                .map_err(WorkerErrorV1::Execution)
         })?;
         let Some(outcome) = outcome else {
             return Ok(None);

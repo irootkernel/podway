@@ -15,7 +15,8 @@ use crate::{
     TerminalReceiptV1, TerminalResultV1,
 };
 use podway_core::{
-    DomainCommandKind, ItemId, SessionId, SessionLifecycle, Sha256Digest, WorkspaceId,
+    AttemptId, AttemptNumberV2, DomainCommandKind, GraphNodeId, ItemId, SessionId,
+    SessionLifecycle, Sha256Digest, WorkspaceId,
 };
 
 pub const STORE_COMMAND_SCHEMA_V1: &str = "podway.store-command/v1";
@@ -27,6 +28,7 @@ pub const STORE_TERMINAL_SCHEMA_V2: &str = "podway.store-terminal/v2";
 pub const STORE_TERMINAL_SCHEMA_V3: &str = "podway.store-terminal/v3";
 pub const STORE_TERMINAL_SCHEMA_V4: &str = "podway.store-terminal/v4";
 pub const STORE_GRAPH_TERMINAL_SCHEMA_V1: &str = "podway.store-graph-terminal/v1";
+pub const STORE_GRAPH_TERMINAL_SCHEMA_V2: &str = "podway.store-graph-terminal/v2";
 
 /// Minimal immutable response correlation retained independently of semantic request identity.
 ///
@@ -362,10 +364,7 @@ struct CommandEnvelopeV3 {
 pub fn encode_command_v1(execution: &ClaimedExecutionV1) -> Result<String, StoreCodecErrorV1> {
     if execution.execution_flavor() == crate::DurableExecutionFlavorV1::ProcedureV2 {
         if !execution.has_complete_execution_document()
-            || !matches!(
-                execution.command(),
-                CommandV1::SessionStart | CommandV1::SessionStartReplace
-            )
+            || !procedure_v2_runtime_command(execution.command())
         {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "Procedure v2 execution flavor",
@@ -377,6 +376,11 @@ pub fn encode_command_v1(execution: &ClaimedExecutionV1) -> Result<String, Store
                 CommandV1::SessionStartReplace,
                 crate::AdmissionSessionIdentityV1::Exact(session_id),
             ) => Some(session_id.clone()),
+            (command, crate::AdmissionSessionIdentityV1::Exact(session_id))
+                if procedure_v2_current_session_command(command) =>
+            {
+                Some(session_id.clone())
+            }
             _ => {
                 return Err(StoreCodecErrorV1::InvalidValue {
                     field: "Procedure v2 session identity",
@@ -453,10 +457,7 @@ pub fn decode_command_v1(value: &str) -> Result<ClaimedExecutionV1, StoreCodecEr
                 });
             }
             let command = envelope.command.into_command();
-            if !matches!(
-                command,
-                CommandV1::SessionStart | CommandV1::SessionStartReplace
-            ) {
+            if !procedure_v2_runtime_command(&command) {
                 return Err(StoreCodecErrorV1::InvalidValue {
                     field: "Procedure v2 execution command",
                 });
@@ -476,6 +477,12 @@ pub fn decode_command_v1(value: &str) -> Result<ClaimedExecutionV1, StoreCodecEr
                 }
                 (CommandV1::SessionStartReplace, Some(session_id))
                     if preconditions.expected_session_revision().is_some() =>
+                {
+                    crate::AdmissionSessionIdentityV1::Exact(session_id)
+                }
+                (command, Some(session_id))
+                    if procedure_v2_current_session_command(command)
+                        && procedure_v2_preconditions_match(command, &preconditions) =>
                 {
                     crate::AdmissionSessionIdentityV1::Exact(session_id)
                 }
@@ -506,6 +513,63 @@ pub fn decode_command_v1(value: &str) -> Result<ClaimedExecutionV1, StoreCodecEr
         });
     }
     Ok(execution)
+}
+
+fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
+    matches!(
+        command,
+        CommandV1::SessionStart
+            | CommandV1::SessionStartReplace
+            | CommandV1::SessionComplete
+            | CommandV1::ItemCheck { .. }
+            | CommandV1::ItemUncheck { .. }
+            | CommandV1::ItemSet { .. }
+            | CommandV1::ItemAdd { .. }
+            | CommandV1::ItemRemove { .. }
+            | CommandV1::ItemAttach { .. }
+            | CommandV1::ItemClear { .. }
+    )
+}
+
+fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
+    matches!(
+        command,
+        CommandV1::SessionComplete
+            | CommandV1::ItemCheck { .. }
+            | CommandV1::ItemUncheck { .. }
+            | CommandV1::ItemSet { .. }
+            | CommandV1::ItemAdd { .. }
+            | CommandV1::ItemRemove { .. }
+            | CommandV1::ItemAttach { .. }
+            | CommandV1::ItemClear { .. }
+    )
+}
+
+fn procedure_v2_preconditions_match(
+    command: &CommandV1,
+    preconditions: &RevisionAttemptItemPreconditionsV1,
+) -> bool {
+    match command {
+        CommandV1::SessionComplete => {
+            preconditions.expected_session_revision().is_some()
+                && preconditions.expected_attempt_id().is_some()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
+        CommandV1::ItemCheck { item_id }
+        | CommandV1::ItemUncheck { item_id }
+        | CommandV1::ItemSet { item_id }
+        | CommandV1::ItemAdd { item_id }
+        | CommandV1::ItemRemove { item_id }
+        | CommandV1::ItemAttach { item_id }
+        | CommandV1::ItemClear { item_id } => {
+            preconditions.expected_session_revision().is_none()
+                && preconditions.expected_attempt_id().is_some()
+                && preconditions.expected_item_id() == Some(item_id)
+                && preconditions.expected_item_revision().is_some()
+        }
+        _ => false,
+    }
 }
 
 /// Serializable mirror of every current [`DomainCommandKind`] variant.
@@ -950,6 +1014,226 @@ impl PersistedTerminalSessionProjectionV1 {
 /// Bounded immutable Procedure v2 session facts captured in the same transaction as a terminal
 /// job receipt. This is separate from the legacy aggregate projection so no v1 shape is forged.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PersistedGraphTerminalOperationV2 {
+    Complete {
+        from_graph_node_id: GraphNodeId,
+        from_attempt_id: AttemptId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_graph_node_id: Option<GraphNodeId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_attempt_id: Option<AttemptId>,
+    },
+    ItemMutation {
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        attempt_number: u64,
+        item_id: ItemId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_digest: Option<Sha256Digest>,
+    },
+    Failure {
+        error: PersistedGraphMutationFailureV2,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PersistedGraphMutationFailureV2 {
+    SessionNotRunning,
+    SessionRevisionConflict {
+        expected: RevisionV1,
+        actual: RevisionV1,
+    },
+    AttemptNotCurrent {
+        expected: AttemptId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actual: Option<AttemptId>,
+    },
+    GraphNodeTypeMismatch {
+        graph_node_id: GraphNodeId,
+        actual: String,
+    },
+    ItemNotFound {
+        item_id: ItemId,
+    },
+    ItemRevisionConflict {
+        expected: RevisionV1,
+        actual: RevisionV1,
+    },
+    ItemTypeMismatch,
+    ItemConstraintFailed,
+    ListValueNotFound,
+    ListValueDuplicate,
+    ArtifactChanged,
+    RequiredItemsMissing {
+        item_ids: Vec<ItemId>,
+    },
+    BlockersPresent,
+    SessionGoalMissing,
+    FreshGoalAssessmentMissing {
+        goal_revision: u64,
+    },
+}
+
+impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
+    type Error = StoreCodecErrorV1;
+
+    fn try_from(error: &crate::GraphMutationErrorV2) -> Result<Self, Self::Error> {
+        Ok(match error {
+            crate::GraphMutationErrorV2::SessionNotRunning => Self::SessionNotRunning,
+            crate::GraphMutationErrorV2::SessionRevisionConflict { expected, actual } => {
+                Self::SessionRevisionConflict {
+                    expected: *expected,
+                    actual: *actual,
+                }
+            }
+            crate::GraphMutationErrorV2::AttemptNotCurrent { expected, actual } => {
+                Self::AttemptNotCurrent {
+                    expected: expected.clone(),
+                    actual: actual.clone(),
+                }
+            }
+            crate::GraphMutationErrorV2::GraphNodeTypeMismatch {
+                graph_node_id,
+                actual,
+            } => Self::GraphNodeTypeMismatch {
+                graph_node_id: graph_node_id.clone(),
+                actual: match actual {
+                    podway_core::NodeKindV2::Action => "action",
+                    podway_core::NodeKindV2::Decision => "decision",
+                }
+                .to_owned(),
+            },
+            crate::GraphMutationErrorV2::ItemNotFound { item_id } => Self::ItemNotFound {
+                item_id: item_id.clone(),
+            },
+            crate::GraphMutationErrorV2::ItemRevisionConflict { expected, actual } => {
+                Self::ItemRevisionConflict {
+                    expected: *expected,
+                    actual: *actual,
+                }
+            }
+            crate::GraphMutationErrorV2::ItemTypeMismatch => Self::ItemTypeMismatch,
+            crate::GraphMutationErrorV2::ItemConstraintFailed => Self::ItemConstraintFailed,
+            crate::GraphMutationErrorV2::ListValueNotFound => Self::ListValueNotFound,
+            crate::GraphMutationErrorV2::ListValueDuplicate => Self::ListValueDuplicate,
+            crate::GraphMutationErrorV2::RequiredItemsMissing { item_ids } => {
+                Self::RequiredItemsMissing {
+                    item_ids: item_ids.clone(),
+                }
+            }
+            crate::GraphMutationErrorV2::BlockersPresent => Self::BlockersPresent,
+            crate::GraphMutationErrorV2::SessionGoalMissing => Self::SessionGoalMissing,
+            crate::GraphMutationErrorV2::FreshGoalAssessmentMissing { goal_revision } => {
+                Self::FreshGoalAssessmentMissing {
+                    goal_revision: goal_revision.get(),
+                }
+            }
+            crate::GraphMutationErrorV2::InvalidState(_)
+            | crate::GraphMutationErrorV2::Domain(_) => {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 graph mutation failure",
+                });
+            }
+        })
+    }
+}
+
+impl PersistedGraphTerminalOperationV2 {
+    pub fn complete(
+        from_graph_node_id: GraphNodeId,
+        from_attempt_id: AttemptId,
+        to_graph_node_id: Option<GraphNodeId>,
+        to_attempt_id: Option<AttemptId>,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Complete {
+            from_graph_node_id,
+            from_attempt_id,
+            to_graph_node_id,
+            to_attempt_id,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn item_mutation(
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        attempt_number: AttemptNumberV2,
+        item_id: ItemId,
+        value_digest: Option<Sha256Digest>,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::ItemMutation {
+            graph_node_id,
+            attempt_id,
+            attempt_number: attempt_number.get(),
+            item_id,
+            value_digest,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn failure(error: PersistedGraphMutationFailureV2) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Failure { error };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    fn validate(&self) -> Result<(), StoreCodecErrorV1> {
+        let valid = match self {
+            Self::Complete {
+                to_graph_node_id,
+                to_attempt_id,
+                ..
+            } => to_graph_node_id.is_some() == to_attempt_id.is_some(),
+            Self::ItemMutation { attempt_number, .. } => *attempt_number > 0,
+            Self::Failure { error } => error.validate(),
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(StoreCodecErrorV1::InvalidValue {
+                field: "Procedure v2 terminal operation projection",
+            })
+        }
+    }
+}
+
+impl PersistedGraphMutationFailureV2 {
+    fn validate(&self) -> bool {
+        match self {
+            Self::GraphNodeTypeMismatch { actual, .. } => {
+                matches!(actual.as_str(), "action" | "decision")
+            }
+            Self::RequiredItemsMissing { item_ids } => {
+                !item_ids.is_empty()
+                    && item_ids.len() <= 64
+                    && item_ids
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        == item_ids.len()
+            }
+            Self::FreshGoalAssessmentMissing { goal_revision } => *goal_revision > 0,
+            Self::SessionNotRunning
+            | Self::SessionRevisionConflict { .. }
+            | Self::AttemptNotCurrent { .. }
+            | Self::ItemNotFound { .. }
+            | Self::ItemRevisionConflict { .. }
+            | Self::ItemTypeMismatch
+            | Self::ItemConstraintFailed
+            | Self::ListValueNotFound
+            | Self::ListValueDuplicate
+            | Self::ArtifactChanged
+            | Self::BlockersPresent
+            | Self::SessionGoalMissing => true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PersistedGraphTerminalSessionProjectionV2 {
     session_id: SessionId,
@@ -960,6 +1244,8 @@ pub struct PersistedGraphTerminalSessionProjectionV2 {
     procedure_digest: Sha256Digest,
     entry_graph_node_id: podway_core::GraphNodeId,
     goal_tracking: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation: Option<PersistedGraphTerminalOperationV2>,
 }
 
 impl PersistedGraphTerminalSessionProjectionV2 {
@@ -983,6 +1269,7 @@ impl PersistedGraphTerminalSessionProjectionV2 {
             procedure_digest,
             entry_graph_node_id,
             goal_tracking,
+            operation: None,
         };
         projection.validate()?;
         Ok(projection)
@@ -1013,6 +1300,20 @@ impl PersistedGraphTerminalSessionProjectionV2 {
         self.goal_tracking
     }
 
+    pub fn operation(&self) -> Option<&PersistedGraphTerminalOperationV2> {
+        self.operation.as_ref()
+    }
+
+    pub fn with_operation(
+        mut self,
+        operation: PersistedGraphTerminalOperationV2,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        operation.validate()?;
+        self.operation = Some(operation);
+        self.validate()?;
+        Ok(self)
+    }
+
     fn validate(&self) -> Result<(), StoreCodecErrorV1> {
         if self.task_title.trim().is_empty()
             || self.task_title.chars().count() > 500
@@ -1024,6 +1325,9 @@ impl PersistedGraphTerminalSessionProjectionV2 {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "Procedure v2 terminal session projection",
             });
+        }
+        if let Some(operation) = &self.operation {
+            operation.validate()?;
         }
         Ok(())
     }
@@ -1374,16 +1678,37 @@ impl PersistedTerminalReceiptV1 {
         }
         if let Some(graph) = &self.graph_session_projection {
             graph.validate()?;
-            match &self.result {
-                PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
-                    session_id,
-                    revision_before,
-                    revision_after,
-                    changed,
-                }) if graph.session_id() == session_id
+            match (graph.operation(), &self.result) {
+                (
+                    None | Some(PersistedGraphTerminalOperationV2::Complete { .. }),
+                    PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                        session_id,
+                        revision_before,
+                        revision_after,
+                        changed,
+                    }),
+                ) if graph.session_id() == session_id
                     && graph.revision_before() == *revision_before
                     && graph.revision_after() == *revision_after
                     && *changed => {}
+                (
+                    Some(PersistedGraphTerminalOperationV2::ItemMutation { item_id, .. }),
+                    PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemChanged {
+                        session_id,
+                        item_id: result_item_id,
+                        revision_before,
+                        revision_after,
+                        changed,
+                    }),
+                ) if graph.session_id() == session_id
+                    && item_id == result_item_id
+                    && graph.revision_before() == *revision_before
+                    && graph.revision_after() == *revision_after
+                    && *changed == (*revision_before != *revision_after) => {}
+                (
+                    Some(PersistedGraphTerminalOperationV2::Failure { .. }),
+                    PersistedTerminalResultV1::Failure(_),
+                ) if graph.revision_before() == graph.revision_after() => {}
                 _ => {
                     return Err(StoreCodecErrorV1::InvalidValue {
                         field: "Procedure v2 terminal session projection",
@@ -1658,6 +1983,8 @@ struct TerminalEnvelopeV5 {
     start_identity: Option<PersistedStartIdentityV1>,
 }
 
+type TerminalEnvelopeV6 = TerminalEnvelopeV5;
+
 /// Core terminal receipts lack the immutable projections required by terminal schema v1, so they
 /// canonically encode as legacy schema v0.
 pub fn encode_terminal_receipt_v1(
@@ -1685,7 +2012,12 @@ pub fn encode_persisted_terminal_receipt_v1(
             let _ = public_terminal_envelope;
         }
         return canonical_json(&TerminalEnvelopeV5 {
-            schema: STORE_GRAPH_TERMINAL_SCHEMA_V1.to_owned(),
+            schema: if graph_session_projection.operation().is_some() {
+                STORE_GRAPH_TERMINAL_SCHEMA_V2
+            } else {
+                STORE_GRAPH_TERMINAL_SCHEMA_V1
+            }
+            .to_owned(),
             command: receipt
                 .lookup_command()
                 .cloned()
@@ -1886,6 +2218,37 @@ pub fn decode_terminal_receipt_v1(
             if envelope.job.identity_sequence == 0 {
                 return Err(StoreCodecErrorV1::InvalidValue {
                     field: "identity sequence",
+                });
+            }
+            if envelope.graph_session_projection.operation().is_some() {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 terminal operation projection",
+                });
+            }
+            let mut receipt = PersistedTerminalReceiptV1::new_with_graph_projection(
+                envelope.job.into(),
+                envelope.result,
+                envelope.job_projection,
+                envelope.graph_session_projection,
+            )?
+            .with_lookup_command(envelope.command)?
+            .with_response_context(envelope.response_context)?;
+            if let Some(start_identity) = envelope.start_identity {
+                receipt = receipt.with_start_identity(start_identity);
+            }
+            if let Some(public_terminal_envelope) = envelope.public_terminal_envelope {
+                receipt = receipt.with_public_terminal_envelope(public_terminal_envelope)?;
+            }
+            receipt
+        }
+        STORE_GRAPH_TERMINAL_SCHEMA_V2 => {
+            let envelope: TerminalEnvelopeV6 =
+                serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+            if envelope.job.identity_sequence == 0
+                || envelope.graph_session_projection.operation().is_none()
+            {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 terminal operation projection",
                 });
             }
             let mut receipt = PersistedTerminalReceiptV1::new_with_graph_projection(

@@ -31,6 +31,7 @@ pub mod v2_memory;
 pub mod v2_state;
 
 pub use codec::{
+    PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2,
     PersistedGraphTerminalSessionProjectionV2, PersistedResponseContextV1,
     PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
     PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
@@ -38,14 +39,15 @@ pub use codec::{
 pub use sqlite_store::SqliteStoreV1;
 pub use v2_goal::{AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2};
 pub use v2_memory::{
-    AttemptWorkflowMemoryV2, BlockerStateV2, EvidenceReadbackV2, EvidenceResolutionStateV2,
-    ItemSlotStateV2, WorkflowMemoryStateV2, canonical_recorded_items_json_v2,
-    recorded_items_digest_v2,
+    ActiveItemMutationV2, AttemptWorkflowMemoryV2, BlockerStateV2, EvidenceReadbackV2,
+    EvidenceResolutionStateV2, GraphMutationErrorV2, ItemSlotStateV2, WorkflowMemoryStateV2,
+    canonical_recorded_items_json_v2, recorded_items_digest_v2,
 };
 pub use v2_state::{
-    AttemptMetadataV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphSessionStateV2,
-    GraphStartCurrentTaskV2, GraphWorkspaceViewV2, ProcedureSnapshotV2,
-    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
+    AttemptMetadataV2, GraphActionCompletionOutcomeV2, GraphItemMutationOutcomeV2,
+    GraphNodeCounterV2, GraphNodeSnapshotV2, GraphSessionStateV2, GraphStartCurrentTaskV2,
+    GraphWorkspaceViewV2, ProcedureSnapshotV2, StoreGraphMutationContractV2,
+    StoreGraphReadContractV2, StoreGraphStateContractV2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;

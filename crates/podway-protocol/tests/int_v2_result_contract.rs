@@ -230,6 +230,39 @@ fn examples() -> BTreeMap<&'static str, Value> {
 }
 
 #[test]
+fn v2run003_readback_schema_accepts_the_declared_list_maximum() {
+    let values = (0..200)
+        .map(|index| format!("value-{index}"))
+        .collect::<Vec<_>>();
+    let mut next = examples()["podway.next-result/v2"].clone();
+    next["references"] = json!([{
+        "source_graph_node_id": "source",
+        "source_title": "Source",
+        "source_attempt_id": UUID,
+        "source_attempt_number": 1,
+        "items_digest": DIGEST,
+        "state": "resolved"
+    }]);
+    next["readback"] = json!([{
+        "source_graph_node_id": "source",
+        "source_title": "Source",
+        "source_attempt_id": UUID,
+        "source_attempt_number": 1,
+        "items_digest": DIGEST,
+        "state": "resolved",
+        "items": [{"item_id": "values", "type": "list", "value": values}]
+    }]);
+    assert_valid("schemas/next-result-v2.schema.json", &next);
+    assert!(decode_result_schema_contract_v2(next.as_object().unwrap()).is_some());
+
+    next["readback"][0]["items"][0]["value"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("overflow"));
+    assert_invalid("schemas/next-result-v2.schema.json", &next);
+}
+
+#[test]
 fn v2grf005_graph_result_uses_plantuml_as_the_machine_format_name() {
     let mut result = examples()["podway.procedure-graph-result/v1"].clone();
     result["format"] = json!("plantuml");

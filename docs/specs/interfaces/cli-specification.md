@@ -92,15 +92,17 @@ identity results before using any reported field.
 
 ## Procedure v2 contract grammar
 
-The `status --verbose` shape below is executable for Procedure v2 sessions.
+The status and next shapes below are executable for Procedure v2 sessions.
 Procedure v2 authoring and preview commands are executable and are specified in
-their dedicated sections below. The five reserved mutation routes and goal-bearing
-start are exposed by the CLI grammar, but remain `reserved_contract` capabilities
-until their owning runtime tasks land. For an active Procedure v2 session, the CLI
-uses the standard status projection to supply omitted command-specific fences. An
+their dedicated sections below. Shared item mutations and `session.complete` are
+also executable for the active action attempt and return their registered v2
+result families. The five reserved mutation routes and goal-bearing start are
+exposed by the CLI grammar, but remain `reserved_contract` capabilities until
+their owning runtime tasks land. For an active Procedure v2 session, the CLI uses
+the standard status projection to supply omitted command-specific fences. An
 invocation may instead provide every required fence explicitly and skip that
-preflight. Either form reaches the daemon's typed
-`UNSUPPORTED_V2_CAPABILITY` boundary and is never reinterpreted as v1.
+preflight. Reserved forms reach the daemon's typed
+`UNSUPPORTED_V2_CAPABILITY` boundary and are never reinterpreted as v1.
 
 ```text
 podway status --verbose [--history-before <trace-sequence>]

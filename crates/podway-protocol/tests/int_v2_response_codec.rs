@@ -36,6 +36,35 @@ fn legacy_output_v1() -> Value {
     })
 }
 
+fn shared_mutation_output_v2(command: &str, result_schema: &str) -> Value {
+    let mut fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/result-families.json"
+    ))
+    .unwrap();
+    let result = fixtures["fixtures"][result_schema].take();
+    json!({
+        "schema": "podway.output/v2",
+        "request_id": "00000000-0000-4000-8000-000000000001",
+        "command": command,
+        "generated_at": "2026-08-09T00:00:00.000Z",
+        "workspace": {
+            "uuid": "00000000-0000-4000-8000-000000000002",
+            "root": "/worktree",
+            "latest_workspace_sequence": 1
+        },
+        "job": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 1,
+            "state": "succeeded",
+            "submitted_at": "2026-08-09T00:00:00.000Z",
+            "claimed_at": "2026-08-09T00:00:00.000Z",
+            "finished_at": "2026-08-09T00:00:00.000Z"
+        },
+        "result": result,
+        "warnings": []
+    })
+}
+
 #[test]
 fn v2plt006_v2_aware_response_codec_round_trips_output_v2() {
     let expected = diagnostics_output_v2();
@@ -46,6 +75,28 @@ fn v2plt006_v2_aware_response_codec_round_trips_output_v2() {
 
     let encoded = encode_response_payload_v2(&decoded).expect("v2 output must encode");
     assert_eq!(serde_json::from_slice::<Value>(&encoded).unwrap(), expected);
+}
+
+#[test]
+fn v2run003_shared_mutation_commands_select_output_v2_result_families() {
+    for (command, result_schema) in [
+        ("item.set", "podway.item-mutation-result/v2"),
+        ("session.complete", "podway.stage-transition-result/v2"),
+    ] {
+        let expected = shared_mutation_output_v2(command, result_schema);
+        let decoded = decode_response_payload_v2(&serde_json::to_vec(&expected).unwrap())
+            .unwrap_or_else(|error| panic!("{command} output/v2 must decode: {error}"));
+        let ResponseEnvelopeV2::OutputV2(output) = &decoded else {
+            panic!("{command} must select output/v2")
+        };
+        assert_eq!(output.command().as_str(), command);
+        assert_eq!(output.result()["schema"], result_schema);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&encode_response_payload_v2(&decoded).unwrap())
+                .unwrap(),
+            expected
+        );
+    }
 }
 
 #[test]

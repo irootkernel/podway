@@ -11,22 +11,24 @@ use crate::{
     workspace::ResetMarkerV1,
 };
 use podway_config::{
-    AuthoringContext, ParsedProcedure, ProcedureFormatV1, ProcedureSourceLabel,
-    ProcedureWarningPolicyV1, parse_procedure_document, parse_procedure_v1, sniff_procedure_schema,
-    validate_procedure_v2, vet_procedure_v2,
+    AuthoringContext, ParsedNodeDefinition, ParsedProcedure, ParsedProcedureV2,
+    ProcedureDocumentFormat, ProcedureFormatV1, ProcedureSourceLabel, ProcedureWarningPolicyV1,
+    parse_procedure_document, parse_procedure_v1, sniff_procedure_schema, validate_procedure_v2,
+    vet_procedure_v2,
 };
 use podway_core::{
     AddItemV1, ArtifactLocationKindV1, ArtifactValueV1, AttachItemV1, AttemptId, AttemptLifecycle,
     AttemptNumberV2, AttemptV1, AttemptValidityV2, AuthoringSeverity, BlockSessionV1, BlockerId,
     BlockerState, CancelSessionV1, CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1,
     CheckItemV1, ClearItemV1, CommandContextV1, CompleteSessionV1, DomainCommand, DomainError,
-    DomainResult, ItemId, ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1, JobId,
-    LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1,
-    RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1, RetrySessionV1,
-    ReturnSessionV1, Revision, SessionAggregateV1, SessionAttemptV2, SessionCommandV1, SessionId,
-    SessionLifecycle, SessionTraceV2, SetItemV1, Sha256Digest, SkipSessionV1, StageSpecV1,
-    StartReplaceSessionV1, StartSessionV1, TraceSequenceV2, UnblockSessionV1, UncheckItemV1,
-    UnixMillis, WorkspaceId, apply_transition_v1, canonicalize_json_v1, required_items_satisfied,
+    DomainResult, GraphPlacementV2, ItemId, ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1,
+    JobId, LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1,
+    ProcedureSourceLabelV1, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1,
+    RetrySessionV1, ReturnSessionV1, Revision, SessionAggregateV1, SessionAttemptV2,
+    SessionCommandV1, SessionId, SessionLifecycle, SessionTraceV2, SetItemV1, Sha256Digest,
+    SkipSessionV1, StageSpecV1, StartReplaceSessionV1, StartSessionV1, TraceSequenceV2,
+    UnblockSessionV1, UncheckItemV1, UnixMillis, WorkspaceId, apply_transition_v1,
+    canonicalize_json_v1, required_items_satisfied,
 };
 use podway_presets::lookup as lookup_embedded_preset_v1;
 use podway_protocol::{
@@ -37,13 +39,15 @@ use podway_protocol::{
     WorktreeSelectorWireV1, canonical_reset_all_identity_v1,
 };
 use podway_store::{
-    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, AttemptMetadataV2,
-    CanonicalExecutionJsonV1, ClaimedJobV1, DurableWorktreeIdentityV1, GraphNodeCounterV2,
-    GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1, PersistedResponseContextV1,
-    PersistedSessionMutationV1, ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1,
-    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreGraphMutationContractV2,
-    StoreIdempotencyReadContractV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
-    WorkerIdV1, WorkflowMemoryStateV2, WorkspaceBindingV1,
+    ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1,
+    AttemptMetadataV2, CanonicalExecutionJsonV1, ClaimedJobV1, DurableWorktreeIdentityV1,
+    GraphMutationErrorV2, GraphNodeCounterV2, GraphSessionStateV2, GraphStartCurrentTaskV2,
+    IdempotencyKeyV1, PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2,
+    PersistedResponseContextV1, PersistedSessionMutationV1, ProcedureSnapshotV2,
+    RevisionAttemptItemPreconditionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
+    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreIdempotencyReadContractV1,
+    StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkflowMemoryStateV2,
+    WorkspaceBindingV1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -54,6 +58,7 @@ const EXECUTION_DOCUMENT_VERSION_V3: u8 = 3;
 const EXECUTION_DOCUMENT_VERSION_V4: u8 = 4;
 const EXECUTION_DOCUMENT_VERSION_V5: u8 = 5;
 const EXECUTION_DOCUMENT_VERSION_V6: u8 = 6;
+const EXECUTION_DOCUMENT_VERSION_V7: u8 = 7;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -696,6 +701,343 @@ fn decode_procedure_v2_start_execution_v1(
         replace,
         expected_current,
         state,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct AdmittedProcedureV2MutationV1 {
+    selector: WorktreeSelectorWireV1,
+    workspace_id: WorkspaceId,
+    command: SliceCommandV1,
+    fresh_attempt_id: Option<AttemptId>,
+    attached_artifact: Option<ArtifactValueV1>,
+}
+
+fn is_procedure_v2_action_mutation_v1(command: &SliceCommandV1) -> bool {
+    matches!(
+        command,
+        SliceCommandV1::SessionComplete(_)
+            | SliceCommandV1::ItemCheck(_)
+            | SliceCommandV1::ItemUncheck(_)
+            | SliceCommandV1::ItemSet(_)
+            | SliceCommandV1::ItemAdd(_)
+            | SliceCommandV1::ItemRemove(_)
+            | SliceCommandV1::ItemAttach(_)
+            | SliceCommandV1::ItemClear(_)
+    )
+}
+
+fn procedure_v2_mutation_execution_document_v1(
+    admitted: &AdmittedProcedureV2MutationV1,
+) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
+    let (preconditions, payload) = execution_components_v1(&admitted.command);
+    let document = json!({
+        "attached_artifact": admitted.attached_artifact.as_ref().map(artifact_value_v1),
+        "command": admitted.command.command_name(),
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V7,
+        "fresh_attempt_id": admitted.fresh_attempt_id,
+        "payload": payload,
+        "preconditions": preconditions,
+        "selector": admitted.selector,
+        "workspace_id": admitted.workspace_id,
+    });
+    let canonical = canonicalize_json_v1(&document).map_err(|_| {
+        invalid_execution_v1("Procedure v2 mutation execution cannot be canonicalized")
+    })?;
+    CanonicalExecutionJsonV1::new(canonical).map_err(ExecutionErrorV1::InvalidStoreValue)
+}
+
+fn decode_procedure_v2_mutation_execution_v1(
+    source: &str,
+) -> Result<AdmittedProcedureV2MutationV1, ExecutionErrorV1> {
+    let root: Value = serde_json::from_str(source)
+        .map_err(|_| invalid_execution_v1("Procedure v2 mutation execution is not JSON"))?;
+    let object = root
+        .as_object()
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 mutation execution root is invalid"))?;
+    require_exact_keys_v1(
+        object,
+        &[
+            "attached_artifact",
+            "command",
+            "execution_version",
+            "fresh_attempt_id",
+            "payload",
+            "preconditions",
+            "selector",
+            "workspace_id",
+        ],
+    )?;
+    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V7) {
+        return Err(invalid_execution_v1(
+            "Procedure v2 mutation execution version is unsupported",
+        ));
+    }
+    let command = decode_command_components_v1(
+        u64::from(EXECUTION_DOCUMENT_VERSION_V5),
+        value_string_v1(object, "command")?,
+        value_object_v1(object, "preconditions")?,
+        value_object_v1(object, "payload")?,
+    )?;
+    if !is_procedure_v2_action_mutation_v1(&command) {
+        return Err(invalid_execution_v1(
+            "Procedure v2 mutation command is outside the admitted set",
+        ));
+    }
+    let fresh_attempt_id = value_optional_typed_v1(object, "fresh_attempt_id")?;
+    let attached_artifact = match value_v1(object, "attached_artifact")? {
+        Value::Null => None,
+        Value::Object(value) => Some(decode_artifact_value_v1(value)?),
+        _ => {
+            return Err(invalid_execution_v1(
+                "Procedure v2 attached artifact resolution is invalid",
+            ));
+        }
+    };
+    match &command {
+        SliceCommandV1::SessionComplete(_) if attached_artifact.is_none() => {}
+        SliceCommandV1::ItemAttach(_)
+            if attached_artifact.is_some() && fresh_attempt_id.is_none() => {}
+        SliceCommandV1::ItemCheck(_)
+        | SliceCommandV1::ItemUncheck(_)
+        | SliceCommandV1::ItemSet(_)
+        | SliceCommandV1::ItemAdd(_)
+        | SliceCommandV1::ItemRemove(_)
+        | SliceCommandV1::ItemClear(_)
+            if attached_artifact.is_none() && fresh_attempt_id.is_none() => {}
+        _ => {
+            return Err(invalid_execution_v1(
+                "Procedure v2 mutation resolution does not match the command",
+            ));
+        }
+    }
+    Ok(AdmittedProcedureV2MutationV1 {
+        selector: serde_json::from_value(value_v1(object, "selector")?.clone())
+            .map_err(|_| invalid_execution_v1("Procedure v2 mutation selector is invalid"))?,
+        workspace_id: value_typed_v1(object, "workspace_id")?,
+        command,
+        fresh_attempt_id,
+        attached_artifact,
+    })
+}
+
+fn artifact_value_v1(artifact: &ArtifactValueV1) -> Value {
+    let location_kind = match artifact.location_kind() {
+        ArtifactLocationKindV1::LocalPath => "local_path",
+        ArtifactLocationKindV1::ExternalReference => "external_reference",
+    };
+    json!({
+        "digest": artifact.digest(),
+        "location": artifact.location(),
+        "location_kind": location_kind,
+        "media_type": artifact.media_type(),
+        "size_bytes": artifact.size_bytes(),
+    })
+}
+
+fn decode_artifact_value_v1(
+    object: &Map<String, Value>,
+) -> Result<ArtifactValueV1, ExecutionErrorV1> {
+    require_exact_keys_v1(
+        object,
+        &[
+            "digest",
+            "location",
+            "location_kind",
+            "media_type",
+            "size_bytes",
+        ],
+    )?;
+    let location = value_string_v1(object, "location")?.to_owned();
+    let digest = value_typed_v1(object, "digest")?;
+    let size_bytes = value_u64_v1(object, "size_bytes")?;
+    let media_type = value_string_v1(object, "media_type")?.to_owned();
+    match value_string_v1(object, "location_kind")? {
+        "local_path" => ArtifactValueV1::local_path(location, digest, size_bytes, media_type),
+        "external_reference" => {
+            ArtifactValueV1::external_reference(location, digest, size_bytes, media_type)
+        }
+        _ => {
+            return Err(invalid_execution_v1(
+                "Procedure v2 artifact location kind is invalid",
+            ));
+        }
+    }
+    .map_err(ExecutionErrorV1::BoundaryDomain)
+}
+
+fn rehydrate_procedure_v2_execution_v1(
+    state: &GraphSessionStateV2,
+) -> Result<ParsedProcedureV2, ExecutionErrorV1> {
+    let parsed = parse_procedure_document(
+        state.snapshot().canonical_json().as_str().as_bytes(),
+        ProcedureDocumentFormat::Json,
+    )
+    .map_err(|_| invalid_execution_v1("Procedure v2 snapshot cannot be parsed"))?;
+    let ParsedProcedure::V2(parsed) = parsed else {
+        return Err(invalid_execution_v1(
+            "Procedure v2 snapshot has an invalid schema",
+        ));
+    };
+    let validated = validate_procedure_v2(parsed)
+        .map_err(|_| invalid_execution_v1("Procedure v2 snapshot cannot be validated"))?;
+    if validated.digest() != state.snapshot().digest()
+        || validated.canonical_json().as_str() != state.snapshot().canonical_json().as_str()
+    {
+        return Err(invalid_execution_v1(
+            "Procedure v2 snapshot identity is inconsistent",
+        ));
+    }
+    Ok(validated.parsed().clone())
+}
+
+fn fresh_complete_attempt_id_v1<Ids: ExecutionIdSourceV1>(
+    state: &GraphSessionStateV2,
+    ids: &Ids,
+) -> Result<Option<AttemptId>, ExecutionErrorV1> {
+    let Some(active) = state.trace().active_attempt() else {
+        return Ok(None);
+    };
+    let procedure = rehydrate_procedure_v2_execution_v1(state)?;
+    Ok(match procedure.graph().placement(active.graph_node_id()) {
+        Some(GraphPlacementV2::Action(action)) if !action.outcome().is_terminal() => {
+            Some(ids.next_attempt_id())
+        }
+        Some(GraphPlacementV2::Action(_) | GraphPlacementV2::Decision(_)) => None,
+        None => {
+            return Err(invalid_execution_v1(
+                "Procedure v2 active graph placement is absent",
+            ));
+        }
+    })
+}
+
+fn required_local_artifacts_v2(
+    state: &GraphSessionStateV2,
+) -> Result<Vec<(ItemId, ArtifactValueV1)>, ExecutionErrorV1> {
+    let Some(active) = state.trace().active_attempt() else {
+        return Ok(Vec::new());
+    };
+    let procedure = rehydrate_procedure_v2_execution_v1(state)?;
+    let Some(GraphPlacementV2::Action(placement)) =
+        procedure.graph().placement(active.graph_node_id())
+    else {
+        return Ok(Vec::new());
+    };
+    let definition = procedure
+        .node_definitions()
+        .iter()
+        .find_map(|definition| match definition {
+            ParsedNodeDefinition::Action(definition)
+                if definition.id() == placement.definition() =>
+            {
+                Some(definition)
+            }
+            ParsedNodeDefinition::Action(_) | ParsedNodeDefinition::Decision(_) => None,
+        })
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 action definition is absent"))?;
+    let memory = state
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .find(|memory| memory.attempt_id() == active.attempt_id())
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 active workflow memory is absent"))?;
+    if definition.items().len() != memory.item_slots().len()
+        || definition
+            .items()
+            .iter()
+            .zip(memory.item_slots())
+            .any(|(specification, slot)| {
+                specification.id() != slot.item_id()
+                    || specification.item_type() != slot.item_type()
+            })
+    {
+        return Err(invalid_execution_v1(
+            "Procedure v2 active items disagree with the snapshot",
+        ));
+    }
+    Ok(definition
+        .items()
+        .iter()
+        .zip(memory.item_slots())
+        .filter_map(|(specification, slot)| {
+            let artifact = slot.value().and_then(|value| value.as_artifact())?;
+            (specification.common().required()
+                && artifact.location_kind() == ArtifactLocationKindV1::LocalPath)
+                .then(|| (slot.item_id().clone(), artifact.clone()))
+        })
+        .collect())
+}
+
+#[derive(Clone, Debug)]
+struct PreparedProcedureV2ItemMutationV1 {
+    item_id: ItemId,
+    expected_attempt_id: AttemptId,
+    expected_item_revision: Revision,
+    mutation: ActiveItemMutationV2,
+}
+
+fn prepare_procedure_v2_item_mutation_v1(
+    admitted: &AdmittedProcedureV2MutationV1,
+) -> Result<PreparedProcedureV2ItemMutationV1, ExecutionErrorV1> {
+    let (item_id, preconditions, mutation) = match &admitted.command {
+        SliceCommandV1::ItemCheck(input) => (
+            &input.item_id,
+            &input.preconditions,
+            ActiveItemMutationV2::Check,
+        ),
+        SliceCommandV1::ItemUncheck(input) => (
+            &input.item_id,
+            &input.preconditions,
+            ActiveItemMutationV2::Uncheck,
+        ),
+        SliceCommandV1::ItemSet(input) => (
+            &input.item_id,
+            &input.preconditions,
+            ActiveItemMutationV2::Set {
+                value: input.value.clone(),
+            },
+        ),
+        SliceCommandV1::ItemAdd(input) => (
+            &input.item_id,
+            &input.preconditions,
+            ActiveItemMutationV2::Add {
+                value: input.value.clone(),
+            },
+        ),
+        SliceCommandV1::ItemRemove(input) => (
+            &input.item_id,
+            &input.preconditions,
+            ActiveItemMutationV2::Remove {
+                value: input.value.clone(),
+                ignore_missing: input.ignore_missing,
+            },
+        ),
+        SliceCommandV1::ItemAttach(input) => (
+            &input.item_id,
+            &input.preconditions,
+            ActiveItemMutationV2::Attach {
+                value: admitted.attached_artifact.clone().ok_or_else(|| {
+                    invalid_execution_v1("Procedure v2 attachment resolution is absent")
+                })?,
+            },
+        ),
+        SliceCommandV1::ItemClear(input) => (
+            &input.item_id,
+            &input.preconditions,
+            ActiveItemMutationV2::Clear,
+        ),
+        _ => {
+            return Err(invalid_execution_v1(
+                "Procedure v2 item preparation received another command",
+            ));
+        }
+    };
+    Ok(PreparedProcedureV2ItemMutationV1 {
+        item_id: item_id.clone(),
+        expected_attempt_id: preconditions.expected_attempt_id.clone(),
+        expected_item_revision: preconditions.expected_item_revision,
+        mutation,
     })
 }
 
@@ -2185,7 +2527,10 @@ where
 impl<Store, Ids, Clock, Procedures, Artifacts, Workspaces>
     DaemonExecutionEngineV1<Store, Ids, Clock, Procedures, Artifacts, Workspaces>
 where
-    Store: StoreContractV1 + StoreIdempotencyReadContractV1 + StoreGraphMutationContractV2,
+    Store: StoreContractV1
+        + StoreIdempotencyReadContractV1
+        + StoreGraphMutationContractV2
+        + StoreGraphReadContractV2,
     Ids: ExecutionIdSourceV1,
     Clock: ExecutionClockV1,
     Procedures: ProcedureProviderV1,
@@ -2344,6 +2689,139 @@ where
             .map_err(ProcedureV2StartPreparationErrorV1::Execution)
     }
 
+    /// Attempts the Procedure v2 action/item path. The immutable execution document freezes all
+    /// generated IDs and attachment metadata before admission; an absent graph task preserves the
+    /// unchanged v1 fallback.
+    pub fn admit_procedure_v2_mutation_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &SliceRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        if !is_procedure_v2_action_mutation_v1(request.command()) {
+            return Ok(None);
+        }
+        if let Some(existing) = self
+            .store
+            .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)?
+        {
+            let Some(canonical_execution) = existing.canonical_execution() else {
+                return Ok(None);
+            };
+            let version = serde_json::from_str::<Value>(canonical_execution.as_str())
+                .ok()
+                .and_then(|value| value.get("execution_version").and_then(Value::as_u64));
+            if version != Some(u64::from(EXECUTION_DOCUMENT_VERSION_V7)) {
+                return Ok(None);
+            }
+            let admitted = decode_procedure_v2_mutation_execution_v1(canonical_execution.as_str())?;
+            if admitted.workspace_id != *expected_workspace.identity().workspace_uuid() {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 mutation replay workspace identity is invalid",
+                ));
+            }
+            let actual = request_digest_v1(
+                request,
+                expected_workspace.identity().workspace_uuid(),
+                None,
+            )?;
+            if existing.request_digest() != &actual {
+                return Err(StoreErrorV1::IdempotencyDigestConflictV1 {
+                    expected: existing.request_digest().clone(),
+                    actual,
+                }
+                .into());
+            }
+            return Ok(Some(existing.outcome().clone()));
+        }
+
+        let binding = self
+            .bound_workspace(request.selector())
+            .map_err(ExecutionErrorV1::from_boundary)?;
+        if binding.identity() != expected_workspace.identity() {
+            return Err(ExecutionErrorV1::BoundaryDomain(
+                DomainError::InvalidState {
+                    reason: "revalidated workspace does not match the scheduler identity",
+                },
+            ));
+        }
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(binding.identity())?;
+        let Some(state) = view.graph_state() else {
+            return Ok(None);
+        };
+        if let Some(expected) = expected_session_id_v1(request.command())
+            && state.trace().session_id() != expected
+        {
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: expected.clone(),
+                actual: Some(state.trace().session_id().clone()),
+            });
+        }
+        let attached_artifact = match request.command() {
+            SliceCommandV1::ItemAttach(input) => Some(match &input.source {
+                ItemAttachSourceV1::Path { path, media_type } => {
+                    let artifact = self
+                        .artifacts
+                        .hash_local_artifact(&binding, path, media_type.as_deref())
+                        .map_err(BoundaryDispositionV1::from)
+                        .map_err(ExecutionErrorV1::from_boundary)?;
+                    validate_local_attached_artifact_v1(path, media_type.as_deref(), &artifact)
+                        .map_err(ExecutionErrorV1::BoundaryDomain)?;
+                    artifact
+                }
+                ItemAttachSourceV1::OpaqueReference {
+                    reference,
+                    digest,
+                    size_bytes,
+                    media_type,
+                } => ArtifactValueV1::external_reference(
+                    reference,
+                    digest.clone(),
+                    *size_bytes,
+                    media_type,
+                )
+                .map_err(ExecutionErrorV1::BoundaryDomain)?,
+            }),
+            _ => None,
+        };
+        let fresh_attempt_id = if matches!(request.command(), SliceCommandV1::SessionComplete(_)) {
+            fresh_complete_attempt_id_v1(state, &self.ids)?
+        } else {
+            None
+        };
+        let admitted = AdmittedProcedureV2MutationV1 {
+            selector: request.selector().clone(),
+            workspace_id: binding.identity().workspace_uuid().clone(),
+            command: request.command().clone(),
+            fresh_attempt_id,
+            attached_artifact,
+        };
+        let canonical_execution = procedure_v2_mutation_execution_document_v1(&admitted)?;
+        let request_digest = request_digest_v1(request, binding.identity().workspace_uuid(), None)?;
+        let durable = AdmitRequestV1::new_with_canonical_execution(
+            command_for_admission_v1(request.command())?,
+            idempotency_key,
+            self.ids.next_job_id(),
+            store_preconditions_v1(request.command())?,
+            request_digest,
+            self.clock.now(),
+            canonical_execution,
+        )
+        .with_procedure_v2_execution()
+        .with_session_identity(admission_session_identity_v1(request.command()));
+        let durable = match response_context {
+            Some(context) => durable.with_response_context(context),
+            None => durable,
+        };
+        self.store
+            .admit(binding.identity(), durable)
+            .map(Some)
+            .map_err(Into::into)
+    }
+
     /// Claims either durable flavor, reconstructing Procedure v2 exclusively from the admitted
     /// execution document before committing graph state and the terminal receipt atomically.
     pub fn execute_next_with_graph_v2(
@@ -2379,22 +2857,236 @@ where
                 "scheduler workspace does not match the Procedure v2 claim",
             ));
         }
-        let admitted = decode_procedure_v2_start_execution_v1(
-            claimed.execution().canonical_execution().as_str(),
-        )?;
+        let document: Value =
+            serde_json::from_str(claimed.execution().canonical_execution().as_str())
+                .map_err(|_| invalid_execution_v1("Procedure v2 execution is not JSON"))?;
+        let version = document
+            .get("execution_version")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid_execution_v1("Procedure v2 execution version is absent"))?;
+        let receipt = match version {
+            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V6) => {
+                let admitted = decode_procedure_v2_start_execution_v1(
+                    claimed.execution().canonical_execution().as_str(),
+                )?;
+                if admitted.workspace_id != *claimed.claim().identity().workspace_uuid() {
+                    return Err(invalid_execution_v1(
+                        "Procedure v2 execution workspace does not match the claim",
+                    ));
+                }
+                validate_procedure_v2_durable_execution_v1(&admitted, claimed.execution())?;
+                self.store.commit_graph_start_terminal_v2(
+                    claimed.claim().clone(),
+                    admitted.expected_current,
+                    admitted.state,
+                    now,
+                )?
+            }
+            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V7) => {
+                let admitted = decode_procedure_v2_mutation_execution_v1(
+                    claimed.execution().canonical_execution().as_str(),
+                )?;
+                self.execute_procedure_v2_mutation_claimed(&workspace, &claimed, admitted, now)?
+            }
+            _ => {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 execution version is unsupported",
+                ));
+            }
+        };
+        Ok(Some(receipt))
+    }
+
+    fn execute_procedure_v2_mutation_claimed(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        claimed: &ClaimedJobV1,
+        admitted: AdmittedProcedureV2MutationV1,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
         if admitted.workspace_id != *claimed.claim().identity().workspace_uuid() {
             return Err(invalid_execution_v1(
-                "Procedure v2 execution workspace does not match the claim",
+                "Procedure v2 mutation workspace does not match the claim",
             ));
         }
-        validate_procedure_v2_durable_execution_v1(&admitted, claimed.execution())?;
-        let receipt = self.store.commit_graph_start_terminal_v2(
-            claimed.claim().clone(),
-            admitted.expected_current,
-            admitted.state,
+        validate_procedure_v2_mutation_durable_execution_v1(&admitted, claimed.execution())?;
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(claimed.claim().identity())?;
+        let state = view.graph_state().ok_or_else(|| {
+            invalid_execution_v1("Procedure v2 claimed mutation has no current graph session")
+        })?;
+        let expected_session = expected_session_id_v1(&admitted.command).ok_or_else(|| {
+            invalid_execution_v1("Procedure v2 mutation has no session identity fence")
+        })?;
+        if state.trace().session_id() != expected_session {
+            return Err(invalid_execution_v1(
+                "Procedure v2 claimed mutation session identity changed",
+            ));
+        }
+        let expected_workspace_revision = state.workspace_revision();
+        let expected_session_revision = state.trace().revision();
+        match &admitted.command {
+            SliceCommandV1::SessionComplete(input) => {
+                let outcome = match state.complete_active_action_v2(
+                    input.preconditions.expected_session_revision,
+                    &input.preconditions.expected_attempt_id,
+                    admitted.fresh_attempt_id.clone(),
+                    now,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                };
+                for (item_id, artifact) in required_local_artifacts_v2(state)? {
+                    if let Err(error) = self
+                        .artifacts
+                        .revalidate_local_artifact(workspace, &item_id, &artifact)
+                    {
+                        return match error {
+                            ExecutionBoundaryErrorV1::Domain(DomainError::ArtifactChanged) => {
+                                self.commit_graph_artifact_changed_failure_v2(claimed, state, now)
+                            }
+                            error => Err(ExecutionErrorV1::from_boundary(error.into())),
+                        };
+                    }
+                }
+                let operation = PersistedGraphTerminalOperationV2::complete(
+                    outcome.from_graph_node_id().clone(),
+                    outcome.from_attempt_id().clone(),
+                    outcome.to_graph_node_id().cloned(),
+                    outcome.to_attempt_id().cloned(),
+                )
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 complete operation cannot be persisted")
+                })?;
+                let result = DomainResult::SessionChanged {
+                    session_id: state.trace().session_id().clone(),
+                    revision_before: state.trace().revision(),
+                    revision_after: outcome.state().trace().revision(),
+                    changed: true,
+                };
+                self.store
+                    .commit_graph_mutation_terminal_v2(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        Some(outcome.into_state()),
+                        TerminalResultV1::Success(result),
+                        operation,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
+            SliceCommandV1::ItemCheck(_)
+            | SliceCommandV1::ItemUncheck(_)
+            | SliceCommandV1::ItemSet(_)
+            | SliceCommandV1::ItemAdd(_)
+            | SliceCommandV1::ItemRemove(_)
+            | SliceCommandV1::ItemAttach(_)
+            | SliceCommandV1::ItemClear(_) => {
+                let prepared = prepare_procedure_v2_item_mutation_v1(&admitted)?;
+                let active = state.trace().active_attempt().ok_or_else(|| {
+                    invalid_execution_v1("Procedure v2 claimed item mutation has no active attempt")
+                })?;
+                let outcome = match state.mutate_active_item_v2(
+                    &prepared.expected_attempt_id,
+                    &prepared.item_id,
+                    prepared.expected_item_revision,
+                    prepared.mutation,
+                    now,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                };
+                let operation = PersistedGraphTerminalOperationV2::item_mutation(
+                    active.graph_node_id().clone(),
+                    active.attempt_id().clone(),
+                    active.number(),
+                    prepared.item_id.clone(),
+                    outcome.value_digest().cloned(),
+                )
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 item operation cannot be persisted")
+                })?;
+                let result = DomainResult::ItemChanged {
+                    session_id: state.trace().session_id().clone(),
+                    item_id: prepared.item_id,
+                    revision_before: state.trace().revision(),
+                    revision_after: outcome.state().trace().revision(),
+                    changed: outcome.changed(),
+                };
+                let next_state = outcome.changed().then(|| outcome.into_state());
+                self.store
+                    .commit_graph_mutation_terminal_v2(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        next_state,
+                        TerminalResultV1::Success(result),
+                        operation,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
+            _ => Err(invalid_execution_v1(
+                "Procedure v2 claimed mutation command is invalid",
+            )),
+        }
+    }
+
+    fn commit_graph_mutation_failure_v2(
+        &self,
+        claimed: &ClaimedJobV1,
+        state: &GraphSessionStateV2,
+        error: &GraphMutationErrorV2,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        let failure = PersistedGraphMutationFailureV2::try_from(error)
+            .map_err(|_| invalid_execution_v1("Procedure v2 graph failure cannot be persisted"))?;
+        self.commit_persisted_graph_mutation_failure_v2(claimed, state, failure, now)
+    }
+
+    fn commit_graph_artifact_changed_failure_v2(
+        &self,
+        claimed: &ClaimedJobV1,
+        state: &GraphSessionStateV2,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        self.commit_persisted_graph_mutation_failure_v2(
+            claimed,
+            state,
+            PersistedGraphMutationFailureV2::ArtifactChanged,
             now,
-        )?;
-        Ok(Some(receipt))
+        )
+    }
+
+    fn commit_persisted_graph_mutation_failure_v2(
+        &self,
+        claimed: &ClaimedJobV1,
+        state: &GraphSessionStateV2,
+        failure: PersistedGraphMutationFailureV2,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        let operation = PersistedGraphTerminalOperationV2::failure(failure).map_err(|_| {
+            invalid_execution_v1("Procedure v2 failure operation cannot be persisted")
+        })?;
+        self.store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                state.workspace_revision(),
+                state.trace().revision(),
+                None,
+                TerminalResultV1::Failure(DomainError::InvalidState {
+                    reason: "Procedure v2 graph mutation failed",
+                }),
+                operation,
+                now,
+            )
+            .map_err(Into::into)
     }
 }
 
@@ -2431,6 +3123,24 @@ fn validate_procedure_v2_durable_execution_v1(
     if !matches {
         return Err(invalid_execution_v1(
             "Procedure v2 execution document does not match durable admission metadata",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_procedure_v2_mutation_durable_execution_v1(
+    admitted: &AdmittedProcedureV2MutationV1,
+    execution: &podway_store::ClaimedExecutionV1,
+) -> Result<(), ExecutionErrorV1> {
+    let command = command_for_admission_v1(&admitted.command)?;
+    let preconditions = store_preconditions_v1(&admitted.command)?;
+    let session_identity = admission_session_identity_v1(&admitted.command);
+    if execution.command() != &command
+        || execution.preconditions() != &preconditions
+        || execution.session_identity() != &session_identity
+    {
+        return Err(invalid_execution_v1(
+            "Procedure v2 mutation document does not match durable admission metadata",
         ));
     }
     Ok(())

@@ -29,9 +29,9 @@ use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
     ClaimedJobV1, GraphSessionStateV2, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
     IdempotencyKeyV1, IdempotentExecutionV1, JobIdV1, JobListQueryV1, JobViewV1,
-    PersistedResponseContextV1, ReconciliationSnapshotV1, RecoveryReportV1,
-    RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreGraphMutationContractV2,
+    PersistedGraphTerminalOperationV2, PersistedResponseContextV1, ReconciliationSnapshotV1,
+    RecoveryReportV1, RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1,
+    SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1, StoreGraphMutationContractV2,
     StoreGraphReadContractV2, StoreIdempotencyReadContractV1, StoreInvariantV1,
     StoreReadContractV1, StoreReconciliationReadContractV1, StoreUnavailableReasonV1,
     StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
@@ -441,6 +441,29 @@ impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
     ) -> Result<TerminalReceiptV1, StoreErrorV1> {
         self.with_open_store(|store| {
             store.commit_graph_start_terminal_v2(claim, expected_current, state, now)
+        })
+    }
+
+    fn commit_graph_mutation_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        next_state: Option<GraphSessionStateV2>,
+        result: TerminalResultV1,
+        operation: PersistedGraphTerminalOperationV2,
+        now: podway_store::EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.commit_graph_mutation_terminal_v2(
+                claim,
+                expected_workspace_revision,
+                expected_session_revision,
+                next_state,
+                result,
+                operation,
+                now,
+            )
         })
     }
 }

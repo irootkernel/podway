@@ -28,10 +28,11 @@ use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
     EpochMillisV1, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
     IdempotencyKeyV1 as StoreIdempotencyKeyV1, JobListQueryV1, JobReceiptOrTerminalV1,
-    JobReceiptV1, JobStateV1 as StoreJobStateV1, JobViewV1, PersistedTerminalJobStateV1,
-    PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1, SqliteStoreOptionsV1,
-    SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1,
-    StoreReadContractV1, StoreReconciliationReadContractV1, WorkerIdV1, WorkspaceBindingV1,
+    JobReceiptV1, JobStateV1 as StoreJobStateV1, JobViewV1, PersistedGraphMutationFailureV2,
+    PersistedGraphTerminalOperationV2, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
+    PersistedTerminalSessionProjectionV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
+    StoreErrorV1, StoreIdempotencyReadContractV1, StoreReadContractV1,
+    StoreReconciliationReadContractV1, WorkerIdV1, WorkspaceBindingV1,
     codec::{
         PersistedDomainCommandV1, PersistedDomainErrorV1, PersistedDomainResultV1,
         PersistedSessionLifecycleV1, PersistedTerminalResultV1,
@@ -550,6 +551,28 @@ impl WorkerExecutionV1<WorkspaceSchedulerContextV1> for NativeContextExecutionV1
         Self::engine(context, self.observability.clone())
             .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
             .admit_procedure_v2_start_for_workspace_with_response_context(
+                binding,
+                request,
+                idempotency_key,
+                response_context.cloned(),
+            )
+    }
+
+    fn admit_procedure_v2_mutation(
+        &self,
+        context: &WorkspaceSchedulerContextV1,
+        binding: &WorkspaceBindingV1,
+        request: &SliceRequestV1,
+        idempotency_key: StoreIdempotencyKeyV1,
+        response_context: Option<&podway_store::PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        if context.binding() != binding {
+            return Err(ExecutionErrorV1::InvalidPersistedExecution {
+                reason: "scheduler context binding changed during Procedure v2 admission",
+            });
+        }
+        Self::engine(context, self.observability.clone())?
+            .admit_procedure_v2_mutation_for_workspace_with_response_context(
                 binding,
                 request,
                 idempotency_key,
@@ -1509,6 +1532,108 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             .map(Some)
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
         }
+        if matches!(
+            slice_request.command(),
+            SliceCommandV1::SessionComplete(_)
+                | SliceCommandV1::ItemCheck(_)
+                | SliceCommandV1::ItemUncheck(_)
+                | SliceCommandV1::ItemSet(_)
+                | SliceCommandV1::ItemAdd(_)
+                | SliceCommandV1::ItemRemove(_)
+                | SliceCommandV1::ItemAttach(_)
+                | SliceCommandV1::ItemClear(_)
+        ) {
+            let runtime = ProductionWorkspaceRuntimeV1::new(
+                Arc::clone(&self.manager),
+                Arc::clone(&self.clock),
+            );
+            let workspace = runtime.resolve_existing(slice_request.selector())?;
+            let idempotency_key = StoreIdempotencyKeyV1::new(
+                request
+                    .idempotency_key()
+                    .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?
+                    .as_str(),
+            )
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+            let response_context = podway_store::PersistedResponseContextV1::new(
+                request.request_id().as_str(),
+                request.command().as_str(),
+                workspace.output.uuid().clone(),
+                workspace.output.root(),
+                workspace.output.latest_workspace_sequence(),
+            )
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?
+            .with_frozen_public_terminal_envelope();
+            let completion_mode = if request.options().detach() {
+                WorkerCompletionModeV1::Detached
+            } else {
+                WorkerCompletionModeV1::WaitUntil(
+                    MonotonicDeadlineV1::after(
+                        self.clock.as_ref(),
+                        request.options().wait_timeout_ms(),
+                    )
+                    .map_err(map_read_error)?,
+                )
+            };
+            let Some(submission) = self
+                .worker
+                .submit_procedure_v2_mutation_with_response_context(
+                    &workspace.scheduler,
+                    slice_request,
+                    idempotency_key,
+                    response_context,
+                    completion_mode,
+                )
+                .map_err(|error| map_mutation_worker_error(slice_request, error))?
+            else {
+                return Ok(None);
+            };
+            let terminal =
+                terminal_replay(submission.admission()).or_else(|| match submission.completion() {
+                    Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
+                    Some(WorkerWaitResultV1::TimedOut(_)) | None => None,
+                });
+            if let Some(receipt) = terminal {
+                return terminal_direct_response_v2(
+                    receipt,
+                    terminal_command_kind(slice_request.command()),
+                    request.request_id(),
+                )
+                .map(Some);
+            }
+            if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
+                let job = job_output(view)?;
+                return Err(
+                    DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job),
+                );
+            }
+            let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
+            let result = json!({
+                "schema": "podway.detached-admission-result/v2",
+                "detached": true,
+                "admission": {
+                    "admitted": true,
+                    "job_id": job.id(),
+                    "workspace_sequence": job.sequence(),
+                },
+            });
+            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.clock.generated_at(),
+                workspace: Some(workspace.output),
+                job: Some(job),
+                session: None,
+                result: result
+                    .as_object()
+                    .expect("Procedure v2 detached result is an object")
+                    .clone(),
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+        }
         if !matches!(
             slice_request.command(),
             SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
@@ -1658,12 +1783,12 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 Some(WorkerWaitResultV1::TimedOut(_)) | None => None,
             });
         if let Some(receipt) = terminal {
-            let value = terminal_job_response(receipt, TerminalCommandKindV1::Start)?;
-            let encoded = serde_json::to_vec(&value)
-                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
-            return decode_response_payload_v2(&encoded)
-                .map(Some)
-                .map_err(|_| terminal_replay_integrity_failure());
+            return terminal_direct_response_v2(
+                receipt,
+                TerminalCommandKindV1::Start,
+                request.request_id(),
+            )
+            .map(Some);
         }
         if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
             let job = job_output(view)?;
@@ -2241,6 +2366,26 @@ fn job_output_from_context(
     Ok((job_output(&view)?, procedure_digest))
 }
 
+fn job_output_only_from_context(
+    scheduler: &Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>,
+    admission: &AdmitOutcomeV1,
+) -> Result<JobOutputV1, DispatchFailureV1> {
+    let job_id = match admission {
+        AdmitOutcomeV1::New(receipt) => receipt.job_id(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt)) => receipt.job_id(),
+        AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(_)) => {
+            return Err(terminal_replay_integrity_failure());
+        }
+    };
+    scheduler
+        .context_snapshot()
+        .read_job(job_id)
+        .map_err(map_store_error)?
+        .as_ref()
+        .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::JobNotFound))
+        .and_then(job_output)
+}
+
 fn terminal_replay_integrity_failure() -> DispatchFailureV1 {
     DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
 }
@@ -2518,11 +2663,22 @@ fn validate_terminal_receipt_projection(
     receipt: &PersistedTerminalReceiptV1,
     command: TerminalCommandKindV1,
 ) -> Result<(), DispatchFailureV1> {
-    if receipt.graph_session_projection().is_some() {
-        return match receipt.result() {
-            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
-                ..
-            }) => Ok(()),
+    if let Some(graph) = receipt.graph_session_projection() {
+        return match (graph.operation(), receipt.result()) {
+            (
+                None | Some(PersistedGraphTerminalOperationV2::Complete { .. }),
+                PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                    ..
+                }),
+            )
+            | (
+                Some(PersistedGraphTerminalOperationV2::ItemMutation { .. }),
+                PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemChanged { .. }),
+            )
+            | (
+                Some(PersistedGraphTerminalOperationV2::Failure { .. }),
+                PersistedTerminalResultV1::Failure(_),
+            ) => Ok(()),
             _ => Err(terminal_replay_integrity_failure()),
         };
     }
@@ -2565,6 +2721,24 @@ fn terminal_job_response(
     )?;
     serde_json::to_value(envelope)
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+}
+
+fn terminal_direct_response_v2(
+    receipt: &PersistedTerminalReceiptV1,
+    command: TerminalCommandKindV1,
+    request_id: &RequestIdV1,
+) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
+    let mut value = terminal_job_response(receipt, command)?;
+    value
+        .as_object_mut()
+        .ok_or_else(terminal_replay_integrity_failure)?
+        .insert(
+            "request_id".to_owned(),
+            Value::String(request_id.as_str().to_owned()),
+        );
+    let encoded = serde_json::to_vec(&value)
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+    decode_response_payload_v2(&encoded).map_err(|_| terminal_replay_integrity_failure())
 }
 
 fn validate_frozen_terminal_envelope(
@@ -2669,18 +2843,30 @@ fn validate_frozen_terminal_error(
     let PersistedTerminalResultV1::Failure(persisted_error) = receipt.result() else {
         return Err(terminal_replay_integrity_failure());
     };
-    let command = receipt
-        .lookup_command()
-        .ok_or_else(terminal_replay_integrity_failure)?;
     let context =
         terminal_response_context(receipt)?.ok_or_else(terminal_replay_integrity_failure)?;
+    let expected_failure = match receipt
+        .graph_session_projection()
+        .and_then(|graph| graph.operation())
+    {
+        Some(PersistedGraphTerminalOperationV2::Failure { error }) => {
+            map_graph_mutation_failure_v2(error)
+        }
+        Some(
+            PersistedGraphTerminalOperationV2::Complete { .. }
+            | PersistedGraphTerminalOperationV2::ItemMutation { .. },
+        ) => return Err(terminal_replay_integrity_failure()),
+        None => {
+            let command = receipt
+                .lookup_command()
+                .ok_or_else(terminal_replay_integrity_failure)?;
+            map_terminal_domain_error(persisted_error, terminal_command_kind_from_lookup(command))
+        }
+    };
     let expected = terminal_response_envelope_v1(
         context,
         expected_job.clone(),
-        DispatcherTerminalResultV1::Error(map_terminal_domain_error(
-            persisted_error,
-            terminal_command_kind_from_lookup(command),
-        )),
+        DispatcherTerminalResultV1::Error(expected_failure),
         false,
     )?;
     let ResponseEnvelopeV1::Error(expected) = expected else {
@@ -2742,27 +2928,57 @@ fn validate_frozen_v2_result_projection(
                 ..
             }),
         ) => {
-            let transition = receipt
-                .lookup_command()
-                .and_then(expected_stage_transition_v2);
-            let base_matches = result.get("revision").and_then(Value::as_u64)
-                == Some(revision_after.get())
-                && result.get("transition").and_then(Value::as_str) == transition;
-            if transition == Some("reset") {
-                base_matches
-                    && session.is_none()
-                    && result.get("reset").and_then(Value::as_bool) == Some(true)
+            if let Some(projection) = graph_session {
+                (|| {
+                    let lifecycle = match projection.lifecycle() {
+                        PersistedSessionLifecycleV1::Running => "running",
+                        PersistedSessionLifecycleV1::Completed => "completed",
+                        PersistedSessionLifecycleV1::Cancelled => return false,
+                    };
+                    let Some(PersistedGraphTerminalOperationV2::Complete {
+                        from_graph_node_id,
+                        from_attempt_id,
+                        to_graph_node_id,
+                        to_attempt_id,
+                    }) = projection.operation()
+                    else {
+                        return false;
+                    };
+                    result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                        && result.get("transition").and_then(Value::as_str) == Some("complete")
+                        && result.get("session_state").and_then(Value::as_str) == Some(lifecycle)
+                        && result.get("from_graph_node_id").and_then(Value::as_str)
+                            == Some(from_graph_node_id.as_str())
+                        && result.get("from_attempt_id").and_then(Value::as_str)
+                            == Some(from_attempt_id.as_str())
+                        && result.get("to_graph_node_id").and_then(Value::as_str)
+                            == to_graph_node_id.as_ref().map(|value| value.as_str())
+                        && result.get("to_attempt_id").and_then(Value::as_str)
+                            == to_attempt_id.as_ref().map(|value| value.as_str())
+                })()
             } else {
-                base_matches
-                    && session.is_some_and(|projection| {
-                        let lifecycle = match projection.lifecycle() {
-                            PersistedSessionLifecycleV1::Running => "running",
-                            PersistedSessionLifecycleV1::Completed => "completed",
-                            PersistedSessionLifecycleV1::Cancelled => "cancelled",
-                        };
-                        result.get("session_state").and_then(Value::as_str) == Some(lifecycle)
-                            && projection.revision_after() == *revision_after
-                    })
+                let transition = receipt
+                    .lookup_command()
+                    .and_then(expected_stage_transition_v2);
+                let base_matches = result.get("revision").and_then(Value::as_u64)
+                    == Some(revision_after.get())
+                    && result.get("transition").and_then(Value::as_str) == transition;
+                if transition == Some("reset") {
+                    base_matches
+                        && session.is_none()
+                        && result.get("reset").and_then(Value::as_bool) == Some(true)
+                } else {
+                    base_matches
+                        && session.is_some_and(|projection| {
+                            let lifecycle = match projection.lifecycle() {
+                                PersistedSessionLifecycleV1::Running => "running",
+                                PersistedSessionLifecycleV1::Completed => "completed",
+                                PersistedSessionLifecycleV1::Cancelled => "cancelled",
+                            };
+                            result.get("session_state").and_then(Value::as_str) == Some(lifecycle)
+                                && projection.revision_after() == *revision_after
+                        })
+                }
             }
         }
         (
@@ -2774,9 +2990,32 @@ fn validate_frozen_v2_result_projection(
                 ..
             }),
         ) => {
-            result.get("item_id").and_then(Value::as_str) == Some(item_id.as_str())
-                && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
-                && result.get("changed").and_then(Value::as_bool) == Some(*changed)
+            if let Some(projection) = graph_session {
+                let Some(PersistedGraphTerminalOperationV2::ItemMutation {
+                    graph_node_id,
+                    attempt_id,
+                    attempt_number,
+                    item_id: operation_item_id,
+                    value_digest,
+                }) = projection.operation()
+                else {
+                    return Err(terminal_replay_integrity_failure());
+                };
+                result.get("item_id").and_then(Value::as_str) == Some(item_id.as_str())
+                    && operation_item_id == item_id
+                    && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                    && result.get("changed").and_then(Value::as_bool) == Some(*changed)
+                    && result.get("graph_node_id").and_then(Value::as_str)
+                        == Some(graph_node_id.as_str())
+                    && result.get("attempt_id").and_then(Value::as_str) == Some(attempt_id.as_str())
+                    && result.get("attempt_number").and_then(Value::as_u64) == Some(*attempt_number)
+                    && result.get("value_digest").and_then(Value::as_str)
+                        == value_digest.as_ref().map(|value| value.as_str())
+            } else {
+                result.get("item_id").and_then(Value::as_str) == Some(item_id.as_str())
+                    && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                    && result.get("changed").and_then(Value::as_bool) == Some(*changed)
+            }
         }
         _ => false,
     };
@@ -2816,14 +3055,11 @@ pub(crate) fn seal_terminal_receipt_v1(
     receipt: &PersistedTerminalReceiptV1,
 ) -> Result<Value, StoreErrorV1> {
     if receipt.graph_session_projection().is_some() {
-        return graph_start_terminal_envelope_v2(receipt)
-            .and_then(|envelope| {
-                serde_json::to_value(envelope)
-                    .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
-            })
-            .map_err(|_| StoreErrorV1::InternalInvariantViolationV1 {
+        return graph_terminal_envelope_v2(receipt).map_err(|_| {
+            StoreErrorV1::InternalInvariantViolationV1 {
                 invariant: podway_store::StoreInvariantV1::TransitionMutationShape,
-            });
+            }
+        });
     }
     let command = receipt
         .lookup_command()
@@ -2835,6 +3071,140 @@ pub(crate) fn seal_terminal_receipt_v1(
             invariant: podway_store::StoreInvariantV1::TransitionMutationShape,
         }
     })
+}
+
+fn graph_terminal_envelope_v2(
+    receipt: &PersistedTerminalReceiptV1,
+) -> Result<Value, DispatchFailureV1> {
+    let graph = receipt
+        .graph_session_projection()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    match graph.operation() {
+        None => serde_json::to_value(graph_start_terminal_envelope_v2(receipt)?)
+            .map_err(|_| terminal_replay_integrity_failure()),
+        Some(PersistedGraphTerminalOperationV2::Complete {
+            from_graph_node_id,
+            from_attempt_id,
+            to_graph_node_id,
+            to_attempt_id,
+        }) => {
+            let session_state = match graph.lifecycle() {
+                PersistedSessionLifecycleV1::Running => "running",
+                PersistedSessionLifecycleV1::Completed => "completed",
+                PersistedSessionLifecycleV1::Cancelled => {
+                    return Err(terminal_replay_integrity_failure());
+                }
+            };
+            let mut result = json!({
+                "schema": "podway.stage-transition-result/v2",
+                "transition": "complete",
+                "from_graph_node_id": from_graph_node_id,
+                "from_attempt_id": from_attempt_id,
+                "revision": graph.revision_after(),
+                "session_state": session_state,
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph transition result is an object")
+            .clone();
+            match (to_graph_node_id, to_attempt_id) {
+                (Some(graph_node_id), Some(attempt_id)) if session_state == "running" => {
+                    result.insert("to_graph_node_id".to_owned(), json!(graph_node_id));
+                    result.insert("to_attempt_id".to_owned(), json!(attempt_id));
+                }
+                (None, None) if session_state == "completed" => {}
+                _ => return Err(terminal_replay_integrity_failure()),
+            }
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::ItemMutation {
+            graph_node_id,
+            attempt_id,
+            attempt_number,
+            item_id,
+            value_digest,
+        }) => {
+            let PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemChanged {
+                changed,
+                ..
+            }) = receipt.result()
+            else {
+                return Err(terminal_replay_integrity_failure());
+            };
+            let mut result = json!({
+                "schema": "podway.item-mutation-result/v2",
+                "changed": changed,
+                "graph_node_id": graph_node_id,
+                "attempt_id": attempt_id,
+                "attempt_number": attempt_number,
+                "item_id": item_id,
+                "revision": graph.revision_after(),
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph item result is an object")
+            .clone();
+            if let Some(value_digest) = value_digest {
+                result.insert("value_digest".to_owned(), json!(value_digest));
+            }
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::Failure { error }) => {
+            let context = terminal_response_context(receipt)?
+                .ok_or_else(terminal_replay_integrity_failure)?;
+            serde_json::to_value(terminal_response_envelope_v1(
+                context,
+                job_output_from_terminal_receipt(receipt)?,
+                DispatcherTerminalResultV1::Error(map_graph_mutation_failure_v2(error)),
+                false,
+            )?)
+            .map_err(|_| terminal_replay_integrity_failure())
+        }
+    }
+}
+
+fn graph_admission_value_v2(
+    receipt: &PersistedTerminalReceiptV1,
+) -> Result<Value, DispatchFailureV1> {
+    let job = job_output_from_terminal_receipt(receipt)?;
+    Ok(json!({
+        "admitted": true,
+        "job_id": job.id(),
+        "workspace_sequence": job.sequence(),
+    }))
+}
+
+fn graph_success_terminal_envelope_v2(
+    receipt: &PersistedTerminalReceiptV1,
+    result: Map<String, Value>,
+) -> Result<Value, DispatchFailureV1> {
+    let context = receipt
+        .response_context()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let projection = receipt
+        .job_projection()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+        request_id: RequestIdV1::new(context.request_id())
+            .map_err(|_| terminal_replay_integrity_failure())?,
+        command: CommandNameV1::new(context.command())
+            .map_err(|_| terminal_replay_integrity_failure())?,
+        generated_at: rfc3339_millis(projection.finished_at())?,
+        workspace: Some(
+            WorkspaceOutputV1::new(
+                context.workspace_uuid().clone(),
+                context.workspace_root(),
+                context.workspace_sequence(),
+            )
+            .map_err(|_| terminal_replay_integrity_failure())?,
+        ),
+        job: Some(job_output_from_terminal_receipt(receipt)?),
+        session: None,
+        result,
+        warnings: Vec::new(),
+    })
+    .map_err(|_| terminal_replay_integrity_failure())?;
+    serde_json::to_value(output).map_err(|_| terminal_replay_integrity_failure())
 }
 
 fn graph_start_terminal_envelope_v2(
@@ -3202,6 +3572,75 @@ fn map_terminal_domain_error(
         | PersistedDomainErrorV1::InvalidIdentifier { .. }
         | PersistedDomainErrorV1::InvalidSha256Digest => {
             DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid)
+        }
+    }
+}
+
+fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> DispatchFailureV1 {
+    match error {
+        PersistedGraphMutationFailureV2::SessionNotRunning => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotRunning)
+        }
+        PersistedGraphMutationFailureV2::SessionRevisionConflict { expected, actual } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_expected_revision(*expected)
+                    .with_current_revision(*actual),
+            )
+        }
+        PersistedGraphMutationFailureV2::AttemptNotCurrent { expected, actual } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::AttemptNotCurrent).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_attempt_mismatch(expected.clone(), actual.clone()),
+            )
+        }
+        PersistedGraphMutationFailureV2::GraphNodeTypeMismatch {
+            graph_node_id,
+            actual,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::GraphNodeTypeMismatch).with_details(
+            DispatchErrorDetailsV1::default()
+                .with_graph_node_type_mismatch(graph_node_id.clone(), actual),
+        ),
+        PersistedGraphMutationFailureV2::ItemNotFound { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)
+        }
+        PersistedGraphMutationFailureV2::ItemRevisionConflict { expected, actual } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ItemRevisionConflict).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_expected_revision(*expected)
+                    .with_current_revision(*actual),
+            )
+        }
+        PersistedGraphMutationFailureV2::ItemTypeMismatch => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ItemTypeMismatch)
+        }
+        PersistedGraphMutationFailureV2::ItemConstraintFailed => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed)
+        }
+        PersistedGraphMutationFailureV2::ListValueNotFound => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ListValueNotFound)
+        }
+        PersistedGraphMutationFailureV2::ListValueDuplicate => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ListValueDuplicate)
+        }
+        PersistedGraphMutationFailureV2::RequiredItemsMissing { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::RequiredItemsMissing)
+        }
+        PersistedGraphMutationFailureV2::BlockersPresent => {
+            DispatchFailureV1::new(DispatchFailureKindV1::BlockersPresent)
+        }
+        PersistedGraphMutationFailureV2::SessionGoalMissing => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionGoalMissing)
+                .with_details(DispatchErrorDetailsV1::default().with_session_goal_missing())
+        }
+        PersistedGraphMutationFailureV2::FreshGoalAssessmentMissing { goal_revision } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::FreshGoalAssessmentMissing).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_fresh_goal_assessment_missing(*goal_revision),
+            )
+        }
+        PersistedGraphMutationFailureV2::ArtifactChanged => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ArtifactChanged)
         }
     }
 }

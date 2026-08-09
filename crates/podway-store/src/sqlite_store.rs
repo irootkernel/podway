@@ -12,7 +12,8 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 
 use crate::codec::{
-    PersistedDomainCommandV1, PersistedDomainResultV1, PersistedGraphTerminalSessionProjectionV2,
+    PersistedDomainCommandV1, PersistedDomainResultV1, PersistedGraphMutationFailureV2,
+    PersistedGraphTerminalOperationV2, PersistedGraphTerminalSessionProjectionV2,
     PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
     PersistedTerminalReceiptV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
     decode_command_v1, decode_response_context_v1, decode_terminal_receipt_v1, encode_command_v1,
@@ -789,6 +790,239 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
         self.trigger_failpoint(StoreFailpointV1::TerminalAfterCommitBeforeResponse)?;
         Ok(receipt)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn commit_graph_mutation_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        next_state: Option<GraphSessionStateV2>,
+        result: TerminalResultV1,
+        operation: PersistedGraphTerminalOperationV2,
+        now: EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        self.require_identity(claim.identity())?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        self.trigger_failpoint(StoreFailpointV1::TerminalAfterTransactionBegin)?;
+        let row: Option<RunningJobRow> = transaction
+            .query_row(
+                "SELECT workspace_sequence, request_digest, command_name, canonical_request_json, \
+                 submitted_at_ms, claimed_at_ms, state, response_context_json FROM jobs WHERE job_id = ?1",
+                [claim.job_id().as_str()],
+                |row| {
+                    Ok(RunningJobRow {
+                        sequence: row.get(0)?,
+                        digest: row.get(1)?,
+                        command_name: row.get(2)?,
+                        request: row.get(3)?,
+                        submitted_at: row.get(4)?,
+                        claimed_at: row.get(5)?,
+                        state: row.get(6)?,
+                        response_context: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| storage_record(error, StoreRecordKindV1::Job))?;
+        let Some(row) = row else {
+            return Err(StoreErrorV1::JobNotFoundV1 {
+                job_id: claim.job_id().clone(),
+            });
+        };
+        let digest = digest(row.digest)?;
+        let sequence =
+            u64::try_from(row.sequence).map_err(|_| invariant(StoreInvariantV1::QueueSequence))?;
+        if sequence == 0 {
+            return Err(corrupt(StoreRecordKindV1::Job));
+        }
+        let submitted_at = epoch(row.submitted_at, StoreRecordKindV1::Job)?;
+        let claimed_at = row
+            .claimed_at
+            .map(|value| epoch(value, StoreRecordKindV1::Job))
+            .transpose()?;
+        let valid_generation = claimed_at.map(|claimed_at| {
+            self.claim_generation(
+                claim.identity(),
+                claim.job_id(),
+                &digest,
+                claimed_at,
+                claim.worker(),
+            )
+        });
+        if row.state != "running" || valid_generation != Some(claim.job_revision()) {
+            return Err(StoreErrorV1::ClaimStaleV1 {
+                job_id: claim.job_id().clone(),
+            });
+        }
+        let execution =
+            decode_command_v1(&row.request).map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        if execution.execution_flavor() != DurableExecutionFlavorV1::ProcedureV2
+            || command_name_v1(execution.command()) != row.command_name
+            || !matches!(
+                execution.command(),
+                crate::CommandV1::SessionComplete
+                    | crate::CommandV1::ItemCheck { .. }
+                    | crate::CommandV1::ItemUncheck { .. }
+                    | crate::CommandV1::ItemSet { .. }
+                    | crate::CommandV1::ItemAdd { .. }
+                    | crate::CommandV1::ItemRemove { .. }
+                    | crate::CommandV1::ItemAttach { .. }
+                    | crate::CommandV1::ItemClear { .. }
+            )
+        {
+            return Err(corrupt(StoreRecordKindV1::Job));
+        }
+        verify_persisted_job_scope(&transaction, claim.job_id().as_str())?;
+        if load_current_session(&transaction)?.is_some() {
+            return Err(corrupt(StoreRecordKindV1::Session));
+        }
+        let current = load_graph_session_connection_v2(&transaction)?
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        if current.workspace_revision() != expected_workspace_revision {
+            return Err(StoreErrorV1::PreconditionConflictV1 {
+                expected: Some(expected_workspace_revision),
+                actual: Some(current.workspace_revision()),
+            });
+        }
+        if current.trace().revision() != expected_session_revision {
+            return Err(StoreErrorV1::PreconditionConflictV1 {
+                expected: Some(expected_session_revision),
+                actual: Some(current.trace().revision()),
+            });
+        }
+        if !matches!(
+            execution.session_identity(),
+            crate::AdmissionSessionIdentityV1::Exact(session_id)
+                if session_id == current.trace().session_id()
+        ) {
+            return Err(corrupt(StoreRecordKindV1::Job));
+        }
+        validate_graph_mutation_terminal_shape_v2(
+            &execution,
+            &current,
+            next_state.as_ref(),
+            &result,
+            &operation,
+        )?;
+        validate_terminal_result_for_command_v1(execution.command(), &result)
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        if let Some(next_state) = &next_state {
+            replace_graph_session_transaction_v2(
+                &transaction,
+                expected_workspace_revision,
+                expected_session_revision,
+                next_state,
+            )?;
+        }
+        self.trigger_failpoint(
+            StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate,
+        )?;
+
+        let receipt = TerminalReceiptV1::new(
+            JobReceiptV1::new(sequence, claim.job_id().clone(), digest),
+            result,
+        );
+        let (job_state, state_text) = match receipt.result() {
+            TerminalResultV1::Success(_) => (PersistedTerminalJobStateV1::Succeeded, "succeeded"),
+            TerminalResultV1::Failure(_) => (PersistedTerminalJobStateV1::Failed, "failed"),
+        };
+        let job_projection =
+            PersistedTerminalJobProjectionV1::new(job_state, submitted_at, claimed_at, now)
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let post_state = next_state.as_ref().unwrap_or(&current);
+        let graph_projection = PersistedGraphTerminalSessionProjectionV2::new(
+            post_state.trace().session_id().clone(),
+            post_state.task_title().to_owned(),
+            post_state.trace().lifecycle().into(),
+            expected_session_revision,
+            post_state.trace().revision(),
+            post_state.snapshot().digest().clone(),
+            post_state.snapshot().entry_graph_node_id().clone(),
+            post_state.snapshot().goal_tracking(),
+        )
+        .and_then(|projection| projection.with_operation(operation))
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let mut persisted = PersistedTerminalReceiptV1::new_with_graph_projection(
+            receipt.job().clone(),
+            PersistedTerminalResultV1::from_terminal_result(receipt.result()),
+            job_projection,
+            graph_projection,
+        )
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        persisted = enrich_terminal_from_execution(persisted, &execution)?;
+        let response_context = row
+            .response_context
+            .as_deref()
+            .ok_or_else(|| corrupt(StoreRecordKindV1::Job))?;
+        persisted = persisted
+            .with_response_context(
+                decode_response_context_v1(response_context)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
+            )
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        if persisted
+            .response_context()
+            .is_some_and(|context| context.freezes_public_terminal_envelope())
+            && let Some(seal) = crate::terminal_envelope_sealer_v1()
+        {
+            let envelope = seal(&persisted)?;
+            persisted = persisted
+                .with_public_terminal_envelope(envelope)
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        }
+        let encoded = encode_persisted_terminal_receipt_v1(&persisted)
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let changed = transaction
+            .execute(
+                "UPDATE jobs SET state = ?1, finished_at_ms = ?2, terminal_response_json = ?3 \
+                 WHERE job_id = ?4 AND state = 'running'",
+                params![
+                    state_text,
+                    sqlite_u64(now.get())?,
+                    &encoded,
+                    claim.job_id().as_str(),
+                ],
+            )
+            .map_err(storage)?;
+        if changed != 1 {
+            return Err(StoreErrorV1::ClaimStaleV1 {
+                job_id: claim.job_id().clone(),
+            });
+        }
+        self.trigger_failpoint(StoreFailpointV1::TerminalAfterJobTerminalUpdateBeforeCommit)?;
+        let changed = transaction
+            .execute(
+                "UPDATE idempotency_records SET terminal_response_json = ?1, updated_at_ms = ?2 \
+                 WHERE job_id = ?3 AND terminal_response_json IS NULL",
+                params![&encoded, sqlite_u64(now.get())?, claim.job_id().as_str()],
+            )
+            .map_err(storage)?;
+        if changed != 1 {
+            return Err(corrupt(StoreRecordKindV1::IdempotencyRecord));
+        }
+        transaction
+            .execute(
+                "UPDATE workspace_state SET updated_at_ms = ?1 WHERE singleton = 1",
+                [sqlite_u64(now.get())?],
+            )
+            .map_err(storage)?;
+        let prune_report =
+            prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
+        record_prune_report(
+            &transaction,
+            &prune_report,
+            Some(row.sequence),
+            Some(claim.job_id().as_str()),
+        )?;
+        self.trigger_failpoint(StoreFailpointV1::TerminalBeforeCommit)?;
+        transaction.commit().map_err(storage)?;
+        self.trigger_failpoint(StoreFailpointV1::TerminalAfterCommitBeforeResponse)?;
+        Ok(receipt)
+    }
 }
 
 impl StoreContractV1 for SqliteStoreV1 {
@@ -806,7 +1040,18 @@ impl StoreContractV1 for SqliteStoreV1 {
             crate::CommandV1::SessionStart | crate::CommandV1::SessionStartReplace
         );
         let is_v2 = request.execution_flavor() == DurableExecutionFlavorV1::ProcedureV2;
-        if is_v2 && !is_session_start {
+        let is_v2_action_runtime = matches!(
+            request.command(),
+            crate::CommandV1::SessionComplete
+                | crate::CommandV1::ItemCheck { .. }
+                | crate::CommandV1::ItemUncheck { .. }
+                | crate::CommandV1::ItemSet { .. }
+                | crate::CommandV1::ItemAdd { .. }
+                | crate::CommandV1::ItemRemove { .. }
+                | crate::CommandV1::ItemAttach { .. }
+                | crate::CommandV1::ItemClear { .. }
+        );
+        if is_v2 && !is_session_start && !is_v2_action_runtime {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
         if request.admitted_procedure_snapshot().is_some() && (!is_session_start || is_v2) {
@@ -845,6 +1090,19 @@ impl StoreContractV1 for SqliteStoreV1 {
         let current_graph = load_graph_session_connection_v2(&transaction)?;
         if current_session.is_some() && current_graph.is_some() {
             return Err(corrupt(StoreRecordKindV1::Session));
+        }
+        if is_v2 && is_v2_action_runtime && current_graph.is_none() {
+            return Err(StoreErrorV1::SessionIdentityConflictV1 {
+                expected: match request.session_identity() {
+                    crate::AdmissionSessionIdentityV1::Exact(expected) => Some(expected.clone()),
+                    crate::AdmissionSessionIdentityV1::Any
+                    | crate::AdmissionSessionIdentityV1::Absent => None,
+                },
+                actual: current_session
+                    .as_ref()
+                    .map(podway_core::SessionAggregateV1::session_id)
+                    .cloned(),
+            });
         }
         let actual_session_id = current_session
             .as_ref()
@@ -898,11 +1156,23 @@ impl StoreContractV1 for SqliteStoreV1 {
                 reason: StoreUnavailableReasonV1::Busy,
             });
         }
-        let scope_session_id = admission_session_scope(
-            &transaction,
-            request.command(),
-            request.preconditions().expected_session_revision(),
-        )?;
+        let scope_session_id = if is_v2 && is_v2_action_runtime {
+            Some(
+                current_graph
+                    .as_ref()
+                    .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?
+                    .trace()
+                    .session_id()
+                    .as_str()
+                    .to_owned(),
+            )
+        } else {
+            admission_session_scope(
+                &transaction,
+                request.command(),
+                request.preconditions().expected_session_revision(),
+            )?
+        };
         let scope_kind = if command_is_session_scoped_v1(request.command()) {
             "session"
         } else {
@@ -3589,6 +3859,362 @@ fn validate_success_transition(
     matches
         .then_some(())
         .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))
+}
+
+fn validate_graph_mutation_terminal_shape_v2(
+    execution: &ClaimedExecutionV1,
+    current: &GraphSessionStateV2,
+    next: Option<&GraphSessionStateV2>,
+    result: &TerminalResultV1,
+    operation: &PersistedGraphTerminalOperationV2,
+) -> Result<(), StoreErrorV1> {
+    let preconditions = execution.preconditions();
+    let valid = match (execution.command(), result, operation) {
+        (
+            crate::CommandV1::SessionComplete,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Complete {
+                from_graph_node_id,
+                from_attempt_id,
+                to_graph_node_id,
+                to_attempt_id,
+            },
+        ) => {
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next_active = next.trace().active_attempt();
+            *changed
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && next.trace().session_id() == current.trace().session_id()
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+                && from_graph_node_id == active.graph_node_id()
+                && from_attempt_id == active.attempt_id()
+                && match (next_active, to_graph_node_id, to_attempt_id) {
+                    (Some(attempt), Some(graph_node_id), Some(attempt_id)) => {
+                        graph_node_id == attempt.graph_node_id()
+                            && attempt_id == attempt.attempt_id()
+                    }
+                    (None, None, None) => true,
+                    _ => false,
+                }
+        }
+        (
+            command,
+            TerminalResultV1::Success(podway_core::DomainResult::ItemChanged {
+                session_id,
+                item_id: result_item_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::ItemMutation {
+                graph_node_id,
+                attempt_id,
+                attempt_number,
+                item_id,
+                ..
+            },
+        ) if graph_item_id_v2(command).is_some() => {
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let item_revision = current
+                .workflow_memory()
+                .attempts()
+                .iter()
+                .find(|memory| memory.attempt_id() == active.attempt_id())
+                .and_then(|memory| {
+                    memory
+                        .item_slots()
+                        .iter()
+                        .find(|slot| slot.item_id() == item_id)
+                })
+                .map(crate::ItemSlotStateV2::revision);
+            let next_revision = next
+                .map(|state| state.trace().revision())
+                .unwrap_or_else(|| current.trace().revision());
+            session_id == current.trace().session_id()
+                && graph_item_id_v2(command) == Some(item_id)
+                && result_item_id == item_id
+                && *revision_before == current.trace().revision()
+                && *revision_after == next_revision
+                && *changed == next.is_some()
+                && *changed == (*revision_before != *revision_after)
+                && next
+                    .is_none_or(|state| state.trace().session_id() == current.trace().session_id())
+                && preconditions.expected_session_revision().is_none()
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && preconditions.expected_item_id() == Some(item_id)
+                && preconditions.expected_item_revision() == item_revision
+                && graph_node_id == active.graph_node_id()
+                && attempt_id == active.attempt_id()
+                && *attempt_number == active.number().get()
+        }
+        (
+            command,
+            TerminalResultV1::Failure(podway_core::DomainError::InvalidState {
+                reason: "Procedure v2 graph mutation failed",
+            }),
+            PersistedGraphTerminalOperationV2::Failure { error },
+        ) => {
+            next.is_none()
+                && graph_mutation_failure_matches_v2(command, preconditions, current, error)
+        }
+        _ => false,
+    };
+    valid
+        .then_some(())
+        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))
+}
+
+fn graph_mutation_failure_matches_v2(
+    command: &crate::CommandV1,
+    preconditions: &crate::RevisionAttemptItemPreconditionsV1,
+    current: &crate::GraphSessionStateV2,
+    error: &PersistedGraphMutationFailureV2,
+) -> bool {
+    let active = current.trace().active_attempt();
+    match command {
+        crate::CommandV1::SessionComplete => {
+            let (Some(expected_revision), Some(expected_attempt)) = (
+                preconditions.expected_session_revision(),
+                preconditions.expected_attempt_id(),
+            ) else {
+                return false;
+            };
+            let Some(fresh_attempt_id) = graph_completion_validation_attempt_v2(current) else {
+                return false;
+            };
+            let observed = current.complete_active_action_v2(
+                expected_revision,
+                expected_attempt,
+                fresh_attempt_id,
+                podway_core::UnixMillis::new(u64::MAX),
+            );
+            if matches!(error, PersistedGraphMutationFailureV2::ArtifactChanged) {
+                return observed.is_ok() && graph_has_recorded_required_artifact_v2(current);
+            }
+            observed
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+                .is_some_and(|failure| &failure == error)
+        }
+        command if graph_item_id_v2(command).is_some() => {
+            let command_item_id = graph_item_id_v2(command).expect("guarded item command");
+            let active_memory = active.and_then(|attempt| {
+                current
+                    .workflow_memory()
+                    .attempts()
+                    .iter()
+                    .find(|memory| memory.attempt_id() == attempt.attempt_id())
+            });
+            let slot = active_memory.and_then(|memory| {
+                memory
+                    .item_slots()
+                    .iter()
+                    .find(|slot| slot.item_id() == command_item_id)
+            });
+            match error {
+                PersistedGraphMutationFailureV2::SessionNotRunning => {
+                    current.trace().lifecycle() != podway_core::SessionLifecycle::Running
+                }
+                PersistedGraphMutationFailureV2::AttemptNotCurrent { expected, actual } => {
+                    preconditions.expected_attempt_id() == Some(expected)
+                        && active.map(podway_core::SessionAttemptV2::attempt_id) == actual.as_ref()
+                }
+                PersistedGraphMutationFailureV2::GraphNodeTypeMismatch {
+                    graph_node_id,
+                    actual,
+                } => active.is_some_and(|attempt| {
+                    attempt.graph_node_id() == graph_node_id
+                        && current
+                            .snapshot()
+                            .graph_node(graph_node_id)
+                            .is_some_and(|node| {
+                                let node_type = match node.node_kind() {
+                                    podway_core::NodeKindV2::Action => "action",
+                                    podway_core::NodeKindV2::Decision => "decision",
+                                };
+                                node_type == actual
+                                    && node.node_kind() != podway_core::NodeKindV2::Action
+                            })
+                }),
+                PersistedGraphMutationFailureV2::ItemNotFound { item_id } => {
+                    item_id == command_item_id && slot.is_none()
+                }
+                PersistedGraphMutationFailureV2::ItemRevisionConflict { expected, actual } => {
+                    preconditions.expected_item_id() == Some(command_item_id)
+                        && preconditions.expected_item_revision() == Some(*expected)
+                        && slot.is_some_and(|slot| slot.revision() == *actual)
+                }
+                PersistedGraphMutationFailureV2::ItemTypeMismatch => slot
+                    .is_some_and(|slot| !item_command_accepts_type_v2(command, slot.item_type())),
+                PersistedGraphMutationFailureV2::ItemConstraintFailed => slot.is_some_and(|slot| {
+                    item_command_accepts_type_v2(command, slot.item_type())
+                        && matches!(
+                            command,
+                            crate::CommandV1::ItemSet { .. }
+                                | crate::CommandV1::ItemAdd { .. }
+                                | crate::CommandV1::ItemRemove { .. }
+                                | crate::CommandV1::ItemAttach { .. }
+                        )
+                }),
+                PersistedGraphMutationFailureV2::ListValueNotFound => matches!(
+                    (command, slot.map(crate::ItemSlotStateV2::item_type)),
+                    (
+                        crate::CommandV1::ItemRemove { .. },
+                        Some(podway_core::ItemTypeV1::List)
+                    )
+                ),
+                PersistedGraphMutationFailureV2::ListValueDuplicate => matches!(
+                    (command, slot.map(crate::ItemSlotStateV2::item_type)),
+                    (
+                        crate::CommandV1::ItemAdd { .. },
+                        Some(podway_core::ItemTypeV1::List)
+                    )
+                ),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn graph_has_recorded_required_artifact_v2(current: &crate::GraphSessionStateV2) -> bool {
+    let Some(active) = current.trace().active_attempt() else {
+        return false;
+    };
+    let Some(memory) = current
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .find(|memory| memory.attempt_id() == active.attempt_id())
+    else {
+        return false;
+    };
+    let Ok(document) =
+        serde_json::from_str::<serde_json::Value>(current.snapshot().canonical_json().as_str())
+    else {
+        return false;
+    };
+    let Some(definition_id) = document
+        .get("graph")
+        .and_then(|graph| graph.get("nodes"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|nodes| {
+            nodes.iter().find(|placement| {
+                placement.get("id").and_then(serde_json::Value::as_str)
+                    == Some(active.graph_node_id().as_str())
+            })
+        })
+        .and_then(|placement| placement.get("use"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let Some(items) = document
+        .get("node_definitions")
+        .and_then(|definitions| definitions.get(definition_id))
+        .and_then(|definition| definition.get("items"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+    items.iter().any(|item| {
+        let Some(item) = item.as_object() else {
+            return false;
+        };
+        if item.get("type").and_then(serde_json::Value::as_str) != Some("artifact")
+            || item.get("required").and_then(serde_json::Value::as_bool) != Some(true)
+        {
+            return false;
+        }
+        let Some(item_id) = item.get("id").and_then(serde_json::Value::as_str) else {
+            return false;
+        };
+        memory.item_slots().iter().any(|slot| {
+            slot.item_id().as_str() == item_id
+                && slot.item_type() == podway_core::ItemTypeV1::Artifact
+                && slot.value().is_some()
+        })
+    })
+}
+
+fn graph_completion_validation_attempt_v2(
+    current: &crate::GraphSessionStateV2,
+) -> Option<Option<podway_core::AttemptId>> {
+    let active = current.trace().active_attempt()?;
+    let node = current.snapshot().graph_node(active.graph_node_id())?;
+    let placement: serde_json::Value =
+        serde_json::from_str(node.canonical_placement_json()).ok()?;
+    if placement
+        .get("terminal")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return Some(None);
+    }
+    placement.get("next")?.as_str()?;
+    (1..=65).find_map(|number| {
+        let candidate =
+            podway_core::AttemptId::new(format!("ffffffff-ffff-4fff-8fff-{number:012x}")).ok()?;
+        current
+            .trace()
+            .attempts()
+            .iter()
+            .all(|attempt| attempt.attempt_id() != &candidate)
+            .then_some(Some(candidate))
+    })
+}
+
+fn item_command_accepts_type_v2(
+    command: &crate::CommandV1,
+    item_type: podway_core::ItemTypeV1,
+) -> bool {
+    match command {
+        crate::CommandV1::ItemCheck { .. } | crate::CommandV1::ItemUncheck { .. } => {
+            item_type == podway_core::ItemTypeV1::Confirm
+        }
+        crate::CommandV1::ItemSet { .. } => matches!(
+            item_type,
+            podway_core::ItemTypeV1::Text
+                | podway_core::ItemTypeV1::Choice
+                | podway_core::ItemTypeV1::Integer
+        ),
+        crate::CommandV1::ItemAdd { .. } | crate::CommandV1::ItemRemove { .. } => {
+            item_type == podway_core::ItemTypeV1::List
+        }
+        crate::CommandV1::ItemAttach { .. } => item_type == podway_core::ItemTypeV1::Artifact,
+        crate::CommandV1::ItemClear { .. } => true,
+        _ => false,
+    }
+}
+
+fn graph_item_id_v2(command: &crate::CommandV1) -> Option<&podway_core::ItemId> {
+    match command {
+        crate::CommandV1::ItemCheck { item_id }
+        | crate::CommandV1::ItemUncheck { item_id }
+        | crate::CommandV1::ItemSet { item_id }
+        | crate::CommandV1::ItemAdd { item_id }
+        | crate::CommandV1::ItemRemove { item_id }
+        | crate::CommandV1::ItemAttach { item_id }
+        | crate::CommandV1::ItemClear { item_id } => Some(item_id),
+        _ => None,
+    }
 }
 
 fn validate_preconditions(

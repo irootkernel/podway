@@ -85,6 +85,8 @@ enum Reply {
     WorkspaceError,
     GoalDefinition,
     StatusV2,
+    SharedMutationV2,
+    SharedMutationV1,
 }
 
 struct RecordingDaemon {
@@ -235,6 +237,13 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             result["session"]["id"] = json!(SESSION_ID);
             result["session"]["revision"] = json!(7);
             result["current"]["attempt"]["attempt_id"] = json!(ATTEMPT_ID);
+            result["items"] = json!([{
+                "item_id": "note",
+                "type": "text",
+                "required": true,
+                "satisfied": false,
+                "revision": 11
+            }]);
             json!({
                 "schema": "podway.output/v2",
                 "request_id": request.request_id().as_str(),
@@ -249,6 +258,78 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 "warnings": []
             })
         }
+        Reply::SharedMutationV2 => {
+            let mut fixture: Value = serde_json::from_str(include_str!(
+                "../../../tests/fixtures/v2/protocol/result-families.json"
+            ))
+            .expect("v2 result fixtures must parse");
+            let schema = match request.command().as_str() {
+                "session.complete" => "podway.stage-transition-result/v2",
+                command if command.starts_with("item.") => "podway.item-mutation-result/v2",
+                command => panic!("unexpected shared v2 mutation {command}"),
+            };
+            let mut result = fixture["fixtures"][schema].take();
+            result["admission"]["job_id"] = json!(JOB_ID);
+            result["admission"]["workspace_sequence"] = json!(8);
+            if request.command().as_str().starts_with("item.") {
+                result["attempt_id"] = json!(ATTEMPT_ID);
+                result["item_id"] = request.payload()["item_id"].clone();
+            } else {
+                result["from_attempt_id"] = json!(ATTEMPT_ID);
+            }
+            json!({
+                "schema": "podway.output/v2",
+                "request_id": request.request_id().as_str(),
+                "command": request.command().as_str(),
+                "generated_at": "2026-08-09T12:34:56.789Z",
+                "workspace": {
+                    "uuid": WORKSPACE_ID,
+                    "root": request.workspace().expect("mutation selects a workspace").root(),
+                    "latest_workspace_sequence": 8
+                },
+                "job": {
+                    "id": JOB_ID,
+                    "sequence": 8,
+                    "state": "succeeded",
+                    "submitted_at": "2026-08-09T12:34:56.789Z",
+                    "claimed_at": "2026-08-09T12:34:56.789Z",
+                    "finished_at": "2026-08-09T12:34:56.789Z"
+                },
+                "result": result,
+                "warnings": []
+            })
+        }
+        Reply::SharedMutationV1 => json!({
+            "schema": "podway.output/v1",
+            "request_id": request.request_id().as_str(),
+            "command": request.command().as_str(),
+            "generated_at": "2026-08-09T12:34:56.789Z",
+            "workspace": {
+                "uuid": WORKSPACE_ID,
+                "root": request.workspace().expect("mutation selects a workspace").root(),
+                "latest_workspace_sequence": 8
+            },
+            "job": {
+                "id": JOB_ID,
+                "sequence": 8,
+                "state": "succeeded",
+                "submitted_at": "2026-08-09T12:34:56.789Z",
+                "claimed_at": "2026-08-09T12:34:56.789Z",
+                "finished_at": "2026-08-09T12:34:56.789Z"
+            },
+            "result": {
+                "schema": "podway.stage-transition-result/v1",
+                "changed": true,
+                "revision_before": 7,
+                "revision_after": 8,
+                "admission": {
+                    "admitted": true,
+                    "job_id": JOB_ID,
+                    "workspace_sequence": 8
+                }
+            },
+            "warnings": []
+        }),
     }
 }
 
@@ -470,6 +551,117 @@ fn v2_status_preflight_supplies_omitted_attempt_fences() {
     assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
     assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
     assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+}
+
+#[test]
+fn shared_item_and_complete_use_v2_status_fences_and_render_output_v2() {
+    for (command, arguments, expected_schema) in [
+        (
+            "item.set",
+            vec!["set", "note", "verified"],
+            "podway.item-mutation-result/v2",
+        ),
+        (
+            "session.complete",
+            vec!["complete"],
+            "podway.stage-transition-result/v2",
+        ),
+    ] {
+        for json_mode in [true, false] {
+            let fixture = Fixture::new();
+            let daemon = SequenceRecordingDaemon::start(
+                &fixture.socket,
+                vec![Reply::StatusV2, Reply::SharedMutationV2],
+            );
+            let mut cli = vec![
+                "--socket".to_owned(),
+                fixture.socket.display().to_string(),
+                "--worktree".to_owned(),
+                fixture.root.display().to_string(),
+                "--idempotency-key".to_owned(),
+                format!("v2run003-{command}-{json_mode}"),
+            ];
+            if json_mode {
+                cli.insert(0, "--json".to_owned());
+            }
+            cli.extend(arguments.iter().map(|argument| (*argument).to_owned()));
+
+            let output = fixture.run(&cli);
+            assert!(output.status.success(), "{command}: {output:?}");
+            let requests = daemon.finish();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0]["command"], "session.status");
+            assert_eq!(requests[1]["command"], command);
+            assert_eq!(requests[1]["workspace"]["expected_uuid"], WORKSPACE_ID);
+            assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+            assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+            if command == "item.set" {
+                assert!(
+                    requests[1]["preconditions"]
+                        .get("session_revision")
+                        .is_none()
+                );
+                assert_eq!(requests[1]["preconditions"]["item_revision"], 11);
+                assert_eq!(requests[1]["payload"]["item_id"], "note");
+                assert_eq!(requests[1]["payload"]["value"], "verified");
+            } else {
+                assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+                assert!(requests[1]["preconditions"].get("item_revision").is_none());
+            }
+
+            if json_mode {
+                let envelope = one_json(&output);
+                assert_eq!(envelope["schema"], "podway.output/v2");
+                assert_eq!(envelope["command"], command);
+                assert_eq!(envelope["result"]["schema"], expected_schema);
+            } else {
+                let text = String::from_utf8_lossy(&output.stdout);
+                assert!(text.contains("workspace:"), "{text}");
+                assert!(text.contains(expected_schema), "{text}");
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_complete_accepts_retained_output_v1_after_preflight() {
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![Reply::StatusV2, Reply::SharedMutationV1],
+    );
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "--if-session-revision".to_owned(),
+        "7".to_owned(),
+        "--if-attempt".to_owned(),
+        ATTEMPT_ID.to_owned(),
+        "--idempotency-key".to_owned(),
+        "v2run003-retained-v1-complete".to_owned(),
+        "complete".to_owned(),
+    ];
+    let output = fixture.run(&arguments);
+    assert!(output.status.success(), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.complete");
+    assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+    assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v1");
+    assert_eq!(
+        envelope["result"]["schema"],
+        "podway.stage-transition-result/v1"
+    );
 }
 
 #[test]

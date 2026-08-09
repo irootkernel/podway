@@ -4,7 +4,7 @@
 //! capabilities remain behind the injected runtime seams below. In particular, a workspace value is
 //! opaque to this module, so routing cannot accidentally turn a display path into an identity key.
 
-use podway_core::{AttemptId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
+use podway_core::{AttemptId, GraphNodeId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
 use podway_protocol::{
     CompactStatusResultV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     IdempotencyKeyV1, JobOutputV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeInputV1,
@@ -46,6 +46,7 @@ pub struct DispatchErrorDetailsV1 {
     digest_confirmation_required: Option<Box<Sha256Digest>>,
     outcome_unknown_key: Option<Box<IdempotencyKeyV1>>,
     maximum_open_blockers: Option<Box<usize>>,
+    v2_runtime: Option<Box<V2RuntimeErrorDetailsV1>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,6 +77,18 @@ struct ProcedureDigestMismatchDetailsV1 {
 struct UnsupportedV2CapabilityDetailsV1 {
     capability: &'static str,
     required_result_schema: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum V2RuntimeErrorDetailsV1 {
+    GraphNodeTypeMismatch {
+        graph_node_id: GraphNodeId,
+        actual_node_type: String,
+    },
+    SessionGoalMissing,
+    FreshGoalAssessmentMissing {
+        goal_revision: u64,
+    },
 }
 
 impl DispatchErrorDetailsV1 {
@@ -174,7 +187,62 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_graph_node_type_mismatch(
+        mut self,
+        graph_node_id: GraphNodeId,
+        actual_node_type: impl Into<String>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::GraphNodeTypeMismatch {
+            graph_node_id,
+            actual_node_type: actual_node_type.into(),
+        }));
+        self
+    }
+
+    pub fn with_session_goal_missing(mut self) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::SessionGoalMissing));
+        self
+    }
+
+    pub fn with_fresh_goal_assessment_missing(mut self, goal_revision: u64) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::FreshGoalAssessmentMissing { goal_revision },
+        ));
+        self
+    }
+
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
+        if let Some(runtime) = self.v2_runtime {
+            let admission = admission_value_v1(self.job_id.as_ref(), self.job_sequence);
+            let value = match *runtime {
+                V2RuntimeErrorDetailsV1::GraphNodeTypeMismatch {
+                    graph_node_id,
+                    actual_node_type,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1",
+                    "kind": "GRAPH_NODE_TYPE_MISMATCH",
+                    "graph_node_id": graph_node_id,
+                    "expected_node_type": "action",
+                    "actual_node_type": actual_node_type,
+                    "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::SessionGoalMissing => json!({
+                    "schema": "podway.v2-runtime-error-details/v1",
+                    "kind": "SESSION_GOAL_MISSING",
+                    "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::FreshGoalAssessmentMissing { goal_revision } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1",
+                    "kind": "FRESH_GOAL_ASSESSMENT_MISSING",
+                    "goal_revision": goal_revision,
+                    "admission": admission,
+                }),
+            };
+            return value
+                .as_object()
+                .expect("v2 runtime details are an object")
+                .clone();
+        }
         if let Some(diagnostic_codes) = self.procedure_v2_schema_invalid {
             return json!({
                 "schema": "podway.v2-runtime-error-details/v1",
@@ -381,12 +449,15 @@ pub enum DispatchFailureKindV1 {
     SessionCancelled,
     SessionRevisionConflict,
     AttemptNotCurrent,
+    GraphNodeTypeMismatch,
     StageNotFound,
     StageNotSkippable,
     ReturnNotAllowed,
     ReopenNotAllowed,
     RequiredItemsMissing,
     BlockersPresent,
+    SessionGoalMissing,
+    FreshGoalAssessmentMissing,
     BlockerLimitReached,
     ItemNotFound,
     ItemTypeMismatch,
@@ -435,6 +506,7 @@ impl DispatchFailureV1 {
                 digest_confirmation_required: None,
                 outcome_unknown_key: None,
                 maximum_open_blockers: None,
+                v2_runtime: None,
             }),
         }
     }
@@ -1728,10 +1800,27 @@ where
                     | SliceCommandV1::SessionStartReplace(_)
                     | SliceCommandV1::SessionStatus(_)
                     | SliceCommandV1::SessionNext(_)
+                    | SliceCommandV1::SessionComplete(_)
+                    | SliceCommandV1::ItemCheck(_)
+                    | SliceCommandV1::ItemUncheck(_)
+                    | SliceCommandV1::ItemSet(_)
+                    | SliceCommandV1::ItemAdd(_)
+                    | SliceCommandV1::ItemRemove(_)
+                    | SliceCommandV1::ItemAttach(_)
+                    | SliceCommandV1::ItemClear(_)
             );
             let development_v2_requires_admission = matches!(
                 slice_request.command(),
-                SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+                SliceCommandV1::SessionStart(_)
+                    | SliceCommandV1::SessionStartReplace(_)
+                    | SliceCommandV1::SessionComplete(_)
+                    | SliceCommandV1::ItemCheck(_)
+                    | SliceCommandV1::ItemUncheck(_)
+                    | SliceCommandV1::ItemSet(_)
+                    | SliceCommandV1::ItemAdd(_)
+                    | SliceCommandV1::ItemRemove(_)
+                    | SliceCommandV1::ItemAttach(_)
+                    | SliceCommandV1::ItemClear(_)
             );
             if development_v2_candidate
                 && let Some(proof) = self
@@ -2048,6 +2137,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             true,
             4,
         ),
+        DispatchFailureKindV1::GraphNodeTypeMismatch => (
+            "GRAPH_NODE_TYPE_MISMATCH",
+            "The active graph node has the wrong type for this command.",
+            false,
+            1,
+        ),
         DispatchFailureKindV1::StageNotFound => {
             ("STAGE_NOT_FOUND", "The stage does not exist.", false, 1)
         }
@@ -2078,6 +2173,18 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::BlockersPresent => (
             "BLOCKERS_PRESENT",
             "Open blockers prevent completion.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::SessionGoalMissing => (
+            "SESSION_GOAL_MISSING",
+            "The goal-tracking session has no current goal.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::FreshGoalAssessmentMissing => (
+            "FRESH_GOAL_ASSESSMENT_MISSING",
+            "A fresh goal assessment is required before terminal completion.",
             false,
             1,
         ),

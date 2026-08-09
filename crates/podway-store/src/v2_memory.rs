@@ -1,6 +1,7 @@
 //! Procedure v2 attempt-local workflow-memory persistence.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::str::FromStr;
 
 use podway_core::{
@@ -45,6 +46,119 @@ fn sqlite_u64(value: u64, field: &'static str) -> Result<i64, StoreErrorV1> {
 
 fn persisted_u64(value: i64, record: StoreRecordKindV1) -> Result<u64, StoreErrorV1> {
     u64::try_from(value).map_err(|_| corrupt(record))
+}
+
+/// One version-neutral item command applied to the active Procedure v2 attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActiveItemMutationV2 {
+    Check,
+    Uncheck,
+    Set { value: String },
+    Add { value: String },
+    Remove { value: String, ignore_missing: bool },
+    Attach { value: ArtifactValueV1 },
+    Clear,
+}
+
+/// Stable typed failures produced before a Procedure v2 graph mutation reaches persistence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GraphMutationErrorV2 {
+    SessionNotRunning,
+    SessionRevisionConflict {
+        expected: Revision,
+        actual: Revision,
+    },
+    AttemptNotCurrent {
+        expected: AttemptId,
+        actual: Option<AttemptId>,
+    },
+    GraphNodeTypeMismatch {
+        graph_node_id: GraphNodeId,
+        actual: podway_core::NodeKindV2,
+    },
+    ItemNotFound {
+        item_id: ItemId,
+    },
+    ItemRevisionConflict {
+        expected: Revision,
+        actual: Revision,
+    },
+    ItemTypeMismatch,
+    ItemConstraintFailed,
+    ListValueNotFound,
+    ListValueDuplicate,
+    RequiredItemsMissing {
+        item_ids: Vec<ItemId>,
+    },
+    BlockersPresent,
+    SessionGoalMissing,
+    FreshGoalAssessmentMissing {
+        goal_revision: GoalRevisionNumberV2,
+    },
+    InvalidState(StoreValueErrorV1),
+    Domain(podway_core::DomainError),
+}
+
+impl fmt::Display for GraphMutationErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SessionNotRunning => formatter.write_str("Procedure v2 session is not running"),
+            Self::SessionRevisionConflict { .. } => {
+                formatter.write_str("Procedure v2 session revision changed")
+            }
+            Self::AttemptNotCurrent { .. } => {
+                formatter.write_str("Procedure v2 attempt is not current")
+            }
+            Self::GraphNodeTypeMismatch { .. } => {
+                formatter.write_str("Procedure v2 graph node has the wrong type")
+            }
+            Self::ItemNotFound { .. } => formatter.write_str("Procedure v2 item was not found"),
+            Self::ItemRevisionConflict { .. } => {
+                formatter.write_str("Procedure v2 item revision changed")
+            }
+            Self::ItemTypeMismatch => {
+                formatter.write_str("Procedure v2 item command does not match its type")
+            }
+            Self::ItemConstraintFailed => {
+                formatter.write_str("Procedure v2 item value violates its declaration")
+            }
+            Self::ListValueNotFound => formatter.write_str("list item value is not present"),
+            Self::ListValueDuplicate => formatter.write_str("list item value is already present"),
+            Self::RequiredItemsMissing { .. } => {
+                formatter.write_str("Procedure v2 required items are missing")
+            }
+            Self::BlockersPresent => formatter.write_str("Procedure v2 blockers are present"),
+            Self::SessionGoalMissing => {
+                formatter.write_str("the Procedure v2 session goal is missing")
+            }
+            Self::FreshGoalAssessmentMissing { .. } => {
+                formatter.write_str("a fresh final goal assessment is missing")
+            }
+            Self::InvalidState(error) => error.fmt(formatter),
+            Self::Domain(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for GraphMutationErrorV2 {}
+
+impl From<StoreValueErrorV1> for GraphMutationErrorV2 {
+    fn from(error: StoreValueErrorV1) -> Self {
+        Self::InvalidState(error)
+    }
+}
+
+impl From<podway_core::DomainError> for GraphMutationErrorV2 {
+    fn from(error: podway_core::DomainError) -> Self {
+        Self::Domain(error)
+    }
+}
+
+pub(crate) struct ActiveItemMemoryMutationV2 {
+    pub memory: WorkflowMemoryStateV2,
+    pub changed: bool,
+    pub item_revision: Revision,
+    pub value_digest: Option<Sha256Digest>,
 }
 
 /// One mutable item slot belonging to a Procedure v2 attempt.
@@ -427,6 +541,183 @@ impl WorkflowMemoryStateV2 {
         &self.reworks
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mutate_active_item_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        trace: &SessionTraceV2,
+        expected_attempt_id: &AttemptId,
+        item_id: &ItemId,
+        expected_item_revision: Revision,
+        mutation: ActiveItemMutationV2,
+        now: UnixMillis,
+    ) -> Result<ActiveItemMemoryMutationV2, GraphMutationErrorV2> {
+        if trace.lifecycle() != SessionLifecycle::Running {
+            return Err(GraphMutationErrorV2::SessionNotRunning);
+        }
+        let active =
+            trace
+                .active_attempt()
+                .ok_or_else(|| GraphMutationErrorV2::AttemptNotCurrent {
+                    expected: expected_attempt_id.clone(),
+                    actual: None,
+                })?;
+        if active.attempt_id() != expected_attempt_id {
+            return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                expected: expected_attempt_id.clone(),
+                actual: Some(active.attempt_id().clone()),
+            });
+        }
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        let node = model.node(active.graph_node_id())?;
+        let specification = node
+            .items
+            .iter()
+            .find(|specification| specification.id() == item_id)
+            .ok_or_else(|| GraphMutationErrorV2::ItemNotFound {
+                item_id: item_id.clone(),
+            })?;
+        let attempt_index = self
+            .attempts
+            .iter()
+            .position(|memory| memory.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        let slot_index = self.attempts[attempt_index]
+            .item_slots
+            .iter()
+            .position(|slot| slot.item_id() == item_id)
+            .ok_or_else(|| invalid("active Procedure v2 item slot is absent"))?;
+        let current = &self.attempts[attempt_index].item_slots[slot_index];
+        if current.revision() != expected_item_revision {
+            return Err(GraphMutationErrorV2::ItemRevisionConflict {
+                expected: expected_item_revision,
+                actual: current.revision(),
+            });
+        }
+        if now < current.updated_at() {
+            return Err(invalid("Procedure v2 item mutation timestamp regressed").into());
+        }
+
+        let next_value = mutate_item_value_v2(specification, current.value(), mutation)?;
+        let value_digest = next_value
+            .as_ref()
+            .and_then(RecordedItemValueV2::as_artifact)
+            .map(|artifact| artifact.digest().clone());
+        if current.value() == next_value.as_ref() {
+            return Ok(ActiveItemMemoryMutationV2 {
+                memory: self.clone(),
+                changed: false,
+                item_revision: current.revision(),
+                value_digest,
+            });
+        }
+        let next_revision = current
+            .revision()
+            .checked_next()
+            .map_err(GraphMutationErrorV2::Domain)?;
+        let next_slot = ItemSlotStateV2::new(
+            current.attempt_id().clone(),
+            current.item_id().clone(),
+            current.item_type(),
+            next_revision,
+            next_value,
+            current.created_at(),
+            now,
+        )?;
+        let mut attempts = self.attempts.clone();
+        let active_memory = &self.attempts[attempt_index];
+        let mut slots = active_memory.item_slots.clone();
+        slots[slot_index] = next_slot;
+        attempts[attempt_index] = AttemptWorkflowMemoryV2::new(
+            active_memory.attempt_id.clone(),
+            slots,
+            active_memory.blockers.clone(),
+            active_memory.evidence.clone(),
+        )?;
+        Ok(ActiveItemMemoryMutationV2 {
+            memory: Self::new(attempts, self.decisions.clone(), self.reworks.clone())?,
+            changed: true,
+            item_revision: next_revision,
+            value_digest,
+        })
+    }
+
+    pub(crate) fn complete_action_successor_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        previous_trace: &SessionTraceV2,
+        next_trace: &SessionTraceV2,
+        ended_at: UnixMillis,
+    ) -> Result<Self, GraphMutationErrorV2> {
+        let source = previous_trace
+            .active_attempt()
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        let source_memory = self
+            .attempts
+            .iter()
+            .find(|memory| memory.attempt_id() == source.attempt_id())
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        let source_specification = model.node(source.graph_node_id())?;
+        if source_specification.node_kind != podway_core::NodeKindV2::Action {
+            return Err(GraphMutationErrorV2::GraphNodeTypeMismatch {
+                graph_node_id: source.graph_node_id().clone(),
+                actual: source_specification.node_kind,
+            });
+        }
+        let missing = source_specification
+            .items
+            .iter()
+            .zip(source_memory.item_slots())
+            .filter(|(specification, slot)| {
+                specification.common().required()
+                    && !slot
+                        .value()
+                        .is_some_and(|value| specification.admits_recorded_value(value))
+            })
+            .map(|(specification, _)| specification.id().clone())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(GraphMutationErrorV2::RequiredItemsMissing { item_ids: missing });
+        }
+        if source_memory
+            .blockers()
+            .iter()
+            .any(|blocker| blocker.state() == BlockerState::Open)
+        {
+            return Err(GraphMutationErrorV2::BlockersPresent);
+        }
+
+        let mut attempts = self.attempts.clone();
+        if let Some(fresh) = next_trace.active_attempt() {
+            let fresh_specification = model.node(fresh.graph_node_id())?;
+            let slots = fresh_specification
+                .items
+                .iter()
+                .map(|item| {
+                    ItemSlotStateV2::new(
+                        fresh.attempt_id().clone(),
+                        item.id().clone(),
+                        item.item_type(),
+                        Revision::ZERO,
+                        None,
+                        ended_at,
+                        ended_at,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let evidence =
+                resolve_evidence_at_activation_v2(fresh_specification, next_trace, self, ended_at)?;
+            attempts.push(AttemptWorkflowMemoryV2::new(
+                fresh.attempt_id().clone(),
+                slots,
+                Vec::new(),
+                evidence,
+            )?);
+        }
+        Self::new(attempts, self.decisions.clone(), self.reworks.clone()).map_err(Into::into)
+    }
+
     pub fn empty_for_trace(
         snapshot: &ProcedureSnapshotV2,
         trace: &SessionTraceV2,
@@ -632,6 +923,172 @@ impl WorkflowMemoryStateV2 {
             })
             .collect()
     }
+}
+
+fn mutate_item_value_v2(
+    specification: &ItemSpecV2,
+    current: Option<&RecordedItemValueV2>,
+    mutation: ActiveItemMutationV2,
+) -> Result<Option<RecordedItemValueV2>, GraphMutationErrorV2> {
+    let candidate = match mutation {
+        ActiveItemMutationV2::Check => {
+            if specification.item_type() != ItemTypeV1::Confirm {
+                return Err(GraphMutationErrorV2::ItemTypeMismatch);
+            }
+            Some(RecordedItemValueV2::confirm())
+        }
+        ActiveItemMutationV2::Uncheck => {
+            if specification.item_type() != ItemTypeV1::Confirm {
+                return Err(GraphMutationErrorV2::ItemTypeMismatch);
+            }
+            None
+        }
+        ActiveItemMutationV2::Set { value } => Some(match specification.item_type() {
+            ItemTypeV1::Text => RecordedItemValueV2::text(value)
+                .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
+            ItemTypeV1::Choice => RecordedItemValueV2::choice(value)
+                .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
+            ItemTypeV1::Integer => RecordedItemValueV2::integer(
+                value
+                    .parse::<i64>()
+                    .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
+            ),
+            ItemTypeV1::Confirm | ItemTypeV1::List | ItemTypeV1::Artifact => {
+                return Err(GraphMutationErrorV2::ItemTypeMismatch);
+            }
+        }),
+        ActiveItemMutationV2::Add { value } => {
+            let ItemSpecV2::List(list_specification) = specification else {
+                return Err(GraphMutationErrorV2::ItemTypeMismatch);
+            };
+            let mut values = current
+                .and_then(RecordedItemValueV2::as_list)
+                .map_or_else(Vec::new, ToOwned::to_owned);
+            if list_specification.unique() && values.contains(&value) {
+                return Err(GraphMutationErrorV2::ListValueDuplicate);
+            }
+            values.push(value);
+            Some(
+                RecordedItemValueV2::list(values)
+                    .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
+            )
+        }
+        ActiveItemMutationV2::Remove {
+            value,
+            ignore_missing,
+        } => {
+            let ItemSpecV2::List(_) = specification else {
+                return Err(GraphMutationErrorV2::ItemTypeMismatch);
+            };
+            let mut values = current
+                .and_then(RecordedItemValueV2::as_list)
+                .map_or_else(Vec::new, ToOwned::to_owned);
+            let Some(index) = values.iter().position(|candidate| candidate == &value) else {
+                if ignore_missing {
+                    return Ok(current.cloned());
+                }
+                return Err(GraphMutationErrorV2::ListValueNotFound);
+            };
+            values.remove(index);
+            if values.is_empty() {
+                None
+            } else {
+                Some(
+                    RecordedItemValueV2::list(values)
+                        .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
+                )
+            }
+        }
+        ActiveItemMutationV2::Attach { value } => {
+            if specification.item_type() != ItemTypeV1::Artifact {
+                return Err(GraphMutationErrorV2::ItemTypeMismatch);
+            }
+            Some(RecordedItemValueV2::artifact(value))
+        }
+        ActiveItemMutationV2::Clear => None,
+    };
+    if candidate
+        .as_ref()
+        .is_some_and(|value| !specification.admits_recorded_value(value))
+    {
+        return Err(GraphMutationErrorV2::ItemConstraintFailed);
+    }
+    Ok(candidate)
+}
+
+fn resolve_evidence_at_activation_v2(
+    specification: &NodeMemorySpecV2,
+    trace: &SessionTraceV2,
+    memory: &WorkflowMemoryStateV2,
+    resolved_at: UnixMillis,
+) -> Result<Vec<EvidenceResolutionStateV2>, GraphMutationErrorV2> {
+    specification
+        .evidence
+        .iter()
+        .enumerate()
+        .map(|(ordinal, reference)| {
+            let mut sources = trace.attempts().iter().filter(|attempt| {
+                attempt.graph_node_id() == &reference.source_node
+                    && attempt.validity() == AttemptValidityV2::Valid
+            });
+            let source = sources.next();
+            if sources.next().is_some() {
+                return Err(invalid(
+                    "Procedure v2 evidence source is not uniquely current at activation",
+                )
+                .into());
+            }
+            let resolution = match source {
+                None if reference.required => {
+                    return Err(invalid(
+                        "required Procedure v2 evidence is unresolved at activation",
+                    )
+                    .into());
+                }
+                None => ResolvedEvidenceReferenceV2::unresolved(reference.source_node.clone()),
+                Some(source)
+                    if !matches!(
+                        source.lifecycle(),
+                        AttemptLifecycle::Completed | AttemptLifecycle::Skipped
+                    ) =>
+                {
+                    return Err(invalid(
+                        "Procedure v2 evidence source is not terminal at activation",
+                    )
+                    .into());
+                }
+                Some(source) => {
+                    let source_memory = memory
+                        .attempts()
+                        .iter()
+                        .find(|candidate| candidate.attempt_id() == source.attempt_id())
+                        .ok_or_else(|| invalid("Procedure v2 evidence source memory is absent"))?;
+                    let snapshot = EvidenceReferenceSnapshotV2::new(
+                        reference.source_node.clone(),
+                        source.attempt_id().clone(),
+                        source.number(),
+                        source_memory.recorded_items_digest()?,
+                        resolved_at,
+                    )
+                    .map_err(GraphMutationErrorV2::Domain)?;
+                    if source.lifecycle() == AttemptLifecycle::Skipped {
+                        ResolvedEvidenceReferenceV2::skipped(snapshot)
+                    } else {
+                        ResolvedEvidenceReferenceV2::resolved(snapshot)
+                    }
+                }
+            };
+            EvidenceResolutionStateV2::new(
+                u32::try_from(ordinal).map_err(|_| {
+                    invalid("Procedure v2 evidence reference ordinal is out of bounds")
+                })?,
+                reference.required,
+                reference.selected_item_ids.clone(),
+                resolution,
+            )
+            .map_err(Into::into)
+        })
+        .collect()
 }
 
 /// SHA-256 over canonical JSON of complete recorded values in Procedure author order.
