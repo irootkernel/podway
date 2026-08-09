@@ -24,6 +24,7 @@ options and result surfaces.
 --if-session-revision <n>      require an exact session revision
 --if-attempt <uuid>            require an exact active attempt
 --if-item-revision <n>         require an exact item revision
+--if-goal-revision <n>         require an exact positive goal revision
 --yes                          approve a required destructive confirmation
 ```
 
@@ -93,7 +94,10 @@ identity results before using any reported field.
 
 The `status --verbose` shape below is adopted but not yet executable. Procedure
 v2 authoring and preview commands are executable and are specified in their
-dedicated sections below.
+dedicated sections below. The five reserved mutation routes and goal-bearing start
+are exposed by the CLI grammar, but remain `reserved_contract` capabilities until
+their owning runtime tasks land. A fully fenced invocation reaches the daemon's
+typed `UNSUPPORTED_V2_CAPABILITY` boundary and is never reinterpreted as v1.
 
 ```text
 podway status --verbose [--history-before <trace-sequence>]
@@ -309,9 +313,18 @@ podway start --preset <name> --task <title>
 podway start --procedure <worktree-relative-file> --task <title>
 podway start --procedure <worktree-relative-file> --expect-procedure-digest <sha256:hex> --task <title>
 podway start ... --replace --yes
+podway start ... --goal <text> --criterion <id>=<statement>... [--actor <text>]
 ```
 
 Exactly one of `--preset` or `--procedure` is required. `--replace` deletes an existing session before start and requires confirmation. `--dry-run` validates and shows the first stage without creating a session.
+
+An initial goal requires one to sixteen ordered, uniquely identified criteria.
+`--criterion` and `--actor` are invalid without `--goal`. Goal-bearing start and
+start replacement use the typed Procedure v2 request boundary; a retained v1
+start contains none of those fields and preserves its released wire shape.
+Until the v2 start runtime lands, goal-bearing replacement requires explicit
+workspace UUID, session ID, and session revision fences so the request reaches
+the typed pre-admission capability response without a legacy status preflight.
 
 A non-dry-run replacement with explicit `--if-workspace-uuid`, `--if-session-id`, and
 `--if-session-revision` sends those complete identity fences directly without a status preflight.
@@ -378,6 +391,41 @@ podway retry --reason <text>
 ```
 
 Creates a clean attempt for the current stage.
+
+### Decide and rework
+
+```bash
+podway decide --option <option-id> --reason <text> [--actor <text>]
+podway rework --to <graph-node-id> --reason <text> [--actor <text>]
+```
+
+`decide` requires the exact active attempt. `rework` requires the exact session
+revision and carries the active attempt when the session is running. These
+Procedure v2 commands are distinct from the retained v1 `return` and `reopen`
+commands; neither retained command is an alias for `rework`.
+
+While these routes remain `reserved_contract`, the CLI requires callers to pass
+the complete command-specific workspace, session, revision, attempt, and goal
+revision fences explicitly. It does not run a legacy status preflight that could
+mask the route-specific `UNSUPPORTED_V2_CAPABILITY` response.
+
+### Goal
+
+```bash
+podway goal define --goal <text> --criterion <id>=<statement>... [--actor <text>]
+podway goal revise --goal <text> --criterion <id>=<statement>... \
+  --rework-to <graph-node-id> --reason <text> [--actor <text>] [--reactivate]
+podway goal assess-criterion <criterion-id> \
+  --status <satisfied|unsatisfied|not_applicable> --reason <text> \
+  [--evidence <graph-node-id>]... [--item <item-id>]... [--actor <text>]
+```
+
+Definitions and revisions carry one to sixteen ordered, uniquely identified
+criteria. Revision and criterion assessment require `--if-goal-revision`.
+Assessment accepts at most four citations in total; `not_applicable` forbids
+citations. The same explicit-fence rule applies to all three goal commands. All
+five Procedure v2 mutation routes preserve the daemon's typed pre-admission
+unsupported response until their owning runtime capability is enabled.
 
 ### Return
 
@@ -504,6 +552,7 @@ Automation SHOULD pass explicit values obtained from `status --json`:
 --if-session-revision <n>
 --if-attempt <uuid>
 --if-item-revision <n>
+--if-goal-revision <n>
 ```
 
 Workspace identity applies to session start and replacement, session-bearing
@@ -549,6 +598,9 @@ The release ships completion for:
 - bash;
 - fish.
 
-Completion includes commands, flags, built-in preset names, active-stage item IDs, allowed return destinations, open blocker IDs, and current-worktree job IDs where dynamic completion is safe and fast.
+Completion includes commands, Procedure v2 goal and decision flags and status
+values, built-in preset names, active-stage item IDs, allowed return destinations,
+open blocker IDs, and current-worktree job IDs where dynamic completion is safe
+and fast.
 
 Dynamic completion MUST use read-only daemon queries and MUST degrade silently when the daemon or workspace is unavailable.

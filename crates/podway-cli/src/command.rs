@@ -1,4 +1,4 @@
-//! Public command-line surface for the Podway v1 command contract.
+//! Public command-line surface for the Podway command contract.
 
 mod completion;
 
@@ -41,7 +41,10 @@ use podway_config::{
     scaffold_procedure_v2, sniff_procedure_schema, validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
-    AttemptId, PROCEDURE_SCHEMA_V2, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId,
+    ActorAttributionV2, AttemptId, CriterionAssessmentReasonV2, CriterionId, GoalCriterionV2,
+    GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, GraphNodeId,
+    ItemId, OptionId, PROCEDURE_SCHEMA_V2, ReasonV2, Revision, SessionId, Sha256Digest, UnixMillis,
+    WorkspaceId,
 };
 use podway_presets::{PresetError, catalog_v1};
 use podway_protocol::{
@@ -49,7 +52,7 @@ use podway_protocol::{
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
     OutputEnvelopeInputV1, OutputEnvelopeInputV2, OutputEnvelopeV1, OutputEnvelopeV2,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV1, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
+    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
     WorktreeSelectorWireV1, build_identity_v1, ensure_command_result_schema_v1,
     ensure_error_details_schema_v1, validate_command_result_v1, validate_command_result_v2,
 };
@@ -142,6 +145,10 @@ struct Cli {
     #[arg(long, global = true, value_name = "N")]
     if_item_revision: Option<u64>,
 
+    /// Require an exact current Procedure v2 goal revision.
+    #[arg(long, global = true, value_name = "N", value_parser = parse_positive_u64)]
+    if_goal_revision: Option<u64>,
+
     /// Approve a destructive operation without prompting.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     yes: bool,
@@ -201,6 +208,12 @@ enum Command {
     Status(StatusArgs),
     Next(ReadArgs),
     Complete,
+    Decide(DecideArgs),
+    Rework(ReworkArgs),
+    Goal {
+        #[command(subcommand)]
+        command: GoalCommand,
+    },
     Skip {
         #[arg(long, value_name = "TEXT")]
         reason: Option<String>,
@@ -295,6 +308,12 @@ struct StartArgs {
     expect_procedure_digest: Option<String>,
     #[arg(long, value_name = "TITLE")]
     task: String,
+    #[arg(long, value_name = "TEXT", requires = "criterion")]
+    goal: Option<String>,
+    #[arg(long, value_name = "ID=STATEMENT", action = ArgAction::Append, requires = "goal")]
+    criterion: Vec<String>,
+    #[arg(long, value_name = "TEXT", requires = "goal")]
+    actor: Option<String>,
     #[arg(long, action = ArgAction::SetTrue)]
     replace: bool,
     #[arg(long, action = ArgAction::SetTrue)]
@@ -322,6 +341,75 @@ struct StatusArgs {
         conflicts_with = "verbose"
     )]
     compact: bool,
+}
+
+#[derive(Debug, Args)]
+struct DecideArgs {
+    #[arg(long, value_name = "ID")]
+    option: String,
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+    #[arg(long, value_name = "TEXT")]
+    actor: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ReworkArgs {
+    #[arg(long, value_name = "GRAPH_NODE_ID")]
+    to: String,
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+    #[arg(long, value_name = "TEXT")]
+    actor: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum GoalCommand {
+    Define(GoalDefineArgs),
+    Revise(GoalReviseArgs),
+    AssessCriterion(GoalAssessCriterionArgs),
+}
+
+#[derive(Debug, Args)]
+struct GoalDefineArgs {
+    #[arg(long, value_name = "TEXT")]
+    goal: String,
+    #[arg(long, value_name = "ID=STATEMENT", action = ArgAction::Append, required = true)]
+    criterion: Vec<String>,
+    #[arg(long, value_name = "TEXT")]
+    actor: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct GoalReviseArgs {
+    #[arg(long, value_name = "TEXT")]
+    goal: String,
+    #[arg(long, value_name = "ID=STATEMENT", action = ArgAction::Append, required = true)]
+    criterion: Vec<String>,
+    #[arg(long, value_name = "GRAPH_NODE_ID")]
+    rework_to: String,
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+    #[arg(long, value_name = "TEXT")]
+    actor: Option<String>,
+    #[arg(long, action = ArgAction::SetTrue)]
+    reactivate: bool,
+}
+
+#[derive(Debug, Args)]
+struct GoalAssessCriterionArgs {
+    #[arg(value_name = "CRITERION_ID")]
+    criterion_id: String,
+    #[arg(long, value_name = "STATUS", value_parser = ["satisfied", "unsatisfied", "not_applicable"])]
+    status: String,
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+    #[arg(long, value_name = "GRAPH_NODE_ID", action = ArgAction::Append)]
+    evidence: Vec<String>,
+    #[arg(long, value_name = "ITEM_ID", action = ArgAction::Append)]
+    item: Vec<String>,
+    #[arg(long, value_name = "TEXT")]
+    actor: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -517,6 +605,17 @@ impl Command {
             Self::Status(_) | Self::CompleteDynamic { .. } => Some("session.status"),
             Self::Next(_) => Some("session.next"),
             Self::Complete => Some("session.complete"),
+            Self::Decide(_) => Some("session.decide"),
+            Self::Rework(_) => Some("session.rework"),
+            Self::Goal {
+                command: GoalCommand::Define(_),
+            } => Some("goal.define"),
+            Self::Goal {
+                command: GoalCommand::Revise(_),
+            } => Some("goal.revise"),
+            Self::Goal {
+                command: GoalCommand::AssessCriterion(_),
+            } => Some("goal.assess_criterion"),
             Self::Skip { .. } => Some("session.skip"),
             Self::Retry { .. } => Some("session.retry"),
             Self::Return(_) => Some("session.return"),
@@ -615,6 +714,9 @@ impl Command {
         match self {
             Self::Init { .. }
             | Self::Complete
+            | Self::Decide(_)
+            | Self::Rework(_)
+            | Self::Goal { .. }
             | Self::Skip { .. }
             | Self::Retry { .. }
             | Self::Block { .. }
@@ -637,6 +739,9 @@ impl Command {
     const fn needs_preflight(&self) -> bool {
         match self {
             Self::Complete
+            | Self::Decide(_)
+            | Self::Rework(_)
+            | Self::Goal { .. }
             | Self::Skip { .. }
             | Self::Retry { .. }
             | Self::Return(_)
@@ -677,6 +782,9 @@ impl Command {
                 | Self::Status(_)
                 | Self::Next(_)
                 | Self::Complete
+                | Self::Decide(_)
+                | Self::Rework(_)
+                | Self::Goal { .. }
                 | Self::Skip { .. }
                 | Self::Retry { .. }
                 | Self::Return(_)
@@ -702,6 +810,9 @@ impl Command {
                 | Self::Status(_)
                 | Self::Next(_)
                 | Self::Complete
+                | Self::Decide(_)
+                | Self::Rework(_)
+                | Self::Goal { .. }
                 | Self::Skip { .. }
                 | Self::Retry { .. }
                 | Self::Return(_)
@@ -770,6 +881,7 @@ struct StatusFacts {
     session_revision: Revision,
     attempt_id: Option<AttemptId>,
     item_revisions: Vec<(String, Revision)>,
+    goal_revision: Option<GoalRevisionNumberV2>,
 }
 
 #[derive(Clone, Debug)]
@@ -793,6 +905,72 @@ impl StatusPreflight {
             facts: StatusFacts::from_status(&status),
         })
     }
+
+    fn from_output_v2(output: &OutputEnvelopeV2) -> Result<Self, LocalFailure> {
+        let result = output.result();
+        if result.get("schema").and_then(Value::as_str) != Some("podway.status-result/v2") {
+            return Err(LocalFailure::response_invalid(
+                "status preflight did not return the standard Procedure v2 status result",
+            ));
+        }
+        let session = result
+            .get("session")
+            .and_then(Value::as_object)
+            .ok_or_else(|| LocalFailure::response_invalid("status response omitted session"))?;
+        let session_id = session
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .and_then(|value| SessionId::new(value).ok())
+            .ok_or_else(|| LocalFailure::response_invalid("status session ID is invalid"))?;
+        let session_revision = session
+            .get("revision")
+            .and_then(Value::as_u64)
+            .map(Revision::new)
+            .ok_or_else(|| LocalFailure::response_invalid("status revision is invalid"))?;
+        let attempt_id = result
+            .get("current")
+            .and_then(Value::as_object)
+            .and_then(|current| current.get("attempt"))
+            .and_then(Value::as_object)
+            .and_then(|attempt| attempt.get("attempt_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .and_then(|value| AttemptId::new(value).ok());
+        let item_revisions = result
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                let item = item.as_object()?;
+                Some((
+                    item.get("item_id")?.as_str()?.to_owned(),
+                    Revision::new(item.get("revision")?.as_u64()?),
+                ))
+            })
+            .collect();
+        let goal_revision = result
+            .get("goal_revision")
+            .and_then(Value::as_u64)
+            .map(GoalRevisionNumberV2::new);
+        let transport_workspace_id = output
+            .workspace()
+            .map(|workspace| workspace.uuid().clone())
+            .ok_or_else(|| {
+                LocalFailure::response_invalid("status response omitted workspace identity")
+            })?;
+        Ok(Self {
+            transport_workspace_id,
+            facts: StatusFacts {
+                session_id,
+                session_revision,
+                attempt_id,
+                item_revisions,
+                goal_revision,
+            },
+        })
+    }
 }
 
 impl StatusFacts {
@@ -809,6 +987,7 @@ impl StatusFacts {
                 .iter()
                 .map(|item| (item.id.as_str().to_owned(), item.revision))
                 .collect(),
+            goal_revision: None,
         }
     }
 
@@ -850,6 +1029,66 @@ impl StatusFacts {
         }
 
         let session_revision = explicit.session_revision.unwrap_or(self.session_revision);
+        if matches!(command, Command::Decide(_)) {
+            return self.v2_preconditions(session_id, session_revision, attempt_id, true, None);
+        }
+        if matches!(command, Command::Rework(_)) {
+            return self.v2_preconditions(session_id, session_revision, attempt_id, false, None);
+        }
+        if matches!(
+            command,
+            Command::Goal {
+                command: GoalCommand::Define(_)
+            }
+        ) {
+            return self.v2_preconditions(session_id, session_revision, None, false, None);
+        }
+        if matches!(
+            command,
+            Command::Goal {
+                command: GoalCommand::Revise(_)
+            }
+        ) {
+            return self.v2_preconditions(
+                session_id,
+                session_revision,
+                attempt_id,
+                false,
+                Some(
+                    explicit
+                        .goal_revision
+                        .or(self.goal_revision)
+                        .ok_or_else(|| {
+                            LocalFailure::response_invalid(
+                                "status response omitted the goal revision",
+                            )
+                        })?,
+                ),
+            );
+        }
+        if matches!(
+            command,
+            Command::Goal {
+                command: GoalCommand::AssessCriterion(_)
+            }
+        ) {
+            return self.v2_preconditions(
+                session_id,
+                session_revision,
+                attempt_id,
+                true,
+                Some(
+                    explicit
+                        .goal_revision
+                        .or(self.goal_revision)
+                        .ok_or_else(|| {
+                            LocalFailure::response_invalid(
+                                "status response omitted the goal revision",
+                            )
+                        })?,
+                ),
+            );
+        }
         if matches!(command, Command::Start(StartArgs { replace: true, .. })) {
             return PreconditionsV1::new(
                 Some(session_id),
@@ -897,6 +1136,38 @@ impl StatusFacts {
         )
         .map_err(|_| LocalFailure::response_invalid("session preconditions are invalid"))
     }
+
+    fn v2_preconditions(
+        &self,
+        session_id: SessionId,
+        session_revision: Revision,
+        attempt_id: Option<AttemptId>,
+        require_attempt: bool,
+        goal_revision: Option<GoalRevisionNumberV2>,
+    ) -> Result<PreconditionsV1, LocalFailure> {
+        let attempt_id = if require_attempt {
+            Some(attempt_id.ok_or_else(|| {
+                LocalFailure::response_invalid("status response omitted the active attempt")
+            })?)
+        } else {
+            attempt_id
+        };
+        let mut preconditions = PreconditionsV1::new(
+            Some(session_id),
+            Some(session_revision),
+            attempt_id,
+            None,
+            None,
+            None,
+        )
+        .map_err(|_| LocalFailure::response_invalid("Procedure v2 preconditions are invalid"))?;
+        if let Some(goal_revision) = goal_revision {
+            preconditions = preconditions
+                .with_goal_revision(goal_revision)
+                .map_err(|_| LocalFailure::response_invalid("goal revision is invalid"))?;
+        }
+        Ok(preconditions)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -906,6 +1177,7 @@ struct ExplicitPreconditions {
     session_revision: Option<Revision>,
     attempt_id: Option<AttemptId>,
     item_revision: Option<Revision>,
+    goal_revision: Option<GoalRevisionNumberV2>,
 }
 
 impl ExplicitPreconditions {
@@ -940,6 +1212,7 @@ impl ExplicitPreconditions {
             session_revision: cli.if_session_revision.map(Revision::new),
             attempt_id,
             item_revision: cli.if_item_revision.map(Revision::new),
+            goal_revision: cli.if_goal_revision.map(GoalRevisionNumberV2::new),
         })
     }
 
@@ -949,10 +1222,14 @@ impl ExplicitPreconditions {
             || self.session_revision.is_some()
             || self.attempt_id.is_some()
             || self.item_revision.is_some()
+            || self.goal_revision.is_some()
     }
 
     const fn any_transition(&self) -> bool {
-        self.session_revision.is_some() || self.attempt_id.is_some() || self.item_revision.is_some()
+        self.session_revision.is_some()
+            || self.attempt_id.is_some()
+            || self.item_revision.is_some()
+            || self.goal_revision.is_some()
     }
 }
 
@@ -1114,6 +1391,7 @@ impl LocalFailure {
 
 enum RunResult {
     Response(Box<ResponseEnvelopeV1>),
+    ResponseV2(Box<ResponseEnvelopeV2>),
     VersionSummary {
         name: &'static str,
         version: String,
@@ -1223,6 +1501,20 @@ fn parse_failure_command_context_from_matches(
         "status" => ParseFailureCommandContext::new("session.status", false),
         "next" => ParseFailureCommandContext::new("session.next", false),
         "complete" => ParseFailureCommandContext::new("session.complete", true),
+        "decide" => ParseFailureCommandContext::new("session.decide", true),
+        "rework" => ParseFailureCommandContext::new("session.rework", true),
+        "goal" => {
+            let route = nested_parse_failure_context(
+                matches,
+                &[
+                    ("define", "goal.define"),
+                    ("revise", "goal.revise"),
+                    ("assess-criterion", "goal.assess_criterion"),
+                ],
+            )?
+            .route;
+            ParseFailureCommandContext::new(route, true)
+        }
         "skip" => ParseFailureCommandContext::new("session.skip", true),
         "retry" => ParseFailureCommandContext::new("session.retry", true),
         "return" => ParseFailureCommandContext::new("session.return", !matches.get_flag("dry_run")),
@@ -1340,6 +1632,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             Command::Start(StartArgs {
                 dry_run: true,
                 replace: false,
+                goal: None,
                 ..
             })
         )
@@ -1364,7 +1657,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             match request_daemon(&client, &status_request)
                 .map_err(|failure| failure.with_command(wire_name))?
             {
-                ResponseEnvelopeV1::Output(status) => Some(
+                ResponseEnvelopeV2::OutputV1(status) => Some(
                     explicit.workspace_id.clone().unwrap_or(
                         StatusPreflight::from_output(&status)
                             .map_err(|failure| {
@@ -1373,10 +1666,19 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                             .transport_workspace_id,
                     ),
                 ),
-                ResponseEnvelopeV1::Error(error) if reset_probe_can_recover(&error) => {
+                ResponseEnvelopeV2::OutputV2(status) => Some(
+                    explicit.workspace_id.clone().unwrap_or(
+                        StatusPreflight::from_output_v2(&status)
+                            .map_err(|failure| {
+                                failure.with_correlation(wire_name, status.request_id().as_str())
+                            })?
+                            .transport_workspace_id,
+                    ),
+                ),
+                ResponseEnvelopeV2::Error(error) if reset_probe_can_recover(&error) => {
                     explicit.workspace_id.clone()
                 }
-                ResponseEnvelopeV1::Error(error) => {
+                ResponseEnvelopeV2::Error(error) => {
                     return re_correlate_preflight_error(&error, wire_name);
                 }
             }
@@ -1384,7 +1686,11 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             None
         };
 
-    if cli.command.needs_preflight() && !fully_fenced_start_replace(&cli.command, &explicit) {
+    if cli.command.needs_preflight()
+        && !fully_fenced_start_replace(&cli.command, &explicit)
+        && !fully_fenced_v2_start_replace(&cli.command, &explicit)
+        && !fully_fenced_v2_mutation(&cli.command, &explicit)
+    {
         let status_request = build_request(
             "session.status",
             &target,
@@ -1392,20 +1698,20 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         )?;
         let status_response = request_daemon(&client, &status_request)
             .map_err(|failure| failure.with_command(wire_name))?;
-        let status = match status_response {
-            ResponseEnvelopeV1::Output(status) => status,
-            ResponseEnvelopeV1::Error(error) => {
+        let preflight = match status_response {
+            ResponseEnvelopeV2::OutputV1(status) => StatusPreflight::from_output(&status),
+            ResponseEnvelopeV2::OutputV2(status) => StatusPreflight::from_output_v2(&status),
+            ResponseEnvelopeV2::Error(error) => {
                 return re_correlate_preflight_error(&error, wire_name);
             }
-        };
-        let preflight = StatusPreflight::from_output(&status)
-            .map_err(|failure| failure.with_correlation(wire_name, status.request_id().as_str()))?;
+        }
+        .map_err(|failure| failure.with_command(wire_name))?;
         let (operation, payload) =
             daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
         let preconditions = preflight
             .facts
             .preconditions(&cli.command, &explicit)
-            .map_err(|failure| failure.with_correlation(wire_name, status.request_id().as_str()))?;
+            .map_err(|failure| failure.with_command(wire_name))?;
         let expected_workspace_id = explicit
             .workspace_id
             .clone()
@@ -1426,7 +1732,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             },
         )?;
         return request_daemon(&client, &request)
-            .map(|response| RunResult::Response(Box::new(response)));
+            .map(|response| RunResult::ResponseV2(Box::new(response)));
     }
 
     let (operation, mut payload) =
@@ -1452,7 +1758,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             payload,
         },
     )?;
-    request_daemon(&client, &request).map(|response| RunResult::Response(Box::new(response)))
+    request_daemon(&client, &request).map(|response| RunResult::ResponseV2(Box::new(response)))
 }
 fn requires_idempotency_key(operation: OperationV1) -> bool {
     matches!(operation, OperationV1::Mutate | OperationV1::Bootstrap)
@@ -1469,6 +1775,45 @@ fn fully_fenced_start_replace(command: &Command, explicit: &ExplicitPrecondition
     ) && explicit.workspace_id.is_some()
         && explicit.session_id.is_some()
         && explicit.session_revision.is_some()
+}
+
+fn fully_fenced_v2_start_replace(command: &Command, explicit: &ExplicitPreconditions) -> bool {
+    matches!(
+        command,
+        Command::Start(StartArgs {
+            replace: true,
+            goal: Some(_),
+            ..
+        })
+    ) && explicit.workspace_id.is_some()
+        && explicit.session_id.is_some()
+        && explicit.session_revision.is_some()
+}
+
+fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions) -> bool {
+    if explicit.workspace_id.is_none()
+        || explicit.session_id.is_none()
+        || explicit.session_revision.is_none()
+    {
+        return false;
+    }
+    match command {
+        Command::Decide(_)
+        | Command::Goal {
+            command: GoalCommand::AssessCriterion(_),
+        } => {
+            explicit.attempt_id.is_some()
+                && (!matches!(command, Command::Goal { .. }) || explicit.goal_revision.is_some())
+        }
+        Command::Rework(_)
+        | Command::Goal {
+            command: GoalCommand::Define(_),
+        } => true,
+        Command::Goal {
+            command: GoalCommand::Revise(_),
+        } => explicit.goal_revision.is_some(),
+        _ => false,
+    }
 }
 
 fn reset_probe_can_recover(error: &podway_protocol::ErrorEnvelopeV1) -> bool {
@@ -1524,6 +1869,17 @@ fn direct_preconditions(
                 |_| LocalFailure::request_invalid("session identity precondition is invalid"),
             )
         }
+        Command::Decide(_) => v2_session_preconditions(explicit, true, false),
+        Command::Rework(_) => v2_session_preconditions(explicit, false, false),
+        Command::Goal {
+            command: GoalCommand::Define(_),
+        } => v2_session_preconditions(explicit, false, false),
+        Command::Goal {
+            command: GoalCommand::Revise(_),
+        } => v2_session_preconditions(explicit, false, true),
+        Command::Goal {
+            command: GoalCommand::AssessCriterion(_),
+        } => v2_session_preconditions(explicit, true, true),
         Command::Job {
             command: JobCommand::Cancel { .. },
         } => PreconditionsV1::new(None, None, None, None, None, Some(JobStateV1::Queued)).map_err(
@@ -1531,6 +1887,48 @@ fn direct_preconditions(
         ),
         _ => Ok(PreconditionsV1::default()),
     }
+}
+
+fn v2_session_preconditions(
+    explicit: &ExplicitPreconditions,
+    require_attempt: bool,
+    require_goal_revision: bool,
+) -> Result<PreconditionsV1, LocalFailure> {
+    let session_id = explicit
+        .session_id
+        .clone()
+        .ok_or_else(|| LocalFailure::request_invalid("--if-session-id is required"))?;
+    let session_revision = explicit
+        .session_revision
+        .ok_or_else(|| LocalFailure::request_invalid("--if-session-revision is required"))?;
+    let attempt_id = if require_attempt {
+        Some(
+            explicit
+                .attempt_id
+                .clone()
+                .ok_or_else(|| LocalFailure::request_invalid("--if-attempt is required"))?,
+        )
+    } else {
+        explicit.attempt_id.clone()
+    };
+    let mut preconditions = PreconditionsV1::new(
+        Some(session_id),
+        Some(session_revision),
+        attempt_id,
+        None,
+        None,
+        None,
+    )
+    .map_err(|_| LocalFailure::request_invalid("Procedure v2 preconditions are invalid"))?;
+    if require_goal_revision {
+        let goal_revision = explicit
+            .goal_revision
+            .ok_or_else(|| LocalFailure::request_invalid("--if-goal-revision is required"))?;
+        preconditions = preconditions
+            .with_goal_revision(goal_revision)
+            .map_err(|_| LocalFailure::request_invalid("goal revision is invalid"))?;
+    }
+    Ok(preconditions)
 }
 
 fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
@@ -4443,6 +4841,28 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
         ));
     }
     let explicit = ExplicitPreconditions::parse(cli)?;
+    if matches!(
+        command,
+        Command::Decide(_) | Command::Rework(_) | Command::Goal { .. }
+    ) && !fully_fenced_v2_mutation(command, &explicit)
+    {
+        return Err(LocalFailure::request_invalid(
+            "reserved Procedure v2 mutations require all command-specific explicit preconditions",
+        ));
+    }
+    if matches!(
+        command,
+        Command::Start(StartArgs {
+            replace: true,
+            goal: Some(_),
+            ..
+        })
+    ) && !fully_fenced_v2_start_replace(command, &explicit)
+    {
+        return Err(LocalFailure::request_invalid(
+            "goal-bearing start replacement requires explicit workspace and session identity preconditions",
+        ));
+    }
     if cli.if_workspace_uuid.is_some() && !command.accepts_workspace_identity() {
         return Err(LocalFailure::request_invalid(
             "--if-workspace-uuid does not apply to this command",
@@ -4466,6 +4886,18 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     if cli.if_item_revision.is_some() && !command.is_item_mutation() {
         return Err(LocalFailure::request_invalid(
             "--if-item-revision applies only to item commands",
+        ));
+    }
+    if cli.if_goal_revision.is_some()
+        && !matches!(
+            command,
+            Command::Goal {
+                command: GoalCommand::Revise(_) | GoalCommand::AssessCriterion(_)
+            }
+        )
+    {
+        return Err(LocalFailure::request_invalid(
+            "--if-goal-revision applies only to goal revise and goal assess-criterion",
         ));
     }
     if cli.if_attempt.is_some()
@@ -4553,7 +4985,106 @@ fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
             })?;
         }
     }
+    match command {
+        Command::Start(args) => {
+            validate_optional_goal(&args.goal, &args.criterion, args.actor.as_deref())?;
+        }
+        Command::Decide(args) => {
+            OptionId::new(args.option.clone()).map_err(invalid_v2_value)?;
+            ReasonV2::new(args.reason.clone()).map_err(invalid_v2_value)?;
+            validate_actor(args.actor.as_deref())?;
+        }
+        Command::Rework(args) => {
+            GraphNodeId::new(args.to.clone()).map_err(invalid_v2_value)?;
+            ReasonV2::new(args.reason.clone()).map_err(invalid_v2_value)?;
+            validate_actor(args.actor.as_deref())?;
+        }
+        Command::Goal {
+            command: GoalCommand::Define(args),
+        } => validate_goal(&args.goal, &args.criterion, args.actor.as_deref())?,
+        Command::Goal {
+            command: GoalCommand::Revise(args),
+        } => {
+            validate_goal(&args.goal, &args.criterion, args.actor.as_deref())?;
+            GraphNodeId::new(args.rework_to.clone()).map_err(invalid_v2_value)?;
+            GoalRevisionReasonV2::new(args.reason.clone()).map_err(invalid_v2_value)?;
+        }
+        Command::Goal {
+            command: GoalCommand::AssessCriterion(args),
+        } => {
+            CriterionId::new(args.criterion_id.clone()).map_err(invalid_v2_value)?;
+            CriterionAssessmentReasonV2::new(args.reason.clone()).map_err(invalid_v2_value)?;
+            validate_actor(args.actor.as_deref())?;
+            if args.evidence.len() + args.item.len() > 4 {
+                return Err(LocalFailure::request_invalid(
+                    "criterion assessment permits at most four citations",
+                ));
+            }
+            if args.status == "not_applicable"
+                && (!args.evidence.is_empty() || !args.item.is_empty())
+            {
+                return Err(LocalFailure::request_invalid(
+                    "not_applicable criterion assessments cannot cite evidence or items",
+                ));
+            }
+            for evidence in &args.evidence {
+                GraphNodeId::new(evidence.clone()).map_err(invalid_v2_value)?;
+            }
+            for item in &args.item {
+                ItemId::new(item.clone()).map_err(invalid_v2_value)?;
+            }
+        }
+        _ => {}
+    }
     Ok(())
+}
+
+fn invalid_v2_value(error: impl std::fmt::Display) -> LocalFailure {
+    LocalFailure::request_invalid(error.to_string())
+}
+
+fn validate_actor(actor: Option<&str>) -> Result<(), LocalFailure> {
+    actor
+        .map(|actor| ActorAttributionV2::new(actor.to_owned()))
+        .transpose()
+        .map(drop)
+        .map_err(invalid_v2_value)
+}
+
+fn validate_optional_goal(
+    goal: &Option<String>,
+    criteria: &[String],
+    actor: Option<&str>,
+) -> Result<(), LocalFailure> {
+    match (goal, criteria.is_empty(), actor) {
+        (None, true, None) => Ok(()),
+        (Some(goal), false, actor) => validate_goal(goal, criteria, actor),
+        _ => Err(LocalFailure::request_invalid(
+            "--goal requires at least one --criterion, and criteria or actor require --goal",
+        )),
+    }
+}
+
+fn validate_goal(goal: &str, criteria: &[String], actor: Option<&str>) -> Result<(), LocalFailure> {
+    GoalStatementV2::new(goal.to_owned()).map_err(invalid_v2_value)?;
+    let criteria = parse_criteria(criteria)?;
+    GoalDefinitionV2::new(criteria)
+        .map(drop)
+        .map_err(invalid_v2_value)?;
+    validate_actor(actor)
+}
+
+fn parse_criteria(criteria: &[String]) -> Result<Vec<GoalCriterionV2>, LocalFailure> {
+    criteria
+        .iter()
+        .map(|criterion| {
+            let (id, statement) = criterion.split_once('=').ok_or_else(|| {
+                LocalFailure::request_invalid("criterion must use <criterion-id>=<statement>")
+            })?;
+            let id = CriterionId::new(id.to_owned()).map_err(invalid_v2_value)?;
+            GoalCriterionV2::new(id, statement.to_owned()).map_err(invalid_v2_value)
+        })
+        .collect()
 }
 
 fn confirm_if_required(cli: &Cli, command: &str) -> Result<(), LocalFailure> {
@@ -4652,6 +5183,16 @@ fn daemon_payload(
                     Value::String(digest.clone()),
                 );
             }
+            if let Some(goal) = &args.goal {
+                payload.insert("goal".to_owned(), Value::String(goal.clone()));
+                payload.insert(
+                    "criteria".to_owned(),
+                    Value::Array(criteria_json(&args.criterion)),
+                );
+                if let Some(actor) = &args.actor {
+                    payload.insert("actor".to_owned(), Value::String(actor.clone()));
+                }
+            }
             if args.dry_run {
                 payload.insert("dry_run".to_owned(), Value::Bool(true));
             } else if args.replace {
@@ -4666,6 +5207,64 @@ fn daemon_payload(
         }
         Command::Next(args) => read_payload(&mut payload, args),
         Command::Complete => {}
+        Command::Decide(args) => {
+            payload.insert("option_id".to_owned(), Value::String(args.option.clone()));
+            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
+            insert_actor(&mut payload, args.actor.as_deref());
+        }
+        Command::Rework(args) => {
+            payload.insert(
+                "target_graph_node_id".to_owned(),
+                Value::String(args.to.clone()),
+            );
+            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
+            insert_actor(&mut payload, args.actor.as_deref());
+        }
+        Command::Goal {
+            command: GoalCommand::Define(args),
+        } => {
+            insert_goal_definition(
+                &mut payload,
+                &args.goal,
+                &args.criterion,
+                args.actor.as_deref(),
+            );
+        }
+        Command::Goal {
+            command: GoalCommand::Revise(args),
+        } => {
+            insert_goal_definition(
+                &mut payload,
+                &args.goal,
+                &args.criterion,
+                args.actor.as_deref(),
+            );
+            payload.insert(
+                "target_graph_node_id".to_owned(),
+                Value::String(args.rework_to.clone()),
+            );
+            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
+            if args.reactivate {
+                payload.insert("reactivate".to_owned(), Value::Bool(true));
+            }
+        }
+        Command::Goal {
+            command: GoalCommand::AssessCriterion(args),
+        } => {
+            payload.insert(
+                "criterion_id".to_owned(),
+                Value::String(args.criterion_id.clone()),
+            );
+            payload.insert("status".to_owned(), Value::String(args.status.clone()));
+            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
+            if !args.evidence.is_empty() {
+                payload.insert("evidence".to_owned(), json!(args.evidence));
+            }
+            if !args.item.is_empty() {
+                payload.insert("items".to_owned(), json!(args.item));
+            }
+            insert_actor(&mut payload, args.actor.as_deref());
+        }
         Command::Skip { reason } => {
             if let Some(reason) = reason {
                 payload.insert("reason".to_owned(), Value::String(reason.clone()));
@@ -4779,6 +5378,35 @@ fn daemon_payload(
         }
     }
     Ok((operation, payload))
+}
+
+fn criteria_json(criteria: &[String]) -> Vec<Value> {
+    criteria
+        .iter()
+        .map(|criterion| {
+            let (criterion_id, statement) = criterion
+                .split_once('=')
+                .expect("criterion shape is validated before payload construction");
+            json!({ "criterion_id": criterion_id, "statement": statement })
+        })
+        .collect()
+}
+
+fn insert_actor(payload: &mut Map<String, Value>, actor: Option<&str>) {
+    if let Some(actor) = actor {
+        payload.insert("actor".to_owned(), Value::String(actor.to_owned()));
+    }
+}
+
+fn insert_goal_definition(
+    payload: &mut Map<String, Value>,
+    goal: &str,
+    criteria: &[String],
+    actor: Option<&str>,
+) {
+    payload.insert("goal".to_owned(), Value::String(goal.to_owned()));
+    payload.insert("criteria".to_owned(), Value::Array(criteria_json(criteria)));
+    insert_actor(payload, actor);
 }
 
 fn read_payload(payload: &mut Map<String, Value>, args: &ReadArgs) {
@@ -5026,8 +5654,8 @@ fn mutation_key(value: Option<String>) -> Result<IdempotencyKeyV1, LocalFailure>
 fn request_daemon(
     client: &DaemonClientV1,
     request: &RequestEnvelopeV1,
-) -> Result<ResponseEnvelopeV1, LocalFailure> {
-    client.request(request).map_err(|error| {
+) -> Result<ResponseEnvelopeV2, LocalFailure> {
+    client.request_v2(request).map_err(|error| {
         map_client_error_for_request(error, request)
             .with_correlation(request.command().as_str(), request.request_id().as_str())
     })
@@ -5131,6 +5759,16 @@ fn parse_timeout_millis(value: &str) -> Result<u64, String> {
         ));
     }
     Ok(millis)
+}
+
+fn parse_positive_u64(value: &str) -> Result<u64, String> {
+    let value = value
+        .parse::<u64>()
+        .map_err(|_| "value must be a positive integer".to_owned())?;
+    if value == 0 {
+        return Err("value must be a positive integer".to_owned());
+    }
+    Ok(value)
 }
 
 trait LocalEnvelopeClock {
@@ -5246,6 +5884,14 @@ fn render_result_with_clock_and_writers(
 ) -> i32 {
     match result {
         RunResult::Response(response) => render_response_with_clock_and_writers(
+            response,
+            json_output,
+            quiet,
+            clock,
+            stdout,
+            stderr,
+        ),
+        RunResult::ResponseV2(response) => render_response_v2_with_clock_and_writers(
             response,
             json_output,
             quiet,
@@ -5409,6 +6055,92 @@ fn render_response_with_clock_and_writers(
         ResponseEnvelopeV1::Output(_) => 0,
         ResponseEnvelopeV1::Error(error) => i32::from(error.exit_code().get()),
     }
+}
+
+fn render_response_v2_with_clock_and_writers(
+    response: &ResponseEnvelopeV2,
+    json_output: bool,
+    quiet: bool,
+    clock: &impl LocalEnvelopeClock,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> i32 {
+    if json_output {
+        if serde_json::to_writer(&mut *stdout, response).is_err() || writeln!(stdout).is_err() {
+            return LOCAL_CLIENT_EXIT;
+        }
+    } else {
+        let rendered = match response {
+            ResponseEnvelopeV2::OutputV1(output) if !quiet => {
+                render_human_response(&ResponseEnvelopeV1::Output(output.clone()), stdout, stderr)
+            }
+            ResponseEnvelopeV2::OutputV2(output) if !quiet => {
+                render_human_output_v2(output, stdout)
+            }
+            ResponseEnvelopeV2::Error(error) => {
+                render_human_response(&ResponseEnvelopeV1::Error(error.clone()), stdout, stderr)
+            }
+            ResponseEnvelopeV2::OutputV1(_) | ResponseEnvelopeV2::OutputV2(_) => Ok(()),
+        };
+        if let Err(failure) = rendered {
+            return render_local_failure_with_clock_and_writers(
+                failure, false, clock, stdout, stderr,
+            );
+        }
+    }
+    match response {
+        ResponseEnvelopeV2::OutputV1(_) | ResponseEnvelopeV2::OutputV2(_) => 0,
+        ResponseEnvelopeV2::Error(error) => i32::from(error.exit_code().get()),
+    }
+}
+
+fn render_human_output_v2(
+    output: &OutputEnvelopeV2,
+    stdout: &mut dyn Write,
+) -> Result<(), LocalFailure> {
+    if let Some(workspace) = output.workspace() {
+        write_text_line(
+            stdout,
+            format_args!(
+                "workspace: {} {} sequence={}",
+                workspace.uuid().as_str(),
+                workspace.root(),
+                workspace.latest_workspace_sequence()
+            ),
+        )?;
+    }
+    if let Some(session) = output.session() {
+        write_text_line(
+            stdout,
+            format_args!(
+                "session: {} {} {:?} revision={}",
+                session.id().as_str(),
+                session.title(),
+                session.lifecycle(),
+                session.revision_after().get()
+            ),
+        )?;
+    }
+    if let Some(job) = output.job() {
+        write_text_line(
+            stdout,
+            format_args!(
+                "job: {} {:?} sequence={} submitted_at={} claimed_at={} finished_at={}",
+                job.id().as_str(),
+                job.state(),
+                job.sequence(),
+                job.submitted_at().as_str(),
+                job.claimed_at().map(Rfc3339MillisV1::as_str).unwrap_or("-"),
+                job.finished_at()
+                    .map(Rfc3339MillisV1::as_str)
+                    .unwrap_or("-")
+            ),
+        )?;
+    }
+    let result = serde_json::to_string_pretty(output.result())
+        .map_err(|_| LocalFailure::response_invalid("cannot render Procedure v2 result"))?;
+    write_text_line(stdout, format_args!("result: {result}"))?;
+    render_warnings(stdout, output.warnings())
 }
 
 fn validate_typed_output_result(
@@ -5912,8 +6644,10 @@ fn dynamic_completion(
         }
     };
     let candidates = match request_daemon(&client, &request) {
-        Ok(ResponseEnvelopeV1::Output(output)) => dynamic_candidates(output.result(), kind),
-        Ok(ResponseEnvelopeV1::Error(_)) | Err(_) => Vec::new(),
+        Ok(ResponseEnvelopeV2::OutputV1(output)) => dynamic_candidates(output.result(), kind),
+        Ok(ResponseEnvelopeV2::OutputV2(_)) | Ok(ResponseEnvelopeV2::Error(_)) | Err(_) => {
+            Vec::new()
+        }
     };
     Ok(local_result(
         "__complete",
@@ -5979,10 +6713,10 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev --task 'add retry backoff'\n  podway status --json\n  podway next"
         }
         "workflow" => {
-            "Workflow:\n  podway start --preset sw-dev --task 'implement feature'\n  podway next\n  podway set goal 'Implement the requested feature.'\n  podway add acceptance-criteria 'The requested behavior is verified.'\n  podway complete"
+            "Workflow:\n  podway start --preset sw-dev --task 'implement feature'\n  podway next\n  podway set goal 'Implement the requested feature.'\n  podway add acceptance-criteria 'The requested behavior is verified.'\n  podway complete\n\nProcedure v2 decisions use podway decide; manual graph re-entry uses podway rework."
         }
         "rework" => {
-            "Rework:\n  podway return --to implement --reason 'review found a gap' --dry-run\n  podway reopen --to implement --reason 'follow-up'"
+            "Rework:\n  Procedure v1: podway return --to implement --reason 'review found a gap' --dry-run\n  Procedure v1: podway reopen --to implement --reason 'follow-up'\n  Procedure v2: podway rework --to implement --reason 'review found a gap'\n\nThe v1 return and reopen verbs are never aliases for Procedure v2 rework."
         }
         "automation" => {
             "Automation:\n  podway complete --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 12 --if-attempt <uuid> --idempotency-key task-42 --json"
@@ -6067,10 +6801,25 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --preset sw-dev --task 'preview procedure' --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'ship safely' --goal 'Ship safely.' --criterion tested='Tests pass.'\n  podway start --preset sw-dev --task 'preview procedure' --dry-run"
+        }
+        "session.decide" => {
+            "Usage:\n  podway decide --option <id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid>\n\nExample:\n  podway decide --option approve --reason 'The evidence supports this route.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid>"
+        }
+        "session.rework" => {
+            "Usage:\n  podway rework --to <graph-node-id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> [--if-attempt <uuid>]\n\nExample:\n  podway rework --to implement --reason 'Review found a gap.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7"
+        }
+        "goal.define" => {
+            "Usage:\n  podway goal define --goal <text> --criterion <id>=<statement>... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n>\n\nExample:\n  podway goal define --goal 'Ship safely.' --criterion tested='Tests pass.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7"
+        }
+        "goal.revise" => {
+            "Usage:\n  podway goal revise --goal <text> --criterion <id>=<statement>... --rework-to <graph-node-id> --reason <text> [--actor <text>] [--reactivate] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-goal-revision <n> [--if-attempt <uuid>]\n\nExample:\n  podway goal revise --goal 'Ship after restart.' --criterion restart-safe='Restart passes.' --rework-to implement --reason 'Scope changed.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-goal-revision 1"
+        }
+        "goal.assess_criterion" => {
+            "Usage:\n  podway goal assess-criterion <criterion-id> --status <satisfied|unsatisfied|not_applicable> --reason <text> [--evidence <graph-node-id>]... [--item <item-id>]... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> --if-goal-revision <n>\n\nExample:\n  podway goal assess-criterion tested --status satisfied --reason 'The test passed.' --evidence test --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid> --if-goal-revision 1"
         }
         "session.start_replace" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
         }
         "session.status" => {
             "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --wait-for-idle --compact"

@@ -19,9 +19,9 @@ use podway_cli::client::{
     DaemonClientErrorV1, DaemonClientIoOperationV1, DaemonClientTimeoutsV1, DaemonClientV1,
 };
 use podway_protocol::{
-    FrameErrorV1, OperationV1, ResponseEnvelopeV1, SliceCommandV1, SliceRequestV1,
-    build_identity_v1, decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1,
-    encode_request_payload_v1,
+    FrameErrorV1, OperationV1, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1,
+    ResponseEnvelopeV1, ResponseEnvelopeV2, SliceCommandV1, SliceRequestV1, build_identity_v1,
+    decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1, encode_request_payload_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 
@@ -251,6 +251,72 @@ fn mutation_request() -> podway_protocol::RequestEnvelopeV1 {
         .as_bytes(),
     )
     .expect("fixture mutation request must satisfy the G006 session.start contract")
+}
+
+fn v2_start_request() -> podway_protocol::RequestEnvelopeV1 {
+    let identity = build_identity_v1();
+    decode_request_payload_v1(
+        format!(
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.2.0-dev","pid":1,"product":"{}","contract_manifest_digest":"{}"}},"operation":"mutate","command":"session.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"v2-start-fixture","options":{{"detach":false,"wait_timeout_ms":30000}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"procedure":"workflow.yaml","task_title":"A bounded v2 fixture task","goal":"Ship safely.","criteria":[{{"criterion_id":"tests","statement":"The focused tests pass."}}]}}}}"#,
+            identity.product(),
+            identity.contract_manifest_digest(),
+        )
+        .as_bytes(),
+    )
+    .expect("fixture request must satisfy the Procedure v2 start envelope contract")
+}
+
+fn v2_decide_request() -> podway_protocol::RequestEnvelopeV1 {
+    let identity = build_identity_v1();
+    decode_request_payload_v1(
+        format!(
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.2.0-dev","pid":1,"product":"{}","contract_manifest_digest":"{}"}},"operation":"mutate","command":"session.decide","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"v2-decide-fixture","preconditions":{{"session_id":"123e4567-e89b-42d3-a456-426614174010","session_revision":7,"attempt_id":"123e4567-e89b-42d3-a456-426614174011"}},"options":{{"detach":false,"wait_timeout_ms":30000}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"option_id":"accept","reason":"The evidence supports this route."}}}}"#,
+            identity.product(),
+            identity.contract_manifest_digest(),
+        )
+        .as_bytes(),
+    )
+    .expect("fixture request must satisfy the Procedure v2 decision envelope contract")
+}
+
+fn v2_start_output_payload() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schema": "podway.output/v2",
+        "request_id": REQUEST_ID,
+        "command": "session.start",
+        "generated_at": "2026-07-15T12:34:56.789Z",
+        "workspace": {
+            "uuid": WORKSPACE_ID,
+            "root": "/fixture/worktree",
+            "latest_workspace_sequence": 1
+        },
+        "job": {
+            "id": "123e4567-e89b-42d3-a456-426614174012",
+            "sequence": 1,
+            "state": "succeeded",
+            "submitted_at": "2026-07-15T12:34:56.789Z",
+            "claimed_at": "2026-07-15T12:34:56.790Z",
+            "finished_at": "2026-07-15T12:34:56.791Z"
+        },
+        "result": {
+            "schema": "podway.session-start-result/v2",
+            "procedure_schema": "podway.procedure/v2",
+            "procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "dry_run": false,
+            "goal_tracking": true,
+            "goal_defined": true,
+            "admission": {
+                "admitted": true,
+                "job_id": "123e4567-e89b-42d3-a456-426614174012",
+                "workspace_sequence": 1
+            },
+            "session_id": "123e4567-e89b-42d3-a456-426614174010",
+            "revision": 1,
+            "entry_graph_node_id": "work"
+        },
+        "warnings": []
+    }))
+    .expect("fixture Procedure v2 output must serialize")
 }
 
 fn error_payload() -> Vec<u8> {
@@ -509,4 +575,50 @@ fn request_is_one_exact_frame_and_preserves_envelope_wait_preferences() {
     assert!(decoded.options().detach());
     assert_eq!(decoded.options().wait_timeout_ms(), 1_234);
     server.join();
+}
+
+#[test]
+fn version_aware_request_admits_typed_v2_start_and_decodes_output_v2() {
+    let fixture = RuntimeFixture::new();
+    let frame = encode_frame_v1(&v2_start_output_payload()).expect("v2 output response must frame");
+    let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
+    let request = v2_start_request();
+    let expected_payload = encode_request_payload_v1(&request).expect("request must encode");
+    let expected_wire = encode_frame_v1(&expected_payload).expect("request must frame");
+
+    let response = client(&fixture)
+        .request_v2(&request)
+        .expect("typed Procedure v2 start and output must round-trip");
+    assert!(matches!(response, ResponseEnvelopeV2::OutputV2(_)));
+    let request_wire = server.request_wire();
+    assert_eq!(
+        request_wire, expected_wire,
+        "v2 admission must not change IPC bytes"
+    );
+    let request_payload = decode_single_frame_v1(&request_wire)
+        .expect("the client wire must contain exactly one frame");
+    let decoded =
+        decode_request_payload_v1(request_payload).expect("request wire must use protocol codec");
+    ProcedureV2StartRequestV1::from_envelope(&decoded)
+        .expect("request must retain the typed Procedure v2 start shape");
+    server.join();
+}
+
+#[test]
+fn version_aware_request_admits_reserved_v2_mutations_before_transport() {
+    let fixture = RuntimeFixture::new();
+    let request = v2_decide_request();
+    ProcedureV2MutationRequestV1::from_envelope(&request)
+        .expect("decision fixture must satisfy the reserved v2 mutation contract");
+
+    let error = client(&fixture)
+        .request_v2(&request)
+        .expect_err("an admitted request must reach the absent transport");
+    assert!(matches!(
+        error,
+        DaemonClientErrorV1::Connection {
+            operation: DaemonClientIoOperationV1::Connect,
+            ..
+        }
+    ));
 }

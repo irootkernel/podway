@@ -1300,6 +1300,9 @@ const START_SURFACE_FLAGS: &[&str] = &[
     "--procedure",
     "--expect-procedure-digest",
     "--task",
+    "--goal",
+    "--criterion",
+    "--actor",
     "--replace",
     "--dry-run",
     "--yes",
@@ -1718,6 +1721,9 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--procedure",
             "--expect-procedure-digest",
             "--task",
+            "--goal",
+            "--criterion",
+            "--actor",
             "--if-workspace-uuid",
             "--dry-run",
         ],
@@ -1814,6 +1820,158 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--if-attempt",
             "--reason",
         ],
+        dynamic: None,
+    },
+    RouteSurface {
+        route: "session.decide",
+        parser: &["decide", "--option", "approve", "--reason", "reason"],
+        flags: &[
+            "--json",
+            "--worktree",
+            "--timeout",
+            "--socket",
+            "--no-color",
+            "--quiet",
+            "--idempotency-key",
+            "--detach",
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--if-session-revision",
+            "--if-attempt",
+            "--option",
+            "--reason",
+            "--actor",
+        ],
+        values: &[],
+        help_tokens: &["--option", "--reason", "--actor", "--if-attempt"],
+        dynamic: None,
+    },
+    RouteSurface {
+        route: "session.rework",
+        parser: &["rework", "--to", "implement", "--reason", "reason"],
+        flags: &[
+            "--json",
+            "--worktree",
+            "--timeout",
+            "--socket",
+            "--no-color",
+            "--quiet",
+            "--idempotency-key",
+            "--detach",
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--if-session-revision",
+            "--if-attempt",
+            "--to",
+            "--reason",
+            "--actor",
+        ],
+        values: &[],
+        help_tokens: &["--to", "--reason", "--actor"],
+        dynamic: None,
+    },
+    RouteSurface {
+        route: "goal.define",
+        parser: &[
+            "goal",
+            "define",
+            "--goal",
+            "goal",
+            "--criterion",
+            "done=Done",
+        ],
+        flags: &[
+            "--json",
+            "--worktree",
+            "--timeout",
+            "--socket",
+            "--no-color",
+            "--quiet",
+            "--idempotency-key",
+            "--detach",
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--if-session-revision",
+            "--goal",
+            "--criterion",
+            "--actor",
+        ],
+        values: &[],
+        help_tokens: &["--goal", "--criterion", "--actor"],
+        dynamic: None,
+    },
+    RouteSurface {
+        route: "goal.revise",
+        parser: &[
+            "goal",
+            "revise",
+            "--goal",
+            "goal",
+            "--criterion",
+            "done=Done",
+            "--rework-to",
+            "implement",
+            "--reason",
+            "reason",
+        ],
+        flags: &[
+            "--json",
+            "--worktree",
+            "--timeout",
+            "--socket",
+            "--no-color",
+            "--quiet",
+            "--idempotency-key",
+            "--detach",
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--if-session-revision",
+            "--if-attempt",
+            "--if-goal-revision",
+            "--goal",
+            "--criterion",
+            "--rework-to",
+            "--reason",
+            "--actor",
+            "--reactivate",
+        ],
+        values: &[],
+        help_tokens: &["--if-goal-revision", "--rework-to", "--reactivate"],
+        dynamic: None,
+    },
+    RouteSurface {
+        route: "goal.assess_criterion",
+        parser: &[
+            "goal",
+            "assess-criterion",
+            "done",
+            "--status",
+            "satisfied",
+            "--reason",
+            "reason",
+        ],
+        flags: &[
+            "--json",
+            "--worktree",
+            "--timeout",
+            "--socket",
+            "--no-color",
+            "--quiet",
+            "--idempotency-key",
+            "--detach",
+            "--if-workspace-uuid",
+            "--if-session-id",
+            "--if-session-revision",
+            "--if-attempt",
+            "--if-goal-revision",
+            "--status",
+            "--reason",
+            "--evidence",
+            "--item",
+            "--actor",
+        ],
+        values: &["satisfied", "unsatisfied", "not_applicable"],
+        help_tokens: &["--if-goal-revision", "--status", "--evidence", "--item"],
         dynamic: None,
     },
     RouteSurface {
@@ -2521,13 +2679,17 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
             (availability == "executable").then_some(route.as_str())
         })
         .collect::<BTreeSet<_>>();
-    let executable_surfaces = ROUTE_SURFACES
+    let public_surfaces = ROUTE_SURFACES
         .iter()
         .map(|surface| surface.route)
         .collect::<BTreeSet<_>>();
     assert_eq!(
-        executable_routes, executable_surfaces,
-        "availability must identify exactly the current 54-route CLI surface",
+        registered_routes
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        public_surfaces,
+        "the CLI grammar must expose every registered route",
     );
     let reserved_v2_routes = registered_routes
         .iter()
@@ -2544,7 +2706,7 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
             "session.decide",
             "session.rework",
         ]),
-        "a registered v2 route stays absent from the executable CLI until its owning task lands",
+        "reserved v2 grammar must remain unavailable until its runtime owner lands",
     );
     assert_eq!(DAEMON_CONTRACTS.len(), 30);
     for contract in DAEMON_CONTRACTS {
@@ -3003,7 +3165,7 @@ rework:
     assert_eq!(
         executed_routes,
         executable_routes.into_iter().collect::<BTreeSet<_>>(),
-        "PAC-048 must execute an executable success fixture or a typed mandatory service proof for all 52 current executable routes"
+        "PAC-048 must cover every executable route with a success or service proof"
     );
 }
 
@@ -3242,6 +3404,56 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
         ("session.skip", &["skip", "--reason", "reason"]),
         ("session.retry", &["retry", "--reason", "reason"]),
         (
+            "session.decide",
+            &["decide", "--option", "approve", "--reason", "reason"],
+        ),
+        (
+            "session.rework",
+            &["rework", "--to", "implement", "--reason", "reason"],
+        ),
+        (
+            "goal.define",
+            &[
+                "goal",
+                "define",
+                "--goal",
+                "goal",
+                "--criterion",
+                "done=Done",
+            ],
+        ),
+        (
+            "goal.revise",
+            &[
+                "--if-goal-revision",
+                "1",
+                "goal",
+                "revise",
+                "--goal",
+                "goal",
+                "--criterion",
+                "done=Done",
+                "--rework-to",
+                "implement",
+                "--reason",
+                "reason",
+            ],
+        ),
+        (
+            "goal.assess_criterion",
+            &[
+                "--if-goal-revision",
+                "1",
+                "goal",
+                "assess-criterion",
+                "done",
+                "--status",
+                "satisfied",
+                "--reason",
+                "reason",
+            ],
+        ),
+        (
             "session.return",
             &[
                 "return",
@@ -3302,7 +3514,7 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
             &["job", "cancel", "123e4567-e89b-42d3-a456-426614174003"],
         ),
     ];
-    assert_eq!(routes.len(), 54);
+    assert_eq!(routes.len(), 59);
 
     for (route, arguments) in routes {
         let mut argv = vec!["--json"];
@@ -3369,6 +3581,16 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
                 assert_eq!(response["retryable"], true);
                 assert_eq!(response["exit_code"], 3);
             }
+            "session.decide"
+            | "session.rework"
+            | "goal.define"
+            | "goal.revise"
+            | "goal.assess_criterion" => {
+                assert_eq!(output.status.code(), Some(2), "{route}: {output:?}");
+                assert_eq!(response["schema"], "podway.error/v1");
+                assert_eq!(response["code"], "REQUEST_INVALID");
+                assert_eq!(response["details"]["admission"]["admitted"], false);
+            }
             route if route.starts_with("daemon.") => {
                 assert!(
                     output.status.success(),
@@ -3420,7 +3642,7 @@ fn fish_route_flags(script: &str, route: &str) -> Vec<String> {
 
 fn completion_route(surface: &RouteSurface) -> String {
     match surface.parser.first().copied() {
-        Some("procedure" | "preset" | "daemon" | "workspace" | "job") => {
+        Some("procedure" | "preset" | "daemon" | "workspace" | "job" | "goal") => {
             surface.parser[..2].join(" ")
         }
         Some(route) => route.to_owned(),
@@ -3430,7 +3652,7 @@ fn completion_route(surface: &RouteSurface) -> String {
 
 #[test]
 fn public_route_surface_table_keeps_parser_help_and_completion_in_lockstep() {
-    assert_eq!(ROUTE_SURFACES.len(), 54);
+    assert_eq!(ROUTE_SURFACES.len(), 59);
     let bash = run(&["completions", "bash"]);
     let zsh = run(&["completions", "zsh"]);
     let fish = run(&["completions", "fish"]);
@@ -3566,6 +3788,11 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "session.complete",
         "session.skip",
         "session.retry",
+        "session.decide",
+        "session.rework",
+        "goal.define",
+        "goal.revise",
+        "goal.assess_criterion",
         "session.return",
         "session.block",
         "session.unblock",
@@ -3586,7 +3813,7 @@ fn every_public_route_has_offline_sot_syntax_and_an_example() {
         "job.wait",
         "job.cancel",
     ];
-    assert_eq!(routes.len(), 54);
+    assert_eq!(routes.len(), 59);
 
     for route in routes {
         let output = run(&["--json", "help", route]);

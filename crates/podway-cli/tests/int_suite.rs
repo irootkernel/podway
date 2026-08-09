@@ -8,3 +8,5 @@ mod int_phase4_client;
 mod int_phase5_cli_contract;
 #[path = "int_v2_authoring_cli.rs"]
 mod int_v2_authoring_cli;
+#[path = "int_v2_platform_cli.rs"]
+mod int_v2_platform_cli;

@@ -1,4 +1,4 @@
-//! Generated shell completion scripts for the public v1 CLI grammar.
+//! Generated shell completion scripts for the public CLI grammar.
 
 use std::fmt::Write as _;
 
@@ -95,6 +95,10 @@ const IF_ATTEMPT: Flag = Flag {
 };
 const IF_ITEM_REVISION: Flag = Flag {
     long: "if-item-revision",
+    takes_value: true,
+};
+const IF_GOAL_REVISION: Flag = Flag {
+    long: "if-goal-revision",
     takes_value: true,
 };
 const YES: Flag = Flag {
@@ -233,6 +237,42 @@ const STATE: Flag = Flag {
     long: "state",
     takes_value: true,
 };
+const GOAL: Flag = Flag {
+    long: "goal",
+    takes_value: true,
+};
+const CRITERION: Flag = Flag {
+    long: "criterion",
+    takes_value: true,
+};
+const ACTOR: Flag = Flag {
+    long: "actor",
+    takes_value: true,
+};
+const OPTION: Flag = Flag {
+    long: "option",
+    takes_value: true,
+};
+const REWORK_TO: Flag = Flag {
+    long: "rework-to",
+    takes_value: true,
+};
+const REACTIVATE: Flag = Flag {
+    long: "reactivate",
+    takes_value: false,
+};
+const STATUS: Flag = Flag {
+    long: "status",
+    takes_value: true,
+};
+const EVIDENCE: Flag = Flag {
+    long: "evidence",
+    takes_value: true,
+};
+const ITEM: Flag = Flag {
+    long: "item",
+    takes_value: true,
+};
 
 const DISPLAY_FLAGS: &[&Flag] = &[&JSON, &NO_COLOR, &QUIET];
 const DAEMON_READ_FLAGS: &[&Flag] = &[&JSON, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET];
@@ -280,6 +320,9 @@ const START_FLAGS: &[&Flag] = &[
     &PROCEDURE,
     &EXPECT_PROCEDURE_DIGEST,
     &TASK,
+    &GOAL,
+    &CRITERION,
+    &ACTOR,
     &REPLACE,
     &DRY_RUN,
     &YES,
@@ -531,6 +574,122 @@ const ROUTES: &[Route] = &[
         words: "complete",
         flags: SESSION_MUTATION_FLAGS,
         values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "decide",
+        flags: &[
+            &JSON,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+            &IF_ATTEMPT,
+            &OPTION,
+            &REASON,
+            &ACTOR,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "rework",
+        flags: &[
+            &JSON,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+            &IF_ATTEMPT,
+            &TO,
+            &REASON,
+            &ACTOR,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "goal define",
+        flags: &[
+            &JSON,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+            &GOAL,
+            &CRITERION,
+            &ACTOR,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "goal revise",
+        flags: &[
+            &JSON,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+            &IF_ATTEMPT,
+            &IF_GOAL_REVISION,
+            &GOAL,
+            &CRITERION,
+            &REWORK_TO,
+            &REASON,
+            &ACTOR,
+            &REACTIVATE,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "goal assess-criterion",
+        flags: &[
+            &JSON,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+            &IF_ATTEMPT,
+            &IF_GOAL_REVISION,
+            &STATUS,
+            &REASON,
+            &EVIDENCE,
+            &ITEM,
+            &ACTOR,
+        ],
+        values: "satisfied unsatisfied not_applicable",
         dynamic: None,
     },
     Route {
