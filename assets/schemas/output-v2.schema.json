@@ -106,7 +106,7 @@
     "stageTransition": { "required": ["workspace", "job"], "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset"] }, "result": { "$ref": "urn:podway:schema:stage-transition-result:v2" } } },
     "itemMutation": { "required": ["workspace", "job"], "properties": { "command": { "enum": ["item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] }, "result": { "$ref": "urn:podway:schema:item-mutation-result:v2" } } },
     "jobLookup": { "properties": { "command": { "const": "job.lookup" }, "result": { "$ref": "urn:podway:schema:job-lookup-result:v2" } } },
-    "jobResult": { "properties": { "command": { "enum": ["job.status", "job.wait"] }, "result": { "$ref": "urn:podway:schema:job-result:v2" } } },
+    "jobResult": { "required": ["job"], "properties": { "command": { "enum": ["job.status", "job.wait"] }, "result": { "$ref": "urn:podway:schema:job-result:v2" } } },
     "procedureSource": { "properties": { "command": { "enum": ["procedure.format", "procedure.scaffold", "procedure.convert"] }, "result": { "$ref": "urn:podway:schema:procedure-source-result:v1" } } },
     "procedureDiagnostics": { "properties": { "command": { "enum": ["procedure.format", "procedure.validate", "procedure.vet", "procedure.lint", "procedure.check", "procedure.graph", "procedure.scaffold", "procedure.convert"] }, "result": { "$ref": "urn:podway:schema:procedure-diagnostics-result:v1" } } },
     "procedureGraph": { "properties": { "command": { "const": "procedure.graph" }, "result": { "$ref": "urn:podway:schema:procedure-graph-result:v1" } } },

@@ -117,6 +117,7 @@ session_id
 session_revision
 attempt_id
 item_revision
+goal_revision
 blocker_id
 job_state
 ```
@@ -124,6 +125,19 @@ job_state
 The command specification determines required fields. Session-bearing reads accept an optional
 `session_id`; stage, item, reopen, replacement, and session-reset mutations require it. Unknown
 precondition fields are rejected in v1.
+
+Procedure v2 goal revision and criterion-assessment mutations additionally carry
+`goal_revision`. It is a positive integer and binds the mutation to the exact
+current immutable goal revision; it never substitutes for the session revision
+or active-attempt fence.
+
+The protocol decoder also owns a closed Procedure v2 form of `session.start` and
+`session.start_replace` that may carry one complete initial goal definition
+(`goal`, ordered `criteria`, and optional `actor`). Its semantic mutation
+identity includes that definition and the resolved Procedure digest. This typed
+form remains separate from executable daemon dispatch until the Procedure v2
+admission route is registered; the retained v1 start decoder rejects these
+additional fields instead of discarding them.
 
 The daemon compares these identities with the same authoritative Store view used by the operation.
 Waiting reads recheck the session identity on every Store observation. New mutations check identity
@@ -214,11 +228,16 @@ or usage behavior; the exact contract-manifest digest is the machine-readable
 capability signal.
 
 The version-aware result registry reserves the complete Procedure v2 family set
-without registering five routes from the thirteen-route v2 delta; `procedure.format`, `procedure.vet`, `procedure.graph`, `procedure.preview`, `procedure.lint`, `procedure.check`, `procedure.scaffold`, and `procedure.convert` are registered and served. It validates required
-family shape before later typed decoding. V2 producers must also enforce the
-bounded-warning guard defined by the JSON contract and the existing complete
-frame limit; the open outer v2 envelope is not permission for unbounded warnings
-or oversized encoded responses.
+without registering five routes from the thirteen-route v2 delta;
+`procedure.format`, `procedure.vet`, `procedure.graph`, `procedure.preview`,
+`procedure.lint`, `procedure.check`, `procedure.scaffold`, and
+`procedure.convert` are registered and served. The production decoder validates
+each selected family and the complete envelope, including nested terminal job
+responses, against the embedded canonical schemas after enforcing the frame and
+JSON-depth bounds. V2 producers also enforce the bounded-warning guard defined
+by the JSON contract and the existing complete frame limit; the open outer v2
+envelope is not permission for unbounded warnings or oversized encoded
+responses.
 
 ## Request canonicalization
 

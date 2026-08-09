@@ -5,8 +5,8 @@
 use std::fmt;
 
 use podway_core::{
-    AttemptId, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, Revision, SessionId, Sha256Digest,
-    WorkspaceId,
+    AttemptId, GoalRevisionNumberV2, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, Revision, SessionId,
+    Sha256Digest, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 mod codec;
@@ -18,8 +18,9 @@ mod result_contract;
 mod slice;
 
 pub use codec::{
-    PayloadCodecErrorV1, decode_request_payload_v1, decode_response_payload_v1,
-    encode_request_payload_v1, encode_response_payload_v1,
+    PayloadCodecErrorV1, ResponseEnvelopeV2, decode_request_payload_v1, decode_response_payload_v1,
+    decode_response_payload_v2, encode_request_payload_v1, encode_response_payload_v1,
+    encode_response_payload_v2,
 };
 pub use framing::{
     FrameErrorV1, FrameIoPhaseV1, decode_single_frame_v1, encode_frame_v1, read_single_frame_v1,
@@ -114,6 +115,7 @@ pub enum ProtocolError {
         value: u8,
     },
     InvalidJobSequence,
+    InvalidGoalRevision,
     MissingWorkspace,
     MissingIdempotencyKey,
     UnexpectedIdempotencyKey,
@@ -219,6 +221,7 @@ impl fmt::Display for ProtocolError {
                 )
             }
             Self::InvalidJobSequence => write!(formatter, "job sequence must be at least one"),
+            Self::InvalidGoalRevision => write!(formatter, "goal revision must be at least one"),
             Self::MissingWorkspace => {
                 write!(formatter, "this operation requires a workspace context")
             }
@@ -648,6 +651,8 @@ pub struct PreconditionsV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     item_revision: Option<Revision>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    goal_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     blocker_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     job_state: Option<JobStateV1>,
@@ -667,6 +672,7 @@ impl PreconditionsV1 {
             session_revision,
             attempt_id,
             item_revision,
+            goal_revision: None,
             blocker_id,
             job_state,
         };
@@ -690,6 +696,21 @@ impl PreconditionsV1 {
         self.item_revision
     }
 
+    /// Returns the caller-observed current Procedure v2 goal revision, when required.
+    pub fn goal_revision(&self) -> Option<GoalRevisionNumberV2> {
+        self.goal_revision.map(GoalRevisionNumberV2::new)
+    }
+
+    /// Adds the Procedure v2 goal-revision fence without changing the released v1 constructor.
+    pub fn with_goal_revision(
+        mut self,
+        goal_revision: GoalRevisionNumberV2,
+    ) -> Result<Self, ProtocolError> {
+        self.goal_revision = Some(goal_revision.get());
+        self.validate()?;
+        Ok(self)
+    }
+
     pub fn blocker_id(&self) -> Option<&str> {
         self.blocker_id.as_deref()
     }
@@ -699,6 +720,9 @@ impl PreconditionsV1 {
     }
 
     fn validate(&self) -> Result<(), ProtocolError> {
+        if self.goal_revision == Some(0) {
+            return Err(ProtocolError::InvalidGoalRevision);
+        }
         if let Some(blocker_id) = &self.blocker_id {
             validate_uuid(blocker_id, "preconditions.blocker_id")?;
         }
@@ -723,6 +747,8 @@ impl<'de> Deserialize<'de> for PreconditionsV1 {
             #[serde(default)]
             item_revision: OptionalField<Revision>,
             #[serde(default)]
+            goal_revision: OptionalField<u64>,
+            #[serde(default)]
             blocker_id: OptionalField<String>,
             #[serde(default)]
             job_state: OptionalField<JobStateV1>,
@@ -734,6 +760,7 @@ impl<'de> Deserialize<'de> for PreconditionsV1 {
             session_revision: raw.session_revision.0,
             attempt_id: raw.attempt_id.0,
             item_revision: raw.item_revision.0,
+            goal_revision: raw.goal_revision.0,
             blocker_id: raw.blocker_id.0,
             job_state: raw.job_state.0,
         };
@@ -962,6 +989,7 @@ impl PreconditionsV1 {
             && self.session_revision.is_none()
             && self.attempt_id.is_none()
             && self.item_revision.is_none()
+            && self.goal_revision.is_none()
             && self.blocker_id.is_none()
             && self.job_state.is_none()
     }

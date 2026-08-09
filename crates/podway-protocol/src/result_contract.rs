@@ -1,5 +1,13 @@
 #![allow(dead_code)]
 
+use std::{
+    collections::HashMap,
+    error::Error,
+    io,
+    sync::{Arc, OnceLock},
+};
+
+use jsonschema::{Retrieve, Uri, Validator};
 use podway_core::{
     AttemptId, CanonicalProcedureJsonV1, ItemId, JobId, Revision, Sha256Digest, StageId,
     verify_canonical_procedure_document_v1,
@@ -8,11 +16,118 @@ use serde::{Deserialize, Deserializer, Serialize, de, de::Error as _};
 use serde_json::{Map, Value};
 
 use crate::{
-    CommandNameV1, CompactStatusResultV1, JobOutputV1, JobStateV1, NextResultV1, OptionalField,
-    ProtocolError, RequestIdV1, ResponseEnvelopeV1, Rfc3339MillisV1, SessionOutputV1,
-    StatusResultV1, WorkspaceOutputV1, validate_admission_metadata_v1,
+    CommandNameV1, CompactStatusResultV1, ErrorEnvelopeV1, JobOutputV1, JobStateV1, NextResultV1,
+    OptionalField, ProtocolError, RequestIdV1, ResponseEnvelopeV1, Rfc3339MillisV1,
+    SessionOutputV1, StatusResultV1, WorkspaceOutputV1, validate_admission_metadata_v1,
     validate_json_document_depth, validate_json_map_depth,
 };
+
+mod embedded_schemas {
+    include!(concat!(env!("OUT_DIR"), "/embedded_json_schemas.rs"));
+}
+
+const EMBEDDED_SCHEMA_BASE_V2: &str = "https://podway.invalid/schemas/";
+
+#[derive(Clone)]
+struct EmbeddedSchemaRetrieverV2(Arc<HashMap<String, Value>>);
+
+impl Retrieve for EmbeddedSchemaRetrieverV2 {
+    fn retrieve(&self, uri: &Uri<String>) -> Result<Value, Box<dyn Error + Send + Sync>> {
+        self.0.get(uri.as_str()).cloned().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unregistered embedded schema URI: {uri}"),
+            )
+            .into()
+        })
+    }
+}
+
+static RESULT_VALIDATORS_V2: OnceLock<Result<HashMap<&'static str, Validator>, String>> =
+    OnceLock::new();
+
+fn embedded_schema_resources_v2() -> Result<EmbeddedSchemaRetrieverV2, String> {
+    let mut resources = HashMap::new();
+    for (id, filename, source) in embedded_schemas::EMBEDDED_JSON_SCHEMAS_V1 {
+        let schema: Value = serde_json::from_str(source)
+            .map_err(|error| format!("embedded schema {filename} is invalid: {error}"))?;
+        if resources.insert((*id).to_owned(), schema.clone()).is_some() {
+            return Err(format!("duplicate embedded schema identifier {id}"));
+        }
+        let local_uri = format!("{EMBEDDED_SCHEMA_BASE_V2}{filename}");
+        if resources.insert(local_uri.clone(), schema).is_some() {
+            return Err(format!("duplicate embedded schema URI {local_uri}"));
+        }
+    }
+    Ok(EmbeddedSchemaRetrieverV2(Arc::new(resources)))
+}
+
+fn build_result_validators_v2() -> Result<HashMap<&'static str, Validator>, String> {
+    let retriever = embedded_schema_resources_v2()?;
+    let sources = embedded_schemas::EMBEDDED_JSON_SCHEMAS_V1
+        .iter()
+        .map(|(_, filename, source)| (*filename, *source))
+        .collect::<HashMap<_, _>>();
+    let mut validators = HashMap::new();
+    for contract in EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+    {
+        let filename = contract
+            .schema_path
+            .strip_prefix("schemas/")
+            .ok_or_else(|| format!("invalid result schema path {}", contract.schema_path))?;
+        let source = sources
+            .get(filename)
+            .ok_or_else(|| format!("embedded result schema {filename} is missing"))?;
+        let mut schema: Value = serde_json::from_str(source)
+            .map_err(|error| format!("embedded result schema {filename} is invalid: {error}"))?;
+        schema
+            .as_object_mut()
+            .ok_or_else(|| format!("embedded result schema {filename} is not an object"))?
+            .remove("$id");
+        let validator = jsonschema::draft202012::options()
+            .with_base_uri(format!("{EMBEDDED_SCHEMA_BASE_V2}{filename}"))
+            .with_retriever(retriever.clone())
+            .should_validate_formats(true)
+            .build(&schema)
+            .map_err(|error| {
+                format!("embedded result schema {filename} does not compile: {error}")
+            })?;
+        validators.insert(contract.schema, validator);
+    }
+    let filename = "output-v2.schema.json";
+    let source = sources
+        .get(filename)
+        .ok_or_else(|| format!("embedded output schema {filename} is missing"))?;
+    let mut schema: Value = serde_json::from_str(source)
+        .map_err(|error| format!("embedded output schema {filename} is invalid: {error}"))?;
+    schema
+        .as_object_mut()
+        .ok_or_else(|| format!("embedded output schema {filename} is not an object"))?
+        .remove("$id");
+    let validator = jsonschema::draft202012::options()
+        .with_base_uri(format!("{EMBEDDED_SCHEMA_BASE_V2}{filename}"))
+        .with_retriever(retriever)
+        .should_validate_formats(true)
+        .build(&schema)
+        .map_err(|error| format!("embedded output schema {filename} does not compile: {error}"))?;
+    validators.insert(OUTPUT_SCHEMA_V2, validator);
+    Ok(validators)
+}
+
+fn validate_embedded_result_schema_v2(schema: &str, result: &Map<String, Value>) -> bool {
+    validate_embedded_schema_v2(schema, &Value::Object(result.clone()))
+}
+
+fn validate_embedded_schema_v2(schema: &str, value: &Value) -> bool {
+    RESULT_VALIDATORS_V2
+        .get_or_init(build_result_validators_v2)
+        .as_ref()
+        .ok()
+        .and_then(|validators| validators.get(schema))
+        .is_some_and(|validator| validator.is_valid(value))
+}
 
 /// A closed result family reserved by the Procedure v2 public contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,6 +352,8 @@ pub fn decode_result_schema_contract_v2(
     let allowed = allowed_result_fields_v2(schema);
     (required.iter().all(|field| result.contains_key(*field))
         && result.keys().all(|field| allowed.contains(&field.as_str()))
+        && validate_json_map_depth(result, 1).is_ok()
+        && validate_embedded_result_schema_v2(schema, result)
         && validate_result_correlations_v2(schema, result))
     .then_some(contract)
 }
@@ -263,8 +380,13 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
                     .is_some_and(|(projected, recorded)| projected == recorded)
             })
         }
-        "podway.job-result/v2" => terminal_response_command_v2(result.get("job"))
-            .is_some_and(|command| command.is_none_or(is_v2_mutation_command)),
+        "podway.job-result/v2" => {
+            terminal_response_command_v2(result.get("job"))
+                .is_some_and(|command| command.is_none_or(is_v2_mutation_command))
+                && result
+                    .get("job")
+                    .is_some_and(validate_terminal_response_typed_v2)
+        }
         "podway.job-lookup-result/v2" => match result.get("found") {
             Some(Value::Bool(false)) => !result.contains_key("job"),
             Some(Value::Bool(true)) => {
@@ -280,11 +402,115 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
                             terminal_command.is_none_or(|value| value == job_command)
                         },
                     )
+                    && terminal_response_identity_matches_job_v2(job)
+                    && job
+                        .get("terminal_response")
+                        .is_some_and(validate_terminal_response_typed_v2)
             }
             _ => false,
         },
         _ => true,
     }
+}
+
+fn validate_terminal_response_typed_v2(response: &Value) -> bool {
+    let Some(response) = response.as_object() else {
+        return response.is_null();
+    };
+    match response.get("schema").and_then(Value::as_str) {
+        Some(OUTPUT_SCHEMA_V2) => {
+            serde_json::from_value::<OutputEnvelopeV2>(Value::Object(response.clone())).is_ok()
+        }
+        Some(crate::ERROR_SCHEMA_V1) => {
+            serde_json::from_value::<ErrorEnvelopeV1>(Value::Object(response.clone())).is_ok()
+        }
+        None => response.get("kind").and_then(Value::as_str) == Some("cancelled"),
+        Some(_) => false,
+    }
+}
+
+fn terminal_response_identity_matches_job_v2(job: &Map<String, Value>) -> bool {
+    let Some(response) = job.get("terminal_response") else {
+        return false;
+    };
+    if response.is_null()
+        || response
+            .as_object()
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str)
+            == Some("cancelled")
+    {
+        return true;
+    }
+    let Some(response) = response.as_object() else {
+        return false;
+    };
+    let admission = match response.get("schema").and_then(Value::as_str) {
+        Some(OUTPUT_SCHEMA_V2) => response
+            .get("result")
+            .and_then(Value::as_object)
+            .and_then(|result| result.get("admission")),
+        Some(crate::ERROR_SCHEMA_V1) => response
+            .get("details")
+            .and_then(Value::as_object)
+            .and_then(|details| details.get("admission")),
+        _ => return false,
+    };
+    let Some(admission) = admission.and_then(Value::as_object) else {
+        return false;
+    };
+    if admission.get("admitted") != Some(&Value::Bool(true))
+        || admission.get("job_id") != job.get("id")
+        || admission.get("workspace_sequence") != job.get("sequence")
+    {
+        return false;
+    }
+    if response.get("schema").and_then(Value::as_str) == Some(OUTPUT_SCHEMA_V2) {
+        let Some(response_job) = response.get("job").and_then(Value::as_object) else {
+            return false;
+        };
+        return [
+            "id",
+            "sequence",
+            "state",
+            "submitted_at",
+            "claimed_at",
+            "finished_at",
+        ]
+        .iter()
+        .all(|field| response_job.get(*field) == job.get(*field));
+    }
+    true
+}
+
+fn validate_job_result_output_v2(output: &OutputEnvelopeV2) -> bool {
+    if output.result.get("schema").and_then(Value::as_str) != Some("podway.job-result/v2") {
+        return true;
+    }
+    let Some(job) = output.job.as_ref() else {
+        return false;
+    };
+    let Some(response) = output.result.get("job") else {
+        return false;
+    };
+    let state_matches = match job.state() {
+        JobStateV1::Queued | JobStateV1::Running => response.is_null(),
+        JobStateV1::Succeeded => {
+            response.get("schema").and_then(Value::as_str) == Some(OUTPUT_SCHEMA_V2)
+        }
+        JobStateV1::Failed => {
+            response.get("schema").and_then(Value::as_str) == Some(crate::ERROR_SCHEMA_V1)
+        }
+        JobStateV1::Cancelled => response.get("kind").and_then(Value::as_str) == Some("cancelled"),
+    };
+    if !state_matches {
+        return false;
+    }
+    let Ok(Value::Object(mut job_projection)) = serde_json::to_value(job) else {
+        return false;
+    };
+    job_projection.insert("terminal_response".to_owned(), response.clone());
+    terminal_response_identity_matches_job_v2(&job_projection)
 }
 
 fn terminal_response_command_v2(value: Option<&Value>) -> Option<Option<&str>> {
@@ -861,6 +1087,11 @@ impl OutputEnvelopeV2 {
         }
         validate_json_map_depth(&self.result, 1)?;
         validate_command_result_v2(self.command.as_str(), &self.result)?;
+        if !validate_job_result_output_v2(self) {
+            return Err(ProtocolError::InvalidCommandResult {
+                command: self.command.as_str().to_owned(),
+            });
+        }
         if let Some(admission) = self.result.get("admission") {
             let (job_id, sequence) = validate_admission_metadata_v1(admission, false)?
                 .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
@@ -877,6 +1108,15 @@ impl OutputEnvelopeV2 {
         }
         for warning in &self.warnings {
             validate_json_map_depth(warning, 2)?;
+        }
+        let envelope_value =
+            serde_json::to_value(self).map_err(|_| ProtocolError::InvalidCommandResult {
+                command: self.command.as_str().to_owned(),
+            })?;
+        if !validate_embedded_schema_v2(OUTPUT_SCHEMA_V2, &envelope_value) {
+            return Err(ProtocolError::InvalidCommandResult {
+                command: self.command.as_str().to_owned(),
+            });
         }
         Ok(())
     }

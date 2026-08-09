@@ -51,6 +51,41 @@ fn emit_git_rerun_paths(workspace: &Path) {
     }
 }
 
+fn generate_embedded_schemas(workspace: &Path, output_dir: &Path) {
+    let schema_dir = workspace.join("assets/schemas");
+    let mut paths = fs::read_dir(&schema_dir)
+        .unwrap_or_else(|error| fail(error.to_string()))
+        .map(|entry| entry.unwrap_or_else(|error| fail(error.to_string())).path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    let mut entries = Vec::with_capacity(paths.len());
+    for path in paths {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| fail(error.to_string()));
+        let schema: Value =
+            serde_json::from_str(&source).unwrap_or_else(|error| fail(error.to_string()));
+        let id = string_field(&schema, "$id");
+        let filename = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_else(|| fail("schema filename is not UTF-8"));
+        entries.push(format!(
+            "({}, {}, {})",
+            rust_string(id),
+            rust_string(filename),
+            rust_string(&source)
+        ));
+    }
+    let generated = format!(
+        "pub const EMBEDDED_JSON_SCHEMAS_V1: &[(&str, &str, &str)] = &[{}];\n",
+        entries.join(",")
+    );
+    fs::write(output_dir.join("embedded_json_schemas.rs"), generated)
+        .unwrap_or_else(|error| fail(error.to_string()));
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=PODWAY_SOURCE_COMMIT");
     let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -142,7 +177,8 @@ fn main() {
         rust_string(MANIFEST_SCHEMA),
         rust_string(&digest),
     );
-    let output =
-        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("contract_identity.rs");
+    let output_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    generate_embedded_schemas(&workspace, &output_dir);
+    let output = output_dir.join("contract_identity.rs");
     fs::write(output, generated).unwrap_or_else(|error| fail(error.to_string()));
 }

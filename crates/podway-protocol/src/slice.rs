@@ -1,8 +1,11 @@
 use std::fmt;
 
 use podway_core::{
-    AttemptId, BlockerId, ItemId, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, MAX_STAGE_ITEMS,
-    Revision, SessionId, Sha256Digest, StageId, WorkspaceId, canonicalize_json_v1,
+    ActorAttributionV2, AttemptId, BlockerId, CriterionAssessmentReasonV2, CriterionId,
+    CriterionStatusV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
+    GoalRevisionReasonV2, GoalStatementV2, GraphNodeId, ItemId, JobId,
+    MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, MAX_STAGE_ITEMS, OptionId, ReasonV2, Revision, SessionId,
+    Sha256Digest, StageId, WorkspaceId, canonicalize_json_v1,
 };
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -652,6 +655,192 @@ pub struct JobWaitV1 {
 pub struct JobCancelV1 {
     pub job_id: JobId,
     pub preconditions: JobMutationPreconditionsWireV1,
+}
+
+/// One ordered criterion supplied while defining a Procedure v2 session goal.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalCriterionWireV2 {
+    pub criterion_id: CriterionId,
+    pub statement: String,
+}
+
+/// Optional immutable revision 1 supplied with a Procedure v2 session start.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InitialGoalWireV2 {
+    pub goal: String,
+    pub criteria: Vec<GoalCriterionWireV2>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+}
+
+/// A closed Procedure v2 start payload decoded without making the route executable.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcedureV2SessionStartV1 {
+    pub start: SessionStartV1,
+    pub initial_goal: Option<InitialGoalWireV2>,
+}
+
+/// A closed Procedure v2 replacement-start payload decoded without dispatching it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcedureV2SessionStartReplaceV1 {
+    pub start: ProcedureV2SessionStartV1,
+    pub confirmed: bool,
+    pub preconditions: SessionIdentityPreconditionsWireV1,
+}
+
+/// Typed protocol-only Procedure v2 start routes reserved for daemon integration.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcedureV2StartCommandV1 {
+    SessionStart(ProcedureV2SessionStartV1),
+    SessionStartReplace(ProcedureV2SessionStartReplaceV1),
+}
+
+impl ProcedureV2StartCommandV1 {
+    pub const fn command_name(&self) -> &'static str {
+        match self {
+            Self::SessionStart(_) => "session.start",
+            Self::SessionStartReplace(_) => "session.start_replace",
+        }
+    }
+
+    pub const fn is_mutation(&self) -> bool {
+        match self {
+            Self::SessionStart(start) => !start.start.dry_run,
+            Self::SessionStartReplace(start) => !start.start.start.dry_run,
+        }
+    }
+}
+
+/// One decoded Procedure v2 start plus its lossless worktree selector.
+///
+/// This protocol boundary is intentionally separate from [`SliceRequestV1`]. The daemon keeps
+/// rejecting goal-bearing starts until V2PLT-007 wires the complete Procedure v2 admission path.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcedureV2StartRequestV1 {
+    selector: WorktreeSelectorWireV1,
+    command: ProcedureV2StartCommandV1,
+}
+
+/// Session and goal-revision fences for a Procedure v2 goal mutation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalRevisionPreconditionsWireV2 {
+    pub expected_session_id: SessionId,
+    pub expected_session_revision: Revision,
+    pub expected_attempt_id: Option<AttemptId>,
+    pub expected_goal_revision: u64,
+}
+
+/// Session fences for manual rework, whose active attempt is absent after completion.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReworkPreconditionsWireV2 {
+    pub expected_session_id: SessionId,
+    pub expected_session_revision: Revision,
+    pub expected_attempt_id: Option<AttemptId>,
+}
+
+/// A closed, bounded `session.decide` request payload.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionDecideV2 {
+    pub option_id: OptionId,
+    pub reason: String,
+    pub actor: Option<String>,
+    pub preconditions: SessionMutationPreconditionsWireV1,
+}
+
+/// A closed, bounded `session.rework` request payload.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionReworkV2 {
+    pub target_graph_node_id: GraphNodeId,
+    pub reason: String,
+    pub actor: Option<String>,
+    pub preconditions: ReworkPreconditionsWireV2,
+}
+
+/// A closed, bounded `goal.define` request payload.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalDefineV2 {
+    pub goal: String,
+    pub criteria: Vec<GoalCriterionWireV2>,
+    pub actor: Option<String>,
+    pub preconditions: SessionIdentityPreconditionsWireV1,
+}
+
+/// A closed, bounded `goal.revise` request payload.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalReviseV2 {
+    pub goal: String,
+    pub criteria: Vec<GoalCriterionWireV2>,
+    pub target_graph_node_id: GraphNodeId,
+    pub reason: String,
+    pub actor: Option<String>,
+    pub reactivate: bool,
+    pub preconditions: GoalRevisionPreconditionsWireV2,
+}
+
+/// A closed, bounded `goal.assess_criterion` request payload.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalAssessCriterionV2 {
+    pub criterion_id: CriterionId,
+    pub status: String,
+    pub reason: String,
+    pub evidence: Vec<GraphNodeId>,
+    pub items: Vec<ItemId>,
+    pub actor: Option<String>,
+    pub preconditions: SessionMutationPreconditionsWireV1,
+    pub expected_goal_revision: u64,
+}
+
+/// The five daemon mutation routes reserved by the Procedure v2 contract.
+pub const RESERVED_V2_MUTATION_COMMAND_NAMES_V1: [&str; 5] = [
+    "session.decide",
+    "session.rework",
+    "goal.define",
+    "goal.revise",
+    "goal.assess_criterion",
+];
+
+/// Typed request data for the reserved Procedure v2 daemon mutation boundary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcedureV2MutationCommandV1 {
+    SessionDecide(SessionDecideV2),
+    SessionRework(SessionReworkV2),
+    GoalDefine(GoalDefineV2),
+    GoalRevise(GoalReviseV2),
+    GoalAssessCriterion(GoalAssessCriterionV2),
+}
+
+impl ProcedureV2MutationCommandV1 {
+    pub const fn command_name(&self) -> &'static str {
+        match self {
+            Self::SessionDecide(_) => "session.decide",
+            Self::SessionRework(_) => "session.rework",
+            Self::GoalDefine(_) => "goal.define",
+            Self::GoalRevise(_) => "goal.revise",
+            Self::GoalAssessCriterion(_) => "goal.assess_criterion",
+        }
+    }
+}
+
+/// One decoded reserved Procedure v2 mutation plus its lossless worktree selector.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcedureV2MutationRequestV1 {
+    selector: WorktreeSelectorWireV1,
+    command: ProcedureV2MutationCommandV1,
 }
 
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
@@ -1333,6 +1522,273 @@ impl TryFrom<&RequestEnvelopeV1> for SliceRequestV1 {
     }
 }
 
+impl ProcedureV2MutationRequestV1 {
+    pub fn from_envelope(envelope: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
+        let (selector, command) = match envelope.command().as_str() {
+            "session.decide" => {
+                require_envelope(envelope, "session.decide", OperationV1::Mutate, true)?;
+                let preconditions = require_session_preconditions(envelope.preconditions())?;
+                let payload: SessionDecidePayloadV2 = parse_payload(envelope)?;
+                validate_reason_v2(&payload.reason)?;
+                validate_actor_v2(payload.actor.as_deref())?;
+                (
+                    payload.selector,
+                    ProcedureV2MutationCommandV1::SessionDecide(SessionDecideV2 {
+                        option_id: payload.option_id,
+                        reason: payload.reason,
+                        actor: payload.actor,
+                        preconditions,
+                    }),
+                )
+            }
+            "session.rework" => {
+                require_envelope(envelope, "session.rework", OperationV1::Mutate, true)?;
+                let preconditions = require_rework_preconditions_v2(envelope.preconditions())?;
+                let payload: SessionReworkPayloadV2 = parse_payload(envelope)?;
+                validate_reason_v2(&payload.reason)?;
+                validate_actor_v2(payload.actor.as_deref())?;
+                (
+                    payload.selector,
+                    ProcedureV2MutationCommandV1::SessionRework(SessionReworkV2 {
+                        target_graph_node_id: payload.target_graph_node_id,
+                        reason: payload.reason,
+                        actor: payload.actor,
+                        preconditions,
+                    }),
+                )
+            }
+            "goal.define" => {
+                require_envelope(envelope, "goal.define", OperationV1::Mutate, true)?;
+                let preconditions =
+                    require_session_identity_preconditions(envelope.preconditions())?;
+                let payload: GoalDefinePayloadV2 = parse_payload(envelope)?;
+                validate_goal_definition_v2(&payload.goal, &payload.criteria)?;
+                validate_actor_v2(payload.actor.as_deref())?;
+                (
+                    payload.selector,
+                    ProcedureV2MutationCommandV1::GoalDefine(GoalDefineV2 {
+                        goal: payload.goal,
+                        criteria: payload.criteria,
+                        actor: payload.actor,
+                        preconditions,
+                    }),
+                )
+            }
+            "goal.revise" => {
+                require_envelope(envelope, "goal.revise", OperationV1::Mutate, true)?;
+                let preconditions =
+                    require_goal_revision_preconditions_v2(envelope.preconditions())?;
+                let payload: GoalRevisePayloadV2 = parse_payload(envelope)?;
+                validate_goal_definition_v2(&payload.goal, &payload.criteria)?;
+                GoalRevisionReasonV2::new(payload.reason.clone()).map_err(domain_value_error_v2)?;
+                validate_actor_v2(payload.actor.as_deref())?;
+                (
+                    payload.selector,
+                    ProcedureV2MutationCommandV1::GoalRevise(GoalReviseV2 {
+                        goal: payload.goal,
+                        criteria: payload.criteria,
+                        target_graph_node_id: payload.target_graph_node_id,
+                        reason: payload.reason,
+                        actor: payload.actor,
+                        reactivate: payload.reactivate,
+                        preconditions,
+                    }),
+                )
+            }
+            "goal.assess_criterion" => {
+                require_envelope(envelope, "goal.assess_criterion", OperationV1::Mutate, true)?;
+                let expected_goal_revision = require_goal_revision_v2(envelope.preconditions())?;
+                let preconditions = require_session_preconditions_v2(envelope.preconditions())?;
+                let payload: GoalAssessCriterionPayloadV2 = parse_payload(envelope)?;
+                let status = payload
+                    .status
+                    .parse::<CriterionStatusV2>()
+                    .map_err(domain_value_error_v2)?;
+                CriterionAssessmentReasonV2::new(payload.reason.clone())
+                    .map_err(domain_value_error_v2)?;
+                validate_actor_v2(payload.actor.as_deref())?;
+                validate_citations_v2(status, &payload.evidence, &payload.items)?;
+                (
+                    payload.selector,
+                    ProcedureV2MutationCommandV1::GoalAssessCriterion(GoalAssessCriterionV2 {
+                        criterion_id: payload.criterion_id,
+                        status: status.as_str().to_owned(),
+                        reason: payload.reason,
+                        evidence: payload.evidence,
+                        items: payload.items,
+                        actor: payload.actor,
+                        preconditions,
+                        expected_goal_revision: expected_goal_revision.get(),
+                    }),
+                )
+            }
+            command => {
+                return Err(SliceErrorV1::InvalidCommand {
+                    received: command.to_owned(),
+                });
+            }
+        };
+        let workspace = envelope.workspace().ok_or(SliceErrorV1::MissingWorkspace {
+            command: command.command_name(),
+        })?;
+        if workspace.expected_uuid() != selector.expected_uuid() {
+            return Err(SliceErrorV1::InvalidValue {
+                field: "workspace.expected_uuid/selector.expected_uuid",
+            });
+        }
+        Ok(Self { selector, command })
+    }
+
+    pub fn selector(&self) -> &WorktreeSelectorWireV1 {
+        &self.selector
+    }
+
+    pub fn command(&self) -> &ProcedureV2MutationCommandV1 {
+        &self.command
+    }
+}
+
+impl TryFrom<&RequestEnvelopeV1> for ProcedureV2MutationRequestV1 {
+    type Error = SliceErrorV1;
+
+    fn try_from(envelope: &RequestEnvelopeV1) -> Result<Self, Self::Error> {
+        Self::from_envelope(envelope)
+    }
+}
+
+impl ProcedureV2StartRequestV1 {
+    /// Decodes the complete closed Procedure v2 start payload without registering it for dispatch.
+    pub fn from_envelope(envelope: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
+        let (selector, command) = match envelope.command().as_str() {
+            "session.start" => {
+                let payload: ProcedureV2SessionStartPayloadV1 = parse_payload(envelope)?;
+                require_dry_run_envelope(envelope, "session.start", payload.dry_run)?;
+                require_no_preconditions(envelope.preconditions())?;
+                let start = validated_start(
+                    payload.preset,
+                    payload.procedure,
+                    payload.expected_procedure_digest,
+                    payload.task_title,
+                    payload.dry_run,
+                )?;
+                let initial_goal =
+                    validated_initial_goal_v2(payload.goal, payload.criteria, payload.actor)?;
+                (
+                    payload.selector,
+                    ProcedureV2StartCommandV1::SessionStart(ProcedureV2SessionStartV1 {
+                        start,
+                        initial_goal,
+                    }),
+                )
+            }
+            "session.start_replace" => {
+                let payload: ProcedureV2SessionStartReplacePayloadV1 = parse_payload(envelope)?;
+                require_dry_run_envelope(envelope, "session.start_replace", payload.dry_run)?;
+                let preconditions =
+                    require_session_identity_preconditions(envelope.preconditions())?;
+                let confirmed = match (payload.dry_run, payload.confirmed) {
+                    (true, None) => false,
+                    (true, Some(_)) => {
+                        return Err(SliceErrorV1::InvalidValue { field: "confirmed" });
+                    }
+                    (false, confirmed) => {
+                        let confirmed = confirmed.unwrap_or(false);
+                        require_confirmation(confirmed)?;
+                        confirmed
+                    }
+                };
+                let start = validated_start(
+                    payload.preset,
+                    payload.procedure,
+                    payload.expected_procedure_digest,
+                    payload.task_title,
+                    payload.dry_run,
+                )?;
+                let initial_goal =
+                    validated_initial_goal_v2(payload.goal, payload.criteria, payload.actor)?;
+                (
+                    payload.selector,
+                    ProcedureV2StartCommandV1::SessionStartReplace(
+                        ProcedureV2SessionStartReplaceV1 {
+                            start: ProcedureV2SessionStartV1 {
+                                start,
+                                initial_goal,
+                            },
+                            confirmed,
+                            preconditions,
+                        },
+                    ),
+                )
+            }
+            command => {
+                return Err(SliceErrorV1::InvalidCommand {
+                    received: command.to_owned(),
+                });
+            }
+        };
+        let workspace = envelope.workspace().ok_or(SliceErrorV1::MissingWorkspace {
+            command: command.command_name(),
+        })?;
+        if workspace.expected_uuid() != selector.expected_uuid() {
+            return Err(SliceErrorV1::InvalidValue {
+                field: "workspace.expected_uuid/selector.expected_uuid",
+            });
+        }
+        Ok(Self { selector, command })
+    }
+
+    pub fn selector(&self) -> &WorktreeSelectorWireV1 {
+        &self.selector
+    }
+
+    pub fn command(&self) -> &ProcedureV2StartCommandV1 {
+        &self.command
+    }
+}
+
+impl TryFrom<&RequestEnvelopeV1> for ProcedureV2StartRequestV1 {
+    type Error = SliceErrorV1;
+
+    fn try_from(envelope: &RequestEnvelopeV1) -> Result<Self, Self::Error> {
+        Self::from_envelope(envelope)
+    }
+}
+
+/// Decodes the optional Procedure v2 revision 1 fields from a start payload.
+///
+/// This extension-only helper intentionally ignores base start fields. Use
+/// [`ProcedureV2StartRequestV1::from_envelope`] at the complete request boundary.
+pub fn decode_initial_goal_v2(
+    payload: &Map<String, Value>,
+) -> Result<Option<InitialGoalWireV2>, SliceErrorV1> {
+    let decode = |field: &'static str| -> Result<Option<Value>, SliceErrorV1> {
+        match payload.get(field) {
+            None => Ok(None),
+            Some(Value::Null) => Err(SliceErrorV1::InvalidValue { field }),
+            Some(value) => Ok(Some(value.clone())),
+        }
+    };
+    let goal = decode("goal")?
+        .map(serde_json::from_value::<String>)
+        .transpose()
+        .map_err(|error| SliceErrorV1::InvalidPayload {
+            message: error.to_string(),
+        })?;
+    let criteria = decode("criteria")?
+        .map(serde_json::from_value::<Vec<GoalCriterionWireV2>>)
+        .transpose()
+        .map_err(|error| SliceErrorV1::InvalidPayload {
+            message: error.to_string(),
+        })?;
+    let actor = decode("actor")?
+        .map(serde_json::from_value::<String>)
+        .transpose()
+        .map_err(|error| SliceErrorV1::InvalidPayload {
+            message: error.to_string(),
+        })?;
+    validated_initial_goal_v2(goal, criteria, actor)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SelectorOnlyPayloadV1 {
@@ -1384,6 +1840,50 @@ struct SessionStartReplacePayloadV1 {
     confirmed: Option<bool>,
     #[serde(default)]
     dry_run: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcedureV2SessionStartPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    preset: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    procedure: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    expected_procedure_digest: Option<Sha256Digest>,
+    task_title: String,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    goal: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    criteria: Option<Vec<GoalCriterionWireV2>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcedureV2SessionStartReplacePayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    preset: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    procedure: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    expected_procedure_digest: Option<Sha256Digest>,
+    task_title: String,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    confirmed: Option<bool>,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    goal: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    criteria: Option<Vec<GoalCriterionWireV2>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1526,12 +2026,243 @@ struct JobIdPayloadV1 {
     job_id: JobId,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionDecidePayloadV2 {
+    selector: WorktreeSelectorWireV1,
+    option_id: OptionId,
+    reason: String,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionReworkPayloadV2 {
+    selector: WorktreeSelectorWireV1,
+    target_graph_node_id: GraphNodeId,
+    reason: String,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoalDefinePayloadV2 {
+    selector: WorktreeSelectorWireV1,
+    goal: String,
+    criteria: Vec<GoalCriterionWireV2>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoalRevisePayloadV2 {
+    selector: WorktreeSelectorWireV1,
+    goal: String,
+    criteria: Vec<GoalCriterionWireV2>,
+    target_graph_node_id: GraphNodeId,
+    reason: String,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
+    #[serde(default)]
+    reactivate: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoalAssessCriterionPayloadV2 {
+    selector: WorktreeSelectorWireV1,
+    criterion_id: CriterionId,
+    status: String,
+    reason: String,
+    #[serde(default)]
+    evidence: Vec<GraphNodeId>,
+    #[serde(default)]
+    items: Vec<ItemId>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
+}
+
 fn parse_payload<T: DeserializeOwned>(envelope: &RequestEnvelopeV1) -> Result<T, SliceErrorV1> {
     serde_json::from_value(Value::Object(envelope.payload().clone())).map_err(|error| {
         SliceErrorV1::InvalidPayload {
             message: error.to_string(),
         }
     })
+}
+
+fn domain_value_error_v2(error: podway_core::DomainError) -> SliceErrorV1 {
+    SliceErrorV1::InvalidPayload {
+        message: error.to_string(),
+    }
+}
+
+fn validate_reason_v2(value: &str) -> Result<(), SliceErrorV1> {
+    ReasonV2::new(value.to_owned())
+        .map(drop)
+        .map_err(domain_value_error_v2)
+}
+
+fn validate_actor_v2(value: Option<&str>) -> Result<(), SliceErrorV1> {
+    value
+        .map(|value| ActorAttributionV2::new(value.to_owned()))
+        .transpose()
+        .map(drop)
+        .map_err(domain_value_error_v2)
+}
+
+fn validate_goal_definition_v2(
+    goal: &str,
+    criteria: &[GoalCriterionWireV2],
+) -> Result<(), SliceErrorV1> {
+    GoalStatementV2::new(goal.to_owned()).map_err(domain_value_error_v2)?;
+    let criteria = criteria
+        .iter()
+        .map(|criterion| {
+            GoalCriterionV2::new(criterion.criterion_id.clone(), criterion.statement.clone())
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(domain_value_error_v2)?;
+    GoalDefinitionV2::new(criteria)
+        .map(drop)
+        .map_err(domain_value_error_v2)
+}
+
+fn validated_initial_goal_v2(
+    goal: Option<String>,
+    criteria: Option<Vec<GoalCriterionWireV2>>,
+    actor: Option<String>,
+) -> Result<Option<InitialGoalWireV2>, SliceErrorV1> {
+    match (goal, criteria, actor) {
+        (None, None, None) => Ok(None),
+        (Some(goal), Some(criteria), actor) => {
+            validate_goal_definition_v2(&goal, &criteria)?;
+            validate_actor_v2(actor.as_deref())?;
+            Ok(Some(InitialGoalWireV2 {
+                goal,
+                criteria,
+                actor,
+            }))
+        }
+        _ => Err(SliceErrorV1::InvalidValue {
+            field: "goal/criteria/actor",
+        }),
+    }
+}
+
+fn require_goal_revision_v2(
+    preconditions: &PreconditionsV1,
+) -> Result<GoalRevisionNumberV2, SliceErrorV1> {
+    preconditions
+        .goal_revision()
+        .ok_or(SliceErrorV1::MissingPrecondition {
+            field: "preconditions.goal_revision",
+        })
+}
+
+fn require_goal_revision_preconditions_v2(
+    preconditions: &PreconditionsV1,
+) -> Result<GoalRevisionPreconditionsWireV2, SliceErrorV1> {
+    let expected_session_id =
+        preconditions
+            .session_id()
+            .cloned()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_id",
+            })?;
+    let expected_session_revision =
+        preconditions
+            .session_revision()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_revision",
+            })?;
+    let expected_goal_revision = require_goal_revision_v2(preconditions)?.get();
+    reject_non_session_preconditions_v2(preconditions)?;
+    Ok(GoalRevisionPreconditionsWireV2 {
+        expected_session_id,
+        expected_session_revision,
+        expected_attempt_id: preconditions.attempt_id().cloned(),
+        expected_goal_revision,
+    })
+}
+
+fn require_rework_preconditions_v2(
+    preconditions: &PreconditionsV1,
+) -> Result<ReworkPreconditionsWireV2, SliceErrorV1> {
+    let expected_session_id =
+        preconditions
+            .session_id()
+            .cloned()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_id",
+            })?;
+    let expected_session_revision =
+        preconditions
+            .session_revision()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_revision",
+            })?;
+    reject_non_session_preconditions_v2(preconditions)?;
+    if preconditions.goal_revision().is_some() {
+        return Err(SliceErrorV1::UnexpectedPrecondition {
+            field: "preconditions.goal_revision",
+        });
+    }
+    Ok(ReworkPreconditionsWireV2 {
+        expected_session_id,
+        expected_session_revision,
+        expected_attempt_id: preconditions.attempt_id().cloned(),
+    })
+}
+
+fn reject_non_session_preconditions_v2(
+    preconditions: &PreconditionsV1,
+) -> Result<(), SliceErrorV1> {
+    for (present, field) in [
+        (
+            preconditions.item_revision().is_some(),
+            "preconditions.item_revision",
+        ),
+        (
+            preconditions.blocker_id().is_some(),
+            "preconditions.blocker_id",
+        ),
+        (
+            preconditions.job_state().is_some(),
+            "preconditions.job_state",
+        ),
+    ] {
+        if present {
+            return Err(SliceErrorV1::UnexpectedPrecondition { field });
+        }
+    }
+    Ok(())
+}
+
+fn validate_citations_v2(
+    status: CriterionStatusV2,
+    evidence: &[GraphNodeId],
+    items: &[ItemId],
+) -> Result<(), SliceErrorV1> {
+    let count = evidence.len().saturating_add(items.len());
+    if count > 4
+        || evidence
+            .iter()
+            .enumerate()
+            .any(|(index, value)| evidence[..index].contains(value))
+        || items
+            .iter()
+            .enumerate()
+            .any(|(index, value)| items[..index].contains(value))
+        || (status == CriterionStatusV2::NotApplicable && count != 0)
+    {
+        return Err(SliceErrorV1::InvalidValue {
+            field: "evidence/items",
+        });
+    }
+    Ok(())
 }
 
 fn require_envelope(
@@ -1575,6 +2306,7 @@ fn require_dry_run_envelope(
 }
 
 fn require_no_preconditions(preconditions: &PreconditionsV1) -> Result<(), SliceErrorV1> {
+    reject_goal_revision_precondition(preconditions)?;
     if preconditions.session_id().is_some() {
         return Err(SliceErrorV1::UnexpectedPrecondition {
             field: "preconditions.session_id",
@@ -1611,6 +2343,7 @@ fn require_no_preconditions(preconditions: &PreconditionsV1) -> Result<(), Slice
 fn require_item_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<ItemMutationPreconditionsWireV1, SliceErrorV1> {
+    reject_goal_revision_precondition(preconditions)?;
     let expected_session_id =
         preconditions
             .session_id()
@@ -1656,6 +2389,7 @@ fn require_item_preconditions(
 fn require_session_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<SessionMutationPreconditionsWireV1, SliceErrorV1> {
+    reject_goal_revision_precondition(preconditions)?;
     let expected_session_id =
         preconditions
             .session_id()
@@ -1698,9 +2432,41 @@ fn require_session_preconditions(
     })
 }
 
+fn require_session_preconditions_v2(
+    preconditions: &PreconditionsV1,
+) -> Result<SessionMutationPreconditionsWireV1, SliceErrorV1> {
+    let expected_session_id =
+        preconditions
+            .session_id()
+            .cloned()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_id",
+            })?;
+    let expected_session_revision =
+        preconditions
+            .session_revision()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.session_revision",
+            })?;
+    let expected_attempt_id =
+        preconditions
+            .attempt_id()
+            .cloned()
+            .ok_or(SliceErrorV1::MissingPrecondition {
+                field: "preconditions.attempt_id",
+            })?;
+    reject_non_session_preconditions_v2(preconditions)?;
+    Ok(SessionMutationPreconditionsWireV1 {
+        expected_session_id,
+        expected_session_revision,
+        expected_attempt_id,
+    })
+}
+
 fn require_session_identity_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<SessionIdentityPreconditionsWireV1, SliceErrorV1> {
+    reject_goal_revision_precondition(preconditions)?;
     let expected_session_id =
         preconditions
             .session_id()
@@ -1743,6 +2509,7 @@ fn require_session_identity_preconditions(
 fn require_session_revision_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<SessionRevisionPreconditionsWireV1, SliceErrorV1> {
+    reject_goal_revision_precondition(preconditions)?;
     let expected_session_id =
         preconditions
             .session_id()
@@ -1785,6 +2552,7 @@ fn require_session_revision_preconditions(
 fn require_session_read_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<SessionReadPreconditionsWireV1, SliceErrorV1> {
+    reject_goal_revision_precondition(preconditions)?;
     if preconditions.session_revision().is_some() {
         return Err(SliceErrorV1::UnexpectedPrecondition {
             field: "preconditions.session_revision",
@@ -1818,6 +2586,7 @@ fn require_session_read_preconditions(
 fn require_job_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<JobMutationPreconditionsWireV1, SliceErrorV1> {
+    reject_goal_revision_precondition(preconditions)?;
     let expected_job_state =
         preconditions
             .job_state()
@@ -1850,6 +2619,15 @@ fn require_job_preconditions(
         });
     }
     Ok(JobMutationPreconditionsWireV1 { expected_job_state })
+}
+
+fn reject_goal_revision_precondition(preconditions: &PreconditionsV1) -> Result<(), SliceErrorV1> {
+    if preconditions.goal_revision().is_some() {
+        return Err(SliceErrorV1::UnexpectedPrecondition {
+            field: "preconditions.goal_revision",
+        });
+    }
+    Ok(())
 }
 
 fn validated_start(
@@ -2087,6 +2865,92 @@ fn validate_scalar_bound(
     Ok(())
 }
 
+/// Canonical semantic identity for one reserved Procedure v2 mutation.
+///
+/// It excludes request correlation, client metadata, selector hints, detach, and wait timeout in
+/// the same way as the released mutation identity. Every semantic payload field and concurrency
+/// fence is retained so an idempotency key cannot be rebound to different v2 work.
+pub fn canonical_procedure_v2_mutation_identity_v1(
+    request: &ProcedureV2MutationRequestV1,
+    resolved_workspace_id: &WorkspaceId,
+) -> Result<String, SliceErrorV1> {
+    let (preconditions, payload) = match request.command() {
+        ProcedureV2MutationCommandV1::SessionDecide(command) => (
+            session_preconditions_json(&command.preconditions),
+            json!({
+                "option_id": &command.option_id,
+                "reason": &command.reason,
+                "actor": &command.actor,
+            }),
+        ),
+        ProcedureV2MutationCommandV1::SessionRework(command) => (
+            json!({
+                "session_id": &command.preconditions.expected_session_id,
+                "session_revision": command.preconditions.expected_session_revision,
+                "attempt_id": &command.preconditions.expected_attempt_id,
+            }),
+            json!({
+                "target_graph_node_id": &command.target_graph_node_id,
+                "reason": &command.reason,
+                "actor": &command.actor,
+            }),
+        ),
+        ProcedureV2MutationCommandV1::GoalDefine(command) => (
+            session_identity_preconditions_json(&command.preconditions),
+            json!({
+                "goal": &command.goal,
+                "criteria": &command.criteria,
+                "actor": &command.actor,
+            }),
+        ),
+        ProcedureV2MutationCommandV1::GoalRevise(command) => (
+            json!({
+                "session_id": &command.preconditions.expected_session_id,
+                "session_revision": command.preconditions.expected_session_revision,
+                "attempt_id": &command.preconditions.expected_attempt_id,
+                "goal_revision": command.preconditions.expected_goal_revision,
+            }),
+            json!({
+                "goal": &command.goal,
+                "criteria": &command.criteria,
+                "target_graph_node_id": &command.target_graph_node_id,
+                "reason": &command.reason,
+                "actor": &command.actor,
+                "reactivate": command.reactivate,
+            }),
+        ),
+        ProcedureV2MutationCommandV1::GoalAssessCriterion(command) => {
+            let mut preconditions = session_preconditions_json(&command.preconditions);
+            insert_canonical_field_v1(
+                &mut preconditions,
+                "goal_revision",
+                json!(command.expected_goal_revision),
+            )?;
+            (
+                preconditions,
+                json!({
+                    "criterion_id": &command.criterion_id,
+                    "status": &command.status,
+                    "reason": &command.reason,
+                    "evidence": &command.evidence,
+                    "items": &command.items,
+                    "actor": &command.actor,
+                }),
+            )
+        }
+    };
+    canonicalize_json_v1(&json!({
+        "protocol_major": 1,
+        "command": request.command().command_name(),
+        "workspace_id": resolved_workspace_id,
+        "preconditions": preconditions,
+        "payload": payload,
+    }))
+    .map_err(|error| SliceErrorV1::Canonicalization {
+        message: error.to_string(),
+    })
+}
+
 /// Canonical semantic mutation identity. Its UTF-8 bytes are the SHA-256 input.
 ///
 /// Request metadata, transport wait preferences, dry-run mode, and the selector's
@@ -2105,21 +2969,14 @@ pub fn canonical_mutation_identity_v1(
 
     let (preconditions, payload) = match command {
         SliceCommandV1::WorkspaceInit(init) => (json!({}), json!({"repair": init.repair})),
-        SliceCommandV1::SessionStart(start) => (
-            json!({}),
-            json!({
-                "source": start_source_json(&start.source),
-                "task_title": &start.task_title,
-            }),
-        ),
-        SliceCommandV1::SessionStartReplace(start) => (
-            session_identity_preconditions_json(&start.preconditions),
-            json!({
-                "source": start_source_json(&start.start.source),
-                "task_title": &start.start.task_title,
-                "confirmed": start.confirmed,
-            }),
-        ),
+        SliceCommandV1::SessionStart(start) => (json!({}), start_payload_json_v1(start)),
+        SliceCommandV1::SessionStartReplace(start) => {
+            (session_identity_preconditions_json(&start.preconditions), {
+                let mut payload = start_payload_json_v1(&start.start);
+                insert_canonical_field_v1(&mut payload, "confirmed", json!(start.confirmed))?;
+                payload
+            })
+        }
         SliceCommandV1::SessionComplete(session) => (
             session_preconditions_json(&session.preconditions),
             json!({}),
@@ -2264,6 +3121,68 @@ pub fn canonical_start_mutation_identity_v1(
     })
 }
 
+/// Canonical semantic identity for a protocol-only Procedure v2 start.
+///
+/// The identity is byte-identical to the retained start identity when no initial goal is present.
+/// A supplied revision 1 definition is encoded in authored criterion order and therefore changes
+/// the identity without exposing the request through the executable v1 slice.
+pub fn canonical_procedure_v2_start_identity_v1(
+    request: &ProcedureV2StartRequestV1,
+    resolved_workspace_id: &WorkspaceId,
+    resolved_procedure_digest: &Sha256Digest,
+) -> Result<String, SliceErrorV1> {
+    if !request.command.is_mutation() {
+        return Err(SliceErrorV1::NotAMutation {
+            command: request.command.command_name(),
+        });
+    }
+
+    let (start, initial_goal, preconditions, confirmed) = match &request.command {
+        ProcedureV2StartCommandV1::SessionStart(start) => {
+            (&start.start, &start.initial_goal, json!({}), None)
+        }
+        ProcedureV2StartCommandV1::SessionStartReplace(replace) => (
+            &replace.start.start,
+            &replace.start.initial_goal,
+            session_identity_preconditions_json(&replace.preconditions),
+            Some(replace.confirmed),
+        ),
+    };
+
+    let mut payload = start_payload_json_v1(start);
+    if let Some(initial_goal) = initial_goal {
+        insert_canonical_field_v1(&mut payload, "goal", json!(&initial_goal.goal))?;
+        insert_canonical_field_v1(&mut payload, "criteria", json!(&initial_goal.criteria))?;
+        insert_canonical_field_v1(&mut payload, "actor", json!(&initial_goal.actor))?;
+    }
+    if let Some(confirmed) = confirmed {
+        insert_canonical_field_v1(&mut payload, "confirmed", json!(confirmed))?;
+    }
+
+    let mut preconditions = preconditions;
+    insert_canonical_field_v1(
+        &mut preconditions,
+        "procedure_digest",
+        json!(resolved_procedure_digest),
+    )?;
+    insert_canonical_field_v1(
+        &mut preconditions,
+        "expected_procedure_digest",
+        json!(&start.expected_procedure_digest),
+    )?;
+
+    canonicalize_json_v1(&json!({
+        "protocol_major": 1,
+        "command": request.command.command_name(),
+        "workspace_id": resolved_workspace_id,
+        "preconditions": preconditions,
+        "payload": payload,
+    }))
+    .map_err(|error| SliceErrorV1::Canonicalization {
+        message: error.to_string(),
+    })
+}
+
 /// Convenience form for hash functions that accept a byte slice.
 pub fn canonical_mutation_identity_bytes_v1(
     request: &SliceRequestV1,
@@ -2316,6 +3235,27 @@ fn start_source_json(source: &SessionStartSourceV1) -> Value {
         SessionStartSourceV1::Preset { preset } => json!({"preset": preset}),
         SessionStartSourceV1::Procedure { procedure } => json!({"procedure": procedure}),
     }
+}
+
+fn start_payload_json_v1(start: &SessionStartV1) -> Value {
+    json!({
+        "source": start_source_json(&start.source),
+        "task_title": &start.task_title,
+    })
+}
+
+fn insert_canonical_field_v1(
+    value: &mut Value,
+    field: &'static str,
+    field_value: Value,
+) -> Result<(), SliceErrorV1> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| SliceErrorV1::Canonicalization {
+            message: "canonical identity component is not an object".to_owned(),
+        })?;
+    object.insert(field.to_owned(), field_value);
+    Ok(())
 }
 
 fn item_attach_source_json(source: &ItemAttachSourceV1) -> Value {

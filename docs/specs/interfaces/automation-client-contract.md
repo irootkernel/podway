@@ -140,6 +140,10 @@ not create a contract mismatch.
 A matching numeric revision is not sufficient evidence that an operation targets
 the same session.
 
+Procedure v2 goal revision and criterion-assessment mutations additionally bind
+the exact positive current goal revision. That fence is distinct from, and does
+not replace, the session revision or active-attempt fence.
+
 ## 15. Procedure start integrity (AUT-START-001–004)
 
 | ID | Normative requirement |

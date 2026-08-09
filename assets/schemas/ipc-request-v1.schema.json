@@ -113,6 +113,11 @@
           "type": "integer",
           "minimum": 0
         },
+        "goal_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
         "blocker_id": {
           "type": "string",
           "format": "uuid"

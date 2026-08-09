@@ -1,15 +1,41 @@
 use std::{fmt, str};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
     COMPACT_STATUS_RESULT_SCHEMA_V1, ERROR_SCHEMA_V1, ErrorEnvelopeV1,
-    MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, OUTPUT_SCHEMA_V1, OutputEnvelopeV1, ProtocolError,
-    RequestEnvelopeV1, ResponseEnvelopeV1, validate_frame_payload_length,
-    validate_json_document_depth,
+    MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, OUTPUT_SCHEMA_V1, OUTPUT_SCHEMA_V2, OutputEnvelopeV1,
+    OutputEnvelopeV2, ProtocolError, RequestEnvelopeV1, ResponseEnvelopeV1,
+    validate_frame_payload_length, validate_json_document_depth,
 };
 
 static SUPPORTED_RESPONSE_SCHEMAS_V1: &[&str] = &[OUTPUT_SCHEMA_V1, ERROR_SCHEMA_V1];
+static SUPPORTED_RESPONSE_SCHEMAS_V2: &[&str] =
+    &[OUTPUT_SCHEMA_V1, OUTPUT_SCHEMA_V2, ERROR_SCHEMA_V1];
+const COMPACT_STATUS_RESULT_SCHEMA_V2: &str = "podway.compact-status-result/v2";
+
+/// A version-aware response envelope carried by Procedure v2-capable clients.
+///
+/// The transport protocol remains `podway.ipc/v1`: this additive decoder accepts
+/// the released v1 success and error envelopes as well as the v2 success envelope.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResponseEnvelopeV2 {
+    OutputV1(OutputEnvelopeV1),
+    OutputV2(OutputEnvelopeV2),
+    Error(ErrorEnvelopeV1),
+}
+
+impl ResponseEnvelopeV2 {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        match self {
+            Self::OutputV1(output) => output.validate(),
+            Self::OutputV2(output) => output.validate(),
+            Self::Error(error) => error.validate(),
+        }
+    }
+}
 
 /// A payload serialization or decoding failure that preserves wire-contract distinctions.
 #[derive(Debug)]
@@ -148,8 +174,88 @@ pub fn decode_response_payload_v1(
     }
 }
 
+/// Validates and compactly serializes one response for a Procedure v2-capable client.
+pub fn encode_response_payload_v2(
+    response: &ResponseEnvelopeV2,
+) -> Result<Vec<u8>, PayloadCodecErrorV1> {
+    response
+        .validate()
+        .map_err(PayloadCodecErrorV1::JsonContract)?;
+    let payload = serde_json::to_vec(response).map_err(PayloadCodecErrorV1::Serialize)?;
+    validate_frame_payload_length(payload.len()).map_err(PayloadCodecErrorV1::InvalidLength)?;
+    if response_is_compact_status_v2(response) {
+        validate_compact_status_payload_length(payload.len())
+            .map_err(PayloadCodecErrorV1::JsonContract)?;
+    }
+    Ok(payload)
+}
+
+/// Decodes one bounded response using the additive v2-aware schema registry.
+pub fn decode_response_payload_v2(
+    payload: &[u8],
+) -> Result<ResponseEnvelopeV2, PayloadCodecErrorV1> {
+    validate_frame_payload_length(payload.len()).map_err(PayloadCodecErrorV1::InvalidLength)?;
+    let document = str::from_utf8(payload).map_err(PayloadCodecErrorV1::InvalidUtf8)?;
+    let value =
+        serde_json::from_str::<Value>(document).map_err(PayloadCodecErrorV1::InvalidJson)?;
+    validate_json_document_depth(&value).map_err(PayloadCodecErrorV1::JsonContract)?;
+
+    let schema = top_level_discriminator(&value, "schema")?.to_owned();
+    match schema.as_str() {
+        OUTPUT_SCHEMA_V1 => {
+            validate_compact_status_result_payload_v2(&value, payload.len())?;
+            serde_json::from_value::<OutputEnvelopeV1>(value)
+                .map(ResponseEnvelopeV2::OutputV1)
+                .map_err(PayloadCodecErrorV1::InvalidEnvelope)
+        }
+        OUTPUT_SCHEMA_V2 => {
+            validate_compact_status_result_payload_v2(&value, payload.len())?;
+            serde_json::from_value::<OutputEnvelopeV2>(value)
+                .map(ResponseEnvelopeV2::OutputV2)
+                .map_err(PayloadCodecErrorV1::InvalidEnvelope)
+        }
+        ERROR_SCHEMA_V1 => serde_json::from_value::<ErrorEnvelopeV1>(value)
+            .map(ResponseEnvelopeV2::Error)
+            .map_err(PayloadCodecErrorV1::InvalidEnvelope),
+        _ => Err(PayloadCodecErrorV1::UnsupportedResponseSchema {
+            received: schema,
+            supported: SUPPORTED_RESPONSE_SCHEMAS_V2,
+        }),
+    }
+}
+
+fn validate_compact_status_result_payload_v2(
+    value: &Value,
+    payload_length: usize,
+) -> Result<(), PayloadCodecErrorV1> {
+    if value
+        .get("result")
+        .and_then(Value::as_object)
+        .is_some_and(is_compact_status_result_v2)
+    {
+        validate_compact_status_payload_length(payload_length)
+            .map_err(PayloadCodecErrorV1::JsonContract)?;
+    }
+    Ok(())
+}
+
 fn is_compact_status_result(result: &serde_json::Map<String, Value>) -> bool {
     result.get("schema").and_then(Value::as_str) == Some(COMPACT_STATUS_RESULT_SCHEMA_V1)
+}
+
+fn is_compact_status_result_v2(result: &serde_json::Map<String, Value>) -> bool {
+    matches!(
+        result.get("schema").and_then(Value::as_str),
+        Some(COMPACT_STATUS_RESULT_SCHEMA_V1 | COMPACT_STATUS_RESULT_SCHEMA_V2)
+    )
+}
+
+fn response_is_compact_status_v2(response: &ResponseEnvelopeV2) -> bool {
+    match response {
+        ResponseEnvelopeV2::OutputV1(output) => is_compact_status_result_v2(output.result()),
+        ResponseEnvelopeV2::OutputV2(output) => is_compact_status_result_v2(output.result()),
+        ResponseEnvelopeV2::Error(_) => false,
+    }
 }
 
 fn validate_compact_status_payload_length(length: usize) -> Result<(), ProtocolError> {

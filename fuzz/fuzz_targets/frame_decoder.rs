@@ -2,7 +2,8 @@
 
 use libfuzzer_sys::fuzz_target;
 use podway_protocol::{
-    decode_request_payload_v1, decode_response_payload_v1, decode_single_frame_v1, encode_frame_v1,
+    decode_request_payload_v1, decode_response_payload_v1, decode_response_payload_v2,
+    decode_single_frame_v1, encode_frame_v1, encode_response_payload_v2,
 };
 
 fuzz_target!(|input: &[u8]| {
@@ -30,6 +31,17 @@ fuzz_target!(|input: &[u8]| {
                         .expect("decoded response must re-encode")
                 )
                 .expect("re-encoded response must decode"),
+                response
+            );
+        }
+
+        if let Ok(response) = decode_response_payload_v2(payload) {
+            assert_eq!(
+                decode_response_payload_v2(
+                    &encode_response_payload_v2(&response)
+                        .expect("decoded v2-aware response must re-encode")
+                )
+                .expect("re-encoded v2-aware response must decode"),
                 response
             );
         }

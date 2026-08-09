@@ -835,6 +835,7 @@ commands:
   - workspace_uuid
   - session_id
   - session_revision
+  - attempt_id_when_running
   - goal_revision
   idempotency_scope: session
   result_schemas:

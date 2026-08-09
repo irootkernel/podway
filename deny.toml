@@ -10,6 +10,7 @@ allow = [
   "Apache-2.0",
   "BSD-3-Clause",
   "MIT",
+  "MIT-0",
   "Unicode-3.0",
   "Zlib",
 ]
@@ -23,9 +24,12 @@ highlight = "all"
 deny = []
 skip = [
   { crate = "foldhash@=0.1.5", reason = "transitive duplicate accepted by local dependency policy" },
+  { crate = "getrandom@=0.3.4", reason = "jsonschema runtime validation retains its upstream random source version" },
   { crate = "hashbrown@=0.15.5", reason = "transitive duplicate accepted by local dependency policy" },
   { crate = "hashbrown@=0.16.1", reason = "transitive duplicate accepted by local dependency policy" },
   { crate = "hashlink@=0.10.0", reason = "transitive duplicate accepted by local dependency policy" },
+  { crate = "r-efi@=5.3.0", reason = "jsonschema's getrandom dependency retains its upstream WASI bindings" },
+  { crate = "syn@=3.0.3", reason = "jsonschema runtime validation retains its upstream derive dependency" },
 ]
 skip-tree = []
 
