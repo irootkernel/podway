@@ -10,6 +10,7 @@ use podway_core::{
     SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId,
     canonicalize_json_v1,
 };
+use podway_store::codec::encode_persisted_terminal_receipt_v1;
 use podway_store::{
     ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitRequestV1, AttemptMetadataV2,
     CanonicalExecutionJsonV1, DurableWorktreeIdentityV1, GraphNodeCounterV2, GraphSessionStateV2,
@@ -17,9 +18,10 @@ use podway_store::{
     PersistedGraphTerminalOperationV2, PersistedResponseContextV1, PersistedSessionMutationV1,
     ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
     StateTransitionV1, StoreContractV1, StoreFailpointActionV1, StoreFailpointV1,
-    StoreGraphMutationContractV2, StoreGraphStateContractV2, StoreReadContractV1, TerminalResultV1,
-    ValidatedWorkspaceRootV1, WorkerIdV1,
+    StoreGraphMutationContractV2, StoreGraphStateContractV2, StoreIdempotencyReadContractV1,
+    StoreReadContractV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
 };
+use rusqlite::Connection;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -391,6 +393,129 @@ fn admit_skip_and_claim(
         .claim_next(
             &identity(),
             WorkerIdV1::new("v2-skip-worker").unwrap(),
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .unwrap()
+}
+
+fn admit_reset_and_claim(
+    store: &SqliteStoreV1,
+    state: &GraphSessionStateV2,
+    key: &str,
+    job_number: u64,
+) -> podway_store::ClaimedJobV1 {
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "attached_artifact": null,
+            "command": "session.reset",
+            "execution_version": 8,
+            "fresh_attempt_id": null,
+            "fresh_blocker_id": null,
+            "payload": {"confirmed": true},
+            "preconditions": {},
+            "selector": {},
+            "workspace_id": identity().workspace_uuid().as_str(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::SessionReset,
+        IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new(uuid(job_number)).unwrap(),
+        RevisionAttemptItemPreconditionsV1::new(Some(state.trace().revision()), None, None, None)
+            .unwrap(),
+        digest('9'),
+        UnixMillis::new(30),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        state.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            uuid(job_number + 100),
+            "session.reset",
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-graph-start",
+            0,
+        )
+        .unwrap(),
+    );
+    store.admit(&identity(), request).unwrap();
+    store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-reset-worker").unwrap(),
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn admit_blocker_command_and_claim(
+    store: &SqliteStoreV1,
+    state: &GraphSessionStateV2,
+    command: DomainCommand,
+    command_name: &str,
+    payload: serde_json::Value,
+    fresh_blocker_id: Option<&podway_core::BlockerId>,
+    key: &str,
+    job_number: u64,
+) -> podway_store::ClaimedJobV1 {
+    let active = state.trace().active_attempt().unwrap();
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "attached_artifact": null,
+            "command": command_name,
+            "execution_version": 8,
+            "fresh_attempt_id": null,
+            "fresh_blocker_id": fresh_blocker_id.map(podway_core::BlockerId::as_str),
+            "payload": payload,
+            "preconditions": {},
+            "selector": {},
+            "workspace_id": identity().workspace_uuid().as_str(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        command,
+        IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new(uuid(job_number)).unwrap(),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(state.trace().revision()),
+            Some(active.attempt_id().clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+        digest('8'),
+        UnixMillis::new(30),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        state.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            uuid(job_number + 100),
+            command_name,
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-graph-start",
+            0,
+        )
+        .unwrap(),
+    );
+    store.admit(&identity(), request).unwrap();
+    store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-blocker-worker").unwrap(),
             UnixMillis::new(31),
         )
         .unwrap()
@@ -836,6 +961,671 @@ fn graph_complete_state_and_typed_terminal_projection_commit_and_reopen_together
             .operation(),
         Some(&operation)
     );
+}
+
+#[test]
+fn graph_reset_clear_receipt_and_failpoint_are_one_atomic_boundary() {
+    let temporary = TempDir::new().unwrap();
+    let initial = graph_state(670, 680, 10);
+    let seed = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    seed.create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+    let prior_claim = admit_complete_and_claim(&seed, &initial, "v2-prior-terminal", 685);
+    let prior_job_id = prior_claim.job().job_id().clone();
+    let prior_key = IdempotencyKeyV1::new("v2-prior-terminal").unwrap();
+    let completed = initial
+        .complete_active_action_v2(
+            initial.trace().revision(),
+            initial.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(32),
+        )
+        .unwrap();
+    let operation = PersistedGraphTerminalOperationV2::complete(
+        completed.from_graph_node_id().clone(),
+        completed.from_attempt_id().clone(),
+        None,
+        None,
+    )
+    .unwrap();
+    let current = completed.into_state();
+    seed.commit_graph_mutation_terminal_v2(
+        prior_claim.claim().clone(),
+        initial.workspace_revision(),
+        initial.trace().revision(),
+        Some(current.clone()),
+        TerminalResultV1::Success(DomainResult::SessionChanged {
+            session_id: initial.trace().session_id().clone(),
+            revision_before: initial.trace().revision(),
+            revision_after: current.trace().revision(),
+            changed: true,
+        }),
+        operation,
+        UnixMillis::new(33),
+    )
+    .unwrap();
+    let initial_claim = admit_reset_and_claim(&seed, &current, "v2-reset-atomic", 690);
+    let job_id = initial_claim.job().job_id().clone();
+    let reset_key = IdempotencyKeyV1::new("v2-reset-atomic").unwrap();
+    drop(seed);
+    let options = SqliteStoreOptionsV1::new(8)
+        .unwrap()
+        .with_failpoint(Some(
+            StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate,
+        ))
+        .with_failpoint_action(StoreFailpointActionV1::ReturnInjectedStorageIo);
+    let store = open(&temporary, options, 11);
+    let claimed = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-reset-worker").unwrap(),
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        store
+            .commit_graph_reset_terminal_v2(
+                claimed.claim().clone(),
+                current.workspace_revision(),
+                current.trace().revision(),
+                current.trace().session_id().clone(),
+                UnixMillis::new(33),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    assert_eq!(
+        store
+            .read_job(&identity(), &job_id)
+            .unwrap()
+            .unwrap()
+            .state(),
+        JobStateV1::Running
+    );
+    assert!(
+        store
+            .read_job(&identity(), &prior_job_id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .read_idempotency_lookup(&identity(), &prior_key)
+            .unwrap()
+            .is_some()
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 34);
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 1);
+    let claimed = reopened
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-reset-retry").unwrap(),
+            UnixMillis::new(35),
+        )
+        .unwrap()
+        .unwrap();
+    reopened
+        .commit_graph_reset_terminal_v2(
+            claimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            current.trace().session_id().clone(),
+            UnixMillis::new(36),
+        )
+        .unwrap();
+    assert_eq!(reopened.read_graph_session_v2(&identity()).unwrap(), None);
+    assert!(
+        reopened
+            .read_job(&identity(), &prior_job_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        reopened
+            .read_idempotency_lookup(&identity(), &prior_key)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        reopened
+            .read_idempotency_lookup(&identity(), &reset_key)
+            .unwrap()
+            .is_some()
+    );
+    let receipt = reopened
+        .read_job(&identity(), &job_id)
+        .unwrap()
+        .unwrap()
+        .terminal_receipt()
+        .unwrap()
+        .clone();
+    assert!(
+        matches!(receipt.graph_session_projection().unwrap().operation(), Some(PersistedGraphTerminalOperationV2::Reset { session_id }) if session_id == current.trace().session_id())
+    );
+    drop(reopened);
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 37);
+    assert_eq!(reopened.read_graph_session_v2(&identity()).unwrap(), None);
+    assert!(
+        reopened
+            .read_idempotency_lookup(&identity(), &reset_key)
+            .unwrap()
+            .is_some()
+    );
+    drop(reopened);
+
+    let mut forged: serde_json::Value =
+        serde_json::from_str(&encode_persisted_terminal_receipt_v1(&receipt).unwrap()).unwrap();
+    forged["graph_session_projection"]["operation"]["session_id"] =
+        serde_json::Value::String(uuid(691));
+    let forged = canonicalize_json_v1(&forged).unwrap();
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE jobs SET terminal_response_json = ?1 WHERE job_id = ?2",
+            [forged.as_str(), job_id.as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE idempotency_records SET terminal_response_json = ?1 WHERE job_id = ?2",
+            [forged.as_str(), job_id.as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    assert!(
+        SqliteStoreV1::open(
+            database_path(&temporary),
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(38),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn graph_reset_stale_admission_terminalizes_and_replays_revision_conflict() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let initial = graph_state(695, 696, 10);
+    store
+        .create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+    let claimed = admit_reset_and_claim(&store, &initial, "v2-reset-stale", 697);
+    let job_id = claimed.job().job_id().clone();
+    let active = initial.trace().active_attempt().unwrap();
+    let advanced = initial
+        .block_active_attempt_v2(
+            initial.trace().revision(),
+            active.attempt_id(),
+            podway_core::BlockerId::new(uuid(698)).unwrap(),
+            "Earlier queued mutation.",
+            UnixMillis::new(32),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            initial.workspace_revision(),
+            initial.trace().revision(),
+            advanced.clone(),
+        )
+        .unwrap();
+    let failure = PersistedGraphMutationFailureV2::SessionRevisionConflict {
+        expected: initial.trace().revision(),
+        actual: advanced.trace().revision(),
+    };
+    store
+        .commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            advanced.workspace_revision(),
+            advanced.trace().revision(),
+            None,
+            TerminalResultV1::Failure(DomainError::InvalidState {
+                reason: "Procedure v2 graph mutation failed",
+            }),
+            PersistedGraphTerminalOperationV2::failure(failure.clone()).unwrap(),
+            UnixMillis::new(33),
+        )
+        .unwrap();
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(advanced.clone())
+    );
+    assert!(
+        matches!(store.read_job(&identity(), &job_id).unwrap().unwrap().terminal_receipt().unwrap().graph_session_projection().unwrap().operation(), Some(PersistedGraphTerminalOperationV2::Failure { error }) if error == &failure)
+    );
+    drop(store);
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 34);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(advanced)
+    );
+    assert!(
+        reopened
+            .read_job(&identity(), &job_id)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt()
+            .is_some()
+    );
+}
+
+#[test]
+fn graph_reset_terminal_rejects_equal_revision_conflict_without_mutation() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let current = graph_state(699, 700, 10);
+    store
+        .create_graph_session_v2(&identity(), current.clone())
+        .unwrap();
+    let claimed = admit_reset_and_claim(&store, &current, "v2-reset-equal-conflict", 701);
+    let job_id = claimed.job().job_id().clone();
+    let failure = PersistedGraphMutationFailureV2::SessionRevisionConflict {
+        expected: current.trace().revision(),
+        actual: current.trace().revision(),
+    };
+    assert!(
+        store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                current.workspace_revision(),
+                current.trace().revision(),
+                None,
+                TerminalResultV1::Failure(DomainError::InvalidState {
+                    reason: "Procedure v2 graph mutation failed",
+                }),
+                PersistedGraphTerminalOperationV2::failure(failure).unwrap(),
+                UnixMillis::new(33),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    let job = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
+}
+
+#[test]
+fn graph_block_and_unblock_terminal_reject_unrelated_workflow_changes() {
+    let block_temporary = TempDir::new().unwrap();
+    let block_store = open(&block_temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let initial = graph_state(700, 701, 10);
+    block_store
+        .create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+    let active = initial.trace().active_attempt().unwrap();
+    let named = podway_core::BlockerId::new(uuid(702)).unwrap();
+    let extra = podway_core::BlockerId::new(uuid(703)).unwrap();
+    let claimed = admit_blocker_command_and_claim(
+        &block_store,
+        &initial,
+        DomainCommand::SessionBlock,
+        "session.block",
+        json!({"reason":"Named blocker."}),
+        Some(&named),
+        "v2-forged-block",
+        704,
+    );
+    let job_id = claimed.job().job_id().clone();
+    let legitimate = initial
+        .block_active_attempt_v2(
+            initial.trace().revision(),
+            active.attempt_id(),
+            named.clone(),
+            "Named blocker.",
+            UnixMillis::new(32),
+        )
+        .unwrap()
+        .into_state();
+    let with_extra = legitimate
+        .block_active_attempt_v2(
+            legitimate.trace().revision(),
+            legitimate.trace().active_attempt().unwrap().attempt_id(),
+            extra,
+            "Unrelated blocker.",
+            UnixMillis::new(33),
+        )
+        .unwrap()
+        .into_state();
+    let with_unrelated_item_change = with_extra
+        .mutate_active_item_v2(
+            with_extra.trace().active_attempt().unwrap().attempt_id(),
+            &ItemId::new("done").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Check,
+            UnixMillis::new(34),
+        )
+        .unwrap()
+        .into_state();
+    let forged = GraphSessionStateV2::new_with_goal_state(
+        legitimate.workspace_revision(),
+        legitimate.task_title(),
+        legitimate.snapshot().clone(),
+        legitimate.trace().clone(),
+        legitimate.counters().to_vec(),
+        legitimate.attempt_metadata().to_vec(),
+        with_unrelated_item_change.workflow_memory().clone(),
+        legitimate.goal_state().clone(),
+        legitimate.created_at(),
+        legitimate.completed_at(),
+        legitimate.cancelled_at(),
+        legitimate.cancel_reason().map(str::to_owned),
+    )
+    .unwrap();
+    assert!(
+        block_store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                initial.workspace_revision(),
+                initial.trace().revision(),
+                Some(forged),
+                TerminalResultV1::Success(DomainResult::SessionChanged {
+                    session_id: initial.trace().session_id().clone(),
+                    revision_before: initial.trace().revision(),
+                    revision_after: legitimate.trace().revision(),
+                    changed: true
+                }),
+                PersistedGraphTerminalOperationV2::block(
+                    active.graph_node_id().clone(),
+                    active.attempt_id().clone(),
+                    named,
+                    "Named blocker.".to_owned()
+                )
+                .unwrap(),
+                UnixMillis::new(35),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        block_store.read_graph_session_v2(&identity()).unwrap(),
+        Some(initial)
+    );
+    let job = block_store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
+
+    let unblock_temporary = TempDir::new().unwrap();
+    let unblock_store = open(&unblock_temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let base = graph_state(710, 711, 10);
+    let first = podway_core::BlockerId::new(uuid(712)).unwrap();
+    let second = podway_core::BlockerId::new(uuid(713)).unwrap();
+    let blocked_once = base
+        .block_active_attempt_v2(
+            base.trace().revision(),
+            base.trace().active_attempt().unwrap().attempt_id(),
+            first.clone(),
+            "First.",
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    let blocked = blocked_once
+        .block_active_attempt_v2(
+            blocked_once.trace().revision(),
+            blocked_once.trace().active_attempt().unwrap().attempt_id(),
+            second,
+            "Second.",
+            UnixMillis::new(21),
+        )
+        .unwrap()
+        .into_state();
+    unblock_store
+        .create_graph_session_v2(&identity(), blocked.clone())
+        .unwrap();
+    let claimed = admit_blocker_command_and_claim(
+        &unblock_store,
+        &blocked,
+        DomainCommand::SessionUnblock,
+        "session.unblock",
+        json!({"all":false,"blocker_id":first.as_str()}),
+        None,
+        "v2-forged-unblock",
+        714,
+    );
+    let job_id = claimed.job().job_id().clone();
+    let legitimate = blocked
+        .unblock_active_attempt_v2(
+            blocked.trace().revision(),
+            blocked.trace().active_attempt().unwrap().attempt_id(),
+            Some(&first),
+            false,
+            UnixMillis::new(32),
+        )
+        .unwrap()
+        .into_state();
+    let with_extra_resolution = legitimate
+        .unblock_active_attempt_v2(
+            legitimate.trace().revision(),
+            legitimate.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            true,
+            UnixMillis::new(33),
+        )
+        .unwrap()
+        .into_state();
+    let with_unrelated_item_change = with_extra_resolution
+        .mutate_active_item_v2(
+            with_extra_resolution
+                .trace()
+                .active_attempt()
+                .unwrap()
+                .attempt_id(),
+            &ItemId::new("done").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Check,
+            UnixMillis::new(34),
+        )
+        .unwrap()
+        .into_state();
+    let forged = GraphSessionStateV2::new_with_goal_state(
+        legitimate.workspace_revision(),
+        legitimate.task_title(),
+        legitimate.snapshot().clone(),
+        legitimate.trace().clone(),
+        legitimate.counters().to_vec(),
+        legitimate.attempt_metadata().to_vec(),
+        with_unrelated_item_change.workflow_memory().clone(),
+        legitimate.goal_state().clone(),
+        legitimate.created_at(),
+        legitimate.completed_at(),
+        legitimate.cancelled_at(),
+        legitimate.cancel_reason().map(str::to_owned),
+    )
+    .unwrap();
+    assert!(
+        unblock_store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                blocked.workspace_revision(),
+                blocked.trace().revision(),
+                Some(forged),
+                TerminalResultV1::Success(DomainResult::SessionChanged {
+                    session_id: blocked.trace().session_id().clone(),
+                    revision_before: blocked.trace().revision(),
+                    revision_after: legitimate.trace().revision(),
+                    changed: true
+                }),
+                PersistedGraphTerminalOperationV2::unblock(
+                    blocked
+                        .trace()
+                        .active_attempt()
+                        .unwrap()
+                        .graph_node_id()
+                        .clone(),
+                    blocked
+                        .trace()
+                        .active_attempt()
+                        .unwrap()
+                        .attempt_id()
+                        .clone(),
+                    false,
+                    vec![first]
+                )
+                .unwrap(),
+                UnixMillis::new(35),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        unblock_store.read_graph_session_v2(&identity()).unwrap(),
+        Some(blocked)
+    );
+    let job = unblock_store
+        .read_job(&identity(), &job_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
+}
+
+#[test]
+fn graph_block_and_unblock_terminal_reject_forged_transition_timestamps() {
+    let block_temporary = TempDir::new().unwrap();
+    let block_store = open(&block_temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let initial = graph_state(720, 721, 10);
+    block_store
+        .create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+    let active = initial.trace().active_attempt().unwrap();
+    let blocker_id = podway_core::BlockerId::new(uuid(722)).unwrap();
+    let claimed = admit_blocker_command_and_claim(
+        &block_store,
+        &initial,
+        DomainCommand::SessionBlock,
+        "session.block",
+        json!({"reason":"Timestamp-bound blocker."}),
+        Some(&blocker_id),
+        "v2-forged-block-timestamp",
+        723,
+    );
+    let job_id = claimed.job().job_id().clone();
+    let forged = initial
+        .block_active_attempt_v2(
+            initial.trace().revision(),
+            active.attempt_id(),
+            blocker_id.clone(),
+            "Timestamp-bound blocker.",
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .into_state();
+    assert!(
+        block_store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                initial.workspace_revision(),
+                initial.trace().revision(),
+                Some(forged.clone()),
+                TerminalResultV1::Success(DomainResult::SessionChanged {
+                    session_id: initial.trace().session_id().clone(),
+                    revision_before: initial.trace().revision(),
+                    revision_after: forged.trace().revision(),
+                    changed: true,
+                }),
+                PersistedGraphTerminalOperationV2::block(
+                    active.graph_node_id().clone(),
+                    active.attempt_id().clone(),
+                    blocker_id,
+                    "Timestamp-bound blocker.".to_owned(),
+                )
+                .unwrap(),
+                UnixMillis::new(32),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        block_store.read_graph_session_v2(&identity()).unwrap(),
+        Some(initial)
+    );
+    let job = block_store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
+
+    let unblock_temporary = TempDir::new().unwrap();
+    let unblock_store = open(&unblock_temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let base = graph_state(730, 731, 10);
+    let blocker_id = podway_core::BlockerId::new(uuid(732)).unwrap();
+    let blocked = base
+        .block_active_attempt_v2(
+            base.trace().revision(),
+            base.trace().active_attempt().unwrap().attempt_id(),
+            blocker_id.clone(),
+            "Timestamp-bound blocker.",
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    unblock_store
+        .create_graph_session_v2(&identity(), blocked.clone())
+        .unwrap();
+    let active = blocked.trace().active_attempt().unwrap();
+    let claimed = admit_blocker_command_and_claim(
+        &unblock_store,
+        &blocked,
+        DomainCommand::SessionUnblock,
+        "session.unblock",
+        json!({"all":false,"blocker_id":blocker_id.as_str()}),
+        None,
+        "v2-forged-unblock-timestamp",
+        733,
+    );
+    let job_id = claimed.job().job_id().clone();
+    let forged = blocked
+        .unblock_active_attempt_v2(
+            blocked.trace().revision(),
+            active.attempt_id(),
+            Some(&blocker_id),
+            false,
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .into_state();
+    assert!(
+        unblock_store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                blocked.workspace_revision(),
+                blocked.trace().revision(),
+                Some(forged.clone()),
+                TerminalResultV1::Success(DomainResult::SessionChanged {
+                    session_id: blocked.trace().session_id().clone(),
+                    revision_before: blocked.trace().revision(),
+                    revision_after: forged.trace().revision(),
+                    changed: true,
+                }),
+                PersistedGraphTerminalOperationV2::unblock(
+                    active.graph_node_id().clone(),
+                    active.attempt_id().clone(),
+                    false,
+                    vec![blocker_id],
+                )
+                .unwrap(),
+                UnixMillis::new(32),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        unblock_store.read_graph_session_v2(&identity()).unwrap(),
+        Some(blocked)
+    );
+    let job = unblock_store
+        .read_job(&identity(), &job_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
 }
 
 #[test]

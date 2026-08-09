@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use podway_core::{
-    AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, CanonicalProcedureJsonV1,
-    GoalRevisionNumberV2, GraphNodeId, ItemId, NodeDefinitionId, NodeKindV2, ProcedureSnapshotId,
-    ProcedureSourceKindV1, ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2, SessionId,
-    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
-    canonicalize_json_v1, verify_canonical_json_v1,
+    AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
+    CanonicalProcedureJsonV1, GoalRevisionNumberV2, GraphNodeId, ItemId, NodeDefinitionId,
+    NodeKindV2, ProcedureSnapshotId, ProcedureSourceKindV1, ProcedureSourceLabelV1, ReasonV2,
+    Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest,
+    TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
@@ -702,6 +702,62 @@ pub struct GraphActionSkipOutcomeV2 {
     to_attempt_id: Option<AttemptId>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphBlockOutcomeV2 {
+    state: GraphSessionStateV2,
+    graph_node_id: GraphNodeId,
+    attempt_id: AttemptId,
+    blocker_id: BlockerId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphUnblockOutcomeV2 {
+    state: GraphSessionStateV2,
+    graph_node_id: GraphNodeId,
+    attempt_id: AttemptId,
+    blocker_ids: Vec<BlockerId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphCancelOutcomeV2 {
+    state: GraphSessionStateV2,
+    graph_node_id: GraphNodeId,
+    attempt_id: AttemptId,
+}
+
+macro_rules! graph_memory_outcome_accessors {
+    ($name:ident) => {
+        impl $name {
+            pub fn state(&self) -> &GraphSessionStateV2 {
+                &self.state
+            }
+            pub fn into_state(self) -> GraphSessionStateV2 {
+                self.state
+            }
+            pub fn graph_node_id(&self) -> &GraphNodeId {
+                &self.graph_node_id
+            }
+            pub fn attempt_id(&self) -> &AttemptId {
+                &self.attempt_id
+            }
+        }
+    };
+}
+graph_memory_outcome_accessors!(GraphBlockOutcomeV2);
+graph_memory_outcome_accessors!(GraphUnblockOutcomeV2);
+graph_memory_outcome_accessors!(GraphCancelOutcomeV2);
+
+impl GraphBlockOutcomeV2 {
+    pub fn blocker_id(&self) -> &BlockerId {
+        &self.blocker_id
+    }
+}
+impl GraphUnblockOutcomeV2 {
+    pub fn blocker_ids(&self) -> &[BlockerId] {
+        &self.blocker_ids
+    }
+}
+
 impl GraphActionSkipOutcomeV2 {
     pub fn state(&self) -> &GraphSessionStateV2 {
         &self.state
@@ -913,6 +969,14 @@ impl GraphSessionStateV2 {
             cancel_reason.as_deref(),
         )?;
         validate_graph_state_members(&snapshot, &trace, &counters, &attempt_metadata)?;
+        validate_terminal_graph_state_v2(
+            &snapshot,
+            &trace,
+            &attempt_metadata,
+            completed_at,
+            cancelled_at,
+            cancel_reason.as_deref(),
+        )?;
         validate_goal_state_v2(
             &snapshot,
             &trace,
@@ -1046,6 +1110,184 @@ impl GraphSessionStateV2 {
             item_revision: memory.item_revision,
             value_digest: memory.value_digest,
         })
+    }
+
+    pub fn block_active_attempt_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+        blocker_id: BlockerId,
+        reason: impl Into<String>,
+        now: UnixMillis,
+    ) -> Result<GraphBlockOutcomeV2, GraphMutationErrorV2> {
+        let active =
+            self.require_running_active_v2(expected_session_revision, expected_attempt_id)?;
+        let graph_node_id = active.graph_node_id().clone();
+        let memory = self.workflow_memory.block_active_attempt_v2(
+            expected_attempt_id,
+            blocker_id.clone(),
+            reason.into(),
+            now,
+        )?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            SessionTraceV2::from_parts(
+                self.trace.session_id().clone(),
+                self.trace.lifecycle(),
+                self.trace
+                    .revision()
+                    .checked_next()
+                    .map_err(GraphMutationErrorV2::Domain)?,
+                self.trace.attempts().to_vec(),
+            )
+            .map_err(GraphMutationErrorV2::Domain)?,
+            self.counters.clone(),
+            self.attempt_metadata.clone(),
+            memory,
+            self.goal_state.clone(),
+            self.created_at,
+            self.completed_at,
+            self.cancelled_at,
+            self.cancel_reason.clone(),
+        )?;
+        Ok(GraphBlockOutcomeV2 {
+            state,
+            graph_node_id,
+            attempt_id: expected_attempt_id.clone(),
+            blocker_id,
+        })
+    }
+
+    pub fn unblock_active_attempt_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+        blocker_id: Option<&BlockerId>,
+        unblock_all: bool,
+        now: UnixMillis,
+    ) -> Result<GraphUnblockOutcomeV2, GraphMutationErrorV2> {
+        let active =
+            self.require_running_active_v2(expected_session_revision, expected_attempt_id)?;
+        let graph_node_id = active.graph_node_id().clone();
+        let (memory, blocker_ids) = self.workflow_memory.unblock_active_attempt_v2(
+            expected_attempt_id,
+            blocker_id,
+            unblock_all,
+            now,
+        )?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            SessionTraceV2::from_parts(
+                self.trace.session_id().clone(),
+                self.trace.lifecycle(),
+                self.trace
+                    .revision()
+                    .checked_next()
+                    .map_err(GraphMutationErrorV2::Domain)?,
+                self.trace.attempts().to_vec(),
+            )
+            .map_err(GraphMutationErrorV2::Domain)?,
+            self.counters.clone(),
+            self.attempt_metadata.clone(),
+            memory,
+            self.goal_state.clone(),
+            self.created_at,
+            self.completed_at,
+            self.cancelled_at,
+            self.cancel_reason.clone(),
+        )?;
+        Ok(GraphUnblockOutcomeV2 {
+            state,
+            graph_node_id,
+            attempt_id: expected_attempt_id.clone(),
+            blocker_ids,
+        })
+    }
+
+    pub fn cancel_active_session_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+        reason: ReasonV2,
+        now: UnixMillis,
+    ) -> Result<GraphCancelOutcomeV2, GraphMutationErrorV2> {
+        let active =
+            self.require_running_active_v2(expected_session_revision, expected_attempt_id)?;
+        let graph_node_id = active.graph_node_id().clone();
+        let mut trace = self.trace.clone();
+        trace
+            .cancel(expected_attempt_id)
+            .map_err(GraphMutationErrorV2::Domain)?;
+        let mut metadata = self.attempt_metadata.clone();
+        let item = metadata
+            .iter_mut()
+            .find(|item| item.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+        *item = AttemptMetadataV2::new(
+            expected_attempt_id.clone(),
+            item.started_at(),
+            Some(now),
+            Some(reason.as_str().to_owned()),
+        )?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            self.counters.clone(),
+            metadata,
+            self.workflow_memory.clone(),
+            self.goal_state.clone(),
+            self.created_at,
+            None,
+            Some(now),
+            Some(reason.into_inner()),
+        )?;
+        Ok(GraphCancelOutcomeV2 {
+            state,
+            graph_node_id,
+            attempt_id: expected_attempt_id.clone(),
+        })
+    }
+
+    fn require_running_active_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+    ) -> Result<&SessionAttemptV2, GraphMutationErrorV2> {
+        if self.trace.lifecycle() != SessionLifecycle::Running {
+            return Err(GraphMutationErrorV2::SessionNotRunning);
+        }
+        if self.trace.revision() != expected_session_revision {
+            return Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: expected_session_revision,
+                actual: self.trace.revision(),
+            });
+        }
+        let active =
+            self.trace
+                .active_attempt()
+                .ok_or_else(|| GraphMutationErrorV2::AttemptNotCurrent {
+                    expected: expected_attempt_id.clone(),
+                    actual: None,
+                })?;
+        if active.attempt_id() != expected_attempt_id {
+            return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                expected: expected_attempt_id.clone(),
+                actual: Some(active.attempt_id().clone()),
+            });
+        }
+        Ok(active)
     }
 
     pub fn complete_active_action_v2(
@@ -1530,6 +1772,52 @@ fn validate_session_metadata(
     }
 }
 
+fn validate_terminal_graph_state_v2(
+    snapshot: &ProcedureSnapshotV2,
+    trace: &SessionTraceV2,
+    metadata: &[AttemptMetadataV2],
+    completed_at: Option<UnixMillis>,
+    cancelled_at: Option<UnixMillis>,
+    cancel_reason: Option<&str>,
+) -> Result<(), StoreValueErrorV1> {
+    let Some(last) = trace.attempts().last() else {
+        return Ok(());
+    };
+    let last_metadata = metadata
+        .iter()
+        .find(|item| item.attempt_id() == last.attempt_id())
+        .ok_or_else(|| invalid("Procedure v2 terminal attempt metadata is absent"))?;
+    let valid = match trace.lifecycle() {
+        SessionLifecycle::Running => true,
+        SessionLifecycle::Completed => {
+            snapshot
+                .graph_node(last.graph_node_id())
+                .is_some_and(|node| {
+                    if node.node_kind() != NodeKindV2::Action {
+                        return false;
+                    }
+                    let Ok(placement) =
+                        serde_json::from_str::<Value>(node.canonical_placement_json())
+                    else {
+                        return false;
+                    };
+                    placement.get("terminal").and_then(Value::as_bool) == Some(true)
+                })
+                && completed_at == last_metadata.ended_at()
+                && cancelled_at.is_none()
+                && cancel_reason.is_none()
+        }
+        SessionLifecycle::Cancelled => {
+            cancelled_at == last_metadata.ended_at()
+                && cancel_reason == last_metadata.terminal_reason()
+                && completed_at.is_none()
+        }
+    };
+    valid
+        .then_some(())
+        .ok_or_else(|| invalid("Procedure v2 terminal graph metadata is inconsistent"))
+}
+
 fn validate_graph_state_members(
     snapshot: &ProcedureSnapshotV2,
     trace: &SessionTraceV2,
@@ -1676,6 +1964,15 @@ pub trait StoreGraphMutationContractV2: Send + Sync {
         operation: crate::PersistedGraphTerminalOperationV2,
         now: crate::EpochMillisV1,
     ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
+
+    fn commit_graph_reset_terminal_v2(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        session_id: SessionId,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
 }
 
 impl<Store> StoreGraphMutationContractV2 for Arc<Store>
@@ -1710,6 +2007,23 @@ where
             next_state,
             result,
             operation,
+            now,
+        )
+    }
+
+    fn commit_graph_reset_terminal_v2(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        session_id: SessionId,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
+        (**self).commit_graph_reset_terminal_v2(
+            claim,
+            expected_workspace_revision,
+            expected_session_revision,
+            session_id,
             now,
         )
     }
@@ -2686,6 +3000,12 @@ fn validate_successor_v2(
         return Err(invalid(
             "Procedure v2 cursor-stable mutation changed graph state",
         ));
+    }
+    if previous.trace().lifecycle() == SessionLifecycle::Running
+        && next.trace().lifecycle() == SessionLifecycle::Cancelled
+        && previous.counters() != next.counters()
+    {
+        return Err(invalid("Procedure v2 cancellation changed graph counters"));
     }
     if next.trace().attempts().len() == previous.trace().attempts().len() + 1 {
         validate_trace_invalidation_successor_v2(previous.trace(), next.trace())?;

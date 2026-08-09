@@ -478,6 +478,14 @@ podway unblock --all
 
 Exactly one blocker ID or `--all` is required.
 
+For a Procedure v2 session, block and unblock preserve the active graph node
+and attempt. Block requires a non-blank reason of at most 1,000 Unicode scalar
+values and permits at most 64 simultaneous open blockers. An open blocker makes
+readiness report `unblocked=false` and removes complete or decide from legal
+actions, but it does not prohibit an otherwise eligible skip. Unblock resolves
+one blocker owned by the active attempt or, with `--all`, every open blocker on
+that attempt. Resolved blockers remain immutable history.
+
 ### Cancel
 
 ```bash
@@ -485,6 +493,11 @@ podway cancel --reason <text>
 ```
 
 Cancels a running session. A cancelled session cannot reopen.
+
+For a Procedure v2 session, cancellation abandons the active attempt, records
+the reason in history, changes lifecycle to `cancelled`, and removes the active
+cursor. The v2 transition result deliberately omits the reason. Subsequent
+status reports `current` as null, and `next` fails with `SESSION_NOT_RUNNING`.
 
 ### Reset
 
@@ -494,6 +507,12 @@ podway reset --all --force --yes
 ```
 
 Normal reset deletes the session but preserves workspace initialization. `--all --force` recreates disposable runtime state and is also the corruption-recovery path.
+
+Normal reset accepts a running, completed, or cancelled Procedure v2 session.
+Its successful v2 result reports `transition: "reset"`, `reset: true`, and the
+terminal revision without inventing a cursor or session lifecycle. The graph
+session no longer exists after the atomic reset; workspace initialization and
+the reset job receipt remain available.
 
 ## Item commands
 

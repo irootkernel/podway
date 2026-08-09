@@ -1387,6 +1387,72 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             // Goal-bearing v2 start DTOs remain closed until durable initial-goal admission lands.
             return Ok(None);
         };
+        if let SliceCommandV1::SessionReset(input) = slice_request.command()
+            && input.dry_run
+        {
+            let selector = selector_from_wire(slice_request.selector())?;
+            let readonly = self
+                .manager
+                .resolve_existing_readonly(selector, slice_request.selector().expected_uuid())
+                .map_err(map_runtime_error)?;
+            let view = SqliteStoreV1::inspect_graph_workspace_view_v2(
+                readonly.database_path(),
+                readonly.binding().identity(),
+                readonly.store_options(),
+                EpochMillisV1::new(self.clock.now().get()),
+            )
+            .map_err(map_store_error)?;
+            let Some(state) = view.graph_state() else {
+                return Ok(None);
+            };
+            validate_graph_view_session_v2(&view, Some(&input.preconditions.expected_session_id))?;
+            if state.trace().revision() != input.preconditions.expected_session_revision {
+                return Err(
+                    DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict)
+                        .with_details(
+                            DispatchErrorDetailsV1::default()
+                                .with_expected_revision(
+                                    input.preconditions.expected_session_revision,
+                                )
+                                .with_current_revision(state.trace().revision()),
+                        ),
+                );
+            }
+            let workspace = WorkspaceOutputV1::new(
+                view.identity().workspace_uuid().clone(),
+                readonly
+                    .worktree()
+                    .roots()
+                    .worktree_root()
+                    .display()
+                    .as_str(),
+                view.latest_workspace_sequence(),
+            )
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+            let result = json!({
+                "schema": "podway.stage-transition-result/v2",
+                "admission": { "admitted": false },
+                "transition": "reset",
+                "reset": true,
+                "revision": state.trace().revision(),
+            });
+            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.clock.generated_at(),
+                workspace: Some(workspace),
+                job: None,
+                session: None,
+                result: result
+                    .as_object()
+                    .expect("Procedure v2 reset dry-run result is an object")
+                    .clone(),
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+        }
         if matches!(
             slice_request.command(),
             SliceCommandV1::SessionStatus(_) | SliceCommandV1::SessionNext(_)
@@ -1537,6 +1603,10 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             SliceCommandV1::SessionComplete(_)
                 | SliceCommandV1::SessionSkip(_)
                 | SliceCommandV1::SessionRetry(_)
+                | SliceCommandV1::SessionBlock(_)
+                | SliceCommandV1::SessionUnblock(_)
+                | SliceCommandV1::SessionCancel(_)
+                | SliceCommandV1::SessionReset(_)
                 | SliceCommandV1::ItemCheck(_)
                 | SliceCommandV1::ItemUncheck(_)
                 | SliceCommandV1::ItemSet(_)
@@ -2671,7 +2741,11 @@ fn validate_terminal_receipt_projection(
                 None
                 | Some(PersistedGraphTerminalOperationV2::Complete { .. })
                 | Some(PersistedGraphTerminalOperationV2::Skip { .. })
-                | Some(PersistedGraphTerminalOperationV2::Retry { .. }),
+                | Some(PersistedGraphTerminalOperationV2::Retry { .. })
+                | Some(PersistedGraphTerminalOperationV2::Block { .. })
+                | Some(PersistedGraphTerminalOperationV2::Unblock { .. })
+                | Some(PersistedGraphTerminalOperationV2::Cancel { .. })
+                | Some(PersistedGraphTerminalOperationV2::Reset { .. }),
                 PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                     ..
                 }),
@@ -2861,6 +2935,10 @@ fn validate_frozen_terminal_error(
             PersistedGraphTerminalOperationV2::Complete { .. }
             | PersistedGraphTerminalOperationV2::Skip { .. }
             | PersistedGraphTerminalOperationV2::Retry { .. }
+            | PersistedGraphTerminalOperationV2::Block { .. }
+            | PersistedGraphTerminalOperationV2::Unblock { .. }
+            | PersistedGraphTerminalOperationV2::Cancel { .. }
+            | PersistedGraphTerminalOperationV2::Reset { .. }
             | PersistedGraphTerminalOperationV2::ItemMutation { .. },
         ) => return Err(terminal_replay_integrity_failure()),
         None => {
@@ -2940,7 +3018,7 @@ fn validate_frozen_v2_result_projection(
                     let lifecycle = match projection.lifecycle() {
                         PersistedSessionLifecycleV1::Running => "running",
                         PersistedSessionLifecycleV1::Completed => "completed",
-                        PersistedSessionLifecycleV1::Cancelled => return false,
+                        PersistedSessionLifecycleV1::Cancelled => "cancelled",
                     };
                     let common = result.get("revision").and_then(Value::as_u64)
                         == Some(revision_after.get())
@@ -3002,6 +3080,74 @@ fn validate_frozen_v2_result_projection(
                                     == Some(to_attempt_id.as_str())
                                 && result.get("reason").and_then(Value::as_str)
                                     == Some(reason.as_str())
+                        }
+                        Some(PersistedGraphTerminalOperationV2::Block {
+                            graph_node_id,
+                            attempt_id,
+                            blocker_id,
+                            reason,
+                        }) => {
+                            common
+                                && lifecycle == "running"
+                                && result.get("transition").and_then(Value::as_str) == Some("block")
+                                && result.get("from_graph_node_id").and_then(Value::as_str)
+                                    == Some(graph_node_id.as_str())
+                                && result.get("from_attempt_id").and_then(Value::as_str)
+                                    == Some(attempt_id.as_str())
+                                && result.get("blocker_id").and_then(Value::as_str)
+                                    == Some(blocker_id.as_str())
+                                && result.get("reason").and_then(Value::as_str)
+                                    == Some(reason.as_str())
+                        }
+                        Some(PersistedGraphTerminalOperationV2::Unblock {
+                            graph_node_id,
+                            attempt_id,
+                            all,
+                            blocker_ids,
+                        }) => {
+                            common
+                                && lifecycle == "running"
+                                && result.get("transition").and_then(Value::as_str)
+                                    == Some("unblock")
+                                && result.get("from_graph_node_id").and_then(Value::as_str)
+                                    == Some(graph_node_id.as_str())
+                                && result.get("from_attempt_id").and_then(Value::as_str)
+                                    == Some(attempt_id.as_str())
+                                && if *all {
+                                    result.get("all").and_then(Value::as_bool) == Some(true)
+                                        && result.get("blocker_id").is_none()
+                                } else {
+                                    let [blocker_id] = blocker_ids.as_slice() else {
+                                        return false;
+                                    };
+                                    result.get("blocker_id").and_then(Value::as_str)
+                                        == Some(blocker_id.as_str())
+                                        && result.get("all").is_none()
+                                }
+                        }
+                        Some(PersistedGraphTerminalOperationV2::Cancel {
+                            graph_node_id,
+                            attempt_id,
+                            ..
+                        }) => {
+                            common
+                                && lifecycle == "cancelled"
+                                && result.get("transition").and_then(Value::as_str)
+                                    == Some("cancel")
+                                && result.get("from_graph_node_id").and_then(Value::as_str)
+                                    == Some(graph_node_id.as_str())
+                                && result.get("from_attempt_id").and_then(Value::as_str)
+                                    == Some(attempt_id.as_str())
+                                && result.get("reason").is_none()
+                        }
+                        Some(PersistedGraphTerminalOperationV2::Reset { session_id }) => {
+                            graph_session
+                                .is_some_and(|projection| projection.session_id() == session_id)
+                                && result.get("revision").and_then(Value::as_u64)
+                                    == Some(revision_after.get())
+                                && result.get("transition").and_then(Value::as_str) == Some("reset")
+                                && result.get("reset").and_then(Value::as_bool) == Some(true)
+                                && result.get("session_state").is_none()
                         }
                         _ => false,
                     }
@@ -3231,6 +3377,97 @@ fn graph_terminal_envelope_v2(
             })
             .as_object()
             .expect("graph retry result is an object")
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::Block {
+            graph_node_id,
+            attempt_id,
+            blocker_id,
+            reason,
+        }) => {
+            if graph.lifecycle() != PersistedSessionLifecycleV1::Running {
+                return Err(terminal_replay_integrity_failure());
+            }
+            let result = json!({
+                "schema": "podway.stage-transition-result/v2",
+                "transition": "block",
+                "from_graph_node_id": graph_node_id,
+                "from_attempt_id": attempt_id,
+                "blocker_id": blocker_id,
+                "reason": reason,
+                "revision": graph.revision_after(),
+                "session_state": "running",
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph block result is an object")
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::Unblock {
+            graph_node_id,
+            attempt_id,
+            all,
+            blocker_ids,
+        }) => {
+            if graph.lifecycle() != PersistedSessionLifecycleV1::Running {
+                return Err(terminal_replay_integrity_failure());
+            }
+            let mut result = json!({
+                "schema": "podway.stage-transition-result/v2",
+                "transition": "unblock",
+                "from_graph_node_id": graph_node_id,
+                "from_attempt_id": attempt_id,
+                "revision": graph.revision_after(),
+                "session_state": "running",
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph unblock result is an object")
+            .clone();
+            if *all {
+                result.insert("all".to_owned(), Value::Bool(true));
+            } else {
+                let [blocker_id] = blocker_ids.as_slice() else {
+                    return Err(terminal_replay_integrity_failure());
+                };
+                result.insert("blocker_id".to_owned(), json!(blocker_id));
+            }
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::Cancel {
+            graph_node_id,
+            attempt_id,
+            ..
+        }) => {
+            if graph.lifecycle() != PersistedSessionLifecycleV1::Cancelled {
+                return Err(terminal_replay_integrity_failure());
+            }
+            let result = json!({
+                "schema": "podway.stage-transition-result/v2",
+                "transition": "cancel",
+                "from_graph_node_id": graph_node_id,
+                "from_attempt_id": attempt_id,
+                "revision": graph.revision_after(),
+                "session_state": "cancelled",
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph cancel result is an object")
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::Reset { .. }) => {
+            let result = json!({
+                "schema": "podway.stage-transition-result/v2",
+                "transition": "reset",
+                "reset": true,
+                "revision": graph.revision_after(),
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph reset result is an object")
             .clone();
             graph_success_terminal_envelope_v2(receipt, result)
         }
@@ -3721,6 +3958,26 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
         PersistedGraphMutationFailureV2::SkipNotAllowed { .. }
         | PersistedGraphMutationFailureV2::SkipReasonRequired { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::StageNotSkippable)
+        }
+        PersistedGraphMutationFailureV2::BlockerIdAlreadyUsed { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::Internal)
+        }
+        PersistedGraphMutationFailureV2::TooManyOpenBlockers { maximum } => {
+            usize::try_from(*maximum).map_or_else(
+                |_| DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+                |maximum| {
+                    DispatchFailureV1::new(DispatchFailureKindV1::BlockerLimitReached)
+                        .with_details(DispatchErrorDetailsV1::default().with_blocker_limit(maximum))
+                },
+            )
+        }
+        PersistedGraphMutationFailureV2::BlockerNotFound { .. }
+        | PersistedGraphMutationFailureV2::NoOpenBlockers => {
+            DispatchFailureV1::new(DispatchFailureKindV1::BlockerNotFound)
+        }
+        PersistedGraphMutationFailureV2::BlockerNotCurrent { .. }
+        | PersistedGraphMutationFailureV2::BlockerAlreadyResolved { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::BlockerNotCurrent)
         }
         PersistedGraphMutationFailureV2::ItemNotFound { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)

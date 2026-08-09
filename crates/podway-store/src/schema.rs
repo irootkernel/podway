@@ -1037,11 +1037,15 @@ fn verify_job_codecs_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
                     .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
                 let canonical_terminal = encode_persisted_terminal_receipt_v1(&receipt)
                     .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
-                validate_persisted_terminal_result_for_command_v1(
-                    execution.command(),
-                    receipt.result(),
-                )
-                .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+                let graph_reset = execution.command() == &crate::CommandV1::SessionReset
+                    && crate::codec::persisted_graph_reset_receipt_is_exact_v2(&receipt);
+                if !graph_reset {
+                    validate_persisted_terminal_result_for_command_v1(
+                        execution.command(),
+                        receipt.result(),
+                    )
+                    .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+                }
                 if matches!(
                     receipt.result(),
                     PersistedTerminalResultV1::Success(

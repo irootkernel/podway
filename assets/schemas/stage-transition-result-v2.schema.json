@@ -6,7 +6,7 @@
   "required": ["schema", "admission", "transition", "revision"],
   "properties": {
     "schema": { "const": "podway.stage-transition-result/v2" },
-    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admission" },
     "transition": { "enum": ["complete", "skip", "retry", "block", "unblock", "cancel", "reset"] },
     "from_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
     "from_attempt_id": { "type": "string", "format": "uuid" },
@@ -18,6 +18,12 @@
     "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/sessionRevision" },
     "session_state": { "enum": ["running", "completed", "cancelled"] }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "admission": { "properties": { "admitted": { "const": false } }, "required": ["admitted"] } }, "required": ["admission"] },
+      "then": { "properties": { "transition": { "const": "reset" } } }
+    }
+  ],
   "oneOf": [
     { "properties": { "transition": { "const": "complete" }, "session_state": { "const": "running" } }, "required": ["from_graph_node_id", "from_attempt_id", "to_graph_node_id", "to_attempt_id", "session_state"], "not": { "anyOf": [{ "required": ["reason"] }, { "required": ["blocker_id"] }, { "required": ["all"] }, { "required": ["reset"] }] } },
     { "properties": { "transition": { "const": "complete" }, "session_state": { "const": "completed" } }, "required": ["from_graph_node_id", "from_attempt_id", "session_state"], "not": { "anyOf": [{ "required": ["to_graph_node_id"] }, { "required": ["to_attempt_id"] }, { "required": ["reason"] }, { "required": ["blocker_id"] }, { "required": ["all"] }, { "required": ["reset"] }] } },

@@ -1,0 +1,34 @@
+schema: podway.procedure/v2
+id: state-derivation-runtime
+version: "2"
+name: State derivation runtime
+purpose: Exercise blocked, completed, cancelled, and reset runtime states.
+node_definitions:
+  work:
+    type: action
+    title: Work
+    intent: Record readiness before advancing.
+    items:
+      - id: ready
+        type: confirm
+        prompt: Confirm the work is ready.
+        required: true
+  finish:
+    type: action
+    title: Finish
+    intent: Reach a terminal action.
+graph:
+  entry: work
+  nodes:
+    - id: work
+      use: work
+      skip:
+        allowed: true
+        reason_required: false
+      next: finish
+    - id: finish
+      use: finish
+      skip:
+        allowed: true
+        reason_required: false
+      terminal: true

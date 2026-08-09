@@ -59,6 +59,7 @@ const EXECUTION_DOCUMENT_VERSION_V4: u8 = 4;
 const EXECUTION_DOCUMENT_VERSION_V5: u8 = 5;
 const EXECUTION_DOCUMENT_VERSION_V6: u8 = 6;
 const EXECUTION_DOCUMENT_VERSION_V7: u8 = 7;
+const EXECUTION_DOCUMENT_VERSION_V8: u8 = 8;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -710,10 +711,11 @@ struct AdmittedProcedureV2MutationV1 {
     workspace_id: WorkspaceId,
     command: SliceCommandV1,
     fresh_attempt_id: Option<AttemptId>,
+    fresh_blocker_id: Option<BlockerId>,
     attached_artifact: Option<ArtifactValueV1>,
 }
 
-fn is_procedure_v2_graph_mutation_v1(command: &SliceCommandV1) -> bool {
+fn is_procedure_v2_graph_mutation_v7(command: &SliceCommandV1) -> bool {
     matches!(
         command,
         SliceCommandV1::SessionComplete(_)
@@ -729,20 +731,57 @@ fn is_procedure_v2_graph_mutation_v1(command: &SliceCommandV1) -> bool {
     )
 }
 
+fn is_procedure_v2_graph_mutation_v8(command: &SliceCommandV1) -> bool {
+    matches!(
+        command,
+        SliceCommandV1::SessionBlock(_)
+            | SliceCommandV1::SessionUnblock(_)
+            | SliceCommandV1::SessionCancel(_)
+            | SliceCommandV1::SessionReset(_)
+    )
+}
+
+fn is_procedure_v2_graph_mutation_v1(command: &SliceCommandV1) -> bool {
+    is_procedure_v2_graph_mutation_v7(command) || is_procedure_v2_graph_mutation_v8(command)
+}
+
+fn validate_procedure_v2_block_reason_v1(reason: &str) -> Result<(), ExecutionErrorV1> {
+    if reason.trim().is_empty() || reason.chars().count() > 1_000 {
+        return Err(invalid_execution_v1(
+            "Procedure v2 blocker reason is invalid",
+        ));
+    }
+    Ok(())
+}
+
 fn procedure_v2_mutation_execution_document_v1(
     admitted: &AdmittedProcedureV2MutationV1,
 ) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
     let (preconditions, payload) = execution_components_v1(&admitted.command);
-    let document = json!({
-        "attached_artifact": admitted.attached_artifact.as_ref().map(artifact_value_v1),
-        "command": admitted.command.command_name(),
-        "execution_version": EXECUTION_DOCUMENT_VERSION_V7,
-        "fresh_attempt_id": admitted.fresh_attempt_id,
-        "payload": payload,
-        "preconditions": preconditions,
-        "selector": admitted.selector,
-        "workspace_id": admitted.workspace_id,
-    });
+    let document = if is_procedure_v2_graph_mutation_v8(&admitted.command) {
+        json!({
+            "attached_artifact": admitted.attached_artifact.as_ref().map(artifact_value_v1),
+            "command": admitted.command.command_name(),
+            "execution_version": EXECUTION_DOCUMENT_VERSION_V8,
+            "fresh_attempt_id": admitted.fresh_attempt_id,
+            "fresh_blocker_id": admitted.fresh_blocker_id,
+            "payload": payload,
+            "preconditions": preconditions,
+            "selector": admitted.selector,
+            "workspace_id": admitted.workspace_id,
+        })
+    } else {
+        json!({
+            "attached_artifact": admitted.attached_artifact.as_ref().map(artifact_value_v1),
+            "command": admitted.command.command_name(),
+            "execution_version": EXECUTION_DOCUMENT_VERSION_V7,
+            "fresh_attempt_id": admitted.fresh_attempt_id,
+            "payload": payload,
+            "preconditions": preconditions,
+            "selector": admitted.selector,
+            "workspace_id": admitted.workspace_id,
+        })
+    };
     let canonical = canonicalize_json_v1(&document).map_err(|_| {
         invalid_execution_v1("Procedure v2 mutation execution cannot be canonicalized")
     })?;
@@ -757,20 +796,37 @@ fn decode_procedure_v2_mutation_execution_v1(
     let object = root
         .as_object()
         .ok_or_else(|| invalid_execution_v1("Procedure v2 mutation execution root is invalid"))?;
-    require_exact_keys_v1(
-        object,
-        &[
-            "attached_artifact",
-            "command",
-            "execution_version",
-            "fresh_attempt_id",
-            "payload",
-            "preconditions",
-            "selector",
-            "workspace_id",
-        ],
-    )?;
-    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V7) {
+    let execution_version = value_u64_v1(object, "execution_version")?;
+    if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V7) {
+        require_exact_keys_v1(
+            object,
+            &[
+                "attached_artifact",
+                "command",
+                "execution_version",
+                "fresh_attempt_id",
+                "payload",
+                "preconditions",
+                "selector",
+                "workspace_id",
+            ],
+        )?;
+    } else if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V8) {
+        require_exact_keys_v1(
+            object,
+            &[
+                "attached_artifact",
+                "command",
+                "execution_version",
+                "fresh_attempt_id",
+                "fresh_blocker_id",
+                "payload",
+                "preconditions",
+                "selector",
+                "workspace_id",
+            ],
+        )?;
+    } else {
         return Err(invalid_execution_v1(
             "Procedure v2 mutation execution version is unsupported",
         ));
@@ -781,7 +837,11 @@ fn decode_procedure_v2_mutation_execution_v1(
         value_object_v1(object, "preconditions")?,
         value_object_v1(object, "payload")?,
     )?;
-    if !is_procedure_v2_graph_mutation_v1(&command) {
+    if (execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V7)
+        && !is_procedure_v2_graph_mutation_v7(&command))
+        || (execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V8)
+            && !is_procedure_v2_graph_mutation_v8(&command))
+    {
         return Err(invalid_execution_v1(
             "Procedure v2 mutation command is outside the admitted set",
         ));
@@ -796,7 +856,26 @@ fn decode_procedure_v2_mutation_execution_v1(
         ReasonV2::new(reason.clone())
             .map_err(|_| invalid_execution_v1("Procedure v2 skip reason is invalid"))?;
     }
+    if let SliceCommandV1::SessionBlock(input) = &command {
+        validate_procedure_v2_block_reason_v1(&input.reason)?;
+    }
+    if let SliceCommandV1::SessionCancel(input) = &command {
+        ReasonV2::new(input.reason.clone())
+            .map_err(|_| invalid_execution_v1("Procedure v2 cancel reason is invalid"))?;
+    }
+    if let SliceCommandV1::SessionReset(input) = &command
+        && (input.dry_run || !input.confirmed)
+    {
+        return Err(invalid_execution_v1(
+            "Procedure v2 durable reset is invalid",
+        ));
+    }
     let fresh_attempt_id = value_optional_typed_v1(object, "fresh_attempt_id")?;
+    let fresh_blocker_id = if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V8) {
+        value_optional_typed_v1(object, "fresh_blocker_id")?
+    } else {
+        None
+    };
     let attached_artifact = match value_v1(object, "attached_artifact")? {
         Value::Null => None,
         Value::Object(value) => Some(decode_artifact_value_v1(value)?),
@@ -811,6 +890,16 @@ fn decode_procedure_v2_mutation_execution_v1(
         SliceCommandV1::SessionSkip(_) if attached_artifact.is_none() => {}
         SliceCommandV1::SessionRetry(_)
             if attached_artifact.is_none() && fresh_attempt_id.is_some() => {}
+        SliceCommandV1::SessionBlock(_)
+            if attached_artifact.is_none()
+                && fresh_attempt_id.is_none()
+                && fresh_blocker_id.is_some() => {}
+        SliceCommandV1::SessionUnblock(_)
+        | SliceCommandV1::SessionCancel(_)
+        | SliceCommandV1::SessionReset(_)
+            if attached_artifact.is_none()
+                && fresh_attempt_id.is_none()
+                && fresh_blocker_id.is_none() => {}
         SliceCommandV1::ItemAttach(_)
             if attached_artifact.is_some() && fresh_attempt_id.is_none() => {}
         SliceCommandV1::ItemCheck(_)
@@ -832,6 +921,7 @@ fn decode_procedure_v2_mutation_execution_v1(
         workspace_id: value_typed_v1(object, "workspace_id")?,
         command,
         fresh_attempt_id,
+        fresh_blocker_id,
         attached_artifact,
     })
 }
@@ -2727,7 +2817,12 @@ where
             let version = serde_json::from_str::<Value>(canonical_execution.as_str())
                 .ok()
                 .and_then(|value| value.get("execution_version").and_then(Value::as_u64));
-            if version != Some(u64::from(EXECUTION_DOCUMENT_VERSION_V7)) {
+            if !matches!(
+                version,
+                Some(version)
+                    if version == u64::from(EXECUTION_DOCUMENT_VERSION_V7)
+                        || version == u64::from(EXECUTION_DOCUMENT_VERSION_V8)
+            ) {
                 return Ok(None);
             }
             let admitted = decode_procedure_v2_mutation_execution_v1(canonical_execution.as_str())?;
@@ -2775,6 +2870,20 @@ where
                 actual: Some(state.trace().session_id().clone()),
             });
         }
+        match request.command() {
+            SliceCommandV1::SessionBlock(input) => {
+                validate_procedure_v2_block_reason_v1(&input.reason)?
+            }
+            SliceCommandV1::SessionCancel(input) => {
+                ReasonV2::new(input.reason.clone()).map_err(ExecutionErrorV1::BoundaryDomain)?;
+            }
+            SliceCommandV1::SessionReset(input) if input.dry_run || !input.confirmed => {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 durable reset requires confirmation and cannot be dry-run",
+                ));
+            }
+            _ => {}
+        }
         let attached_artifact = match request.command() {
             SliceCommandV1::ItemAttach(input) => Some(match &input.source {
                 ItemAttachSourceV1::Path { path, media_type } => {
@@ -2818,11 +2927,14 @@ where
         } else {
             None
         };
+        let fresh_blocker_id = matches!(request.command(), SliceCommandV1::SessionBlock(_))
+            .then(|| self.ids.next_blocker_id());
         let admitted = AdmittedProcedureV2MutationV1 {
             selector: request.selector().clone(),
             workspace_id: binding.identity().workspace_uuid().clone(),
             command: request.command().clone(),
             fresh_attempt_id,
+            fresh_blocker_id,
             attached_artifact,
         };
         let canonical_execution = procedure_v2_mutation_execution_document_v1(&admitted)?;
@@ -2908,7 +3020,10 @@ where
                     now,
                 )?
             }
-            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V7) => {
+            version
+                if version == u64::from(EXECUTION_DOCUMENT_VERSION_V7)
+                    || version == u64::from(EXECUTION_DOCUMENT_VERSION_V8) =>
+            {
                 let admitted = decode_procedure_v2_mutation_execution_v1(
                     claimed.execution().canonical_execution().as_str(),
                 )?;
@@ -3095,6 +3210,153 @@ where
                         Some(outcome.into_state()),
                         TerminalResultV1::Success(result),
                         operation,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
+            SliceCommandV1::SessionBlock(input) => {
+                let blocker_id = admitted.fresh_blocker_id.clone().ok_or_else(|| {
+                    invalid_execution_v1(
+                        "Procedure v2 block execution has no fresh blocker identity",
+                    )
+                })?;
+                let outcome = match state.block_active_attempt_v2(
+                    input.preconditions.expected_session_revision,
+                    &input.preconditions.expected_attempt_id,
+                    blocker_id,
+                    input.reason.clone(),
+                    now,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                };
+                let operation = PersistedGraphTerminalOperationV2::block(
+                    outcome.graph_node_id().clone(),
+                    outcome.attempt_id().clone(),
+                    outcome.blocker_id().clone(),
+                    input.reason.clone(),
+                )
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 block operation cannot be persisted")
+                })?;
+                let result = DomainResult::SessionChanged {
+                    session_id: state.trace().session_id().clone(),
+                    revision_before: state.trace().revision(),
+                    revision_after: outcome.state().trace().revision(),
+                    changed: true,
+                };
+                self.store
+                    .commit_graph_mutation_terminal_v2(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        Some(outcome.into_state()),
+                        TerminalResultV1::Success(result),
+                        operation,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
+            SliceCommandV1::SessionUnblock(input) => {
+                let outcome = match state.unblock_active_attempt_v2(
+                    input.preconditions.expected_session_revision,
+                    &input.preconditions.expected_attempt_id,
+                    input.blocker_id.as_ref(),
+                    input.all,
+                    now,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                };
+                let operation = PersistedGraphTerminalOperationV2::unblock(
+                    outcome.graph_node_id().clone(),
+                    outcome.attempt_id().clone(),
+                    input.all,
+                    outcome.blocker_ids().to_vec(),
+                )
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 unblock operation cannot be persisted")
+                })?;
+                let result = DomainResult::SessionChanged {
+                    session_id: state.trace().session_id().clone(),
+                    revision_before: state.trace().revision(),
+                    revision_after: outcome.state().trace().revision(),
+                    changed: true,
+                };
+                self.store
+                    .commit_graph_mutation_terminal_v2(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        Some(outcome.into_state()),
+                        TerminalResultV1::Success(result),
+                        operation,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
+            SliceCommandV1::SessionCancel(input) => {
+                let reason = ReasonV2::new(input.reason.clone())
+                    .map_err(|_| invalid_execution_v1("Procedure v2 cancel reason is invalid"))?;
+                let outcome = match state.cancel_active_session_v2(
+                    input.preconditions.expected_session_revision,
+                    &input.preconditions.expected_attempt_id,
+                    reason.clone(),
+                    now,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                };
+                let operation = PersistedGraphTerminalOperationV2::cancel(
+                    outcome.graph_node_id().clone(),
+                    outcome.attempt_id().clone(),
+                    reason,
+                )
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 cancel operation cannot be persisted")
+                })?;
+                let result = DomainResult::SessionChanged {
+                    session_id: state.trace().session_id().clone(),
+                    revision_before: state.trace().revision(),
+                    revision_after: outcome.state().trace().revision(),
+                    changed: true,
+                };
+                self.store
+                    .commit_graph_mutation_terminal_v2(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        Some(outcome.into_state()),
+                        TerminalResultV1::Success(result),
+                        operation,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
+            SliceCommandV1::SessionReset(input) => {
+                if input.preconditions.expected_session_revision != state.trace().revision() {
+                    return self.commit_persisted_graph_mutation_failure_v2(
+                        claimed,
+                        state,
+                        PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                            expected: input.preconditions.expected_session_revision,
+                            actual: state.trace().revision(),
+                        },
+                        now,
+                    );
+                }
+                self.store
+                    .commit_graph_reset_terminal_v2(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        state.trace().session_id().clone(),
                         now,
                     )
                     .map_err(Into::into)
@@ -4912,6 +5174,7 @@ mod tests {
                 },
             }),
             fresh_attempt_id: Some(AttemptId::new("00000000-0000-4000-8000-000000000905").unwrap()),
+            fresh_blocker_id: None,
             attached_artifact: None,
         };
         let canonical = procedure_v2_mutation_execution_document_v1(&admitted).unwrap();
@@ -4947,6 +5210,7 @@ mod tests {
                 },
             }),
             fresh_attempt_id: Some(AttemptId::new("00000000-0000-4000-8000-000000000915").unwrap()),
+            fresh_blocker_id: None,
             attached_artifact: None,
         };
         let canonical = procedure_v2_mutation_execution_document_v1(&admitted).unwrap();

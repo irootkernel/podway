@@ -15,8 +15,8 @@ use crate::{
     TerminalReceiptV1, TerminalResultV1,
 };
 use podway_core::{
-    AttemptId, AttemptNumberV2, DomainCommandKind, GraphNodeId, ItemId, ReasonV2, SessionId,
-    SessionLifecycle, Sha256Digest, WorkspaceId,
+    AttemptId, AttemptNumberV2, BlockerId, DomainCommandKind, GraphNodeId, ItemId, ReasonV2,
+    SessionId, SessionLifecycle, Sha256Digest, WorkspaceId,
 };
 
 pub const STORE_COMMAND_SCHEMA_V1: &str = "podway.store-command/v1";
@@ -523,6 +523,10 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
             | CommandV1::SessionComplete
             | CommandV1::SessionRetry
             | CommandV1::SessionSkip
+            | CommandV1::SessionBlock
+            | CommandV1::SessionUnblock
+            | CommandV1::SessionCancel
+            | CommandV1::SessionReset
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -539,6 +543,10 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
         CommandV1::SessionComplete
             | CommandV1::SessionRetry
             | CommandV1::SessionSkip
+            | CommandV1::SessionBlock
+            | CommandV1::SessionUnblock
+            | CommandV1::SessionCancel
+            | CommandV1::SessionReset
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -554,9 +562,20 @@ fn procedure_v2_preconditions_match(
     preconditions: &RevisionAttemptItemPreconditionsV1,
 ) -> bool {
     match command {
-        CommandV1::SessionComplete | CommandV1::SessionRetry | CommandV1::SessionSkip => {
+        CommandV1::SessionComplete
+        | CommandV1::SessionRetry
+        | CommandV1::SessionSkip
+        | CommandV1::SessionBlock
+        | CommandV1::SessionUnblock
+        | CommandV1::SessionCancel => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_attempt_id().is_some()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
+        CommandV1::SessionReset => {
+            preconditions.expected_session_revision().is_some()
+                && preconditions.expected_attempt_id().is_none()
                 && preconditions.expected_item_id().is_none()
                 && preconditions.expected_item_revision().is_none()
         }
@@ -1044,6 +1063,26 @@ pub enum PersistedGraphTerminalOperationV2 {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    Block {
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        blocker_id: BlockerId,
+        reason: String,
+    },
+    Unblock {
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        all: bool,
+        blocker_ids: Vec<BlockerId>,
+    },
+    Cancel {
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        reason: String,
+    },
+    Reset {
+        session_id: SessionId,
+    },
     ItemMutation {
         graph_node_id: GraphNodeId,
         attempt_id: AttemptId,
@@ -1080,6 +1119,22 @@ pub enum PersistedGraphMutationFailureV2 {
     SkipReasonRequired {
         graph_node_id: GraphNodeId,
     },
+    BlockerIdAlreadyUsed {
+        blocker_id: BlockerId,
+    },
+    TooManyOpenBlockers {
+        maximum: u32,
+    },
+    BlockerNotFound {
+        blocker_id: BlockerId,
+    },
+    BlockerNotCurrent {
+        blocker_id: BlockerId,
+    },
+    BlockerAlreadyResolved {
+        blocker_id: BlockerId,
+    },
+    NoOpenBlockers,
     ItemNotFound {
         item_id: ItemId,
     },
@@ -1139,6 +1194,28 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
                     graph_node_id: graph_node_id.clone(),
                 }
             }
+            crate::GraphMutationErrorV2::BlockerIdAlreadyUsed { blocker_id } => {
+                Self::BlockerIdAlreadyUsed {
+                    blocker_id: blocker_id.clone(),
+                }
+            }
+            crate::GraphMutationErrorV2::TooManyOpenBlockers { maximum } => {
+                Self::TooManyOpenBlockers { maximum: *maximum }
+            }
+            crate::GraphMutationErrorV2::BlockerNotFound { blocker_id } => Self::BlockerNotFound {
+                blocker_id: blocker_id.clone(),
+            },
+            crate::GraphMutationErrorV2::BlockerNotCurrent { blocker_id } => {
+                Self::BlockerNotCurrent {
+                    blocker_id: blocker_id.clone(),
+                }
+            }
+            crate::GraphMutationErrorV2::BlockerAlreadyResolved { blocker_id } => {
+                Self::BlockerAlreadyResolved {
+                    blocker_id: blocker_id.clone(),
+                }
+            }
+            crate::GraphMutationErrorV2::NoOpenBlockers => Self::NoOpenBlockers,
             crate::GraphMutationErrorV2::ItemNotFound { item_id } => Self::ItemNotFound {
                 item_id: item_id.clone(),
             },
@@ -1243,6 +1320,58 @@ impl PersistedGraphTerminalOperationV2 {
         Ok(operation)
     }
 
+    pub fn block(
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        blocker_id: BlockerId,
+        reason: String,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Block {
+            graph_node_id,
+            attempt_id,
+            blocker_id,
+            reason,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn unblock(
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        all: bool,
+        blocker_ids: Vec<BlockerId>,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Unblock {
+            graph_node_id,
+            attempt_id,
+            all,
+            blocker_ids,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn cancel(
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        reason: ReasonV2,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Cancel {
+            graph_node_id,
+            attempt_id,
+            reason: reason.into_inner(),
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn reset(session_id: SessionId) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Reset { session_id };
+        operation.validate()?;
+        Ok(operation)
+    }
+
     pub fn failure(error: PersistedGraphMutationFailureV2) -> Result<Self, StoreCodecErrorV1> {
         let operation = Self::Failure { error };
         operation.validate()?;
@@ -1273,6 +1402,20 @@ impl PersistedGraphTerminalOperationV2 {
                         .as_ref()
                         .is_none_or(|reason| ReasonV2::new(reason.clone()).is_ok())
             }
+            Self::Block { reason, .. } => {
+                !reason.trim().is_empty() && reason.chars().count() <= 1_000
+            }
+            Self::Unblock { blocker_ids, .. } => {
+                !blocker_ids.is_empty()
+                    && blocker_ids.len() <= 64
+                    && blocker_ids
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        == blocker_ids.len()
+            }
+            Self::Cancel { reason, .. } => ReasonV2::new(reason.clone()).is_ok(),
+            Self::Reset { .. } => true,
             Self::ItemMutation { attempt_number, .. } => *attempt_number > 0,
             Self::Failure { error } => error.validate(),
         };
@@ -1307,6 +1450,11 @@ impl PersistedGraphMutationFailureV2 {
             | Self::AttemptNotCurrent { .. }
             | Self::SkipNotAllowed { .. }
             | Self::SkipReasonRequired { .. }
+            | Self::BlockerIdAlreadyUsed { .. }
+            | Self::BlockerNotFound { .. }
+            | Self::BlockerNotCurrent { .. }
+            | Self::BlockerAlreadyResolved { .. }
+            | Self::NoOpenBlockers
             | Self::ItemNotFound { .. }
             | Self::ItemRevisionConflict { .. }
             | Self::ItemTypeMismatch
@@ -1316,6 +1464,7 @@ impl PersistedGraphMutationFailureV2 {
             | Self::ArtifactChanged
             | Self::BlockersPresent
             | Self::SessionGoalMissing => true,
+            Self::TooManyOpenBlockers { maximum } => *maximum == 64,
         }
     }
 }
@@ -1770,7 +1919,11 @@ impl PersistedTerminalReceiptV1 {
                     None
                     | Some(PersistedGraphTerminalOperationV2::Complete { .. })
                     | Some(PersistedGraphTerminalOperationV2::Retry { .. })
-                    | Some(PersistedGraphTerminalOperationV2::Skip { .. }),
+                    | Some(PersistedGraphTerminalOperationV2::Skip { .. })
+                    | Some(PersistedGraphTerminalOperationV2::Block { .. })
+                    | Some(PersistedGraphTerminalOperationV2::Unblock { .. })
+                    | Some(PersistedGraphTerminalOperationV2::Cancel { .. })
+                    | Some(PersistedGraphTerminalOperationV2::Reset { .. }),
                     PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                         session_id,
                         revision_before,
@@ -1915,7 +2068,11 @@ impl PersistedTerminalReceiptV1 {
                 field: "terminal lookup command",
             })?
             .command();
-        validate_persisted_terminal_result_for_command_v1(&command, &self.result)?;
+        let graph_reset =
+            command == CommandV1::SessionReset && persisted_graph_reset_receipt_is_exact_v2(self);
+        if !graph_reset {
+            validate_persisted_terminal_result_for_command_v1(&command, &self.result)?;
+        }
         Ok(())
     }
 
@@ -1959,6 +2116,31 @@ impl PersistedTerminalReceiptV1 {
         }
         Ok(())
     }
+}
+
+pub(crate) fn persisted_graph_reset_receipt_is_exact_v2(
+    receipt: &PersistedTerminalReceiptV1,
+) -> bool {
+    matches!(
+        (receipt.graph_session_projection(), receipt.result()),
+        (
+            Some(graph),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id: result_session_id,
+                revision_before,
+                revision_after,
+                changed: true,
+            }),
+        ) if matches!(
+            graph.operation(),
+            Some(PersistedGraphTerminalOperationV2::Reset { session_id })
+                if session_id == graph.session_id() && session_id == result_session_id
+        )
+            && graph.revision_before() == *revision_before
+            && graph.revision_after() == *revision_after
+            && *revision_before == *revision_after
+            && *revision_before > RevisionV1::ZERO
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

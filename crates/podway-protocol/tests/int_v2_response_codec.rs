@@ -65,6 +65,28 @@ fn shared_mutation_output_v2(command: &str, result_schema: &str) -> Value {
     })
 }
 
+fn reset_dry_run_output_v2() -> Value {
+    json!({
+        "schema": "podway.output/v2",
+        "request_id": "00000000-0000-4000-8000-000000000001",
+        "command": "session.reset",
+        "generated_at": "2026-08-09T00:00:00.000Z",
+        "workspace": {
+            "uuid": "00000000-0000-4000-8000-000000000002",
+            "root": "/worktree",
+            "latest_workspace_sequence": 1
+        },
+        "result": {
+            "schema": "podway.stage-transition-result/v2",
+            "admission": {"admitted": false},
+            "transition": "reset",
+            "reset": true,
+            "revision": 1
+        },
+        "warnings": []
+    })
+}
+
 #[test]
 fn v2plt006_v2_aware_response_codec_round_trips_output_v2() {
     let expected = diagnostics_output_v2();
@@ -75,6 +97,70 @@ fn v2plt006_v2_aware_response_codec_round_trips_output_v2() {
 
     let encoded = encode_response_payload_v2(&decoded).expect("v2 output must encode");
     assert_eq!(serde_json::from_slice::<Value>(&encoded).unwrap(), expected);
+}
+
+#[test]
+fn v2run006_reset_dry_run_round_trips_only_without_a_job() {
+    let expected = reset_dry_run_output_v2();
+    let decoded = decode_response_payload_v2(&serde_json::to_vec(&expected).unwrap())
+        .expect("a non-admitted reset dry-run without a job must decode");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&encode_response_payload_v2(&decoded).unwrap()).unwrap(),
+        expected
+    );
+
+    let mut false_with_job = reset_dry_run_output_v2();
+    false_with_job["job"] =
+        shared_mutation_output_v2("session.reset", "podway.stage-transition-result/v2")["job"]
+            .take();
+    assert!(decode_response_payload_v2(&serde_json::to_vec(&false_with_job).unwrap()).is_err());
+
+    let mut true_without_job = reset_dry_run_output_v2();
+    true_without_job["result"]["admission"] = json!({
+        "admitted": true,
+        "job_id": "00000000-0000-4000-8000-000000000001",
+        "workspace_sequence": 1
+    });
+    assert!(decode_response_payload_v2(&serde_json::to_vec(&true_without_job).unwrap()).is_err());
+}
+
+#[test]
+fn v2run006_blocker_limit_details_accept_only_the_v1_and_v2_limits() {
+    for maximum in [64, 1_024] {
+        let error = json!({
+            "schema": "podway.error/v1",
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "command": "session.block",
+            "generated_at": "2026-08-09T00:00:00.000Z",
+            "code": "BLOCKER_LIMIT_REACHED",
+            "message": "The active attempt reached the open blocker limit.",
+            "retryable": false,
+            "exit_code": 1,
+            "details": {
+                "schema": "podway.blocker-limit-details/v1",
+                "maximum_open_blockers": maximum
+            }
+        });
+        assert!(decode_response_payload_v2(&serde_json::to_vec(&error).unwrap()).is_ok());
+    }
+
+    let mut invalid = json!({
+        "schema": "podway.error/v1",
+        "request_id": "00000000-0000-4000-8000-000000000001",
+        "command": "session.block",
+        "generated_at": "2026-08-09T00:00:00.000Z",
+        "code": "BLOCKER_LIMIT_REACHED",
+        "message": "The active attempt reached the open blocker limit.",
+        "retryable": false,
+        "exit_code": 1,
+        "details": {
+            "schema": "podway.blocker-limit-details/v1",
+            "maximum_open_blockers": 65
+        }
+    });
+    assert!(decode_response_payload_v2(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    invalid["details"]["maximum_open_blockers"] = json!(1_023);
+    assert!(decode_response_payload_v2(&serde_json::to_vec(&invalid).unwrap()).is_err());
 }
 
 #[test]

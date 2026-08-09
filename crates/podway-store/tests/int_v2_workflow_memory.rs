@@ -866,6 +866,147 @@ fn cursor_stable_items_and_blockers_round_trip_without_moving_the_cursor() {
 }
 
 #[test]
+fn block_unblock_and_cancel_are_revision_checked_history_preserving_transitions() {
+    let initial = initial_state();
+    let blocker = BlockerId::new("00000000-0000-4000-8000-000000000099").unwrap();
+    let blocked = initial
+        .block_active_attempt_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            blocker.clone(),
+            "Waiting for review.",
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(blocked.trace().revision(), Revision::new(2));
+    assert_eq!(
+        blocked.trace().active_attempt(),
+        initial.trace().active_attempt()
+    );
+    assert_eq!(blocked.counters(), initial.counters());
+    assert_eq!(blocked.goal_state(), initial.goal_state());
+    assert_eq!(
+        blocked.workflow_memory().attempts()[0].blockers()[0].blocker_id(),
+        &blocker
+    );
+
+    let outcome = blocked
+        .unblock_active_attempt_v2(
+            Revision::new(2),
+            &attempt_id(1),
+            Some(&blocker),
+            false,
+            UnixMillis::new(30),
+        )
+        .unwrap();
+    assert_eq!(outcome.blocker_ids(), &[blocker]);
+    let unblocked = outcome.into_state();
+    assert_eq!(unblocked.trace().revision(), Revision::new(3));
+    assert_eq!(
+        unblocked.workflow_memory().attempts()[0].blockers()[0].state(),
+        BlockerState::Resolved
+    );
+    assert_eq!(
+        unblocked.workflow_memory().attempts()[0].item_slots(),
+        initial.workflow_memory().attempts()[0].item_slots()
+    );
+
+    let cancelled = unblocked
+        .cancel_active_session_v2(
+            Revision::new(3),
+            &attempt_id(1),
+            ReasonV2::new("No longer needed.").unwrap(),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(cancelled.trace().lifecycle(), SessionLifecycle::Cancelled);
+    assert!(cancelled.trace().active_attempt().is_none());
+    assert_eq!(cancelled.workflow_memory(), unblocked.workflow_memory());
+    assert_eq!(cancelled.counters(), unblocked.counters());
+    assert_eq!(cancelled.cancelled_at(), Some(UnixMillis::new(40)));
+    assert_eq!(cancelled.cancel_reason(), Some("No longer needed."));
+}
+
+#[test]
+fn block_enforces_the_v2_open_limit_and_session_global_id_uniqueness() {
+    let mut state = initial_state();
+    for number in 1..=64 {
+        let blocker = BlockerId::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap();
+        state = state
+            .block_active_attempt_v2(
+                Revision::new(number),
+                &attempt_id(1),
+                blocker,
+                "Open blocker.",
+                UnixMillis::new(20 + number),
+            )
+            .unwrap()
+            .into_state();
+    }
+    let before = state.clone();
+    assert_eq!(
+        state.block_active_attempt_v2(
+            Revision::new(65),
+            &attempt_id(1),
+            BlockerId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+            "One too many.",
+            UnixMillis::new(100),
+        ),
+        Err(GraphMutationErrorV2::TooManyOpenBlockers { maximum: 64 })
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn same_millisecond_blocks_are_canonically_ordered_by_frozen_id_and_reopen() {
+    let initial = initial_state();
+    let higher = BlockerId::new("00000000-0000-4000-8000-0000000000ff").unwrap();
+    let lower = BlockerId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let first = initial
+        .block_active_attempt_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            higher.clone(),
+            "Higher identifier.",
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    let second = first
+        .block_active_attempt_v2(
+            Revision::new(2),
+            &attempt_id(1),
+            lower.clone(),
+            "Lower identifier.",
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(
+        second.workflow_memory().attempts()[0]
+            .blockers()
+            .iter()
+            .map(BlockerStateV2::blocker_id)
+            .collect::<Vec<_>>(),
+        vec![&lower, &higher]
+    );
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store
+        .create_graph_session_v2(&identity(), second.clone())
+        .unwrap();
+    drop(store);
+    assert_eq!(
+        open(&temporary, SqliteStoreOptionsV1::new(8).unwrap())
+            .read_graph_session_v2(&identity())
+            .unwrap(),
+        Some(second)
+    );
+}
+
+#[test]
 fn evidence_digest_uses_all_items_in_author_order_while_readback_honors_selector() {
     let state = gate_state();
     let capture = &state.workflow_memory().attempts()[0];

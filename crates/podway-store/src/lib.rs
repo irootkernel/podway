@@ -40,14 +40,15 @@ pub use sqlite_store::SqliteStoreV1;
 pub use v2_goal::{AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2};
 pub use v2_memory::{
     ActiveItemMutationV2, AttemptWorkflowMemoryV2, BlockerStateV2, EvidenceReadbackV2,
-    EvidenceResolutionStateV2, GraphMutationErrorV2, ItemSlotStateV2, WorkflowMemoryStateV2,
-    canonical_recorded_items_json_v2, recorded_items_digest_v2,
+    EvidenceResolutionStateV2, GraphMutationErrorV2, ItemSlotStateV2, MAX_OPEN_BLOCKERS_V2,
+    WorkflowMemoryStateV2, canonical_recorded_items_json_v2, recorded_items_digest_v2,
 };
 pub use v2_state::{
     AttemptMetadataV2, GraphActionCompletionOutcomeV2, GraphActionSkipOutcomeV2,
-    GraphItemMutationOutcomeV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphRetryOutcomeV2,
-    GraphSessionStateV2, GraphStartCurrentTaskV2, GraphWorkspaceViewV2, ProcedureSnapshotV2,
-    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
+    GraphBlockOutcomeV2, GraphCancelOutcomeV2, GraphItemMutationOutcomeV2, GraphNodeCounterV2,
+    GraphNodeSnapshotV2, GraphRetryOutcomeV2, GraphSessionStateV2, GraphStartCurrentTaskV2,
+    GraphUnblockOutcomeV2, GraphWorkspaceViewV2, ProcedureSnapshotV2, StoreGraphMutationContractV2,
+    StoreGraphReadContractV2, StoreGraphStateContractV2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;

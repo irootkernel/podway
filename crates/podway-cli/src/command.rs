@@ -1816,6 +1816,14 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
         Command::Rework(_) => explicit.attempt_id.is_some(),
         Command::Retry { .. } => explicit.attempt_id.is_some(),
         Command::Skip { .. } => explicit.attempt_id.is_some(),
+        Command::Block { .. } | Command::Unblock { .. } | Command::Cancel { .. } => {
+            explicit.attempt_id.is_some()
+        }
+        Command::Reset(ResetArgs {
+            all: false,
+            dry_run: false,
+            ..
+        }) => true,
         Command::Goal {
             command: GoalCommand::Define(_),
         } => true,
@@ -1883,6 +1891,14 @@ fn direct_preconditions(
         Command::Rework(_) => v2_session_preconditions(explicit, false, false),
         Command::Retry { .. } => v2_session_preconditions(explicit, true, false),
         Command::Skip { .. } => v2_session_preconditions(explicit, true, false),
+        Command::Block { .. } | Command::Unblock { .. } | Command::Cancel { .. } => {
+            v2_session_preconditions(explicit, true, false)
+        }
+        Command::Reset(ResetArgs {
+            all: false,
+            dry_run: false,
+            ..
+        }) => v2_session_preconditions(explicit, false, false),
         Command::Goal {
             command: GoalCommand::Define(_),
         } => v2_session_preconditions(explicit, false, false),

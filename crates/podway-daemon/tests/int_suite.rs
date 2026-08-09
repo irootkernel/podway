@@ -58,3 +58,5 @@ mod int_v2run003_runtime;
 mod int_v2run004_retry;
 #[path = "int_v2run005_skip.rs"]
 mod int_v2run005_skip;
+#[path = "int_v2run006_states.rs"]
+mod int_v2run006_states;

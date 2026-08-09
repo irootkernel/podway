@@ -276,6 +276,24 @@ impl SessionTraceV2 {
                 if active_count != 0 {
                     return Err(invalid("a terminal session must have no active attempt"));
                 }
+                let Some(last) = attempts.last() else {
+                    return Err(invalid("a terminal session requires an attempt"));
+                };
+                let terminal_shape_valid = match lifecycle {
+                    SessionLifecycle::Completed => {
+                        matches!(
+                            last.lifecycle,
+                            AttemptLifecycle::Completed | AttemptLifecycle::Skipped
+                        ) && last.validity.is_valid()
+                    }
+                    SessionLifecycle::Cancelled => {
+                        last.lifecycle == AttemptLifecycle::Abandoned && !last.validity.is_valid()
+                    }
+                    SessionLifecycle::Running => unreachable!(),
+                };
+                if !terminal_shape_valid {
+                    return Err(invalid("the terminal session attempt is inconsistent"));
+                }
             }
         }
         Ok(Self {
@@ -385,6 +403,17 @@ impl SessionTraceV2 {
         self.attempts[active_index].lifecycle = AttemptLifecycle::Abandoned;
         self.attempts[active_index].validity = AttemptValidityV2::Stale;
         self.attempts.push(fresh);
+        self.revision = next_revision;
+        Ok(())
+    }
+
+    /// Cancels the running session by abandoning and staling its current attempt.
+    pub fn cancel(&mut self, expected_active: &AttemptId) -> Result<(), DomainError> {
+        let active_index = self.require_running_active(expected_active)?;
+        let next_revision = self.revision.checked_next()?;
+        self.attempts[active_index].lifecycle = AttemptLifecycle::Abandoned;
+        self.attempts[active_index].validity = AttemptValidityV2::Stale;
+        self.lifecycle = SessionLifecycle::Cancelled;
         self.revision = next_revision;
         Ok(())
     }

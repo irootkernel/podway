@@ -20,6 +20,7 @@ const SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174002";
 const ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174003";
 const JOB_ID: &str = "123e4567-e89b-42d3-a456-426614174004";
 const NEXT_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174005";
+const BLOCKER_ID: &str = "123e4567-e89b-42d3-a456-426614174006";
 const PROCEDURE_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -265,7 +266,8 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             ))
             .expect("v2 result fixtures must parse");
             let schema = match request.command().as_str() {
-                "session.complete" | "session.retry" | "session.skip" => {
+                "session.complete" | "session.retry" | "session.skip" | "session.block"
+                | "session.unblock" | "session.cancel" | "session.reset" => {
                     "podway.stage-transition-result/v2"
                 }
                 command if command.starts_with("item.") => "podway.item-mutation-result/v2",
@@ -295,6 +297,28 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                         result.as_object_mut().unwrap().remove("reason");
                     }
                     result["session_state"] = json!("running");
+                } else if request.command().as_str() == "session.block" {
+                    result["transition"] = json!("block");
+                    result["blocker_id"] = json!(BLOCKER_ID);
+                    result["reason"] = request.payload()["reason"].clone();
+                    result["session_state"] = json!("running");
+                } else if request.command().as_str() == "session.unblock" {
+                    result["transition"] = json!("unblock");
+                    if request.payload()["all"] == Value::Bool(true) {
+                        result["all"] = json!(true);
+                    } else {
+                        result["blocker_id"] = request.payload()["blocker_id"].clone();
+                    }
+                    result["session_state"] = json!("running");
+                } else if request.command().as_str() == "session.cancel" {
+                    result["transition"] = json!("cancel");
+                    result["session_state"] = json!("cancelled");
+                } else if request.command().as_str() == "session.reset" {
+                    result["transition"] = json!("reset");
+                    result["reset"] = json!(true);
+                    result.as_object_mut().unwrap().remove("from_graph_node_id");
+                    result.as_object_mut().unwrap().remove("from_attempt_id");
+                    result.as_object_mut().unwrap().remove("session_state");
                 }
             }
             json!({
@@ -736,6 +760,180 @@ fn fully_fenced_skip_skips_status_preflight_and_preserves_explicit_fences() {
     assert_eq!(envelope["schema"], "podway.output/v2");
     assert_eq!(envelope["result"]["transition"], "skip");
     assert!(envelope["result"].get("reason").is_none());
+}
+
+#[test]
+fn fully_fenced_state_mutations_skip_status_preflight_and_render_output_v2() {
+    let cases = [
+        (
+            "session.block",
+            vec!["block", "--reason", "waiting for an external decision"],
+            "block",
+            true,
+        ),
+        (
+            "session.unblock",
+            vec!["unblock", BLOCKER_ID],
+            "unblock",
+            true,
+        ),
+        ("session.unblock", vec!["unblock", "--all"], "unblock", true),
+        (
+            "session.cancel",
+            vec!["cancel", "--reason", "the task is no longer needed"],
+            "cancel",
+            true,
+        ),
+        ("session.reset", vec!["reset"], "reset", false),
+    ];
+
+    for (command, command_arguments, transition, requires_attempt) in cases {
+        let fixture = Fixture::new();
+        let daemon = RecordingDaemon::start(&fixture.socket, Reply::SharedMutationV2);
+        let mut arguments = vec![
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+            "--if-workspace-uuid".to_owned(),
+            WORKSPACE_ID.to_owned(),
+            "--if-session-id".to_owned(),
+            SESSION_ID.to_owned(),
+            "--if-session-revision".to_owned(),
+            "7".to_owned(),
+            "--idempotency-key".to_owned(),
+            format!("v2run006-fully-fenced-{transition}"),
+        ];
+        if requires_attempt {
+            arguments.extend(["--if-attempt".to_owned(), ATTEMPT_ID.to_owned()]);
+        } else {
+            arguments.push("--yes".to_owned());
+        }
+        arguments.extend(command_arguments.into_iter().map(str::to_owned));
+
+        let output = fixture.run(&arguments);
+        assert!(output.status.success(), "{command}: {output:?}");
+        let request = daemon.finish();
+        assert_eq!(request["command"], command);
+        assert_eq!(request["workspace"]["expected_uuid"], WORKSPACE_ID);
+        assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+        assert_eq!(request["preconditions"]["session_revision"], 7);
+        if requires_attempt {
+            assert_eq!(request["preconditions"]["attempt_id"], ATTEMPT_ID);
+        } else {
+            assert!(request["preconditions"].get("attempt_id").is_none());
+            assert_eq!(request["payload"]["confirmed"], true);
+        }
+        let envelope = one_json(&output);
+        assert_eq!(envelope["schema"], "podway.output/v2");
+        assert_eq!(
+            envelope["result"]["schema"],
+            "podway.stage-transition-result/v2"
+        );
+        assert_eq!(envelope["result"]["transition"], transition);
+    }
+}
+
+#[test]
+fn state_mutations_with_omitted_fences_use_v2_status_preflight() {
+    for (command, command_arguments, requires_attempt) in [
+        (
+            "session.block",
+            vec!["block", "--reason", "waiting for review"],
+            true,
+        ),
+        ("session.unblock", vec!["unblock", "--all"], true),
+        (
+            "session.cancel",
+            vec!["cancel", "--reason", "cancel after review"],
+            true,
+        ),
+        ("session.reset", vec!["reset"], false),
+    ] {
+        let fixture = Fixture::new();
+        let daemon = SequenceRecordingDaemon::start(
+            &fixture.socket,
+            vec![Reply::StatusV2, Reply::SharedMutationV2],
+        );
+        let mut arguments = vec![
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+            "--idempotency-key".to_owned(),
+            format!("v2run006-preflight-{command}"),
+        ];
+        if command == "session.reset" {
+            arguments.push("--yes".to_owned());
+        }
+        arguments.extend(command_arguments.into_iter().map(str::to_owned));
+
+        let output = fixture.run(&arguments);
+        assert!(output.status.success(), "{command}: {output:?}");
+        let requests = daemon.finish();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["command"], "session.status");
+        assert_eq!(requests[1]["command"], command);
+        assert_eq!(requests[1]["workspace"]["expected_uuid"], WORKSPACE_ID);
+        assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+        assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+        if requires_attempt {
+            assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+        } else {
+            assert!(requests[1]["preconditions"].get("attempt_id").is_none());
+        }
+        assert_eq!(one_json(&output)["schema"], "podway.output/v2");
+    }
+}
+
+#[test]
+fn state_mutation_preflight_preserves_retained_output_v1() {
+    for (command, command_arguments) in [
+        (
+            "session.block",
+            vec!["block", "--reason", "retained v1 blocker"],
+        ),
+        ("session.unblock", vec!["unblock", BLOCKER_ID]),
+        ("session.unblock", vec!["unblock", "--all"]),
+        (
+            "session.cancel",
+            vec!["cancel", "--reason", "retained v1 cancellation"],
+        ),
+        ("session.reset", vec!["reset"]),
+    ] {
+        let fixture = Fixture::new();
+        let daemon = SequenceRecordingDaemon::start(
+            &fixture.socket,
+            vec![Reply::StatusV2, Reply::SharedMutationV1],
+        );
+        let mut arguments = vec![
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+            "--idempotency-key".to_owned(),
+            format!("v2run006-retained-v1-{command}"),
+        ];
+        if command == "session.reset" {
+            arguments.push("--yes".to_owned());
+        }
+        arguments.extend(command_arguments.into_iter().map(str::to_owned));
+
+        let output = fixture.run(&arguments);
+        assert!(output.status.success(), "{command}: {output:?}");
+        let requests = daemon.finish();
+        assert_eq!(requests[0]["command"], "session.status");
+        assert_eq!(requests[1]["command"], command);
+        let envelope = one_json(&output);
+        assert_eq!(envelope["schema"], "podway.output/v1");
+        assert_eq!(
+            envelope["result"]["schema"],
+            "podway.stage-transition-result/v1"
+        );
+    }
 }
 
 #[test]

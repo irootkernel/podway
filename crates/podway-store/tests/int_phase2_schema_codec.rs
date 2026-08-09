@@ -6,19 +6,20 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use podway_core::{
-    AttemptId, DomainCommand, DomainCommandKind, DomainError, DomainResult, ItemId, JobId,
-    Revision, SessionId, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
+    AttemptId, DomainCommand, DomainCommandKind, DomainError, DomainResult, GraphNodeId, ItemId,
+    JobId, Revision, SessionId, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
     canonicalize_json_v1,
 };
 use podway_store::codec::{
     PersistedDomainCommandKindV1, PersistedDomainCommandV1, PersistedDomainErrorV1,
-    PersistedDomainResultV1, PersistedResponseContextV1, PersistedSessionLifecycleV1,
-    PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
-    PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1, STORE_COMMAND_SCHEMA_V1,
-    STORE_COMMAND_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V0, STORE_TERMINAL_SCHEMA_V1,
-    STORE_TERMINAL_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V3, StoreCodecErrorV1, decode_command_v1,
-    decode_terminal_receipt_v1, encode_command_v1, encode_persisted_terminal_receipt_v1,
-    encode_terminal_receipt_v1,
+    PersistedDomainResultV1, PersistedGraphTerminalOperationV2,
+    PersistedGraphTerminalSessionProjectionV2, PersistedResponseContextV1,
+    PersistedSessionLifecycleV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
+    PersistedTerminalReceiptV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
+    STORE_COMMAND_SCHEMA_V1, STORE_COMMAND_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V0,
+    STORE_TERMINAL_SCHEMA_V1, STORE_TERMINAL_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V3,
+    StoreCodecErrorV1, decode_command_v1, decode_terminal_receipt_v1, encode_command_v1,
+    encode_persisted_terminal_receipt_v1, encode_terminal_receipt_v1,
 };
 use podway_store::schema::{
     SQLITE_INITIAL_MIGRATION_NAME_V1, SQLITE_PROCEDURE_V2_STATE_MIGRATION_NAME_V3,
@@ -2438,6 +2439,90 @@ fn terminal_v2_codec_round_trips_lookup_command_and_preserves_legacy_literals()
     assert!(decode_terminal_receipt_v1(&unknown_field).is_err());
     Ok(())
 }
+
+#[test]
+fn graph_reset_codec_requires_exact_unchanged_positive_revision_and_session_binding()
+-> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id();
+    let graph_node_id = GraphNodeId::new("reset-node")?;
+    let result = |revision_after| {
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: Revision::new(5),
+            revision_after,
+            changed: true,
+        })
+    };
+    let projection = |revision_after, operation_session_id: SessionId| {
+        PersistedGraphTerminalSessionProjectionV2::new(
+            session_id.clone(),
+            "Reset codec session".to_owned(),
+            PersistedSessionLifecycleV1::Cancelled,
+            Revision::new(5),
+            revision_after,
+            digest('a'),
+            graph_node_id.clone(),
+            false,
+        )?
+        .with_operation(PersistedGraphTerminalOperationV2::reset(
+            operation_session_id,
+        )?)
+    };
+    let job_projection = || {
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(20),
+            Some(UnixMillis::new(21)),
+            UnixMillis::new(22),
+        )
+    };
+
+    let exact = PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(103),
+        result(Revision::new(5)),
+        job_projection()?,
+        projection(Revision::new(5), session_id.clone())?,
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::SessionReset)?
+    .with_response_context(PersistedResponseContextV1::new(
+        "00000000-0000-4000-8000-000000000103",
+        "session.reset",
+        workspace_id(),
+        "/safe/worktree",
+        103,
+    )?)?;
+    let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+    assert_eq!(decode_terminal_receipt_v1(&encoded)?, exact);
+
+    let changed_revision = PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(104),
+        result(Revision::new(6)),
+        job_projection()?,
+        projection(Revision::new(6), session_id.clone())?,
+    )?;
+    assert!(
+        changed_revision
+            .with_lookup_command(PersistedDomainCommandV1::SessionReset)
+            .is_err()
+    );
+
+    let mismatched_session = PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(105),
+        result(Revision::new(5)),
+        job_projection()?,
+        projection(
+            Revision::new(5),
+            SessionId::new("00000000-0000-4000-8000-000000000106")?,
+        )?,
+    )?;
+    assert!(
+        mismatched_session
+            .with_lookup_command(PersistedDomainCommandV1::SessionReset)
+            .is_err()
+    );
+    Ok(())
+}
+
 #[test]
 fn terminal_v1_codec_rejects_inconsistent_job_and_session_projections() {
     let timestamp_error = StoreCodecErrorV1::InvalidValue {

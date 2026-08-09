@@ -2809,9 +2809,9 @@ fn validate_wait_timeout_details_v1(details: &Map<String, Value>) -> bool {
 }
 
 fn validate_blocker_limit_details_v1(details: &Map<String, Value>) -> bool {
+    let maximum = details.get("maximum_open_blockers").and_then(Value::as_u64);
     if details.get("schema").and_then(Value::as_str) != Some("podway.blocker-limit-details/v1")
-        || details.get("maximum_open_blockers").and_then(Value::as_u64)
-            != u64::try_from(MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1).ok()
+        || (maximum != Some(64) && maximum != u64::try_from(MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1).ok())
     {
         return false;
     }

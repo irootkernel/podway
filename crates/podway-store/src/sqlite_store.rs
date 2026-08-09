@@ -867,6 +867,10 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 crate::CommandV1::SessionComplete
                     | crate::CommandV1::SessionRetry
                     | crate::CommandV1::SessionSkip
+                    | crate::CommandV1::SessionBlock
+                    | crate::CommandV1::SessionUnblock
+                    | crate::CommandV1::SessionCancel
+                    | crate::CommandV1::SessionReset
                     | crate::CommandV1::ItemCheck { .. }
                     | crate::CommandV1::ItemUncheck { .. }
                     | crate::CommandV1::ItemSet { .. }
@@ -909,10 +913,21 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             next_state.as_ref(),
             &result,
             &operation,
+            now,
         )?;
-        validate_terminal_result_for_command_v1(execution.command(), &result)
-            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        if let Some(next_state) = &next_state {
+        let reset_session_id = matches!(operation, PersistedGraphTerminalOperationV2::Reset { .. })
+            .then(|| current.trace().session_id().as_str().to_owned());
+        if reset_session_id.is_none() {
+            validate_terminal_result_for_command_v1(execution.command(), &result)
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        }
+        if matches!(operation, PersistedGraphTerminalOperationV2::Reset { .. }) {
+            clear_graph_session_transaction_v2(
+                &transaction,
+                expected_workspace_revision,
+                expected_session_revision,
+            )?;
+        } else if let Some(next_state) = &next_state {
             replace_graph_session_transaction_v2(
                 &transaction,
                 expected_workspace_revision,
@@ -1012,18 +1027,58 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 [sqlite_u64(now.get())?],
             )
             .map_err(storage)?;
-        let prune_report =
-            prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
-        record_prune_report(
-            &transaction,
-            &prune_report,
-            Some(row.sequence),
-            Some(claim.job_id().as_str()),
-        )?;
+        let graph_reset = reset_session_id.is_some();
+        if let Some(reset_session_id) = reset_session_id {
+            let cleanup_report = cleanup_session_scope_barrier(&transaction, &reset_session_id)?;
+            record_session_barrier_cleanup(
+                &transaction,
+                row.sequence,
+                claim.job_id().as_str(),
+                now,
+                &cleanup_report,
+            )?;
+        }
+        if !graph_reset {
+            let prune_report =
+                prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
+            record_prune_report(
+                &transaction,
+                &prune_report,
+                Some(row.sequence),
+                Some(claim.job_id().as_str()),
+            )?;
+        }
         self.trigger_failpoint(StoreFailpointV1::TerminalBeforeCommit)?;
         transaction.commit().map_err(storage)?;
         self.trigger_failpoint(StoreFailpointV1::TerminalAfterCommitBeforeResponse)?;
         Ok(receipt)
+    }
+
+    fn commit_graph_reset_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        session_id: podway_core::SessionId,
+        now: EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        let result = TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: expected_session_revision,
+            revision_after: expected_session_revision,
+            changed: true,
+        });
+        let operation = PersistedGraphTerminalOperationV2::reset(session_id)
+            .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        self.commit_graph_mutation_terminal_v2(
+            claim,
+            expected_workspace_revision,
+            expected_session_revision,
+            None,
+            result,
+            operation,
+            now,
+        )
     }
 }
 
@@ -1047,6 +1102,10 @@ impl StoreContractV1 for SqliteStoreV1 {
             crate::CommandV1::SessionComplete
                 | crate::CommandV1::SessionRetry
                 | crate::CommandV1::SessionSkip
+                | crate::CommandV1::SessionBlock
+                | crate::CommandV1::SessionUnblock
+                | crate::CommandV1::SessionCancel
+                | crate::CommandV1::SessionReset
                 | crate::CommandV1::ItemCheck { .. }
                 | crate::CommandV1::ItemUncheck { .. }
                 | crate::CommandV1::ItemSet { .. }
@@ -1160,23 +1219,24 @@ impl StoreContractV1 for SqliteStoreV1 {
                 reason: StoreUnavailableReasonV1::Busy,
             });
         }
-        let scope_session_id = if is_v2 && is_v2_action_runtime {
-            Some(
-                current_graph
-                    .as_ref()
-                    .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?
-                    .trace()
-                    .session_id()
-                    .as_str()
-                    .to_owned(),
-            )
-        } else {
-            admission_session_scope(
-                &transaction,
-                request.command(),
-                request.preconditions().expected_session_revision(),
-            )?
-        };
+        let scope_session_id =
+            if is_v2 && is_v2_action_runtime && command_is_session_scoped_v1(request.command()) {
+                Some(
+                    current_graph
+                        .as_ref()
+                        .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?
+                        .trace()
+                        .session_id()
+                        .as_str()
+                        .to_owned(),
+                )
+            } else {
+                admission_session_scope(
+                    &transaction,
+                    request.command(),
+                    request.preconditions().expected_session_revision(),
+                )?
+            };
         let scope_kind = if command_is_session_scoped_v1(request.command()) {
             "session"
         } else {
@@ -2470,6 +2530,25 @@ fn cleanup_old_session_barrier(
     old_session_id: &str,
     old_snapshot_id: &str,
 ) -> Result<SessionBarrierCleanupReportV1, StoreErrorV1> {
+    let mut report = cleanup_session_scope_barrier(transaction, old_session_id)?;
+    let deleted_snapshots = transaction
+        .execute(
+            "DELETE FROM procedure_snapshots
+             WHERE snapshot_id = ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM task_sessions WHERE procedure_snapshot_id = ?1
+               )",
+            [old_snapshot_id],
+        )
+        .map_err(storage)?;
+    report.deleted_snapshots = retention_count(deleted_snapshots)?;
+    Ok(report)
+}
+
+fn cleanup_session_scope_barrier(
+    transaction: &Transaction<'_>,
+    old_session_id: &str,
+) -> Result<SessionBarrierCleanupReportV1, StoreErrorV1> {
     verify_session_cleanup_job_scopes(transaction, old_session_id)?;
     let deleted_journal_entries = transaction
         .execute(
@@ -2492,21 +2571,11 @@ fn cleanup_old_session_barrier(
             [old_session_id],
         )
         .map_err(storage)?;
-    let deleted_snapshots = transaction
-        .execute(
-            "DELETE FROM procedure_snapshots
-             WHERE snapshot_id = ?1
-               AND NOT EXISTS (
-                   SELECT 1 FROM task_sessions WHERE procedure_snapshot_id = ?1
-               )",
-            [old_snapshot_id],
-        )
-        .map_err(storage)?;
     Ok(SessionBarrierCleanupReportV1 {
         deleted_journal_entries: retention_count(deleted_journal_entries)?,
         deleted_terminal_jobs: retention_count(deleted_terminal_jobs)?,
         deleted_idempotency_records: retention_count(deleted_idempotency_records)?,
-        deleted_snapshots: retention_count(deleted_snapshots)?,
+        deleted_snapshots: 0,
     })
 }
 
@@ -3914,15 +3983,225 @@ fn procedure_v2_skip_reason_v1(
     }
 }
 
+type ProcedureV2OperationDocumentV1 = (
+    serde_json::Map<String, serde_json::Value>,
+    serde_json::Map<String, serde_json::Value>,
+);
+
+fn procedure_v2_operation_payload_v1(
+    execution: &ClaimedExecutionV1,
+    command: &str,
+    version: u64,
+) -> Result<ProcedureV2OperationDocumentV1, StoreErrorV1> {
+    let invalid = || invariant(StoreInvariantV1::TransitionMutationShape);
+    let document: serde_json::Value =
+        serde_json::from_str(execution.canonical_execution().as_str()).map_err(|_| invalid())?;
+    let object = document.as_object().ok_or_else(invalid)?;
+    let v8_keys = [
+        "attached_artifact",
+        "command",
+        "execution_version",
+        "fresh_attempt_id",
+        "fresh_blocker_id",
+        "payload",
+        "preconditions",
+        "selector",
+        "workspace_id",
+    ];
+    let v7_keys = [
+        "attached_artifact",
+        "command",
+        "execution_version",
+        "fresh_attempt_id",
+        "payload",
+        "preconditions",
+        "selector",
+        "workspace_id",
+    ];
+    let expected_keys = if version == 8 {
+        &v8_keys[..]
+    } else {
+        &v7_keys[..]
+    };
+    if object.len() != expected_keys.len()
+        || expected_keys.iter().any(|key| !object.contains_key(*key))
+        || object.get("command").and_then(serde_json::Value::as_str) != Some(command)
+        || object
+            .get("execution_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(version)
+        || !object
+            .get("attached_artifact")
+            .is_some_and(serde_json::Value::is_null)
+    {
+        return Err(invalid());
+    }
+    let payload = object
+        .get("payload")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(invalid)?;
+    Ok((object.clone(), payload.clone()))
+}
+
+fn graph_cursor_stable_non_memory_exact_v2(
+    current: &GraphSessionStateV2,
+    next: &GraphSessionStateV2,
+) -> bool {
+    current.trace().session_id() == next.trace().session_id()
+        && current.trace().lifecycle() == next.trace().lifecycle()
+        && current.trace().attempts() == next.trace().attempts()
+        && current.snapshot() == next.snapshot()
+        && current.task_title() == next.task_title()
+        && current.counters() == next.counters()
+        && current.attempt_metadata() == next.attempt_metadata()
+        && current.goal_state() == next.goal_state()
+        && current.created_at() == next.created_at()
+        && current.completed_at() == next.completed_at()
+        && current.cancelled_at() == next.cancelled_at()
+        && current.cancel_reason() == next.cancel_reason()
+        && current.workflow_memory().decisions() == next.workflow_memory().decisions()
+        && current.workflow_memory().reworks() == next.workflow_memory().reworks()
+}
+
+fn graph_block_successor_matches_v2(
+    current: &GraphSessionStateV2,
+    next: &GraphSessionStateV2,
+    attempt_id: &podway_core::AttemptId,
+    blocker_id: &podway_core::BlockerId,
+    reason: &str,
+    now: EpochMillisV1,
+) -> bool {
+    if !graph_cursor_stable_non_memory_exact_v2(current, next)
+        || current.workflow_memory().attempts().len() != next.workflow_memory().attempts().len()
+    {
+        return false;
+    }
+    current
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .zip(next.workflow_memory().attempts())
+        .all(|(old, new)| {
+            if old.attempt_id() != attempt_id {
+                return old == new;
+            }
+            old.item_slots() == new.item_slots()
+                && old.evidence() == new.evidence()
+                && new.blockers().len() == old.blockers().len() + 1
+                && new
+                    .blockers()
+                    .iter()
+                    .filter(|blocker| blocker.blocker_id() != blocker_id)
+                    .eq(old.blockers())
+                && new
+                    .blockers()
+                    .iter()
+                    .find(|blocker| blocker.blocker_id() == blocker_id)
+                    .is_some_and(|blocker| {
+                        blocker.blocker_id() == blocker_id
+                            && blocker.attempt_id() == attempt_id
+                            && blocker.reason() == reason
+                            && blocker.state() == podway_core::BlockerState::Open
+                            && blocker.created_at() == now
+                            && blocker.resolved_at().is_none()
+                    })
+        })
+}
+
+fn graph_unblock_successor_matches_v2(
+    current: &GraphSessionStateV2,
+    next: &GraphSessionStateV2,
+    attempt_id: &podway_core::AttemptId,
+    all: bool,
+    blocker_ids: &[podway_core::BlockerId],
+    now: EpochMillisV1,
+) -> bool {
+    if !graph_cursor_stable_non_memory_exact_v2(current, next)
+        || current.workflow_memory().attempts().len() != next.workflow_memory().attempts().len()
+    {
+        return false;
+    }
+    current
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .zip(next.workflow_memory().attempts())
+        .all(|(old, new)| {
+            if old.attempt_id() != attempt_id {
+                return old == new;
+            }
+            let expected = if all {
+                old.blockers()
+                    .iter()
+                    .filter(|blocker| blocker.state() == podway_core::BlockerState::Open)
+                    .map(|blocker| blocker.blocker_id().clone())
+                    .collect::<Vec<_>>()
+            } else {
+                blocker_ids.to_vec()
+            };
+            old.item_slots() == new.item_slots()
+                && old.evidence() == new.evidence()
+                && old.blockers().len() == new.blockers().len()
+                && blocker_ids == expected
+                && old
+                    .blockers()
+                    .iter()
+                    .zip(new.blockers())
+                    .all(|(before, after)| {
+                        if expected.contains(before.blocker_id()) {
+                            before.blocker_id() == after.blocker_id()
+                                && before.attempt_id() == after.attempt_id()
+                                && before.reason() == after.reason()
+                                && before.created_at() == after.created_at()
+                                && before.state() == podway_core::BlockerState::Open
+                                && after.state() == podway_core::BlockerState::Resolved
+                                && after.resolved_at() == Some(now)
+                        } else {
+                            before == after
+                        }
+                    })
+        })
+}
+
 fn validate_graph_mutation_terminal_shape_v2(
     execution: &ClaimedExecutionV1,
     current: &GraphSessionStateV2,
     next: Option<&GraphSessionStateV2>,
     result: &TerminalResultV1,
     operation: &PersistedGraphTerminalOperationV2,
+    now: EpochMillisV1,
 ) -> Result<(), StoreErrorV1> {
     let preconditions = execution.preconditions();
     let valid = match (execution.command(), result, operation) {
+        (
+            crate::CommandV1::SessionReset,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Reset {
+                session_id: operation_session_id,
+            },
+        ) => {
+            let (_, payload) = procedure_v2_operation_payload_v1(execution, "session.reset", 8)?;
+            *changed
+                && payload.len() == 1
+                && payload
+                    .get("confirmed")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                && next.is_none()
+                && session_id == current.trace().session_id()
+                && operation_session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == current.trace().revision()
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id().is_none()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
         (
             crate::CommandV1::SessionComplete,
             TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
@@ -4072,6 +4351,173 @@ fn validate_graph_mutation_terminal_shape_v2(
                 }
         }
         (
+            crate::CommandV1::SessionBlock,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Block {
+                graph_node_id,
+                attempt_id,
+                blocker_id,
+                reason,
+            },
+        ) => {
+            let (document, payload) =
+                procedure_v2_operation_payload_v1(execution, "session.block", 8)?;
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let added = next
+                .workflow_memory()
+                .attempts()
+                .iter()
+                .find(|memory| memory.attempt_id() == attempt_id)
+                .and_then(|memory| {
+                    memory
+                        .blockers()
+                        .iter()
+                        .find(|blocker| blocker.blocker_id() == blocker_id)
+                });
+            *changed
+                && payload.len() == 1
+                && payload.get("reason").and_then(serde_json::Value::as_str)
+                    == Some(reason.as_str())
+                && document
+                    .get("fresh_blocker_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(blocker_id.as_str())
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && current.trace().revision().checked_next().ok() == Some(next.trace().revision())
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && graph_node_id == active.graph_node_id()
+                && attempt_id == active.attempt_id()
+                && graph_block_successor_matches_v2(
+                    current, next, attempt_id, blocker_id, reason, now,
+                )
+                && added.is_some_and(|blocker| {
+                    blocker.reason() == reason && blocker.state() == podway_core::BlockerState::Open
+                })
+        }
+        (
+            crate::CommandV1::SessionUnblock,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Unblock {
+                graph_node_id,
+                attempt_id,
+                all,
+                blocker_ids,
+            },
+        ) => {
+            let (_, payload) = procedure_v2_operation_payload_v1(execution, "session.unblock", 8)?;
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let memory = next
+                .workflow_memory()
+                .attempts()
+                .iter()
+                .find(|memory| memory.attempt_id() == attempt_id);
+            *changed
+                && payload.len() == 2
+                && payload.get("all").and_then(serde_json::Value::as_bool) == Some(*all)
+                && ((!*all
+                    && blocker_ids.len() == 1
+                    && payload
+                        .get("blocker_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(blocker_ids[0].as_str()))
+                    || (*all
+                        && payload
+                            .get("blocker_id")
+                            .is_some_and(serde_json::Value::is_null)))
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && current.trace().revision().checked_next().ok() == Some(next.trace().revision())
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && graph_node_id == active.graph_node_id()
+                && attempt_id == active.attempt_id()
+                && graph_unblock_successor_matches_v2(
+                    current,
+                    next,
+                    attempt_id,
+                    *all,
+                    blocker_ids,
+                    now,
+                )
+                && memory.is_some_and(|memory| {
+                    blocker_ids.iter().all(|id| {
+                        memory.blockers().iter().any(|blocker| {
+                            blocker.blocker_id() == id
+                                && blocker.state() == podway_core::BlockerState::Resolved
+                        })
+                    })
+                })
+        }
+        (
+            crate::CommandV1::SessionCancel,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Cancel {
+                graph_node_id,
+                attempt_id,
+                reason,
+            },
+        ) => {
+            let (_, payload) = procedure_v2_operation_payload_v1(execution, "session.cancel", 8)?;
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let terminalized = next
+                .trace()
+                .attempts()
+                .iter()
+                .zip(next.attempt_metadata())
+                .find(|(attempt, _)| attempt.attempt_id() == attempt_id);
+            *changed
+                && payload.len() == 1
+                && payload.get("reason").and_then(serde_json::Value::as_str)
+                    == Some(reason.as_str())
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && current.trace().revision().checked_next().ok() == Some(next.trace().revision())
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && graph_node_id == active.graph_node_id()
+                && attempt_id == active.attempt_id()
+                && next.trace().lifecycle() == podway_core::SessionLifecycle::Cancelled
+                && next.cancel_reason() == Some(reason.as_str())
+                && terminalized.is_some_and(|(attempt, metadata)| {
+                    attempt.lifecycle() == podway_core::AttemptLifecycle::Abandoned
+                        && attempt.validity() == podway_core::AttemptValidityV2::Stale
+                        && metadata.terminal_reason() == Some(reason.as_str())
+                        && metadata.ended_at() == next.cancelled_at()
+                })
+        }
+        (
             command,
             TerminalResultV1::Success(podway_core::DomainResult::ItemChanged {
                 session_id,
@@ -4131,6 +4577,21 @@ fn validate_graph_mutation_terminal_shape_v2(
             }),
             PersistedGraphTerminalOperationV2::Failure { error },
         ) => {
+            match command {
+                crate::CommandV1::SessionBlock => {
+                    procedure_v2_operation_payload_v1(execution, "session.block", 8)?;
+                }
+                crate::CommandV1::SessionUnblock => {
+                    procedure_v2_operation_payload_v1(execution, "session.unblock", 8)?;
+                }
+                crate::CommandV1::SessionCancel => {
+                    procedure_v2_operation_payload_v1(execution, "session.cancel", 8)?;
+                }
+                crate::CommandV1::SessionReset => {
+                    procedure_v2_operation_payload_v1(execution, "session.reset", 8)?;
+                }
+                _ => {}
+            }
             let admitted_skip_reason = if command == &crate::CommandV1::SessionSkip {
                 Some(procedure_v2_skip_reason_v1(execution)?)
             } else {
@@ -4275,6 +4736,116 @@ fn graph_mutation_failure_matches_v2(
                 .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
                 .is_some_and(|failure| &failure == error)
         }
+        crate::CommandV1::SessionBlock => {
+            let (Some(expected_revision), Some(expected_attempt)) = (
+                preconditions.expected_session_revision(),
+                preconditions.expected_attempt_id(),
+            ) else {
+                return false;
+            };
+            let Ok((document, payload)) =
+                procedure_v2_operation_payload_v1(execution, "session.block", 8)
+            else {
+                return false;
+            };
+            let (Some(id), Some(reason)) = (
+                document
+                    .get("fresh_blocker_id")
+                    .and_then(serde_json::Value::as_str),
+                payload.get("reason").and_then(serde_json::Value::as_str),
+            ) else {
+                return false;
+            };
+            let Ok(id) = podway_core::BlockerId::new(id.to_owned()) else {
+                return false;
+            };
+            current
+                .block_active_attempt_v2(
+                    expected_revision,
+                    expected_attempt,
+                    id,
+                    reason.to_owned(),
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+                .as_ref()
+                == Some(error)
+        }
+        crate::CommandV1::SessionUnblock => {
+            let (Some(expected_revision), Some(expected_attempt)) = (
+                preconditions.expected_session_revision(),
+                preconditions.expected_attempt_id(),
+            ) else {
+                return false;
+            };
+            let Ok((_, payload)) =
+                procedure_v2_operation_payload_v1(execution, "session.unblock", 8)
+            else {
+                return false;
+            };
+            let Some(all) = payload.get("all").and_then(serde_json::Value::as_bool) else {
+                return false;
+            };
+            let blocker_id = match payload.get("blocker_id") {
+                Some(serde_json::Value::String(value)) => {
+                    podway_core::BlockerId::new(value.clone()).ok()
+                }
+                Some(serde_json::Value::Null) => None,
+                _ => return false,
+            };
+            current
+                .unblock_active_attempt_v2(
+                    expected_revision,
+                    expected_attempt,
+                    blocker_id.as_ref(),
+                    all,
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+                .as_ref()
+                == Some(error)
+        }
+        crate::CommandV1::SessionCancel => {
+            let (Some(expected_revision), Some(expected_attempt)) = (
+                preconditions.expected_session_revision(),
+                preconditions.expected_attempt_id(),
+            ) else {
+                return false;
+            };
+            let Ok((_, payload)) =
+                procedure_v2_operation_payload_v1(execution, "session.cancel", 8)
+            else {
+                return false;
+            };
+            let Some(reason) = payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::ReasonV2::new(value.to_owned()).ok())
+            else {
+                return false;
+            };
+            current
+                .cancel_active_session_v2(
+                    expected_revision,
+                    expected_attempt,
+                    reason,
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+                .as_ref()
+                == Some(error)
+        }
+        crate::CommandV1::SessionReset => match error {
+            PersistedGraphMutationFailureV2::SessionRevisionConflict { expected, actual } => {
+                preconditions.expected_session_revision() == Some(*expected)
+                    && current.trace().revision() == *actual
+                    && expected != actual
+            }
+            _ => false,
+        },
         command if graph_item_id_v2(command).is_some() => {
             let command_item_id = graph_item_id_v2(command).expect("guarded item command");
             let active_memory = active.and_then(|attempt| {
@@ -4620,8 +5191,21 @@ fn validate_persisted_terminal_for_job(
     terminal: &PersistedTerminalReceiptV1,
 ) -> Result<(), StoreErrorV1> {
     let (execution, _) = persisted_job_execution_v1(transaction, job_id)?;
-    validate_persisted_terminal_result_for_command_v1(execution.command(), terminal.result())
-        .map_err(|_| corrupt(StoreRecordKindV1::Job))
+    validate_persisted_terminal_for_execution_v2(&execution, terminal)
+}
+
+fn validate_persisted_terminal_for_execution_v2(
+    execution: &ClaimedExecutionV1,
+    terminal: &PersistedTerminalReceiptV1,
+) -> Result<(), StoreErrorV1> {
+    let graph_reset = execution.command() == &crate::CommandV1::SessionReset
+        && crate::codec::persisted_graph_reset_receipt_is_exact_v2(terminal);
+    if graph_reset {
+        Ok(())
+    } else {
+        validate_persisted_terminal_result_for_command_v1(execution.command(), terminal.result())
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))
+    }
 }
 
 fn verify_live_idempotency(
@@ -4806,11 +5390,7 @@ fn decode_job_view_v1(
                 row.claimed_at,
                 row.finished_at,
             )?;
-            validate_persisted_terminal_result_for_command_v1(
-                execution.command(),
-                terminal.result(),
-            )
-            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+            validate_persisted_terminal_for_execution_v2(&execution, &terminal)?;
             Some(terminal)
         }
     };

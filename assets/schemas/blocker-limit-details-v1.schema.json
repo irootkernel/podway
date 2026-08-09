@@ -9,7 +9,7 @@
       "required": ["schema", "maximum_open_blockers"],
       "properties": {
         "schema": { "const": "podway.blocker-limit-details/v1" },
-        "maximum_open_blockers": { "const": 1024 }
+        "maximum_open_blockers": { "enum": [64, 1024] }
       }
     },
     {
@@ -18,7 +18,7 @@
       "required": ["schema", "maximum_open_blockers", "admission"],
       "properties": {
         "schema": { "const": "podway.blocker-limit-details/v1" },
-        "maximum_open_blockers": { "const": 1024 },
+        "maximum_open_blockers": { "enum": [64, 1024] },
         "admission": {
           "type": "object",
           "additionalProperties": false,
@@ -35,7 +35,7 @@
       ],
       "properties": {
         "schema": { "const": "podway.blocker-limit-details/v1" },
-        "maximum_open_blockers": { "const": 1024 },
+        "maximum_open_blockers": { "enum": [64, 1024] },
         "job_id": { "type": "string", "format": "uuid" },
         "job_sequence": { "type": "integer", "minimum": 1 },
         "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" }

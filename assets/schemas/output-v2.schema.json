@@ -103,7 +103,17 @@
     "status": { "properties": { "command": { "const": "session.status" }, "result": { "$ref": "urn:podway:schema:status-result:v2" } } },
     "compactStatus": { "properties": { "command": { "const": "session.status" }, "result": { "$ref": "urn:podway:schema:compact-status-result:v2" } } },
     "next": { "properties": { "command": { "const": "session.next" }, "result": { "$ref": "urn:podway:schema:next-result:v2" } } },
-    "stageTransition": { "required": ["workspace", "job"], "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset"] }, "result": { "$ref": "urn:podway:schema:stage-transition-result:v2" } } },
+    "stageTransition": {
+      "required": ["workspace"],
+      "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset"] }, "result": { "$ref": "urn:podway:schema:stage-transition-result:v2" } },
+      "allOf": [
+        {
+          "if": { "properties": { "result": { "properties": { "admission": { "properties": { "admitted": { "const": true } }, "required": ["admitted"] } }, "required": ["admission"] } }, "required": ["result"] },
+          "then": { "required": ["job"] },
+          "else": { "not": { "required": ["job"] } }
+        }
+      ]
+    },
     "itemMutation": { "required": ["workspace", "job"], "properties": { "command": { "enum": ["item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] }, "result": { "$ref": "urn:podway:schema:item-mutation-result:v2" } } },
     "jobLookup": { "properties": { "command": { "const": "job.lookup" }, "result": { "$ref": "urn:podway:schema:job-lookup-result:v2" } } },
     "jobResult": { "required": ["job"], "properties": { "command": { "enum": ["job.status", "job.wait"] }, "result": { "$ref": "urn:podway:schema:job-result:v2" } } },

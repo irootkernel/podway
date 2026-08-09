@@ -312,6 +312,33 @@ its activation time. Retry does not increment rework-traversal counters or alter
 unrelated attempts. No transition activates parallel attempts or waits for
 another branch.
 
+Blocked and terminal Procedure v2 states are derived rather than stored as a
+second lifecycle. A running session remains `running` with the same active
+attempt while that attempt has open blockers; its readiness reports
+`unblocked=false` and `can_advance=false`, and completion or decision selection
+is unavailable. Item mutation, retry, skip on an eligible action, blocker
+management, cancellation, and reset retain their independent applicability.
+Resolving the final open blocker makes the unchanged active attempt unblocked.
+At most 64 blockers may be open on one attempt.
+
+`session.block` records one non-blank reason of at most 1,000 Unicode scalar
+values under an admission-frozen blocker ID. `session.unblock` resolves either
+one blocker owned by the active attempt or every open blocker on that attempt;
+it does not delete blocker history. Both transitions keep the graph cursor and
+session lifecycle unchanged. Cancelling a running session abandons its active
+attempt, records the bounded cancellation reason in history, changes lifecycle
+to `cancelled`, and removes the cursor. Reset is permitted for running,
+completed, and cancelled sessions and atomically removes the current graph
+session while preserving workspace initialization.
+
+A completed or cancelled v2 session has no active cursor. Status reports its
+lifecycle with `current=null`; `session.next` fails with
+`SESSION_NOT_RUNNING` instead of presenting an actionable node. Normal terminal
+completion remains distinct from the latest recorded goal outcome: `completed`
+does not mean Podway assessed the goal as achieved. A running stored state with
+no active attempt, or a terminal stored state with an active attempt, is an
+integrity failure rather than a new public dead-end state.
+
 Evidence references resolve once when a decision attempt is activated and bind
 the exact source attempt and complete recorded-item digest. A reference becomes
 stale when rework invalidates its source. Stale references and records remain

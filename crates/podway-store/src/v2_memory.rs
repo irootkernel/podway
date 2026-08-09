@@ -24,7 +24,7 @@ use crate::{
     map_rusqlite_error_v1,
 };
 
-const MAX_OPEN_BLOCKERS_V2: usize = 64;
+pub const MAX_OPEN_BLOCKERS_V2: usize = 64;
 const MAX_BLOCKER_REASON_CHARS_V2: usize = 1_000;
 
 fn invalid(reason: &'static str) -> StoreValueErrorV1 {
@@ -82,6 +82,22 @@ pub enum GraphMutationErrorV2 {
     SkipReasonRequired {
         graph_node_id: GraphNodeId,
     },
+    BlockerIdAlreadyUsed {
+        blocker_id: BlockerId,
+    },
+    TooManyOpenBlockers {
+        maximum: u32,
+    },
+    BlockerNotFound {
+        blocker_id: BlockerId,
+    },
+    BlockerNotCurrent {
+        blocker_id: BlockerId,
+    },
+    BlockerAlreadyResolved {
+        blocker_id: BlockerId,
+    },
+    NoOpenBlockers,
     ItemNotFound {
         item_id: ItemId,
     },
@@ -124,6 +140,20 @@ impl fmt::Display for GraphMutationErrorV2 {
             Self::SkipReasonRequired { .. } => {
                 formatter.write_str("Procedure v2 skip reason is required")
             }
+            Self::BlockerIdAlreadyUsed { .. } => {
+                formatter.write_str("blocker identifier was already used")
+            }
+            Self::TooManyOpenBlockers { .. } => {
+                formatter.write_str("the active attempt has too many open blockers")
+            }
+            Self::BlockerNotFound { .. } => formatter.write_str("blocker identifier was not found"),
+            Self::BlockerNotCurrent { .. } => {
+                formatter.write_str("blocker does not belong to the current attempt")
+            }
+            Self::BlockerAlreadyResolved { .. } => {
+                formatter.write_str("blocker is already resolved")
+            }
+            Self::NoOpenBlockers => formatter.write_str("the active attempt has no open blockers"),
             Self::ItemNotFound { .. } => formatter.write_str("Procedure v2 item was not found"),
             Self::ItemRevisionConflict { .. } => {
                 formatter.write_str("Procedure v2 item revision changed")
@@ -551,6 +581,128 @@ impl WorkflowMemoryStateV2 {
     }
     pub fn reworks(&self) -> &[ReworkRecordV2] {
         &self.reworks
+    }
+
+    pub(crate) fn block_active_attempt_v2(
+        &self,
+        expected_attempt_id: &AttemptId,
+        blocker_id: BlockerId,
+        reason: String,
+        now: UnixMillis,
+    ) -> Result<Self, GraphMutationErrorV2> {
+        if self
+            .attempts
+            .iter()
+            .flat_map(|memory| memory.blockers.iter())
+            .any(|blocker| blocker.blocker_id() == &blocker_id)
+        {
+            return Err(GraphMutationErrorV2::BlockerIdAlreadyUsed { blocker_id });
+        }
+        let index = self
+            .attempts
+            .iter()
+            .position(|memory| memory.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        if self.attempts[index]
+            .blockers
+            .iter()
+            .filter(|blocker| blocker.state() == BlockerState::Open)
+            .count()
+            >= MAX_OPEN_BLOCKERS_V2
+        {
+            return Err(GraphMutationErrorV2::TooManyOpenBlockers {
+                maximum: MAX_OPEN_BLOCKERS_V2 as u32,
+            });
+        }
+        let blocker = BlockerStateV2::new(
+            blocker_id,
+            expected_attempt_id.clone(),
+            reason,
+            BlockerState::Open,
+            now,
+            None,
+        )?;
+        let mut next = self.clone();
+        next.attempts[index].blockers.push(blocker);
+        next.attempts[index].blockers.sort_by(|left, right| {
+            (left.created_at(), left.blocker_id()).cmp(&(right.created_at(), right.blocker_id()))
+        });
+        Ok(next)
+    }
+
+    pub(crate) fn unblock_active_attempt_v2(
+        &self,
+        expected_attempt_id: &AttemptId,
+        blocker_id: Option<&BlockerId>,
+        unblock_all: bool,
+        now: UnixMillis,
+    ) -> Result<(Self, Vec<BlockerId>), GraphMutationErrorV2> {
+        if blocker_id.is_some() == unblock_all {
+            return Err(GraphMutationErrorV2::InvalidState(invalid(
+                "unblock requires exactly one blocker identifier or all",
+            )));
+        }
+        let index = self
+            .attempts
+            .iter()
+            .position(|memory| memory.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        if let Some(id) = blocker_id {
+            let current = self.attempts[index]
+                .blockers
+                .iter()
+                .find(|blocker| blocker.blocker_id() == id);
+            match current {
+                Some(blocker) if blocker.state() == BlockerState::Open => {}
+                Some(_) => {
+                    return Err(GraphMutationErrorV2::BlockerAlreadyResolved {
+                        blocker_id: id.clone(),
+                    });
+                }
+                None if self
+                    .attempts
+                    .iter()
+                    .flat_map(|memory| memory.blockers.iter())
+                    .any(|blocker| blocker.blocker_id() == id) =>
+                {
+                    return Err(GraphMutationErrorV2::BlockerNotCurrent {
+                        blocker_id: id.clone(),
+                    });
+                }
+                None => {
+                    return Err(GraphMutationErrorV2::BlockerNotFound {
+                        blocker_id: id.clone(),
+                    });
+                }
+            }
+        }
+        let selected = self.attempts[index]
+            .blockers
+            .iter()
+            .filter(|blocker| {
+                blocker.state() == BlockerState::Open
+                    && blocker_id.is_none_or(|id| blocker.blocker_id() == id)
+            })
+            .map(|blocker| blocker.blocker_id().clone())
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Err(GraphMutationErrorV2::NoOpenBlockers);
+        }
+        let selected_set = selected.iter().collect::<BTreeSet<_>>();
+        let mut next = self.clone();
+        for blocker in &mut next.attempts[index].blockers {
+            if selected_set.contains(blocker.blocker_id()) {
+                *blocker = BlockerStateV2::new(
+                    blocker.blocker_id().clone(),
+                    blocker.attempt_id().clone(),
+                    blocker.reason().to_owned(),
+                    BlockerState::Resolved,
+                    blocker.created_at(),
+                    Some(now),
+                )?;
+            }
+        }
+        Ok((next, selected))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2235,7 +2387,14 @@ pub(crate) fn validate_workflow_memory_successor_v2(
                 cursor_stable_changed = true;
             }
         }
-        for (old, new) in old_memory.blockers().iter().zip(new_memory.blockers()) {
+        for old in old_memory.blockers() {
+            let Some(new) = new_memory
+                .blockers()
+                .iter()
+                .find(|new| new.blocker_id() == old.blocker_id())
+            else {
+                return Err(invalid("Procedure v2 blocker history was removed"));
+            };
             if old.blocker_id() != new.blocker_id()
                 || old.attempt_id() != new.attempt_id()
                 || old.reason() != new.reason()
@@ -2254,8 +2413,15 @@ pub(crate) fn validate_workflow_memory_successor_v2(
             }
             cursor_stable_changed |= old != new;
         }
-        if new_memory.blockers()[old_memory.blockers().len()..]
+        if new_memory
+            .blockers()
             .iter()
+            .filter(|new| {
+                !old_memory
+                    .blockers()
+                    .iter()
+                    .any(|old| old.blocker_id() == new.blocker_id())
+            })
             .any(|blocker| blocker.state() != BlockerState::Open)
         {
             return Err(invalid(

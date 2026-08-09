@@ -466,6 +466,25 @@ impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
             )
         })
     }
+
+    fn commit_graph_reset_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        session_id: podway_core::SessionId,
+        now: podway_store::EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.commit_graph_reset_terminal_v2(
+                claim,
+                expected_workspace_revision,
+                expected_session_revision,
+                session_id,
+                now,
+            )
+        })
+    }
 }
 
 impl StoreGraphReadContractV2 for WorkspaceStoreSlotV1 {

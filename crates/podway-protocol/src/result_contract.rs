@@ -1093,14 +1093,14 @@ impl OutputEnvelopeV2 {
             });
         }
         if let Some(admission) = self.result.get("admission") {
-            let (job_id, sequence) = validate_admission_metadata_v1(admission, false)?
-                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
-            let job = self
-                .job
-                .as_ref()
-                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
-            if job.id() != &job_id || job.sequence() != sequence {
-                return Err(ProtocolError::InvalidAdmissionMetadata);
+            match validate_admission_metadata_v1(admission, true)? {
+                None if self.job.is_none() => {}
+                Some((job_id, sequence))
+                    if self
+                        .job
+                        .as_ref()
+                        .is_some_and(|job| job.id() == &job_id && job.sequence() == sequence) => {}
+                None | Some(_) => return Err(ProtocolError::InvalidAdmissionMetadata),
             }
         }
         if !validate_v2_output_warnings(&self.warnings) {

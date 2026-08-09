@@ -2184,15 +2184,11 @@ fn stale_goal_assessment_cannot_satisfy_terminal_completion() {
         })
         .collect();
     assert!(
-        try_state(
-            9,
+        SessionTraceV2::from_parts(
+            session_id(),
             SessionLifecycle::Completed,
+            Revision::new(9),
             attempts,
-            base.attempt_metadata().to_vec(),
-            base.counters().to_vec(),
-            base.workflow_memory().clone(),
-            base.goal_state().clone(),
-            Some(UnixMillis::new(70)),
         )
         .is_err()
     );

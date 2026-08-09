@@ -296,11 +296,16 @@ fn reworked_state() -> GraphSessionStateV2 {
     .unwrap()
 }
 
-fn completed_state() -> GraphSessionStateV2 {
+fn advanced_after_rework_state(completed: bool) -> GraphSessionStateV2 {
+    let revision = if completed { 5 } else { 4 };
     let trace = SessionTraceV2::from_parts(
         SessionId::new("00000000-0000-4000-8000-000000000020").unwrap(),
-        SessionLifecycle::Completed,
-        Revision::new(4),
+        if completed {
+            SessionLifecycle::Completed
+        } else {
+            SessionLifecycle::Running
+        },
+        Revision::new(revision),
         vec![
             attempt(
                 1,
@@ -326,17 +331,29 @@ fn completed_state() -> GraphSessionStateV2 {
                 AttemptLifecycle::Completed,
                 AttemptValidityV2::Valid,
             ),
+            attempt(
+                4,
+                "review",
+                2,
+                4,
+                if completed {
+                    AttemptLifecycle::Completed
+                } else {
+                    AttemptLifecycle::Active
+                },
+                AttemptValidityV2::Valid,
+            ),
         ],
     )
     .unwrap();
     GraphSessionStateV2::new_with_workflow_memory(
-        Revision::new(4),
+        Revision::new(revision),
         "Persist this task",
         snapshot(),
         trace,
         vec![
             GraphNodeCounterV2::new(node("draft"), 2, 1),
-            GraphNodeCounterV2::new(node("review"), 1, 0),
+            GraphNodeCounterV2::new(node("review"), 2, 0),
         ],
         vec![
             AttemptMetadataV2::new(
@@ -360,14 +377,25 @@ fn completed_state() -> GraphSessionStateV2 {
                 None,
             )
             .unwrap(),
+            AttemptMetadataV2::new(
+                attempt_id(4),
+                UnixMillis::new(40),
+                completed.then_some(UnixMillis::new(50)),
+                None,
+            )
+            .unwrap(),
         ],
-        workflow_memory(3),
+        workflow_memory(4),
         UnixMillis::new(10),
-        Some(UnixMillis::new(40)),
+        completed.then_some(UnixMillis::new(50)),
         None,
         None,
     )
     .unwrap()
+}
+
+fn completed_state() -> GraphSessionStateV2 {
+    advanced_after_rework_state(true)
 }
 
 fn workflow_memory(attempt_count: u64) -> WorkflowMemoryStateV2 {
@@ -439,6 +467,14 @@ fn graph_state_round_trips_successors_and_rework_across_reopen() {
             &identity(),
             Revision::new(3),
             Revision::new(3),
+            advanced_after_rework_state(false),
+        )
+        .unwrap();
+    reopened
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(4),
+            Revision::new(4),
             completed_state(),
         )
         .unwrap();
