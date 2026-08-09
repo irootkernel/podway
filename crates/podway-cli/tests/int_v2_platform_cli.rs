@@ -265,7 +265,9 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             ))
             .expect("v2 result fixtures must parse");
             let schema = match request.command().as_str() {
-                "session.complete" | "session.retry" => "podway.stage-transition-result/v2",
+                "session.complete" | "session.retry" | "session.skip" => {
+                    "podway.stage-transition-result/v2"
+                }
                 command if command.starts_with("item.") => "podway.item-mutation-result/v2",
                 command => panic!("unexpected shared v2 mutation {command}"),
             };
@@ -282,6 +284,16 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                     result["to_graph_node_id"] = result["from_graph_node_id"].clone();
                     result["to_attempt_id"] = json!(NEXT_ATTEMPT_ID);
                     result["reason"] = request.payload()["reason"].clone();
+                    result["session_state"] = json!("running");
+                } else if request.command().as_str() == "session.skip" {
+                    result["transition"] = json!("skip");
+                    result["to_graph_node_id"] = json!("finish");
+                    result["to_attempt_id"] = json!(NEXT_ATTEMPT_ID);
+                    if let Some(reason) = request.payload().get("reason") {
+                        result["reason"] = reason.clone();
+                    } else {
+                        result.as_object_mut().unwrap().remove("reason");
+                    }
                     result["session_state"] = json!("running");
                 }
             }
@@ -562,7 +574,7 @@ fn v2_status_preflight_supplies_omitted_attempt_fences() {
 }
 
 #[test]
-fn shared_item_complete_and_retry_use_v2_status_fences_and_render_output_v2() {
+fn shared_item_complete_retry_and_skip_use_v2_status_fences_and_render_output_v2() {
     for (command, arguments, expected_schema) in [
         (
             "item.set",
@@ -577,6 +589,11 @@ fn shared_item_complete_and_retry_use_v2_status_fences_and_render_output_v2() {
         (
             "session.retry",
             vec!["retry", "--reason", "repeat from clean state"],
+            "podway.stage-transition-result/v2",
+        ),
+        (
+            "session.skip",
+            vec!["skip", "--reason", "not applicable"],
             "podway.stage-transition-result/v2",
         ),
     ] {
@@ -622,6 +639,8 @@ fn shared_item_complete_and_retry_use_v2_status_fences_and_render_output_v2() {
                 assert!(requests[1]["preconditions"].get("item_revision").is_none());
                 if command == "session.retry" {
                     assert_eq!(requests[1]["payload"]["reason"], "repeat from clean state");
+                } else if command == "session.skip" {
+                    assert_eq!(requests[1]["payload"]["reason"], "not applicable");
                 }
             }
 
@@ -682,6 +701,44 @@ fn fully_fenced_retry_skips_status_preflight_and_preserves_explicit_fences() {
 }
 
 #[test]
+fn fully_fenced_skip_skips_status_preflight_and_preserves_explicit_fences() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::SharedMutationV2);
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "--if-session-revision".to_owned(),
+        "7".to_owned(),
+        "--if-attempt".to_owned(),
+        ATTEMPT_ID.to_owned(),
+        "--idempotency-key".to_owned(),
+        "v2run005-fully-fenced-skip".to_owned(),
+        "skip".to_owned(),
+    ];
+
+    let output = fixture.run(&arguments);
+    assert!(output.status.success(), "{output:?}");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "session.skip");
+    assert_eq!(request["workspace"]["expected_uuid"], WORKSPACE_ID);
+    assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(request["preconditions"]["session_revision"], 7);
+    assert_eq!(request["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert!(request["payload"].get("reason").is_none());
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["result"]["transition"], "skip");
+    assert!(envelope["result"].get("reason").is_none());
+}
+
+#[test]
 fn shared_complete_accepts_retained_output_v1_after_preflight() {
     let fixture = Fixture::new();
     let daemon = SequenceRecordingDaemon::start(
@@ -714,6 +771,42 @@ fn shared_complete_accepts_retained_output_v1_after_preflight() {
     assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
     assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
     assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v1");
+    assert_eq!(
+        envelope["result"]["schema"],
+        "podway.stage-transition-result/v1"
+    );
+}
+
+#[test]
+fn shared_skip_accepts_retained_output_v1_after_preflight() {
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![Reply::StatusV2, Reply::SharedMutationV1],
+    );
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--idempotency-key".to_owned(),
+        "v2run005-retained-v1-skip".to_owned(),
+        "skip".to_owned(),
+        "--reason".to_owned(),
+        "retained v1 session".to_owned(),
+    ];
+    let output = fixture.run(&arguments);
+    assert!(output.status.success(), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.skip");
+    assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+    assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert_eq!(requests[1]["payload"]["reason"], "retained v1 session");
     let envelope = one_json(&output);
     assert_eq!(envelope["schema"], "podway.output/v1");
     assert_eq!(

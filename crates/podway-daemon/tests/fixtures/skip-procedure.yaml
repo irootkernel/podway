@@ -1,0 +1,63 @@
+schema: podway.procedure/v2
+id: skip-runtime
+version: "2"
+name: Skip runtime
+purpose: Exercise eligible action skips and empty downstream read-back.
+node_definitions:
+  prepare:
+    type: action
+    title: Prepare
+    intent: Reach the first skippable placement.
+  source:
+    type: action
+    title: Capture optional evidence
+    intent: Demonstrate that skipping discards every recorded item value.
+    items:
+      - id: required-note
+        type: text
+        prompt: Record the required note.
+        required: true
+        min_length: 1
+        max_length: 200
+        multiline: false
+      - id: optional-note
+        type: text
+        prompt: Record the optional note.
+        required: false
+        max_length: 200
+        multiline: false
+  consumer:
+    type: action
+    title: Consume optional evidence
+    intent: Read back the skipped source without retaining its values.
+  finish:
+    type: action
+    title: Finish
+    intent: Finish through a terminal skip.
+graph:
+  entry: prepare
+  nodes:
+    - id: prepare
+      use: prepare
+      next: source
+    - id: source
+      use: source
+      skip:
+        allowed: true
+        reason_required: true
+      next: consumer
+    - id: consumer
+      use: consumer
+      evidence_from:
+        - node: source
+          required: false
+      skip:
+        allowed: true
+        reason_required: false
+      next: finish
+    - id: finish
+      use: finish
+      skip:
+        allowed: true
+        reason_required: false
+      terminal: true

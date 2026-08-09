@@ -293,7 +293,16 @@ No-op item clears return equal before and after revisions with `changed=false`.
 A running Procedure v2 session owns one cursor and exactly one active graph-node
 attempt. Completing or skipping an action, or deciding an option, terminates the
 current attempt and either activates one fresh target attempt or completes the
-session. Retry abandons the active attempt and creates a fresh attempt of the
+session. Skip is allowed only by the active action placement's declared policy;
+required items and open blockers do not gate it. The skipped attempt remains valid,
+keeps its blocker and evidence history, records its optional terminal reason, and
+atomically clears every recorded item value. A downstream optional evidence
+reference may therefore resolve the skipped source with an empty item set, while a
+required reference to a skippable source is rejected during Procedure vetting. A
+terminal skip applies the same current-goal and fresh-assessment readiness gates as
+terminal completion.
+
+Retry abandons the active attempt and creates a fresh attempt of the
 same placement, whether it is an action or decision. Only that active attempt
 becomes stale: its item values, blockers, criterion state, evidence snapshot, and
 terminal reason remain immutable history. The fresh attempt receives the next

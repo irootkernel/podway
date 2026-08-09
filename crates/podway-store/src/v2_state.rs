@@ -692,6 +692,37 @@ pub struct GraphRetryOutcomeV2 {
     to_attempt_id: AttemptId,
 }
 
+/// Pure result of skipping the active Procedure v2 action placement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphActionSkipOutcomeV2 {
+    state: GraphSessionStateV2,
+    from_graph_node_id: GraphNodeId,
+    from_attempt_id: AttemptId,
+    to_graph_node_id: Option<GraphNodeId>,
+    to_attempt_id: Option<AttemptId>,
+}
+
+impl GraphActionSkipOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+    pub fn from_graph_node_id(&self) -> &GraphNodeId {
+        &self.from_graph_node_id
+    }
+    pub fn from_attempt_id(&self) -> &AttemptId {
+        &self.from_attempt_id
+    }
+    pub fn to_graph_node_id(&self) -> Option<&GraphNodeId> {
+        self.to_graph_node_id.as_ref()
+    }
+    pub fn to_attempt_id(&self) -> Option<&AttemptId> {
+        self.to_attempt_id.as_ref()
+    }
+}
+
 impl GraphRetryOutcomeV2 {
     pub fn state(&self) -> &GraphSessionStateV2 {
         &self.state
@@ -1285,6 +1316,181 @@ impl GraphSessionStateV2 {
             state,
             graph_node_id,
             from_attempt_id,
+            to_attempt_id,
+        })
+    }
+
+    pub fn skip_active_action_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+        fresh_attempt_id: Option<AttemptId>,
+        reason: Option<ReasonV2>,
+        now: UnixMillis,
+    ) -> Result<GraphActionSkipOutcomeV2, GraphMutationErrorV2> {
+        if self.trace.lifecycle() != SessionLifecycle::Running {
+            return Err(GraphMutationErrorV2::SessionNotRunning);
+        }
+        if self.trace.revision() != expected_session_revision {
+            return Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: expected_session_revision,
+                actual: self.trace.revision(),
+            });
+        }
+        let active =
+            self.trace
+                .active_attempt()
+                .ok_or_else(|| GraphMutationErrorV2::AttemptNotCurrent {
+                    expected: expected_attempt_id.clone(),
+                    actual: None,
+                })?;
+        if active.attempt_id() != expected_attempt_id {
+            return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                expected: expected_attempt_id.clone(),
+                actual: Some(active.attempt_id().clone()),
+            });
+        }
+        let node = self
+            .snapshot
+            .graph_node(active.graph_node_id())
+            .ok_or_else(|| invalid("active Procedure v2 graph node is absent"))?;
+        if node.node_kind() != NodeKindV2::Action {
+            return Err(GraphMutationErrorV2::GraphNodeTypeMismatch {
+                graph_node_id: active.graph_node_id().clone(),
+                actual: node.node_kind(),
+            });
+        }
+        let placement: Value = serde_json::from_str(node.canonical_placement_json())
+            .map_err(|_| invalid("active Procedure v2 placement is invalid"))?;
+        let placement = placement
+            .as_object()
+            .ok_or_else(|| invalid("active Procedure v2 placement is invalid"))?;
+        let skip = placement
+            .get("skip")
+            .and_then(Value::as_object)
+            .filter(|skip| skip.get("allowed").and_then(Value::as_bool) == Some(true))
+            .ok_or_else(|| GraphMutationErrorV2::SkipNotAllowed {
+                graph_node_id: active.graph_node_id().clone(),
+            })?;
+        if skip.get("reason_required").and_then(Value::as_bool) == Some(true) && reason.is_none() {
+            return Err(GraphMutationErrorV2::SkipReasonRequired {
+                graph_node_id: active.graph_node_id().clone(),
+            });
+        }
+        let target = placement
+            .get("next")
+            .and_then(Value::as_str)
+            .map(|value| {
+                GraphNodeId::new(value.to_owned())
+                    .map_err(|_| invalid("Procedure v2 action target is invalid"))
+            })
+            .transpose()?;
+        let terminal = placement.get("terminal").and_then(Value::as_bool) == Some(true);
+        if target.is_some() == terminal {
+            return Err(invalid("Procedure v2 action outcome is invalid").into());
+        }
+        if terminal && self.snapshot.goal_tracking() {
+            let goal_revision = self
+                .goal_state
+                .current_revision()
+                .ok_or(GraphMutationErrorV2::SessionGoalMissing)?;
+            if self
+                .goal_state
+                .latest_fresh_assessment(&self.trace)
+                .is_none()
+            {
+                return Err(GraphMutationErrorV2::FreshGoalAssessmentMissing { goal_revision });
+            }
+        }
+        let active_metadata = self
+            .attempt_metadata
+            .iter()
+            .find(|metadata| metadata.attempt_id() == active.attempt_id())
+            .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+        if now < active_metadata.started_at() {
+            return Err(invalid("Procedure v2 skip timestamp regressed").into());
+        }
+
+        let from_graph_node_id = active.graph_node_id().clone();
+        let from_attempt_id = active.attempt_id().clone();
+        let mut trace = self.trace.clone();
+        let to_attempt_id = match (&target, fresh_attempt_id) {
+            (Some(target), Some(fresh_attempt_id)) => {
+                trace.advance(
+                    expected_attempt_id,
+                    AdvanceTerminalV2::Skipped,
+                    target.clone(),
+                    fresh_attempt_id.clone(),
+                    self.goal_state.current_revision(),
+                )?;
+                Some(fresh_attempt_id)
+            }
+            (None, None) => {
+                trace.finish(expected_attempt_id, AdvanceTerminalV2::Skipped)?;
+                None
+            }
+            _ => return Err(invalid("Procedure v2 skip fresh-attempt identity is invalid").into()),
+        };
+        let workflow_memory = self.workflow_memory.skip_action_successor_v2(
+            &self.snapshot,
+            &self.trace,
+            &trace,
+            now,
+        )?;
+        let mut metadata = self.attempt_metadata.clone();
+        let active_index = metadata
+            .iter()
+            .position(|candidate| candidate.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+        metadata[active_index] = AttemptMetadataV2::new(
+            expected_attempt_id.clone(),
+            metadata[active_index].started_at(),
+            Some(now),
+            reason.map(ReasonV2::into_inner),
+        )?;
+        if let Some(to_attempt_id) = &to_attempt_id {
+            metadata.push(AttemptMetadataV2::new(
+                to_attempt_id.clone(),
+                now,
+                None,
+                None,
+            )?);
+        }
+        let counters = self
+            .counters
+            .iter()
+            .map(|counter| {
+                Ok(GraphNodeCounterV2::new(
+                    counter.graph_node_id().clone(),
+                    counter
+                        .attempt_count()
+                        .checked_add(u64::from(target.as_ref() == Some(counter.graph_node_id())))
+                        .ok_or_else(|| invalid("Procedure v2 skip attempt counter overflowed"))?,
+                    counter.rework_traversal_count(),
+                ))
+            })
+            .collect::<Result<Vec<_>, GraphMutationErrorV2>>()?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            counters,
+            metadata,
+            workflow_memory,
+            self.goal_state.clone(),
+            self.created_at,
+            terminal.then_some(now),
+            None,
+            None,
+        )?;
+        Ok(GraphActionSkipOutcomeV2 {
+            state,
+            from_graph_node_id,
+            from_attempt_id,
+            to_graph_node_id: target,
             to_attempt_id,
         })
     }

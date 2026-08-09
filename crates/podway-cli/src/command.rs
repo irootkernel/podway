@@ -1815,6 +1815,7 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
         }
         Command::Rework(_) => explicit.attempt_id.is_some(),
         Command::Retry { .. } => explicit.attempt_id.is_some(),
+        Command::Skip { .. } => explicit.attempt_id.is_some(),
         Command::Goal {
             command: GoalCommand::Define(_),
         } => true,
@@ -1881,6 +1882,7 @@ fn direct_preconditions(
         Command::Decide(_) => v2_session_preconditions(explicit, true, false),
         Command::Rework(_) => v2_session_preconditions(explicit, false, false),
         Command::Retry { .. } => v2_session_preconditions(explicit, true, false),
+        Command::Skip { .. } => v2_session_preconditions(explicit, true, false),
         Command::Goal {
             command: GoalCommand::Define(_),
         } => v2_session_preconditions(explicit, false, false),

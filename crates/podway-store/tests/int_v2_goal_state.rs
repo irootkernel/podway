@@ -242,7 +242,7 @@ fn snapshot() -> ProcedureSnapshotV2 {
                         "superseded":{"to":"finish","effect":"advance"}
                     }
                 },
-                {"id":"finish","use":"finish-def","terminal":true}
+                {"id":"finish","use":"finish-def","skip":{"allowed":true,"reason_required":false},"terminal":true}
             ]
         },
         "manual_rework":{"allowed_targets":["clarify","assess"]}
@@ -298,7 +298,7 @@ fn terminal_goal_snapshot() -> ProcedureSnapshotV2 {
         },
         "graph":{
             "entry":"finish",
-            "nodes":[{"id":"finish","use":"finish-def","terminal":true}]
+            "nodes":[{"id":"finish","use":"finish-def","skip":{"allowed":true,"reason_required":false},"terminal":true}]
         }
     });
     let canonical = canonicalize_json_v1(&document).unwrap();
@@ -2212,6 +2212,16 @@ fn terminal_action_completion_requires_goal_and_fresh_assessment_without_changin
         Err(GraphMutationErrorV2::SessionGoalMissing)
     );
     assert_eq!(missing_goal, missing_goal_before);
+    assert_eq!(
+        missing_goal.skip_active_action_v2(
+            Revision::new(1),
+            &attempt_id(9),
+            None,
+            None,
+            UnixMillis::new(30),
+        ),
+        Err(GraphMutationErrorV2::SessionGoalMissing)
+    );
 
     let missing_assessment = terminal_goal_state(
         Some(1),
@@ -2236,6 +2246,82 @@ fn terminal_action_completion_requires_goal_and_fresh_assessment_without_changin
         })
     );
     assert_eq!(missing_assessment, missing_assessment_before);
+    assert_eq!(
+        missing_assessment.skip_active_action_v2(
+            Revision::new(1),
+            &attempt_id(9),
+            None,
+            None,
+            UnixMillis::new(30),
+        ),
+        Err(GraphMutationErrorV2::FreshGoalAssessmentMissing {
+            goal_revision: GoalRevisionNumberV2::FIRST,
+        })
+    );
+}
+
+#[test]
+fn terminal_skip_with_a_fresh_goal_assessment_completes_without_rewriting_goal_history() {
+    let ready = decided_state(8, false);
+    let goal_before = ready.goal_state().clone();
+    let workflow_before = ready.workflow_memory().clone();
+    let skipped = ready
+        .skip_active_action_v2(
+            Revision::new(8),
+            &attempt_id(3),
+            None,
+            None,
+            UnixMillis::new(70),
+        )
+        .unwrap()
+        .into_state();
+
+    assert_eq!(skipped.trace().lifecycle(), SessionLifecycle::Completed);
+    assert!(skipped.trace().active_attempt().is_none());
+    assert_eq!(
+        skipped.trace().attempts()[2].lifecycle(),
+        AttemptLifecycle::Skipped
+    );
+    assert_eq!(skipped.completed_at(), Some(UnixMillis::new(70)));
+    assert_eq!(skipped.goal_state(), &goal_before);
+    assert_eq!(skipped.workflow_memory(), &workflow_before);
+
+    let mut stale_attempts = ready.trace().attempts().to_vec();
+    let assessment = &stale_attempts[1];
+    stale_attempts[1] = SessionAttemptV2::new(
+        assessment.attempt_id().clone(),
+        assessment.graph_node_id().clone(),
+        assessment.number(),
+        assessment.trace(),
+        assessment.lifecycle(),
+        AttemptValidityV2::Stale,
+        assessment.goal_revision(),
+    )
+    .unwrap();
+    let stale = state(
+        8,
+        SessionLifecycle::Running,
+        stale_attempts,
+        ready.attempt_metadata().to_vec(),
+        ready.counters().to_vec(),
+        ready.workflow_memory().clone(),
+        ready.goal_state().clone(),
+        None,
+    );
+    let stale_before = stale.clone();
+    assert_eq!(
+        stale.skip_active_action_v2(
+            Revision::new(8),
+            &attempt_id(3),
+            None,
+            None,
+            UnixMillis::new(70),
+        ),
+        Err(GraphMutationErrorV2::FreshGoalAssessmentMissing {
+            goal_revision: GoalRevisionNumberV2::FIRST,
+        })
+    );
+    assert_eq!(stale, stale_before);
 }
 
 #[test]

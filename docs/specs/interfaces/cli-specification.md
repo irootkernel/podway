@@ -393,6 +393,13 @@ podway skip --reason <text>
 
 Fails when the active stage is not skippable. A reason is always accepted and is mandatory when the procedure requires it.
 
+For a Procedure v2 session, skip is executable only on an active action placement
+whose skip policy allows it. Required items and blockers do not prevent the
+transition. A supplied reason is non-blank and limited to 2,000 characters; the
+placement policy may require it. The CLI automatically supplies the current
+session revision and attempt unless explicit precondition flags are given. A fully
+fenced skip is sent directly without a status preflight.
+
 ### Retry
 
 ```bash

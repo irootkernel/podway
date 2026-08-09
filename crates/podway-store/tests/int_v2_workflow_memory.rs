@@ -144,6 +144,25 @@ fn snapshot() -> ProcedureSnapshotV2 {
     .unwrap()
 }
 
+fn skip_snapshot() -> ProcedureSnapshotV2 {
+    let mut document: serde_json::Value =
+        serde_json::from_str(snapshot().canonical_json().as_str()).unwrap();
+    let nodes = document["graph"]["nodes"].as_array_mut().unwrap();
+    nodes[0]["skip"] = json!({"allowed": true, "reason_required": true});
+    nodes[1]["evidence_from"][0]["required"] = json!(false);
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000111").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        digest,
+        ProcedureSourceLabelV1::file("skip-procedure.yaml").unwrap(),
+        UnixMillis::new(5),
+    )
+    .unwrap()
+}
+
 fn attempt(
     number: u64,
     graph_node: &str,
@@ -1015,6 +1034,157 @@ fn retry_discards_missing_required_items_and_open_blockers_only_from_the_fresh_a
     assert_eq!(retried.counters()[0].rework_traversal_count(), 0);
     assert_eq!(retried.counters()[1], state.counters()[1]);
     assert_eq!(retried.counters()[2], state.counters()[2]);
+}
+
+#[test]
+fn skip_clears_values_preserves_blockers_and_resolves_optional_source_as_empty() {
+    assert_eq!(
+        initial_state().skip_active_action_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            Some(attempt_id(2)),
+            Some(ReasonV2::new("Not allowed.").unwrap()),
+            UnixMillis::new(20),
+        ),
+        Err(GraphMutationErrorV2::SkipNotAllowed {
+            graph_node_id: node("capture")
+        })
+    );
+    assert_eq!(
+        gate_state().skip_active_action_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            Some(attempt_id(3)),
+            Some(ReasonV2::new("Decisions cannot skip.").unwrap()),
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::GraphNodeTypeMismatch {
+            graph_node_id: node("gate"),
+            actual: podway_core::NodeKindV2::Decision,
+        })
+    );
+    let old_memory = capture_memory(true, Some((BlockerState::Open, "Still blocked.")));
+    let state = GraphSessionStateV2::new_with_workflow_memory(
+        Revision::new(1),
+        "Skip recorded action",
+        skip_snapshot(),
+        SessionTraceV2::from_parts(
+            session_id(),
+            SessionLifecycle::Running,
+            Revision::new(1),
+            vec![attempt(
+                1,
+                "capture",
+                1,
+                1,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+            )],
+        )
+        .unwrap(),
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 0, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
+        WorkflowMemoryStateV2::new(vec![old_memory.clone()], Vec::new(), Vec::new()).unwrap(),
+        UnixMillis::new(10),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        state.skip_active_action_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            Some(attempt_id(2)),
+            None,
+            UnixMillis::new(20),
+        ),
+        Err(GraphMutationErrorV2::SkipReasonRequired {
+            graph_node_id: node("capture")
+        })
+    );
+
+    let outcome = state
+        .skip_active_action_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            Some(attempt_id(2)),
+            Some(ReasonV2::new("Not needed for this task.").unwrap()),
+            UnixMillis::new(20),
+        )
+        .unwrap();
+    let skipped = outcome.state();
+    let old_after = &skipped.workflow_memory().attempts()[0];
+    let fresh = &skipped.workflow_memory().attempts()[1];
+
+    assert_eq!(
+        skipped.trace().attempts()[0].lifecycle(),
+        AttemptLifecycle::Skipped
+    );
+    assert_eq!(old_after.blockers(), old_memory.blockers());
+    assert_eq!(old_after.evidence(), old_memory.evidence());
+    assert!(
+        old_after
+            .item_slots()
+            .iter()
+            .all(|slot| slot.value().is_none())
+    );
+    for (before, after) in old_memory.item_slots().iter().zip(old_after.item_slots()) {
+        assert_eq!(after.revision(), before.revision().checked_next().unwrap());
+        assert_eq!(after.updated_at(), UnixMillis::new(20));
+    }
+    assert!(fresh.item_slots().is_empty());
+    assert!(fresh.blockers().is_empty());
+    assert!(matches!(
+        fresh.evidence()[0].resolution(),
+        ResolvedEvidenceReferenceV2::Skipped(_)
+    ));
+    let readback = skipped.selected_evidence_readback(&attempt_id(2)).unwrap();
+    assert!(readback[0].items().items().is_empty());
+    assert_eq!(
+        fresh.evidence()[0]
+            .resolution()
+            .snapshot()
+            .unwrap()
+            .items_digest(),
+        &old_after.recorded_items_digest().unwrap()
+    );
+    assert!(fresh.evidence()[1].resolution().snapshot().is_none());
+    assert_eq!(skipped.counters()[0].attempt_count(), 1);
+    assert_eq!(skipped.counters()[1].attempt_count(), 1);
+    assert_eq!(skipped.counters()[2].attempt_count(), 0);
+
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store.create_graph_session_v2(&identity(), state).unwrap();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(1),
+            Revision::new(1),
+            outcome.into_state(),
+        )
+        .unwrap();
+    drop(store);
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    let loaded = reopened
+        .read_graph_session_v2(&identity())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        loaded.trace().attempts()[0].lifecycle(),
+        AttemptLifecycle::Skipped
+    );
+    assert!(
+        loaded.workflow_memory().attempts()[0]
+            .item_slots()
+            .iter()
+            .all(|slot| slot.value().is_none())
+    );
 }
 
 #[test]

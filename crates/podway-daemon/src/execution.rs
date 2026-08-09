@@ -717,6 +717,7 @@ fn is_procedure_v2_graph_mutation_v1(command: &SliceCommandV1) -> bool {
     matches!(
         command,
         SliceCommandV1::SessionComplete(_)
+            | SliceCommandV1::SessionSkip(_)
             | SliceCommandV1::SessionRetry(_)
             | SliceCommandV1::ItemCheck(_)
             | SliceCommandV1::ItemUncheck(_)
@@ -789,6 +790,12 @@ fn decode_procedure_v2_mutation_execution_v1(
         ReasonV2::new(input.reason.clone())
             .map_err(|_| invalid_execution_v1("Procedure v2 retry reason is invalid"))?;
     }
+    if let SliceCommandV1::SessionSkip(input) = &command
+        && let Some(reason) = &input.reason
+    {
+        ReasonV2::new(reason.clone())
+            .map_err(|_| invalid_execution_v1("Procedure v2 skip reason is invalid"))?;
+    }
     let fresh_attempt_id = value_optional_typed_v1(object, "fresh_attempt_id")?;
     let attached_artifact = match value_v1(object, "attached_artifact")? {
         Value::Null => None,
@@ -801,6 +808,7 @@ fn decode_procedure_v2_mutation_execution_v1(
     };
     match &command {
         SliceCommandV1::SessionComplete(_) if attached_artifact.is_none() => {}
+        SliceCommandV1::SessionSkip(_) if attached_artifact.is_none() => {}
         SliceCommandV1::SessionRetry(_)
             if attached_artifact.is_none() && fresh_attempt_id.is_some() => {}
         SliceCommandV1::ItemAttach(_)
@@ -898,7 +906,7 @@ fn rehydrate_procedure_v2_execution_v1(
     Ok(validated.parsed().clone())
 }
 
-fn fresh_complete_attempt_id_v1<Ids: ExecutionIdSourceV1>(
+fn fresh_successor_attempt_id_v1<Ids: ExecutionIdSourceV1>(
     state: &GraphSessionStateV2,
     ids: &Ids,
 ) -> Result<Option<AttemptId>, ExecutionErrorV1> {
@@ -2696,10 +2704,9 @@ where
             .map_err(ProcedureV2StartPreparationErrorV1::Execution)
     }
 
-    /// Attempts the Procedure v2 action, decision-retry, or item path. The immutable execution
-    /// document freezes all
-    /// generated IDs and attachment metadata before admission; an absent graph task preserves the
-    /// unchanged v1 fallback.
+    /// Attempts the Procedure v2 complete, skip, retry, or item path. The immutable execution
+    /// document freezes all generated IDs and attachment metadata before admission; an absent
+    /// graph task preserves the unchanged v1 fallback.
     pub fn admit_procedure_v2_mutation_for_workspace_with_response_context(
         &self,
         expected_workspace: &WorkspaceBindingV1,
@@ -2795,8 +2802,16 @@ where
             }),
             _ => None,
         };
-        let fresh_attempt_id = if matches!(request.command(), SliceCommandV1::SessionComplete(_)) {
-            fresh_complete_attempt_id_v1(state, &self.ids)?
+        let fresh_attempt_id = if matches!(
+            request.command(),
+            SliceCommandV1::SessionComplete(_) | SliceCommandV1::SessionSkip(_)
+        ) {
+            if let SliceCommandV1::SessionSkip(input) = request.command()
+                && let Some(reason) = &input.reason
+            {
+                ReasonV2::new(reason.clone()).map_err(ExecutionErrorV1::BoundaryDomain)?;
+            }
+            fresh_successor_attempt_id_v1(state, &self.ids)?
         } else if let SliceCommandV1::SessionRetry(input) = request.command() {
             ReasonV2::new(input.reason.clone()).map_err(ExecutionErrorV1::BoundaryDomain)?;
             Some(self.ids.next_attempt_id())
@@ -2971,6 +2986,53 @@ where
                 )
                 .map_err(|_| {
                     invalid_execution_v1("Procedure v2 complete operation cannot be persisted")
+                })?;
+                let result = DomainResult::SessionChanged {
+                    session_id: state.trace().session_id().clone(),
+                    revision_before: state.trace().revision(),
+                    revision_after: outcome.state().trace().revision(),
+                    changed: true,
+                };
+                self.store
+                    .commit_graph_mutation_terminal_v2(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        Some(outcome.into_state()),
+                        TerminalResultV1::Success(result),
+                        operation,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
+            SliceCommandV1::SessionSkip(input) => {
+                let reason = input
+                    .reason
+                    .clone()
+                    .map(ReasonV2::new)
+                    .transpose()
+                    .map_err(|_| invalid_execution_v1("Procedure v2 skip reason is invalid"))?;
+                let outcome = match state.skip_active_action_v2(
+                    input.preconditions.expected_session_revision,
+                    &input.preconditions.expected_attempt_id,
+                    admitted.fresh_attempt_id.clone(),
+                    reason.clone(),
+                    now,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                };
+                let operation = PersistedGraphTerminalOperationV2::skip(
+                    outcome.from_graph_node_id().clone(),
+                    outcome.from_attempt_id().clone(),
+                    outcome.to_graph_node_id().cloned(),
+                    outcome.to_attempt_id().cloned(),
+                    reason,
+                )
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 skip operation cannot be persisted")
                 })?;
                 let result = DomainResult::SessionChanged {
                     session_id: state.trace().session_id().clone(),
@@ -4863,6 +4925,48 @@ mod tests {
         let mut missing_fresh: Value = serde_json::from_str(canonical.as_str()).unwrap();
         missing_fresh["fresh_attempt_id"] = Value::Null;
         assert!(decode_procedure_v2_mutation_execution_v1(&missing_fresh.to_string()).is_err());
+
+        let mut oversized_reason: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        oversized_reason["payload"]["reason"] = json!("x".repeat(2_001));
+        assert!(decode_procedure_v2_mutation_execution_v1(&oversized_reason.to_string()).is_err());
+    }
+
+    #[test]
+    fn v2run005_skip_execution_preserves_optional_reason_and_fresh_identity() {
+        let admitted = AdmittedProcedureV2MutationV1 {
+            selector: WorktreeSelectorWireV1::new(b"/tmp/worktree", "/tmp/worktree", None).unwrap(),
+            workspace_id: WorkspaceId::new("00000000-0000-4000-8000-000000000914").unwrap(),
+            command: SliceCommandV1::SessionSkip(SessionSkipV1 {
+                reason: Some("Skip the optional placement.".to_owned()),
+                preconditions: podway_protocol::SessionMutationPreconditionsWireV1 {
+                    expected_session_id: SessionId::new("00000000-0000-4000-8000-000000000912")
+                        .unwrap(),
+                    expected_session_revision: Revision::new(7),
+                    expected_attempt_id: AttemptId::new("00000000-0000-4000-8000-000000000913")
+                        .unwrap(),
+                },
+            }),
+            fresh_attempt_id: Some(AttemptId::new("00000000-0000-4000-8000-000000000915").unwrap()),
+            attached_artifact: None,
+        };
+        let canonical = procedure_v2_mutation_execution_document_v1(&admitted).unwrap();
+        let decoded = decode_procedure_v2_mutation_execution_v1(canonical.as_str()).unwrap();
+        assert_eq!(decoded.fresh_attempt_id, admitted.fresh_attempt_id);
+        let SliceCommandV1::SessionSkip(decoded) = decoded.command else {
+            panic!("decoded command is not session.skip");
+        };
+        assert_eq!(
+            decoded.reason.as_deref(),
+            Some("Skip the optional placement.")
+        );
+
+        let mut no_reason: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        no_reason["payload"]["reason"] = Value::Null;
+        assert!(decode_procedure_v2_mutation_execution_v1(&no_reason.to_string()).is_ok());
+
+        let mut blank_reason: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        blank_reason["payload"]["reason"] = json!("   ");
+        assert!(decode_procedure_v2_mutation_execution_v1(&blank_reason.to_string()).is_err());
 
         let mut oversized_reason: Value = serde_json::from_str(canonical.as_str()).unwrap();
         oversized_reason["payload"]["reason"] = json!("x".repeat(2_001));

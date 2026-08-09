@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 
 use podway_core::{
     ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
-    CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1, DomainCommand, DomainResult,
-    GraphNodeId, ItemId, ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1,
-    Revision, SessionAggregateV1, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2,
-    Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
+    CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1, DomainCommand, DomainError,
+    DomainResult, GraphNodeId, ItemId, ProcedureSnapshotId, ProcedureSnapshotV1,
+    ProcedureSourceLabelV1, ReasonV2, Revision, SessionAggregateV1, SessionAttemptV2, SessionId,
+    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId,
+    canonicalize_json_v1,
 };
 use podway_store::{
     ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitRequestV1, AttemptMetadataV2,
@@ -96,7 +97,7 @@ fn graph_state_with_required_artifact(
         },
         "graph": {
             "entry": "work",
-            "nodes": [{"id": "work", "use": "work", "terminal": true}]
+            "nodes": [{"id": "work", "use": "work", "skip":{"allowed":true,"reason_required":true}, "terminal": true}]
         }
     });
     let canonical = canonicalize_json_v1(&document).unwrap();
@@ -329,6 +330,67 @@ fn admit_complete_and_claim(
         .claim_next(
             &identity(),
             WorkerIdV1::new("v2-complete-worker").unwrap(),
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .unwrap()
+}
+
+fn admit_skip_and_claim(
+    store: &SqliteStoreV1,
+    state: &GraphSessionStateV2,
+    key: &str,
+    job_number: u64,
+) -> podway_store::ClaimedJobV1 {
+    let active = state.trace().active_attempt().unwrap();
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "attached_artifact": null,
+            "command": "session.skip",
+            "execution_version": 7,
+            "fresh_attempt_id": null,
+            "payload": {"reason": "Not applicable."},
+            "preconditions": {},
+            "selector": {},
+            "workspace_id": identity().workspace_uuid().as_str(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::SessionSkip,
+        IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new(uuid(job_number)).unwrap(),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(state.trace().revision()),
+            Some(active.attempt_id().clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+        digest('f'),
+        UnixMillis::new(30),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        state.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            uuid(job_number + 100),
+            "session.skip",
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-graph-start",
+            0,
+        )
+        .unwrap(),
+    );
+    store.admit(&identity(), request).unwrap();
+    store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-skip-worker").unwrap(),
             UnixMillis::new(31),
         )
         .unwrap()
@@ -777,6 +839,88 @@ fn graph_complete_state_and_typed_terminal_projection_commit_and_reopen_together
 }
 
 #[test]
+fn graph_skip_state_and_typed_terminal_projection_commit_and_reopen_together() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let current = graph_state(611, 621, 10);
+    store
+        .create_graph_session_v2(&identity(), current.clone())
+        .unwrap();
+    let claimed = admit_skip_and_claim(&store, &current, "v2-skip", 631);
+    let job_id = claimed.job().job_id().clone();
+    let active = current.trace().active_attempt().unwrap();
+    let reason = ReasonV2::new("Not applicable.").unwrap();
+    let skipped = current
+        .skip_active_action_v2(
+            current.trace().revision(),
+            active.attempt_id(),
+            None,
+            Some(reason.clone()),
+            UnixMillis::new(32),
+        )
+        .unwrap();
+    let operation = PersistedGraphTerminalOperationV2::skip(
+        skipped.from_graph_node_id().clone(),
+        skipped.from_attempt_id().clone(),
+        None,
+        None,
+        Some(reason),
+    )
+    .unwrap();
+    let next = skipped.into_state();
+
+    store
+        .commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            Some(next.clone()),
+            TerminalResultV1::Success(DomainResult::SessionChanged {
+                session_id: current.trace().session_id().clone(),
+                revision_before: current.trace().revision(),
+                revision_after: next.trace().revision(),
+                changed: true,
+            }),
+            operation.clone(),
+            UnixMillis::new(33),
+        )
+        .unwrap();
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(next.clone())
+    );
+    let job = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(job.state(), JobStateV1::Succeeded);
+    assert_eq!(
+        job.terminal_receipt()
+            .unwrap()
+            .graph_session_projection()
+            .unwrap()
+            .operation(),
+        Some(&operation)
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 34);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(next)
+    );
+    assert_eq!(
+        reopened
+            .read_job(&identity(), &job_id)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt()
+            .unwrap()
+            .graph_session_projection()
+            .unwrap()
+            .operation(),
+        Some(&operation)
+    );
+}
+
+#[test]
 fn graph_complete_failpoint_rolls_back_state_and_terminal_receipt() {
     let temporary = TempDir::new().unwrap();
     let current = graph_state(640, 650, 10);
@@ -844,6 +988,197 @@ fn graph_complete_failpoint_rolls_back_state_and_terminal_receipt() {
         reopened.read_graph_session_v2(&identity()).unwrap(),
         Some(current)
     );
+}
+
+#[test]
+fn graph_skip_failpoint_rolls_back_state_receipt_and_requeues_after_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let initial = graph_state(641, 651, 10);
+    let current = initial
+        .mutate_active_item_v2(
+            initial.trace().active_attempt().unwrap().attempt_id(),
+            &ItemId::new("done").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Check,
+            UnixMillis::new(11),
+        )
+        .unwrap()
+        .into_state();
+    let recorded_before = current.workflow_memory().attempts()[0].item_slots()[0]
+        .value()
+        .cloned();
+    assert!(recorded_before.is_some());
+    {
+        let seed = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+        seed.create_graph_session_v2(&identity(), current.clone())
+            .unwrap();
+    }
+    let options = SqliteStoreOptionsV1::new(8)
+        .unwrap()
+        .with_failpoint(Some(
+            StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate,
+        ))
+        .with_failpoint_action(StoreFailpointActionV1::ReturnInjectedStorageIo);
+    let store = open(&temporary, options, 11);
+    let claimed = admit_skip_and_claim(&store, &current, "v2-skip-rollback", 661);
+    let job_id = claimed.job().job_id().clone();
+    let active = current.trace().active_attempt().unwrap();
+    let reason = ReasonV2::new("Not applicable.").unwrap();
+    let skipped = current
+        .skip_active_action_v2(
+            current.trace().revision(),
+            active.attempt_id(),
+            None,
+            Some(reason.clone()),
+            UnixMillis::new(32),
+        )
+        .unwrap();
+    let operation = PersistedGraphTerminalOperationV2::skip(
+        skipped.from_graph_node_id().clone(),
+        skipped.from_attempt_id().clone(),
+        None,
+        None,
+        Some(reason),
+    )
+    .unwrap();
+    let next = skipped.into_state();
+
+    assert!(
+        store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                current.workspace_revision(),
+                current.trace().revision(),
+                Some(next.clone()),
+                TerminalResultV1::Success(DomainResult::SessionChanged {
+                    session_id: current.trace().session_id().clone(),
+                    revision_before: current.trace().revision(),
+                    revision_after: next.trace().revision(),
+                    changed: true,
+                }),
+                operation,
+                UnixMillis::new(33),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    assert_eq!(
+        store
+            .read_graph_session_v2(&identity())
+            .unwrap()
+            .unwrap()
+            .workflow_memory()
+            .attempts()[0]
+            .item_slots()[0]
+            .value(),
+        recorded_before.as_ref()
+    );
+    let job = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 34);
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 1);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    assert_eq!(
+        reopened
+            .read_graph_session_v2(&identity())
+            .unwrap()
+            .unwrap()
+            .workflow_memory()
+            .attempts()[0]
+            .item_slots()[0]
+            .value(),
+        recorded_before.as_ref()
+    );
+    let recovered_job = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(recovered_job.state(), JobStateV1::Queued);
+    assert!(recovered_job.terminal_receipt().is_none());
+}
+
+#[test]
+fn graph_skip_terminal_rejects_reason_drift_and_reason_present_missing_failure() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let current = graph_state(642, 652, 10);
+    store
+        .create_graph_session_v2(&identity(), current.clone())
+        .unwrap();
+    let claimed = admit_skip_and_claim(&store, &current, "v2-skip-reason-forgery", 662);
+    let job_id = claimed.job().job_id().clone();
+    let active = current.trace().active_attempt().unwrap();
+    let forged_reason = ReasonV2::new("Forged after admission.").unwrap();
+    let skipped = current
+        .skip_active_action_v2(
+            current.trace().revision(),
+            active.attempt_id(),
+            None,
+            Some(forged_reason.clone()),
+            UnixMillis::new(32),
+        )
+        .unwrap();
+    let operation = PersistedGraphTerminalOperationV2::skip(
+        skipped.from_graph_node_id().clone(),
+        skipped.from_attempt_id().clone(),
+        None,
+        None,
+        Some(forged_reason),
+    )
+    .unwrap();
+    let next = skipped.into_state();
+
+    assert!(
+        store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                current.workspace_revision(),
+                current.trace().revision(),
+                Some(next.clone()),
+                TerminalResultV1::Success(DomainResult::SessionChanged {
+                    session_id: current.trace().session_id().clone(),
+                    revision_before: current.trace().revision(),
+                    revision_after: next.trace().revision(),
+                    changed: true,
+                }),
+                operation,
+                UnixMillis::new(33),
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                current.workspace_revision(),
+                current.trace().revision(),
+                None,
+                TerminalResultV1::Failure(DomainError::InvalidState {
+                    reason: "Procedure v2 graph mutation failed",
+                }),
+                PersistedGraphTerminalOperationV2::failure(
+                    PersistedGraphMutationFailureV2::SkipReasonRequired {
+                        graph_node_id: node("work"),
+                    },
+                )
+                .unwrap(),
+                UnixMillis::new(34),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    let job = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
 }
 
 #[test]

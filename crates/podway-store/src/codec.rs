@@ -522,6 +522,7 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
             | CommandV1::SessionStartReplace
             | CommandV1::SessionComplete
             | CommandV1::SessionRetry
+            | CommandV1::SessionSkip
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -537,6 +538,7 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
         command,
         CommandV1::SessionComplete
             | CommandV1::SessionRetry
+            | CommandV1::SessionSkip
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -552,7 +554,7 @@ fn procedure_v2_preconditions_match(
     preconditions: &RevisionAttemptItemPreconditionsV1,
 ) -> bool {
     match command {
-        CommandV1::SessionComplete | CommandV1::SessionRetry => {
+        CommandV1::SessionComplete | CommandV1::SessionRetry | CommandV1::SessionSkip => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_attempt_id().is_some()
                 && preconditions.expected_item_id().is_none()
@@ -1032,6 +1034,16 @@ pub enum PersistedGraphTerminalOperationV2 {
         to_attempt_id: AttemptId,
         reason: String,
     },
+    Skip {
+        from_graph_node_id: GraphNodeId,
+        from_attempt_id: AttemptId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_graph_node_id: Option<GraphNodeId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_attempt_id: Option<AttemptId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     ItemMutation {
         graph_node_id: GraphNodeId,
         attempt_id: AttemptId,
@@ -1061,6 +1073,12 @@ pub enum PersistedGraphMutationFailureV2 {
     GraphNodeTypeMismatch {
         graph_node_id: GraphNodeId,
         actual: String,
+    },
+    SkipNotAllowed {
+        graph_node_id: GraphNodeId,
+    },
+    SkipReasonRequired {
+        graph_node_id: GraphNodeId,
     },
     ItemNotFound {
         item_id: ItemId,
@@ -1113,6 +1131,14 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
                 }
                 .to_owned(),
             },
+            crate::GraphMutationErrorV2::SkipNotAllowed { graph_node_id } => Self::SkipNotAllowed {
+                graph_node_id: graph_node_id.clone(),
+            },
+            crate::GraphMutationErrorV2::SkipReasonRequired { graph_node_id } => {
+                Self::SkipReasonRequired {
+                    graph_node_id: graph_node_id.clone(),
+                }
+            }
             crate::GraphMutationErrorV2::ItemNotFound { item_id } => Self::ItemNotFound {
                 item_id: item_id.clone(),
             },
@@ -1199,6 +1225,24 @@ impl PersistedGraphTerminalOperationV2 {
         Ok(operation)
     }
 
+    pub fn skip(
+        from_graph_node_id: GraphNodeId,
+        from_attempt_id: AttemptId,
+        to_graph_node_id: Option<GraphNodeId>,
+        to_attempt_id: Option<AttemptId>,
+        reason: Option<ReasonV2>,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Skip {
+            from_graph_node_id,
+            from_attempt_id,
+            to_graph_node_id,
+            to_attempt_id,
+            reason: reason.map(ReasonV2::into_inner),
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
     pub fn failure(error: PersistedGraphMutationFailureV2) -> Result<Self, StoreCodecErrorV1> {
         let operation = Self::Failure { error };
         operation.validate()?;
@@ -1218,6 +1262,17 @@ impl PersistedGraphTerminalOperationV2 {
                 reason,
                 ..
             } => from_attempt_id != to_attempt_id && ReasonV2::new(reason.clone()).is_ok(),
+            Self::Skip {
+                to_graph_node_id,
+                to_attempt_id,
+                reason,
+                ..
+            } => {
+                to_graph_node_id.is_some() == to_attempt_id.is_some()
+                    && reason
+                        .as_ref()
+                        .is_none_or(|reason| ReasonV2::new(reason.clone()).is_ok())
+            }
             Self::ItemMutation { attempt_number, .. } => *attempt_number > 0,
             Self::Failure { error } => error.validate(),
         };
@@ -1250,6 +1305,8 @@ impl PersistedGraphMutationFailureV2 {
             Self::SessionNotRunning
             | Self::SessionRevisionConflict { .. }
             | Self::AttemptNotCurrent { .. }
+            | Self::SkipNotAllowed { .. }
+            | Self::SkipReasonRequired { .. }
             | Self::ItemNotFound { .. }
             | Self::ItemRevisionConflict { .. }
             | Self::ItemTypeMismatch
@@ -1712,7 +1769,8 @@ impl PersistedTerminalReceiptV1 {
                 (
                     None
                     | Some(PersistedGraphTerminalOperationV2::Complete { .. })
-                    | Some(PersistedGraphTerminalOperationV2::Retry { .. }),
+                    | Some(PersistedGraphTerminalOperationV2::Retry { .. })
+                    | Some(PersistedGraphTerminalOperationV2::Skip { .. }),
                     PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                         session_id,
                         revision_before,

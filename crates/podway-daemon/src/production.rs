@@ -1535,6 +1535,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         if matches!(
             slice_request.command(),
             SliceCommandV1::SessionComplete(_)
+                | SliceCommandV1::SessionSkip(_)
                 | SliceCommandV1::SessionRetry(_)
                 | SliceCommandV1::ItemCheck(_)
                 | SliceCommandV1::ItemUncheck(_)
@@ -2669,6 +2670,7 @@ fn validate_terminal_receipt_projection(
             (
                 None
                 | Some(PersistedGraphTerminalOperationV2::Complete { .. })
+                | Some(PersistedGraphTerminalOperationV2::Skip { .. })
                 | Some(PersistedGraphTerminalOperationV2::Retry { .. }),
                 PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                     ..
@@ -2857,6 +2859,7 @@ fn validate_frozen_terminal_error(
         }
         Some(
             PersistedGraphTerminalOperationV2::Complete { .. }
+            | PersistedGraphTerminalOperationV2::Skip { .. }
             | PersistedGraphTerminalOperationV2::Retry { .. }
             | PersistedGraphTerminalOperationV2::ItemMutation { .. },
         ) => return Err(terminal_replay_integrity_failure()),
@@ -2960,6 +2963,25 @@ fn validate_frozen_v2_result_projection(
                                     == to_graph_node_id.as_ref().map(|value| value.as_str())
                                 && result.get("to_attempt_id").and_then(Value::as_str)
                                     == to_attempt_id.as_ref().map(|value| value.as_str())
+                        }
+                        Some(PersistedGraphTerminalOperationV2::Skip {
+                            from_graph_node_id,
+                            from_attempt_id,
+                            to_graph_node_id,
+                            to_attempt_id,
+                            reason,
+                        }) => {
+                            common
+                                && result.get("transition").and_then(Value::as_str) == Some("skip")
+                                && result.get("from_graph_node_id").and_then(Value::as_str)
+                                    == Some(from_graph_node_id.as_str())
+                                && result.get("from_attempt_id").and_then(Value::as_str)
+                                    == Some(from_attempt_id.as_str())
+                                && result.get("to_graph_node_id").and_then(Value::as_str)
+                                    == to_graph_node_id.as_ref().map(|value| value.as_str())
+                                && result.get("to_attempt_id").and_then(Value::as_str)
+                                    == to_attempt_id.as_ref().map(|value| value.as_str())
+                                && result.get("reason").and_then(Value::as_str) == reason.as_deref()
                         }
                         Some(PersistedGraphTerminalOperationV2::Retry {
                             graph_node_id,
@@ -3142,6 +3164,45 @@ fn graph_terminal_envelope_v2(
                 }
                 (None, None) if session_state == "completed" => {}
                 _ => return Err(terminal_replay_integrity_failure()),
+            }
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::Skip {
+            from_graph_node_id,
+            from_attempt_id,
+            to_graph_node_id,
+            to_attempt_id,
+            reason,
+        }) => {
+            let session_state = match graph.lifecycle() {
+                PersistedSessionLifecycleV1::Running => "running",
+                PersistedSessionLifecycleV1::Completed => "completed",
+                PersistedSessionLifecycleV1::Cancelled => {
+                    return Err(terminal_replay_integrity_failure());
+                }
+            };
+            let mut result = json!({
+                "schema": "podway.stage-transition-result/v2",
+                "transition": "skip",
+                "from_graph_node_id": from_graph_node_id,
+                "from_attempt_id": from_attempt_id,
+                "revision": graph.revision_after(),
+                "session_state": session_state,
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph transition result is an object")
+            .clone();
+            match (to_graph_node_id, to_attempt_id) {
+                (Some(graph_node_id), Some(attempt_id)) if session_state == "running" => {
+                    result.insert("to_graph_node_id".to_owned(), json!(graph_node_id));
+                    result.insert("to_attempt_id".to_owned(), json!(attempt_id));
+                }
+                (None, None) if session_state == "completed" => {}
+                _ => return Err(terminal_replay_integrity_failure()),
+            }
+            if let Some(reason) = reason {
+                result.insert("reason".to_owned(), json!(reason));
             }
             graph_success_terminal_envelope_v2(receipt, result)
         }
@@ -3657,6 +3718,10 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
             DispatchErrorDetailsV1::default()
                 .with_graph_node_type_mismatch(graph_node_id.clone(), actual),
         ),
+        PersistedGraphMutationFailureV2::SkipNotAllowed { .. }
+        | PersistedGraphMutationFailureV2::SkipReasonRequired { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::StageNotSkippable)
+        }
         PersistedGraphMutationFailureV2::ItemNotFound { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)
         }
@@ -5079,6 +5144,76 @@ mod tests {
         assert_eq!(
             envelope["result"]["to_graph_node_id"],
             graph_node_id.as_str()
+        );
+        assert_eq!(
+            envelope["result"]["from_attempt_id"],
+            from_attempt_id.as_str()
+        );
+        assert_eq!(envelope["result"]["to_attempt_id"], to_attempt_id.as_str());
+        assert_eq!(envelope["result"]["reason"], reason.as_str());
+        validate_frozen_terminal_envelope(&receipt, &envelope).unwrap();
+    }
+
+    #[test]
+    fn v2run005_skip_terminal_seals_successor_fields_and_optional_reason() {
+        let sequence = 84;
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000080").unwrap();
+        let from_graph_node_id = GraphNodeId::new("optional-work").unwrap();
+        let to_graph_node_id = GraphNodeId::new("review").unwrap();
+        let from_attempt_id = AttemptId::new("00000000-0000-4000-8000-000000000081").unwrap();
+        let to_attempt_id = AttemptId::new("00000000-0000-4000-8000-000000000082").unwrap();
+        let reason = ReasonV2::new("The optional work is unnecessary.").unwrap();
+        let operation = PersistedGraphTerminalOperationV2::skip(
+            from_graph_node_id.clone(),
+            from_attempt_id.clone(),
+            Some(to_graph_node_id.clone()),
+            Some(to_attempt_id.clone()),
+            Some(reason.clone()),
+        )
+        .unwrap();
+        let graph_projection = PersistedGraphTerminalSessionProjectionV2::new(
+            session_id.clone(),
+            "Stored immutable skip session".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::new(4),
+            Revision::new(5),
+            Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            GraphNodeId::new("entry").unwrap(),
+            false,
+        )
+        .unwrap()
+        .with_operation(operation)
+        .unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_graph_projection(
+            fixture_job(sequence),
+            PersistedTerminalResultV1::Success(terminal_session_result(session_id)),
+            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+            graph_projection,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionSkip)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                format!("00000000-0000-4000-8000-{sequence:012x}"),
+                "session.skip",
+                WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+                "/safe/worktree",
+                sequence,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let envelope = seal_terminal_receipt_v1(&receipt).unwrap();
+        assert_eq!(envelope["result"]["transition"], "skip");
+        assert_eq!(
+            envelope["result"]["from_graph_node_id"],
+            from_graph_node_id.as_str()
+        );
+        assert_eq!(
+            envelope["result"]["to_graph_node_id"],
+            to_graph_node_id.as_str()
         );
         assert_eq!(
             envelope["result"]["from_attempt_id"],

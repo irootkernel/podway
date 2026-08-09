@@ -139,7 +139,7 @@ Dependencies: `V2GRF` and `V2PLT`.
 | `V2RUN-002` | Serve v2 status and next | Completed | Expose deterministic bounded cursor, readiness, action, goal, and guidance views. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
 | `V2RUN-003` | Complete actions and read items back | Completed | Gate completion on recorded items and present selected prior values. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
 | `V2RUN-004` | Retry v2 actions | Completed | Create a fresh attempt while preserving immutable history. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
-| `V2RUN-005` | Skip eligible placements | Planned | Enforce declared skip policy and terminal readiness. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
+| `V2RUN-005` | Skip eligible placements | Completed | Enforce declared skip policy and terminal readiness. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
 | `V2RUN-006` | Derive terminal and blocked states | Planned | Present completed, blocked, and dead-end states without ambiguity. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
 | `V2RUN-007` | Enforce runtime preconditions | Planned | Reject stale mutations and replay exact idempotent receipts. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
 | `V2RUN-008` | Close action runtime recovery | Planned | Prove concurrency, restart, durable-job, storage, and cycle behavior. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |

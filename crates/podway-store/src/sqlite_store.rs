@@ -866,6 +866,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 execution.command(),
                 crate::CommandV1::SessionComplete
                     | crate::CommandV1::SessionRetry
+                    | crate::CommandV1::SessionSkip
                     | crate::CommandV1::ItemCheck { .. }
                     | crate::CommandV1::ItemUncheck { .. }
                     | crate::CommandV1::ItemSet { .. }
@@ -1045,6 +1046,7 @@ impl StoreContractV1 for SqliteStoreV1 {
             request.command(),
             crate::CommandV1::SessionComplete
                 | crate::CommandV1::SessionRetry
+                | crate::CommandV1::SessionSkip
                 | crate::CommandV1::ItemCheck { .. }
                 | crate::CommandV1::ItemUncheck { .. }
                 | crate::CommandV1::ItemSet { .. }
@@ -3863,6 +3865,55 @@ fn validate_success_transition(
         .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))
 }
 
+fn procedure_v2_skip_reason_v1(
+    execution: &ClaimedExecutionV1,
+) -> Result<Option<String>, StoreErrorV1> {
+    let invalid = || invariant(StoreInvariantV1::TransitionMutationShape);
+    let document: serde_json::Value =
+        serde_json::from_str(execution.canonical_execution().as_str()).map_err(|_| invalid())?;
+    let object = document.as_object().ok_or_else(invalid)?;
+    let keys = [
+        "attached_artifact",
+        "command",
+        "execution_version",
+        "fresh_attempt_id",
+        "payload",
+        "preconditions",
+        "selector",
+        "workspace_id",
+    ];
+    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
+        return Err(invalid());
+    }
+    if object.get("command").and_then(serde_json::Value::as_str) != Some("session.skip")
+        || object
+            .get("execution_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(7)
+        || !object
+            .get("attached_artifact")
+            .is_some_and(serde_json::Value::is_null)
+    {
+        return Err(invalid());
+    }
+    let payload = object
+        .get("payload")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(invalid)?;
+    if payload.len() != 1 || !payload.contains_key("reason") {
+        return Err(invalid());
+    }
+    match payload.get("reason") {
+        Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(reason))
+            if podway_core::ReasonV2::new(reason.clone()).is_ok() =>
+        {
+            Ok(Some(reason.clone()))
+        }
+        _ => Err(invalid()),
+    }
+}
+
 fn validate_graph_mutation_terminal_shape_v2(
     execution: &ClaimedExecutionV1,
     current: &GraphSessionStateV2,
@@ -3965,6 +4016,62 @@ fn validate_graph_mutation_terminal_shape_v2(
                 })
         }
         (
+            crate::CommandV1::SessionSkip,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Skip {
+                from_graph_node_id,
+                from_attempt_id,
+                to_graph_node_id,
+                to_attempt_id,
+                reason,
+            },
+        ) => {
+            let admitted_reason = procedure_v2_skip_reason_v1(execution)?;
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let terminalized = next
+                .trace()
+                .attempts()
+                .iter()
+                .zip(next.attempt_metadata())
+                .find(|(attempt, _)| attempt.attempt_id() == active.attempt_id());
+            let next_active = next.trace().active_attempt();
+            *changed
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && current.trace().revision().checked_next().ok() == Some(next.trace().revision())
+                && next.trace().session_id() == current.trace().session_id()
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+                && from_graph_node_id == active.graph_node_id()
+                && from_attempt_id == active.attempt_id()
+                && reason == &admitted_reason
+                && terminalized.is_some_and(|(attempt, metadata)| {
+                    attempt.lifecycle() == podway_core::AttemptLifecycle::Skipped
+                        && attempt.validity() == podway_core::AttemptValidityV2::Valid
+                        && metadata.terminal_reason() == reason.as_deref()
+                })
+                && match (next_active, to_graph_node_id, to_attempt_id) {
+                    (Some(attempt), Some(graph_node_id), Some(attempt_id)) => {
+                        graph_node_id == attempt.graph_node_id()
+                            && attempt_id == attempt.attempt_id()
+                    }
+                    (None, None, None) => true,
+                    _ => false,
+                }
+        }
+        (
             command,
             TerminalResultV1::Success(podway_core::DomainResult::ItemChanged {
                 session_id,
@@ -4024,8 +4131,19 @@ fn validate_graph_mutation_terminal_shape_v2(
             }),
             PersistedGraphTerminalOperationV2::Failure { error },
         ) => {
+            let admitted_skip_reason = if command == &crate::CommandV1::SessionSkip {
+                Some(procedure_v2_skip_reason_v1(execution)?)
+            } else {
+                None
+            };
             next.is_none()
-                && graph_mutation_failure_matches_v2(command, preconditions, current, error)
+                && graph_mutation_failure_matches_v2(
+                    execution,
+                    preconditions,
+                    current,
+                    admitted_skip_reason.as_ref(),
+                    error,
+                )
         }
         _ => false,
     };
@@ -4035,11 +4153,13 @@ fn validate_graph_mutation_terminal_shape_v2(
 }
 
 fn graph_mutation_failure_matches_v2(
-    command: &crate::CommandV1,
+    execution: &ClaimedExecutionV1,
     preconditions: &crate::RevisionAttemptItemPreconditionsV1,
     current: &crate::GraphSessionStateV2,
+    admitted_skip_reason: Option<&Option<String>>,
     error: &PersistedGraphMutationFailureV2,
 ) -> bool {
+    let command = execution.command();
     let active = current.trace().active_attempt();
     match command {
         crate::CommandV1::SessionComplete => {
@@ -4080,6 +4200,81 @@ fn graph_mutation_failure_matches_v2(
             }
             _ => false,
         },
+        crate::CommandV1::SessionSkip => {
+            let (Some(expected_revision), Some(expected_attempt)) = (
+                preconditions.expected_session_revision(),
+                preconditions.expected_attempt_id(),
+            ) else {
+                return false;
+            };
+            match error {
+                PersistedGraphMutationFailureV2::SessionNotRunning => {
+                    return current.trace().lifecycle() != podway_core::SessionLifecycle::Running;
+                }
+                PersistedGraphMutationFailureV2::SessionRevisionConflict { expected, actual } => {
+                    return expected_revision == *expected && current.trace().revision() == *actual;
+                }
+                PersistedGraphMutationFailureV2::AttemptNotCurrent { expected, actual } => {
+                    return expected_attempt == expected
+                        && active.map(podway_core::SessionAttemptV2::attempt_id)
+                            == actual.as_ref();
+                }
+                PersistedGraphMutationFailureV2::GraphNodeTypeMismatch {
+                    graph_node_id,
+                    actual,
+                } => {
+                    return active.is_some_and(|attempt| {
+                        attempt.attempt_id() == expected_attempt
+                            && attempt.graph_node_id() == graph_node_id
+                            && current
+                                .snapshot()
+                                .graph_node(graph_node_id)
+                                .is_some_and(|node| {
+                                    node.node_kind() == podway_core::NodeKindV2::Decision
+                                        && actual == "decision"
+                                })
+                    });
+                }
+                _ => {}
+            }
+            if let PersistedGraphMutationFailureV2::SkipReasonRequired { graph_node_id } = error {
+                if !matches!(admitted_skip_reason, Some(None)) {
+                    return false;
+                }
+                return active.is_some_and(|attempt| {
+                    attempt.attempt_id() == expected_attempt
+                        && attempt.graph_node_id() == graph_node_id
+                        && current.trace().revision() == expected_revision
+                        && current
+                            .snapshot()
+                            .graph_node(graph_node_id)
+                            .and_then(|node| {
+                                serde_json::from_str::<serde_json::Value>(
+                                    node.canonical_placement_json(),
+                                )
+                                .ok()
+                            })
+                            .and_then(|placement| placement.get("skip").cloned())
+                            .and_then(|skip| skip.get("reason_required").cloned())
+                            .and_then(|required| required.as_bool())
+                            == Some(true)
+                });
+            }
+            let Some(fresh_attempt_id) = graph_completion_validation_attempt_v2(current) else {
+                return false;
+            };
+            current
+                .skip_active_action_v2(
+                    expected_revision,
+                    expected_attempt,
+                    fresh_attempt_id,
+                    Some(podway_core::ReasonV2::new("Store validation").expect("valid reason")),
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+                .is_some_and(|failure| &failure == error)
+        }
         command if graph_item_id_v2(command).is_some() => {
             let command_item_id = graph_item_id_v2(command).expect("guarded item command");
             let active_memory = active.and_then(|attempt| {

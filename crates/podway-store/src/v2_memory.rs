@@ -76,6 +76,12 @@ pub enum GraphMutationErrorV2 {
         graph_node_id: GraphNodeId,
         actual: podway_core::NodeKindV2,
     },
+    SkipNotAllowed {
+        graph_node_id: GraphNodeId,
+    },
+    SkipReasonRequired {
+        graph_node_id: GraphNodeId,
+    },
     ItemNotFound {
         item_id: ItemId,
     },
@@ -111,6 +117,12 @@ impl fmt::Display for GraphMutationErrorV2 {
             }
             Self::GraphNodeTypeMismatch { .. } => {
                 formatter.write_str("Procedure v2 graph node has the wrong type")
+            }
+            Self::SkipNotAllowed { .. } => {
+                formatter.write_str("Procedure v2 graph node may not be skipped")
+            }
+            Self::SkipReasonRequired { .. } => {
+                formatter.write_str("Procedure v2 skip reason is required")
             }
             Self::ItemNotFound { .. } => formatter.write_str("Procedure v2 item was not found"),
             Self::ItemRevisionConflict { .. } => {
@@ -754,6 +766,83 @@ impl WorkflowMemoryStateV2 {
             evidence,
         )?);
         Self::new(attempts, self.decisions.clone(), self.reworks.clone()).map_err(Into::into)
+    }
+
+    pub(crate) fn skip_action_successor_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        previous_trace: &SessionTraceV2,
+        next_trace: &SessionTraceV2,
+        ended_at: UnixMillis,
+    ) -> Result<Self, GraphMutationErrorV2> {
+        let source = previous_trace
+            .active_attempt()
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        let source_index = self
+            .attempts
+            .iter()
+            .position(|memory| memory.attempt_id() == source.attempt_id())
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        let source_memory = &self.attempts[source_index];
+        let cleared_slots = source_memory
+            .item_slots()
+            .iter()
+            .map(|slot| {
+                if slot.value().is_none() {
+                    return Ok(slot.clone());
+                }
+                ItemSlotStateV2::new(
+                    slot.attempt_id().clone(),
+                    slot.item_id().clone(),
+                    slot.item_type(),
+                    slot.revision()
+                        .checked_next()
+                        .map_err(GraphMutationErrorV2::Domain)?,
+                    None,
+                    slot.created_at(),
+                    ended_at,
+                )
+                .map_err(Into::into)
+            })
+            .collect::<Result<Vec<_>, GraphMutationErrorV2>>()?;
+        let mut attempts = self.attempts.clone();
+        attempts[source_index] = AttemptWorkflowMemoryV2::new(
+            source.attempt_id().clone(),
+            cleared_slots,
+            source_memory.blockers().to_vec(),
+            source_memory.evidence().to_vec(),
+        )?;
+        let cleared = Self::new(attempts, self.decisions.clone(), self.reworks.clone())?;
+        let Some(fresh) = next_trace.active_attempt() else {
+            return Ok(cleared);
+        };
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        let specification = model.node(fresh.graph_node_id())?;
+        let slots = specification
+            .items
+            .iter()
+            .map(|item| {
+                ItemSlotStateV2::new(
+                    fresh.attempt_id().clone(),
+                    item.id().clone(),
+                    item.item_type(),
+                    Revision::ZERO,
+                    None,
+                    ended_at,
+                    ended_at,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let evidence =
+            resolve_evidence_at_activation_v2(specification, next_trace, &cleared, ended_at)?;
+        let mut attempts = cleared.attempts.clone();
+        attempts.push(AttemptWorkflowMemoryV2::new(
+            fresh.attempt_id().clone(),
+            slots,
+            Vec::new(),
+            evidence,
+        )?);
+        Self::new(attempts, cleared.decisions, cleared.reworks).map_err(Into::into)
     }
 
     pub fn empty_for_trace(
@@ -2074,6 +2163,39 @@ pub(crate) fn validate_workflow_memory_successor_v2(
         let new_attempt = &next_trace.attempts()[index];
         let old_memory = &previous.attempts()[index];
         let new_memory = &next.attempts()[index];
+        let terminalizing_skip = old_attempt.lifecycle() == AttemptLifecycle::Active
+            && new_attempt.lifecycle() == AttemptLifecycle::Skipped;
+        if terminalizing_skip {
+            if old_memory.evidence() != new_memory.evidence()
+                || old_memory.blockers() != new_memory.blockers()
+                || old_memory.item_slots().len() != new_memory.item_slots().len()
+            {
+                return Err(invalid(
+                    "Procedure v2 skip changed preserved workflow memory",
+                ));
+            }
+            for (old, new) in old_memory.item_slots().iter().zip(new_memory.item_slots()) {
+                let identity_unchanged = old.attempt_id() == new.attempt_id()
+                    && old.item_id() == new.item_id()
+                    && old.item_type() == new.item_type()
+                    && old.created_at() == new.created_at();
+                let value_cleared = if old.value().is_some() {
+                    new.value().is_none()
+                        && new.revision()
+                            == old
+                                .revision()
+                                .checked_next()
+                                .map_err(|_| invalid("Procedure v2 item revision overflowed"))?
+                        && new.updated_at() >= old.updated_at()
+                } else {
+                    new == old
+                };
+                if !identity_unchanged || !value_cleared {
+                    return Err(invalid("Procedure v2 skip item clearing is inconsistent"));
+                }
+            }
+            continue;
+        }
         if old_attempt.lifecycle() != AttemptLifecycle::Active
             || new_attempt.lifecycle() != AttemptLifecycle::Active
         {
