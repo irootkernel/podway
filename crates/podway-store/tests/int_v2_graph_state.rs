@@ -1,6 +1,8 @@
 //! Procedure v2 graph/action persistence across transactions and process reopen.
 
 use std::{
+    fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     sync::{Arc, Barrier},
     thread,
@@ -8,15 +10,18 @@ use std::{
 
 use podway_core::{
     AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, CanonicalProcedureJsonV1,
-    GraphNodeId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2, Revision, ReworkKindV2,
-    ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId, SessionLifecycle,
-    SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
+    DomainCommand, GraphNodeId, JobId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2,
+    Revision, ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
+    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId,
+    canonicalize_json_v1,
 };
 use podway_store::{
-    AttemptMetadataV2, AttemptWorkflowMemoryV2, DurableWorktreeIdentityV1, GraphNodeCounterV2,
-    GraphSessionStateV2, ProcedureSnapshotV2, SqliteStoreOptionsV1, SqliteStoreV1, StoreErrorV1,
-    StoreFailpointV1, StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1,
-    ValidatedWorkspaceRootV1, WorkflowMemoryStateV2,
+    AdmitOutcomeV1, AdmitRequestV1, AttemptMetadataV2, AttemptWorkflowMemoryV2,
+    DurableWorktreeIdentityV1, GraphNodeCounterV2, GraphSessionStateV2, IdempotencyKeyV1,
+    ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
+    StoreContractV1, StoreErrorV1, StoreFailpointV1, StoreGraphReadContractV2,
+    StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreRecordKindV1, StoreUnavailableReasonV1,
+    ValidatedWorkspaceRootV1, WorkerIdV1, WorkflowMemoryStateV2,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -47,6 +52,21 @@ fn database_path(temporary: &TempDir) -> PathBuf {
     temporary.path().join("state.sqlite3")
 }
 
+fn database_artifacts(temporary: &TempDir) -> Vec<Option<Vec<u8>>> {
+    ["", "-wal", "-shm"]
+        .into_iter()
+        .map(|suffix| {
+            let mut path = database_path(temporary).into_os_string();
+            path.push(suffix);
+            match fs::read(PathBuf::from(path)) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == ErrorKind::NotFound => None,
+                Err(error) => panic!("database artifact must be readable: {error}"),
+            }
+        })
+        .collect()
+}
+
 fn open(temporary: &TempDir, options: SqliteStoreOptionsV1) -> SqliteStoreV1 {
     SqliteStoreV1::open(
         database_path(temporary),
@@ -60,6 +80,10 @@ fn open(temporary: &TempDir, options: SqliteStoreOptionsV1) -> SqliteStoreV1 {
 
 fn attempt_id(number: u64) -> AttemptId {
     AttemptId::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap()
+}
+
+fn job_id(number: u64) -> JobId {
+    JobId::new(format!("00000000-0000-4000-9000-{number:012x}")).unwrap()
 }
 
 fn node(value: &str) -> GraphNodeId {
@@ -423,6 +447,202 @@ fn graph_state_round_trips_successors_and_rework_across_reopen() {
     assert_eq!(
         reopened.read_graph_session_v2(&identity()).unwrap(),
         Some(completed_state())
+    );
+}
+
+#[test]
+fn graph_workspace_view_reads_graph_queue_and_sequence_from_one_store_boundary() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, options());
+    let state = initial_state();
+    store
+        .create_graph_session_v2(&identity(), state.clone())
+        .unwrap();
+
+    let queued_job = job_id(1);
+    let request = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new("v2-view-queued").unwrap(),
+        queued_job.clone(),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('c'),
+        UnixMillis::new(20),
+    );
+    assert!(matches!(
+        store.admit(&identity(), request),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+
+    let queued = store.read_graph_workspace_view_v2(&identity()).unwrap();
+    assert_eq!(queued.identity(), &identity());
+    assert_eq!(queued.graph_state(), Some(&state));
+    assert_eq!(queued.queued_job_count(), 1);
+    assert_eq!(queued.running_job_id(), None);
+    assert_eq!(queued.latest_workspace_sequence(), 1);
+    assert_eq!(queued.observed_at(), UnixMillis::new(20));
+
+    let claimed = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-view-worker").unwrap(),
+            UnixMillis::new(21),
+        )
+        .unwrap()
+        .expect("the queued job must be claimable");
+    assert_eq!(claimed.claim().job_id(), &queued_job);
+    let running = store.read_graph_workspace_view_v2(&identity()).unwrap();
+    assert_eq!(running.graph_state(), Some(&state));
+    assert_eq!(running.queued_job_count(), 0);
+    assert_eq!(running.running_job_id(), Some(&queued_job));
+    assert_eq!(running.latest_workspace_sequence(), 1);
+
+    drop(store);
+    let reopened = open(&temporary, options());
+    let recovered = reopened.read_graph_workspace_view_v2(&identity()).unwrap();
+    assert_eq!(recovered.graph_state(), Some(&state));
+    assert_eq!(recovered.queued_job_count(), 1);
+    assert_eq!(recovered.running_job_id(), None);
+    assert_eq!(recovered.latest_workspace_sequence(), 1);
+}
+
+#[test]
+fn disposable_graph_workspace_inspection_preserves_authoritative_artifact_bytes() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, options());
+
+    let empty_before = database_artifacts(&temporary);
+    let empty = SqliteStoreV1::inspect_graph_workspace_view_v2(
+        database_path(&temporary),
+        &identity(),
+        &options(),
+        UnixMillis::new(10),
+    )
+    .unwrap();
+    assert_eq!(empty.graph_state(), None);
+    assert_eq!(database_artifacts(&temporary), empty_before);
+
+    let state = initial_state();
+    store
+        .create_graph_session_v2(&identity(), state.clone())
+        .unwrap();
+    let queued_job = job_id(2);
+    let request = AdmitRequestV1::new(
+        DomainCommand::WorkspaceInitialize,
+        IdempotencyKeyV1::new("v2-disposable-view").unwrap(),
+        queued_job.clone(),
+        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+        digest('9'),
+        UnixMillis::new(20),
+    );
+    assert!(matches!(
+        store.admit(&identity(), request),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+
+    let before = database_artifacts(&temporary);
+    let inspected = SqliteStoreV1::inspect_graph_workspace_view_v2(
+        database_path(&temporary),
+        &identity(),
+        &options(),
+        UnixMillis::new(21),
+    )
+    .unwrap();
+    assert_eq!(inspected.identity(), &identity());
+    assert_eq!(inspected.graph_state(), Some(&state));
+    assert_eq!(inspected.queued_job_count(), 1);
+    assert_eq!(inspected.running_job_id(), None);
+    assert_eq!(inspected.latest_workspace_sequence(), 1);
+    assert_eq!(inspected.observed_at(), UnixMillis::new(20));
+    assert_eq!(database_artifacts(&temporary), before);
+
+    let (coherent, queued_state) = SqliteStoreV1::inspect_graph_workspace_view_and_job_state_v2(
+        database_path(&temporary),
+        &identity(),
+        &options(),
+        Some(&queued_job),
+        UnixMillis::new(21),
+    )
+    .unwrap();
+    assert_eq!(coherent, inspected);
+    assert_eq!(queued_state, Some(podway_store::JobStateV1::Queued));
+    let (_, missing_state) = SqliteStoreV1::inspect_graph_workspace_view_and_job_state_v2(
+        database_path(&temporary),
+        &identity(),
+        &options(),
+        Some(&job_id(99)),
+        UnixMillis::new(21),
+    )
+    .unwrap();
+    assert_eq!(missing_state, None);
+    assert_eq!(database_artifacts(&temporary), before);
+
+    drop(store);
+    let reopened = open(&temporary, options());
+    let reopened_before = database_artifacts(&temporary);
+    let recovered = SqliteStoreV1::inspect_graph_workspace_view_v2(
+        database_path(&temporary),
+        &identity(),
+        &options(),
+        UnixMillis::new(22),
+    )
+    .unwrap();
+    assert_eq!(recovered.graph_state(), Some(&state));
+    assert_eq!(recovered.queued_job_count(), 1);
+    assert_eq!(recovered.running_job_id(), None);
+    assert_eq!(recovered.latest_workspace_sequence(), 1);
+    assert_eq!(database_artifacts(&temporary), reopened_before);
+    drop(reopened);
+}
+
+#[test]
+fn graph_workspace_view_rejects_wrong_identity_and_v1_v2_coexistence() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, options());
+    store
+        .create_graph_session_v2(&identity(), initial_state())
+        .unwrap();
+    let wrong_identity = DurableWorktreeIdentityV1::new(
+        digest('d'),
+        identity().workspace_uuid().clone(),
+        digest('e'),
+    );
+    assert!(matches!(
+        store.read_graph_workspace_view_v2(&wrong_identity),
+        Err(StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::WorkspaceIdentity
+        })
+    ));
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "INSERT INTO procedure_snapshots (snapshot_id, schema_id, procedure_id, \
+             procedure_version, name, digest, canonical_json, source_kind, source_label, \
+             created_at_ms) VALUES (?1, 'podway.procedure/v1', 'legacy', '1', 'Legacy', ?2, \
+             '{}', 'file', 'legacy.yaml', 30)",
+            ("00000000-0000-4000-8000-000000000030", digest('f').as_str()),
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO task_sessions (singleton, session_id, task_title, \
+             procedure_snapshot_id, lifecycle, session_revision, active_stage_id, \
+             active_attempt_id, created_at_ms) VALUES (1, ?1, 'Legacy task', ?2, \
+             'running', 1, 'work', ?3, 30)",
+            (
+                "00000000-0000-4000-8000-000000000031",
+                "00000000-0000-4000-8000-000000000030",
+                "00000000-0000-4000-8000-000000000032",
+            ),
+        )
+        .unwrap();
+    drop(connection);
+
+    assert_eq!(
+        store.read_graph_workspace_view_v2(&identity()).unwrap_err(),
+        StoreErrorV1::CorruptStateV1 {
+            record: StoreRecordKindV1::Session
+        }
     );
 }
 

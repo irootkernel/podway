@@ -1334,6 +1334,7 @@ const STATUS_SURFACE_FLAGS: &[&str] = &[
     "--if-workspace-uuid",
     "--if-session-id",
     "--verbose",
+    "--history-before",
     "--wait-for-idle",
     "--compact",
     "--after-job",
@@ -1762,6 +1763,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--if-workspace-uuid",
             "--if-session-id",
             "--verbose",
+            "--history-before",
             "--wait-for-idle",
             "--compact",
             "--after-job",
@@ -3580,16 +3582,6 @@ fn all_public_route_grammars_parse_to_a_single_structured_outcome() {
                 assert_eq!(response["code"], "DAEMON_UNAVAILABLE");
                 assert_eq!(response["retryable"], true);
                 assert_eq!(response["exit_code"], 3);
-            }
-            "session.decide"
-            | "session.rework"
-            | "goal.define"
-            | "goal.revise"
-            | "goal.assess_criterion" => {
-                assert_eq!(output.status.code(), Some(2), "{route}: {output:?}");
-                assert_eq!(response["schema"], "podway.error/v1");
-                assert_eq!(response["code"], "REQUEST_INVALID");
-                assert_eq!(response["details"]["admission"]["admitted"], false);
             }
             route if route.starts_with("daemon.") => {
                 assert!(

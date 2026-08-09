@@ -44,8 +44,8 @@ pub use v2_memory::{
 };
 pub use v2_state::{
     AttemptMetadataV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphSessionStateV2,
-    GraphStartCurrentTaskV2, ProcedureSnapshotV2, StoreGraphMutationContractV2,
-    StoreGraphStateContractV2,
+    GraphStartCurrentTaskV2, GraphWorkspaceViewV2, ProcedureSnapshotV2,
+    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;

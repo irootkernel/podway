@@ -177,6 +177,10 @@ const VERBOSE: Flag = Flag {
     long: "verbose",
     takes_value: false,
 };
+const HISTORY_BEFORE: Flag = Flag {
+    long: "history-before",
+    takes_value: true,
+};
 const WAIT_FOR_IDLE: Flag = Flag {
     long: "wait-for-idle",
     takes_value: false,
@@ -546,6 +550,7 @@ const ROUTES: &[Route] = &[
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &VERBOSE,
+            &HISTORY_BEFORE,
             &WAIT_FOR_IDLE,
             &COMPACT,
             &AFTER_JOB,

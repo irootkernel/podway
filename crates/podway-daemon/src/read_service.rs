@@ -20,8 +20,8 @@ use podway_protocol::{
     StatusResultV1, StatusSessionV1, StatusStageResultV1, StatusTaskV1,
 };
 use podway_store::{
-    DurableWorktreeIdentityV1, JobIdV1, JobListQueryV1, JobStateV1, JobViewV1, StoreErrorV1,
-    StoreReadContractV1, WorkspaceViewV1,
+    DurableWorktreeIdentityV1, GraphWorkspaceViewV2, JobIdV1, JobListQueryV1, JobStateV1,
+    JobViewV1, StoreErrorV1, StoreGraphReadContractV2, StoreReadContractV1, WorkspaceViewV1,
 };
 
 /// A monotonic millisecond deadline supplied by the daemon runtime.
@@ -603,6 +603,127 @@ where
             suggestions,
         };
         validate_next_result(result)
+    }
+}
+
+impl<Store, Notifications, Clock> AuthoritativeReadServiceV1<Store, Notifications, Clock>
+where
+    Store: StoreReadContractV1 + StoreGraphReadContractV2,
+    Notifications: ReadNotificationV1,
+    Clock: MonotonicClockV1,
+{
+    /// Returns one coherent Procedure v2 graph/queue observation after the requested durable wait.
+    /// Notifications are hints only; every successful branch ends with a Store transaction read.
+    pub fn graph_workspace_view_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        wait: ReadWaitV1,
+        expected_session_id: Option<&SessionId>,
+    ) -> Result<GraphWorkspaceViewV2, ReadServiceErrorV1> {
+        if matches!(wait, ReadWaitV1::Immediate) {
+            return self.read_graph_workspace_view_v2(identity, expected_session_id);
+        }
+        let deadline = wait
+            .deadline()
+            .ok_or(ReadServiceErrorV1::InconsistentState {
+                reason: "a non-immediate graph wait is missing its deadline",
+            })?;
+        loop {
+            let observed = self
+                .notifications
+                .observe(identity)
+                .map_err(ReadServiceErrorV1::Notification)?;
+            if let Some(view) =
+                self.graph_predicate_satisfied_v2(identity, &wait, expected_session_id)?
+            {
+                return Ok(view);
+            }
+            if self.clock.now_millis() >= deadline.millis() {
+                return Err(ReadServiceErrorV1::WaitTimedOut);
+            }
+            match self
+                .notifications
+                .wait_for_change(identity, observed, deadline)
+                .map_err(ReadServiceErrorV1::Notification)?
+            {
+                ReadWaitOutcomeV1::Notified => {}
+                ReadWaitOutcomeV1::TimedOut => {
+                    if let Some(view) =
+                        self.graph_predicate_satisfied_v2(identity, &wait, expected_session_id)?
+                    {
+                        return Ok(view);
+                    }
+                    return Err(ReadServiceErrorV1::WaitTimedOut);
+                }
+            }
+        }
+    }
+
+    fn graph_predicate_satisfied_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        wait: &ReadWaitV1,
+        expected_session_id: Option<&SessionId>,
+    ) -> Result<Option<GraphWorkspaceViewV2>, ReadServiceErrorV1> {
+        match wait {
+            ReadWaitV1::Immediate => self
+                .read_graph_workspace_view_v2(identity, expected_session_id)
+                .map(Some),
+            ReadWaitV1::IdleUntil(_) => {
+                let view = self.read_graph_workspace_view_v2(identity, expected_session_id)?;
+                Ok(
+                    (view.queued_job_count() == 0 && view.running_job_id().is_none())
+                        .then_some(view),
+                )
+            }
+            ReadWaitV1::AfterJobUntil { job_id, .. } => {
+                let first = self.read_graph_workspace_view_v2(identity, expected_session_id)?;
+                let job = self
+                    .store
+                    .read_job(identity, job_id)
+                    .map_err(ReadServiceErrorV1::Store)?
+                    .ok_or_else(|| ReadServiceErrorV1::JobNotFound {
+                        job_id: job_id.clone(),
+                    })?;
+                if is_terminal_job(job.state()) {
+                    // Re-read after the terminal observation so graph/queue facts cannot predate it.
+                    self.read_graph_workspace_view_v2(identity, expected_session_id)
+                        .map(Some)
+                } else {
+                    drop(first);
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    fn read_graph_workspace_view_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        expected_session_id: Option<&SessionId>,
+    ) -> Result<GraphWorkspaceViewV2, ReadServiceErrorV1> {
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(identity)
+            .map_err(ReadServiceErrorV1::Store)?;
+        if view.identity() != identity {
+            return Err(ReadServiceErrorV1::InconsistentState {
+                reason: "Procedure v2 workspace view identity is inconsistent",
+            });
+        }
+        let actual = view
+            .graph_state()
+            .map(|state| state.trace().session_id().clone());
+        if let Some(expected) = expected_session_id
+            && actual.is_some()
+            && actual.as_ref() != Some(expected)
+        {
+            return Err(ReadServiceErrorV1::SessionIdentityMismatch {
+                expected: expected.clone(),
+                actual,
+            });
+        }
+        Ok(view)
     }
 }
 

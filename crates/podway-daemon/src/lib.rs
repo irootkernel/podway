@@ -21,6 +21,7 @@ pub mod runtime;
 pub mod runtime_workspace;
 pub mod scheduler;
 pub mod server;
+pub mod v2_read_service;
 pub mod worker;
 pub mod workspace;
 use std::{

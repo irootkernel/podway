@@ -172,7 +172,7 @@ fn examples() -> BTreeMap<&'static str, Value> {
         ),
         (
             "podway.next-result/v2",
-            json!({"schema":"podway.next-result/v2","procedure_schema":"podway.procedure/v2","procedure_digest":DIGEST,"goal_tracking":false,"goal_defined":false,"node":node,"attempt":attempt,"trace_length":1,"counters":[{"graph_node_id":"work","attempt_count":1,"rework_traversal_count":0}],"queue":queue,"revision":1,"readiness":readiness,"title":"Work","intent":"Do work","instructions":[],"missing_required_item_count":0,"missing_required_items":[],"blockers_total":0,"blockers":[],"blockers_truncated":false,"terminal":true,"allowed_actions":["session.complete"],"suggestions":[{"command":"session.complete","argv":["complete"]}],"references":[],"readback":[],"allowed_manual_rework_targets":[]}),
+            json!({"schema":"podway.next-result/v2","procedure_schema":"podway.procedure/v2","procedure_digest":DIGEST,"goal_tracking":false,"goal_defined":false,"node":node,"attempt":attempt,"trace_length":1,"counters":[{"graph_node_id":"work","attempt_count":1,"rework_traversal_count":0}],"queue":queue,"revision":1,"readiness":readiness,"title":"Work","intent":"Do work","instructions":[],"missing_required_item_count":0,"missing_required_items":[],"blockers_total":0,"blockers":[],"blockers_truncated":false,"terminal":true,"allowed_actions":["session.complete"],"suggestions":[{"command":"session.complete","argv":["podway","complete"]}],"references":[],"readback":[],"allowed_manual_rework_targets":[]}),
         ),
         (
             "podway.stage-transition-result/v2",

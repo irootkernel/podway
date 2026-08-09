@@ -24,8 +24,8 @@ use crate::v2_memory::{
     validate_workflow_memory_v2,
 };
 use crate::{
-    DurableWorktreeIdentityV1, RusqliteErrorContextV1, StoreErrorV1, StoreInvariantV1,
-    StoreRecordKindV1, StoreValueErrorV1, map_rusqlite_error_v1,
+    DurableWorktreeIdentityV1, EpochMillisV1, JobIdV1, RusqliteErrorContextV1, StoreErrorV1,
+    StoreInvariantV1, StoreRecordKindV1, StoreValueErrorV1, map_rusqlite_error_v1,
 };
 
 const PROCEDURE_SCHEMA_V2: &str = "podway.procedure/v2";
@@ -646,6 +646,64 @@ pub struct GraphSessionStateV2 {
     cancel_reason: Option<String>,
 }
 
+/// One coherent committed observation of Procedure v2 state and its workspace queue.
+///
+/// The Store constructs this view from one SQLite read transaction so a daemon read never pairs
+/// a graph cursor from one committed point with queue or sequence facts from another.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphWorkspaceViewV2 {
+    identity: DurableWorktreeIdentityV1,
+    graph_state: Option<GraphSessionStateV2>,
+    queued_job_count: u32,
+    running_job_id: Option<JobIdV1>,
+    latest_workspace_sequence: u64,
+    observed_at: EpochMillisV1,
+}
+
+impl GraphWorkspaceViewV2 {
+    pub fn new(
+        identity: DurableWorktreeIdentityV1,
+        graph_state: Option<GraphSessionStateV2>,
+        queued_job_count: u32,
+        running_job_id: Option<JobIdV1>,
+        latest_workspace_sequence: u64,
+        observed_at: EpochMillisV1,
+    ) -> Self {
+        Self {
+            identity,
+            graph_state,
+            queued_job_count,
+            running_job_id,
+            latest_workspace_sequence,
+            observed_at,
+        }
+    }
+
+    pub fn identity(&self) -> &DurableWorktreeIdentityV1 {
+        &self.identity
+    }
+
+    pub fn graph_state(&self) -> Option<&GraphSessionStateV2> {
+        self.graph_state.as_ref()
+    }
+
+    pub const fn queued_job_count(&self) -> u32 {
+        self.queued_job_count
+    }
+
+    pub fn running_job_id(&self) -> Option<&JobIdV1> {
+        self.running_job_id.as_ref()
+    }
+
+    pub const fn latest_workspace_sequence(&self) -> u64 {
+        self.latest_workspace_sequence
+    }
+
+    pub const fn observed_at(&self) -> EpochMillisV1 {
+        self.observed_at
+    }
+}
+
 impl GraphSessionStateV2 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -952,6 +1010,14 @@ pub trait StoreGraphStateContractV2: Send + Sync {
         &self,
         identity: &DurableWorktreeIdentityV1,
     ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1>;
+}
+
+/// Additive read-only Store boundary for one coherent Procedure v2 workspace observation.
+pub trait StoreGraphReadContractV2: Send + Sync {
+    fn read_graph_workspace_view_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<GraphWorkspaceViewV2, StoreErrorV1>;
 }
 
 /// Exact current-task fence for a Procedure v2 start terminal transaction.

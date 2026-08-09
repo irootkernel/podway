@@ -197,6 +197,14 @@ fn mcont004_compact_status_requires_idle_wait_and_forbids_verbose() {
     assert!(status.compact);
     assert_eq!(status.wait, QueryWaitV1::Idle);
     assert!(!status.verbose);
+    assert_eq!(status.history_before, None);
+    assert!(
+        serde_json::to_value(status)
+            .unwrap()
+            .get("history_before")
+            .is_none(),
+        "the absent v2 cursor must not change retained status serialization"
+    );
 
     for payload in [
         json!({"selector": selector(), "compact": true}),
@@ -214,6 +222,53 @@ fn mcont004_compact_status_requires_idle_wait_and_forbids_verbose() {
             Err(SliceErrorV1::InvalidValue { field: "compact" }),
         );
     }
+}
+
+#[test]
+fn v2run002_status_history_cursor_is_positive_and_verbose_only() {
+    let valid = SliceRequestV1::from_envelope(&envelope(
+        "session.status",
+        OperationV1::Query,
+        false,
+        json!({"selector": selector(), "verbose": true, "history_before": 42}),
+        PreconditionsV1::default(),
+    ))
+    .unwrap();
+    let SliceCommandV1::SessionStatus(status) = valid.command() else {
+        panic!("expected status command");
+    };
+    assert!(status.verbose);
+    assert!(!status.compact);
+    assert_eq!(status.history_before, Some(42));
+    assert_eq!(serde_json::to_value(status).unwrap()["history_before"], 42);
+
+    for payload in [
+        json!({"selector": selector(), "history_before": 42}),
+        json!({"selector": selector(), "verbose": true, "history_before": 0}),
+        json!({"selector": selector(), "wait_for_idle": true, "compact": true, "history_before": 42}),
+    ] {
+        assert_eq!(
+            SliceRequestV1::from_envelope(&envelope(
+                "session.status",
+                OperationV1::Query,
+                false,
+                payload,
+                PreconditionsV1::default(),
+            )),
+            Err(SliceErrorV1::InvalidValue {
+                field: "history_before",
+            }),
+        );
+    }
+
+    assert!(SliceRequestV1::from_envelope(&envelope(
+        "session.status",
+        OperationV1::Query,
+        false,
+        json!({"selector": selector(), "verbose": true, "history_before": "18446744073709551616"}),
+        PreconditionsV1::default(),
+    ))
+    .is_err());
 }
 
 struct RouteCase {

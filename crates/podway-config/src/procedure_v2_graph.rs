@@ -16,7 +16,45 @@
 //!
 use std::collections::{BTreeMap, VecDeque};
 
-use podway_core::{ActionOutcomeV2, GraphPlacementV2, ProcedureGraphV2, TransitionEffectV2};
+use podway_core::{
+    ActionOutcomeV2, GraphNodeId, GraphPlacementV2, ProcedureGraphV2, TransitionEffectV2,
+};
+
+use crate::{ParsedNodeDefinition, ParsedProcedureV2};
+
+/// Returns the graph nodes from which every terminal path crosses a session-goal assessment.
+///
+/// Goal revision uses this stricter subset of ordinary manual-rework targets. The analysis is the
+/// same bounded least fixpoint used by vet and lint, exposed here so runtime guidance cannot drift
+/// from authoring diagnostics.
+pub fn goal_revision_safe_targets_v2(procedure: &ParsedProcedureV2) -> Vec<GraphNodeId> {
+    let graph = GraphIndex::new(procedure.graph());
+    let assessment_definitions = procedure
+        .node_definitions()
+        .iter()
+        .filter_map(|definition| match definition {
+            ParsedNodeDefinition::Decision(definition) if definition.assessment().is_some() => {
+                Some(definition.id())
+            }
+            ParsedNodeDefinition::Action(_) | ParsedNodeDefinition::Decision(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let unsafe_nodes = graph.assessment_free_to_terminal(|index| {
+        matches!(
+            graph.placement(index),
+            Some(GraphPlacementV2::Decision(placement))
+                if assessment_definitions.contains(&placement.definition())
+        )
+    });
+    procedure
+        .graph()
+        .placements()
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !unsafe_nodes.contains(*index))
+        .map(|(_, placement)| placement.id().clone())
+        .collect()
+}
 
 /// The maximum number of placements a Procedure v2 graph can hold (`ProcedureGraphV2::new`).
 ///
@@ -460,6 +498,45 @@ struct TarjanState {
 mod tests {
     use super::*;
     use podway_core::{ActionPlacementV2, GraphNodeId, NodeDefinitionId};
+
+    #[test]
+    fn goal_revision_targets_require_an_assessment_on_every_terminal_path() {
+        let source = br#"{
+          "schema":"podway.procedure/v2",
+          "id":"revision-safety",
+          "version":"1",
+          "name":"Revision safety",
+          "purpose":"Separate manual rework from safe goal revision.",
+          "goal_tracking":true,
+          "node_definitions":{
+            "assess":{"type":"decision","title":"Assess","objective":"Assess goal.","prompt":"Outcome?","options":[{"id":"achieved","label":"Achieved"},{"id":"not-achieved","label":"Not achieved"},{"id":"superseded","label":"Superseded"}],"reason":{"required":true},"assessment":{"target":"session_goal","outcomes":{"achieved":"achieved","not-achieved":"not_achieved","superseded":"superseded"}}},
+            "work":{"type":"action","title":"Work","intent":"Do work."},
+            "finish":{"type":"action","title":"Finish","intent":"Finish."}
+          },
+          "graph":{
+            "entry":"assessment",
+            "nodes":[
+              {"id":"assessment","use":"assess","routes":{"achieved":{"to":"work","effect":"advance"},"not-achieved":{"to":"work","effect":"advance"},"superseded":{"to":"work","effect":"advance"}}},
+              {"id":"work","use":"work","next":"finish"},
+              {"id":"finish","use":"finish","terminal":true}
+            ]
+          },
+          "manual_rework":{"allowed_targets":["assessment","work"]}
+        }"#;
+        let parsed =
+            match crate::parse_procedure_document(source, crate::ProcedureDocumentFormat::Json)
+                .expect("fixture must parse")
+            {
+                crate::ParsedProcedure::V2(parsed) => parsed,
+                crate::ParsedProcedure::V1(_) => panic!("fixture must be Procedure v2"),
+            };
+
+        let safe = goal_revision_safe_targets_v2(&parsed);
+        assert_eq!(
+            safe.iter().map(GraphNodeId::as_str).collect::<Vec<_>>(),
+            vec!["assessment"]
+        );
+    }
 
     /// Runs a check against a synthetic three-node index. The placements provide terminal
     /// identity; adjacency is supplied independently so all 512 directed graphs can be exhausted

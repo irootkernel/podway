@@ -32,10 +32,10 @@ use crate::state_rows::{
     load_current_session, load_workspace_state, persist_snapshot, replace_current_session,
 };
 use crate::v2_state::{
-    GraphSessionStateV2, GraphStartCurrentTaskV2, StoreGraphMutationContractV2,
-    StoreGraphStateContractV2, clear_graph_session_transaction_v2,
-    create_graph_session_transaction_v2, load_graph_session_connection_v2,
-    replace_graph_session_transaction_v2,
+    GraphSessionStateV2, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
+    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
+    clear_graph_session_transaction_v2, create_graph_session_transaction_v2,
+    load_graph_session_connection_v2, replace_graph_session_transaction_v2,
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
@@ -205,6 +205,59 @@ impl SqliteStoreV1 {
                     })
                 })
                 .unwrap_or(GraphStartCurrentTaskV2::Absent))
+        })
+    }
+
+    /// Reads one coherent Procedure v2 graph and queue view from a disposable database snapshot.
+    ///
+    /// The authoritative database and its sidecars are never opened for mutation. This supports
+    /// daemon reads before a scheduler generation is active and lets callers distinguish an absent
+    /// graph session without activating the workspace Store.
+    pub fn inspect_graph_workspace_view_v2(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+        checked_at: EpochMillisV1,
+    ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
+        Self::inspect_graph_workspace_view_and_job_state_v2(
+            path,
+            expected_identity,
+            options,
+            None,
+            checked_at,
+        )
+        .map(|(view, _)| view)
+    }
+
+    /// Reads one coherent Procedure v2 graph view and optional named job state from a disposable
+    /// database snapshot.
+    ///
+    /// This is the restart-safe read boundary for durable waits before a scheduler generation is
+    /// active. The authoritative database and its sidecars are never opened for mutation.
+    pub fn inspect_graph_workspace_view_and_job_state_v2(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+        job: Option<&JobIdV1>,
+        checked_at: EpochMillisV1,
+    ) -> Result<(GraphWorkspaceViewV2, Option<JobStateV1>), StoreErrorV1> {
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
+            verify_inspection_integrity_connection_v1(
+                connection,
+                expected_identity,
+                options,
+                IntegrityModeV1::Fast,
+                checked_at,
+            )?;
+            let transaction = connection.transaction().map_err(storage)?;
+            let view = read_graph_workspace_view_connection_v2(&transaction, expected_identity)?;
+            let job_state = job
+                .map(|job| read_job_state_connection_v1(&transaction, job))
+                .transpose()?
+                .flatten();
+            transaction.commit().map_err(storage)?;
+            Ok((view, job_state))
         })
     }
 
@@ -449,6 +502,20 @@ impl StoreGraphStateContractV2 for SqliteStoreV1 {
         )?;
         self.trigger_failpoint(StoreFailpointV1::V2GraphStateBeforeCommit)?;
         transaction.commit().map_err(storage)
+    }
+}
+
+impl StoreGraphReadContractV2 for SqliteStoreV1 {
+    fn read_graph_workspace_view_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection.transaction().map_err(storage)?;
+        let view = read_graph_workspace_view_connection_v2(&transaction, &self.identity)?;
+        transaction.commit().map_err(storage)?;
+        Ok(view)
     }
 }
 
@@ -3870,6 +3937,74 @@ fn decode_job_view_v1(
         terminal_receipt,
     ))
 }
+fn read_graph_workspace_view_connection_v2(
+    connection: &Connection,
+    identity: &DurableWorktreeIdentityV1,
+) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
+    let legacy_session_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM task_sessions", [], |row| row.get(0))
+        .map_err(|error| storage_record(error, StoreRecordKindV1::Session))?;
+    let graph_state = load_graph_session_connection_v2(connection)?;
+    if legacy_session_count != 0 && graph_state.is_some() {
+        return Err(corrupt(StoreRecordKindV1::Session));
+    }
+    let queued: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM jobs WHERE state = 'queued'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage)?;
+    let running: Option<String> = connection
+        .query_row(
+            "SELECT job_id FROM jobs WHERE state = 'running' ORDER BY workspace_sequence LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    let (latest_workspace_sequence, observed_at): (i64, i64) = connection
+        .query_row(
+            "SELECT next_workspace_sequence, updated_at_ms FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| storage_record(error, StoreRecordKindV1::Workspace))?;
+    Ok(GraphWorkspaceViewV2::new(
+        identity.clone(),
+        graph_state,
+        u32::try_from(queued).map_err(|_| invariant(StoreInvariantV1::QueueSequence))?,
+        running.map(job_id).transpose()?,
+        u64::try_from(latest_workspace_sequence)
+            .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
+        epoch(observed_at, StoreRecordKindV1::Workspace)?,
+    ))
+}
+
+fn read_job_state_connection_v1(
+    connection: &Connection,
+    job: &JobIdV1,
+) -> Result<Option<JobStateV1>, StoreErrorV1> {
+    let state: Option<String> = connection
+        .query_row(
+            "SELECT state FROM jobs WHERE job_id = ?1",
+            [job.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage_record(error, StoreRecordKindV1::Job))?;
+    state
+        .map(|state| match state.as_str() {
+            "queued" => Ok(JobStateV1::Queued),
+            "running" => Ok(JobStateV1::Running),
+            "succeeded" => Ok(JobStateV1::Succeeded),
+            "failed" => Ok(JobStateV1::Failed),
+            "cancelled" => Ok(JobStateV1::Cancelled),
+            _ => Err(corrupt(StoreRecordKindV1::Job)),
+        })
+        .transpose()
+}
+
 fn job_id(value: String) -> Result<JobIdV1, StoreErrorV1> {
     JobIdV1::new(value).map_err(|_| corrupt(StoreRecordKindV1::Job))
 }

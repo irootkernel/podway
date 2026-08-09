@@ -471,6 +471,8 @@ pub struct SessionStatusV1 {
     pub wait: QueryWaitV1,
     pub verbose: bool,
     pub compact: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_before: Option<u64>,
     pub preconditions: SessionReadPreconditionsWireV1,
 }
 
@@ -1150,12 +1152,20 @@ impl SliceRequestV1 {
                 if payload.compact && (!matches!(wait, QueryWaitV1::Idle) || payload.verbose) {
                     return Err(SliceErrorV1::InvalidValue { field: "compact" });
                 }
+                if payload.history_before.is_some_and(|cursor| cursor == 0)
+                    || (payload.history_before.is_some() && (!payload.verbose || payload.compact))
+                {
+                    return Err(SliceErrorV1::InvalidValue {
+                        field: "history_before",
+                    });
+                }
                 (
                     payload.selector,
                     SliceCommandV1::SessionStatus(SessionStatusV1 {
                         wait,
                         verbose: payload.verbose,
                         compact: payload.compact,
+                        history_before: payload.history_before,
                         preconditions,
                     }),
                 )
@@ -1899,6 +1909,8 @@ struct SessionStatusPayloadV1 {
     verbose: bool,
     #[serde(default)]
     compact: bool,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    history_before: Option<u64>,
 }
 
 #[derive(Deserialize)]

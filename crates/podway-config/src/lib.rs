@@ -54,6 +54,7 @@ pub use procedure_v2_dot_projection::{ProcedureDotProjectionV2, project_procedur
 pub use procedure_v2_format::{
     FormatFailure, FormatRequest, FormattedProcedureV2, format_procedure_v2,
 };
+pub use procedure_v2_graph::goal_revision_safe_targets_v2;
 pub use procedure_v2_graph_projection::{
     GraphProjectionNodeTypeV2, ProcedureGraphEdgeV2, ProcedureGraphModelV2, ProcedureGraphNodeV2,
     ProcedureGraphProjectionV2, normalize_procedure_v2_graph, project_procedure_v2_graph,

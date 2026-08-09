@@ -84,10 +84,53 @@ enum Reply {
     Unsupported,
     WorkspaceError,
     GoalDefinition,
+    StatusV2,
 }
 
 struct RecordingDaemon {
     handle: JoinHandle<io::Result<Value>>,
+}
+
+struct SequenceRecordingDaemon {
+    handle: JoinHandle<io::Result<Vec<Value>>>,
+}
+
+impl SequenceRecordingDaemon {
+    fn start(socket: &Path, replies: Vec<Reply>) -> Self {
+        let listener = UnixListener::bind(socket).expect("recording socket must bind");
+        fs::set_permissions(socket, fs::Permissions::from_mode(0o600))
+            .expect("recording socket must be private");
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::with_capacity(replies.len());
+            for reply in replies {
+                let (mut connection, _) = listener.accept()?;
+                let mut frame = Vec::new();
+                connection.read_to_end(&mut frame)?;
+                let request = decode_request_payload_v1(
+                    decode_single_frame_v1(&frame)
+                        .map_err(|error| io::Error::other(error.to_string()))?,
+                )
+                .map_err(|error| io::Error::other(error.to_string()))?;
+                let response = response_for(&request, reply);
+                let frame = encode_frame_v1(
+                    &serde_json::to_vec(&response).expect("recording response must serialize"),
+                )
+                .map_err(|error| io::Error::other(error.to_string()))?;
+                connection.write_all(&frame)?;
+                requests
+                    .push(serde_json::to_value(request).expect("recorded request must serialize"));
+            }
+            Ok(requests)
+        });
+        Self { handle }
+    }
+
+    fn finish(self) -> Vec<Value> {
+        self.handle
+            .join()
+            .expect("recording daemon must not panic")
+            .expect("recording daemon I/O must succeed")
+    }
 }
 
 impl RecordingDaemon {
@@ -183,6 +226,29 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             },
             "warnings": []
         }),
+        Reply::StatusV2 => {
+            let mut fixture: Value = serde_json::from_str(include_str!(
+                "../../../tests/fixtures/v2/protocol/result-families.json"
+            ))
+            .expect("v2 result fixtures must parse");
+            let mut result = fixture["fixtures"]["podway.status-result/v2"].take();
+            result["session"]["id"] = json!(SESSION_ID);
+            result["session"]["revision"] = json!(7);
+            result["current"]["attempt"]["attempt_id"] = json!(ATTEMPT_ID);
+            json!({
+                "schema": "podway.output/v2",
+                "request_id": request.request_id().as_str(),
+                "command": "session.status",
+                "generated_at": "2026-08-09T12:34:56.789Z",
+                "workspace": {
+                    "uuid": WORKSPACE_ID,
+                    "root": request.workspace().expect("status selects a workspace").root(),
+                    "latest_workspace_sequence": 8
+                },
+                "result": result,
+                "warnings": []
+            })
+        }
     }
 }
 
@@ -339,6 +405,74 @@ fn reserved_v2_commands_shape_exact_requests_and_preserve_unsupported_errors() {
 }
 
 #[test]
+fn v2_status_preflight_supplies_omitted_attempt_fences() {
+    let fixture = Fixture::new();
+    let daemon =
+        SequenceRecordingDaemon::start(&fixture.socket, vec![Reply::StatusV2, Reply::Unsupported]);
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--idempotency-key".to_owned(),
+        "v2run002-preflight-key".to_owned(),
+        "decide".to_owned(),
+        "--option".to_owned(),
+        "approve".to_owned(),
+        "--reason".to_owned(),
+        "ready".to_owned(),
+    ];
+
+    let output = fixture.run(&arguments);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert_eq!(one_json(&output)["code"], "UNSUPPORTED_V2_CAPABILITY");
+    let requests = daemon.finish();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[0]["operation"], "query");
+    assert_eq!(requests[1]["command"], "session.decide");
+    assert_eq!(requests[1]["workspace"]["expected_uuid"], WORKSPACE_ID);
+    assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+    assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+
+    let fixture = Fixture::new();
+    let daemon =
+        SequenceRecordingDaemon::start(&fixture.socket, vec![Reply::StatusV2, Reply::Unsupported]);
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "--if-session-revision".to_owned(),
+        "7".to_owned(),
+        "--idempotency-key".to_owned(),
+        "v2run002-rework-preflight-key".to_owned(),
+        "rework".to_owned(),
+        "--to".to_owned(),
+        "implement".to_owned(),
+        "--reason".to_owned(),
+        "review found a gap".to_owned(),
+    ];
+
+    let output = fixture.run(&arguments);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.rework");
+    assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+    assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+}
+
+#[test]
 fn goal_bearing_start_is_typed_and_a_plain_v1_start_remains_unchanged() {
     let fixture = Fixture::new();
     let procedure = fixture.root.join("procedure.yaml");
@@ -458,21 +592,6 @@ fn v2_goal_success_has_stable_json_human_and_quiet_rendering() {
 fn v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon() {
     let invalid = [
         vec![
-            "decide",
-            "--option",
-            "approve",
-            "--reason",
-            "valid but unfenced",
-        ],
-        vec![
-            "goal",
-            "define",
-            "--goal",
-            "Valid but unfenced.",
-            "--criterion",
-            "tested=Tests pass.",
-        ],
-        vec![
             "start",
             "--preset",
             "sw-dev",
@@ -545,6 +664,21 @@ fn v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon() {
             "five",
         ],
         vec!["status", "--history-before", "3"],
+        vec!["status", "--verbose", "--history-before", "0"],
+        vec![
+            "status",
+            "--verbose",
+            "--history-before",
+            "18446744073709551616",
+        ],
+        vec![
+            "status",
+            "--verbose",
+            "--history-before",
+            "3",
+            "--wait-for-idle",
+            "--compact",
+        ],
         vec!["goal", "unknown"],
     ];
     for command in invalid {
@@ -556,8 +690,38 @@ fn v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon() {
 }
 
 #[test]
+fn verbose_status_sends_one_positive_exclusive_history_cursor() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::WorkspaceError);
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "status".to_owned(),
+        "--verbose".to_owned(),
+        "--history-before".to_owned(),
+        "42".to_owned(),
+    ];
+    let output = fixture.run(&arguments);
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "session.status");
+    assert_eq!(request["operation"], "query");
+    assert_eq!(request["payload"]["verbose"], true);
+    assert_eq!(request["payload"]["history_before"], 42);
+    assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+}
+
+#[test]
 fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
     for topic in [
+        "session.status",
         "session.decide",
         "session.rework",
         "goal.define",
@@ -596,6 +760,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         assert!(output.status.success(), "{shell}: {output:?}");
         let script = String::from_utf8(output.stdout).expect("completion must be UTF-8");
         for token in [
+            "history-before",
             "decide",
             "rework",
             "goal",

@@ -341,6 +341,14 @@ struct StatusArgs {
         conflicts_with = "verbose"
     )]
     compact: bool,
+    #[arg(
+        long,
+        value_name = "TRACE_SEQUENCE",
+        value_parser = clap::value_parser!(u64).range(1..),
+        requires = "verbose",
+        conflicts_with = "compact"
+    )]
+    history_before: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -1805,13 +1813,13 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
             explicit.attempt_id.is_some()
                 && (!matches!(command, Command::Goal { .. }) || explicit.goal_revision.is_some())
         }
-        Command::Rework(_)
-        | Command::Goal {
+        Command::Rework(_) => explicit.attempt_id.is_some(),
+        Command::Goal {
             command: GoalCommand::Define(_),
         } => true,
         Command::Goal {
             command: GoalCommand::Revise(_),
-        } => explicit.goal_revision.is_some(),
+        } => explicit.goal_revision.is_some() && explicit.attempt_id.is_some(),
         _ => false,
     }
 }
@@ -4843,15 +4851,6 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     let explicit = ExplicitPreconditions::parse(cli)?;
     if matches!(
         command,
-        Command::Decide(_) | Command::Rework(_) | Command::Goal { .. }
-    ) && !fully_fenced_v2_mutation(command, &explicit)
-    {
-        return Err(LocalFailure::request_invalid(
-            "reserved Procedure v2 mutations require all command-specific explicit preconditions",
-        ));
-    }
-    if matches!(
-        command,
         Command::Start(StartArgs {
             replace: true,
             goal: Some(_),
@@ -5203,6 +5202,9 @@ fn daemon_payload(
             read_payload(&mut payload, &args.read);
             if args.compact {
                 payload.insert("compact".to_owned(), Value::Bool(true));
+            }
+            if let Some(history_before) = args.history_before {
+                payload.insert("history_before".to_owned(), json!(history_before));
             }
         }
         Command::Next(args) => read_payload(&mut payload, args),
@@ -6822,7 +6824,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --goal <text> --criterion <id>=<statement>... [--actor <text>] --replace --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'replace goal' --goal 'Ship safely.' --criterion tested='Tests pass.' --replace --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
         }
         "session.status" => {
-            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --wait-for-idle --compact"
+            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --verbose --history-before 42\n  podway status --wait-for-idle --compact"
         }
         "session.next" => {
             "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway next"

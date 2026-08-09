@@ -214,7 +214,7 @@ fn suggestion_charge(placement: &GraphPlacementV2, definition: &ParsedNodeDefini
     // Charging mutually exclusive states together is a deliberate, bounded over-approximation.
     charge = add(
         charge,
-        suggestion("session.retry", &["retry", "--reason", "<text>"], None),
+        suggestion("session.retry", &["retry", "--reason", "<reason>"], None),
     );
     match (placement, definition) {
         (GraphPlacementV2::Action(action), ParsedNodeDefinition::Action(_)) => {
@@ -237,7 +237,7 @@ fn suggestion_charge(placement: &GraphPlacementV2, definition: &ParsedNodeDefini
                             "--option",
                             option.id().as_str(),
                             "--reason",
-                            "<text>",
+                            "<reason>",
                         ],
                         None,
                     ),

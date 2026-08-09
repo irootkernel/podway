@@ -10,7 +10,7 @@ use std::{sync::Arc, time::Instant};
 use podway_core::{
     AttemptId, CommandContextV1, DomainError, ProcedureSnapshotId, ReopenSessionV1, ResetSessionV1,
     ReturnSessionV1, Revision, SessionCommandV1, SessionId, Sha256Digest, StartReplaceSessionV1,
-    StartSessionV1, UnixMillis, preview_transition_v1,
+    StartSessionV1, TraceSequenceV2, UnixMillis, preview_transition_v1,
 };
 use podway_git::{
     Base64UrlPathBytesV1, DiagnosticPathDisplayV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1,
@@ -26,12 +26,12 @@ use podway_protocol::{
 };
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
-    EpochMillisV1, GraphStartCurrentTaskV2, IdempotencyKeyV1 as StoreIdempotencyKeyV1,
-    JobListQueryV1, JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1 as StoreJobStateV1, JobViewV1,
-    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
-    SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1,
-    StoreIdempotencyReadContractV1, StoreReadContractV1, StoreReconciliationReadContractV1,
-    WorkerIdV1, WorkspaceBindingV1,
+    EpochMillisV1, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
+    IdempotencyKeyV1 as StoreIdempotencyKeyV1, JobListQueryV1, JobReceiptOrTerminalV1,
+    JobReceiptV1, JobStateV1 as StoreJobStateV1, JobViewV1, PersistedTerminalJobStateV1,
+    PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1, SqliteStoreOptionsV1,
+    SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1,
+    StoreReadContractV1, StoreReconciliationReadContractV1, WorkerIdV1, WorkspaceBindingV1,
     codec::{
         PersistedDomainCommandV1, PersistedDomainErrorV1, PersistedDomainResultV1,
         PersistedSessionLifecycleV1, PersistedTerminalResultV1,
@@ -77,6 +77,9 @@ use crate::{
     },
     scheduler::WorkspaceSchedulerV1,
     server::{DaemonRequestV1, ResponseMetadataSourceV1, SystemResponseMetadataSourceV1},
+    v2_read_service::{
+        GraphStatusTierV2, GraphViewErrorV2, project_graph_next_v2, project_graph_status_v2,
+    },
     worker::{
         DaemonWorkerV1, WorkerClockV1, WorkerCompletionModeV1, WorkerErrorV1, WorkerExecutionV1,
         WorkerWaitResultV1, WorkerWorkspaceContextV1,
@@ -1103,6 +1106,23 @@ impl ProductionMutationWorkerV1 {
     pub fn manager(&self) -> &Arc<WorkspaceRuntimeManagerV1> {
         &self.manager
     }
+
+    fn read_wait_v2(&self, wait: RequestReadWaitV1) -> Result<ReadWaitV1, DispatchFailureV1> {
+        match wait {
+            RequestReadWaitV1::Immediate => Ok(ReadWaitV1::immediate()),
+            RequestReadWaitV1::IdleUntil { timeout_millis } => {
+                MonotonicDeadlineV1::after(self.clock.as_ref(), timeout_millis)
+                    .map(ReadWaitV1::idle_until)
+                    .map_err(map_read_error)
+            }
+            RequestReadWaitV1::AfterJobUntil {
+                job_id,
+                timeout_millis,
+            } => MonotonicDeadlineV1::after(self.clock.as_ref(), timeout_millis)
+                .map(|deadline| ReadWaitV1::after_job_until(job_id, deadline))
+                .map_err(map_read_error),
+        }
+    }
     fn prepare_reset_without_store(
         &self,
         source: &ResetSourceAuthorityV1,
@@ -1344,6 +1364,151 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             // Goal-bearing v2 start DTOs remain closed until durable initial-goal admission lands.
             return Ok(None);
         };
+        if matches!(
+            slice_request.command(),
+            SliceCommandV1::SessionStatus(_) | SliceCommandV1::SessionNext(_)
+        ) {
+            let selector = selector_from_wire(slice_request.selector())?;
+            let readonly = self
+                .manager
+                .resolve_existing_readonly(selector, slice_request.selector().expected_uuid())
+                .map_err(map_runtime_error)?;
+            let (wait, expected_session_id) = match slice_request.command() {
+                SliceCommandV1::SessionStatus(input) => (
+                    RequestReadWaitV1::from_query_wait(
+                        &input.wait,
+                        request.options().wait_timeout_ms(),
+                    ),
+                    input.preconditions.expected_session_id.as_ref(),
+                ),
+                SliceCommandV1::SessionNext(input) => (
+                    RequestReadWaitV1::from_query_wait(
+                        &input.wait,
+                        request.options().wait_timeout_ms(),
+                    ),
+                    input.preconditions.expected_session_id.as_ref(),
+                ),
+                _ => unreachable!("non-read requests returned above"),
+            };
+            let view = if let Some(scheduler) = readonly.active_scheduler().cloned() {
+                let context = scheduler.context_snapshot();
+                AuthoritativeReadServiceV1::new(
+                    context.store(),
+                    SchedulerReadNotificationV1 {
+                        scheduler,
+                        clock: Arc::clone(&self.clock),
+                    },
+                    Arc::clone(&self.clock),
+                )
+                .graph_workspace_view_v2(
+                    context.binding().identity(),
+                    self.read_wait_v2(wait.clone())?,
+                    expected_session_id,
+                )
+                .map_err(map_read_error)?
+            } else {
+                let durable_wait = self.read_wait_v2(wait)?;
+                loop {
+                    let inspected_job = match &durable_wait {
+                        ReadWaitV1::AfterJobUntil { job_id, .. } => Some(job_id),
+                        ReadWaitV1::Immediate | ReadWaitV1::IdleUntil(_) => None,
+                    };
+                    let (view, job_state) =
+                        SqliteStoreV1::inspect_graph_workspace_view_and_job_state_v2(
+                            readonly.database_path(),
+                            readonly.binding().identity(),
+                            readonly.store_options(),
+                            inspected_job,
+                            EpochMillisV1::new(self.clock.now().get()),
+                        )
+                        .map_err(map_store_error)?;
+                    if view.graph_state().is_none() {
+                        return Ok(None);
+                    }
+                    validate_graph_view_session_v2(&view, expected_session_id)?;
+                    let deadline = match &durable_wait {
+                        ReadWaitV1::Immediate => break view,
+                        ReadWaitV1::IdleUntil(deadline)
+                            if view.queued_job_count() == 0 && view.running_job_id().is_none() =>
+                        {
+                            break view;
+                        }
+                        ReadWaitV1::AfterJobUntil { deadline, .. } => {
+                            let Some(job_state) = job_state else {
+                                return Err(DispatchFailureV1::new(
+                                    DispatchFailureKindV1::JobNotFound,
+                                ));
+                            };
+                            if matches!(
+                                job_state,
+                                StoreJobStateV1::Succeeded
+                                    | StoreJobStateV1::Failed
+                                    | StoreJobStateV1::Cancelled
+                            ) {
+                                break view;
+                            }
+                            *deadline
+                        }
+                        ReadWaitV1::IdleUntil(deadline) => *deadline,
+                    };
+                    let now = self.clock.now_millis();
+                    if now >= deadline.millis() {
+                        return Err(DispatchFailureV1::new(
+                            DispatchFailureKindV1::JobWaitTimeout,
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        deadline.millis().saturating_sub(now).min(50),
+                    ));
+                }
+            };
+            if view.graph_state().is_none() {
+                return Ok(None);
+            }
+            let result = match slice_request.command() {
+                SliceCommandV1::SessionStatus(input) => {
+                    let tier = if input.compact {
+                        GraphStatusTierV2::Compact
+                    } else if input.verbose {
+                        GraphStatusTierV2::Verbose
+                    } else {
+                        GraphStatusTierV2::Standard
+                    };
+                    project_graph_status_v2(
+                        &view,
+                        tier,
+                        input.history_before.map(TraceSequenceV2::new),
+                    )
+                }
+                SliceCommandV1::SessionNext(_) => project_graph_next_v2(&view),
+                _ => unreachable!("non-read requests returned above"),
+            }
+            .map_err(map_graph_view_error_v2)?;
+            let workspace = WorkspaceOutputV1::new(
+                view.identity().workspace_uuid().clone(),
+                readonly
+                    .worktree()
+                    .roots()
+                    .worktree_root()
+                    .display()
+                    .as_str(),
+                view.latest_workspace_sequence(),
+            )
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.clock.generated_at(),
+                workspace: Some(workspace),
+                job: None,
+                session: None,
+                result,
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+        }
         if !matches!(
             slice_request.command(),
             SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
@@ -3249,6 +3414,40 @@ fn map_read_error(error: ReadServiceErrorV1) -> DispatchFailureV1 {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
         }
     }
+}
+
+fn map_graph_view_error_v2(error: GraphViewErrorV2) -> DispatchFailureV1 {
+    match error {
+        GraphViewErrorV2::MissingGraphSession => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound)
+        }
+        GraphViewErrorV2::TerminalSessionHasNoNext => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotRunning)
+        }
+        GraphViewErrorV2::TimestampOutOfRange => {
+            DispatchFailureV1::new(DispatchFailureKindV1::Internal)
+        }
+        GraphViewErrorV2::PendingMutationsForCompact
+        | GraphViewErrorV2::InvalidSnapshot
+        | GraphViewErrorV2::InconsistentState(_) => {
+            DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
+        }
+    }
+}
+
+fn validate_graph_view_session_v2(
+    view: &GraphWorkspaceViewV2,
+    expected_session_id: Option<&SessionId>,
+) -> Result<(), DispatchFailureV1> {
+    let actual = view
+        .graph_state()
+        .map(|state| state.trace().session_id().clone());
+    if let Some(expected) = expected_session_id
+        && actual.as_ref() != Some(expected)
+    {
+        return Err(session_id_mismatch_failure(expected.clone(), actual));
+    }
+    Ok(())
 }
 
 fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {

@@ -27,11 +27,12 @@ use podway_protocol::Rfc3339MillisV1;
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
-    ClaimedJobV1, GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1,
-    IdempotentExecutionV1, JobIdV1, JobListQueryV1, JobViewV1, PersistedResponseContextV1,
-    ReconciliationSnapshotV1, RecoveryReportV1, RevisionAttemptItemPreconditionsV1, RevisionV1,
-    SqliteStoreOptionsV1, SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
-    StoreGraphMutationContractV2, StoreIdempotencyReadContractV1, StoreInvariantV1,
+    ClaimedJobV1, GraphSessionStateV2, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
+    IdempotencyKeyV1, IdempotentExecutionV1, JobIdV1, JobListQueryV1, JobViewV1,
+    PersistedResponseContextV1, ReconciliationSnapshotV1, RecoveryReportV1,
+    RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1, SqliteStoreV1,
+    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreGraphMutationContractV2,
+    StoreGraphReadContractV2, StoreIdempotencyReadContractV1, StoreInvariantV1,
     StoreReadContractV1, StoreReconciliationReadContractV1, StoreUnavailableReasonV1,
     StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
     WorkspaceBindingV1, WorkspaceViewV1,
@@ -202,6 +203,15 @@ impl StoreReadContractV1 for WorkspaceStoreReadFacadeV1 {
         query: JobListQueryV1,
     ) -> Result<Vec<JobViewV1>, StoreErrorV1> {
         self.slot.list_jobs(identity, query)
+    }
+}
+
+impl StoreGraphReadContractV2 for WorkspaceStoreReadFacadeV1 {
+    fn read_graph_workspace_view_v2(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+    ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
+        self.slot.read_graph_workspace_view_v2(identity)
     }
 }
 
@@ -432,6 +442,15 @@ impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
         self.with_open_store(|store| {
             store.commit_graph_start_terminal_v2(claim, expected_current, state, now)
         })
+    }
+}
+
+impl StoreGraphReadContractV2 for WorkspaceStoreSlotV1 {
+    fn read_graph_workspace_view_v2(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+    ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
+        self.with_open_store(|store| store.read_graph_workspace_view_v2(identity))
     }
 }
 

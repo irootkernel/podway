@@ -272,6 +272,7 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
         "runtime_workspace.rs",
         "scheduler.rs",
         "server.rs",
+        "v2_read_service.rs",
         "worker.rs",
         "workspace.rs",
     ]

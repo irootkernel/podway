@@ -18,11 +18,14 @@ use podway_config::{
 use podway_core::{DomainError, JobId, Revision, Sha256Digest, UnixMillis, canonicalize_json_v1};
 use podway_daemon::{
     dispatch::{
-        DevelopmentV2AdmissionProofV1, DispatchFailureKindV1, MutationAdmissionWorkerV1,
+        CatalogDispatchErrorMapperV1, DevelopmentV2AdmissionProofV1, DispatchFailureKindV1,
+        DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, RequestDispatcherV1Adapter,
         WorkspaceRuntimeV1,
     },
     production::{
-        ProductionWorkspaceRuntimeV1, compose_dispatcher_v1, compose_dispatcher_with_worker_v1,
+        NativeProductionClockV1, ProductionControlServiceV1, ProductionMutationWorkerV1,
+        ProductionPreviewServiceV1, ProductionReadServiceV1, ProductionWorkspaceRuntimeV1,
+        ProductionWorkspaceV1, compose_dispatcher_v1, compose_dispatcher_with_worker_v1,
     },
     runtime_workspace::WorkspaceRuntimeObservationV1,
     server::{DaemonRequestV1, RequestDispatcherV1},
@@ -98,6 +101,92 @@ fn observation() -> WorkspaceRuntimeObservationV1 {
         UnixMillis::new(1_700_000_000_123),
         Rfc3339MillisV1::new("2026-07-15T12:34:56.789Z")
             .expect("fixture observation timestamp must be valid"),
+    )
+}
+
+#[derive(Clone)]
+struct DevelopmentV2RoutingRuntime {
+    inner: ProductionWorkspaceRuntimeV1,
+}
+
+impl WorkspaceRuntimeV1 for DevelopmentV2RoutingRuntime {
+    type Workspace = ProductionWorkspaceV1;
+
+    fn resolve_existing(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<Self::Workspace, podway_daemon::dispatch::DispatchFailureV1> {
+        self.inner.resolve_existing(selector)
+    }
+
+    fn resolve_existing_readonly(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<Self::Workspace, podway_daemon::dispatch::DispatchFailureV1> {
+        self.inner.resolve_existing_readonly(selector)
+    }
+
+    fn resolve_bootstrap(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<Self::Workspace, podway_daemon::dispatch::DispatchFailureV1> {
+        self.inner.resolve_bootstrap(selector)
+    }
+
+    fn development_v2_admission(
+        &self,
+        _selector: &WorktreeSelectorWireV1,
+    ) -> Option<DevelopmentV2AdmissionProofV1> {
+        Some(DevelopmentV2AdmissionProofV1::granted_for_runtime())
+    }
+
+    fn workspace_output(&self, workspace: &Self::Workspace) -> podway_protocol::WorkspaceOutputV1 {
+        self.inner.workspace_output(workspace)
+    }
+
+    fn doctor(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+        deep: bool,
+    ) -> Result<DispatcherWorkspaceOutputV1, podway_daemon::dispatch::DispatchFailureV1> {
+        self.inner.doctor(selector, deep)
+    }
+
+    fn show(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<DispatcherWorkspaceOutputV1, podway_daemon::dispatch::DispatchFailureV1> {
+        self.inner.show(selector)
+    }
+
+    fn repair(
+        &self,
+        selector: &WorktreeSelectorWireV1,
+    ) -> Result<DispatcherWorkspaceOutputV1, podway_daemon::dispatch::DispatchFailureV1> {
+        self.inner.repair(selector)
+    }
+}
+
+fn development_v2_dispatcher(
+    manager: Arc<podway_daemon::runtime_workspace::WorkspaceRuntimeManagerV1>,
+    worker_id: &str,
+) -> impl RequestDispatcherV1 {
+    let clock = Arc::new(NativeProductionClockV1::default());
+    let worker = ProductionMutationWorkerV1::new(
+        WorkerIdV1::new(worker_id).unwrap(),
+        Arc::clone(&clock),
+        Arc::clone(&manager),
+    );
+    RequestDispatcherV1Adapter::new(
+        DevelopmentV2RoutingRuntime {
+            inner: ProductionWorkspaceRuntimeV1::new(Arc::clone(&manager), Arc::clone(&clock)),
+        },
+        ProductionReadServiceV1::new(Arc::clone(&manager), Arc::clone(&clock)),
+        ProductionControlServiceV1::new(Arc::clone(&clock)),
+        ProductionPreviewServiceV1::new(Arc::clone(&clock)),
+        worker,
+        clock,
+        CatalogDispatchErrorMapperV1,
     )
 }
 
@@ -509,6 +598,174 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     assert_eq!(live_output.result()["revision"], 1);
 
     let session_id = live_output.result()["session_id"].as_str().unwrap();
+    let session_id_value = podway_core::SessionId::new(session_id).unwrap();
+    let graph_before_reads = direct_store
+        .read_graph_session_v2(identity)
+        .unwrap()
+        .unwrap();
+    let attempt_id = graph_before_reads
+        .trace()
+        .active_attempt()
+        .unwrap()
+        .attempt_id()
+        .as_str()
+        .to_owned();
+    let sequence_before_reads = direct_store
+        .read_workspace_view(identity)
+        .unwrap()
+        .latest_workspace_sequence();
+    let jobs_before_reads = direct_store
+        .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+        .unwrap()
+        .len();
+    let read_preconditions =
+        PreconditionsV1::new(Some(session_id_value.clone()), None, None, None, None, None).unwrap();
+    let routed_reads =
+        development_v2_dispatcher(Arc::clone(&runtime_manager), "v2run002-version-routing");
+
+    for (request_number, payload, expected_schema, expected_tier) in [
+        (
+            10_020,
+            json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+            "podway.status-result/v2",
+            Some("standard"),
+        ),
+        (
+            10_021,
+            json!({
+                "selector": serde_json::to_value(&workspace_selector).unwrap(),
+                "wait_for_idle": true,
+                "compact": true,
+            }),
+            "podway.compact-status-result/v2",
+            None,
+        ),
+        (
+            10_022,
+            json!({
+                "selector": serde_json::to_value(&workspace_selector).unwrap(),
+                "verbose": true,
+                "history_before": 1,
+            }),
+            "podway.status-result/v2",
+            Some("verbose"),
+        ),
+    ] {
+        let status = request(
+            request_number,
+            "session.status",
+            &workspace_selector,
+            payload,
+            RequestOptionsV1::new(false, 5_000).unwrap(),
+            "unused-v2-status-key",
+            read_preconditions.clone(),
+        );
+        let daemon_request = DaemonRequestV1::from_envelope(&status.0).unwrap();
+        let response = routed_reads.dispatch_daemon(&status.0, &daemon_request);
+        let ResponseEnvelopeV2::OutputV2(output) = response else {
+            panic!("the gated dispatcher must select podway.output/v2 for Procedure v2 status")
+        };
+        assert_eq!(output.command().as_str(), "session.status");
+        assert_eq!(output.result()["schema"], expected_schema);
+        assert_eq!(output.result()["session"]["id"], session_id);
+        assert_eq!(output.result()["session"]["revision"], 1);
+        assert_eq!(
+            output.result().get("tier").and_then(Value::as_str),
+            expected_tier
+        );
+        assert_eq!(
+            output.result()["queue"]["latest_workspace_sequence"],
+            sequence_before_reads
+        );
+        if expected_tier == Some("verbose") {
+            assert!(
+                output.result()["current_trace_history"]["entries"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                output.result()["current_trace_history"]["trace_truncated"],
+                false
+            );
+        }
+    }
+
+    let next = request(
+        10_023,
+        "session.next",
+        &workspace_selector,
+        json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "unused-v2-next-key",
+        read_preconditions.clone(),
+    );
+    let next_daemon = DaemonRequestV1::from_envelope(&next.0).unwrap();
+    let next_response = routed_reads.dispatch_daemon(&next.0, &next_daemon);
+    let ResponseEnvelopeV2::OutputV2(next_output) = next_response else {
+        panic!("the gated dispatcher must select podway.output/v2 for Procedure v2 next")
+    };
+    assert_eq!(next_output.result()["schema"], "podway.next-result/v2");
+    assert_eq!(next_output.result()["node"]["graph_node_id"], "perform");
+    assert_eq!(next_output.result()["attempt"]["attempt_id"], attempt_id);
+    assert_eq!(next_output.result()["revision"], 1);
+    assert_eq!(
+        next_output.result()["queue"]["latest_workspace_sequence"],
+        sequence_before_reads
+    );
+
+    let wrong_session_status = request(
+        10_024,
+        "session.status",
+        &workspace_selector,
+        json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "unused-v2-wrong-session-key",
+        PreconditionsV1::new(
+            Some(podway_core::SessionId::new("00000000-0000-4000-8000-000000010024").unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let wrong_session_daemon = DaemonRequestV1::from_envelope(&wrong_session_status.0).unwrap();
+    assert_eq!(
+        composition
+            .worker()
+            .dispatch_development_v2(
+                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+                &wrong_session_status.0,
+                &wrong_session_daemon,
+            )
+            .unwrap_err()
+            .kind(),
+        DispatchFailureKindV1::SessionIdMismatch
+    );
+    assert_eq!(
+        direct_store.read_graph_session_v2(identity).unwrap(),
+        Some(graph_before_reads),
+        "Procedure v2 reads must not mutate the graph"
+    );
+    assert_eq!(
+        direct_store
+            .read_workspace_view(identity)
+            .unwrap()
+            .latest_workspace_sequence(),
+        sequence_before_reads,
+        "Procedure v2 reads must not advance workspace sequence"
+    );
+    assert_eq!(
+        direct_store
+            .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+            .unwrap()
+            .len(),
+        jobs_before_reads,
+        "Procedure v2 reads must not admit jobs"
+    );
+
     let jobs_before_replace_dry_run = direct_store
         .list_jobs(identity, JobListQueryV1::new(100).unwrap())
         .unwrap()
@@ -734,14 +991,147 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
 }
 
 #[test]
+fn inactive_v2_after_job_reads_terminal_state_without_activating_scheduler() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let workspace_selector = selector(fixture.main());
+    let (terminal_job_id, session_id) = {
+        let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+        let composition = compose_dispatcher_with_worker_v1(
+            Arc::clone(&runtime_manager),
+            WorkerIdV1::new("v2run002-inactive-initializer").unwrap(),
+        );
+        let initialize = request(
+            10_030,
+            "workspace.init",
+            &workspace_selector,
+            json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+            RequestOptionsV1::new(false, 5_000).unwrap(),
+            "v2run002-inactive-initialize",
+            PreconditionsV1::default(),
+        );
+        dispatch_command(composition.dispatcher(), &initialize, "workspace.init");
+
+        let source =
+            include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.yaml");
+        fs::write(fixture.main().join("inactive-workflow.yaml"), source).unwrap();
+        let ParsedProcedure::V2(parsed) =
+            parse_procedure_document(source, ProcedureDocumentFormat::Yaml).unwrap()
+        else {
+            panic!("the inactive read fixture must be Procedure v2")
+        };
+        let procedure_digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+        let start = request(
+            10_031,
+            "session.start",
+            &workspace_selector,
+            json!({
+                "selector": serde_json::to_value(&workspace_selector).unwrap(),
+                "procedure": "inactive-workflow.yaml",
+                "expected_procedure_digest": procedure_digest,
+                "task_title": "Inactive Procedure v2 read"
+            }),
+            RequestOptionsV1::new(false, 5_000).unwrap(),
+            "v2run002-inactive-start",
+            PreconditionsV1::default(),
+        );
+        let daemon_request = DaemonRequestV1::from_envelope(&start.0).unwrap();
+        let response = composition
+            .worker()
+            .dispatch_development_v2(
+                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+                &start.0,
+                &daemon_request,
+            )
+            .unwrap()
+            .expect("the Procedure v2 start must be handled");
+        let ResponseEnvelopeV2::OutputV2(output) = response else {
+            panic!("Procedure v2 start must return podway.output/v2")
+        };
+        assert_eq!(output.job().unwrap().state(), JobStateV1::Succeeded);
+        fs::remove_file(fixture.main().join("inactive-workflow.yaml")).unwrap();
+        (
+            output.job().unwrap().id().clone(),
+            podway_core::SessionId::new(output.result()["session_id"].as_str().unwrap()).unwrap(),
+        )
+    };
+
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    assert!(
+        runtime_manager
+            .resolve_existing_readonly(git_selector(fixture.main()), None)
+            .unwrap()
+            .active_scheduler()
+            .is_none()
+    );
+    let composition = compose_dispatcher_with_worker_v1(
+        Arc::clone(&runtime_manager),
+        WorkerIdV1::new("v2run002-inactive-reader").unwrap(),
+    );
+    let routed_reads = development_v2_dispatcher(
+        Arc::clone(&runtime_manager),
+        "v2run002-inactive-version-routing",
+    );
+    let preconditions =
+        PreconditionsV1::new(Some(session_id), None, None, None, None, None).unwrap();
+    let status = request(
+        10_032,
+        "session.status",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "after_job_id": terminal_job_id,
+        }),
+        RequestOptionsV1::new(false, 100).unwrap(),
+        "unused-inactive-status",
+        preconditions.clone(),
+    );
+    let daemon_request = DaemonRequestV1::from_envelope(&status.0).unwrap();
+    let response = routed_reads.dispatch_daemon(&status.0, &daemon_request);
+    let ResponseEnvelopeV2::OutputV2(output) = response else {
+        panic!("the restarted gated dispatcher must return podway.output/v2")
+    };
+    assert_eq!(output.result()["schema"], "podway.status-result/v2");
+    assert_eq!(output.result()["procedure"]["id"], "fixture-equivalence");
+
+    let unknown = request(
+        10_033,
+        "session.status",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "after_job_id": "00000000-0000-4000-8000-000000009999",
+        }),
+        RequestOptionsV1::new(false, 100).unwrap(),
+        "unused-inactive-status",
+        preconditions,
+    );
+    let daemon_request = DaemonRequestV1::from_envelope(&unknown.0).unwrap();
+    let failure = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &unknown.0,
+            &daemon_request,
+        )
+        .unwrap_err();
+    assert_eq!(failure.kind(), DispatchFailureKindV1::JobNotFound);
+    assert!(
+        runtime_manager
+            .resolve_existing_readonly(git_selector(fixture.main()), None)
+            .unwrap()
+            .active_scheduler()
+            .is_none(),
+        "inactive reads must not create a scheduler generation"
+    );
+}
+
+#[test]
 fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_return() {
     let fixture = git_worktrees();
     make_runtime_private(fixture.main());
     let manager = Arc::new(manager(fixture.temporary_path()));
-    let dispatcher = compose_dispatcher_v1(
-        Arc::clone(&manager),
-        WorkerIdV1::new("production-composition-test").unwrap(),
-    );
+    let dispatcher = development_v2_dispatcher(Arc::clone(&manager), "production-composition-test");
     let main_selector = selector(fixture.main());
 
     let initialize = request(
@@ -930,7 +1320,13 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
         "unused-status-key",
         PreconditionsV1::default(),
     );
-    let initial_status = status_result(&dispatch_command(&dispatcher, &status, "session.status"));
+    let status_daemon = DaemonRequestV1::from_envelope(&status.0).unwrap();
+    let ResponseEnvelopeV2::OutputV1(initial_status_output) =
+        dispatcher.dispatch_daemon(&status.0, &status_daemon)
+    else {
+        panic!("a retained v1 session must keep podway.output/v1 status")
+    };
+    let initial_status = status_result(&initial_status_output);
     assert_eq!(
         started.result()["procedure_digest"],
         initial_status.task.procedure.digest.as_str(),
@@ -985,7 +1381,13 @@ fn production_composition_bootstraps_replays_and_covers_active_attempt_retry_ret
         "unused-next-key",
         PreconditionsV1::default(),
     );
-    let initial_next = next_result(&dispatch_command(&dispatcher, &next, "session.next"));
+    let next_daemon = DaemonRequestV1::from_envelope(&next.0).unwrap();
+    let ResponseEnvelopeV2::OutputV1(initial_next_output) =
+        dispatcher.dispatch_daemon(&next.0, &next_daemon)
+    else {
+        panic!("a retained v1 session must keep podway.output/v1 next")
+    };
+    let initial_next = next_result(&initial_next_output);
     let next_stage = initial_next
         .stage
         .as_ref()

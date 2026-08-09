@@ -163,6 +163,7 @@ struct ReadState {
     next_session_ids: Vec<Option<SessionId>>,
     job_lookup_result: Option<Map<String, Value>>,
     job_status_result: Option<(JobOutputV1, Map<String, Value>)>,
+    status_failure: Option<DispatchFailureV1>,
 }
 
 #[derive(Clone)]
@@ -183,6 +184,10 @@ impl FakeReads {
         state.job_status_result = Some((terminal_job(), status));
         drop(state);
         self
+    }
+
+    fn fail_status(&self, failure: DispatchFailureV1) {
+        self.state.lock().unwrap().status_failure = Some(failure);
     }
 }
 
@@ -244,6 +249,9 @@ impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
         state.status_waits.push(input.wait);
         state.status_verbose.push(input.verbose);
         state.status_session_ids.push(input.expected_session_id);
+        if let Some(failure) = state.status_failure.clone() {
+            return Err(failure);
+        }
         Ok(DispatcherReadOutputV1::new(status_result(), Vec::new()))
     }
 
@@ -353,6 +361,7 @@ struct WorkerState {
     development_v2_calls: Vec<String>,
     development_v2_failure: bool,
     development_v2_response: Option<ResponseEnvelopeV2>,
+    development_v2_response_after_calls: usize,
 }
 
 #[derive(Clone)]
@@ -369,6 +378,7 @@ impl FakeWorker {
                 development_v2_calls: Vec::new(),
                 development_v2_failure: false,
                 development_v2_response: None,
+                development_v2_response_after_calls: 0,
             })),
         }
     }
@@ -379,6 +389,12 @@ impl FakeWorker {
 
     fn respond_development_v2(&self, response: ResponseEnvelopeV2) {
         self.state.lock().unwrap().development_v2_response = Some(response);
+    }
+
+    fn respond_development_v2_after_fallback(&self, response: ResponseEnvelopeV2) {
+        let mut state = self.state.lock().unwrap();
+        state.development_v2_response = Some(response);
+        state.development_v2_response_after_calls = 1;
     }
 }
 
@@ -430,18 +446,22 @@ impl MutationAdmissionWorkerV1<FakeWorkspace> for FakeWorker {
         request: &RequestEnvelopeV1,
         daemon_request: &DaemonRequestV1,
     ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
-        self.state.lock().unwrap().development_v2_calls.push(
+        let mut state = self.state.lock().unwrap();
+        state.development_v2_calls.push(
             daemon_request
                 .capability()
                 .unwrap_or(request.command().as_str())
                 .to_owned(),
         );
-        if self.state.lock().unwrap().development_v2_failure {
+        if state.development_v2_failure {
             return Err(DispatchFailureV1::new(
                 DispatchFailureKindV1::DaemonUnavailable,
             ));
         }
-        Ok(self.state.lock().unwrap().development_v2_response.clone())
+        if state.development_v2_calls.len() <= state.development_v2_response_after_calls {
+            return Ok(None);
+        }
+        Ok(state.development_v2_response.clone())
     }
 }
 
@@ -605,6 +625,38 @@ fn v2_terminal_response() -> Value {
         },
         "warnings": [],
     })
+}
+
+fn v2_status_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
+    let mut fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/result-families.json"
+    ))
+    .unwrap();
+    let result = fixtures["fixtures"]["podway.status-result/v2"]
+        .take()
+        .as_object()
+        .cloned()
+        .unwrap();
+    ResponseEnvelopeV2::OutputV2(
+        OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            request_id: request.request_id().clone(),
+            command: request.command().clone(),
+            generated_at: Rfc3339MillisV1::new(GENERATED_AT).unwrap(),
+            workspace: Some(
+                WorkspaceOutputV1::new(
+                    WorkspaceId::new(WORKSPACE_ID).unwrap(),
+                    "/safe/worktree",
+                    41,
+                )
+                .unwrap(),
+            ),
+            job: None,
+            session: None,
+            result,
+            warnings: Vec::new(),
+        })
+        .unwrap(),
+    )
 }
 
 fn v2_job_results() -> (Map<String, Value>, Map<String, Value>) {
@@ -1441,6 +1493,39 @@ fn v2run001_development_probe_preserves_retained_v1_start_output() {
         "fallthrough must admit the retained v1 request exactly once"
     );
     assert_eq!(slice.command().command_name(), "session.start");
+}
+
+#[test]
+fn v2run002_read_retries_version_selection_after_a_cross_schema_replace() {
+    let runtime = FakeRuntime::new();
+    runtime.enable_development_v2();
+    let reads = FakeReads::new();
+    reads.fail_status(DispatchFailureV1::new(
+        DispatchFailureKindV1::SessionNotFound,
+    ));
+    let worker = FakeWorker::new(terminal_success());
+    let dispatcher = dispatcher(runtime, reads, worker.clone());
+    let (request, _) = request_and_slice(
+        "session.status",
+        json!({"selector": selector("/safe/worktree")}),
+        PreconditionsV1::default(),
+        false,
+        30_000,
+        44,
+    );
+    worker.respond_development_v2_after_fallback(v2_status_response(&request));
+
+    let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
+    let ResponseEnvelopeV2::OutputV2(output) =
+        dispatcher.dispatch_daemon(&request, &daemon_request)
+    else {
+        panic!("a cross-schema replacement must retry the coherent Procedure v2 view")
+    };
+    assert_eq!(output.result()["schema"], "podway.status-result/v2");
+    assert_eq!(
+        worker.state.lock().unwrap().development_v2_calls,
+        vec!["session.status", "session.status"]
+    );
 }
 
 #[test]

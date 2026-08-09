@@ -632,7 +632,7 @@ pub enum RequestReadWaitV1 {
 }
 
 impl RequestReadWaitV1 {
-    fn from_query_wait(wait: &QueryWaitV1, timeout_millis: u64) -> Self {
+    pub(crate) fn from_query_wait(wait: &QueryWaitV1, timeout_millis: u64) -> Self {
         match wait {
             QueryWaitV1::Immediate => Self::Immediate,
             QueryWaitV1::Idle => Self::IdleUntil { timeout_millis },
@@ -1070,14 +1070,9 @@ where
             }
             SliceCommandV1::WorkspaceShow(_) => self.dispatch_show(request, slice_request),
             SliceCommandV1::WorkspaceRepair(_) => self.dispatch_repair(request, slice_request),
-            SliceCommandV1::SessionStatus(input) => self.dispatch_status(
-                request,
-                slice_request,
-                &input.wait,
-                input.verbose,
-                input.compact,
-                input.preconditions.expected_session_id.clone(),
-            ),
+            SliceCommandV1::SessionStatus(input) => {
+                self.dispatch_status(request, slice_request, input)
+            }
             SliceCommandV1::SessionNext(input) => self.dispatch_next(
                 request,
                 slice_request,
@@ -1169,28 +1164,30 @@ where
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-        query_wait: &QueryWaitV1,
-        verbose: bool,
-        compact: bool,
-        expected_session_id: Option<SessionId>,
+        input: &podway_protocol::SessionStatusV1,
     ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
         self.require_query_options(request)?;
+        if input.history_before.is_some() {
+            return Err(DispatchFailureV1::new(
+                DispatchFailureKindV1::RequestInvalid,
+            ));
+        }
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
         let output = self.reads.status(
             &workspace,
             DispatcherStatusRequestV1 {
                 wait: RequestReadWaitV1::from_query_wait(
-                    query_wait,
+                    &input.wait,
                     request.options().wait_timeout_ms(),
                 ),
-                verbose,
-                expected_session_id,
+                verbose: input.verbose,
+                expected_session_id: input.preconditions.expected_session_id.clone(),
             },
         )?;
         let status = StatusResultV1::from_result_map(&output.result)
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
         let mut workspace_output = self.runtime.workspace_output(&workspace);
-        let result = if compact {
+        let result = if input.compact {
             workspace_output =
                 workspace_at_sequence(workspace_output, status.queue.latest_workspace_sequence)?;
             CompactStatusResultV1::from_status(&status).to_result_map()
@@ -1725,12 +1722,21 @@ where
         daemon_request: &DaemonRequestV1,
     ) -> ResponseEnvelopeV2 {
         if let Some(slice_request) = daemon_request.legacy() {
-            if matches!(
+            let development_v2_candidate = matches!(
+                slice_request.command(),
+                SliceCommandV1::SessionStart(_)
+                    | SliceCommandV1::SessionStartReplace(_)
+                    | SliceCommandV1::SessionStatus(_)
+                    | SliceCommandV1::SessionNext(_)
+            );
+            let development_v2_requires_admission = matches!(
                 slice_request.command(),
                 SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
-            ) && let Some(proof) = self
-                .runtime
-                .development_v2_admission(slice_request.selector())
+            );
+            if development_v2_candidate
+                && let Some(proof) = self
+                    .runtime
+                    .development_v2_admission(slice_request.selector())
             {
                 match self
                     .mutations
@@ -1739,7 +1745,11 @@ where
                     Ok(Some(response)) => return response,
                     Ok(None) => {}
                     Err(failure) => {
-                        return match self.error_response(request, failure, true) {
+                        return match self.error_response(
+                            request,
+                            failure,
+                            development_v2_requires_admission,
+                        ) {
                             ResponseEnvelopeV1::Output(output) => {
                                 ResponseEnvelopeV2::OutputV1(output)
                             }
@@ -1770,7 +1780,44 @@ where
                     },
                 ),
                 _ => {
-                    return match self.dispatch(request, slice_request) {
+                    let legacy = self.dispatch(request, slice_request);
+                    let version_may_have_changed = matches!(
+                        &legacy,
+                        ResponseEnvelopeV1::Error(error)
+                            if matches!(
+                                error.code().as_str(),
+                                "SESSION_NOT_FOUND" | "SESSION_ID_MISMATCH"
+                            )
+                    );
+                    if development_v2_candidate
+                        && version_may_have_changed
+                        && let Some(proof) = self
+                            .runtime
+                            .development_v2_admission(slice_request.selector())
+                    {
+                        match self
+                            .mutations
+                            .dispatch_development_v2(proof, request, daemon_request)
+                        {
+                            Ok(Some(response)) => return response,
+                            Ok(None) => {}
+                            Err(failure) => {
+                                return match self.error_response(
+                                    request,
+                                    failure,
+                                    development_v2_requires_admission,
+                                ) {
+                                    ResponseEnvelopeV1::Output(output) => {
+                                        ResponseEnvelopeV2::OutputV1(output)
+                                    }
+                                    ResponseEnvelopeV1::Error(error) => {
+                                        ResponseEnvelopeV2::Error(error)
+                                    }
+                                };
+                            }
+                        }
+                    }
+                    return match legacy {
                         ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
                         ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
                     };

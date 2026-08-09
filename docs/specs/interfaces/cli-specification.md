@@ -92,12 +92,15 @@ identity results before using any reported field.
 
 ## Procedure v2 contract grammar
 
-The `status --verbose` shape below is adopted but not yet executable. Procedure
-v2 authoring and preview commands are executable and are specified in their
-dedicated sections below. The five reserved mutation routes and goal-bearing start
-are exposed by the CLI grammar, but remain `reserved_contract` capabilities until
-their owning runtime tasks land. A fully fenced invocation reaches the daemon's
-typed `UNSUPPORTED_V2_CAPABILITY` boundary and is never reinterpreted as v1.
+The `status --verbose` shape below is executable for Procedure v2 sessions.
+Procedure v2 authoring and preview commands are executable and are specified in
+their dedicated sections below. The five reserved mutation routes and goal-bearing
+start are exposed by the CLI grammar, but remain `reserved_contract` capabilities
+until their owning runtime tasks land. For an active Procedure v2 session, the CLI
+uses the standard status projection to supply omitted command-specific fences. An
+invocation may instead provide every required fence explicitly and skip that
+preflight. Either form reaches the daemon's typed
+`UNSUPPORTED_V2_CAPABILITY` boundary and is never reinterpreted as v1.
 
 ```text
 podway status --verbose [--history-before <trace-sequence>]
@@ -334,7 +337,7 @@ omitted, the CLI continues to preflight status and fills the missing identity fr
 ### Status
 
 ```bash
-podway status [--verbose] [--wait-for-idle] [--compact] [--after-job <uuid>]
+podway status [--verbose [--history-before <trace-sequence>]] [--wait-for-idle] [--compact] [--after-job <uuid>]
 ```
 
 Reports:
@@ -348,7 +351,11 @@ Reports:
 - queued and running jobs;
 - whether the stage is ready to advance.
 
-`--verbose` includes previous attempt summaries for the current session. It does not provide an audit export.
+For Procedure v1, `--verbose` includes previous attempt summaries for the current
+session. For Procedure v2, it adds the six bounded history windows defined by
+`status-result/v2`. `--history-before` requires `--verbose`, accepts a positive
+trace sequence, and applies that exclusive cursor to all six windows. Verbose
+status does not provide an audit export.
 
 `--compact` requires `--wait-for-idle` and returns the closed, bounded authority
 projection defined by the automation client contract.
@@ -404,10 +411,11 @@ revision and carries the active attempt when the session is running. These
 Procedure v2 commands are distinct from the retained v1 `return` and `reopen`
 commands; neither retained command is an alias for `rework`.
 
-While these routes remain `reserved_contract`, the CLI requires callers to pass
-the complete command-specific workspace, session, revision, attempt, and goal
-revision fences explicitly. It does not run a legacy status preflight that could
-mask the route-specific `UNSUPPORTED_V2_CAPABILITY` response.
+While these routes remain `reserved_contract`, the CLI obtains omitted workspace,
+session, revision, attempt, and goal-revision fences from a version-aware standard
+status preflight. A caller may provide the complete command-specific fences to skip
+that read. The preflight does not reinterpret a Procedure v2 session as v1 or mask
+the route-specific `UNSUPPORTED_V2_CAPABILITY` response.
 
 ### Goal
 
@@ -423,7 +431,7 @@ podway goal assess-criterion <criterion-id> \
 Definitions and revisions carry one to sixteen ordered, uniquely identified
 criteria. Revision and criterion assessment require `--if-goal-revision`.
 Assessment accepts at most four citations in total; `not_applicable` forbids
-citations. The same explicit-fence rule applies to all three goal commands. All
+citations. The same version-aware preflight rule applies to all three goal commands. All
 five Procedure v2 mutation routes preserve the daemon's typed pre-admission
 unsupported response until their owning runtime capability is enabled.
 
