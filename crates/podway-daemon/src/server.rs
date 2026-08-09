@@ -22,10 +22,11 @@ use std::{
 use podway_protocol::{
     CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, IdempotencyKeyV1, OperationV1,
-    OutputEnvelopeInputV1, OutputEnvelopeV1, PayloadCodecErrorV1, ProtocolError, RequestEnvelopeV1,
-    RequestIdV1, ResponseEnvelopeV1, Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceRequestV1,
+    OutputEnvelopeInputV1, OutputEnvelopeV1, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
+    ProcedureV2StartRequestV1, ProtocolError, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV1,
+    ResponseEnvelopeV2, Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceErrorV1, SliceRequestV1,
     build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
-    encode_response_payload_v1, read_single_frame_v1, validate_frame_payload_length,
+    encode_response_payload_v2, read_single_frame_v1, validate_frame_payload_length,
     write_frame_v1,
 };
 use serde_json::{Map, Value};
@@ -377,6 +378,74 @@ pub trait RequestDispatcherV1: Send + Sync {
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
     ) -> ResponseEnvelopeV1;
+
+    /// Dispatches one version-aware daemon request after the transport has closed decoding.
+    fn dispatch_daemon(
+        &self,
+        request: &RequestEnvelopeV1,
+        daemon_request: &DaemonRequestV1,
+    ) -> ResponseEnvelopeV2;
+}
+
+/// A closed request admitted by the daemon transport boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DaemonRequestV1 {
+    Legacy(SliceRequestV1),
+    ProcedureV2Start(ProcedureV2StartRequestV1),
+    ProcedureV2Mutation(ProcedureV2MutationRequestV1),
+}
+
+impl DaemonRequestV1 {
+    /// Classifies a fully decoded IPC envelope without making reserved v2 routes executable.
+    pub fn from_envelope(request: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
+        if let Ok(slice) = SliceRequestV1::from_envelope(request) {
+            return Ok(Self::Legacy(slice));
+        }
+        if podway_protocol::RESERVED_V2_MUTATION_COMMAND_NAMES_V1
+            .contains(&request.command().as_str())
+        {
+            return ProcedureV2MutationRequestV1::from_envelope(request)
+                .map(Self::ProcedureV2Mutation);
+        }
+        if matches!(
+            request.command().as_str(),
+            "session.start" | "session.start_replace"
+        ) && request.payload().contains_key("goal")
+        {
+            return ProcedureV2StartRequestV1::from_envelope(request).map(Self::ProcedureV2Start);
+        }
+        SliceRequestV1::from_envelope(request).map(Self::Legacy)
+    }
+
+    pub fn legacy(&self) -> Option<&SliceRequestV1> {
+        match self {
+            Self::Legacy(request) => Some(request),
+            Self::ProcedureV2Start(_) | Self::ProcedureV2Mutation(_) => None,
+        }
+    }
+
+    pub fn capability(&self) -> Option<&'static str> {
+        match self {
+            Self::Legacy(_) => None,
+            Self::ProcedureV2Start(request) => Some(request.command().command_name()),
+            Self::ProcedureV2Mutation(request) => Some(request.command().command_name()),
+        }
+    }
+
+    pub fn required_result_schema(&self) -> Option<&'static str> {
+        match self {
+            Self::Legacy(_) => None,
+            Self::ProcedureV2Start(_) => Some("podway.session-start-result/v2"),
+            Self::ProcedureV2Mutation(request) => Some(match request.command().command_name() {
+                "session.decide" => "podway.decision-result/v1",
+                "session.rework" => "podway.rework-result/v1",
+                "goal.define" => "podway.goal-definition-result/v1",
+                "goal.revise" => "podway.goal-revision-result/v1",
+                "goal.assess_criterion" => "podway.criterion-assessment-result/v1",
+                _ => unreachable!("Procedure v2 mutation decoder is closed"),
+            }),
+        }
+    }
 }
 
 /// Failures that prevent a connection from receiving a complete protocol response.
@@ -716,8 +785,8 @@ where
                 .request_shutdown();
             return Ok(());
         }
-        let slice_request = match SliceRequestV1::from_envelope(&request) {
-            Ok(slice_request) => slice_request,
+        let daemon_request = match DaemonRequestV1::from_envelope(&request) {
+            Ok(daemon_request) => daemon_request,
             Err(_) => {
                 emit_observation(
                     &self.observability,
@@ -732,17 +801,19 @@ where
             }
         };
 
-        let response = self.dispatcher.dispatch(&request, &slice_request);
+        let response = self.dispatcher.dispatch_daemon(&request, &daemon_request);
         if response_matches_request(&response, &request) && response.validate().is_ok() {
             emit_observation(
                 &self.observability,
                 EventOperationV1::ServiceDispatch,
                 match &response {
-                    ResponseEnvelopeV1::Output(_) => EventOutcomeV1::Succeeded,
-                    ResponseEnvelopeV1::Error(_) => EventOutcomeV1::Rejected,
+                    ResponseEnvelopeV2::OutputV1(_) | ResponseEnvelopeV2::OutputV2(_) => {
+                        EventOutcomeV1::Succeeded
+                    }
+                    ResponseEnvelopeV2::Error(_) => EventOutcomeV1::Rejected,
                 },
             );
-            return self.write_response(&mut connection, &response);
+            return self.write_response_v2(&mut connection, &response);
         }
 
         emit_observation(
@@ -1013,8 +1084,20 @@ where
         connection: &mut UnixStream,
         response: &ResponseEnvelopeV1,
     ) -> Result<(), ServerConnectionErrorV1> {
+        let response = match response {
+            ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output.clone()),
+            ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error.clone()),
+        };
+        self.write_response_v2(connection, &response)
+    }
+
+    fn write_response_v2(
+        &self,
+        connection: &mut UnixStream,
+        response: &ResponseEnvelopeV2,
+    ) -> Result<(), ServerConnectionErrorV1> {
         let result = (|| {
-            let payload = encode_response_payload_v1(response)
+            let payload = encode_response_payload_v2(response)
                 .map_err(ServerConnectionErrorV1::ResponseEncode)?;
             write_frame_v1(connection, &payload).map_err(ServerConnectionErrorV1::ResponseWrite)?;
             connection
@@ -1145,12 +1228,15 @@ fn classify_payload_error(error: &PayloadCodecErrorV1) -> TransportErrorKindV1 {
     }
 }
 
-fn response_matches_request(response: &ResponseEnvelopeV1, request: &RequestEnvelopeV1) -> bool {
+fn response_matches_request(response: &ResponseEnvelopeV2, request: &RequestEnvelopeV1) -> bool {
     match response {
-        ResponseEnvelopeV1::Output(output) => {
+        ResponseEnvelopeV2::OutputV1(output) => {
             output.request_id() == request.request_id() && output.command() == request.command()
         }
-        ResponseEnvelopeV1::Error(error) => {
+        ResponseEnvelopeV2::OutputV2(output) => {
+            output.request_id() == request.request_id() && output.command() == request.command()
+        }
+        ResponseEnvelopeV2::Error(error) => {
             error.request_id() == request.request_id() && error.command() == request.command()
         }
     }

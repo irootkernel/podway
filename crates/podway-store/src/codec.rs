@@ -992,7 +992,10 @@ impl PersistedTerminalReceiptV1 {
         envelope: Value,
     ) -> Result<Self, StoreCodecErrorV1> {
         let schema = envelope.get("schema").and_then(Value::as_str);
-        if !matches!(schema, Some("podway.output/v1" | "podway.error/v1")) {
+        if !matches!(
+            schema,
+            Some("podway.output/v1" | "podway.output/v2" | "podway.error/v1")
+        ) {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "public terminal envelope",
             });
@@ -1295,7 +1298,10 @@ impl PersistedTerminalReceiptV1 {
             .as_ref()
             .and_then(|envelope| envelope.get("schema"))
             .and_then(Value::as_str);
-        if !matches!(schema, Some("podway.output/v1" | "podway.error/v1")) {
+        if !matches!(
+            schema,
+            Some("podway.output/v1" | "podway.output/v2" | "podway.error/v1")
+        ) {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "public terminal envelope",
             });

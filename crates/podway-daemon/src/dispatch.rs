@@ -8,12 +8,13 @@ use podway_core::{AttemptId, JobId, Revision, SessionId, Sha256Digest, Workspace
 use podway_protocol::{
     CompactStatusResultV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     IdempotencyKeyV1, JobOutputV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeInputV1,
-    OutputEnvelopeV1, QueryWaitV1, RequestEnvelopeV1, ResponseEnvelopeV1, Rfc3339MillisV1,
-    SessionOutputV1, SliceCommandV1, SliceRequestV1, StatusResultV1, WorkspaceOutputV1,
-    WorktreeSelectorWireV1,
+    OutputEnvelopeInputV2, OutputEnvelopeV1, OutputEnvelopeV2, QueryWaitV1, RequestEnvelopeV1,
+    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
+    SliceRequestV1, StatusResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
 };
 use serde_json::{Map, Value, json};
 
+use crate::server::DaemonRequestV1;
 use crate::server::RequestDispatcherV1;
 
 /// The longest diagnostic that may be emitted by this dispatcher.
@@ -40,6 +41,7 @@ pub struct DispatchErrorDetailsV1 {
     attempt_mismatch: Option<Box<AttemptMismatchDetailsV1>>,
     identity_conflict: Option<Box<IdentityConflictDetailsV1>>,
     procedure_digest_mismatch: Option<Box<ProcedureDigestMismatchDetailsV1>>,
+    unsupported_v2_capability: Option<Box<UnsupportedV2CapabilityDetailsV1>>,
     outcome_unknown_key: Option<Box<IdempotencyKeyV1>>,
     maximum_open_blockers: Option<Box<usize>>,
 }
@@ -66,6 +68,12 @@ struct AttemptMismatchDetailsV1 {
 struct ProcedureDigestMismatchDetailsV1 {
     expected: Sha256Digest,
     actual: Sha256Digest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UnsupportedV2CapabilityDetailsV1 {
+    capability: &'static str,
+    required_result_schema: &'static str,
 }
 
 impl DispatchErrorDetailsV1 {
@@ -142,7 +150,33 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_unsupported_v2_capability(
+        mut self,
+        capability: &'static str,
+        required_result_schema: &'static str,
+    ) -> Self {
+        self.unsupported_v2_capability = Some(Box::new(UnsupportedV2CapabilityDetailsV1 {
+            capability,
+            required_result_schema,
+        }));
+        self
+    }
+
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
+        if let Some(unsupported) = self.unsupported_v2_capability {
+            return json!({
+                "schema": "podway.v2-runtime-error-details/v1",
+                "kind": "UNSUPPORTED_V2_CAPABILITY",
+                "capability": unsupported.capability,
+                "required_result_schema": unsupported.required_result_schema,
+                "contract_manifest_digest": podway_protocol::build_identity_v1()
+                    .contract_manifest_digest(),
+                "admission": {"admitted": false},
+            })
+            .as_object()
+            .expect("unsupported-v2 details are an object")
+            .clone();
+        }
         if let Some(idempotency_key) = self.outcome_unknown_key {
             return json!({
                 "schema": "podway.mutation-outcome-unknown-details/v1",
@@ -300,6 +334,7 @@ pub enum DispatchFailureKindV1 {
     ProcedureNotFound,
     ProcedureInvalid,
     ProcedureSchemaUnsupported,
+    UnsupportedV2Capability,
     ProcedureDigestMismatch,
     PresetNotFound,
     SessionNotFound,
@@ -344,14 +379,14 @@ pub enum DispatchFailureKindV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DispatchFailureV1 {
     kind: DispatchFailureKindV1,
-    details: DispatchErrorDetailsV1,
+    details: Box<DispatchErrorDetailsV1>,
 }
 
 impl DispatchFailureV1 {
     pub fn new(kind: DispatchFailureKindV1) -> Self {
         Self {
             kind,
-            details: DispatchErrorDetailsV1 {
+            details: Box::new(DispatchErrorDetailsV1 {
                 job_id: None,
                 job_sequence: None,
                 expected_revision: None,
@@ -359,24 +394,25 @@ impl DispatchFailureV1 {
                 attempt_mismatch: None,
                 identity_conflict: None,
                 procedure_digest_mismatch: None,
+                unsupported_v2_capability: None,
                 outcome_unknown_key: None,
                 maximum_open_blockers: None,
-            },
+            }),
         }
     }
 
     pub fn with_details(mut self, details: DispatchErrorDetailsV1) -> Self {
-        self.details = details;
+        self.details = Box::new(details);
         self
     }
 
     pub fn with_job(mut self, job: &JobOutputV1) -> Self {
-        self.details = self.details.with_job(job);
+        self.details = Box::new((*self.details).with_job(job));
         self
     }
 
     pub fn with_admission_identity(mut self, job_id: JobId, job_sequence: u64) -> Self {
-        self.details = self.details.with_admission_identity(job_id, job_sequence);
+        self.details = Box::new((*self.details).with_admission_identity(job_id, job_sequence));
         self
     }
 
@@ -390,7 +426,7 @@ impl DispatchFailureV1 {
     }
 
     pub(crate) fn into_details(self) -> DispatchErrorDetailsV1 {
-        self.details
+        *self.details
     }
 }
 
@@ -1211,6 +1247,76 @@ where
         )
     }
 
+    fn dispatch_job_lookup_versioned(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+        idempotency_key: &IdempotencyKeyV1,
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        let output = self
+            .reads
+            .job_lookup(slice_request.selector(), idempotency_key)?;
+        self.output_response_versioned(
+            request,
+            output.workspace,
+            None,
+            output.result,
+            output.warnings,
+        )
+    }
+
+    fn dispatch_job_status_versioned(
+        &self,
+        request: &RequestEnvelopeV1,
+        slice_request: &SliceRequestV1,
+        job_id: &JobId,
+        wait: RequestReadWaitV1,
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
+        self.require_query_options(request)?;
+        let workspace = self.runtime.resolve_existing(slice_request.selector())?;
+        let output = self.reads.job_status(&workspace, job_id, wait)?;
+        self.output_response_versioned(
+            request,
+            Some(self.runtime.workspace_output(&workspace)),
+            Some(output.job),
+            output.result,
+            output.warnings,
+        )
+    }
+
+    fn output_response_versioned(
+        &self,
+        request: &RequestEnvelopeV1,
+        workspace: Option<WorkspaceOutputV1>,
+        job: Option<JobOutputV1>,
+        result: Map<String, Value>,
+        warnings: Vec<Map<String, Value>>,
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
+        if matches!(
+            result.get("schema").and_then(Value::as_str),
+            Some("podway.job-result/v2" | "podway.job-lookup-result/v2")
+        ) {
+            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.metadata.generated_at(),
+                workspace,
+                job,
+                session: None,
+                result,
+                warnings,
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+        }
+        self.output_response(request, workspace, job, None, result, warnings)
+            .map(|response| match response {
+                ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
+                ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+            })
+    }
+
     fn dispatch_job_cancel(
         &self,
         request: &RequestEnvelopeV1,
@@ -1476,6 +1582,30 @@ where
         });
         ResponseEnvelopeV1::Error(envelope)
     }
+
+    fn unsupported_v2_capability_response(
+        &self,
+        request: &RequestEnvelopeV1,
+        daemon_request: &DaemonRequestV1,
+    ) -> ResponseEnvelopeV2 {
+        let capability = daemon_request
+            .capability()
+            .expect("this response is reserved for Procedure v2 requests");
+        let required_result_schema = daemon_request
+            .required_result_schema()
+            .expect("each reserved Procedure v2 request has a result contract");
+        let failure = DispatchFailureV1::new(DispatchFailureKindV1::UnsupportedV2Capability)
+            .with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_unsupported_v2_capability(capability, required_result_schema),
+            );
+        match self.error_response(request, failure, true) {
+            ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+            ResponseEnvelopeV1::Output(_) => {
+                unreachable!("dispatcher failures always produce error envelopes")
+            }
+        }
+    }
 }
 
 fn workspace_at_least_sequence(
@@ -1517,6 +1647,50 @@ where
         );
         self.dispatch_valid(request, slice_request)
             .unwrap_or_else(|failure| self.error_response(request, failure, requires_admission))
+    }
+
+    fn dispatch_daemon(
+        &self,
+        request: &RequestEnvelopeV1,
+        daemon_request: &DaemonRequestV1,
+    ) -> ResponseEnvelopeV2 {
+        if let Some(slice_request) = daemon_request.legacy() {
+            let versioned = match slice_request.command() {
+                SliceCommandV1::JobLookup(input) => self.dispatch_job_lookup_versioned(
+                    request,
+                    slice_request,
+                    &input.idempotency_key,
+                ),
+                SliceCommandV1::JobStatus(input) => self.dispatch_job_status_versioned(
+                    request,
+                    slice_request,
+                    &input.job_id,
+                    RequestReadWaitV1::Immediate,
+                ),
+                SliceCommandV1::JobWait(input) => self.dispatch_job_status_versioned(
+                    request,
+                    slice_request,
+                    &input.job_id,
+                    RequestReadWaitV1::AfterJobUntil {
+                        job_id: input.job_id.clone(),
+                        timeout_millis: request.options().wait_timeout_ms(),
+                    },
+                ),
+                _ => {
+                    return match self.dispatch(request, slice_request) {
+                        ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
+                        ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+                    };
+                }
+            };
+            return versioned.unwrap_or_else(|failure| {
+                match self.error_response(request, failure, false) {
+                    ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
+                    ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+                }
+            });
+        }
+        self.unsupported_v2_capability_response(request, daemon_request)
     }
 }
 
@@ -1638,6 +1812,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "Procedure schema is unsupported.",
             false,
             1,
+        ),
+        DispatchFailureKindV1::UnsupportedV2Capability => (
+            "UNSUPPORTED_V2_CAPABILITY",
+            "The requested Procedure v2 capability is not enabled.",
+            false,
+            3,
         ),
         DispatchFailureKindV1::ProcedureDigestMismatch => (
             "PROCEDURE_DIGEST_MISMATCH",

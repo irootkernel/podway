@@ -35,9 +35,10 @@ use podway_protocol::{
     ClientInfoV1, CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     FrameIoPhaseV1, IdempotencyKeyV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1,
     OutputEnvelopeInputV1, OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1,
-    SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
-    decode_response_payload_v1, encode_frame_v1, encode_request_payload_v1, read_single_frame_v1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, ResponseEnvelopeV2,
+    Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
+    decode_response_payload_v1, decode_response_payload_v2, encode_frame_v1,
+    encode_request_payload_v1, read_single_frame_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -152,6 +153,46 @@ impl RequestDispatcherV1 for TestDispatcher {
             DispatcherOutcome::InvalidResponse => invalid_response(request),
         }
     }
+
+    fn dispatch_daemon(
+        &self,
+        request: &RequestEnvelopeV1,
+        daemon_request: &podway_daemon::server::DaemonRequestV1,
+    ) -> podway_protocol::ResponseEnvelopeV2 {
+        if let Some(slice) = daemon_request.legacy() {
+            return match self.dispatch(request, slice) {
+                ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
+                ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+            };
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let capability = daemon_request.capability().unwrap();
+        let details = json!({
+            "schema": "podway.v2-runtime-error-details/v1",
+            "kind": "UNSUPPORTED_V2_CAPABILITY",
+            "capability": capability,
+            "required_result_schema": daemon_request.required_result_schema().unwrap(),
+            "contract_manifest_digest": build_identity_v1().contract_manifest_digest(),
+            "admission": {"admitted": false},
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        ResponseEnvelopeV2::Error(
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: timestamp(),
+                code: ErrorCodeV1::new("UNSUPPORTED_V2_CAPABILITY").unwrap(),
+                message: "The registered Procedure v2 capability is unavailable.".to_owned(),
+                retryable: false,
+                exit_code: ExitCodeV1::new(3).unwrap(),
+                workspace: None,
+                details,
+            })
+            .unwrap(),
+        )
+    }
 }
 
 struct BlockingDispatcher {
@@ -184,6 +225,22 @@ impl RequestDispatcherV1 for BlockingDispatcher {
         }
         self.completed.fetch_add(1, Ordering::SeqCst);
         success_response(request)
+    }
+
+    fn dispatch_daemon(
+        &self,
+        request: &RequestEnvelopeV1,
+        daemon_request: &podway_daemon::server::DaemonRequestV1,
+    ) -> podway_protocol::ResponseEnvelopeV2 {
+        let slice = daemon_request
+            .legacy()
+            .expect("legacy server fixtures must remain legacy requests");
+        match self.dispatch(request, slice) {
+            ResponseEnvelopeV1::Output(output) => {
+                podway_protocol::ResponseEnvelopeV2::OutputV1(output)
+            }
+            ResponseEnvelopeV1::Error(error) => podway_protocol::ResponseEnvelopeV2::Error(error),
+        }
     }
 }
 #[derive(Debug)]
@@ -348,6 +405,13 @@ fn read_response(client: &mut UnixStream) -> ResponseEnvelopeV1 {
     decode_response_payload_v1(&payload).expect("server response payload must be valid")
 }
 
+fn read_response_v2(client: &mut UnixStream) -> ResponseEnvelopeV2 {
+    let payload = read_single_frame_v1(client)
+        .expect("server response must be one complete frame")
+        .expect("server must send one response frame");
+    decode_response_payload_v2(&payload).expect("server response payload must be version-aware")
+}
+
 fn send_and_half_close(client: &mut UnixStream, frame: &[u8]) {
     client
         .write_all(frame)
@@ -402,6 +466,50 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
         }
     }
     assert!(handler_result.is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn reserved_v2_start_crosses_the_socket_as_a_closed_compatibility_error() {
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        EXPECTED_UID,
+        ServerTransportTimeoutsV1::default(),
+    );
+    let selector =
+        WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None).unwrap();
+    let request = mutation_request(
+        "session.start",
+        json!({
+            "selector": selector,
+            "procedure": "workflow.yaml",
+            "task_title": "Exercise the v2 boundary",
+            "goal": "Keep unsupported admission fail-closed.",
+            "criteria": [{
+                "criterion_id": "closed",
+                "statement": "The daemon returns the registered compatibility error."
+            }]
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &request_frame(&request));
+    let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
+        panic!("reserved Procedure v2 start must return a compatibility error");
+    };
+    assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+    assert_eq!(error.details()["capability"], "session.start");
+    assert_eq!(error.details()["admission"], json!({"admitted": false}));
+    assert!(handler.join().expect("handler must not panic").is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 

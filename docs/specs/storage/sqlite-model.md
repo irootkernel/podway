@@ -305,9 +305,11 @@ never leaves a partial installation.
 ### Normal reset
 
 Session reset runs as a destructive queue barrier. The store's revision-fenced Procedure v2 clear
-helper validates and removes the complete relational current-task state; the daemon composes that
-helper with old session-scoped job/idempotency cleanup and the workspace-scoped reset receipt in
-the barrier transaction. Workspace identity and schema history remain intact.
+helper validates and removes the complete relational current-task state. When Procedure v2 reset
+dispatch is enabled, the daemon must compose that helper with old session-scoped job/idempotency
+cleanup and the workspace-scoped reset receipt in the barrier transaction. Until then, Procedure
+v2 admission fails before a reset job can be created. Workspace identity and schema history remain
+intact.
 
 ### Reset all
 

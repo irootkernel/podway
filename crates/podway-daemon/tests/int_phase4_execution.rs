@@ -236,6 +236,30 @@ impl ProcedureProviderV1 for FixtureProcedures {
         self.load_preset_snapshot("execution-test", snapshot_id, created_at)
     }
 }
+
+#[derive(Clone, Copy)]
+struct UnsupportedV2WorkspaceProcedures;
+
+impl ProcedureProviderV1 for UnsupportedV2WorkspaceProcedures {
+    fn load_preset_snapshot(
+        &self,
+        _preset: &str,
+        _snapshot_id: ProcedureSnapshotId,
+        _created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+        panic!("the v2 source-declaration fixture must use a workspace Procedure")
+    }
+
+    fn load_workspace_procedure_snapshot(
+        &self,
+        _workspace: &WorkspaceBindingV1,
+        _procedure: &str,
+        _snapshot_id: ProcedureSnapshotId,
+        _created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
+        Err(ExecutionBoundaryErrorV1::procedure_v2_unsupported())
+    }
+}
 #[derive(Clone)]
 struct SpyProcedures {
     calls: Arc<AtomicUsize>,
@@ -1057,6 +1081,75 @@ fn workspace_identity_mismatch_survives_admission_revalidation() {
         } if error_expected == expected && error_actual == actual
     ));
     assert_eq!(store.request_count(), 0);
+}
+
+#[test]
+fn v2plt007_source_declared_v2_start_is_rejected_before_durable_admission() {
+    let durable_identity = identity();
+    let binding = binding(durable_identity.clone());
+    let store = RecordingStore::new(durable_identity);
+    let ids = SpyIds::new();
+    let engine = DaemonExecutionEngineV1::new(
+        store.clone(),
+        ids.clone(),
+        FixtureClock::new(),
+        UnsupportedV2WorkspaceProcedures,
+        FixtureArtifacts,
+        FixtureWorkspaces::stable(binding),
+    );
+    let replace_session = SessionId::new("00000000-0000-4000-8000-000000000099").unwrap();
+    let cases = [
+        (
+            "session.start",
+            PreconditionsV1::default(),
+            "session.start",
+            "source-declared-v2-start",
+        ),
+        (
+            "session.start_replace",
+            PreconditionsV1::new(
+                Some(replace_session),
+                Some(Revision::new(1)),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            "session.start_replace",
+            "source-declared-v2-replace",
+        ),
+    ];
+    for (index, (command, preconditions, expected_capability, key)) in cases.into_iter().enumerate()
+    {
+        let mut payload = json!({
+            "selector": selector_json(),
+            "procedure": "procedure-v2.yaml",
+            "task_title": "Unsupported v2"
+        });
+        if command == "session.start_replace" {
+            payload["confirmed"] = Value::Bool(true);
+        }
+        let request = slice_request(command, payload, preconditions, 702 + index as u64);
+        let error = engine
+            .admit(&request, IdempotencyKeyV1::new(key).unwrap())
+            .expect_err("v2 source must fail before admission");
+
+        match error {
+            ExecutionErrorV1::UnsupportedV2Capability {
+                capability,
+                required_result_schema,
+            } => {
+                assert_eq!(capability, expected_capability);
+                assert_eq!(required_result_schema, "podway.session-start-result/v2");
+            }
+            other => panic!("unexpected source-declared v2 failure: {other}"),
+        }
+    }
+    assert_eq!(store.request_count(), 0);
+    assert!(store.current_session().is_none());
+    assert!(store.terminal().is_empty());
+    assert_eq!(ids.calls(), vec!["snapshot", "snapshot"]);
 }
 
 #[test]

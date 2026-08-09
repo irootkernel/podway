@@ -147,6 +147,16 @@ fn terminal_v4_codec_round_trips_the_frozen_public_envelope()
         ))
         .is_err()
     );
+
+    let v2_receipt = receipt.with_public_terminal_envelope(serde_json::json!({
+        "schema": "podway.output/v2",
+        "request_id": "00000000-0000-4000-8000-000000000103",
+        "command": "workspace.init"
+    }))?;
+    assert_eq!(
+        decode_terminal_receipt_v1(&encode_persisted_terminal_receipt_v1(&v2_receipt)?)?,
+        v2_receipt
+    );
     Ok(())
 }
 

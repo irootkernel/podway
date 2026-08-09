@@ -38,6 +38,16 @@ use uuid::{Uuid, Version};
 
 const FIXTURE_DISPLAY_V1: &str = "native execution fixture";
 const PROCEDURE_YAML: &[u8] = include_bytes!("../../../assets/presets/sw-dev.yaml");
+const PROCEDURE_V2_YAML: &[u8] = br#"schema: podway.procedure/v2
+id: unsupported-native-v2
+version: "2"
+name: Unsupported native v2
+entry: work
+nodes:
+  - id: work
+    action:
+      instructions: ["Do work"]
+"#;
 
 struct WorktreeFixtureV1 {
     temporary_root: PathBuf,
@@ -339,6 +349,30 @@ fn g006_workspace_procedure_start_uses_a_bounded_regular_file_without_symlink_tr
             )
             .is_err()
     );
+}
+
+#[test]
+fn v2plt007_native_provider_classifies_source_declared_v2_before_v1_parsing() {
+    let fixture = fixture_v1();
+    fs::write(
+        fixture.worktree_root.join("procedure-v2.yaml"),
+        PROCEDURE_V2_YAML,
+    )
+    .expect("v2 Procedure source");
+
+    let error = procedure_provider_v1(fixture.options.clone())
+        .load_workspace_procedure_snapshot(
+            &fixture.binding,
+            "procedure-v2.yaml",
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009913").expect("snapshot ID"),
+            UnixMillis::new(100),
+        )
+        .expect_err("v2 admission must remain locked");
+
+    assert!(matches!(
+        error,
+        ExecutionBoundaryErrorV1::ProcedureV2Unsupported
+    ));
 }
 
 #[test]

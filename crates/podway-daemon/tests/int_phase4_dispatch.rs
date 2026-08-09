@@ -11,13 +11,13 @@ use podway_daemon::{
         DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, MutationDispatchOutcomeV1,
         MutationWaitV1, RequestDispatcherV1Adapter, RequestReadWaitV1, WorkspaceRuntimeV1,
     },
-    server::RequestDispatcherV1,
+    server::{DaemonRequestV1, RequestDispatcherV1},
 };
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OperationV1,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV1, Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1, WorkspaceOutputV1,
-    WorktreeSelectorWireV1,
+    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1,
+    WorkspaceOutputV1, WorktreeSelectorWireV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -144,6 +144,8 @@ struct ReadState {
     next_waits: Vec<RequestReadWaitV1>,
     status_session_ids: Vec<Option<SessionId>>,
     next_session_ids: Vec<Option<SessionId>>,
+    job_lookup_result: Option<Map<String, Value>>,
+    job_status_result: Option<(JobOutputV1, Map<String, Value>)>,
 }
 
 #[derive(Clone)]
@@ -156,6 +158,14 @@ impl FakeReads {
         Self {
             state: Arc::new(Mutex::new(ReadState::default())),
         }
+    }
+
+    fn with_job_results(self, lookup: Map<String, Value>, status: Map<String, Value>) -> Self {
+        let mut state = self.state.lock().unwrap();
+        state.job_lookup_result = Some(lookup);
+        state.job_status_result = Some((terminal_job(), status));
+        drop(state);
+        self
     }
 }
 
@@ -246,16 +256,19 @@ impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
         selector: &WorktreeSelectorWireV1,
         _idempotency_key: &IdempotencyKeyV1,
     ) -> Result<DispatcherReconciliationOutputV1, DispatchFailureV1> {
+        let override_result = self.state.lock().unwrap().job_lookup_result.clone();
+        let latest_sequence = if override_result.is_some() { 41 } else { 9 };
+        let result = override_result.unwrap_or_else(|| map(json!({"found": false})));
         Ok(DispatcherReconciliationOutputV1::new(
             Some(
                 WorkspaceOutputV1::new(
                     WorkspaceId::new(WORKSPACE_ID).unwrap(),
                     selector.display(),
-                    9,
+                    latest_sequence,
                 )
                 .unwrap(),
             ),
-            map(json!({"found": false})),
+            result,
             Vec::new(),
         ))
     }
@@ -266,11 +279,10 @@ impl DispatcherReadServiceV1<FakeWorkspace> for FakeReads {
         _job_id: &JobId,
         _wait: RequestReadWaitV1,
     ) -> Result<DispatcherJobOutputV1, DispatchFailureV1> {
-        Ok(DispatcherJobOutputV1::new(
-            queued_job(),
-            map(json!({"job": {"id": JOB_ID}})),
-            Vec::new(),
-        ))
+        let output = self.state.lock().unwrap().job_status_result.clone();
+        let (job, result) =
+            output.unwrap_or_else(|| (queued_job(), map(json!({"job": {"id": JOB_ID}}))));
+        Ok(DispatcherJobOutputV1::new(job, result, Vec::new()))
     }
 }
 
@@ -515,6 +527,63 @@ fn terminal_job() -> JobOutputV1 {
     .unwrap()
 }
 
+fn v2_terminal_response() -> Value {
+    json!({
+        "schema": "podway.output/v2",
+        "request_id": "00000000-0000-4000-8000-000000000042",
+        "command": "session.complete",
+        "generated_at": GENERATED_AT,
+        "workspace": {
+            "uuid": WORKSPACE_ID,
+            "root": "/safe/worktree",
+            "latest_workspace_sequence": 41,
+        },
+        "job": terminal_job(),
+        "result": {
+            "schema": "podway.stage-transition-result/v2",
+            "admission": {
+                "admitted": true,
+                "job_id": JOB_ID,
+                "workspace_sequence": 41,
+            },
+            "transition": "complete",
+            "from_graph_node_id": "work",
+            "from_attempt_id": ATTEMPT_ID,
+            "revision": 2,
+            "session_state": "completed",
+        },
+        "warnings": [],
+    })
+}
+
+fn v2_job_results() -> (Map<String, Value>, Map<String, Value>) {
+    let terminal = v2_terminal_response();
+    let mut job = serde_json::to_value(terminal_job()).unwrap();
+    let job = job.as_object_mut().unwrap();
+    job.insert(
+        "command".to_owned(),
+        Value::String("session.complete".to_owned()),
+    );
+    job.insert(
+        "request_digest".to_owned(),
+        Value::String(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        ),
+    );
+    job.insert("terminal_response".to_owned(), terminal.clone());
+    (
+        map(json!({
+            "schema": "podway.job-lookup-result/v2",
+            "found": true,
+            "job": job,
+        })),
+        map(json!({
+            "schema": "podway.job-result/v2",
+            "job": terminal,
+        })),
+    )
+}
+
 fn terminal_success() -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
     Ok(MutationDispatchOutcomeV1::Terminal {
         job: terminal_job(),
@@ -730,6 +799,48 @@ fn queries_preserve_pending_fields_and_use_the_request_wait() {
         reads.state.lock().unwrap().status_session_ids,
         vec![Some(SessionId::new(SESSION_ID).unwrap())]
     );
+}
+
+#[test]
+fn v2_terminal_receipts_use_v2_job_read_wrappers() {
+    let (lookup, status) = v2_job_results();
+    let runtime = FakeRuntime::new();
+    let reads = FakeReads::new().with_job_results(lookup, status);
+    let dispatcher = dispatcher(runtime, reads, FakeWorker::new(terminal_success()));
+    let cases = [
+        (
+            "job.lookup",
+            json!({"selector": selector("/safe/worktree"), "idempotency_key": "v2-job"}),
+            "podway.job-lookup-result/v2",
+        ),
+        (
+            "job.status",
+            json!({"selector": selector("/safe/worktree"), "job_id": JOB_ID}),
+            "podway.job-result/v2",
+        ),
+        (
+            "job.wait",
+            json!({"selector": selector("/safe/worktree"), "job_id": JOB_ID}),
+            "podway.job-result/v2",
+        ),
+    ];
+
+    for (index, (command, payload, schema)) in cases.into_iter().enumerate() {
+        let (request, slice) = request_and_slice(
+            command,
+            payload,
+            PreconditionsV1::default(),
+            false,
+            30_000,
+            70 + index as u64,
+        );
+        let response = dispatcher.dispatch_daemon(&request, &DaemonRequestV1::Legacy(slice));
+        let ResponseEnvelopeV2::OutputV2(output) = response else {
+            panic!("v2 terminal job reads must use the v2 output envelope");
+        };
+        assert_eq!(output.result()["schema"], schema);
+        assert_eq!(output.command().as_str(), command);
+    }
 }
 
 #[test]
@@ -996,6 +1107,198 @@ fn unsupported_and_malformed_requests_are_rejected_before_dispatch() {
     })
     .unwrap();
     assert!(SliceRequestV1::from_envelope(&malformed).is_err());
+}
+
+#[test]
+fn reserved_v2_mutation_is_closed_and_rejected_without_runtime_or_worker_calls() {
+    let cases = [
+        (
+            "session.decide",
+            json!({"session_id": SESSION_ID, "session_revision": 7, "attempt_id": ATTEMPT_ID}),
+            json!({"option_id": "accept", "reason": "The evidence supports this decision."}),
+            "podway.decision-result/v1",
+        ),
+        (
+            "session.rework",
+            json!({"session_id": SESSION_ID, "session_revision": 7, "attempt_id": ATTEMPT_ID}),
+            json!({"target_graph_node_id": "implement", "reason": "The implementation needs correction."}),
+            "podway.rework-result/v1",
+        ),
+        (
+            "goal.define",
+            json!({"session_id": SESSION_ID, "session_revision": 7}),
+            json!({"goal": "Ship the daemon boundary.", "criteria": [{"criterion_id": "tests", "statement": "The focused tests pass."}]}),
+            "podway.goal-definition-result/v1",
+        ),
+        (
+            "goal.revise",
+            json!({"session_id": SESSION_ID, "session_revision": 7, "goal_revision": 1}),
+            json!({"goal": "Ship the daemon boundary safely.", "criteria": [{"criterion_id": "tests", "statement": "The focused tests pass."}], "target_graph_node_id": "implement", "reason": "Safety is explicit.", "reactivate": false}),
+            "podway.goal-revision-result/v1",
+        ),
+        (
+            "goal.assess_criterion",
+            json!({"session_id": SESSION_ID, "session_revision": 7, "attempt_id": ATTEMPT_ID, "goal_revision": 1}),
+            json!({"criterion_id": "tests", "status": "satisfied", "reason": "The tests pass.", "evidence": ["verify"]}),
+            "podway.criterion-assessment-result/v1",
+        ),
+    ];
+
+    for (index, (command, preconditions, mut payload, result_schema)) in
+        cases.into_iter().enumerate()
+    {
+        payload["selector"] = json!({
+            "version": 1,
+            "path_bytes_base64url": "L3NhZmUvd29ya3RyZWU",
+            "display": "/safe/worktree",
+            "expected_uuid": WORKSPACE_ID
+        });
+        let request: RequestEnvelopeV1 = serde_json::from_value(json!({
+            "protocol": "podway.ipc/v1",
+            "request_id": format!("00000000-0000-4000-8000-{:012}", 39 + index),
+            "client": {
+                "name": "dispatch-test",
+                "version": "2",
+                "pid": 1,
+                "product": "podway",
+                "contract_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "operation": "mutate",
+            "command": command,
+            "workspace": {"root": "/safe/worktree", "expected_uuid": WORKSPACE_ID},
+            "idempotency_key": format!("reserved-v2-{index}"),
+            "preconditions": preconditions,
+            "options": {"detach": false, "wait_timeout_ms": 30_000},
+            "payload": payload
+        }))
+        .unwrap();
+        let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
+        assert!(matches!(
+            daemon_request,
+            DaemonRequestV1::ProcedureV2Mutation(_)
+        ));
+
+        let runtime = FakeRuntime::new();
+        let reads = FakeReads::new();
+        let worker = FakeWorker::new(terminal_success());
+        let dispatcher = dispatcher(runtime.clone(), reads.clone(), worker.clone());
+        let ResponseEnvelopeV2::Error(error) =
+            dispatcher.dispatch_daemon(&request, &daemon_request)
+        else {
+            panic!("reserved v2 capability must fail closed");
+        };
+
+        assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+        assert_eq!(error.exit_code().get(), 3);
+        assert!(!error.retryable());
+        assert_eq!(
+            error.details()["schema"],
+            "podway.v2-runtime-error-details/v1"
+        );
+        assert_eq!(error.details()["kind"], "UNSUPPORTED_V2_CAPABILITY");
+        assert_eq!(error.details()["capability"], command);
+        assert_eq!(error.details()["required_result_schema"], result_schema);
+        assert_eq!(error.details()["admission"], json!({"admitted": false}));
+        assert_eq!(
+            error.details()["contract_manifest_digest"],
+            podway_protocol::build_identity_v1().contract_manifest_digest()
+        );
+        assert!(runtime.state.lock().unwrap().existing_selectors.is_empty());
+        let reads = reads.state.lock().unwrap();
+        assert!(reads.status_waits.is_empty());
+        assert!(reads.next_waits.is_empty());
+        assert!(worker.state.lock().unwrap().calls.is_empty());
+
+        let mut malformed = serde_json::to_value(&request).unwrap();
+        malformed["payload"]["unknown"] = json!(true);
+        let malformed: RequestEnvelopeV1 = serde_json::from_value(malformed).unwrap();
+        assert!(DaemonRequestV1::from_envelope(&malformed).is_err());
+    }
+}
+
+#[test]
+fn goal_bearing_start_uses_the_protocol_only_v2_fallback() {
+    let request: RequestEnvelopeV1 = serde_json::from_value(json!({
+        "protocol": "podway.ipc/v1",
+        "request_id": "00000000-0000-4000-8000-000000000040",
+        "client": {
+            "name": "dispatch-test",
+            "version": "2",
+            "pid": 1,
+            "product": "podway",
+            "contract_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "operation": "mutate",
+        "command": "session.start",
+        "workspace": {"root": "/safe/worktree", "expected_uuid": WORKSPACE_ID},
+        "idempotency_key": "v2-start",
+        "preconditions": {},
+        "options": {"detach": false, "wait_timeout_ms": 30_000},
+        "payload": {
+            "selector": {
+                "version": 1,
+                "path_bytes_base64url": "L3NhZmUvd29ya3RyZWU",
+                "display": "/safe/worktree",
+                "expected_uuid": WORKSPACE_ID
+            },
+            "procedure": "workflow.yaml",
+            "task_title": "Implement Procedure v2",
+            "goal": "Ship the complete Procedure v2 behavior.",
+            "criteria": [{
+                "criterion_id": "verified",
+                "statement": "The focused daemon tests pass."
+            }]
+        }
+    }))
+    .unwrap();
+    assert!(SliceRequestV1::from_envelope(&request).is_err());
+    let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
+    assert!(matches!(
+        daemon_request,
+        DaemonRequestV1::ProcedureV2Start(_)
+    ));
+
+    let runtime = FakeRuntime::new();
+    let reads = FakeReads::new();
+    let worker = FakeWorker::new(terminal_success());
+    let dispatcher = dispatcher(runtime.clone(), reads, worker.clone());
+    let ResponseEnvelopeV2::Error(error) = dispatcher.dispatch_daemon(&request, &daemon_request)
+    else {
+        panic!("goal-bearing start must remain unavailable before v2 admission support");
+    };
+    assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+    assert_eq!(error.details()["capability"], "session.start");
+    assert_eq!(
+        error.details()["required_result_schema"],
+        "podway.session-start-result/v2"
+    );
+    assert_eq!(error.details()["admission"], json!({"admitted": false}));
+    assert!(runtime.state.lock().unwrap().bootstrap_selectors.is_empty());
+    assert!(runtime.state.lock().unwrap().existing_selectors.is_empty());
+    assert!(worker.state.lock().unwrap().calls.is_empty());
+
+    let mut replace = serde_json::to_value(&request).unwrap();
+    replace["request_id"] = json!("00000000-0000-4000-8000-000000000041");
+    replace["command"] = json!("session.start_replace");
+    replace["idempotency_key"] = json!("v2-start-replace");
+    replace["preconditions"] = json!({"session_id": SESSION_ID, "session_revision": 7});
+    replace["payload"]["confirmed"] = json!(true);
+    let replace: RequestEnvelopeV1 = serde_json::from_value(replace).unwrap();
+    let daemon_request = DaemonRequestV1::from_envelope(&replace).unwrap();
+    let ResponseEnvelopeV2::Error(error) = dispatcher.dispatch_daemon(&replace, &daemon_request)
+    else {
+        panic!("goal-bearing replacement must remain unavailable before v2 admission support");
+    };
+    assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+    assert_eq!(error.details()["capability"], "session.start_replace");
+    assert_eq!(
+        error.details()["required_result_schema"],
+        "podway.session-start-result/v2"
+    );
+    assert_eq!(error.details()["admission"], json!({"admitted": false}));
+    assert!(runtime.state.lock().unwrap().bootstrap_selectors.is_empty());
+    assert!(runtime.state.lock().unwrap().existing_selectors.is_empty());
+    assert!(worker.state.lock().unwrap().calls.is_empty());
 }
 
 #[test]

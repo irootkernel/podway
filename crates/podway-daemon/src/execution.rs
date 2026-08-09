@@ -12,6 +12,7 @@ use crate::{
 };
 use podway_config::{
     ProcedureFormatV1, ProcedureSourceLabel, ProcedureWarningPolicyV1, parse_procedure_v1,
+    sniff_procedure_schema,
 };
 use podway_core::{
     AddItemV1, ArtifactLocationKindV1, ArtifactValueV1, AttachItemV1, AttemptId, AttemptV1,
@@ -83,6 +84,7 @@ enum AdmissionResolutionV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionBoundaryErrorV1 {
     Domain(DomainError),
+    ProcedureV2Unsupported,
     WorkspaceIdentityMismatch {
         expected: WorkspaceId,
         actual: WorkspaceId,
@@ -99,6 +101,10 @@ impl ExecutionBoundaryErrorV1 {
 
     pub const fn transient(operation: &'static str) -> Self {
         Self::Transient { operation }
+    }
+
+    pub const fn procedure_v2_unsupported() -> Self {
+        Self::ProcedureV2Unsupported
     }
 
     pub fn workspace_identity_mismatch(expected: WorkspaceId, actual: WorkspaceId) -> Self {
@@ -214,6 +220,9 @@ pub(crate) fn workspace_procedure_snapshot_from_bytes_v1(
             },
         ))?,
     };
+    if sniff_procedure_schema(source, format) == Some(podway_core::PROCEDURE_SCHEMA_V2) {
+        return Err(ExecutionBoundaryErrorV1::procedure_v2_unsupported());
+    }
     parse_procedure_v1(source, format)
         .and_then(|procedure| {
             procedure.into_snapshot_v1(
@@ -280,6 +289,10 @@ pub trait ArtifactVerifierV1: Send + Sync {
 #[derive(Debug)]
 pub enum ExecutionErrorV1 {
     BoundaryDomain(DomainError),
+    UnsupportedV2Capability {
+        capability: &'static str,
+        required_result_schema: &'static str,
+    },
     BoundaryTransient {
         operation: &'static str,
     },
@@ -307,6 +320,9 @@ impl fmt::Display for ExecutionErrorV1 {
         match self {
             Self::BoundaryDomain(error) => {
                 write!(formatter, "execution boundary rejected request: {error}")
+            }
+            Self::UnsupportedV2Capability { capability, .. } => {
+                write!(formatter, "v2 capability is not enabled: {capability}")
             }
             Self::BoundaryTransient { operation } => {
                 write!(
@@ -338,7 +354,8 @@ impl Error for ExecutionErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::BoundaryDomain(error) => Some(error),
-            Self::BoundaryTransient { .. }
+            Self::UnsupportedV2Capability { .. }
+            | Self::BoundaryTransient { .. }
             | Self::SessionIdentityMismatch { .. }
             | Self::WorkspaceIdentityMismatch { .. }
             | Self::ProcedureDigestMismatch { .. }
@@ -1240,10 +1257,10 @@ where
     ) -> Result<AdmissionResolutionV1, ExecutionErrorV1> {
         match command {
             SliceCommandV1::SessionStart(input) => {
-                self.resolve_session_start(input, workspace, now)
+                self.resolve_session_start(input, workspace, now, "session.start")
             }
             SliceCommandV1::SessionStartReplace(input) => {
-                self.resolve_session_start(&input.start, workspace, now)
+                self.resolve_session_start(&input.start, workspace, now, "session.start_replace")
             }
             SliceCommandV1::SessionBlock(_) => Ok(AdmissionResolutionV1::SessionBlock {
                 blocker_id: self.ids.next_blocker_id(),
@@ -1295,6 +1312,7 @@ where
         input: &SessionStartV1,
         workspace: &WorkspaceBindingV1,
         now: UnixMillis,
+        capability: &'static str,
     ) -> Result<AdmissionResolutionV1, ExecutionErrorV1> {
         let snapshot_id = self.ids.next_procedure_snapshot_id();
         let snapshot = match &input.source {
@@ -1306,7 +1324,15 @@ where
                 .procedures
                 .load_workspace_procedure_snapshot(workspace, procedure, snapshot_id, now),
         }
-        .map_err(|error| ExecutionErrorV1::from_boundary(error.into()))?;
+        .map_err(|error| match error {
+            ExecutionBoundaryErrorV1::ProcedureV2Unsupported => {
+                ExecutionErrorV1::UnsupportedV2Capability {
+                    capability,
+                    required_result_schema: "podway.session-start-result/v2",
+                }
+            }
+            other => ExecutionErrorV1::from_boundary(other.into()),
+        })?;
         if let Some(expected) = input.expected_procedure_digest.as_ref()
             && snapshot.digest() != expected
         {
@@ -1659,6 +1685,11 @@ impl From<ExecutionBoundaryErrorV1> for BoundaryDispositionV1 {
     fn from(error: ExecutionBoundaryErrorV1) -> Self {
         match error {
             ExecutionBoundaryErrorV1::Domain(error) => Self::Domain(error),
+            ExecutionBoundaryErrorV1::ProcedureV2Unsupported => {
+                Self::Domain(DomainError::InvalidState {
+                    reason: "Procedure v2 capability escaped start admission resolution",
+                })
+            }
             ExecutionBoundaryErrorV1::WorkspaceIdentityMismatch { expected, actual } => {
                 Self::WorkspaceIdentityMismatch { expected, actual }
             }

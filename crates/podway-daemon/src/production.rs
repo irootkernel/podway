@@ -17,10 +17,11 @@ use podway_git::{
     WorktreeSelectorV1,
 };
 use podway_protocol::{
-    CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, RequestIdV1, Rfc3339MillisV1,
-    SessionLifecycleV1, SessionOutputV1, SliceCommandV1, SliceRequestV1,
-    TerminalJobCancellationProjectionV1, TerminalJobResponseV1, TerminalJobSuccessResultV1,
-    WorkspaceOutputV1, WorktreeSelectorWireV1, canonical_reset_all_identity_v1,
+    CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, RequestIdV1, ResponseEnvelopeV1,
+    ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, SliceCommandV1,
+    SliceRequestV1, TerminalJobCancellationProjectionV1, TerminalJobResponseV1,
+    TerminalJobSuccessResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
+    canonical_reset_all_identity_v1, decode_response_payload_v2,
 };
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
@@ -790,12 +791,22 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             "request_digest".to_owned(),
             Value::String(binding.request_digest().as_str().to_owned()),
         );
+        let mut result = Map::from_iter([
+            ("found".to_owned(), Value::Bool(true)),
+            ("job".to_owned(), Value::Object(job.clone())),
+        ]);
+        if job
+            .get("terminal_response")
+            .is_some_and(terminal_response_requires_v2_wrapper)
+        {
+            result.insert(
+                "schema".to_owned(),
+                Value::String("podway.job-lookup-result/v2".to_owned()),
+            );
+        }
         Ok(DispatcherReconciliationOutputV1::new(
             Some(workspace),
-            Map::from_iter([
-                ("found".to_owned(), Value::Bool(true)),
-                ("job".to_owned(), Value::Object(job.clone())),
-            ]),
+            result,
             Vec::new(),
         ))
     }
@@ -812,11 +823,15 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             .job(context.binding().identity(), job_id, self.wait(wait)?)
             .map_err(map_read_error)?;
         let (job, result) = job_read_projection(&view)?;
-        Ok(DispatcherJobOutputV1::new(
-            job,
-            Map::from_iter([("job".to_owned(), result)]),
-            Vec::new(),
-        ))
+        let uses_v2 = terminal_response_requires_v2_wrapper(&result);
+        let mut result = Map::from_iter([("job".to_owned(), result)]);
+        if uses_v2 {
+            result.insert(
+                "schema".to_owned(),
+                Value::String("podway.job-result/v2".to_owned()),
+            );
+        }
+        Ok(DispatcherJobOutputV1::new(job, result, Vec::new()))
     }
 }
 
@@ -1414,7 +1429,13 @@ fn preview_command(
     }
     match command {
         SliceCommandV1::SessionStart(input) => Ok((
-            SessionCommandV1::Start(preview_start(input, workspace, now, provider)?),
+            SessionCommandV1::Start(preview_start(
+                input,
+                workspace,
+                now,
+                provider,
+                "session.start",
+            )?),
             Revision::ZERO,
         )),
         SliceCommandV1::SessionStartReplace(input) => {
@@ -1424,7 +1445,13 @@ fn preview_command(
                 SessionCommandV1::StartReplace(StartReplaceSessionV1 {
                     expected_session_id: input.preconditions.expected_session_id.clone(),
                     confirmed: true,
-                    start: preview_start(&input.start, workspace, now, provider)?,
+                    start: preview_start(
+                        &input.start,
+                        workspace,
+                        now,
+                        provider,
+                        "session.start_replace",
+                    )?,
                 }),
                 input.preconditions.expected_session_revision,
             ))
@@ -1479,6 +1506,7 @@ fn preview_start(
     workspace: &WorkspaceBindingV1,
     now: UnixMillis,
     provider: &impl ProcedureProviderV1,
+    capability: &'static str,
 ) -> Result<StartSessionV1, DispatchFailureV1> {
     let snapshot_id =
         ProcedureSnapshotId::new(PREVIEW_SNAPSHOT_ID_V1).expect("preview snapshot ID is valid");
@@ -1490,7 +1518,7 @@ fn preview_start(
             provider.load_workspace_procedure_snapshot(workspace, procedure, snapshot_id, now)
         }
     }
-    .map_err(map_preview_procedure_error)?;
+    .map_err(|error| map_preview_procedure_error(error, capability))?;
     if let Some(expected) = input.expected_procedure_digest.as_ref()
         && snapshot.digest() != expected
     {
@@ -1648,10 +1676,14 @@ const fn stage_progress_state_name(state: podway_core::StageProgressState) -> &'
 
 fn map_preview_procedure_error(
     error: crate::execution::ExecutionBoundaryErrorV1,
+    capability: &'static str,
 ) -> DispatchFailureV1 {
     match error {
         crate::execution::ExecutionBoundaryErrorV1::Domain(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::ProcedureInvalid)
+        }
+        crate::execution::ExecutionBoundaryErrorV1::ProcedureV2Unsupported => {
+            unsupported_v2_capability_failure(capability)
         }
         crate::execution::ExecutionBoundaryErrorV1::WorkspaceIdentityMismatch {
             expected,
@@ -1663,6 +1695,13 @@ fn map_preview_procedure_error(
             DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
         }
     }
+}
+
+fn unsupported_v2_capability_failure(capability: &'static str) -> DispatchFailureV1 {
+    DispatchFailureV1::new(DispatchFailureKindV1::UnsupportedV2Capability).with_details(
+        DispatchErrorDetailsV1::default()
+            .with_unsupported_v2_capability(capability, "podway.session-start-result/v2"),
+    )
 }
 
 fn map_preview_domain_error(error: DomainError, command: &SliceCommandV1) -> DispatchFailureV1 {
@@ -1791,6 +1830,13 @@ fn reset_all_digest(
 fn map_reset_preparation_error(error: ExecutionErrorV1) -> DispatchFailureV1 {
     match error {
         ExecutionErrorV1::Store(error) => map_store_error(error),
+        ExecutionErrorV1::UnsupportedV2Capability {
+            capability,
+            required_result_schema,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::UnsupportedV2Capability).with_details(
+            DispatchErrorDetailsV1::default()
+                .with_unsupported_v2_capability(capability, required_result_schema),
+        ),
         ExecutionErrorV1::BoundaryDomain(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid)
         }
@@ -1860,6 +1906,19 @@ fn protocol_job_state(state: StoreJobStateV1) -> JobStateV1 {
         StoreJobStateV1::Failed => JobStateV1::Failed,
         StoreJobStateV1::Cancelled => JobStateV1::Cancelled,
     }
+}
+
+fn terminal_response_requires_v2_wrapper(response: &Value) -> bool {
+    // V2PLT-007 rejects every Procedure v2 mutation before durable admission, so only imported or
+    // future terminal receipts can currently require a v2 wrapper. Enabling queued/running v2 jobs
+    // must add an immutable request-version discriminator to the persisted job identity instead of
+    // extending this terminal-response inference.
+    response.get("schema").and_then(Value::as_str) == Some("podway.output/v2")
+        || response
+            .get("details")
+            .and_then(|details| details.get("schema"))
+            .and_then(Value::as_str)
+            == Some("podway.v2-runtime-error-details/v1")
 }
 
 fn job_read_projection(view: &JobViewV1) -> Result<(JobOutputV1, Value), DispatchFailureV1> {
@@ -2053,8 +2112,10 @@ fn validate_frozen_terminal_envelope(
         .response_context()
         .ok_or_else(terminal_replay_integrity_failure)?;
     let schema = object.get("schema").and_then(Value::as_str);
-    if !matches!(schema, Some("podway.output/v1" | "podway.error/v1"))
-        || object.get("request_id").and_then(Value::as_str) != Some(context.request_id())
+    if !matches!(
+        schema,
+        Some("podway.output/v1" | "podway.output/v2" | "podway.error/v1")
+    ) || object.get("request_id").and_then(Value::as_str) != Some(context.request_id())
         || object.get("command").and_then(Value::as_str) != Some(context.command())
     {
         return Err(terminal_replay_integrity_failure());
@@ -2079,24 +2140,200 @@ fn validate_frozen_terminal_envelope(
                 return Err(terminal_replay_integrity_failure());
             }
         }
+        Some("podway.output/v2") => {
+            validate_frozen_v2_terminal_envelope(receipt, envelope, &job)?;
+        }
         Some("podway.error/v1") => {
-            let admission = object
-                .get("details")
-                .and_then(Value::as_object)
-                .and_then(|details| details.get("admission"));
-            if admission
-                != Some(&json!({
-                    "admitted": true,
-                    "job_id": job.id(),
-                    "workspace_sequence": job.sequence(),
-                }))
-            {
-                return Err(terminal_replay_integrity_failure());
-            }
+            validate_frozen_terminal_error(receipt, envelope, &job)?;
         }
         _ => return Err(terminal_replay_integrity_failure()),
     }
     Ok(())
+}
+
+fn validate_frozen_v2_terminal_envelope(
+    receipt: &PersistedTerminalReceiptV1,
+    envelope: &Value,
+    expected_job: &JobOutputV1,
+) -> Result<(), DispatchFailureV1> {
+    let encoded = serde_json::to_vec(envelope).map_err(|_| terminal_replay_integrity_failure())?;
+    let ResponseEnvelopeV2::OutputV2(output) =
+        decode_response_payload_v2(&encoded).map_err(|_| terminal_replay_integrity_failure())?
+    else {
+        return Err(terminal_replay_integrity_failure());
+    };
+    let expected_command = receipt
+        .lookup_command()
+        .map(PersistedDomainCommandV1::public_command_name)
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    if output.command().as_str() != expected_command
+        || output.job() != Some(expected_job)
+        || expected_job.finished_at() != Some(output.generated_at())
+        || !matches!(receipt.result(), PersistedTerminalResultV1::Success(_))
+    {
+        return Err(terminal_replay_integrity_failure());
+    }
+    let admission = output
+        .result()
+        .get("admission")
+        .and_then(Value::as_object)
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    if admission.get("admitted") != Some(&Value::Bool(true))
+        || admission.get("job_id").and_then(Value::as_str) != Some(expected_job.id().as_str())
+        || admission.get("workspace_sequence").and_then(Value::as_u64)
+            != Some(expected_job.sequence())
+    {
+        return Err(terminal_replay_integrity_failure());
+    }
+    validate_frozen_v2_result_projection(receipt, output.result())?;
+    Ok(())
+}
+
+fn validate_frozen_terminal_error(
+    receipt: &PersistedTerminalReceiptV1,
+    envelope: &Value,
+    expected_job: &JobOutputV1,
+) -> Result<(), DispatchFailureV1> {
+    let encoded = serde_json::to_vec(envelope).map_err(|_| terminal_replay_integrity_failure())?;
+    let ResponseEnvelopeV2::Error(error) =
+        decode_response_payload_v2(&encoded).map_err(|_| terminal_replay_integrity_failure())?
+    else {
+        return Err(terminal_replay_integrity_failure());
+    };
+    let PersistedTerminalResultV1::Failure(persisted_error) = receipt.result() else {
+        return Err(terminal_replay_integrity_failure());
+    };
+    let command = receipt
+        .lookup_command()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let context =
+        terminal_response_context(receipt)?.ok_or_else(terminal_replay_integrity_failure)?;
+    let expected = terminal_response_envelope_v1(
+        context,
+        expected_job.clone(),
+        DispatcherTerminalResultV1::Error(map_terminal_domain_error(
+            persisted_error,
+            terminal_command_kind_from_lookup(command),
+        )),
+        false,
+    )?;
+    let ResponseEnvelopeV1::Error(expected) = expected else {
+        return Err(terminal_replay_integrity_failure());
+    };
+    let mut actual =
+        serde_json::to_value(error).map_err(|_| terminal_replay_integrity_failure())?;
+    let mut expected =
+        serde_json::to_value(expected).map_err(|_| terminal_replay_integrity_failure())?;
+    actual
+        .as_object_mut()
+        .and_then(|value| value.remove("message"));
+    expected
+        .as_object_mut()
+        .and_then(|value| value.remove("message"));
+    if actual != expected {
+        return Err(terminal_replay_integrity_failure());
+    }
+    Ok(())
+}
+
+fn validate_frozen_v2_result_projection(
+    receipt: &PersistedTerminalReceiptV1,
+    result: &Map<String, Value>,
+) -> Result<(), DispatchFailureV1> {
+    let schema = result.get("schema").and_then(Value::as_str);
+    let session = receipt.session_projection();
+    let matches_projection = match (schema, receipt.result()) {
+        (
+            Some("podway.session-start-result/v2"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id,
+                revision_after,
+                ..
+            }),
+        ) => {
+            result.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+                && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                && session.is_some_and(|projection| {
+                    projection.session_id() == session_id
+                        && result.get("procedure_digest").and_then(Value::as_str)
+                            == projection.procedure_digest().map(|digest| digest.as_str())
+                })
+        }
+        (
+            Some("podway.stage-transition-result/v2"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                revision_after,
+                ..
+            }),
+        ) => {
+            let transition = receipt
+                .lookup_command()
+                .and_then(expected_stage_transition_v2);
+            let base_matches = result.get("revision").and_then(Value::as_u64)
+                == Some(revision_after.get())
+                && result.get("transition").and_then(Value::as_str) == transition;
+            if transition == Some("reset") {
+                base_matches
+                    && session.is_none()
+                    && result.get("reset").and_then(Value::as_bool) == Some(true)
+            } else {
+                base_matches
+                    && session.is_some_and(|projection| {
+                        let lifecycle = match projection.lifecycle() {
+                            PersistedSessionLifecycleV1::Running => "running",
+                            PersistedSessionLifecycleV1::Completed => "completed",
+                            PersistedSessionLifecycleV1::Cancelled => "cancelled",
+                        };
+                        result.get("session_state").and_then(Value::as_str) == Some(lifecycle)
+                            && projection.revision_after() == *revision_after
+                    })
+            }
+        }
+        (
+            Some("podway.item-mutation-result/v2"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemChanged {
+                item_id,
+                revision_after,
+                changed,
+                ..
+            }),
+        ) => {
+            result.get("item_id").and_then(Value::as_str) == Some(item_id.as_str())
+                && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                && result.get("changed").and_then(Value::as_bool) == Some(*changed)
+        }
+        _ => false,
+    };
+    if matches_projection {
+        Ok(())
+    } else {
+        Err(terminal_replay_integrity_failure())
+    }
+}
+
+fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'static str> {
+    match command {
+        PersistedDomainCommandV1::SessionComplete => Some("complete"),
+        PersistedDomainCommandV1::SessionSkip => Some("skip"),
+        PersistedDomainCommandV1::SessionRetry => Some("retry"),
+        PersistedDomainCommandV1::SessionBlock => Some("block"),
+        PersistedDomainCommandV1::SessionUnblock => Some("unblock"),
+        PersistedDomainCommandV1::SessionCancel => Some("cancel"),
+        PersistedDomainCommandV1::SessionReset => Some("reset"),
+        PersistedDomainCommandV1::WorkspaceInitialize
+        | PersistedDomainCommandV1::WorkspaceResetAll
+        | PersistedDomainCommandV1::SessionStart
+        | PersistedDomainCommandV1::SessionStartReplace
+        | PersistedDomainCommandV1::SessionReturn
+        | PersistedDomainCommandV1::SessionReopen
+        | PersistedDomainCommandV1::ItemCheck { .. }
+        | PersistedDomainCommandV1::ItemUncheck { .. }
+        | PersistedDomainCommandV1::ItemSet { .. }
+        | PersistedDomainCommandV1::ItemAdd { .. }
+        | PersistedDomainCommandV1::ItemRemove { .. }
+        | PersistedDomainCommandV1::ItemAttach { .. }
+        | PersistedDomainCommandV1::ItemClear { .. } => None,
+    }
 }
 
 pub(crate) fn seal_terminal_receipt_v1(
@@ -2467,6 +2704,14 @@ fn map_worker_error(error: WorkerErrorV1) -> DispatchFailureV1 {
         WorkerErrorV1::Store(error) => map_store_error(error),
         WorkerErrorV1::Execution(error) => match error {
             crate::execution::ExecutionErrorV1::Store(error) => map_store_error(error),
+            crate::execution::ExecutionErrorV1::UnsupportedV2Capability {
+                capability,
+                required_result_schema,
+            } => DispatchFailureV1::new(DispatchFailureKindV1::UnsupportedV2Capability)
+                .with_details(
+                    DispatchErrorDetailsV1::default()
+                        .with_unsupported_v2_capability(capability, required_result_schema),
+                ),
             crate::execution::ExecutionErrorV1::BoundaryDomain(_) => {
                 DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid)
             }
@@ -2831,6 +3076,44 @@ mod tests {
             terminal.into_details().into_json(false),
             Map::from_iter([("maximum_open_blockers".to_owned(), json!(1024))])
         );
+    }
+
+    #[test]
+    fn v2plt007_source_declared_v2_preserves_capability_and_pre_admission_details() {
+        let expected = json!({
+            "schema": "podway.v2-runtime-error-details/v1",
+            "kind": "UNSUPPORTED_V2_CAPABILITY",
+            "capability": "session.start",
+            "required_result_schema": "podway.session-start-result/v2",
+            "contract_manifest_digest": podway_protocol::build_identity_v1()
+                .contract_manifest_digest(),
+            "admission": {"admitted": false},
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let preview = map_preview_procedure_error(
+            crate::execution::ExecutionBoundaryErrorV1::ProcedureV2Unsupported,
+            "session.start",
+        );
+        assert_eq!(
+            preview.kind(),
+            DispatchFailureKindV1::UnsupportedV2Capability
+        );
+        assert_eq!(preview.into_details().into_json(false), expected);
+
+        let admission = map_worker_error(WorkerErrorV1::Execution(
+            crate::execution::ExecutionErrorV1::UnsupportedV2Capability {
+                capability: "session.start",
+                required_result_schema: "podway.session-start-result/v2",
+            },
+        ));
+        assert_eq!(
+            admission.kind(),
+            DispatchFailureKindV1::UnsupportedV2Capability
+        );
+        assert_eq!(admission.into_details().into_json(true), expected);
     }
 
     fn terminal_job_projection(
@@ -3457,6 +3740,232 @@ mod tests {
             frozen
         );
     }
+
+    fn procedure_v2_terminal_fixture(sequence: u64) -> (PersistedTerminalReceiptV1, Value) {
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000080").unwrap();
+        let session_projection = PersistedTerminalSessionProjectionV1::new(
+            session_id.clone(),
+            "Stored immutable terminal session".to_owned(),
+            PersistedSessionLifecycleV1::Completed,
+            Revision::new(4),
+            Revision::new(5),
+        )
+        .unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(sequence),
+            PersistedTerminalResultV1::Success(terminal_session_result(session_id.clone())),
+            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+            Some(session_projection),
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionComplete)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                format!("00000000-0000-4000-8000-{sequence:012x}"),
+                "session.complete",
+                WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+                "/safe/worktree",
+                sequence,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let job_output = job_output_from_terminal_receipt(&receipt).unwrap();
+        let generated_at = job_output.finished_at().unwrap().as_str().to_owned();
+        let job = serde_json::to_value(job_output).unwrap();
+        let envelope = json!({
+            "schema": "podway.output/v2",
+            "request_id": format!("00000000-0000-4000-8000-{sequence:012x}"),
+            "command": "session.complete",
+            "generated_at": generated_at,
+            "workspace": {
+                "uuid": "00000000-0000-4000-8000-000000000099",
+                "root": "/safe/worktree",
+                "latest_workspace_sequence": sequence,
+            },
+            "job": job,
+            "result": {
+                "schema": "podway.stage-transition-result/v2",
+                "admission": {
+                    "admitted": true,
+                    "job_id": format!("00000000-0000-4000-8000-{sequence:012x}"),
+                    "workspace_sequence": sequence,
+                },
+                "transition": "complete",
+                "from_graph_node_id": "work",
+                "from_attempt_id": "00000000-0000-4000-8000-000000000081",
+                "revision": 5,
+                "session_state": "completed",
+            },
+            "warnings": [],
+        });
+        (receipt, envelope)
+    }
+
+    #[test]
+    fn v2plt007_terminal_replay_accepts_a_complete_correlated_v2_envelope() {
+        let (receipt, frozen) = procedure_v2_terminal_fixture(80);
+        validate_frozen_terminal_envelope(&receipt, &frozen).unwrap();
+        let receipt = receipt
+            .with_public_terminal_envelope(frozen.clone())
+            .unwrap();
+
+        assert_eq!(
+            terminal_job_response(&receipt, TerminalCommandKindV1::Other).unwrap(),
+            frozen
+        );
+    }
+
+    #[test]
+    fn v2plt007_terminal_replay_rejects_open_or_mismatched_v2_receipts() {
+        let (receipt, frozen) = procedure_v2_terminal_fixture(81);
+        let invalid = [
+            {
+                let mut value = frozen.clone();
+                value["result"]["unexpected"] = json!(true);
+                value
+            },
+            {
+                let mut value = frozen.clone();
+                value["result"]["admission"]["job_id"] =
+                    json!("00000000-0000-4000-8000-000000000099");
+                value
+            },
+            {
+                let mut value = frozen.clone();
+                value["job"]["finished_at"] = json!("2026-08-09T00:00:00.000Z");
+                value
+            },
+            {
+                let mut value = frozen.clone();
+                value["command"] = json!("session.skip");
+                value
+            },
+            {
+                let mut value = frozen.clone();
+                value["warnings"] = json!([{"code":"incomplete"}]);
+                value
+            },
+            {
+                let mut value = frozen.clone();
+                value["result"]["revision"] = json!(6);
+                value
+            },
+            {
+                let mut value = frozen.clone();
+                value["result"]["transition"] = json!("skip");
+                value
+            },
+        ];
+
+        for envelope in invalid {
+            let receipt = receipt
+                .clone()
+                .with_public_terminal_envelope(envelope)
+                .unwrap();
+            assert_eq!(
+                terminal_job_response(&receipt, TerminalCommandKindV1::Other)
+                    .unwrap_err()
+                    .kind(),
+                DispatchFailureKindV1::WorkspaceStateUnreadable
+            );
+        }
+    }
+
+    fn terminal_error_fixture(sequence: u64) -> (PersistedTerminalReceiptV1, Value) {
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(sequence),
+            PersistedTerminalResultV1::Failure(PersistedDomainErrorV1::PreconditionFailed {
+                expected: Revision::new(4),
+                actual: Revision::new(5),
+            }),
+            terminal_job_projection(PersistedTerminalJobStateV1::Failed),
+            None,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionComplete)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                format!("00000000-0000-4000-8000-{sequence:012x}"),
+                "session.complete",
+                WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+                "/safe/worktree",
+                sequence,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let envelope = terminal_job_response(&receipt, TerminalCommandKindV1::Other).unwrap();
+        (receipt, envelope)
+    }
+
+    #[test]
+    fn v2plt007_terminal_error_replay_is_typed_and_failure_bound() {
+        let (failure, valid) = terminal_error_fixture(82);
+        validate_frozen_terminal_envelope(&failure, &valid).unwrap();
+        let mut improved_message = valid.clone();
+        improved_message["message"] = json!("The observed session revision changed.");
+        validate_frozen_terminal_envelope(&failure, &improved_message).unwrap();
+
+        let (success, _) = procedure_v2_terminal_fixture(82);
+        assert!(validate_frozen_terminal_envelope(&success, &valid).is_err());
+
+        let alternate_receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(82),
+            PersistedTerminalResultV1::Failure(PersistedDomainErrorV1::SessionIdentityMismatch {
+                expected: SessionId::new("00000000-0000-4000-8000-000000000090").unwrap(),
+                actual: Some(SessionId::new("00000000-0000-4000-8000-000000000091").unwrap()),
+            }),
+            terminal_job_projection(PersistedTerminalJobStateV1::Failed),
+            None,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionComplete)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                "00000000-0000-4000-8000-000000000052",
+                "session.complete",
+                WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+                "/safe/worktree",
+                82,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let alternate =
+            terminal_job_response(&alternate_receipt, TerminalCommandKindV1::Other).unwrap();
+        assert!(validate_frozen_terminal_envelope(&failure, &alternate).is_err());
+
+        let invalid = [
+            {
+                let mut value = valid.clone();
+                value["details"]["unknown"] = json!(true);
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value["code"] = json!("UNSUPPORTED_V2_CAPABILITY");
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value["retryable"] = json!(!value["retryable"].as_bool().unwrap());
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value["exit_code"] = json!(6);
+                value
+            },
+        ];
+        for envelope in invalid {
+            assert!(validate_frozen_terminal_envelope(&failure, &envelope).is_err());
+        }
+    }
+
     #[test]
     fn projectionless_terminal_replay_fails_closed() {
         let job = JobReceiptV1::new(
