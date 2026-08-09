@@ -55,6 +55,8 @@ pub const RESET_MARKER_SCHEMA_V2: &str = "podway.reset-marker/v2";
 /// Reset-marker decoding is bounded before parsing so a local corrupt file cannot amplify recovery.
 pub const MAX_RESET_MARKER_BYTES_V1: u64 = 16 * 1024;
 const RESET_MARKER_FILE_NAME_V1: &str = "reset.marker";
+pub(crate) const DEVELOPMENT_V2_MARKER_FILE_NAME_V1: &str = "development-v2.marker";
+pub(crate) const MAX_DEVELOPMENT_V2_MARKER_BYTES_V1: u64 = 4 * 1024;
 const STATE_DATABASE_FILE_WAL_NAME_V1: &str = "state.sqlite3-wal";
 const STATE_DATABASE_FILE_SHM_NAME_V1: &str = "state.sqlite3-shm";
 const PRIVATE_RUNTIME_DIRECTORY_MODE_V1: u32 = 0o700;
@@ -532,6 +534,32 @@ impl ValidatedRuntimeDirectoryV1 {
             ResetMarkerV1::decode_canonical(&bytes)
                 .map(Some)
                 .map_err(ValidatedRuntimeDirectoryErrorV1::Marker)
+        }
+        #[cfg(not(unix))]
+        {
+            Err(ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    /// Reads the fixed development-v2 marker through the already validated runtime-directory
+    /// descriptor. The admission policy owns decoding; this boundary owns symlink-safe bounded
+    /// filesystem access.
+    pub(crate) fn read_development_v2_marker_bytes(
+        &self,
+    ) -> Result<Option<Vec<u8>>, ValidatedRuntimeDirectoryErrorV1> {
+        #[cfg(unix)]
+        {
+            let Some((mut file, _)) =
+                self.open_fixed_private_file(DEVELOPMENT_V2_MARKER_FILE_NAME_V1)?
+            else {
+                return Ok(None);
+            };
+            read_bounded_runtime_file(
+                &mut file,
+                MAX_DEVELOPMENT_V2_MARKER_BYTES_V1,
+                &self.path.join(DEVELOPMENT_V2_MARKER_FILE_NAME_V1),
+            )
+            .map(Some)
         }
         #[cfg(not(unix))]
         {

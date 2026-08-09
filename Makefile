@@ -110,6 +110,9 @@ dev-daemon:
 
 dev-runtime-test:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/dev_runtime.py self-test
+	$(RUST_GATE_ENV) cargo test -p podway-daemon --lib --locked \
+		--features development-v2-admission development_v2::tests -- \
+		--test-threads=$(TEST_THREADS)
 
 test-rust:
 	$(RUST_GATE_ENV) cargo test --workspace --lib --bins \

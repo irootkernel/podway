@@ -8,6 +8,10 @@ publish = false
 autobins = false
 autotests = false
 
+[features]
+default = []
+development-v2-admission = []
+
 [dependencies]
 podway-core = { path = "../podway-core" }
 podway-protocol = { path = "../podway-protocol" }

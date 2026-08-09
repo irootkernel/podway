@@ -34,6 +34,20 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(all(feature = "development-v2-admission", debug_assertions))]
+    {
+        const PROBE_ARGUMENT: &str = "--podway-development-v2-admission-probe";
+        const PROBE_ENVIRONMENT: &str = "PODWAY_DEVELOPMENT_V2_ADMISSION_PROBE";
+        const PROBE_TOKEN: &str = "podway-development-v2-admission-v1";
+        let probe_arguments = env::args_os().skip(1).collect::<Vec<_>>();
+        if probe_arguments.as_slice() == [PROBE_ARGUMENT]
+            && env::var_os(PROBE_ENVIRONMENT).as_deref() == Some(std::ffi::OsStr::new(PROBE_TOKEN))
+        {
+            println!("{PROBE_TOKEN}");
+            return Ok(());
+        }
+    }
+
     #[cfg(debug_assertions)]
     {
         const PROBE_ARGUMENT: &str = "--podway-test-isolation-probe";
@@ -133,7 +147,9 @@ fn run_service(
     )
     .with_process_identity(process_identity);
     if dev_mode {
-        configuration = configuration.with_dev_mode();
+        configuration = configuration
+            .with_dev_mode()
+            .with_development_v2_admission(&paths, &env::current_exe()?.canonicalize()?);
     }
     let inspection_options = SqliteStoreOptionsV1::new(1)?;
     let mut signals = Signals::new([SIGINT, SIGTERM])?;

@@ -31,6 +31,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PINNED_RUST_TOOLCHAIN = "1.97.1"
 SCHEMA = "podway.dev-runtime/v1"
 METADATA_NAME = "runtime.json"
+DEVELOPMENT_V2_MARKER_NAME = "development-v2.marker"
+DEVELOPMENT_V2_MARKER_SCHEMA = "podway.disposable-development-workspace/v1"
+DEVELOPMENT_V2_FEATURE = "development-v2-admission"
 TMP_ROOT = Path("/private/tmp")
 MACOS_UNIX_SOCKET_PATH_CAPACITY = 104
 DIRECTORY_MODE = 0o700
@@ -92,6 +95,9 @@ def layout_paths(root: Path) -> dict[str, Path]:
         "sandbox": root / SANDBOX_NAME,
         "snapshots": root / SNAPSHOTS_NAME,
         "metadata": root / METADATA_NAME,
+        "development_v2_marker": (
+            root / SANDBOX_NAME / ".podway" / "runtime" / DEVELOPMENT_V2_MARKER_NAME
+        ),
         "lock": root / ACCOUNT_NAME / ".podway" / "run" / "podwayd.lock",
         "socket": root / DEV_HOME_NAME / "run" / "podwayd.sock",
     }
@@ -381,6 +387,8 @@ def build_debug_binaries() -> tuple[Path, Path]:
             "podway-daemon",
             "--bin",
             "podwayd",
+            "--features",
+            f"podway-daemon/{DEVELOPMENT_V2_FEATURE}",
         ],
         cwd=ROOT,
         env=environment,
@@ -403,6 +411,11 @@ def build_debug_binaries() -> tuple[Path, Path]:
             is not release_archive.TestIsolationCapability.ENABLED
         ):
             fail(f"built {label} lacks debug test-isolation capability: {path}")
+    if (
+        release_archive.development_v2_admission_capability(daemon)
+        is not release_archive.TestIsolationCapability.ENABLED
+    ):
+        fail(f"built podwayd lacks {DEVELOPMENT_V2_FEATURE} capability: {daemon}")
     return cli.resolve(), daemon.resolve()
 
 
@@ -441,6 +454,11 @@ def snapshot_pair(
             is not release_archive.TestIsolationCapability.ENABLED
         ):
             fail(f"snapshot {label} lacks debug test-isolation capability")
+    if (
+        release_archive.development_v2_admission_capability(snapshotted_daemon)
+        is not release_archive.TestIsolationCapability.ENABLED
+    ):
+        fail(f"snapshot podwayd lacks {DEVELOPMENT_V2_FEATURE} capability")
     return {
         "schema": SCHEMA,
         "checkout": checkout.as_posix(),
@@ -643,6 +661,27 @@ def run_snapshotted_cli(
     )
 
 
+def publish_development_v2_marker(
+    paths: dict[str, Path], metadata: dict[str, Any]
+) -> None:
+    atomic_write_private_json(
+        paths["development_v2_marker"],
+        {
+            "schema": DEVELOPMENT_V2_MARKER_SCHEMA,
+            "feature": DEVELOPMENT_V2_FEATURE,
+            "uid": euid(),
+            "managed_root": paths["root"].as_posix(),
+            "account_root": paths["account_root"].as_posix(),
+            "dev_home": paths["dev_home"].as_posix(),
+            "workspace_root": paths["sandbox"].as_posix(),
+            "socket_path": paths["socket"].as_posix(),
+            "state_directory": (paths["dev_home"] / "state").as_posix(),
+            "daemon_path": metadata["snapshot"]["podwayd"],
+            "daemon_sha256": metadata["snapshot"]["podwayd_sha256"],
+        },
+    )
+
+
 def allocate_trash_path(root: Path) -> Path:
     parent = root.parent
     for _ in range(32):
@@ -712,6 +751,8 @@ def command_init() -> int:
     metadata = current_snapshot(paths, checkout=checkout)
     initialize_sandbox(paths["sandbox"])
     completed = run_snapshotted_cli(paths, metadata, ["init"])
+    if completed.returncode == 0:
+        publish_development_v2_marker(paths, metadata)
     audit_managed_tree(paths["root"], expected=paths["root"], uid=euid(), repair_modes=True)
     sys.stdout.buffer.write(completed.stdout)
     sys.stderr.buffer.write(completed.stderr)
@@ -765,9 +806,9 @@ def command_clean(*, yes: bool) -> int:
     return 0
 
 
-def write_probe_script(path: Path, *, marker: str) -> None:
+def write_probe_script(path: Path, *, marker: str, development_v2: bool = False) -> None:
     token = release_archive.ISOLATION_PROBE_TOKEN
-    path.write_text(
+    script = (
         "#!/bin/sh\n"
         f"# {marker}\n"
         f'if [ "$1" = "--podway-test-isolation-probe" ] && '
@@ -775,7 +816,18 @@ def write_probe_script(path: Path, *, marker: str) -> None:
         f'  printf "%s\\n" "{token}"\n'
         "  exit 0\n"
         "fi\n"
-        "exit 1\n",
+    )
+    if development_v2:
+        script += (
+            f'if [ "$1" = "{release_archive.DEVELOPMENT_V2_PROBE_ARGUMENT}" ] && '
+            f'[ "${release_archive.DEVELOPMENT_V2_PROBE_ENV}" = '
+            f'"{release_archive.DEVELOPMENT_V2_PROBE_TOKEN}" ]; then\n'
+            f'  printf "%s\\n" "{release_archive.DEVELOPMENT_V2_PROBE_TOKEN}"\n'
+            "  exit 0\n"
+            "fi\n"
+        )
+    path.write_text(
+        script + "exit 1\n",
         encoding="utf-8",
     )
     os.chmod(path, EXECUTABLE_MODE)
@@ -954,7 +1006,7 @@ def self_test_snapshot_and_clean() -> int:
         cli_source = source_dir / "podway"
         daemon_source = source_dir / "podwayd"
         write_probe_script(cli_source, marker="cli-probe")
-        write_probe_script(daemon_source, marker="daemon-probe")
+        write_probe_script(daemon_source, marker="daemon-probe", development_v2=True)
         cli_digest = release_archive.sha256_file(cli_source)
         daemon_digest = release_archive.sha256_file(daemon_source)
         if cli_digest == daemon_digest:
@@ -970,6 +1022,25 @@ def self_test_snapshot_and_clean() -> int:
         if snapshot["podwayd_sha256"] != daemon_digest:
             fail("metadata lost the daemon digest")
         adopt_snapshot_when_idle(paths, metadata)
+        ensure_private_directory(paths["sandbox"] / ".podway", uid=euid())
+        ensure_private_directory(paths["sandbox"] / ".podway" / "runtime", uid=euid())
+        publish_development_v2_marker(paths, metadata)
+        require_owned_regular_file(
+            paths["development_v2_marker"],
+            label="development-v2 marker",
+            uid=euid(),
+            mode=FILE_MODE,
+        )
+        marker = json.loads(paths["development_v2_marker"].read_text(encoding="utf-8"))
+        if (
+            marker.get("schema") != DEVELOPMENT_V2_MARKER_SCHEMA
+            or marker.get("feature") != DEVELOPMENT_V2_FEATURE
+            or marker.get("workspace_root") != paths["sandbox"].as_posix()
+            or marker.get("daemon_path") != snapshot["podwayd"]
+            or marker.get("daemon_sha256") != daemon_digest
+        ):
+            fail("development-v2 marker lost its exact runtime or snapshot binding")
+        sentinels += 1
         revalidated = current_snapshot(paths, checkout=checkout)["snapshot"]
         if revalidated["podway"] != snapshot["podway"] or revalidated["podwayd"] != snapshot["podwayd"]:
             fail("current_snapshot changed snapshot paths")

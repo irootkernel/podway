@@ -543,6 +543,15 @@ pub trait WorkspaceRuntimeV1: Send + Sync {
         selector: &WorktreeSelectorWireV1,
     ) -> Result<Self::Workspace, DispatchFailureV1>;
 
+    /// Produces a read-only, non-persisted proof that this exact selector satisfies every
+    /// development-v2 admission conjunct. The default keeps existing runtimes closed.
+    fn development_v2_admission(
+        &self,
+        _selector: &WorktreeSelectorWireV1,
+    ) -> Option<DevelopmentV2AdmissionProofV1> {
+        None
+    }
+
     fn workspace_output(&self, workspace: &Self::Workspace) -> WorkspaceOutputV1;
     /// Performs read-only workspace diagnostics after validated identity resolution.
     fn doctor(
@@ -562,6 +571,18 @@ pub trait WorkspaceRuntimeV1: Send + Sync {
         &self,
         selector: &WorktreeSelectorWireV1,
     ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1>;
+}
+
+/// Opaque evidence that the runtime completed the read-only development admission check.
+/// It deliberately carries no scheduler or Store mutation authority.
+#[derive(Clone, Copy, Debug)]
+pub struct DevelopmentV2AdmissionProofV1(());
+
+impl DevelopmentV2AdmissionProofV1 {
+    #[doc(hidden)]
+    pub const fn granted_for_runtime() -> Self {
+        Self(())
+    }
 }
 
 /// The request-derived wait policy for an authoritative read.
@@ -904,6 +925,17 @@ pub trait MutationAdmissionWorkerV1<Workspace>: Send + Sync {
         idempotency_key: &IdempotencyKeyV1,
         response_request_id: &podway_protocol::RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1>;
+
+    /// Future Procedure v2 runtimes plug into this seam only after the conjunctive development
+    /// admission gate succeeds. V2PLT-009 deliberately leaves the production worker closed.
+    fn dispatch_development_v2(
+        &self,
+        _proof: DevelopmentV2AdmissionProofV1,
+        _request: &RequestEnvelopeV1,
+        _daemon_request: &DaemonRequestV1,
+    ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
+        Ok(None)
+    }
 }
 
 /// Production adapter for valid G006 requests.
@@ -1689,6 +1721,26 @@ where
                     ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
                 }
             });
+        }
+        let selector = match daemon_request {
+            DaemonRequestV1::ProcedureV2Start(request) => request.selector(),
+            DaemonRequestV1::ProcedureV2Mutation(request) => request.selector(),
+            DaemonRequestV1::Legacy(_) => unreachable!("legacy requests returned above"),
+        };
+        if let Some(proof) = self.runtime.development_v2_admission(selector) {
+            match self
+                .mutations
+                .dispatch_development_v2(proof, request, daemon_request)
+            {
+                Ok(Some(response)) => return response,
+                Ok(None) => {}
+                Err(failure) => {
+                    return match self.error_response(request, failure, true) {
+                        ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
+                        ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+                    };
+                }
+            }
         }
         self.unsupported_v2_capability_response(request, daemon_request)
     }

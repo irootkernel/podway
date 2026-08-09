@@ -256,6 +256,7 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
     );
     let expected = [
         "blocking.rs",
+        "development_v2.rs",
         "dispatch.rs",
         "endpoint.rs",
         "execution.rs",

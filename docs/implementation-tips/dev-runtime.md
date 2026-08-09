@@ -26,12 +26,15 @@ even when Make has not adjusted `PATH`. It fails clearly when that toolchain is
 missing. Builds honor `CARGO_TARGET_DIR` using the same relative/absolute
 resolution as `tools/run_g005_vertical.py`.
 
-- `daemon` builds with `--locked`, verifies debug test-isolation capability,
+- `daemon` builds with `--locked` and the daemon-only
+  `development-v2-admission` feature, verifies both debug test-isolation and
+  development-v2 capabilities,
   snapshots matching immutable binaries, writes private metadata atomically, and
   `exec`s the snapshot `podwayd --dev` in the foreground so signal handling stays
   with the daemon process.
-- `init` creates one managed disposable Git sandbox under the runtime root and
-  runs the snapshotted `podway --dev init` only against that sandbox.
+- `init` creates one managed disposable Git sandbox under the runtime root,
+  runs the snapshotted `podway --dev init` only against that sandbox, and only
+  after success atomically publishes the private disposable-workspace marker.
 - `run -- <podway args>` invokes the same snapshot CLI from the managed sandbox,
   prepends `--dev`, and rejects `--socket`, `--worktree`, `--dev`, daemon
   lifecycle commands, and `terminate`.
@@ -67,6 +70,7 @@ Below that root the helper keeps:
 | `sandbox/` | disposable Git worktree used by `init` and `run` |
 | `snapshots/<id>/` | immutable matching `podway` and `podwayd` binaries |
 | `runtime.json` | bounded private metadata for the adopted snapshot |
+| `sandbox/.podway/runtime/development-v2.marker` | private disposable-workspace marker bound to the exact runtime and daemon snapshot |
 
 The helper validates exact root identity, current-user ownership, `0700`
 directories, no symlinks, and macOS Unix-socket path capacity before trusting or
@@ -102,9 +106,20 @@ singleton/preflight behavior used by packaging qualification.
 
 ## Procedure v2 admission
 
-This runtime does not unlock Procedure v2 admission. Development admission stays
-closed until `V2PLT-009` lands. Use the helper for isolated v1 contributor work
-and packaged-style `--dev` flows only.
+This helper is the only supported source of development-v2 admission provenance.
+The daemon revalidates every conjunct for every candidate request: the explicit
+debug-only feature, `--dev` launch mode, managed runtime metadata, snapshotted
+daemon digest, separate socket and state directory, exact sandbox marker, and
+absence from the normal production registry. Deleting, changing, copying, or
+loosening the marker closes the gate immediately. Rebuilding the snapshot makes
+an old marker stale; clean and initialize the disposable runtime again.
+
+The gate only authorizes delegation to a future Procedure v2 handler. Until the
+owning `V2RUN`, `V2DRW`, and `V2GOL` runtime tasks land, goal-bearing starts and
+the reserved decision/rework/goal mutations still return
+`UNSUPPORTED_V2_CAPABILITY` with `admitted:false` and create no job or session.
+Ordinary debug builds, release builds, raw `podwayd --dev`, installed daemons,
+LaunchAgents, and arbitrary worktrees contain no accepting path.
 
 ## Why the helper stays sizable
 

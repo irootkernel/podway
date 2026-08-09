@@ -67,8 +67,11 @@ production service should use `tools/dev_runtime.py` rather than raw
 snapshots matching debug binaries, and sets debug-only `PODWAY_TEST_ACCOUNT_ROOT`
 together with a separate `PODWAY_DEV_HOME` so the isolated lock is disjoint from
 production. Raw `podwayd --dev` without that account-root override still shares the
-production lock. Procedure v2 admission remains closed until `V2PLT-009`. See the
-[contributor development runtime](../implementation-tips/dev-runtime.md) guide.
+production lock and never satisfies the development-v2 admission gate. Only the
+feature-built, helper-managed daemon plus its exact disposable sandbox marker can
+produce a development admission token; current v2 runtime routes remain closed
+until their owning runtime tasks land. See the [contributor development
+runtime](../implementation-tips/dev-runtime.md) guide.
 
 ## LaunchAgent configuration
 

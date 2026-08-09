@@ -830,6 +830,36 @@ impl RegistryStoreV1 {
     }
 }
 
+/// Loads the normal registry without creating its parent, lock file, or any other state.
+/// Development admission uses this only as negative provenance evidence before any scheduler or
+/// Store mutation is authorized.
+pub(crate) fn load_registry_readonly_v1(
+    paths: &ServiceRuntimePathsV1,
+) -> Result<WorkspaceRegistryV1, RegistryErrorV1> {
+    let registry_path = paths.workspace_registry_path().as_path();
+    let parent =
+        registry_path
+            .parent()
+            .ok_or_else(|| RegistryErrorV1::RegistryPathHasNoParent {
+                path: registry_path.to_path_buf(),
+            })?;
+    let current_uid = geteuid().as_raw();
+    match fs::symlink_metadata(parent) {
+        Ok(metadata) => validate_parent_v1(parent, &metadata, current_uid)?,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Ok(WorkspaceRegistryV1::empty());
+        }
+        Err(source) => {
+            return Err(RegistryErrorV1::Io {
+                operation: "inspect registry parent",
+                path: parent.to_path_buf(),
+                source,
+            });
+        }
+    }
+    read_registry_v1(registry_path, parent, current_uid)
+}
+
 fn ensure_private_parent_v1(path: &Path, current_uid: u32) -> Result<(), RegistryErrorV1> {
     match fs::symlink_metadata(path) {
         Ok(_) => {}

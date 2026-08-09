@@ -40,6 +40,9 @@ COMPLETION_NAMES = {
 ISOLATION_PROBE_ENV = "PODWAY_TEST_ISOLATION_PROBE"
 ISOLATION_PROBE_TOKEN = "podway-test-isolation-v1"
 ISOLATION_PROBE_TIMEOUT_SECONDS = 5
+DEVELOPMENT_V2_PROBE_ENV = "PODWAY_DEVELOPMENT_V2_ADMISSION_PROBE"
+DEVELOPMENT_V2_PROBE_TOKEN = "podway-development-v2-admission-v1"
+DEVELOPMENT_V2_PROBE_ARGUMENT = "--podway-development-v2-admission-probe"
 
 
 class ReleaseError(RuntimeError):
@@ -203,6 +206,37 @@ def test_isolation_capability(path: Path) -> TestIsolationCapability:
     return TestIsolationCapability.INDETERMINATE
 
 
+def development_v2_admission_capability(path: Path) -> TestIsolationCapability:
+    def run_probe(token: str) -> tuple[int, bytes, bytes] | None:
+        environment = {"PATH": "/usr/bin:/bin", DEVELOPMENT_V2_PROBE_ENV: token}
+        try:
+            completed = subprocess.run(
+                [str(path), DEVELOPMENT_V2_PROBE_ARGUMENT],
+                cwd=ROOT,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=ISOLATION_PROBE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return completed.returncode, completed.stdout, completed.stderr
+
+    enabled_probe = run_probe(DEVELOPMENT_V2_PROBE_TOKEN)
+    disabled_probe = run_probe(f"{DEVELOPMENT_V2_PROBE_TOKEN}-disabled")
+    if enabled_probe == (0, f"{DEVELOPMENT_V2_PROBE_TOKEN}\n".encode(), b""):
+        return TestIsolationCapability.ENABLED
+    if (
+        enabled_probe is not None
+        and disabled_probe is not None
+        and enabled_probe == disabled_probe
+        and enabled_probe[0] != 0
+    ):
+        return TestIsolationCapability.DISABLED
+    return TestIsolationCapability.INDETERMINATE
+
+
 def validate_package_mode(artifact_class: str, allow_dirty: bool) -> None:
     if artifact_class == "distribution" and allow_dirty:
         fail("distribution archives cannot use --allow-dirty")
@@ -311,6 +345,28 @@ def self_test() -> dict[str, Any]:
     validate_package_mode("test-fixture", True)
     with tempfile.TemporaryDirectory(prefix="podway-release-self-test-") as temporary_name:
         temporary = Path(temporary_name)
+        enabled_v2 = temporary / "v2-enabled"
+        enabled_v2.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$1" = "{DEVELOPMENT_V2_PROBE_ARGUMENT}" ] && '
+            f'[ "${DEVELOPMENT_V2_PROBE_ENV}" = "{DEVELOPMENT_V2_PROBE_TOKEN}" ]; then\n'
+            f'  printf "%s\\n" "{DEVELOPMENT_V2_PROBE_TOKEN}"\n'
+            "  exit 0\n"
+            "fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        enabled_v2.chmod(0o700)
+        disabled_v2 = temporary / "v2-disabled"
+        disabled_v2.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        disabled_v2.chmod(0o700)
+        if (
+            development_v2_admission_capability(enabled_v2)
+            is not TestIsolationCapability.ENABLED
+            or development_v2_admission_capability(disabled_v2)
+            is not TestIsolationCapability.DISABLED
+        ):
+            fail("development-v2 capability self-test misclassified a binary")
         source = temporary / "source"
         snapshot = temporary / "snapshot"
         source.write_bytes(b"verified bytes")
@@ -733,6 +789,13 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
         verify_artifact_class(
             {"podway": podway, "podwayd": podwayd}, arguments.artifact_class
         )
+        if arguments.artifact_class == "distribution":
+            capability = development_v2_admission_capability(podwayd)
+            if capability is not TestIsolationCapability.DISABLED:
+                fail(
+                    "distribution daemon exposes or ambiguously reports the "
+                    f"development-v2 admission unlock: {capability.value}"
+                )
         contract_receipt = verify_release_contract(ROOT, podway, podwayd, source_commit)
 
         output_directory = arguments.output_dir

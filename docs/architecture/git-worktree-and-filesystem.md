@@ -44,6 +44,7 @@ The resolver MUST NOT depend on invoking the `git` executable for discovery.
       state.sqlite3-wal
       state.sqlite3-shm
       reset.marker          # only during destructive recovery
+      development-v2.marker # only in the helper-managed disposable development runtime
 ```
 
 `.podway/.gitignore` MUST include:
@@ -53,6 +54,14 @@ runtime/
 ```
 
 `podway init` appends this entry if needed without overwriting unrelated ignore rules.
+
+The development runtime helper has one narrow, development-only exception to the daemon's normal
+write authority: after the isolated `podway --dev init` succeeds, it atomically publishes
+`development-v2.marker` through the private runtime directory. The marker contains no task state
+and grants no transition authority; the daemon treats it only as disposable-runtime provenance and
+revalidates it before exposing the future v2-handler seam. Normal session reset and workspace
+reset-all retain it so the helper-managed sandbox remains disposable after state replacement. The
+helper's `clean` operation removes the complete managed root, including the marker.
 
 ## Path containment
 

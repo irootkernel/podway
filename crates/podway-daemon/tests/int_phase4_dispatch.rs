@@ -37,6 +37,7 @@ struct RuntimeState {
     existing_selectors: Vec<String>,
     bootstrap_selectors: Vec<String>,
     existing_failure: Option<DispatchFailureV1>,
+    development_v2_eligible: bool,
 }
 
 #[derive(Clone)]
@@ -62,6 +63,11 @@ impl FakeRuntime {
 
     fn fail_existing(&self, failure: DispatchFailureV1) {
         self.state.lock().unwrap().existing_failure = Some(failure);
+    }
+
+    fn enable_development_v2(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.development_v2_eligible = true;
     }
 }
 
@@ -96,6 +102,17 @@ impl WorkspaceRuntimeV1 for FakeRuntime {
             .bootstrap_selectors
             .push(selector.display().to_owned());
         Ok(self.workspace.clone())
+    }
+
+    fn development_v2_admission(
+        &self,
+        _selector: &WorktreeSelectorWireV1,
+    ) -> Option<podway_daemon::dispatch::DevelopmentV2AdmissionProofV1> {
+        self.state
+            .lock()
+            .unwrap()
+            .development_v2_eligible
+            .then(podway_daemon::dispatch::DevelopmentV2AdmissionProofV1::granted_for_runtime)
     }
 
     fn workspace_output(&self, workspace: &Self::Workspace) -> WorkspaceOutputV1 {
@@ -333,6 +350,8 @@ struct MutationCall {
 struct WorkerState {
     calls: Vec<MutationCall>,
     outcome: Option<Result<MutationDispatchOutcomeV1, DispatchFailureV1>>,
+    development_v2_calls: Vec<String>,
+    development_v2_failure: bool,
 }
 
 #[derive(Clone)]
@@ -346,8 +365,14 @@ impl FakeWorker {
             state: Arc::new(Mutex::new(WorkerState {
                 calls: Vec::new(),
                 outcome: Some(outcome),
+                development_v2_calls: Vec::new(),
+                development_v2_failure: false,
             })),
         }
+    }
+
+    fn fail_development_v2(&self) {
+        self.state.lock().unwrap().development_v2_failure = true;
     }
 }
 
@@ -391,6 +416,25 @@ impl MutationAdmissionWorkerV1<FakeWorkspace> for FakeWorker {
             output,
             state.outcome.clone().expect("test worker has an outcome")?,
         ))
+    }
+
+    fn dispatch_development_v2(
+        &self,
+        _proof: podway_daemon::dispatch::DevelopmentV2AdmissionProofV1,
+        _request: &RequestEnvelopeV1,
+        daemon_request: &DaemonRequestV1,
+    ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
+        self.state
+            .lock()
+            .unwrap()
+            .development_v2_calls
+            .push(daemon_request.capability().unwrap().to_owned());
+        if self.state.lock().unwrap().development_v2_failure {
+            return Err(DispatchFailureV1::new(
+                DispatchFailureKindV1::DaemonUnavailable,
+            ));
+        }
+        Ok(None)
     }
 }
 
@@ -1277,6 +1321,19 @@ fn goal_bearing_start_uses_the_protocol_only_v2_fallback() {
     assert!(runtime.state.lock().unwrap().existing_selectors.is_empty());
     assert!(worker.state.lock().unwrap().calls.is_empty());
 
+    runtime.enable_development_v2();
+    let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
+    let ResponseEnvelopeV2::Error(error) = dispatcher.dispatch_daemon(&request, &daemon_request)
+    else {
+        panic!("the empty future handler remains unsupported after the gate");
+    };
+    assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+    assert!(runtime.state.lock().unwrap().existing_selectors.is_empty());
+    assert_eq!(
+        worker.state.lock().unwrap().development_v2_calls,
+        vec!["session.start"]
+    );
+
     let mut replace = serde_json::to_value(&request).unwrap();
     replace["request_id"] = json!("00000000-0000-4000-8000-000000000041");
     replace["command"] = json!("session.start_replace");
@@ -1299,6 +1356,20 @@ fn goal_bearing_start_uses_the_protocol_only_v2_fallback() {
     assert!(runtime.state.lock().unwrap().bootstrap_selectors.is_empty());
     assert!(runtime.state.lock().unwrap().existing_selectors.is_empty());
     assert!(worker.state.lock().unwrap().calls.is_empty());
+    assert_eq!(
+        worker.state.lock().unwrap().development_v2_calls,
+        vec!["session.start", "session.start_replace"]
+    );
+
+    worker.fail_development_v2();
+    let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
+    let ResponseEnvelopeV2::Error(error) = dispatcher.dispatch_daemon(&request, &daemon_request)
+    else {
+        panic!("a future handler failure must remain a typed failure");
+    };
+    assert_eq!(error.code().as_str(), "DAEMON_UNAVAILABLE");
+    assert_ne!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+    assert_eq!(error.details()["admission"], json!({"admitted": false}));
 }
 
 #[test]
