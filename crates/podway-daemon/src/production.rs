@@ -17,16 +17,17 @@ use podway_git::{
     WorktreeSelectorV1,
 };
 use podway_protocol::{
-    CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, RequestIdV1, ResponseEnvelopeV1,
-    ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, SliceCommandV1,
+    CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OutputEnvelopeInputV2,
+    OutputEnvelopeV2, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV1, ResponseEnvelopeV2,
+    Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, SessionStartSourceV1, SliceCommandV1,
     SliceRequestV1, TerminalJobCancellationProjectionV1, TerminalJobResponseV1,
     TerminalJobSuccessResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
     canonical_reset_all_identity_v1, decode_response_payload_v2,
 };
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
-    EpochMillisV1, IdempotencyKeyV1 as StoreIdempotencyKeyV1, JobListQueryV1,
-    JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1 as StoreJobStateV1, JobViewV1,
+    EpochMillisV1, GraphStartCurrentTaskV2, IdempotencyKeyV1 as StoreIdempotencyKeyV1,
+    JobListQueryV1, JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1 as StoreJobStateV1, JobViewV1,
     PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
     SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreErrorV1,
     StoreIdempotencyReadContractV1, StoreReadContractV1, StoreReconciliationReadContractV1,
@@ -53,8 +54,11 @@ use crate::{
         WorkspaceRuntimeV1, terminal_response_envelope_v1,
     },
     execution::{
-        DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1, ProcedureProviderV1,
-        ResetAllPreparationOutcomeV1, admitted_start_procedure_digest_v1,
+        DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1, ExecutionIdSourceV1,
+        ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
+        ResetAllPreparationOutcomeV1, admitted_procedure_v2_start_projection_v1,
+        admitted_start_procedure_digest_v1, prepare_custom_procedure_v2_start,
+        prepare_preset_procedure_v2_start,
     },
     native_execution::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeProcedureProviderV1,
@@ -72,7 +76,7 @@ use crate::{
         WorkspaceSchedulerRevalidationV1, WorkspaceStoreReadFacadeV1, WorkspaceStoreSlotV1,
     },
     scheduler::WorkspaceSchedulerV1,
-    server::{ResponseMetadataSourceV1, SystemResponseMetadataSourceV1},
+    server::{DaemonRequestV1, ResponseMetadataSourceV1, SystemResponseMetadataSourceV1},
     worker::{
         DaemonWorkerV1, WorkerClockV1, WorkerCompletionModeV1, WorkerErrorV1, WorkerExecutionV1,
         WorkerWaitResultV1, WorkerWorkspaceContextV1,
@@ -521,7 +525,33 @@ impl WorkerExecutionV1<WorkspaceSchedulerContextV1> for NativeContextExecutionV1
                 },
             );
         }
-        Self::engine(context, self.observability.clone())?.execute_next(binding, worker)
+        Self::engine(context, self.observability.clone())?
+            .execute_next_with_graph_v2(binding, worker)
+    }
+
+    fn admit_procedure_v2_start(
+        &self,
+        context: &WorkspaceSchedulerContextV1,
+        binding: &WorkspaceBindingV1,
+        request: &SliceRequestV1,
+        idempotency_key: StoreIdempotencyKeyV1,
+        response_context: Option<&podway_store::PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ProcedureV2StartPreparationErrorV1> {
+        if context.binding() != binding {
+            return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                ExecutionErrorV1::InvalidPersistedExecution {
+                    reason: "scheduler context binding changed during Procedure v2 admission",
+                },
+            ));
+        }
+        Self::engine(context, self.observability.clone())
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
+            .admit_procedure_v2_start_for_workspace_with_response_context(
+                binding,
+                request,
+                idempotency_key,
+                response_context.cloned(),
+            )
     }
 }
 
@@ -1303,6 +1333,217 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 .with_admission_identity(admission.job_id().clone(), admission.identity_sequence())
         })
     }
+
+    fn dispatch_development_v2(
+        &self,
+        _proof: DevelopmentV2AdmissionProofV1,
+        request: &RequestEnvelopeV1,
+        daemon_request: &DaemonRequestV1,
+    ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
+        let Some(slice_request) = daemon_request.legacy() else {
+            // Goal-bearing v2 start DTOs remain closed until durable initial-goal admission lands.
+            return Ok(None);
+        };
+        if !matches!(
+            slice_request.command(),
+            SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+        ) {
+            return Ok(None);
+        }
+        let start = match slice_request.command() {
+            SliceCommandV1::SessionStart(start) => start,
+            SliceCommandV1::SessionStartReplace(replace) => &replace.start,
+            _ => unreachable!("non-start requests returned above"),
+        };
+        if start.dry_run {
+            let selector = selector_from_wire(slice_request.selector())?;
+            let readonly = self
+                .manager
+                .resolve_existing_readonly(selector, slice_request.selector().expected_uuid())
+                .map_err(map_runtime_error)?;
+            let provider = NativeProcedureProviderV1::new(SqliteWorkspaceBindingInspectorV1::new(
+                readonly.store_options().clone(),
+            ));
+            let ids = NativeExecutionIdSourceV1;
+            let now = self.clock.now();
+            let session_id = ids.next_session_id();
+            let attempt_id = ids.next_attempt_id();
+            let snapshot_id = ids.next_procedure_snapshot_id();
+            let state = match &start.source {
+                SessionStartSourceV1::Procedure { procedure } => {
+                    match prepare_custom_procedure_v2_start(
+                        &provider,
+                        readonly.binding(),
+                        procedure,
+                        start.expected_procedure_digest.as_ref(),
+                        &start.task_title,
+                        session_id,
+                        attempt_id,
+                        snapshot_id,
+                        now,
+                    ) {
+                        Ok(state) => Ok(Some(state)),
+                        Err(ProcedureV2StartPreparationErrorV1::Source(
+                            ProcedureV2SourceAdmissionErrorV1::NotProcedureV2,
+                        )) => Ok(None),
+                        Err(error) => Err(error),
+                    }
+                }
+                SessionStartSourceV1::Preset { preset } => prepare_preset_procedure_v2_start(
+                    &provider,
+                    preset,
+                    &start.task_title,
+                    session_id,
+                    attempt_id,
+                    snapshot_id,
+                    now,
+                ),
+            }
+            .map_err(map_procedure_v2_start_preparation_error)?;
+            let Some(state) = state else {
+                return Ok(None);
+            };
+            let expected_current = match slice_request.command() {
+                SliceCommandV1::SessionStart(_) => GraphStartCurrentTaskV2::Absent,
+                SliceCommandV1::SessionStartReplace(replace) => GraphStartCurrentTaskV2::Exact {
+                    session_id: replace.preconditions.expected_session_id.clone(),
+                    session_revision: replace.preconditions.expected_session_revision,
+                },
+                _ => unreachable!("non-start requests returned above"),
+            };
+            let actual_current = SqliteStoreV1::inspect_graph_start_current_task_v2(
+                readonly.database_path(),
+                readonly.binding().identity(),
+                readonly.store_options(),
+                podway_store::EpochMillisV1::new(now.get()),
+            )
+            .map_err(map_store_error)?;
+            validate_graph_start_dry_run_fence_v2(&expected_current, &actual_current)?;
+            let result = json!({
+                "schema": "podway.session-start-result/v2",
+                "procedure_schema": "podway.procedure/v2",
+                "procedure_digest": state.snapshot().digest(),
+                "dry_run": true,
+                "goal_tracking": state.snapshot().goal_tracking(),
+                "goal_defined": false,
+            });
+            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.clock.generated_at(),
+                workspace: None,
+                job: None,
+                session: None,
+                result: result
+                    .as_object()
+                    .expect("Procedure v2 dry-run result is an object")
+                    .clone(),
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+        }
+        let runtime =
+            ProductionWorkspaceRuntimeV1::new(Arc::clone(&self.manager), Arc::clone(&self.clock));
+        let workspace = runtime.resolve_existing(slice_request.selector())?;
+        let idempotency_key = StoreIdempotencyKeyV1::new(
+            request
+                .idempotency_key()
+                .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?
+                .as_str(),
+        )
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+        let response_context = podway_store::PersistedResponseContextV1::new(
+            request.request_id().as_str(),
+            request.command().as_str(),
+            workspace.output.uuid().clone(),
+            workspace.output.root(),
+            workspace.output.latest_workspace_sequence(),
+        )
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?
+        .with_frozen_public_terminal_envelope();
+        let completion_mode = if request.options().detach() {
+            WorkerCompletionModeV1::Detached
+        } else {
+            WorkerCompletionModeV1::WaitUntil(
+                MonotonicDeadlineV1::after(
+                    self.clock.as_ref(),
+                    request.options().wait_timeout_ms(),
+                )
+                .map_err(map_read_error)?,
+            )
+        };
+        let Some(submission) = self
+            .worker
+            .submit_procedure_v2_start_with_response_context(
+                &workspace.scheduler,
+                slice_request,
+                idempotency_key,
+                response_context,
+                completion_mode,
+            )
+            .map_err(map_worker_error)?
+        else {
+            return Ok(None);
+        };
+        let terminal =
+            terminal_replay(submission.admission()).or_else(|| match submission.completion() {
+                Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
+                Some(WorkerWaitResultV1::TimedOut(_)) | None => None,
+            });
+        if let Some(receipt) = terminal {
+            let value = terminal_job_response(receipt, TerminalCommandKindV1::Start)?;
+            let encoded = serde_json::to_vec(&value)
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+            return decode_response_payload_v2(&encoded)
+                .map(Some)
+                .map_err(|_| terminal_replay_integrity_failure());
+        }
+        if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
+            let job = job_output(view)?;
+            return Err(
+                DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job),
+            );
+        }
+        let (job, _) = job_output_from_context(&workspace.scheduler, submission.admission())?;
+        let view = workspace
+            .scheduler
+            .context_snapshot()
+            .read_job(job.id())
+            .map_err(map_store_error)?
+            .ok_or_else(terminal_replay_integrity_failure)?;
+        let projection =
+            admitted_procedure_v2_start_projection_v1(view.execution().canonical_execution())
+                .map_err(|_| terminal_replay_integrity_failure())?;
+        let result = json!({
+            "schema": "podway.detached-admission-result/v2",
+            "detached": true,
+            "procedure_digest": projection.procedure_digest,
+            "admission": {
+                "admitted": true,
+                "job_id": job.id(),
+                "workspace_sequence": job.sequence(),
+            },
+        });
+        OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            request_id: request.request_id().clone(),
+            command: request.command().clone(),
+            generated_at: self.clock.generated_at(),
+            workspace: Some(workspace.output),
+            job: Some(job),
+            session: None,
+            result: result
+                .as_object()
+                .expect("Procedure v2 start result is an object")
+                .clone(),
+            warnings: Vec::new(),
+        })
+        .map(ResponseEnvelopeV2::OutputV2)
+        .map(Some)
+        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+    }
+
     fn reset_all(
         &self,
         selector: &WorktreeSelectorWireV1,
@@ -2112,6 +2353,14 @@ fn validate_terminal_receipt_projection(
     receipt: &PersistedTerminalReceiptV1,
     command: TerminalCommandKindV1,
 ) -> Result<(), DispatchFailureV1> {
+    if receipt.graph_session_projection().is_some() {
+        return match receipt.result() {
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                ..
+            }) => Ok(()),
+            _ => Err(terminal_replay_integrity_failure()),
+        };
+    }
     match receipt.result() {
         PersistedTerminalResultV1::Success(result) => {
             let _ = terminal_session_projection(result, receipt.session_projection(), command)?;
@@ -2294,6 +2543,7 @@ fn validate_frozen_v2_result_projection(
 ) -> Result<(), DispatchFailureV1> {
     let schema = result.get("schema").and_then(Value::as_str);
     let session = receipt.session_projection();
+    let graph_session = receipt.graph_session_projection();
     let matches_projection = match (schema, receipt.result()) {
         (
             Some("podway.session-start-result/v2"),
@@ -2305,11 +2555,20 @@ fn validate_frozen_v2_result_projection(
         ) => {
             result.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
                 && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
-                && session.is_some_and(|projection| {
+                && (session.is_some_and(|projection| {
                     projection.session_id() == session_id
                         && result.get("procedure_digest").and_then(Value::as_str)
                             == projection.procedure_digest().map(|digest| digest.as_str())
-                })
+                }) || graph_session.is_some_and(|projection| {
+                    projection.session_id() == session_id
+                        && result.get("procedure_digest").and_then(Value::as_str)
+                            == Some(projection.procedure_digest().as_str())
+                        && result.get("entry_graph_node_id").and_then(Value::as_str)
+                            == Some(projection.entry_graph_node_id().as_str())
+                        && result.get("goal_tracking").and_then(Value::as_bool)
+                            == Some(projection.goal_tracking())
+                        && result.get("goal_defined").and_then(Value::as_bool) == Some(false)
+                }))
         }
         (
             Some("podway.stage-transition-result/v2"),
@@ -2391,6 +2650,16 @@ fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'
 pub(crate) fn seal_terminal_receipt_v1(
     receipt: &PersistedTerminalReceiptV1,
 ) -> Result<Value, StoreErrorV1> {
+    if receipt.graph_session_projection().is_some() {
+        return graph_start_terminal_envelope_v2(receipt)
+            .and_then(|envelope| {
+                serde_json::to_value(envelope)
+                    .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+            })
+            .map_err(|_| StoreErrorV1::InternalInvariantViolationV1 {
+                invariant: podway_store::StoreInvariantV1::TransitionMutationShape,
+            });
+    }
     let command = receipt
         .lookup_command()
         .ok_or(StoreErrorV1::InternalInvariantViolationV1 {
@@ -2401,6 +2670,60 @@ pub(crate) fn seal_terminal_receipt_v1(
             invariant: podway_store::StoreInvariantV1::TransitionMutationShape,
         }
     })
+}
+
+fn graph_start_terminal_envelope_v2(
+    receipt: &PersistedTerminalReceiptV1,
+) -> Result<OutputEnvelopeV2, DispatchFailureV1> {
+    let graph = receipt
+        .graph_session_projection()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let context = receipt
+        .response_context()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let projection = receipt
+        .job_projection()
+        .ok_or_else(terminal_replay_integrity_failure)?;
+    let job = job_output_from_terminal_receipt(receipt)?;
+    let result = json!({
+        "schema": "podway.session-start-result/v2",
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_digest": graph.procedure_digest(),
+        "dry_run": false,
+        "goal_tracking": graph.goal_tracking(),
+        "goal_defined": false,
+        "admission": {
+            "admitted": true,
+            "job_id": job.id(),
+            "workspace_sequence": job.sequence(),
+        },
+        "session_id": graph.session_id(),
+        "revision": graph.revision_after(),
+        "entry_graph_node_id": graph.entry_graph_node_id(),
+    });
+    OutputEnvelopeV2::new(podway_protocol::OutputEnvelopeInputV2 {
+        request_id: RequestIdV1::new(context.request_id())
+            .map_err(|_| terminal_replay_integrity_failure())?,
+        command: CommandNameV1::new(context.command())
+            .map_err(|_| terminal_replay_integrity_failure())?,
+        generated_at: rfc3339_millis(projection.finished_at())?,
+        workspace: Some(
+            WorkspaceOutputV1::new(
+                context.workspace_uuid().clone(),
+                context.workspace_root(),
+                context.workspace_sequence(),
+            )
+            .map_err(|_| terminal_replay_integrity_failure())?,
+        ),
+        job: Some(job),
+        session: None,
+        result: result
+            .as_object()
+            .expect("graph start result is an object")
+            .clone(),
+        warnings: Vec::new(),
+    })
+    .map_err(|_| terminal_replay_integrity_failure())
 }
 
 fn terminal_job_success_result(result: &PersistedDomainResultV1) -> TerminalJobSuccessResultV1 {
@@ -2784,6 +3107,9 @@ fn map_worker_error(error: WorkerErrorV1) -> DispatchFailureV1 {
                 DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
             }
         },
+        WorkerErrorV1::ProcedureV2Preparation(error) => {
+            map_procedure_v2_start_preparation_error(error)
+        }
         WorkerErrorV1::JobNotFound(_) => DispatchFailureV1::new(DispatchFailureKindV1::JobNotFound),
         WorkerErrorV1::Progress(_)
         | WorkerErrorV1::BackgroundPanicked
@@ -2791,6 +3117,109 @@ fn map_worker_error(error: WorkerErrorV1) -> DispatchFailureV1 {
         | WorkerErrorV1::RetirementRejected => {
             DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
         }
+    }
+}
+
+fn map_procedure_v2_start_preparation_error(
+    error: ProcedureV2StartPreparationErrorV1,
+) -> DispatchFailureV1 {
+    match error {
+        ProcedureV2StartPreparationErrorV1::Source(
+            ProcedureV2SourceAdmissionErrorV1::SchemaInvalid { diagnostic_codes },
+        ) => DispatchFailureV1::new(DispatchFailureKindV1::ProcedureV2SchemaInvalid).with_details(
+            DispatchErrorDetailsV1::default().with_procedure_v2_schema_invalid(diagnostic_codes),
+        ),
+        ProcedureV2StartPreparationErrorV1::DigestConfirmationRequired { procedure_digest } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::DigestConfirmationRequired).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_digest_confirmation_required(procedure_digest),
+            )
+        }
+        ProcedureV2StartPreparationErrorV1::ProcedureDigestMismatch { expected, actual } => {
+            procedure_digest_mismatch_failure(expected, actual)
+        }
+        ProcedureV2StartPreparationErrorV1::Execution(error) => {
+            map_worker_error(WorkerErrorV1::Execution(error))
+        }
+        ProcedureV2StartPreparationErrorV1::Source(
+            ProcedureV2SourceAdmissionErrorV1::Rejected(error),
+        ) => match error {
+            crate::execution::ExecutionBoundaryErrorV1::Domain(_) => {
+                DispatchFailureV1::new(DispatchFailureKindV1::ProcedureInvalid)
+            }
+            crate::execution::ExecutionBoundaryErrorV1::Transient { .. } => {
+                DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
+            }
+            crate::execution::ExecutionBoundaryErrorV1::ProcedureV2Unsupported => {
+                DispatchFailureV1::new(DispatchFailureKindV1::UnsupportedV2Capability)
+            }
+            crate::execution::ExecutionBoundaryErrorV1::WorkspaceIdentityMismatch {
+                expected,
+                actual,
+            } => workspace_uuid_mismatch_failure(expected, actual),
+        },
+        ProcedureV2StartPreparationErrorV1::Source(
+            ProcedureV2SourceAdmissionErrorV1::NotProcedureV2,
+        ) => DispatchFailureV1::new(DispatchFailureKindV1::ProcedureInvalid),
+        ProcedureV2StartPreparationErrorV1::PinnedPresetDigestMismatch { expected, actual } => {
+            procedure_digest_mismatch_failure(expected, actual)
+        }
+        ProcedureV2StartPreparationErrorV1::Domain(_)
+        | ProcedureV2StartPreparationErrorV1::InvalidStoreValue(_) => {
+            DispatchFailureV1::new(DispatchFailureKindV1::Internal)
+        }
+    }
+}
+
+fn validate_graph_start_dry_run_fence_v2(
+    expected: &GraphStartCurrentTaskV2,
+    actual: &GraphStartCurrentTaskV2,
+) -> Result<(), DispatchFailureV1> {
+    if expected == actual {
+        return Ok(());
+    }
+    match (expected, actual) {
+        (GraphStartCurrentTaskV2::Absent, GraphStartCurrentTaskV2::Exact { .. }) => Err(
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionAlreadyExists),
+        ),
+        (
+            GraphStartCurrentTaskV2::Exact {
+                session_id: expected_id,
+                session_revision: expected_revision,
+            },
+            GraphStartCurrentTaskV2::Exact {
+                session_id: actual_id,
+                session_revision: actual_revision,
+            },
+        ) if expected_id == actual_id => Err(DispatchFailureV1::new(
+            DispatchFailureKindV1::SessionRevisionConflict,
+        )
+        .with_details(
+            DispatchErrorDetailsV1::default()
+                .with_expected_revision(*expected_revision)
+                .with_current_revision(*actual_revision),
+        )),
+        (
+            GraphStartCurrentTaskV2::Exact {
+                session_id: expected_id,
+                ..
+            },
+            GraphStartCurrentTaskV2::Exact {
+                session_id: actual_id,
+                ..
+            },
+        ) => Err(session_id_mismatch_failure(
+            expected_id.clone(),
+            Some(actual_id.clone()),
+        )),
+        (
+            GraphStartCurrentTaskV2::Exact {
+                session_id: expected_id,
+                ..
+            },
+            GraphStartCurrentTaskV2::Absent,
+        ) => Err(session_id_mismatch_failure(expected_id.clone(), None)),
+        (GraphStartCurrentTaskV2::Absent, GraphStartCurrentTaskV2::Absent) => Ok(()),
     }
 }
 
@@ -3096,6 +3525,34 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn v2run001_pinned_preset_digest_mismatch_preserves_stable_details() {
+        let expected = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let actual = Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let failure = map_procedure_v2_start_preparation_error(
+            ProcedureV2StartPreparationErrorV1::PinnedPresetDigestMismatch {
+                expected: expected.clone(),
+                actual: actual.clone(),
+            },
+        );
+        assert_eq!(
+            failure.kind(),
+            DispatchFailureKindV1::ProcedureDigestMismatch
+        );
+        assert_eq!(
+            failure.into_details().into_json(true),
+            Map::from_iter([
+                (
+                    "schema".to_owned(),
+                    json!("podway.procedure-digest-mismatch-details/v1"),
+                ),
+                ("expected_procedure_digest".to_owned(), json!(expected)),
+                ("actual_procedure_digest".to_owned(), json!(actual)),
+                ("admission".to_owned(), json!({"admitted": false})),
+            ])
+        );
     }
 
     #[test]

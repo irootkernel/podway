@@ -14,6 +14,8 @@ mod int_phase4_command_execution_codec;
 mod int_phase4_store_transactions;
 #[path = "int_v2_goal_state.rs"]
 mod int_v2_goal_state;
+#[path = "int_v2_graph_start_terminal.rs"]
+mod int_v2_graph_start_terminal;
 #[path = "int_v2_graph_state.rs"]
 mod int_v2_graph_state;
 #[path = "int_v2_workflow_memory.rs"]

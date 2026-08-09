@@ -290,6 +290,47 @@ where
             created_at,
         )
     }
+
+    fn load_workspace_procedure_snapshot_v2(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        procedure: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<
+        podway_store::ProcedureSnapshotV2,
+        crate::execution::ProcedureV2SourceAdmissionErrorV1,
+    > {
+        use crate::execution::ProcedureV2SourceAdmissionErrorV1;
+
+        let resolved = self
+            .resolve_bound_workspace(workspace)
+            .map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
+        let candidate = artifact_path_from_root_v1(resolved.workspace_root(), procedure)
+            .map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
+        let source = self
+            .git_resolver
+            .read_bounded_local_file(
+                resolved.worktree(),
+                &candidate,
+                MAX_PROCEDURE_DOCUMENT_BYTES_V1,
+            )
+            .map_err(git_resolution_boundary_error_v1)
+            .map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
+        if source.canonical_path() != &candidate {
+            return Err(ProcedureV2SourceAdmissionErrorV1::Rejected(
+                domain_invalid_state_v1(
+                    "Procedure resolver returned a path outside the requested worktree location",
+                ),
+            ));
+        }
+        crate::execution::workspace_procedure_snapshot_from_bytes_v2(
+            procedure,
+            source.bytes(),
+            snapshot_id,
+            created_at,
+        )
+    }
 }
 
 impl<I> NativeArtifactVerifierV1<I>

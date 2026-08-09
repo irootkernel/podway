@@ -24,7 +24,8 @@ use podway_store::{
 use crate::{
     execution::{
         ArtifactVerifierV1, DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1,
-        ExecutionIdSourceV1, ProcedureProviderV1, WorkspaceRevalidatorV1,
+        ExecutionIdSourceV1, ProcedureProviderV1, ProcedureV2StartPreparationErrorV1,
+        WorkspaceRevalidatorV1,
     },
     observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
     read_service::{MonotonicClockV1, MonotonicDeadlineV1},
@@ -139,6 +140,17 @@ where
         binding: &WorkspaceBindingV1,
         worker: WorkerIdV1,
     ) -> Result<Option<TerminalReceiptV1>, ExecutionErrorV1>;
+
+    fn admit_procedure_v2_start(
+        &self,
+        _workspace: &Context,
+        _binding: &WorkspaceBindingV1,
+        _request: &SliceRequestV1,
+        _idempotency_key: IdempotencyKeyV1,
+        _response_context: Option<&PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ProcedureV2StartPreparationErrorV1> {
+        Ok(None)
+    }
 }
 
 /// A directly injected engine remains useful for deterministic worker tests. Production uses a
@@ -246,6 +258,7 @@ pub enum WorkerErrorV1 {
     },
     Store(StoreErrorV1),
     Execution(ExecutionErrorV1),
+    ProcedureV2Preparation(ProcedureV2StartPreparationErrorV1),
     Progress(WorkspaceSchedulerProgressErrorV1),
     JobNotFound(JobIdV1),
     BackgroundPanicked,
@@ -259,6 +272,9 @@ impl fmt::Display for WorkerErrorV1 {
             Self::AfterAdmission { source, .. } => source.fmt(formatter),
             Self::Store(source) => source.fmt(formatter),
             Self::Execution(source) => source.fmt(formatter),
+            Self::ProcedureV2Preparation(_) => {
+                formatter.write_str("Procedure v2 start preparation failed")
+            }
             Self::Progress(source) => source.fmt(formatter),
             Self::JobNotFound(job) => write!(formatter, "durable job is not present: {job}"),
             Self::BackgroundPanicked => formatter.write_str("detached worker drain panicked"),
@@ -278,6 +294,7 @@ impl Error for WorkerErrorV1 {
             Self::AfterAdmission { source, .. } => Some(source.as_ref()),
             Self::Store(source) => Some(source),
             Self::Execution(source) => Some(source),
+            Self::ProcedureV2Preparation(_) => None,
             Self::Progress(source) => Some(source),
             Self::JobNotFound(_)
             | Self::BackgroundPanicked
@@ -427,6 +444,43 @@ where
         )
     }
 
+    /// Attempts the additive Procedure v2 start admission path. `None` preserves the v1 fallback
+    /// contract when the selected custom source is not a Procedure v2 document.
+    pub fn submit_procedure_v2_start_with_response_context(
+        &self,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+        request: &SliceRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: PersistedResponseContextV1,
+        completion_mode: WorkerCompletionModeV1,
+    ) -> Result<Option<WorkerSubmissionV1>, WorkerErrorV1> {
+        if scheduler.context_snapshot().recovery_required() {
+            return Err(WorkerErrorV1::RetirementRejected);
+        }
+        let outcome = scheduler.with_serialized(|context| {
+            if context.recovery_required() {
+                return Err(WorkerErrorV1::RetirementRejected);
+            }
+            context
+                .with_claim_permission(|binding| {
+                    self.inner.execution.admit_procedure_v2_start(
+                        context.as_ref(),
+                        binding,
+                        request,
+                        idempotency_key,
+                        Some(&response_context),
+                    )
+                })
+                .ok_or(WorkerErrorV1::RetirementRejected)?
+                .map_err(WorkerErrorV1::ProcedureV2Preparation)
+        })?;
+        let Some(outcome) = outcome else {
+            return Ok(None);
+        };
+        self.complete_submission(scheduler, outcome, completion_mode)
+            .map(Some)
+    }
+
     fn submit_inner(
         &self,
         scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
@@ -455,6 +509,15 @@ where
                 .ok_or(WorkerErrorV1::RetirementRejected)?
                 .map_err(Into::into)
         })?;
+        self.complete_submission(scheduler, outcome, completion_mode)
+    }
+
+    fn complete_submission(
+        &self,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+        outcome: AdmitOutcomeV1,
+        completion_mode: WorkerCompletionModeV1,
+    ) -> Result<WorkerSubmissionV1, WorkerErrorV1> {
         let Some(job) = job_to_drive(&outcome) else {
             let completion = match completion_mode {
                 WorkerCompletionModeV1::Detached => None,

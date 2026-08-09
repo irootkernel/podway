@@ -31,8 +31,9 @@ pub mod v2_memory;
 pub mod v2_state;
 
 pub use codec::{
-    PersistedResponseContextV1, PersistedStartIdentityV1, PersistedTerminalJobProjectionV1,
-    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
+    PersistedGraphTerminalSessionProjectionV2, PersistedResponseContextV1,
+    PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
+    PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
 };
 pub use sqlite_store::SqliteStoreV1;
 pub use v2_goal::{AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2};
@@ -43,7 +44,8 @@ pub use v2_memory::{
 };
 pub use v2_state::{
     AttemptMetadataV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphSessionStateV2,
-    ProcedureSnapshotV2, StoreGraphStateContractV2,
+    GraphStartCurrentTaskV2, ProcedureSnapshotV2, StoreGraphMutationContractV2,
+    StoreGraphStateContractV2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
@@ -58,6 +60,17 @@ pub type CommandV1 = DomainCommand;
 pub type EpochMillisV1 = UnixMillis;
 pub type GitIdentityV1 = Sha256Digest;
 pub type TerminalEnvelopeSealerV1 = fn(&PersistedTerminalReceiptV1) -> Result<Value, StoreErrorV1>;
+
+/// Identifies the runtime model encoded by one complete durable execution document.
+///
+/// Legacy constructors remain v1 so their canonical Store encoding is unchanged. Procedure v2
+/// callers must opt in explicitly; the flavor then survives admission, claim, and restart.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DurableExecutionFlavorV1 {
+    #[default]
+    LegacyV1,
+    ProcedureV2,
+}
 
 static TERMINAL_ENVELOPE_SEALER_V1: OnceLock<TerminalEnvelopeSealerV1> = OnceLock::new();
 
@@ -1257,6 +1270,7 @@ pub struct AdmitRequestV1 {
     admitted_procedure_snapshot: Option<Box<ProcedureSnapshotV1>>,
     canonical_execution: CanonicalExecutionJsonV1,
     command: CommandV1,
+    execution_flavor: DurableExecutionFlavorV1,
     has_full_execution_document: bool,
     idempotency_key: IdempotencyKeyV1,
     job_id: JobIdV1,
@@ -1284,6 +1298,7 @@ impl AdmitRequestV1 {
             admitted_procedure_snapshot: None,
             canonical_execution: direct_store_canonical_execution_v1(&command, &preconditions),
             command,
+            execution_flavor: DurableExecutionFlavorV1::LegacyV1,
             has_full_execution_document: true,
             idempotency_key,
             job_id,
@@ -1309,6 +1324,7 @@ impl AdmitRequestV1 {
             admitted_procedure_snapshot: None,
             canonical_execution,
             command,
+            execution_flavor: DurableExecutionFlavorV1::LegacyV1,
             has_full_execution_document: true,
             idempotency_key,
             job_id,
@@ -1322,6 +1338,12 @@ impl AdmitRequestV1 {
 
     pub fn with_session_identity(mut self, expected: AdmissionSessionIdentityV1) -> Self {
         self.session_identity = expected;
+        self
+    }
+
+    /// Marks a complete execution document as a Procedure v2 runtime command.
+    pub fn with_procedure_v2_execution(mut self) -> Self {
+        self.execution_flavor = DurableExecutionFlavorV1::ProcedureV2;
         self
     }
 
@@ -1349,12 +1371,18 @@ impl AdmitRequestV1 {
         &self.canonical_execution
     }
 
+    pub const fn execution_flavor(&self) -> DurableExecutionFlavorV1 {
+        self.execution_flavor
+    }
+
     pub(crate) fn claimed_execution(&self) -> ClaimedExecutionV1 {
         ClaimedExecutionV1 {
             canonical_execution: self.canonical_execution.clone(),
             command: self.command.clone(),
+            execution_flavor: self.execution_flavor,
             has_full_execution_document: self.has_full_execution_document,
             preconditions: self.preconditions.clone(),
+            session_identity: self.session_identity.clone(),
         }
     }
 
@@ -1442,8 +1470,10 @@ pub enum AdmitOutcomeV1 {
 pub struct ClaimedExecutionV1 {
     canonical_execution: CanonicalExecutionJsonV1,
     command: CommandV1,
+    execution_flavor: DurableExecutionFlavorV1,
     has_full_execution_document: bool,
     preconditions: RevisionAttemptItemPreconditionsV1,
+    session_identity: AdmissionSessionIdentityV1,
 }
 
 impl ClaimedExecutionV1 {
@@ -1452,8 +1482,10 @@ impl ClaimedExecutionV1 {
         Self {
             canonical_execution: legacy_minimal_canonical_execution_v1(&command),
             command,
+            execution_flavor: DurableExecutionFlavorV1::LegacyV1,
             has_full_execution_document: false,
             preconditions,
+            session_identity: AdmissionSessionIdentityV1::Any,
         }
     }
 
@@ -1466,13 +1498,40 @@ impl ClaimedExecutionV1 {
         Self {
             canonical_execution,
             command,
+            execution_flavor: DurableExecutionFlavorV1::LegacyV1,
             has_full_execution_document: true,
             preconditions,
+            session_identity: AdmissionSessionIdentityV1::Any,
+        }
+    }
+
+    /// Reconstructs a claimed Procedure v2 execution with its complete immutable document.
+    pub fn new_procedure_v2(
+        command: CommandV1,
+        preconditions: RevisionAttemptItemPreconditionsV1,
+        canonical_execution: CanonicalExecutionJsonV1,
+        session_identity: AdmissionSessionIdentityV1,
+    ) -> Self {
+        Self {
+            canonical_execution,
+            command,
+            execution_flavor: DurableExecutionFlavorV1::ProcedureV2,
+            has_full_execution_document: true,
+            preconditions,
+            session_identity,
         }
     }
 
     pub fn command(&self) -> &CommandV1 {
         &self.command
+    }
+
+    pub const fn execution_flavor(&self) -> DurableExecutionFlavorV1 {
+        self.execution_flavor
+    }
+
+    pub fn session_identity(&self) -> &AdmissionSessionIdentityV1 {
+        &self.session_identity
     }
 
     pub fn canonical_execution(&self) -> &CanonicalExecutionJsonV1 {

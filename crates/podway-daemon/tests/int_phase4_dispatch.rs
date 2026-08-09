@@ -15,9 +15,9 @@ use podway_daemon::{
 };
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OperationV1,
-    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1,
-    WorkspaceOutputV1, WorktreeSelectorWireV1,
+    OutputEnvelopeInputV2, OutputEnvelopeV2, PreconditionsV1, RequestEnvelopeInputV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, ResponseEnvelopeV2,
+    Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -352,6 +352,7 @@ struct WorkerState {
     outcome: Option<Result<MutationDispatchOutcomeV1, DispatchFailureV1>>,
     development_v2_calls: Vec<String>,
     development_v2_failure: bool,
+    development_v2_response: Option<ResponseEnvelopeV2>,
 }
 
 #[derive(Clone)]
@@ -367,12 +368,17 @@ impl FakeWorker {
                 outcome: Some(outcome),
                 development_v2_calls: Vec::new(),
                 development_v2_failure: false,
+                development_v2_response: None,
             })),
         }
     }
 
     fn fail_development_v2(&self) {
         self.state.lock().unwrap().development_v2_failure = true;
+    }
+
+    fn respond_development_v2(&self, response: ResponseEnvelopeV2) {
+        self.state.lock().unwrap().development_v2_response = Some(response);
     }
 }
 
@@ -421,20 +427,21 @@ impl MutationAdmissionWorkerV1<FakeWorkspace> for FakeWorker {
     fn dispatch_development_v2(
         &self,
         _proof: podway_daemon::dispatch::DevelopmentV2AdmissionProofV1,
-        _request: &RequestEnvelopeV1,
+        request: &RequestEnvelopeV1,
         daemon_request: &DaemonRequestV1,
     ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
-        self.state
-            .lock()
-            .unwrap()
-            .development_v2_calls
-            .push(daemon_request.capability().unwrap().to_owned());
+        self.state.lock().unwrap().development_v2_calls.push(
+            daemon_request
+                .capability()
+                .unwrap_or(request.command().as_str())
+                .to_owned(),
+        );
         if self.state.lock().unwrap().development_v2_failure {
             return Err(DispatchFailureV1::new(
                 DispatchFailureKindV1::DaemonUnavailable,
             ));
         }
-        Ok(None)
+        Ok(self.state.lock().unwrap().development_v2_response.clone())
     }
 }
 
@@ -637,6 +644,18 @@ fn terminal_success() -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
             Vec::new(),
         )),
         response_context: None,
+    })
+}
+
+fn terminal_start_success() -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
+    Ok(MutationDispatchOutcomeV1::Detached {
+        job: terminal_job(),
+        procedure_digest: Some(
+            podway_core::Sha256Digest::new(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+        ),
     })
 }
 
@@ -1377,6 +1396,119 @@ fn goal_bearing_start_uses_the_protocol_only_v2_fallback() {
     assert_eq!(error.code().as_str(), "DAEMON_UNAVAILABLE");
     assert_ne!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
     assert_eq!(error.details()["admission"], json!({"admitted": false}));
+}
+
+#[test]
+fn v2run001_development_probe_preserves_retained_v1_start_output() {
+    let runtime = FakeRuntime::new();
+    runtime.enable_development_v2();
+    let worker = FakeWorker::new(terminal_start_success());
+    let dispatcher = dispatcher(runtime, FakeReads::new(), worker.clone());
+    let (request, slice) = request_and_slice(
+        "session.start",
+        json!({
+            "selector": selector("/safe/worktree"),
+            "preset": "sw-dev",
+            "task_title": "Retained v1 start"
+        }),
+        PreconditionsV1::default(),
+        true,
+        30_000,
+        42,
+    );
+    let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
+    assert!(matches!(daemon_request, DaemonRequestV1::Legacy(_)));
+
+    let response = dispatcher.dispatch_daemon(&request, &daemon_request);
+    let ResponseEnvelopeV2::OutputV1(output) = response else {
+        panic!(
+            "a v1 start must retain podway.output/v1 after the v2 development probe: {response:?}"
+        )
+    };
+    assert_eq!(output.request_id(), request.request_id());
+    assert_eq!(output.command(), request.command());
+    assert_eq!(
+        output.result()["schema"],
+        "podway.detached-admission-result/v1"
+    );
+    assert_eq!(
+        worker.state.lock().unwrap().development_v2_calls,
+        vec!["session.start"]
+    );
+    assert_eq!(
+        worker.state.lock().unwrap().calls.len(),
+        1,
+        "fallthrough must admit the retained v1 request exactly once"
+    );
+    assert_eq!(slice.command().command_name(), "session.start");
+}
+
+#[test]
+fn v2run001_development_start_preserves_output_v2_request_correlation() {
+    let runtime = FakeRuntime::new();
+    runtime.enable_development_v2();
+    let worker = FakeWorker::new(terminal_success());
+    let dispatcher = dispatcher(runtime, FakeReads::new(), worker.clone());
+    let (request, _) = request_and_slice(
+        "session.start",
+        json!({
+            "selector": selector("/safe/worktree"),
+            "procedure": "workflow.yaml",
+            "expected_procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "task_title": "Confirmed v2 start"
+        }),
+        PreconditionsV1::default(),
+        false,
+        30_000,
+        43,
+    );
+    let result = map(json!({
+        "schema": "podway.session-start-result/v2",
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dry_run": false,
+        "goal_tracking": false,
+        "goal_defined": false,
+        "admission": {
+            "admitted": true,
+            "job_id": JOB_ID,
+            "workspace_sequence": 41
+        },
+        "session_id": SESSION_ID,
+        "revision": 1,
+        "entry_graph_node_id": "work"
+    }));
+    worker.respond_development_v2(ResponseEnvelopeV2::OutputV2(
+        OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            request_id: request.request_id().clone(),
+            command: request.command().clone(),
+            generated_at: Rfc3339MillisV1::new(GENERATED_AT).unwrap(),
+            workspace: Some(
+                WorkspaceOutputV1::new(
+                    WorkspaceId::new(WORKSPACE_ID).unwrap(),
+                    "/safe/worktree",
+                    41,
+                )
+                .unwrap(),
+            ),
+            job: Some(terminal_job()),
+            session: None,
+            result,
+            warnings: Vec::new(),
+        })
+        .unwrap(),
+    ));
+
+    let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
+    let ResponseEnvelopeV2::OutputV2(output) =
+        dispatcher.dispatch_daemon(&request, &daemon_request)
+    else {
+        panic!("a confirmed v2 start must retain podway.output/v2")
+    };
+    assert_eq!(output.request_id(), request.request_id());
+    assert_eq!(output.command(), request.command());
+    assert_eq!(output.result()["schema"], "podway.session-start-result/v2");
+    assert_eq!(output.result()["admission"]["job_id"], JOB_ID);
 }
 
 #[test]

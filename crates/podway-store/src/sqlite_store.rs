@@ -12,10 +12,10 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 
 use crate::codec::{
-    PersistedDomainCommandV1, PersistedDomainResultV1, PersistedStartIdentityV1,
-    PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
-    PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1, decode_command_v1,
-    decode_response_context_v1, decode_terminal_receipt_v1, encode_command_v1,
+    PersistedDomainCommandV1, PersistedDomainResultV1, PersistedGraphTerminalSessionProjectionV2,
+    PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
+    PersistedTerminalReceiptV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
+    decode_command_v1, decode_response_context_v1, decode_terminal_receipt_v1, encode_command_v1,
     encode_persisted_terminal_receipt_v1, encode_response_context_v1,
     validate_persisted_terminal_result_for_command_v1, validate_terminal_result_for_command_v1,
 };
@@ -32,16 +32,17 @@ use crate::state_rows::{
     load_current_session, load_workspace_state, persist_snapshot, replace_current_session,
 };
 use crate::v2_state::{
-    GraphSessionStateV2, StoreGraphStateContractV2, clear_graph_session_transaction_v2,
+    GraphSessionStateV2, GraphStartCurrentTaskV2, StoreGraphMutationContractV2,
+    StoreGraphStateContractV2, clear_graph_session_transaction_v2,
     create_graph_session_transaction_v2, load_graph_session_connection_v2,
     replace_graph_session_transaction_v2,
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
-    ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, EpochMillisV1,
-    IdempotentExecutionV1, IntegrityModeV1, JobIdV1, JobListQueryV1, JobReceiptOrTerminalV1,
-    JobReceiptV1, JobStateV1, JobViewV1, PersistedSessionMutationV1, PruneReportV1,
-    ReconciliationSnapshotV1, RecoveryReportV1, RevisionV1, RusqliteErrorContextV1,
+    ClaimedExecutionV1, ClaimedJobV1, DurableExecutionFlavorV1, DurableWorktreeIdentityV1,
+    EpochMillisV1, IdempotentExecutionV1, IntegrityModeV1, JobIdV1, JobListQueryV1,
+    JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1, JobViewV1, PersistedSessionMutationV1,
+    PruneReportV1, ReconciliationSnapshotV1, RecoveryReportV1, RevisionV1, RusqliteErrorContextV1,
     SqliteStoreOptionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1, StoreFailpointV1,
     StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreReadContractV1,
     StoreReconciliationReadContractV1, StoreRecordKindV1, StoreUnavailableReasonV1,
@@ -167,6 +168,43 @@ impl SqliteStoreV1 {
                 checked_at,
             )?;
             read_reconciliation_snapshot_connection(connection, idempotency_key)
+        })
+    }
+
+    /// Reads the exact current-task identity from a disposable snapshot without touching the
+    /// authoritative database. This is the read-only fence used by start dry-runs.
+    pub fn inspect_graph_start_current_task_v2(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+        checked_at: EpochMillisV1,
+    ) -> Result<GraphStartCurrentTaskV2, StoreErrorV1> {
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
+            verify_inspection_integrity_connection_v1(
+                connection,
+                expected_identity,
+                options,
+                IntegrityModeV1::Fast,
+                checked_at,
+            )?;
+            let current_v1 = load_current_session(connection)?;
+            let current_v2 = load_graph_session_connection_v2(connection)?;
+            if current_v1.is_some() && current_v2.is_some() {
+                return Err(corrupt(StoreRecordKindV1::Session));
+            }
+            Ok(current_v1
+                .map(|session| GraphStartCurrentTaskV2::Exact {
+                    session_id: session.session_id().clone(),
+                    session_revision: session.revision(),
+                })
+                .or_else(|| {
+                    current_v2.map(|state| GraphStartCurrentTaskV2::Exact {
+                        session_id: state.trace().session_id().clone(),
+                        session_revision: state.trace().revision(),
+                    })
+                })
+                .unwrap_or(GraphStartCurrentTaskV2::Absent))
         })
     }
 
@@ -414,6 +452,278 @@ impl StoreGraphStateContractV2 for SqliteStoreV1 {
     }
 }
 
+impl StoreGraphMutationContractV2 for SqliteStoreV1 {
+    fn commit_graph_start_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_current: GraphStartCurrentTaskV2,
+        state: GraphSessionStateV2,
+        now: EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        self.require_identity(claim.identity())?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        self.trigger_failpoint(StoreFailpointV1::TerminalAfterTransactionBegin)?;
+        let row: Option<RunningJobRow> = transaction
+            .query_row(
+                "SELECT workspace_sequence, request_digest, command_name, canonical_request_json, \
+                 submitted_at_ms, claimed_at_ms, state, response_context_json FROM jobs WHERE job_id = ?1",
+                [claim.job_id().as_str()],
+                |row| {
+                    Ok(RunningJobRow {
+                        sequence: row.get(0)?,
+                        digest: row.get(1)?,
+                        command_name: row.get(2)?,
+                        request: row.get(3)?,
+                        submitted_at: row.get(4)?,
+                        claimed_at: row.get(5)?,
+                        state: row.get(6)?,
+                        response_context: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| storage_record(error, StoreRecordKindV1::Job))?;
+        let Some(row) = row else {
+            return Err(StoreErrorV1::JobNotFoundV1 {
+                job_id: claim.job_id().clone(),
+            });
+        };
+        let digest = digest(row.digest)?;
+        let sequence =
+            u64::try_from(row.sequence).map_err(|_| invariant(StoreInvariantV1::QueueSequence))?;
+        if sequence == 0 {
+            return Err(corrupt(StoreRecordKindV1::Job));
+        }
+        let submitted_at = epoch(row.submitted_at, StoreRecordKindV1::Job)?;
+        let claimed_at = row
+            .claimed_at
+            .map(|value| epoch(value, StoreRecordKindV1::Job))
+            .transpose()?;
+        let valid_generation = claimed_at.map(|claimed_at| {
+            self.claim_generation(
+                claim.identity(),
+                claim.job_id(),
+                &digest,
+                claimed_at,
+                claim.worker(),
+            )
+        });
+        if row.state != "running" || valid_generation != Some(claim.job_revision()) {
+            return Err(StoreErrorV1::ClaimStaleV1 {
+                job_id: claim.job_id().clone(),
+            });
+        }
+        let execution =
+            decode_command_v1(&row.request).map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        if execution.execution_flavor() != DurableExecutionFlavorV1::ProcedureV2
+            || command_name_v1(execution.command()) != row.command_name
+            || !matches!(
+                execution.command(),
+                crate::CommandV1::SessionStart | crate::CommandV1::SessionStartReplace
+            )
+        {
+            return Err(corrupt(StoreRecordKindV1::Job));
+        }
+        verify_persisted_job_scope(&transaction, claim.job_id().as_str())?;
+
+        let current_v1 = load_current_session(&transaction)?;
+        let current_v2 = load_graph_session_connection_v2(&transaction)?;
+        if current_v1.is_some() && current_v2.is_some() {
+            return Err(corrupt(StoreRecordKindV1::Session));
+        }
+        let actual = current_v1
+            .as_ref()
+            .map(|session| (session.session_id().clone(), session.revision()))
+            .or_else(|| {
+                current_v2.as_ref().map(|session| {
+                    (
+                        session.trace().session_id().clone(),
+                        session.trace().revision(),
+                    )
+                })
+            });
+        let expected = match &expected_current {
+            GraphStartCurrentTaskV2::Absent => None,
+            GraphStartCurrentTaskV2::Exact {
+                session_id,
+                session_revision,
+            } => Some((session_id.clone(), *session_revision)),
+        };
+        if actual != expected {
+            match (&expected, &actual) {
+                (Some((expected_id, expected_revision)), Some((actual_id, actual_revision)))
+                    if expected_id == actual_id =>
+                {
+                    return Err(StoreErrorV1::PreconditionConflictV1 {
+                        expected: Some(*expected_revision),
+                        actual: Some(*actual_revision),
+                    });
+                }
+                _ => {
+                    return Err(StoreErrorV1::SessionIdentityConflictV1 {
+                        expected: expected.map(|value| value.0),
+                        actual: actual.map(|value| value.0),
+                    });
+                }
+            }
+        }
+        let replacing = matches!(execution.command(), crate::CommandV1::SessionStartReplace);
+        if replacing != !matches!(expected_current, GraphStartCurrentTaskV2::Absent)
+            || state.workspace_revision() != RevisionV1::new(1)
+            || state.trace().revision() != RevisionV1::new(1)
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+        let revision_before = match &expected_current {
+            GraphStartCurrentTaskV2::Absent => RevisionV1::ZERO,
+            GraphStartCurrentTaskV2::Exact {
+                session_revision, ..
+            } => *session_revision,
+        };
+
+        let old_v1 = if current_v1.is_some() {
+            capture_old_session_for_barrier(&transaction, row.sequence)?
+        } else {
+            None
+        };
+        if let Some(current) = &current_v2 {
+            ensure_graph_session_barrier_v2(
+                &transaction,
+                row.sequence,
+                current.trace().session_id(),
+            )?;
+            clear_graph_session_transaction_v2(
+                &transaction,
+                current.workspace_revision(),
+                current.trace().revision(),
+            )?;
+        } else if current_v1.is_some() {
+            transaction
+                .execute("DELETE FROM task_sessions WHERE singleton = 1", [])
+                .map_err(storage)?;
+        }
+        create_graph_session_transaction_v2(&transaction, &state)?;
+        self.trigger_failpoint(
+            StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate,
+        )?;
+
+        let result = TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+            session_id: state.trace().session_id().clone(),
+            revision_before,
+            revision_after: state.trace().revision(),
+            changed: true,
+        });
+        validate_terminal_result_for_command_v1(execution.command(), &result)
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let receipt = TerminalReceiptV1::new(
+            JobReceiptV1::new(sequence, claim.job_id().clone(), digest),
+            result,
+        );
+        let job_projection = PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            submitted_at,
+            claimed_at,
+            now,
+        )
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let graph_projection = PersistedGraphTerminalSessionProjectionV2::new(
+            state.trace().session_id().clone(),
+            state.task_title().to_owned(),
+            state.trace().lifecycle().into(),
+            revision_before,
+            state.trace().revision(),
+            state.snapshot().digest().clone(),
+            state.snapshot().entry_graph_node_id().clone(),
+            state.snapshot().goal_tracking(),
+        )
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let mut persisted = PersistedTerminalReceiptV1::new_with_graph_projection(
+            receipt.job().clone(),
+            PersistedTerminalResultV1::from_terminal_result(receipt.result()),
+            job_projection,
+            graph_projection,
+        )
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        persisted = enrich_terminal_from_execution(persisted, &execution)?;
+        if let Some(response_context) = row.response_context.as_deref() {
+            persisted = persisted
+                .with_response_context(
+                    decode_response_context_v1(response_context)
+                        .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
+                )
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        }
+        if persisted.response_context().is_none() {
+            return Err(corrupt(StoreRecordKindV1::Job));
+        }
+        if persisted
+            .response_context()
+            .is_some_and(|context| context.freezes_public_terminal_envelope())
+            && let Some(seal) = crate::terminal_envelope_sealer_v1()
+        {
+            let envelope = seal(&persisted)?;
+            persisted = persisted
+                .with_public_terminal_envelope(envelope)
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        }
+        let encoded = encode_persisted_terminal_receipt_v1(&persisted)
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        let changed = transaction.execute(
+            "UPDATE jobs SET state = 'succeeded', finished_at_ms = ?1, terminal_response_json = ?2 \
+             WHERE job_id = ?3 AND state = 'running'",
+            params![sqlite_u64(now.get())?, &encoded, claim.job_id().as_str()],
+        ).map_err(storage)?;
+        if changed != 1 {
+            return Err(StoreErrorV1::ClaimStaleV1 {
+                job_id: claim.job_id().clone(),
+            });
+        }
+        self.trigger_failpoint(StoreFailpointV1::TerminalAfterJobTerminalUpdateBeforeCommit)?;
+        let changed = transaction
+            .execute(
+                "UPDATE idempotency_records SET terminal_response_json = ?1, updated_at_ms = ?2 \
+             WHERE job_id = ?3 AND terminal_response_json IS NULL",
+                params![&encoded, sqlite_u64(now.get())?, claim.job_id().as_str()],
+            )
+            .map_err(storage)?;
+        if changed != 1 {
+            return Err(corrupt(StoreRecordKindV1::IdempotencyRecord));
+        }
+        transaction
+            .execute(
+                "UPDATE workspace_state SET updated_at_ms = ?1 WHERE singleton = 1",
+                [sqlite_u64(now.get())?],
+            )
+            .map_err(storage)?;
+        if let Some((old_session_id, old_snapshot_id)) = old_v1 {
+            let report =
+                cleanup_old_session_barrier(&transaction, &old_session_id, &old_snapshot_id)?;
+            record_session_barrier_cleanup(
+                &transaction,
+                row.sequence,
+                claim.job_id().as_str(),
+                now,
+                &report,
+            )?;
+        }
+        let prune_report =
+            prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
+        record_prune_report(
+            &transaction,
+            &prune_report,
+            Some(row.sequence),
+            Some(claim.job_id().as_str()),
+        )?;
+        self.trigger_failpoint(StoreFailpointV1::TerminalBeforeCommit)?;
+        transaction.commit().map_err(storage)?;
+        self.trigger_failpoint(StoreFailpointV1::TerminalAfterCommitBeforeResponse)?;
+        Ok(receipt)
+    }
+}
+
 impl StoreContractV1 for SqliteStoreV1 {
     fn admit(
         &self,
@@ -428,7 +738,11 @@ impl StoreContractV1 for SqliteStoreV1 {
             request.command(),
             crate::CommandV1::SessionStart | crate::CommandV1::SessionStartReplace
         );
-        if request.admitted_procedure_snapshot().is_some() && !is_session_start {
+        let is_v2 = request.execution_flavor() == DurableExecutionFlavorV1::ProcedureV2;
+        if is_v2 && !is_session_start {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+        if request.admitted_procedure_snapshot().is_some() && (!is_session_start || is_v2) {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
         self.trigger_failpoint(StoreFailpointV1::AdmissionBeforeTransaction)?;
@@ -457,14 +771,23 @@ impl StoreContractV1 for SqliteStoreV1 {
             transaction.commit().map_err(storage)?;
             return Ok(AdmitOutcomeV1::Existing(outcome));
         }
-        if is_session_start && request.admitted_procedure_snapshot().is_none() {
+        if is_session_start && !is_v2 && request.admitted_procedure_snapshot().is_none() {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
         let current_session = load_current_session(&transaction)?;
+        let current_graph = load_graph_session_connection_v2(&transaction)?;
+        if current_session.is_some() && current_graph.is_some() {
+            return Err(corrupt(StoreRecordKindV1::Session));
+        }
         let actual_session_id = current_session
             .as_ref()
             .map(podway_core::SessionAggregateV1::session_id)
-            .cloned();
+            .cloned()
+            .or_else(|| {
+                current_graph
+                    .as_ref()
+                    .map(|state| state.trace().session_id().clone())
+            });
         let session_identity_matches = match request.session_identity() {
             crate::AdmissionSessionIdentityV1::Any => true,
             crate::AdmissionSessionIdentityV1::Absent => actual_session_id.is_none(),
@@ -482,6 +805,18 @@ impl StoreContractV1 for SqliteStoreV1 {
                 expected,
                 actual: actual_session_id,
             });
+        }
+        if is_v2 && matches!(request.command(), crate::CommandV1::SessionStartReplace) {
+            let actual_revision = current_session
+                .as_ref()
+                .map(podway_core::SessionAggregateV1::revision)
+                .or_else(|| current_graph.as_ref().map(|state| state.trace().revision()));
+            if request.preconditions().expected_session_revision() != actual_revision {
+                return Err(StoreErrorV1::PreconditionConflictV1 {
+                    expected: request.preconditions().expected_session_revision(),
+                    actual: actual_revision,
+                });
+            }
         }
         let barrier_exists: i64 = transaction
             .query_row(
@@ -1736,6 +2071,33 @@ fn capture_old_session_for_barrier(
     Ok(old_session)
 }
 
+fn ensure_graph_session_barrier_v2(
+    transaction: &Transaction<'_>,
+    barrier_sequence: i64,
+    session_id: &podway_core::SessionId,
+) -> Result<(), StoreErrorV1> {
+    let earlier_nonterminal: i64 = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE workspace_sequence < ?1 \
+         AND state IN ('queued', 'running'))",
+            [barrier_sequence],
+            |row| row.get(0),
+        )
+        .map_err(storage)?;
+    let scoped_nonterminal: i64 = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE session_id = ?1 \
+         AND state IN ('queued', 'running'))",
+            [session_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(storage)?;
+    if earlier_nonterminal != 0 || scoped_nonterminal != 0 {
+        return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SessionBarrierCleanupReportV1 {
     deleted_journal_entries: u32,
@@ -2888,7 +3250,11 @@ fn enrich_terminal_from_execution(
             .with_lookup_command(PersistedDomainCommandV1::from_command(execution.command()))
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
     }
-    let start_identity = admitted_start_identity(execution)?;
+    let start_identity = if execution.execution_flavor() == DurableExecutionFlavorV1::ProcedureV2 {
+        None
+    } else {
+        admitted_start_identity(execution)?
+    };
     if terminal
         .session_projection()
         .is_some_and(|projection| projection.procedure_digest().is_none())

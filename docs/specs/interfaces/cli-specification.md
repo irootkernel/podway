@@ -322,7 +322,7 @@ An initial goal requires one to sixteen ordered, uniquely identified criteria.
 `--criterion` and `--actor` are invalid without `--goal`. Goal-bearing start and
 start replacement use the typed Procedure v2 request boundary; a retained v1
 start contains none of those fields and preserves its released wire shape.
-Until the v2 start runtime lands, goal-bearing replacement requires explicit
+Until initial-goal admission lands, goal-bearing replacement requires explicit
 workspace UUID, session ID, and session revision fences so the request reaches
 the typed pre-admission capability response without a legacy status preflight.
 

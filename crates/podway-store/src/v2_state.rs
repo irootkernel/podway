@@ -954,6 +954,43 @@ pub trait StoreGraphStateContractV2: Send + Sync {
     ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1>;
 }
 
+/// Exact current-task fence for a Procedure v2 start terminal transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GraphStartCurrentTaskV2 {
+    Absent,
+    Exact {
+        session_id: SessionId,
+        session_revision: Revision,
+    },
+}
+
+/// Additive durable-job boundary that publishes a fresh Procedure v2 graph session and its
+/// immutable terminal receipt in one SQLite transaction.
+pub trait StoreGraphMutationContractV2: Send + Sync {
+    fn commit_graph_start_terminal_v2(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_current: GraphStartCurrentTaskV2,
+        state: GraphSessionStateV2,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
+}
+
+impl<Store> StoreGraphMutationContractV2 for Arc<Store>
+where
+    Store: StoreGraphMutationContractV2 + ?Sized,
+{
+    fn commit_graph_start_terminal_v2(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_current: GraphStartCurrentTaskV2,
+        state: GraphSessionStateV2,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
+        (**self).commit_graph_start_terminal_v2(claim, expected_current, state, now)
+    }
+}
+
 impl<Store> StoreGraphStateContractV2 for Arc<Store>
 where
     Store: StoreGraphStateContractV2 + ?Sized,

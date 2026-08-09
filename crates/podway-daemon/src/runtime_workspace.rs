@@ -27,13 +27,14 @@ use podway_protocol::Rfc3339MillisV1;
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
-    ClaimedJobV1, IdempotencyKeyV1, IdempotentExecutionV1, JobIdV1, JobListQueryV1, JobViewV1,
-    PersistedResponseContextV1, ReconciliationSnapshotV1, RecoveryReportV1,
-    RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1,
-    StoreInvariantV1, StoreReadContractV1, StoreReconciliationReadContractV1,
-    StoreUnavailableReasonV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
-    ValidatedWorkspaceRootV1, WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1,
+    ClaimedJobV1, GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1,
+    IdempotentExecutionV1, JobIdV1, JobListQueryV1, JobViewV1, PersistedResponseContextV1,
+    ReconciliationSnapshotV1, RecoveryReportV1, RevisionAttemptItemPreconditionsV1, RevisionV1,
+    SqliteStoreOptionsV1, SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
+    StoreGraphMutationContractV2, StoreIdempotencyReadContractV1, StoreInvariantV1,
+    StoreReadContractV1, StoreReconciliationReadContractV1, StoreUnavailableReasonV1,
+    StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    WorkspaceBindingV1, WorkspaceViewV1,
 };
 
 use crate::{
@@ -417,6 +418,20 @@ impl StoreContractV1 for WorkspaceStoreSlotV1 {
         identity: &podway_store::DurableWorktreeIdentityV1,
     ) -> Result<WorkspaceViewV1, StoreErrorV1> {
         self.with_open_store(|store| store.read_workspace_view(identity))
+    }
+}
+
+impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
+    fn commit_graph_start_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_current: GraphStartCurrentTaskV2,
+        state: GraphSessionStateV2,
+        now: podway_store::EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.commit_graph_start_terminal_v2(claim, expected_current, state, now)
+        })
     }
 }
 

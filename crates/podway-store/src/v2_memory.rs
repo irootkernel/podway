@@ -466,6 +466,80 @@ impl WorkflowMemoryStateV2 {
         Self::new(attempts, Vec::new(), Vec::new())
     }
 
+    /// Constructs memory for the first attempt of a newly admitted graph session. Optional
+    /// references may legitimately be unresolved at activation; a required unresolved reference
+    /// is rejected because graph vetting must have ruled it out before runtime admission.
+    pub fn initial_for_trace(
+        snapshot: &ProcedureSnapshotV2,
+        trace: &SessionTraceV2,
+        metadata: &[AttemptMetadataV2],
+    ) -> Result<Self, StoreValueErrorV1> {
+        let initial_attempt = trace.attempts().first();
+        if trace.lifecycle() != SessionLifecycle::Running
+            || trace.revision() != Revision::new(1)
+            || trace.attempts().len() != 1
+            || metadata.len() != 1
+            || !initial_attempt.is_some_and(|attempt| {
+                attempt.lifecycle() == AttemptLifecycle::Active
+                    && attempt.validity() == AttemptValidityV2::Valid
+                    && attempt.number() == AttemptNumberV2::FIRST
+                    && attempt.trace() == TraceSequenceV2::FIRST
+                    && metadata[0].attempt_id() == attempt.attempt_id()
+            })
+        {
+            return Err(invalid(
+                "initial Procedure v2 workflow memory requires one fresh active attempt",
+            ));
+        }
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        let mut attempts = Vec::with_capacity(trace.attempts().len());
+        for (attempt, metadata) in trace.attempts().iter().zip(metadata) {
+            let node = model.node(attempt.graph_node_id())?;
+            let slots = node
+                .items
+                .iter()
+                .map(|item| {
+                    ItemSlotStateV2::new(
+                        attempt.attempt_id().clone(),
+                        item.id().clone(),
+                        item.item_type(),
+                        Revision::ZERO,
+                        None,
+                        metadata.started_at(),
+                        metadata.started_at(),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let evidence = node
+                .evidence
+                .iter()
+                .enumerate()
+                .map(|(ordinal, reference)| {
+                    if reference.required {
+                        return Err(invalid(
+                            "required Procedure v2 evidence is unresolved at initial activation",
+                        ));
+                    }
+                    EvidenceResolutionStateV2::new(
+                        u32::try_from(ordinal).map_err(|_| {
+                            invalid("Procedure v2 evidence reference ordinal is out of bounds")
+                        })?,
+                        false,
+                        reference.selected_item_ids.clone(),
+                        ResolvedEvidenceReferenceV2::unresolved(reference.source_node.clone()),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            attempts.push(AttemptWorkflowMemoryV2::new(
+                attempt.attempt_id().clone(),
+                slots,
+                Vec::new(),
+                evidence,
+            )?);
+        }
+        Self::new(attempts, Vec::new(), Vec::new())
+    }
+
     pub(crate) fn selected_readback(
         &self,
         trace: &SessionTraceV2,

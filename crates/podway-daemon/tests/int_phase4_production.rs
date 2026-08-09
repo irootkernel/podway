@@ -12,26 +12,35 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
 
+use podway_config::{
+    ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document, validate_procedure_v2,
+};
 use podway_core::{DomainError, JobId, Revision, Sha256Digest, UnixMillis, canonicalize_json_v1};
 use podway_daemon::{
-    dispatch::WorkspaceRuntimeV1,
-    production::{ProductionWorkspaceRuntimeV1, compose_dispatcher_v1},
+    dispatch::{
+        DevelopmentV2AdmissionProofV1, DispatchFailureKindV1, MutationAdmissionWorkerV1,
+        WorkspaceRuntimeV1,
+    },
+    production::{
+        ProductionWorkspaceRuntimeV1, compose_dispatcher_v1, compose_dispatcher_with_worker_v1,
+    },
     runtime_workspace::WorkspaceRuntimeObservationV1,
-    server::RequestDispatcherV1,
+    server::{DaemonRequestV1, RequestDispatcherV1},
 };
 use podway_git::{GitResolverContractV1, NativeGitResolverV1};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobStateV1, NextResultV1, OperationV1,
     OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1,
-    RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1, SliceRequestV1, StageStatusResultV1,
-    StatusItemValueV1, StatusResultV1, WorkspaceContextV1, WorktreeSelectorWireV1,
+    RequestOptionsV1, ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SliceRequestV1,
+    StageStatusResultV1, StatusItemValueV1, StatusResultV1, WorkspaceContextV1,
+    WorktreeSelectorWireV1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
     AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CommandV1,
     IdempotencyKeyV1 as StoreIdempotencyKeyV1, JobListQueryV1, PersistedResponseContextV1,
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
-    StoreReadContractV1, TerminalResultV1, WorkerIdV1,
+    StoreGraphStateContractV2, StoreReadContractV1, TerminalResultV1, WorkerIdV1,
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -102,6 +111,11 @@ fn request(
     preconditions: PreconditionsV1,
 ) -> (RequestEnvelopeV1, SliceRequestV1) {
     let operation = match command {
+        "session.start" | "session.start_replace"
+            if payload.get("dry_run").and_then(Value::as_bool) == Some(true) =>
+        {
+            OperationV1::Query
+        }
         "workspace.init" => OperationV1::Bootstrap,
         "workspace.repair" | "job.cancel" => OperationV1::Control,
         "workspace.doctor" | "session.status" | "session.next" | "job.list" | "job.lookup"
@@ -189,6 +203,534 @@ fn item_preconditions(status: &StatusResultV1, item_id: &str) -> PreconditionsV1
         None,
     )
     .unwrap()
+}
+
+#[test]
+fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let composition = compose_dispatcher_with_worker_v1(
+        Arc::clone(&runtime_manager),
+        WorkerIdV1::new("v2run001-production-start").unwrap(),
+    );
+    let workspace_selector = selector(fixture.main());
+    let initialize = request(
+        10_001,
+        "workspace.init",
+        &workspace_selector,
+        json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "v2run001-initialize",
+        PreconditionsV1::default(),
+    );
+    dispatch_command(composition.dispatcher(), &initialize, "workspace.init");
+
+    let source = include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.yaml");
+    fs::write(fixture.main().join("workflow.yaml"), source).unwrap();
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(source, ProcedureDocumentFormat::Yaml).unwrap()
+    else {
+        panic!("the V2RUN-001 production fixture must be Procedure v2")
+    };
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let start_payload = json!({
+        "selector": serde_json::to_value(&workspace_selector).unwrap(),
+        "procedure": "workflow.yaml",
+        "expected_procedure_digest": digest,
+        "task_title": "Production Procedure v2 start"
+    });
+    let runtime = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap();
+    let context = runtime.context_snapshot();
+    let identity = context.binding().identity();
+    let direct_store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        identity.clone(),
+        context.store_options().clone(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let baseline_sequence = direct_store
+        .read_workspace_view(identity)
+        .unwrap()
+        .latest_workspace_sequence();
+    let baseline_jobs = direct_store
+        .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+        .unwrap()
+        .len();
+    let baseline_registry = runtime_manager
+        .registry()
+        .lookup(identity.workspace_uuid())
+        .unwrap();
+    let readonly_before = runtime_manager
+        .resolve_existing_readonly(git_selector(fixture.main()), None)
+        .unwrap();
+    assert!(baseline_registry.is_some());
+    assert!(readonly_before.active_scheduler().is_some());
+
+    fs::write(
+        fixture.main().join("legacy.yaml"),
+        include_bytes!("../../../assets/presets/sw-dev.yaml"),
+    )
+    .unwrap();
+    let legacy = request(
+        10_018,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "selector": serde_json::to_value(&workspace_selector).unwrap(),
+            "procedure": "legacy.yaml",
+            "task_title": "Retained v1 fallback",
+            "dry_run": true,
+        }),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "unused-v1-dry-run-key",
+        PreconditionsV1::default(),
+    );
+    let legacy_daemon = DaemonRequestV1::from_envelope(&legacy.0).unwrap();
+    assert!(
+        composition
+            .worker()
+            .dispatch_development_v2(
+                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+                &legacy.0,
+                &legacy_daemon,
+            )
+            .unwrap()
+            .is_none(),
+        "retained v1 starts must fall through the development v2 probe"
+    );
+    assert_eq!(
+        direct_store
+            .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+            .unwrap()
+            .len(),
+        baseline_jobs
+    );
+
+    let mut dry_run_payload = start_payload.clone();
+    dry_run_payload["dry_run"] = Value::Bool(true);
+    let dry_run = request(
+        10_002,
+        "session.start",
+        &workspace_selector,
+        dry_run_payload,
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "v2run001-dry-run",
+        PreconditionsV1::default(),
+    );
+    let dry_run_daemon = DaemonRequestV1::from_envelope(&dry_run.0).unwrap();
+    let dry_run_response = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &dry_run.0,
+            &dry_run_daemon,
+        )
+        .unwrap()
+        .expect("a confirmed custom Procedure v2 dry-run must be handled");
+    let ResponseEnvelopeV2::OutputV2(dry_run_output) = dry_run_response else {
+        panic!("Procedure v2 dry-run must return podway.output/v2")
+    };
+    assert_eq!(dry_run_output.result()["dry_run"], true);
+    assert!(dry_run_output.job().is_none());
+    assert!(dry_run_output.result().get("admission").is_none());
+    for forbidden in ["session_id", "revision", "entry_graph_node_id"] {
+        assert!(
+            dry_run_output.result().get(forbidden).is_none(),
+            "dry-run must omit {forbidden}"
+        );
+    }
+
+    assert!(
+        direct_store
+            .read_graph_session_v2(identity)
+            .unwrap()
+            .is_none(),
+        "dry-run must not create graph state"
+    );
+    assert_eq!(
+        direct_store
+            .read_workspace_view(identity)
+            .unwrap()
+            .latest_workspace_sequence(),
+        baseline_sequence
+    );
+    assert_eq!(
+        direct_store
+            .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+            .unwrap()
+            .len(),
+        baseline_jobs
+    );
+    assert_eq!(
+        runtime_manager
+            .registry()
+            .lookup(identity.workspace_uuid())
+            .unwrap(),
+        baseline_registry
+    );
+    assert!(
+        runtime_manager
+            .resolve_existing_readonly(git_selector(fixture.main()), None)
+            .unwrap()
+            .active_scheduler()
+            .is_some()
+    );
+
+    for (request_number, key, expected, payload) in [
+        (
+            10_010,
+            "v2run001-missing-digest",
+            DispatchFailureKindV1::DigestConfirmationRequired,
+            {
+                let mut payload = start_payload.clone();
+                payload
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("expected_procedure_digest");
+                payload
+            },
+        ),
+        (
+            10_011,
+            "v2run001-wrong-digest",
+            DispatchFailureKindV1::ProcedureDigestMismatch,
+            {
+                let mut payload = start_payload.clone();
+                payload["expected_procedure_digest"] = json!(format!("sha256:{}", "b".repeat(64)));
+                payload
+            },
+        ),
+    ] {
+        let rejected = request(
+            request_number,
+            "session.start",
+            &workspace_selector,
+            payload,
+            RequestOptionsV1::new(false, 5_000).unwrap(),
+            key,
+            PreconditionsV1::default(),
+        );
+        let rejected_daemon = DaemonRequestV1::from_envelope(&rejected.0).unwrap();
+        let failure = composition
+            .worker()
+            .dispatch_development_v2(
+                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+                &rejected.0,
+                &rejected_daemon,
+            )
+            .unwrap_err();
+        assert_eq!(failure.kind(), expected);
+        assert!(
+            direct_store
+                .read_graph_session_v2(identity)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            direct_store
+                .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+                .unwrap()
+                .len(),
+            baseline_jobs
+        );
+    }
+
+    let live = request(
+        10_003,
+        "session.start",
+        &workspace_selector,
+        start_payload.clone(),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "v2run001-live",
+        PreconditionsV1::default(),
+    );
+    let mut goal_bearing_value = serde_json::to_value(&live.0).unwrap();
+    goal_bearing_value["request_id"] = json!("00000000-0000-4000-8000-000000010012");
+    goal_bearing_value["idempotency_key"] = json!("v2run001-goal-bearing");
+    goal_bearing_value["payload"]["goal"] = json!("Ship the complete v2 runtime.");
+    goal_bearing_value["payload"]["criteria"] = json!([{
+        "criterion_id": "verified",
+        "statement": "The focused daemon tests pass."
+    }]);
+    let goal_bearing: RequestEnvelopeV1 = serde_json::from_value(goal_bearing_value).unwrap();
+    let goal_bearing_daemon = DaemonRequestV1::from_envelope(&goal_bearing).unwrap();
+    assert!(matches!(
+        goal_bearing_daemon,
+        DaemonRequestV1::ProcedureV2Start(_)
+    ));
+    assert!(
+        composition
+            .worker()
+            .dispatch_development_v2(
+                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+                &goal_bearing,
+                &goal_bearing_daemon,
+            )
+            .unwrap()
+            .is_none(),
+        "goal-bearing start remains unsupported until V2GOL-001"
+    );
+    assert!(
+        direct_store
+            .read_graph_session_v2(identity)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        direct_store
+            .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+            .unwrap()
+            .len(),
+        baseline_jobs
+    );
+    let live_daemon = DaemonRequestV1::from_envelope(&live.0).unwrap();
+    let live_response = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &live.0,
+            &live_daemon,
+        )
+        .unwrap()
+        .expect("a confirmed custom Procedure v2 start must be handled");
+    let ResponseEnvelopeV2::OutputV2(live_output) = &live_response else {
+        panic!("Procedure v2 live start must return podway.output/v2")
+    };
+    assert_eq!(live_output.request_id(), live.0.request_id());
+    assert_eq!(live_output.command(), live.0.command());
+    assert_eq!(live_output.result()["dry_run"], false);
+    assert_eq!(live_output.result()["admission"]["admitted"], true);
+    assert!(live_output.job().is_some());
+    assert_eq!(live_output.result()["revision"], 1);
+
+    let session_id = live_output.result()["session_id"].as_str().unwrap();
+    let jobs_before_replace_dry_run = direct_store
+        .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+        .unwrap()
+        .len();
+    let mut replace_dry_run_payload = start_payload.clone();
+    replace_dry_run_payload["dry_run"] = Value::Bool(true);
+    let replace_dry_run = request(
+        10_014,
+        "session.start_replace",
+        &workspace_selector,
+        replace_dry_run_payload.clone(),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "unused-dry-run-key",
+        PreconditionsV1::new(
+            Some(podway_core::SessionId::new(session_id).unwrap()),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let replace_dry_run_daemon = DaemonRequestV1::from_envelope(&replace_dry_run.0).unwrap();
+    let replace_dry_run_response = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &replace_dry_run.0,
+            &replace_dry_run_daemon,
+        )
+        .unwrap()
+        .expect("an exactly fenced replacement dry-run must be handled");
+    let ResponseEnvelopeV2::OutputV2(replace_dry_run_output) = replace_dry_run_response else {
+        panic!("Procedure v2 replacement dry-run must return podway.output/v2")
+    };
+    assert_eq!(replace_dry_run_output.result()["dry_run"], true);
+
+    let stale_replace_dry_run = request(
+        10_015,
+        "session.start_replace",
+        &workspace_selector,
+        replace_dry_run_payload,
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "unused-stale-dry-run-key",
+        PreconditionsV1::new(
+            Some(podway_core::SessionId::new(session_id).unwrap()),
+            Some(Revision::new(2)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let stale_replace_dry_run_daemon =
+        DaemonRequestV1::from_envelope(&stale_replace_dry_run.0).unwrap();
+    let stale_dry_run_failure = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &stale_replace_dry_run.0,
+            &stale_replace_dry_run_daemon,
+        )
+        .unwrap_err();
+    assert_eq!(
+        stale_dry_run_failure.kind(),
+        DispatchFailureKindV1::SessionRevisionConflict
+    );
+    assert_eq!(
+        direct_store
+            .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+            .unwrap()
+            .len(),
+        jobs_before_replace_dry_run,
+        "replacement dry-runs must not create durable jobs"
+    );
+    assert_eq!(
+        direct_store
+            .read_graph_session_v2(identity)
+            .unwrap()
+            .unwrap()
+            .trace()
+            .session_id()
+            .as_str(),
+        session_id
+    );
+
+    let mut replace_payload = start_payload.clone();
+    replace_payload["task_title"] = json!("Replacement Procedure v2 start");
+    replace_payload["confirmed"] = Value::Bool(true);
+    let jobs_before_stale_replace = direct_store
+        .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+        .unwrap()
+        .len();
+    let wrong_identity_replace = request(
+        10_016,
+        "session.start_replace",
+        &workspace_selector,
+        replace_payload.clone(),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "v2run001-wrong-identity-replace",
+        PreconditionsV1::new(
+            Some(podway_core::SessionId::new("00000000-0000-4000-8000-000000010016").unwrap()),
+            Some(Revision::new(2)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let wrong_identity_replace_daemon =
+        DaemonRequestV1::from_envelope(&wrong_identity_replace.0).unwrap();
+    let wrong_identity_failure = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &wrong_identity_replace.0,
+            &wrong_identity_replace_daemon,
+        )
+        .unwrap_err();
+    assert_eq!(
+        wrong_identity_failure.kind(),
+        DispatchFailureKindV1::SessionIdMismatch
+    );
+    let stale_replace = request(
+        10_013,
+        "session.start_replace",
+        &workspace_selector,
+        replace_payload.clone(),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "v2run001-stale-replace",
+        PreconditionsV1::new(
+            Some(podway_core::SessionId::new(session_id).unwrap()),
+            Some(Revision::new(2)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let stale_replace_daemon = DaemonRequestV1::from_envelope(&stale_replace.0).unwrap();
+    let stale_failure = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &stale_replace.0,
+            &stale_replace_daemon,
+        )
+        .unwrap_err();
+    assert_eq!(
+        stale_failure.kind(),
+        DispatchFailureKindV1::SessionRevisionConflict
+    );
+    assert_eq!(
+        direct_store
+            .list_jobs(identity, JobListQueryV1::new(100).unwrap())
+            .unwrap()
+            .len(),
+        jobs_before_stale_replace,
+        "a stale replacement must fail before durable admission"
+    );
+    assert_eq!(
+        direct_store
+            .read_graph_session_v2(identity)
+            .unwrap()
+            .unwrap()
+            .trace()
+            .session_id()
+            .as_str(),
+        session_id
+    );
+    let replace = request(
+        10_004,
+        "session.start_replace",
+        &workspace_selector,
+        replace_payload,
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "v2run001-replace",
+        PreconditionsV1::new(
+            Some(podway_core::SessionId::new(session_id).unwrap()),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let replace_daemon = DaemonRequestV1::from_envelope(&replace.0).unwrap();
+    let replace_response = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &replace.0,
+            &replace_daemon,
+        )
+        .unwrap()
+        .expect("confirmed v2 replacement must be handled");
+    let ResponseEnvelopeV2::OutputV2(replace_output) = replace_response else {
+        panic!("Procedure v2 replacement must return podway.output/v2")
+    };
+    assert_eq!(replace_output.result()["revision"], 1);
+    assert_ne!(replace_output.result()["session_id"], session_id);
+
+    fs::remove_file(fixture.main().join("workflow.yaml")).unwrap();
+    let replay = composition
+        .worker()
+        .dispatch_development_v2(
+            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            &live.0,
+            &live_daemon,
+        )
+        .unwrap()
+        .expect("an exact replay must not reread a deleted source");
+    assert_eq!(
+        serde_json::to_value(replay).unwrap(),
+        serde_json::to_value(live_response).unwrap(),
+        "exact replay must preserve the frozen v2 response"
+    );
 }
 
 #[test]

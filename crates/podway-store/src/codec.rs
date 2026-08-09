@@ -20,11 +20,13 @@ use podway_core::{
 
 pub const STORE_COMMAND_SCHEMA_V1: &str = "podway.store-command/v1";
 pub const STORE_COMMAND_SCHEMA_V2: &str = "podway.store-command/v2";
+pub const STORE_GRAPH_COMMAND_SCHEMA_V1: &str = "podway.store-graph-command/v1";
 pub const STORE_TERMINAL_SCHEMA_V0: &str = "podway.store-terminal/v0";
 pub const STORE_TERMINAL_SCHEMA_V1: &str = "podway.store-terminal/v1";
 pub const STORE_TERMINAL_SCHEMA_V2: &str = "podway.store-terminal/v2";
 pub const STORE_TERMINAL_SCHEMA_V3: &str = "podway.store-terminal/v3";
 pub const STORE_TERMINAL_SCHEMA_V4: &str = "podway.store-terminal/v4";
+pub const STORE_GRAPH_TERMINAL_SCHEMA_V1: &str = "podway.store-graph-terminal/v1";
 
 /// Minimal immutable response correlation retained independently of semantic request identity.
 ///
@@ -345,8 +347,51 @@ struct CommandEnvelopeV2 {
     canonical_execution_json: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandEnvelopeV3 {
+    schema: String,
+    command: PersistedDomainCommandV1,
+    preconditions: PersistedPreconditionsV1,
+    canonical_execution_json: String,
+    execution_flavor: String,
+    expected_session_id: Option<SessionId>,
+}
+
 /// Canonically encodes the command and all admission preconditions required after a claim.
 pub fn encode_command_v1(execution: &ClaimedExecutionV1) -> Result<String, StoreCodecErrorV1> {
+    if execution.execution_flavor() == crate::DurableExecutionFlavorV1::ProcedureV2 {
+        if !execution.has_complete_execution_document()
+            || !matches!(
+                execution.command(),
+                CommandV1::SessionStart | CommandV1::SessionStartReplace
+            )
+        {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "Procedure v2 execution flavor",
+            });
+        }
+        let expected_session_id = match (execution.command(), execution.session_identity()) {
+            (CommandV1::SessionStart, crate::AdmissionSessionIdentityV1::Absent) => None,
+            (
+                CommandV1::SessionStartReplace,
+                crate::AdmissionSessionIdentityV1::Exact(session_id),
+            ) => Some(session_id.clone()),
+            _ => {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 session identity",
+                });
+            }
+        };
+        return canonical_json(&CommandEnvelopeV3 {
+            schema: STORE_GRAPH_COMMAND_SCHEMA_V1.to_owned(),
+            command: PersistedDomainCommandV1::from_command(execution.command()),
+            preconditions: execution.preconditions().into(),
+            canonical_execution_json: execution.canonical_execution().as_str().to_owned(),
+            execution_flavor: "procedure_v2".to_owned(),
+            expected_session_id,
+        });
+    }
     if execution.has_complete_execution_document() {
         return canonical_json(&CommandEnvelopeV2 {
             schema: STORE_COMMAND_SCHEMA_V2.to_owned(),
@@ -397,6 +442,54 @@ pub fn decode_command_v1(value: &str) -> Result<ClaimedExecutionV1, StoreCodecEr
                 envelope.command.into_command(),
                 envelope.preconditions.into_preconditions()?,
                 canonical_execution,
+            )
+        }
+        STORE_GRAPH_COMMAND_SCHEMA_V1 => {
+            let envelope: CommandEnvelopeV3 =
+                serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+            if envelope.execution_flavor != "procedure_v2" {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 execution flavor",
+                });
+            }
+            let command = envelope.command.into_command();
+            if !matches!(
+                command,
+                CommandV1::SessionStart | CommandV1::SessionStartReplace
+            ) {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 execution command",
+                });
+            }
+            let canonical_execution =
+                CanonicalExecutionJsonV1::new(envelope.canonical_execution_json).map_err(|_| {
+                    StoreCodecErrorV1::InvalidValue {
+                        field: "canonical execution JSON",
+                    }
+                })?;
+            let preconditions = envelope.preconditions.into_preconditions()?;
+            let session_identity = match (&command, envelope.expected_session_id) {
+                (CommandV1::SessionStart, None)
+                    if preconditions.expected_session_revision().is_none() =>
+                {
+                    crate::AdmissionSessionIdentityV1::Absent
+                }
+                (CommandV1::SessionStartReplace, Some(session_id))
+                    if preconditions.expected_session_revision().is_some() =>
+                {
+                    crate::AdmissionSessionIdentityV1::Exact(session_id)
+                }
+                _ => {
+                    return Err(StoreCodecErrorV1::InvalidValue {
+                        field: "Procedure v2 session identity",
+                    });
+                }
+            };
+            ClaimedExecutionV1::new_procedure_v2(
+                command,
+                preconditions,
+                canonical_execution,
+                session_identity,
             )
         }
         found => {
@@ -854,6 +947,88 @@ impl PersistedTerminalSessionProjectionV1 {
     }
 }
 
+/// Bounded immutable Procedure v2 session facts captured in the same transaction as a terminal
+/// job receipt. This is separate from the legacy aggregate projection so no v1 shape is forged.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedGraphTerminalSessionProjectionV2 {
+    session_id: SessionId,
+    task_title: String,
+    lifecycle: PersistedSessionLifecycleV1,
+    revision_before: RevisionV1,
+    revision_after: RevisionV1,
+    procedure_digest: Sha256Digest,
+    entry_graph_node_id: podway_core::GraphNodeId,
+    goal_tracking: bool,
+}
+
+impl PersistedGraphTerminalSessionProjectionV2 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        session_id: SessionId,
+        task_title: String,
+        lifecycle: PersistedSessionLifecycleV1,
+        revision_before: RevisionV1,
+        revision_after: RevisionV1,
+        procedure_digest: Sha256Digest,
+        entry_graph_node_id: podway_core::GraphNodeId,
+        goal_tracking: bool,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let projection = Self {
+            session_id,
+            task_title,
+            lifecycle,
+            revision_before,
+            revision_after,
+            procedure_digest,
+            entry_graph_node_id,
+            goal_tracking,
+        };
+        projection.validate()?;
+        Ok(projection)
+    }
+
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+    pub fn task_title(&self) -> &str {
+        &self.task_title
+    }
+    pub const fn lifecycle(&self) -> PersistedSessionLifecycleV1 {
+        self.lifecycle
+    }
+    pub const fn revision_before(&self) -> RevisionV1 {
+        self.revision_before
+    }
+    pub const fn revision_after(&self) -> RevisionV1 {
+        self.revision_after
+    }
+    pub fn procedure_digest(&self) -> &Sha256Digest {
+        &self.procedure_digest
+    }
+    pub fn entry_graph_node_id(&self) -> &podway_core::GraphNodeId {
+        &self.entry_graph_node_id
+    }
+    pub const fn goal_tracking(&self) -> bool {
+        self.goal_tracking
+    }
+
+    fn validate(&self) -> Result<(), StoreCodecErrorV1> {
+        if self.task_title.trim().is_empty()
+            || self.task_title.chars().count() > 500
+            || self.revision_after == RevisionV1::ZERO
+            || (self.revision_after < self.revision_before
+                && !(self.revision_after == RevisionV1::new(1)
+                    && self.revision_before > RevisionV1::ZERO))
+        {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "Procedure v2 terminal session projection",
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Bounded start identity retained after terminal job pruning.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -903,6 +1078,7 @@ pub struct PersistedTerminalReceiptV1 {
     result: PersistedTerminalResultV1,
     job_projection: Option<PersistedTerminalJobProjectionV1>,
     session_projection: Option<PersistedTerminalSessionProjectionV1>,
+    graph_session_projection: Option<PersistedGraphTerminalSessionProjectionV2>,
     start_identity: Option<PersistedStartIdentityV1>,
     lookup_command: Option<PersistedDomainCommandV1>,
     response_context: Option<PersistedResponseContextV1>,
@@ -917,6 +1093,7 @@ impl PersistedTerminalReceiptV1 {
             result,
             job_projection: None,
             session_projection: None,
+            graph_session_projection: None,
             start_identity: None,
             lookup_command: None,
             response_context: None,
@@ -935,6 +1112,7 @@ impl PersistedTerminalReceiptV1 {
             result,
             job_projection: Some(job_projection),
             session_projection,
+            graph_session_projection: None,
             start_identity: None,
             lookup_command: None,
             response_context: None,
@@ -969,6 +1147,31 @@ impl PersistedTerminalReceiptV1 {
 
     pub fn session_projection(&self) -> Option<&PersistedTerminalSessionProjectionV1> {
         self.session_projection.as_ref()
+    }
+
+    pub fn graph_session_projection(&self) -> Option<&PersistedGraphTerminalSessionProjectionV2> {
+        self.graph_session_projection.as_ref()
+    }
+
+    pub fn new_with_graph_projection(
+        job: JobReceiptV1,
+        result: PersistedTerminalResultV1,
+        job_projection: PersistedTerminalJobProjectionV1,
+        graph_session_projection: PersistedGraphTerminalSessionProjectionV2,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let receipt = Self {
+            job,
+            result,
+            job_projection: Some(job_projection),
+            session_projection: None,
+            graph_session_projection: Some(graph_session_projection),
+            start_identity: None,
+            lookup_command: None,
+            response_context: None,
+            public_terminal_envelope: None,
+        };
+        receipt.validate_v1_projections()?;
+        Ok(receipt)
     }
 
     pub fn start_identity(&self) -> Option<&PersistedStartIdentityV1> {
@@ -1122,6 +1325,7 @@ impl PersistedTerminalReceiptV1 {
         }
         if self.job_projection.is_some()
             || self.session_projection.is_some()
+            || self.graph_session_projection.is_some()
             || self.lookup_command.is_some()
             || self.response_context.is_some()
             || self.public_terminal_envelope.is_some()
@@ -1161,6 +1365,31 @@ impl PersistedTerminalReceiptV1 {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "terminal job state",
             });
+        }
+
+        if self.session_projection.is_some() && self.graph_session_projection.is_some() {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "terminal session projection",
+            });
+        }
+        if let Some(graph) = &self.graph_session_projection {
+            graph.validate()?;
+            match &self.result {
+                PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                    session_id,
+                    revision_before,
+                    revision_after,
+                    changed,
+                }) if graph.session_id() == session_id
+                    && graph.revision_before() == *revision_before
+                    && graph.revision_after() == *revision_after
+                    && *changed => {}
+                _ => {
+                    return Err(StoreCodecErrorV1::InvalidValue {
+                        field: "Procedure v2 terminal session projection",
+                    });
+                }
+            }
         }
 
         match (&self.result, &self.session_projection) {
@@ -1222,6 +1451,13 @@ impl PersistedTerminalReceiptV1 {
             ) if *revision_before != RevisionV1::ZERO
                 && *revision_after == RevisionV1::ZERO
                 && *changed => {}
+            (
+                PersistedTerminalResultV1::Success(
+                    PersistedDomainResultV1::SessionChanged { .. }
+                    | PersistedDomainResultV1::ItemChanged { .. },
+                ),
+                None,
+            ) if self.graph_session_projection.is_some() => {}
             (
                 PersistedTerminalResultV1::Success(
                     PersistedDomainResultV1::SessionChanged { .. }
@@ -1406,6 +1642,22 @@ struct TerminalEnvelopeV4 {
     start_identity: Option<PersistedStartIdentityV1>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalEnvelopeV5 {
+    schema: String,
+    command: PersistedDomainCommandV1,
+    job: PersistedJobReceiptV1,
+    job_projection: PersistedTerminalJobProjectionV1,
+    result: PersistedTerminalResultV1,
+    response_context: PersistedResponseContextV1,
+    graph_session_projection: PersistedGraphTerminalSessionProjectionV2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_terminal_envelope: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_identity: Option<PersistedStartIdentityV1>,
+}
+
 /// Core terminal receipts lack the immutable projections required by terminal schema v1, so they
 /// canonically encode as legacy schema v0.
 pub fn encode_terminal_receipt_v1(
@@ -1423,6 +1675,38 @@ pub fn encode_persisted_terminal_receipt_v1(
     if receipt.job().identity_sequence() == 0 {
         return Err(StoreCodecErrorV1::InvalidValue {
             field: "identity sequence",
+        });
+    }
+
+    if let Some(graph_session_projection) = receipt.graph_session_projection() {
+        receipt.validate_v3_projection()?;
+        if let Some(public_terminal_envelope) = receipt.public_terminal_envelope() {
+            receipt.validate_v4_projection()?;
+            let _ = public_terminal_envelope;
+        }
+        return canonical_json(&TerminalEnvelopeV5 {
+            schema: STORE_GRAPH_TERMINAL_SCHEMA_V1.to_owned(),
+            command: receipt
+                .lookup_command()
+                .cloned()
+                .ok_or(StoreCodecErrorV1::InvalidValue {
+                    field: "terminal lookup command",
+                })?,
+            job: receipt.job().into(),
+            job_projection: receipt.job_projection().cloned().ok_or(
+                StoreCodecErrorV1::InvalidValue {
+                    field: "terminal replay projections",
+                },
+            )?,
+            result: receipt.result().clone(),
+            response_context: receipt.response_context().cloned().ok_or(
+                StoreCodecErrorV1::InvalidValue {
+                    field: "terminal response context",
+                },
+            )?,
+            graph_session_projection: graph_session_projection.clone(),
+            public_terminal_envelope: receipt.public_terminal_envelope().cloned(),
+            start_identity: receipt.start_identity().cloned(),
         });
     }
 
@@ -1595,6 +1879,30 @@ pub fn decode_terminal_receipt_v1(
                 });
             }
             PersistedTerminalReceiptV1::from_v4_envelope(envelope)?
+        }
+        STORE_GRAPH_TERMINAL_SCHEMA_V1 => {
+            let envelope: TerminalEnvelopeV5 =
+                serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+            if envelope.job.identity_sequence == 0 {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "identity sequence",
+                });
+            }
+            let mut receipt = PersistedTerminalReceiptV1::new_with_graph_projection(
+                envelope.job.into(),
+                envelope.result,
+                envelope.job_projection,
+                envelope.graph_session_projection,
+            )?
+            .with_lookup_command(envelope.command)?
+            .with_response_context(envelope.response_context)?;
+            if let Some(start_identity) = envelope.start_identity {
+                receipt = receipt.with_start_identity(start_identity);
+            }
+            if let Some(public_terminal_envelope) = envelope.public_terminal_envelope {
+                receipt = receipt.with_public_terminal_envelope(public_terminal_envelope)?;
+            }
+            receipt
         }
         found => {
             return Err(StoreCodecErrorV1::UnsupportedSchema {

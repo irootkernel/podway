@@ -20,7 +20,7 @@ use podway_core::{
 use podway_daemon::{
     execution::{
         ArtifactVerifierV1, ExecutionBoundaryErrorV1, ExecutionIdSourceV1, ProcedureProviderV1,
-        WorkspaceRevalidatorV1,
+        ProcedureV2SourceAdmissionErrorV1, WorkspaceRevalidatorV1,
     },
     native_execution::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeProcedureProviderV1,
@@ -38,16 +38,8 @@ use uuid::{Uuid, Version};
 
 const FIXTURE_DISPLAY_V1: &str = "native execution fixture";
 const PROCEDURE_YAML: &[u8] = include_bytes!("../../../assets/presets/sw-dev.yaml");
-const PROCEDURE_V2_YAML: &[u8] = br#"schema: podway.procedure/v2
-id: unsupported-native-v2
-version: "2"
-name: Unsupported native v2
-entry: work
-nodes:
-  - id: work
-    action:
-      instructions: ["Do work"]
-"#;
+const PROCEDURE_V2_YAML: &[u8] =
+    include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.yaml");
 
 struct WorktreeFixtureV1 {
     temporary_root: PathBuf,
@@ -372,6 +364,35 @@ fn v2plt007_native_provider_classifies_source_declared_v2_before_v1_parsing() {
     assert!(matches!(
         error,
         ExecutionBoundaryErrorV1::ProcedureV2Unsupported
+    ));
+}
+
+#[test]
+fn v2run001_native_provider_admits_v2_through_the_same_descriptor_safe_boundary() {
+    let fixture = fixture_v1();
+    let path = fixture.worktree_root.join("procedure-v2.yaml");
+    fs::write(&path, PROCEDURE_V2_YAML).expect("v2 Procedure source");
+    let provider = procedure_provider_v1(fixture.options.clone());
+    let snapshot = provider
+        .load_workspace_procedure_snapshot_v2(
+            &fixture.binding,
+            "procedure-v2.yaml",
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009914").expect("snapshot ID"),
+            UnixMillis::new(100),
+        )
+        .expect("descriptor-safe v2 source must be admitted");
+    assert_eq!(snapshot.source().label(), "procedure-v2.yaml");
+    assert_eq!(snapshot.created_at(), UnixMillis::new(100));
+
+    symlink(&path, fixture.worktree_root.join("linked-v2.yaml")).expect("v2 Procedure symlink");
+    assert!(matches!(
+        provider.load_workspace_procedure_snapshot_v2(
+            &fixture.binding,
+            "linked-v2.yaml",
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000009915").expect("snapshot ID"),
+            UnixMillis::new(100),
+        ),
+        Err(ProcedureV2SourceAdmissionErrorV1::Rejected(_))
     ));
 }
 

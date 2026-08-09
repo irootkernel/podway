@@ -114,9 +114,10 @@ absence from the normal production registry. Deleting, changing, copying, or
 loosening the marker closes the gate immediately. Rebuilding the snapshot makes
 an old marker stale; clean and initialize the disposable runtime again.
 
-The gate only authorizes delegation to a future Procedure v2 handler. Until the
-owning `V2RUN`, `V2DRW`, and `V2GOL` runtime tasks land, goal-bearing starts and
-the reserved decision/rework/goal mutations still return
+The gate authorizes only handlers that have landed. Confirmed goal-free custom
+Procedure v2 starts are currently served; shipped v2 presets remain absent until
+their owning tasks add reviewed assets. Goal-bearing starts and the reserved
+decision/rework/goal mutations still return
 `UNSUPPORTED_V2_CAPABILITY` with `admitted:false` and create no job or session.
 Ordinary debug builds, release builds, raw `podwayd --dev`, installed daemons,
 LaunchAgents, and arbitrary worktrees contain no accepting path.

@@ -785,7 +785,10 @@ fn unavailable_reason_from_worker_error(
         WorkerErrorV1::AfterAdmission { source, .. } => {
             unavailable_reason_from_worker_error(*source)
         }
-        WorkerErrorV1::Store(_) | WorkerErrorV1::Execution(_) | WorkerErrorV1::RecoveryRequired => {
+        WorkerErrorV1::Store(_)
+        | WorkerErrorV1::Execution(_)
+        | WorkerErrorV1::ProcedureV2Preparation(_)
+        | WorkerErrorV1::RecoveryRequired => {
             WorkspaceRecoveryUnavailableReasonV1::WorkspaceStateUnreadable
         }
         WorkerErrorV1::Progress(_)

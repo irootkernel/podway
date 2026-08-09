@@ -11,21 +11,22 @@ use crate::{
     workspace::ResetMarkerV1,
 };
 use podway_config::{
-    ProcedureFormatV1, ProcedureSourceLabel, ProcedureWarningPolicyV1, parse_procedure_v1,
-    sniff_procedure_schema,
+    AuthoringContext, ParsedProcedure, ProcedureFormatV1, ProcedureSourceLabel,
+    ProcedureWarningPolicyV1, parse_procedure_document, parse_procedure_v1, sniff_procedure_schema,
+    validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
-    AddItemV1, ArtifactLocationKindV1, ArtifactValueV1, AttachItemV1, AttemptId, AttemptV1,
-    BlockSessionV1, BlockerId, BlockerState, CancelSessionV1, CanonicalProcedureJsonV1,
-    CanonicalProcedureSnapshotInputV1, CheckItemV1, ClearItemV1, CommandContextV1,
-    CompleteSessionV1, DomainCommand, DomainError, DomainResult, ItemId,
-    ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1, JobId, LocalArtifactVerificationV1,
-    ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1, RemoveItemV1,
-    ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1, RetrySessionV1, ReturnSessionV1,
-    Revision, SessionAggregateV1, SessionCommandV1, SessionId, SetItemV1, Sha256Digest,
-    SkipSessionV1, StageSpecV1, StartReplaceSessionV1, StartSessionV1, UnblockSessionV1,
-    UncheckItemV1, UnixMillis, WorkspaceId, apply_transition_v1, canonicalize_json_v1,
-    required_items_satisfied,
+    AddItemV1, ArtifactLocationKindV1, ArtifactValueV1, AttachItemV1, AttemptId, AttemptLifecycle,
+    AttemptNumberV2, AttemptV1, AttemptValidityV2, AuthoringSeverity, BlockSessionV1, BlockerId,
+    BlockerState, CancelSessionV1, CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1,
+    CheckItemV1, ClearItemV1, CommandContextV1, CompleteSessionV1, DomainCommand, DomainError,
+    DomainResult, ItemId, ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1, JobId,
+    LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1,
+    RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1, RetrySessionV1,
+    ReturnSessionV1, Revision, SessionAggregateV1, SessionAttemptV2, SessionCommandV1, SessionId,
+    SessionLifecycle, SessionTraceV2, SetItemV1, Sha256Digest, SkipSessionV1, StageSpecV1,
+    StartReplaceSessionV1, StartSessionV1, TraceSequenceV2, UnblockSessionV1, UncheckItemV1,
+    UnixMillis, WorkspaceId, apply_transition_v1, canonicalize_json_v1, required_items_satisfied,
 };
 use podway_presets::lookup as lookup_embedded_preset_v1;
 use podway_protocol::{
@@ -36,11 +37,13 @@ use podway_protocol::{
     WorktreeSelectorWireV1, canonical_reset_all_identity_v1,
 };
 use podway_store::{
-    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CanonicalExecutionJsonV1,
-    ClaimedJobV1, DurableWorktreeIdentityV1, IdempotencyKeyV1, PersistedResponseContextV1,
-    PersistedSessionMutationV1, RevisionAttemptItemPreconditionsV1, StateTransitionV1,
-    StoreContractV1, StoreErrorV1, StoreIdempotencyReadContractV1, StoreValueErrorV1,
-    TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkspaceBindingV1,
+    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, AttemptMetadataV2,
+    CanonicalExecutionJsonV1, ClaimedJobV1, DurableWorktreeIdentityV1, GraphNodeCounterV2,
+    GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1, PersistedResponseContextV1,
+    PersistedSessionMutationV1, ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1,
+    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreGraphMutationContractV2,
+    StoreIdempotencyReadContractV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
+    WorkerIdV1, WorkflowMemoryStateV2, WorkspaceBindingV1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -50,6 +53,7 @@ const EXECUTION_DOCUMENT_VERSION_V2: u8 = 2;
 const EXECUTION_DOCUMENT_VERSION_V3: u8 = 3;
 const EXECUTION_DOCUMENT_VERSION_V4: u8 = 4;
 const EXECUTION_DOCUMENT_VERSION_V5: u8 = 5;
+const EXECUTION_DOCUMENT_VERSION_V6: u8 = 6;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -151,6 +155,82 @@ pub trait ProcedureProviderV1: Send + Sync {
         snapshot_id: ProcedureSnapshotId,
         created_at: UnixMillis,
     ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1>;
+
+    /// Reads, validates, and vets a relative Procedure v2 source under an already revalidated
+    /// worktree. Implementations that do not own descriptor-safe filesystem authority remain
+    /// closed by default.
+    fn load_workspace_procedure_snapshot_v2(
+        &self,
+        _workspace: &WorkspaceBindingV1,
+        _procedure: &str,
+        _snapshot_id: ProcedureSnapshotId,
+        _created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV2, ProcedureV2SourceAdmissionErrorV1> {
+        Err(ProcedureV2SourceAdmissionErrorV1::Rejected(
+            ExecutionBoundaryErrorV1::procedure_v2_unsupported(),
+        ))
+    }
+
+    /// Returns an admitted shipped Procedure v2 snapshot together with its independently pinned
+    /// package digest. Production remains closed until a shipped v2 asset is registered.
+    fn load_preset_snapshot_v2(
+        &self,
+        _preset: &str,
+        _snapshot_id: ProcedureSnapshotId,
+        _created_at: UnixMillis,
+    ) -> Result<Option<(ProcedureSnapshotV2, Sha256Digest)>, ProcedureV2SourceAdmissionErrorV1>
+    {
+        Ok(None)
+    }
+}
+
+/// Version-sensitive outcome of inspecting one custom Procedure source. A declared v1 document
+/// is not a v2 failure: dispatch may safely fall back to the unchanged v1 start path.
+#[derive(Debug)]
+pub enum ProcedureV2SourceAdmissionErrorV1 {
+    NotProcedureV2,
+    SchemaInvalid { diagnostic_codes: Vec<String> },
+    Rejected(ExecutionBoundaryErrorV1),
+}
+
+/// Failure before a confirmed Procedure v2 start can be durably admitted.
+#[derive(Debug)]
+pub enum ProcedureV2StartPreparationErrorV1 {
+    Source(ProcedureV2SourceAdmissionErrorV1),
+    DigestConfirmationRequired {
+        procedure_digest: Sha256Digest,
+    },
+    ProcedureDigestMismatch {
+        expected: Sha256Digest,
+        actual: Sha256Digest,
+    },
+    Domain(DomainError),
+    InvalidStoreValue(StoreValueErrorV1),
+    Execution(ExecutionErrorV1),
+    PinnedPresetDigestMismatch {
+        expected: Sha256Digest,
+        actual: Sha256Digest,
+    },
+}
+
+fn verify_pinned_procedure_v2_snapshot(
+    snapshot: &ProcedureSnapshotV2,
+    pinned_digest: &Sha256Digest,
+) -> Result<(), ProcedureV2StartPreparationErrorV1> {
+    let recomputed = Sha256Digest::new(format!(
+        "sha256:{:x}",
+        Sha256::digest(snapshot.canonical_json().as_str().as_bytes())
+    ))
+    .map_err(ProcedureV2StartPreparationErrorV1::Domain)?;
+    if &recomputed != snapshot.digest() || &recomputed != pinned_digest {
+        return Err(
+            ProcedureV2StartPreparationErrorV1::PinnedPresetDigestMismatch {
+                expected: pinned_digest.clone(),
+                actual: recomputed,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// The production provider loads preset and worktree-relative procedure sources through their public
@@ -237,6 +317,401 @@ pub(crate) fn workspace_procedure_snapshot_from_bytes_v1(
                 reason: "workspace procedure admission failed",
             })
         })
+}
+
+/// Admits already bounded workspace bytes through the complete Procedure v2 configuration path.
+/// This helper performs no filesystem I/O and creates no durable state.
+pub fn workspace_procedure_snapshot_from_bytes_v2(
+    procedure: &str,
+    source: &[u8],
+    snapshot_id: ProcedureSnapshotId,
+    created_at: UnixMillis,
+) -> Result<ProcedureSnapshotV2, ProcedureV2SourceAdmissionErrorV1> {
+    let source_label = ProcedureSourceLabel::workspace_path(procedure).map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "workspace procedure path is invalid",
+            },
+        ))
+    })?;
+    let format =
+        procedure_format_v1(procedure).map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
+    if sniff_procedure_schema(source, format) != Some(podway_core::PROCEDURE_SCHEMA_V2) {
+        return Err(ProcedureV2SourceAdmissionErrorV1::NotProcedureV2);
+    }
+    let source_text = std::str::from_utf8(source).map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::SchemaInvalid {
+            diagnostic_codes: vec!["AUTHORING_SOURCE_NOT_UTF8".to_owned()],
+        }
+    })?;
+    let parsed = match parse_procedure_document(source, format) {
+        Ok(ParsedProcedure::V2(parsed)) => parsed,
+        Ok(ParsedProcedure::V1(_)) => {
+            return Err(ProcedureV2SourceAdmissionErrorV1::NotProcedureV2);
+        }
+        Err(_) => {
+            return Err(ProcedureV2SourceAdmissionErrorV1::SchemaInvalid {
+                diagnostic_codes: vec!["AUTHORING_SCHEMA_INVALID".to_owned()],
+            });
+        }
+    };
+    let validated = validate_procedure_v2(parsed).map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::SchemaInvalid {
+            diagnostic_codes: vec!["AUTHORING_SCHEMA_INVALID".to_owned()],
+        }
+    })?;
+    let context = AuthoringContext::new(procedure, source_text, format);
+    let diagnostics = vet_procedure_v2(&validated, &context);
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity() == AuthoringSeverity::Error)
+    {
+        let mut diagnostic_codes: Vec<String> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity() == AuthoringSeverity::Error)
+            .map(|diagnostic| diagnostic.code().as_str().to_owned())
+            .take(256)
+            .collect();
+        diagnostic_codes.sort();
+        diagnostic_codes.dedup();
+        return Err(ProcedureV2SourceAdmissionErrorV1::SchemaInvalid { diagnostic_codes });
+    }
+    let canonical_json = CanonicalProcedureJsonV1::new(
+        validated.canonical_json().as_str().to_owned(),
+    )
+    .map_err(|error| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
+    })?;
+    let source = ProcedureSourceLabelV1::new(source_label.display_label()).map_err(|error| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
+    })?;
+    ProcedureSnapshotV2::new(
+        snapshot_id,
+        canonical_json,
+        validated.digest().clone(),
+        source,
+        created_at,
+    )
+    .map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "workspace Procedure v2 snapshot admission failed",
+            },
+        ))
+    })
+}
+
+/// Resolves and confirms one custom Procedure v2 source, then constructs the complete fresh
+/// in-memory graph session that a durable start transaction may persist. Source admission and
+/// digest confirmation finish before this function returns any state to an admission caller.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_custom_procedure_v2_start(
+    provider: &impl ProcedureProviderV1,
+    workspace: &WorkspaceBindingV1,
+    procedure: &str,
+    expected_digest: Option<&Sha256Digest>,
+    task_title: &str,
+    session_id: SessionId,
+    first_attempt_id: AttemptId,
+    snapshot_id: ProcedureSnapshotId,
+    created_at: UnixMillis,
+) -> Result<GraphSessionStateV2, ProcedureV2StartPreparationErrorV1> {
+    let snapshot = provider
+        .load_workspace_procedure_snapshot_v2(workspace, procedure, snapshot_id, created_at)
+        .map_err(ProcedureV2StartPreparationErrorV1::Source)?;
+    let actual_digest = snapshot.digest().clone();
+    match expected_digest {
+        None => {
+            return Err(
+                ProcedureV2StartPreparationErrorV1::DigestConfirmationRequired {
+                    procedure_digest: actual_digest,
+                },
+            );
+        }
+        Some(expected) if expected != &actual_digest => {
+            return Err(
+                ProcedureV2StartPreparationErrorV1::ProcedureDigestMismatch {
+                    expected: expected.clone(),
+                    actual: actual_digest,
+                },
+            );
+        }
+        Some(_) => {}
+    }
+
+    graph_session_state_from_procedure_v2_snapshot(
+        snapshot,
+        task_title,
+        session_id,
+        first_attempt_id,
+        created_at,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_preset_procedure_v2_start(
+    provider: &impl ProcedureProviderV1,
+    preset: &str,
+    task_title: &str,
+    session_id: SessionId,
+    first_attempt_id: AttemptId,
+    snapshot_id: ProcedureSnapshotId,
+    created_at: UnixMillis,
+) -> Result<Option<GraphSessionStateV2>, ProcedureV2StartPreparationErrorV1> {
+    let Some((snapshot, pinned_digest)) = provider
+        .load_preset_snapshot_v2(preset, snapshot_id, created_at)
+        .map_err(ProcedureV2StartPreparationErrorV1::Source)?
+    else {
+        return Ok(None);
+    };
+    verify_pinned_procedure_v2_snapshot(&snapshot, &pinned_digest)?;
+    graph_session_state_from_procedure_v2_snapshot(
+        snapshot,
+        task_title,
+        session_id,
+        first_attempt_id,
+        created_at,
+    )
+    .map(Some)
+}
+
+/// Reconstructs a fresh Procedure v2 graph session exclusively from immutable admitted data.
+/// Claimed execution uses this path so restart never reopens or reparses the caller's source file.
+pub fn graph_session_state_from_procedure_v2_snapshot(
+    snapshot: ProcedureSnapshotV2,
+    task_title: &str,
+    session_id: SessionId,
+    first_attempt_id: AttemptId,
+    created_at: UnixMillis,
+) -> Result<GraphSessionStateV2, ProcedureV2StartPreparationErrorV1> {
+    let entry_graph_node_id = snapshot.entry_graph_node_id().clone();
+    let attempt = SessionAttemptV2::new(
+        first_attempt_id.clone(),
+        entry_graph_node_id.clone(),
+        AttemptNumberV2::FIRST,
+        TraceSequenceV2::FIRST,
+        AttemptLifecycle::Active,
+        AttemptValidityV2::Valid,
+        None,
+    )
+    .map_err(ProcedureV2StartPreparationErrorV1::Domain)?;
+    let trace = SessionTraceV2::from_parts(
+        session_id,
+        SessionLifecycle::Running,
+        Revision::new(1),
+        vec![attempt],
+    )
+    .map_err(ProcedureV2StartPreparationErrorV1::Domain)?;
+    let counters = snapshot
+        .graph_nodes()
+        .iter()
+        .map(|node| {
+            GraphNodeCounterV2::new(
+                node.graph_node_id().clone(),
+                u64::from(node.graph_node_id() == &entry_graph_node_id),
+                0,
+            )
+        })
+        .collect();
+    let metadata = AttemptMetadataV2::new(first_attempt_id, created_at, None, None)
+        .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)?;
+    let metadata = vec![metadata];
+    let workflow_memory = WorkflowMemoryStateV2::initial_for_trace(&snapshot, &trace, &metadata)
+        .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)?;
+    GraphSessionStateV2::new_with_workflow_memory(
+        Revision::new(1),
+        task_title,
+        snapshot,
+        trace,
+        counters,
+        metadata,
+        workflow_memory,
+        created_at,
+        None,
+        None,
+        None,
+    )
+    .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)
+}
+
+#[derive(Clone, Debug)]
+struct AdmittedProcedureV2StartV1 {
+    selector: WorktreeSelectorWireV1,
+    workspace_id: WorkspaceId,
+    replace: bool,
+    expected_current: GraphStartCurrentTaskV2,
+    state: GraphSessionStateV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdmittedProcedureV2StartProjectionV1 {
+    pub procedure_digest: Sha256Digest,
+    pub session_id: SessionId,
+    pub revision: Revision,
+    pub entry_graph_node_id: podway_core::GraphNodeId,
+    pub goal_tracking: bool,
+}
+
+pub fn admitted_procedure_v2_start_projection_v1(
+    execution: &CanonicalExecutionJsonV1,
+) -> Result<AdmittedProcedureV2StartProjectionV1, ExecutionErrorV1> {
+    let admitted = decode_procedure_v2_start_execution_v1(execution.as_str())?;
+    Ok(AdmittedProcedureV2StartProjectionV1 {
+        procedure_digest: admitted.state.snapshot().digest().clone(),
+        session_id: admitted.state.trace().session_id().clone(),
+        revision: admitted.state.trace().revision(),
+        entry_graph_node_id: admitted.state.snapshot().entry_graph_node_id().clone(),
+        goal_tracking: admitted.state.snapshot().goal_tracking(),
+    })
+}
+
+fn procedure_v2_start_execution_document_v1(
+    admitted: &AdmittedProcedureV2StartV1,
+    command: &SliceCommandV1,
+) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
+    let snapshot = admitted.state.snapshot();
+    let expected_current = match &admitted.expected_current {
+        GraphStartCurrentTaskV2::Absent => Value::Null,
+        GraphStartCurrentTaskV2::Exact {
+            session_id,
+            session_revision,
+        } => json!({
+            "session_id": session_id,
+            "session_revision": session_revision,
+        }),
+    };
+    let document = json!({
+        "command": command.command_name(),
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V6,
+        "expected_current": expected_current,
+        "first_attempt_id": admitted.state.trace().active_attempt().expect("fresh graph state has an active attempt").attempt_id(),
+        "selector": admitted.selector,
+        "session_id": admitted.state.trace().session_id(),
+        "snapshot": {
+            "canonical_json": snapshot.canonical_json().as_str(),
+            "created_at": snapshot.created_at().get(),
+            "digest": snapshot.digest(),
+            "snapshot_id": snapshot.snapshot_id(),
+            "source_label": snapshot.source().as_str(),
+        },
+        "task_title": admitted.state.task_title(),
+        "workspace_id": admitted.workspace_id,
+    });
+    let canonical = canonicalize_json_v1(&document).map_err(|_| {
+        ExecutionErrorV1::InvalidPersistedExecution {
+            reason: "Procedure v2 execution document cannot be canonicalized",
+        }
+    })?;
+    CanonicalExecutionJsonV1::new(canonical).map_err(ExecutionErrorV1::InvalidStoreValue)
+}
+
+fn decode_procedure_v2_start_execution_v1(
+    source: &str,
+) -> Result<AdmittedProcedureV2StartV1, ExecutionErrorV1> {
+    let root: Value = serde_json::from_str(source)
+        .map_err(|_| invalid_execution_v1("Procedure v2 execution is not JSON"))?;
+    let object = root
+        .as_object()
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 execution root is invalid"))?;
+    require_exact_keys_v1(
+        object,
+        &[
+            "command",
+            "execution_version",
+            "expected_current",
+            "first_attempt_id",
+            "selector",
+            "session_id",
+            "snapshot",
+            "task_title",
+            "workspace_id",
+        ],
+    )?;
+    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V6) {
+        return Err(invalid_execution_v1(
+            "Procedure v2 execution version is unsupported",
+        ));
+    }
+    let replace = match value_string_v1(object, "command")? {
+        "session.start" => false,
+        "session.start_replace" => true,
+        _ => {
+            return Err(invalid_execution_v1(
+                "Procedure v2 execution command is invalid",
+            ));
+        }
+    };
+    let snapshot = value_object_v1(object, "snapshot")?;
+    require_exact_keys_v1(
+        snapshot,
+        &[
+            "canonical_json",
+            "created_at",
+            "digest",
+            "snapshot_id",
+            "source_label",
+        ],
+    )?;
+    let snapshot = ProcedureSnapshotV2::new(
+        value_typed_v1(snapshot, "snapshot_id")?,
+        CanonicalProcedureJsonV1::new(value_string_v1(snapshot, "canonical_json")?.to_owned())
+            .map_err(ExecutionErrorV1::BoundaryDomain)?,
+        value_typed_v1(snapshot, "digest")?,
+        ProcedureSourceLabelV1::new(value_string_v1(snapshot, "source_label")?.to_owned())
+            .map_err(ExecutionErrorV1::BoundaryDomain)?,
+        UnixMillis::new(value_u64_v1(snapshot, "created_at")?),
+    )
+    .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+    let expected_current = match value_v1(object, "expected_current")? {
+        Value::Null => GraphStartCurrentTaskV2::Absent,
+        Value::Object(expected) => {
+            require_exact_keys_v1(expected, &["session_id", "session_revision"])?;
+            GraphStartCurrentTaskV2::Exact {
+                session_id: value_typed_v1(expected, "session_id")?,
+                session_revision: value_typed_v1(expected, "session_revision")?,
+            }
+        }
+        _ => {
+            return Err(invalid_execution_v1(
+                "Procedure v2 current-task fence is invalid",
+            ));
+        }
+    };
+    let task_title = value_string_v1(object, "task_title")?;
+    let state = graph_session_state_from_procedure_v2_snapshot(
+        snapshot,
+        task_title,
+        value_typed_v1(object, "session_id")?,
+        value_typed_v1(object, "first_attempt_id")?,
+        UnixMillis::new(value_u64_v1(
+            value_object_v1(object, "snapshot")?,
+            "created_at",
+        )?),
+    )
+    .map_err(|_| invalid_execution_v1("Procedure v2 graph state cannot be reconstructed"))?;
+    Ok(AdmittedProcedureV2StartV1 {
+        selector: serde_json::from_value(value_v1(object, "selector")?.clone())
+            .map_err(|_| invalid_execution_v1("Procedure v2 selector is invalid"))?,
+        workspace_id: value_typed_v1(object, "workspace_id")?,
+        replace,
+        expected_current,
+        state,
+    })
+}
+
+fn procedure_format_v1(procedure: &str) -> Result<ProcedureFormatV1, ExecutionBoundaryErrorV1> {
+    match std::path::Path::new(procedure)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some("json") => Ok(ProcedureFormatV1::Json),
+        Some("yaml" | "yml") => Ok(ProcedureFormatV1::Yaml),
+        _ => Err(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "workspace procedure source has an unsupported extension",
+            },
+        )),
+    }
 }
 
 /// Revalidates workspace evidence into the durable identity and lossless workspace root accepted
@@ -500,6 +975,71 @@ where
     Artifacts: ArtifactVerifierV1,
     Workspaces: WorkspaceRevalidatorV1,
 {
+    /// Resolves a Procedure v2 start without admitting a job. This is the complete dry-run
+    /// boundary: source bytes are validated and digest-confirmed, but no Store mutation occurs.
+    pub fn prepare_procedure_v2_start_for_workspace(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &SliceRequestV1,
+    ) -> Result<Option<AdmittedProcedureV2StartProjectionV1>, ProcedureV2StartPreparationErrorV1>
+    {
+        let start = match request.command() {
+            SliceCommandV1::SessionStart(start) => start,
+            SliceCommandV1::SessionStartReplace(replace) => &replace.start,
+            _ => return Ok(None),
+        };
+        let binding = self
+            .bound_workspace(request.selector())
+            .map_err(ExecutionErrorV1::from_boundary)
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+        if binding.identity() != expected_workspace.identity() {
+            return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                invalid_execution_v1("dry-run workspace does not match the scheduler identity"),
+            ));
+        }
+        let now = self.clock.now();
+        let session_id = self.ids.next_session_id();
+        let attempt_id = self.ids.next_attempt_id();
+        let snapshot_id = self.ids.next_procedure_snapshot_id();
+        let state = match &start.source {
+            SessionStartSourceV1::Procedure { procedure } => prepare_custom_procedure_v2_start(
+                &self.procedures,
+                &binding,
+                procedure,
+                start.expected_procedure_digest.as_ref(),
+                &start.task_title,
+                session_id,
+                attempt_id,
+                snapshot_id,
+                now,
+            )?,
+            SessionStartSourceV1::Preset { preset } => {
+                let Some((snapshot, pinned_digest)) = self
+                    .procedures
+                    .load_preset_snapshot_v2(preset, snapshot_id, now)
+                    .map_err(ProcedureV2StartPreparationErrorV1::Source)?
+                else {
+                    return Ok(None);
+                };
+                verify_pinned_procedure_v2_snapshot(&snapshot, &pinned_digest)?;
+                graph_session_state_from_procedure_v2_snapshot(
+                    snapshot,
+                    &start.task_title,
+                    session_id,
+                    attempt_id,
+                    now,
+                )?
+            }
+        };
+        Ok(Some(AdmittedProcedureV2StartProjectionV1 {
+            procedure_digest: state.snapshot().digest().clone(),
+            session_id: state.trace().session_id().clone(),
+            revision: state.trace().revision(),
+            entry_graph_node_id: state.snapshot().entry_graph_node_id().clone(),
+            goal_tracking: state.snapshot().goal_tracking(),
+        }))
+    }
+
     pub fn new(
         store: Store,
         ids: Ids,
@@ -1640,6 +2180,260 @@ where
         }
         Ok(verifications)
     }
+}
+
+impl<Store, Ids, Clock, Procedures, Artifacts, Workspaces>
+    DaemonExecutionEngineV1<Store, Ids, Clock, Procedures, Artifacts, Workspaces>
+where
+    Store: StoreContractV1 + StoreIdempotencyReadContractV1 + StoreGraphMutationContractV2,
+    Ids: ExecutionIdSourceV1,
+    Clock: ExecutionClockV1,
+    Procedures: ProcedureProviderV1,
+    Artifacts: ArtifactVerifierV1,
+    Workspaces: WorkspaceRevalidatorV1,
+{
+    /// Attempts the development-gated Procedure v2 start path. `None` means the source is not a
+    /// Procedure v2 document and the unchanged v1 admission path may inspect it.
+    pub fn admit_procedure_v2_start_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &SliceRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ProcedureV2StartPreparationErrorV1> {
+        let (start, expected_current) = match request.command() {
+            SliceCommandV1::SessionStart(start) => (start, GraphStartCurrentTaskV2::Absent),
+            SliceCommandV1::SessionStartReplace(replace) => (
+                &replace.start,
+                GraphStartCurrentTaskV2::Exact {
+                    session_id: replace.preconditions.expected_session_id.clone(),
+                    session_revision: replace.preconditions.expected_session_revision,
+                },
+            ),
+            _ => return Ok(None),
+        };
+        if let Some(existing) = self
+            .store
+            .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)
+            .map_err(ExecutionErrorV1::from)
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
+        {
+            let Some(canonical_execution) = existing.canonical_execution() else {
+                return Ok(None);
+            };
+            let version = serde_json::from_str::<Value>(canonical_execution.as_str())
+                .ok()
+                .and_then(|value| value.get("execution_version").and_then(Value::as_u64));
+            if version != Some(u64::from(EXECUTION_DOCUMENT_VERSION_V6)) {
+                return Ok(None);
+            }
+            let admitted = decode_procedure_v2_start_execution_v1(canonical_execution.as_str())
+                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+            if admitted.workspace_id != *expected_workspace.identity().workspace_uuid() {
+                return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                    invalid_execution_v1("Procedure v2 replay workspace identity is invalid"),
+                ));
+            }
+            let actual = request_digest_v1(
+                request,
+                expected_workspace.identity().workspace_uuid(),
+                Some(admitted.state.snapshot().digest()),
+            )
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+            if existing.request_digest() != &actual {
+                return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                    ExecutionErrorV1::Store(StoreErrorV1::IdempotencyDigestConflictV1 {
+                        expected: existing.request_digest().clone(),
+                        actual,
+                    }),
+                ));
+            }
+            return Ok(Some(existing.outcome().clone()));
+        }
+
+        let binding = self
+            .bound_workspace(request.selector())
+            .map_err(ExecutionErrorV1::from_boundary)
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+        if binding.identity() != expected_workspace.identity() {
+            return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                ExecutionErrorV1::BoundaryDomain(DomainError::InvalidState {
+                    reason: "revalidated workspace does not match the scheduler identity",
+                }),
+            ));
+        }
+        let now = self.clock.now();
+        let session_id = self.ids.next_session_id();
+        let first_attempt_id = self.ids.next_attempt_id();
+        let snapshot_id = self.ids.next_procedure_snapshot_id();
+        let state = match &start.source {
+            SessionStartSourceV1::Procedure { procedure } => {
+                match prepare_custom_procedure_v2_start(
+                    &self.procedures,
+                    &binding,
+                    procedure,
+                    start.expected_procedure_digest.as_ref(),
+                    &start.task_title,
+                    session_id,
+                    first_attempt_id,
+                    snapshot_id,
+                    now,
+                ) {
+                    Ok(state) => state,
+                    Err(ProcedureV2StartPreparationErrorV1::Source(
+                        ProcedureV2SourceAdmissionErrorV1::NotProcedureV2,
+                    )) => return Ok(None),
+                    Err(error) => return Err(error),
+                }
+            }
+            SessionStartSourceV1::Preset { preset } => {
+                let Some((snapshot, pinned_digest)) = self
+                    .procedures
+                    .load_preset_snapshot_v2(preset, snapshot_id, now)
+                    .map_err(ProcedureV2StartPreparationErrorV1::Source)?
+                else {
+                    return Ok(None);
+                };
+                verify_pinned_procedure_v2_snapshot(&snapshot, &pinned_digest)?;
+                graph_session_state_from_procedure_v2_snapshot(
+                    snapshot,
+                    &start.task_title,
+                    session_id,
+                    first_attempt_id,
+                    now,
+                )?
+            }
+        };
+        let admitted = AdmittedProcedureV2StartV1 {
+            selector: request.selector().clone(),
+            workspace_id: binding.identity().workspace_uuid().clone(),
+            replace: matches!(request.command(), SliceCommandV1::SessionStartReplace(_)),
+            expected_current,
+            state,
+        };
+        let canonical_execution =
+            procedure_v2_start_execution_document_v1(&admitted, request.command())
+                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+        let request_digest = request_digest_v1(
+            request,
+            binding.identity().workspace_uuid(),
+            Some(admitted.state.snapshot().digest()),
+        )
+        .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+        let durable = AdmitRequestV1::new_with_canonical_execution(
+            command_for_admission_v1(request.command())
+                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?,
+            idempotency_key,
+            self.ids.next_job_id(),
+            store_preconditions_v1(request.command())
+                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?,
+            request_digest,
+            now,
+            canonical_execution,
+        )
+        .with_procedure_v2_execution()
+        .with_session_identity(admission_session_identity_v1(request.command()));
+        let durable = match response_context {
+            Some(context) => durable.with_response_context(context),
+            None => durable,
+        };
+        self.store
+            .admit(binding.identity(), durable)
+            .map(Some)
+            .map_err(ExecutionErrorV1::from)
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)
+    }
+
+    /// Claims either durable flavor, reconstructing Procedure v2 exclusively from the admitted
+    /// execution document before committing graph state and the terminal receipt atomically.
+    pub fn execute_next_with_graph_v2(
+        &self,
+        scheduled_workspace: &WorkspaceBindingV1,
+        worker: WorkerIdV1,
+    ) -> Result<Option<TerminalReceiptV1>, ExecutionErrorV1> {
+        let workspace = self
+            .bound_manager_workspace(scheduled_workspace)
+            .map_err(ExecutionErrorV1::from_boundary)?;
+        let now = self.clock.now();
+        let claimed = match self.store.claim_next(workspace.identity(), worker, now) {
+            Ok(Some(claimed)) => {
+                self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Succeeded);
+                claimed
+            }
+            Ok(None) => {
+                self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Rejected);
+                return Ok(None);
+            }
+            Err(error) => {
+                self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Failed);
+                return Err(error.into());
+            }
+        };
+        if claimed.execution().execution_flavor()
+            == podway_store::DurableExecutionFlavorV1::LegacyV1
+        {
+            return self.execute_claimed(&workspace, claimed, now).map(Some);
+        }
+        if workspace.identity() != claimed.claim().identity() {
+            return Err(invalid_execution_v1(
+                "scheduler workspace does not match the Procedure v2 claim",
+            ));
+        }
+        let admitted = decode_procedure_v2_start_execution_v1(
+            claimed.execution().canonical_execution().as_str(),
+        )?;
+        if admitted.workspace_id != *claimed.claim().identity().workspace_uuid() {
+            return Err(invalid_execution_v1(
+                "Procedure v2 execution workspace does not match the claim",
+            ));
+        }
+        validate_procedure_v2_durable_execution_v1(&admitted, claimed.execution())?;
+        let receipt = self.store.commit_graph_start_terminal_v2(
+            claimed.claim().clone(),
+            admitted.expected_current,
+            admitted.state,
+            now,
+        )?;
+        Ok(Some(receipt))
+    }
+}
+
+fn validate_procedure_v2_durable_execution_v1(
+    admitted: &AdmittedProcedureV2StartV1,
+    execution: &podway_store::ClaimedExecutionV1,
+) -> Result<(), ExecutionErrorV1> {
+    let matches = match (
+        admitted.replace,
+        &admitted.expected_current,
+        execution.command(),
+        execution.session_identity(),
+        execution.preconditions().expected_session_revision(),
+    ) {
+        (
+            false,
+            GraphStartCurrentTaskV2::Absent,
+            podway_store::CommandV1::SessionStart,
+            AdmissionSessionIdentityV1::Absent,
+            None,
+        ) => true,
+        (
+            true,
+            GraphStartCurrentTaskV2::Exact {
+                session_id: inner_session_id,
+                session_revision: inner_revision,
+            },
+            podway_store::CommandV1::SessionStartReplace,
+            AdmissionSessionIdentityV1::Exact(outer_session_id),
+            Some(outer_revision),
+        ) => inner_session_id == outer_session_id && *inner_revision == outer_revision,
+        _ => false,
+    };
+    if !matches {
+        return Err(invalid_execution_v1(
+            "Procedure v2 execution document does not match durable admission metadata",
+        ));
+    }
+    Ok(())
 }
 fn start_session_input_v1(
     input: &SessionStartV1,
@@ -3189,7 +3983,7 @@ fn sha256_hex_v1(input: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sha256_hex_v1;
+    use super::*;
 
     #[test]
     fn sha256_matches_the_standard_empty_and_short_vectors() {
@@ -3201,5 +3995,74 @@ mod tests {
             sha256_hex_v1(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn v2run001_inner_execution_fence_must_match_durable_metadata() {
+        let snapshot = workspace_procedure_snapshot_from_bytes_v2(
+            "workflow.json",
+            br#"{
+                "schema":"podway.procedure/v2",
+                "id":"durable-fence",
+                "version":"1",
+                "name":"Durable fence",
+                "purpose":"Reject mismatched persisted execution metadata.",
+                "node_definitions":{"work":{"type":"action","title":"Work","intent":"Work."}},
+                "graph":{"entry":"work","nodes":[{"id":"work","use":"work","terminal":true}]}
+            }"#,
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000901").unwrap(),
+            UnixMillis::new(10),
+        )
+        .unwrap();
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000902").unwrap();
+        let state = graph_session_state_from_procedure_v2_snapshot(
+            snapshot,
+            "Durable fence",
+            session_id.clone(),
+            AttemptId::new("00000000-0000-4000-8000-000000000903").unwrap(),
+            UnixMillis::new(10),
+        )
+        .unwrap();
+        let admitted = AdmittedProcedureV2StartV1 {
+            selector: WorktreeSelectorWireV1::new(b"/tmp/worktree", "/tmp/worktree", None).unwrap(),
+            workspace_id: WorkspaceId::new("00000000-0000-4000-8000-000000000904").unwrap(),
+            replace: true,
+            expected_current: GraphStartCurrentTaskV2::Exact {
+                session_id: session_id.clone(),
+                session_revision: Revision::new(2),
+            },
+            state,
+        };
+        let canonical_execution = procedure_v2_start_execution_document_v1(
+            &admitted,
+            &SliceCommandV1::SessionStartReplace(podway_protocol::SessionStartReplaceV1 {
+                start: podway_protocol::SessionStartV1 {
+                    source: SessionStartSourceV1::Procedure {
+                        procedure: "workflow.json".to_owned(),
+                    },
+                    task_title: "Durable fence".to_owned(),
+                    expected_procedure_digest: Some(admitted.state.snapshot().digest().clone()),
+                    dry_run: false,
+                },
+                confirmed: true,
+                preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
+                    expected_session_id: session_id.clone(),
+                    expected_session_revision: Revision::new(2),
+                },
+            }),
+        )
+        .unwrap();
+        let durable = podway_store::ClaimedExecutionV1::new_procedure_v2(
+            podway_store::CommandV1::SessionStartReplace,
+            RevisionAttemptItemPreconditionsV1::new(Some(Revision::new(1)), None, None, None)
+                .unwrap(),
+            canonical_execution,
+            AdmissionSessionIdentityV1::Exact(session_id),
+        );
+
+        assert!(matches!(
+            validate_procedure_v2_durable_execution_v1(&admitted, &durable),
+            Err(ExecutionErrorV1::InvalidPersistedExecution { .. })
+        ));
     }
 }

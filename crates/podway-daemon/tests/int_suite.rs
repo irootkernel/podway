@@ -48,3 +48,5 @@ mod int_phase5_reset_marker;
 mod int_phase5_reset_runtime;
 #[path = "int_phase8_observability.rs"]
 mod int_phase8_observability;
+#[path = "int_v2run001_start.rs"]
+mod int_v2run001_start;

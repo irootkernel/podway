@@ -42,6 +42,8 @@ pub struct DispatchErrorDetailsV1 {
     identity_conflict: Option<Box<IdentityConflictDetailsV1>>,
     procedure_digest_mismatch: Option<Box<ProcedureDigestMismatchDetailsV1>>,
     unsupported_v2_capability: Option<Box<UnsupportedV2CapabilityDetailsV1>>,
+    procedure_v2_schema_invalid: Option<Vec<String>>,
+    digest_confirmation_required: Option<Box<Sha256Digest>>,
     outcome_unknown_key: Option<Box<IdempotencyKeyV1>>,
     maximum_open_blockers: Option<Box<usize>>,
 }
@@ -162,7 +164,39 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_procedure_v2_schema_invalid(mut self, diagnostic_codes: Vec<String>) -> Self {
+        self.procedure_v2_schema_invalid = Some(diagnostic_codes);
+        self
+    }
+
+    pub fn with_digest_confirmation_required(mut self, digest: Sha256Digest) -> Self {
+        self.digest_confirmation_required = Some(Box::new(digest));
+        self
+    }
+
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
+        if let Some(diagnostic_codes) = self.procedure_v2_schema_invalid {
+            return json!({
+                "schema": "podway.v2-runtime-error-details/v1",
+                "kind": "PROCEDURE_V2_SCHEMA_INVALID",
+                "diagnostic_codes": diagnostic_codes,
+                "admission": {"admitted": false},
+            })
+            .as_object()
+            .expect("Procedure v2 schema details are an object")
+            .clone();
+        }
+        if let Some(digest) = self.digest_confirmation_required {
+            return json!({
+                "schema": "podway.v2-runtime-error-details/v1",
+                "kind": "DIGEST_CONFIRMATION_REQUIRED",
+                "procedure_digest": digest,
+                "admission": {"admitted": false},
+            })
+            .as_object()
+            .expect("digest-confirmation details are an object")
+            .clone();
+        }
         if let Some(unsupported) = self.unsupported_v2_capability {
             return json!({
                 "schema": "podway.v2-runtime-error-details/v1",
@@ -333,9 +367,11 @@ pub enum DispatchFailureKindV1 {
     MigrationFailed,
     ProcedureNotFound,
     ProcedureInvalid,
+    ProcedureV2SchemaInvalid,
     ProcedureSchemaUnsupported,
     UnsupportedV2Capability,
     ProcedureDigestMismatch,
+    DigestConfirmationRequired,
     PresetNotFound,
     SessionNotFound,
     SessionIdMismatch,
@@ -395,6 +431,8 @@ impl DispatchFailureV1 {
                 identity_conflict: None,
                 procedure_digest_mismatch: None,
                 unsupported_v2_capability: None,
+                procedure_v2_schema_invalid: None,
+                digest_confirmation_required: None,
                 outcome_unknown_key: None,
                 maximum_open_blockers: None,
             }),
@@ -1687,6 +1725,29 @@ where
         daemon_request: &DaemonRequestV1,
     ) -> ResponseEnvelopeV2 {
         if let Some(slice_request) = daemon_request.legacy() {
+            if matches!(
+                slice_request.command(),
+                SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
+            ) && let Some(proof) = self
+                .runtime
+                .development_v2_admission(slice_request.selector())
+            {
+                match self
+                    .mutations
+                    .dispatch_development_v2(proof, request, daemon_request)
+                {
+                    Ok(Some(response)) => return response,
+                    Ok(None) => {}
+                    Err(failure) => {
+                        return match self.error_response(request, failure, true) {
+                            ResponseEnvelopeV1::Output(output) => {
+                                ResponseEnvelopeV2::OutputV1(output)
+                            }
+                            ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+                        };
+                    }
+                }
+            }
             let versioned = match slice_request.command() {
                 SliceCommandV1::JobLookup(input) => self.dispatch_job_lookup_versioned(
                     request,
@@ -1859,6 +1920,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::ProcedureInvalid => {
             ("PROCEDURE_INVALID", "Procedure is invalid.", false, 1)
         }
+        DispatchFailureKindV1::ProcedureV2SchemaInvalid => (
+            "PROCEDURE_V2_SCHEMA_INVALID",
+            "The Procedure v2 document violates its closed schema.",
+            false,
+            1,
+        ),
         DispatchFailureKindV1::ProcedureSchemaUnsupported => (
             "PROCEDURE_SCHEMA_UNSUPPORTED",
             "Procedure schema is unsupported.",
@@ -1876,6 +1943,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "The canonical Procedure digest differs from the expected digest.",
             false,
             4,
+        ),
+        DispatchFailureKindV1::DigestConfirmationRequired => (
+            "DIGEST_CONFIRMATION_REQUIRED",
+            "A custom Procedure start requires explicit digest confirmation.",
+            false,
+            2,
         ),
         DispatchFailureKindV1::PresetNotFound => (
             "PRESET_NOT_FOUND",
