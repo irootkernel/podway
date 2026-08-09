@@ -14,11 +14,13 @@ The tables below are the implemented machine contract. Automation errors have
 closed detail schemas, canonical assets, and executable contract tests.
 
 The v2 contract baseline registers 26 additive runtime codes and the exhaustive
-authoring diagnostic inventory before their commands become executable. Route
-registration in the manifest is not parser or daemon support: until the owning
-V2PLT tasks land, these routes remain absent from the build and retain the
-ordinary unknown-command or invalid-request behavior. A peer that later carries
-a route but cannot serve it uses `UNSUPPORTED_V2_CAPABILITY`.
+authoring diagnostic inventory. Five Procedure v2 mutation routes are registered
+as `reserved_contract`, and Procedure v2 forms of the shared start routes have
+bounded protocol, CLI, and daemon surfaces while their runtime owners remain
+unserved. A well-formed registered but unserved request returns
+`UNSUPPORTED_V2_CAPABILITY`; a malformed request returns `REQUEST_INVALID`; and
+a route absent from the registry retains ordinary unknown-command or usage
+behavior. Manifest registration alone does not imply executable capability.
 
 ## Exit codes
 
