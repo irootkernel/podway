@@ -1535,6 +1535,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         if matches!(
             slice_request.command(),
             SliceCommandV1::SessionComplete(_)
+                | SliceCommandV1::SessionRetry(_)
                 | SliceCommandV1::ItemCheck(_)
                 | SliceCommandV1::ItemUncheck(_)
                 | SliceCommandV1::ItemSet(_)
@@ -2666,7 +2667,9 @@ fn validate_terminal_receipt_projection(
     if let Some(graph) = receipt.graph_session_projection() {
         return match (graph.operation(), receipt.result()) {
             (
-                None | Some(PersistedGraphTerminalOperationV2::Complete { .. }),
+                None
+                | Some(PersistedGraphTerminalOperationV2::Complete { .. })
+                | Some(PersistedGraphTerminalOperationV2::Retry { .. }),
                 PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                     ..
                 }),
@@ -2854,6 +2857,7 @@ fn validate_frozen_terminal_error(
         }
         Some(
             PersistedGraphTerminalOperationV2::Complete { .. }
+            | PersistedGraphTerminalOperationV2::Retry { .. }
             | PersistedGraphTerminalOperationV2::ItemMutation { .. },
         ) => return Err(terminal_replay_integrity_failure()),
         None => {
@@ -2935,26 +2939,50 @@ fn validate_frozen_v2_result_projection(
                         PersistedSessionLifecycleV1::Completed => "completed",
                         PersistedSessionLifecycleV1::Cancelled => return false,
                     };
-                    let Some(PersistedGraphTerminalOperationV2::Complete {
-                        from_graph_node_id,
-                        from_attempt_id,
-                        to_graph_node_id,
-                        to_attempt_id,
-                    }) = projection.operation()
-                    else {
-                        return false;
-                    };
-                    result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
-                        && result.get("transition").and_then(Value::as_str) == Some("complete")
-                        && result.get("session_state").and_then(Value::as_str) == Some(lifecycle)
-                        && result.get("from_graph_node_id").and_then(Value::as_str)
-                            == Some(from_graph_node_id.as_str())
-                        && result.get("from_attempt_id").and_then(Value::as_str)
-                            == Some(from_attempt_id.as_str())
-                        && result.get("to_graph_node_id").and_then(Value::as_str)
-                            == to_graph_node_id.as_ref().map(|value| value.as_str())
-                        && result.get("to_attempt_id").and_then(Value::as_str)
-                            == to_attempt_id.as_ref().map(|value| value.as_str())
+                    let common = result.get("revision").and_then(Value::as_u64)
+                        == Some(revision_after.get())
+                        && result.get("session_state").and_then(Value::as_str) == Some(lifecycle);
+                    match projection.operation() {
+                        Some(PersistedGraphTerminalOperationV2::Complete {
+                            from_graph_node_id,
+                            from_attempt_id,
+                            to_graph_node_id,
+                            to_attempt_id,
+                        }) => {
+                            common
+                                && result.get("transition").and_then(Value::as_str)
+                                    == Some("complete")
+                                && result.get("from_graph_node_id").and_then(Value::as_str)
+                                    == Some(from_graph_node_id.as_str())
+                                && result.get("from_attempt_id").and_then(Value::as_str)
+                                    == Some(from_attempt_id.as_str())
+                                && result.get("to_graph_node_id").and_then(Value::as_str)
+                                    == to_graph_node_id.as_ref().map(|value| value.as_str())
+                                && result.get("to_attempt_id").and_then(Value::as_str)
+                                    == to_attempt_id.as_ref().map(|value| value.as_str())
+                        }
+                        Some(PersistedGraphTerminalOperationV2::Retry {
+                            graph_node_id,
+                            from_attempt_id,
+                            to_attempt_id,
+                            reason,
+                        }) => {
+                            common
+                                && lifecycle == "running"
+                                && result.get("transition").and_then(Value::as_str) == Some("retry")
+                                && result.get("from_graph_node_id").and_then(Value::as_str)
+                                    == Some(graph_node_id.as_str())
+                                && result.get("to_graph_node_id").and_then(Value::as_str)
+                                    == Some(graph_node_id.as_str())
+                                && result.get("from_attempt_id").and_then(Value::as_str)
+                                    == Some(from_attempt_id.as_str())
+                                && result.get("to_attempt_id").and_then(Value::as_str)
+                                    == Some(to_attempt_id.as_str())
+                                && result.get("reason").and_then(Value::as_str)
+                                    == Some(reason.as_str())
+                        }
+                        _ => false,
+                    }
                 })()
             } else {
                 let transition = receipt
@@ -3115,6 +3143,34 @@ fn graph_terminal_envelope_v2(
                 (None, None) if session_state == "completed" => {}
                 _ => return Err(terminal_replay_integrity_failure()),
             }
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::Retry {
+            graph_node_id,
+            from_attempt_id,
+            to_attempt_id,
+            reason,
+        }) => {
+            if graph.lifecycle() != PersistedSessionLifecycleV1::Running
+                || from_attempt_id == to_attempt_id
+            {
+                return Err(terminal_replay_integrity_failure());
+            }
+            let result = json!({
+                "schema": "podway.stage-transition-result/v2",
+                "transition": "retry",
+                "from_graph_node_id": graph_node_id,
+                "from_attempt_id": from_attempt_id,
+                "to_graph_node_id": graph_node_id,
+                "to_attempt_id": to_attempt_id,
+                "reason": reason,
+                "revision": graph.revision_after(),
+                "session_state": "running",
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph retry result is an object")
+            .clone();
             graph_success_terminal_envelope_v2(receipt, result)
         }
         Some(PersistedGraphTerminalOperationV2::ItemMutation {
@@ -4143,13 +4199,14 @@ mod tests {
     use super::*;
     use podway_config::{ProcedureFormatV1, ProcedureWarningPolicyV1, parse_procedure_v1};
     use podway_core::{
-        AttemptId, CompleteSessionV1, ItemId, JobId, ProcedureSnapshotId, ProcedureSourceLabelV1,
-        Revision, SessionAggregateV1, SessionCommandV1, SessionId, Sha256Digest, WorkspaceId,
-        preview_transition_v1,
+        AttemptId, CompleteSessionV1, GraphNodeId, ItemId, JobId, ProcedureSnapshotId,
+        ProcedureSourceLabelV1, ReasonV2, Revision, SessionAggregateV1, SessionCommandV1,
+        SessionId, Sha256Digest, WorkspaceId, preview_transition_v1,
     };
     use podway_store::{
         ClaimedExecutionV1, DurableWorktreeIdentityV1, JobReceiptV1, JobViewV1,
-        PersistedResponseContextV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
+        PersistedGraphTerminalSessionProjectionV2, PersistedResponseContextV1,
+        PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
         PersistedTerminalSessionProjectionV1, RevisionAttemptItemPreconditionsV1,
         ValidatedWorkspaceRootV1,
     };
@@ -4962,6 +5019,74 @@ mod tests {
             terminal_job_response(&receipt, TerminalCommandKindV1::Other).unwrap(),
             frozen
         );
+    }
+
+    #[test]
+    fn v2run004_retry_terminal_seals_required_same_node_fields_and_reason() {
+        let sequence = 83;
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000080").unwrap();
+        let graph_node_id = GraphNodeId::new("work").unwrap();
+        let from_attempt_id = AttemptId::new("00000000-0000-4000-8000-000000000081").unwrap();
+        let to_attempt_id = AttemptId::new("00000000-0000-4000-8000-000000000082").unwrap();
+        let reason = ReasonV2::new("Retry from a clean attempt.").unwrap();
+        let operation = PersistedGraphTerminalOperationV2::retry(
+            graph_node_id.clone(),
+            from_attempt_id.clone(),
+            to_attempt_id.clone(),
+            reason.clone(),
+        )
+        .unwrap();
+        let graph_projection = PersistedGraphTerminalSessionProjectionV2::new(
+            session_id.clone(),
+            "Stored immutable retry session".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::new(4),
+            Revision::new(5),
+            Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            graph_node_id.clone(),
+            false,
+        )
+        .unwrap()
+        .with_operation(operation)
+        .unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_graph_projection(
+            fixture_job(sequence),
+            PersistedTerminalResultV1::Success(terminal_session_result(session_id)),
+            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+            graph_projection,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionRetry)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                format!("00000000-0000-4000-8000-{sequence:012x}"),
+                "session.retry",
+                WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+                "/safe/worktree",
+                sequence,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let envelope = seal_terminal_receipt_v1(&receipt).unwrap();
+        assert_eq!(envelope["result"]["transition"], "retry");
+        assert_eq!(
+            envelope["result"]["from_graph_node_id"],
+            graph_node_id.as_str()
+        );
+        assert_eq!(
+            envelope["result"]["to_graph_node_id"],
+            graph_node_id.as_str()
+        );
+        assert_eq!(
+            envelope["result"]["from_attempt_id"],
+            from_attempt_id.as_str()
+        );
+        assert_eq!(envelope["result"]["to_attempt_id"], to_attempt_id.as_str());
+        assert_eq!(envelope["result"]["reason"], reason.as_str());
+        validate_frozen_terminal_envelope(&receipt, &envelope).unwrap();
     }
 
     #[test]

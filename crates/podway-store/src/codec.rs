@@ -15,7 +15,7 @@ use crate::{
     TerminalReceiptV1, TerminalResultV1,
 };
 use podway_core::{
-    AttemptId, AttemptNumberV2, DomainCommandKind, GraphNodeId, ItemId, SessionId,
+    AttemptId, AttemptNumberV2, DomainCommandKind, GraphNodeId, ItemId, ReasonV2, SessionId,
     SessionLifecycle, Sha256Digest, WorkspaceId,
 };
 
@@ -521,6 +521,7 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
         CommandV1::SessionStart
             | CommandV1::SessionStartReplace
             | CommandV1::SessionComplete
+            | CommandV1::SessionRetry
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -535,6 +536,7 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
     matches!(
         command,
         CommandV1::SessionComplete
+            | CommandV1::SessionRetry
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -550,7 +552,7 @@ fn procedure_v2_preconditions_match(
     preconditions: &RevisionAttemptItemPreconditionsV1,
 ) -> bool {
     match command {
-        CommandV1::SessionComplete => {
+        CommandV1::SessionComplete | CommandV1::SessionRetry => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_attempt_id().is_some()
                 && preconditions.expected_item_id().is_none()
@@ -1024,6 +1026,12 @@ pub enum PersistedGraphTerminalOperationV2 {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to_attempt_id: Option<AttemptId>,
     },
+    Retry {
+        graph_node_id: GraphNodeId,
+        from_attempt_id: AttemptId,
+        to_attempt_id: AttemptId,
+        reason: String,
+    },
     ItemMutation {
         graph_node_id: GraphNodeId,
         attempt_id: AttemptId,
@@ -1175,6 +1183,22 @@ impl PersistedGraphTerminalOperationV2 {
         Ok(operation)
     }
 
+    pub fn retry(
+        graph_node_id: GraphNodeId,
+        from_attempt_id: AttemptId,
+        to_attempt_id: AttemptId,
+        reason: ReasonV2,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Retry {
+            graph_node_id,
+            from_attempt_id,
+            to_attempt_id,
+            reason: reason.into_inner(),
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
     pub fn failure(error: PersistedGraphMutationFailureV2) -> Result<Self, StoreCodecErrorV1> {
         let operation = Self::Failure { error };
         operation.validate()?;
@@ -1188,6 +1212,12 @@ impl PersistedGraphTerminalOperationV2 {
                 to_attempt_id,
                 ..
             } => to_graph_node_id.is_some() == to_attempt_id.is_some(),
+            Self::Retry {
+                from_attempt_id,
+                to_attempt_id,
+                reason,
+                ..
+            } => from_attempt_id != to_attempt_id && ReasonV2::new(reason.clone()).is_ok(),
             Self::ItemMutation { attempt_number, .. } => *attempt_number > 0,
             Self::Failure { error } => error.validate(),
         };
@@ -1680,7 +1710,9 @@ impl PersistedTerminalReceiptV1 {
             graph.validate()?;
             match (graph.operation(), &self.result) {
                 (
-                    None | Some(PersistedGraphTerminalOperationV2::Complete { .. }),
+                    None
+                    | Some(PersistedGraphTerminalOperationV2::Complete { .. })
+                    | Some(PersistedGraphTerminalOperationV2::Retry { .. }),
                     PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                         session_id,
                         revision_before,

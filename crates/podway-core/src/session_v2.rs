@@ -371,6 +371,24 @@ impl SessionTraceV2 {
         Ok(())
     }
 
+    /// Abandons the active attempt and activates a clean attempt of the same graph node. Retry is
+    /// the degenerate one-attempt form of suffix invalidation: no earlier attempt changes validity.
+    pub fn retry(
+        &mut self,
+        expected_active: &AttemptId,
+        fresh_attempt_id: AttemptId,
+        goal_revision: Option<GoalRevisionNumberV2>,
+    ) -> Result<(), DomainError> {
+        let active_index = self.require_running_active(expected_active)?;
+        let node = self.attempts[active_index].graph_node_id.clone();
+        let (fresh, next_revision) = self.prepare_fresh(&node, &fresh_attempt_id, goal_revision)?;
+        self.attempts[active_index].lifecycle = AttemptLifecycle::Abandoned;
+        self.attempts[active_index].validity = AttemptValidityV2::Stale;
+        self.attempts.push(fresh);
+        self.revision = next_revision;
+        Ok(())
+    }
+
     /// Reworks the cursor to a target graph node that currently holds a valid attempt: completes
     /// the active attempt, conservatively stales the trace suffix from the target (including the
     /// active), and activates a fresh target attempt (sections 9.3 and 9.6). Detailed declared versus
@@ -946,6 +964,39 @@ mod tests {
             trace.attempts().last().unwrap().lifecycle(),
             AttemptLifecycle::Skipped
         );
+    }
+
+    #[test]
+    fn retry_stales_only_the_active_attempt_and_repeats_the_same_node() {
+        let mut trace =
+            SessionTraceV2::start(session(), node("entry"), attempt_id(1), None).unwrap();
+        trace
+            .advance(
+                &attempt_id(1),
+                AdvanceTerminalV2::Completed,
+                node("review"),
+                attempt_id(2),
+                Some(GoalRevisionNumberV2::FIRST),
+            )
+            .unwrap();
+        trace
+            .retry(
+                &attempt_id(2),
+                attempt_id(3),
+                Some(GoalRevisionNumberV2::FIRST),
+            )
+            .unwrap();
+
+        assert_eq!(trace.revision(), Revision::new(2));
+        assert_eq!(trace.attempts()[0].validity(), AttemptValidityV2::Valid);
+        assert_eq!(trace.attempts()[1].lifecycle(), AttemptLifecycle::Abandoned);
+        assert_eq!(trace.attempts()[1].validity(), AttemptValidityV2::Stale);
+        let fresh = trace.active_attempt().unwrap();
+        assert_eq!(fresh.graph_node_id(), &node("review"));
+        assert_eq!(fresh.attempt_id(), &attempt_id(3));
+        assert_eq!(fresh.number(), AttemptNumberV2::new(2));
+        assert_eq!(fresh.trace(), TraceSequenceV2::new(3));
+        assert_eq!(fresh.goal_revision(), Some(GoalRevisionNumberV2::FIRST));
     }
 
     #[test]

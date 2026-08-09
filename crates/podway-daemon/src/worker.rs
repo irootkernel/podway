@@ -492,7 +492,7 @@ where
             .map(Some)
     }
 
-    /// Attempts the additive Procedure v2 action/item admission path. `None` preserves the v1
+    /// Attempts the additive Procedure v2 graph-mutation admission path. `None` preserves the v1
     /// fallback contract when the workspace does not own a Procedure v2 current task.
     pub fn submit_procedure_v2_mutation_with_response_context(
         &self,

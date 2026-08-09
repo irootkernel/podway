@@ -294,8 +294,14 @@ A running Procedure v2 session owns one cursor and exactly one active graph-node
 attempt. Completing or skipping an action, or deciding an option, terminates the
 current attempt and either activates one fresh target attempt or completes the
 session. Retry abandons the active attempt and creates a fresh attempt of the
-same placement. No transition activates parallel attempts or waits for another
-branch.
+same placement, whether it is an action or decision. Only that active attempt
+becomes stale: its item values, blockers, criterion state, evidence snapshot, and
+terminal reason remain immutable history. The fresh attempt receives the next
+per-node attempt number and session trace sequence, begins with empty item,
+blocker, and criterion state, and resolves every declared evidence reference at
+its activation time. Retry does not increment rework-traversal counters or alter
+unrelated attempts. No transition activates parallel attempts or waits for
+another branch.
 
 Evidence references resolve once when a decision attempt is activated and bind
 the exact source attempt and complete recorded-item digest. A reference becomes

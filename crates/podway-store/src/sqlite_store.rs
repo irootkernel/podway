@@ -865,6 +865,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             || !matches!(
                 execution.command(),
                 crate::CommandV1::SessionComplete
+                    | crate::CommandV1::SessionRetry
                     | crate::CommandV1::ItemCheck { .. }
                     | crate::CommandV1::ItemUncheck { .. }
                     | crate::CommandV1::ItemSet { .. }
@@ -1043,6 +1044,7 @@ impl StoreContractV1 for SqliteStoreV1 {
         let is_v2_action_runtime = matches!(
             request.command(),
             crate::CommandV1::SessionComplete
+                | crate::CommandV1::SessionRetry
                 | crate::CommandV1::ItemCheck { .. }
                 | crate::CommandV1::ItemUncheck { .. }
                 | crate::CommandV1::ItemSet { .. }
@@ -3912,6 +3914,57 @@ fn validate_graph_mutation_terminal_shape_v2(
                 }
         }
         (
+            crate::CommandV1::SessionRetry,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Retry {
+                graph_node_id,
+                from_attempt_id,
+                to_attempt_id,
+                reason,
+            },
+        ) => {
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next_active = next
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let terminalized = next
+                .trace()
+                .attempts()
+                .iter()
+                .zip(next.attempt_metadata())
+                .find(|(attempt, _)| attempt.attempt_id() == active.attempt_id());
+            *changed
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && current.trace().revision().checked_next().ok() == Some(next.trace().revision())
+                && next.trace().session_id() == current.trace().session_id()
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+                && graph_node_id == active.graph_node_id()
+                && graph_node_id == next_active.graph_node_id()
+                && from_attempt_id == active.attempt_id()
+                && to_attempt_id == next_active.attempt_id()
+                && from_attempt_id != to_attempt_id
+                && terminalized.is_some_and(|(attempt, metadata)| {
+                    attempt.lifecycle() == podway_core::AttemptLifecycle::Abandoned
+                        && attempt.validity() == podway_core::AttemptValidityV2::Stale
+                        && metadata.terminal_reason() == Some(reason.as_str())
+                })
+        }
+        (
             command,
             TerminalResultV1::Success(podway_core::DomainResult::ItemChanged {
                 session_id,
@@ -4013,6 +4066,20 @@ fn graph_mutation_failure_matches_v2(
                 .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
                 .is_some_and(|failure| &failure == error)
         }
+        crate::CommandV1::SessionRetry => match error {
+            PersistedGraphMutationFailureV2::SessionNotRunning => {
+                current.trace().lifecycle() != podway_core::SessionLifecycle::Running
+            }
+            PersistedGraphMutationFailureV2::SessionRevisionConflict { expected, actual } => {
+                preconditions.expected_session_revision() == Some(*expected)
+                    && current.trace().revision() == *actual
+            }
+            PersistedGraphMutationFailureV2::AttemptNotCurrent { expected, actual } => {
+                preconditions.expected_attempt_id() == Some(expected)
+                    && active.map(podway_core::SessionAttemptV2::attempt_id) == actual.as_ref()
+            }
+            _ => false,
+        },
         command if graph_item_id_v2(command).is_some() => {
             let command_item_id = graph_item_id_v2(command).expect("guarded item command");
             let active_memory = active.and_then(|attempt| {

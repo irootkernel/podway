@@ -54,3 +54,5 @@ mod int_v2run001_start;
 mod int_v2run002_views;
 #[path = "int_v2run003_runtime.rs"]
 mod int_v2run003_runtime;
+#[path = "int_v2run004_retry.rs"]
+mod int_v2run004_retry;

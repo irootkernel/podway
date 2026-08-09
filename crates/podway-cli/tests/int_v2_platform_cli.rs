@@ -19,6 +19,7 @@ const WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174001";
 const SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174002";
 const ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174003";
 const JOB_ID: &str = "123e4567-e89b-42d3-a456-426614174004";
+const NEXT_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174005";
 const PROCEDURE_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -264,7 +265,7 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             ))
             .expect("v2 result fixtures must parse");
             let schema = match request.command().as_str() {
-                "session.complete" => "podway.stage-transition-result/v2",
+                "session.complete" | "session.retry" => "podway.stage-transition-result/v2",
                 command if command.starts_with("item.") => "podway.item-mutation-result/v2",
                 command => panic!("unexpected shared v2 mutation {command}"),
             };
@@ -276,6 +277,13 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 result["item_id"] = request.payload()["item_id"].clone();
             } else {
                 result["from_attempt_id"] = json!(ATTEMPT_ID);
+                if request.command().as_str() == "session.retry" {
+                    result["transition"] = json!("retry");
+                    result["to_graph_node_id"] = result["from_graph_node_id"].clone();
+                    result["to_attempt_id"] = json!(NEXT_ATTEMPT_ID);
+                    result["reason"] = request.payload()["reason"].clone();
+                    result["session_state"] = json!("running");
+                }
             }
             json!({
                 "schema": "podway.output/v2",
@@ -554,7 +562,7 @@ fn v2_status_preflight_supplies_omitted_attempt_fences() {
 }
 
 #[test]
-fn shared_item_and_complete_use_v2_status_fences_and_render_output_v2() {
+fn shared_item_complete_and_retry_use_v2_status_fences_and_render_output_v2() {
     for (command, arguments, expected_schema) in [
         (
             "item.set",
@@ -564,6 +572,11 @@ fn shared_item_and_complete_use_v2_status_fences_and_render_output_v2() {
         (
             "session.complete",
             vec!["complete"],
+            "podway.stage-transition-result/v2",
+        ),
+        (
+            "session.retry",
+            vec!["retry", "--reason", "repeat from clean state"],
             "podway.stage-transition-result/v2",
         ),
     ] {
@@ -607,6 +620,9 @@ fn shared_item_and_complete_use_v2_status_fences_and_render_output_v2() {
             } else {
                 assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
                 assert!(requests[1]["preconditions"].get("item_revision").is_none());
+                if command == "session.retry" {
+                    assert_eq!(requests[1]["payload"]["reason"], "repeat from clean state");
+                }
             }
 
             if json_mode {
@@ -621,6 +637,48 @@ fn shared_item_and_complete_use_v2_status_fences_and_render_output_v2() {
             }
         }
     }
+}
+
+#[test]
+fn fully_fenced_retry_skips_status_preflight_and_preserves_explicit_fences() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::SharedMutationV2);
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "--if-session-revision".to_owned(),
+        "7".to_owned(),
+        "--if-attempt".to_owned(),
+        ATTEMPT_ID.to_owned(),
+        "--idempotency-key".to_owned(),
+        "v2run004-fully-fenced-retry".to_owned(),
+        "retry".to_owned(),
+        "--reason".to_owned(),
+        "repeat without a status probe".to_owned(),
+    ];
+
+    let output = fixture.run(&arguments);
+    assert!(output.status.success(), "{output:?}");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "session.retry");
+    assert_eq!(request["workspace"]["expected_uuid"], WORKSPACE_ID);
+    assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(request["preconditions"]["session_revision"], 7);
+    assert_eq!(request["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert_eq!(
+        request["payload"]["reason"],
+        "repeat without a status probe"
+    );
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v2");
+    assert_eq!(envelope["result"]["transition"], "retry");
 }
 
 #[test]

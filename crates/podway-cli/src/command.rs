@@ -1814,6 +1814,7 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
                 && (!matches!(command, Command::Goal { .. }) || explicit.goal_revision.is_some())
         }
         Command::Rework(_) => explicit.attempt_id.is_some(),
+        Command::Retry { .. } => explicit.attempt_id.is_some(),
         Command::Goal {
             command: GoalCommand::Define(_),
         } => true,
@@ -1879,6 +1880,7 @@ fn direct_preconditions(
         }
         Command::Decide(_) => v2_session_preconditions(explicit, true, false),
         Command::Rework(_) => v2_session_preconditions(explicit, false, false),
+        Command::Retry { .. } => v2_session_preconditions(explicit, true, false),
         Command::Goal {
             command: GoalCommand::Define(_),
         } => v2_session_preconditions(explicit, false, false),

@@ -718,6 +718,44 @@ impl WorkflowMemoryStateV2 {
         Self::new(attempts, self.decisions.clone(), self.reworks.clone()).map_err(Into::into)
     }
 
+    pub(crate) fn retry_successor_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        next_trace: &SessionTraceV2,
+        started_at: UnixMillis,
+    ) -> Result<Self, GraphMutationErrorV2> {
+        let fresh = next_trace
+            .active_attempt()
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        let specification = model.node(fresh.graph_node_id())?;
+        let slots = specification
+            .items
+            .iter()
+            .map(|item| {
+                ItemSlotStateV2::new(
+                    fresh.attempt_id().clone(),
+                    item.id().clone(),
+                    item.item_type(),
+                    Revision::ZERO,
+                    None,
+                    started_at,
+                    started_at,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let evidence =
+            resolve_evidence_at_activation_v2(specification, next_trace, self, started_at)?;
+        let mut attempts = self.attempts.clone();
+        attempts.push(AttemptWorkflowMemoryV2::new(
+            fresh.attempt_id().clone(),
+            slots,
+            Vec::new(),
+            evidence,
+        )?);
+        Self::new(attempts, self.decisions.clone(), self.reworks.clone()).map_err(Into::into)
+    }
+
     pub fn empty_for_trace(
         snapshot: &ProcedureSnapshotV2,
         trace: &SessionTraceV2,

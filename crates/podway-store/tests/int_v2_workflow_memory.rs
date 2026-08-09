@@ -892,6 +892,132 @@ fn evidence_digest_uses_all_items_in_author_order_while_readback_honors_selector
 }
 
 #[test]
+fn retrying_a_decision_re_resolves_evidence_into_clean_attempt_memory() {
+    let state = gate_state();
+    let prior_attempt = state.trace().attempts()[0].clone();
+    let prior_metadata = state.attempt_metadata()[0].clone();
+    let prior_memory = state.workflow_memory().attempts()[0].clone();
+    let prior_counters = state.counters().to_vec();
+    let prior_evidence = state.workflow_memory().attempts()[1].evidence().to_vec();
+    let outcome = state
+        .retry_active_attempt_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            attempt_id(3),
+            ReasonV2::new("Reconsider the decision.").unwrap(),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+    let retried = outcome.state();
+    let fresh_memory = &retried.workflow_memory().attempts()[2];
+
+    assert_eq!(retried.trace().attempts()[0], prior_attempt);
+    assert_eq!(retried.attempt_metadata()[0], prior_metadata);
+    assert_eq!(retried.workflow_memory().attempts()[0], prior_memory);
+    assert_eq!(retried.counters()[0], prior_counters[0]);
+    assert_eq!(retried.counters()[2], prior_counters[2]);
+    assert_eq!(
+        retried.counters()[1].attempt_count(),
+        prior_counters[1].attempt_count() + 1
+    );
+    assert_eq!(
+        retried.counters()[1].rework_traversal_count(),
+        prior_counters[1].rework_traversal_count()
+    );
+    assert_eq!(
+        retried.trace().attempts()[0].validity(),
+        AttemptValidityV2::Valid
+    );
+    assert_eq!(
+        retried.trace().attempts()[1].lifecycle(),
+        AttemptLifecycle::Abandoned
+    );
+    assert_eq!(
+        retried.trace().attempts()[1].validity(),
+        AttemptValidityV2::Stale
+    );
+    assert_eq!(
+        retried.trace().active_attempt().unwrap().graph_node_id(),
+        &node("gate")
+    );
+    assert!(fresh_memory.item_slots().is_empty());
+    assert!(fresh_memory.blockers().is_empty());
+    assert_eq!(fresh_memory.evidence().len(), prior_evidence.len());
+    assert_eq!(
+        fresh_memory.evidence()[0]
+            .resolution()
+            .snapshot()
+            .unwrap()
+            .source_attempt_id(),
+        &attempt_id(1)
+    );
+    assert_eq!(
+        fresh_memory.evidence()[0]
+            .resolution()
+            .snapshot()
+            .unwrap()
+            .resolved_at(),
+        UnixMillis::new(40)
+    );
+    assert!(fresh_memory.evidence()[1].resolution().snapshot().is_none());
+    assert_eq!(
+        retried.workflow_memory().attempts()[1].evidence(),
+        prior_evidence
+    );
+    assert!(retried.selected_evidence_readback(&attempt_id(2)).unwrap()[0].stale());
+    assert!(!retried.selected_evidence_readback(&attempt_id(3)).unwrap()[0].stale());
+    assert!(retried.workflow_memory().decisions().is_empty());
+    assert!(retried.workflow_memory().reworks().is_empty());
+}
+
+#[test]
+fn retry_discards_missing_required_items_and_open_blockers_only_from_the_fresh_attempt() {
+    let old_memory = capture_memory(false, Some((BlockerState::Open, "Still blocked.")));
+    let state = state_with_memory(
+        1,
+        SessionLifecycle::Running,
+        vec![attempt(
+            1,
+            "capture",
+            1,
+            1,
+            AttemptLifecycle::Active,
+            AttemptValidityV2::Valid,
+        )],
+        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 0, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        WorkflowMemoryStateV2::new(vec![old_memory.clone()], Vec::new(), Vec::new()).unwrap(),
+        None,
+    );
+    assert!(old_memory.item_slots()[0].value().is_none());
+    assert_eq!(old_memory.blockers()[0].state(), BlockerState::Open);
+
+    let retried = state
+        .retry_active_attempt_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            attempt_id(2),
+            ReasonV2::new("Retry despite incomplete work.").unwrap(),
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    let fresh = &retried.workflow_memory().attempts()[1];
+
+    assert_eq!(retried.workflow_memory().attempts()[0], old_memory);
+    assert!(fresh.item_slots().iter().all(|slot| slot.value().is_none()));
+    assert!(fresh.blockers().is_empty());
+    assert_eq!(retried.counters()[0].attempt_count(), 2);
+    assert_eq!(retried.counters()[0].rework_traversal_count(), 0);
+    assert_eq!(retried.counters()[1], state.counters()[1]);
+    assert_eq!(retried.counters()[2], state.counters()[2]);
+}
+
+#[test]
 fn declared_rework_keeps_items_evidence_and_decision_history_across_reopen() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());

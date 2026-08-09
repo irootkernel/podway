@@ -86,6 +86,10 @@ const V2_TABLES: [&str; 16] = [
     "v2_workspace_state",
 ];
 
+type BaseWorkspaceIdentity = (String, String, String, String, i64, i64, i64);
+type SchemaMigrationIdentity = (i64, String, String, i64);
+type BaseStoreIdentity = (BaseWorkspaceIdentity, Vec<SchemaMigrationIdentity>);
+
 fn v2_table_counts(path: &Path) -> Vec<(String, i64)> {
     let connection = Connection::open(path).unwrap();
     V2_TABLES
@@ -101,12 +105,7 @@ fn v2_table_counts(path: &Path) -> Vec<(String, i64)> {
         .collect()
 }
 
-fn base_store_identity(
-    path: &Path,
-) -> (
-    (String, String, String, String, i64, i64, i64),
-    Vec<(i64, String, String, i64)>,
-) {
+fn base_store_identity(path: &Path) -> BaseStoreIdentity {
     let connection = Connection::open(path).unwrap();
     let workspace = connection
         .query_row(
@@ -2004,6 +2003,52 @@ fn fk_off_orphan_goal_rows_fail_reopen() {
             "{orphan} orphan must fail startup integrity"
         );
     }
+}
+
+#[test]
+fn retrying_a_goal_decision_retains_history_but_starts_without_criterion_state() {
+    let state = assessment_state(6, true, vec![partial_criterion_state()]);
+    let historical = state.goal_state().attempt_assessments()[0].clone();
+    let outcome = state
+        .retry_active_attempt_v2(
+            Revision::new(6),
+            &attempt_id(2),
+            attempt_id(3),
+            ReasonV2::new("Reassess the current goal decision.").unwrap(),
+            UnixMillis::new(50),
+        )
+        .unwrap();
+    let retried = outcome.state();
+
+    assert_eq!(
+        retried.goal_state().current_revision(),
+        Some(GoalRevisionNumberV2::FIRST)
+    );
+    assert_eq!(retried.goal_state().attempt_assessments(), &[historical]);
+    assert!(
+        retried
+            .goal_state()
+            .attempt_assessments()
+            .iter()
+            .all(|assessment| assessment.attempt_id() != &attempt_id(3))
+    );
+    assert_eq!(
+        retried.trace().attempts()[1].lifecycle(),
+        AttemptLifecycle::Abandoned
+    );
+    assert_eq!(
+        retried.trace().attempts()[1].validity(),
+        AttemptValidityV2::Stale
+    );
+    assert_eq!(
+        retried.trace().active_attempt().unwrap().goal_revision(),
+        Some(GoalRevisionNumberV2::FIRST)
+    );
+    assert!(
+        retried.workflow_memory().attempts()[2].item_slots()[0]
+            .value()
+            .is_none()
+    );
 }
 
 #[test]

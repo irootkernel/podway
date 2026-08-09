@@ -44,7 +44,7 @@ fn fixture_runtime_directory(root: &Path) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("pdr-v2run003-{}", &format!("{digest:x}")[..16]))
 }
 
-fn manager(root: &Path) -> WorkspaceRuntimeManagerV1 {
+pub(super) fn manager(root: &Path) -> WorkspaceRuntimeManagerV1 {
     let application_support = root.join("Application Support");
     fs::create_dir_all(&application_support).unwrap();
     #[cfg(unix)]
@@ -59,7 +59,7 @@ fn manager(root: &Path) -> WorkspaceRuntimeManagerV1 {
     WorkspaceRuntimeManagerV1::new(&paths, SqliteStoreOptionsV1::new(8).unwrap())
 }
 
-fn make_runtime_private(root: &Path) {
+pub(super) fn make_runtime_private(root: &Path) {
     #[cfg(unix)]
     fs::set_permissions(
         root.join(".podway/runtime"),
@@ -68,7 +68,7 @@ fn make_runtime_private(root: &Path) {
     .unwrap();
 }
 
-fn selector(path: &Path) -> WorktreeSelectorWireV1 {
+pub(super) fn selector(path: &Path) -> WorktreeSelectorWireV1 {
     let canonical = fs::canonicalize(path).unwrap();
     WorktreeSelectorWireV1::new(
         canonical.to_string_lossy().as_bytes(),
@@ -148,7 +148,7 @@ impl WorkspaceRuntimeV1 for DevelopmentV2RoutingRuntime {
     }
 }
 
-fn dispatcher(
+pub(super) fn dispatcher(
     manager: Arc<WorkspaceRuntimeManagerV1>,
     worker_id: &str,
 ) -> impl RequestDispatcherV1 {
@@ -171,7 +171,7 @@ fn dispatcher(
     )
 }
 
-fn request(
+pub(super) fn request(
     request_number: u64,
     command: &str,
     selector: &WorktreeSelectorWireV1,
@@ -210,14 +210,14 @@ fn request(
     (envelope, daemon)
 }
 
-fn dispatch(
+pub(super) fn dispatch(
     dispatcher: &impl RequestDispatcherV1,
     request: &(RequestEnvelopeV1, DaemonRequestV1),
 ) -> ResponseEnvelopeV2 {
     dispatcher.dispatch_daemon(&request.0, &request.1)
 }
 
-fn v2_result(response: ResponseEnvelopeV2, command: &str) -> Map<String, Value> {
+pub(super) fn v2_result(response: ResponseEnvelopeV2, command: &str) -> Map<String, Value> {
     let ResponseEnvelopeV2::OutputV2(output) = &response else {
         panic!(
             "{command} against a Procedure v2 session must return podway.output/v2: {response:?}"
@@ -227,7 +227,7 @@ fn v2_result(response: ResponseEnvelopeV2, command: &str) -> Map<String, Value> 
     output.result().clone()
 }
 
-fn response_request_id(response: &ResponseEnvelopeV2) -> &RequestIdV1 {
+pub(super) fn response_request_id(response: &ResponseEnvelopeV2) -> &RequestIdV1 {
     match response {
         ResponseEnvelopeV2::OutputV1(output) => output.request_id(),
         ResponseEnvelopeV2::OutputV2(output) => output.request_id(),
@@ -235,13 +235,13 @@ fn response_request_id(response: &ResponseEnvelopeV2) -> &RequestIdV1 {
     }
 }
 
-fn without_request_id(response: &ResponseEnvelopeV2) -> Value {
+pub(super) fn without_request_id(response: &ResponseEnvelopeV2) -> Value {
     let mut value = serde_json::to_value(response).unwrap();
     value.as_object_mut().unwrap().remove("request_id");
     value
 }
 
-fn session_preconditions(status: &Map<String, Value>) -> PreconditionsV1 {
+pub(super) fn session_preconditions(status: &Map<String, Value>) -> PreconditionsV1 {
     PreconditionsV1::new(
         Some(SessionId::new(status["session"]["id"].as_str().unwrap()).unwrap()),
         Some(Revision::new(
@@ -273,7 +273,7 @@ fn item_preconditions(status: &Map<String, Value>, item_id: &str) -> Preconditio
     .unwrap()
 }
 
-fn status(
+pub(super) fn status(
     dispatcher: &impl RequestDispatcherV1,
     selector: &WorktreeSelectorWireV1,
     request_number: u64,
@@ -299,7 +299,7 @@ fn status(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn mutate_item(
+pub(super) fn mutate_item(
     dispatcher: &impl RequestDispatcherV1,
     selector: &WorktreeSelectorWireV1,
     request_number: u64,

@@ -399,7 +399,13 @@ Fails when the active stage is not skippable. A reason is always accepted and is
 podway retry --reason <text>
 ```
 
-Creates a clean attempt for the current stage.
+For a Procedure v2 session, retry is executable on the active action or decision
+placement. It abandons only the current attempt, preserves that attempt as stale
+history, and creates a clean attempt of the same placement. The new attempt has
+fresh item and blocker state and resolves its evidence references again. The CLI
+automatically supplies the current session revision and attempt unless explicit
+precondition flags are given. The v2 reason is required, non-blank, and limited to
+2,000 characters.
 
 ### Decide and rework
 

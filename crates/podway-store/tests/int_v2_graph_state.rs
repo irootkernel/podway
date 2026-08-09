@@ -451,6 +451,159 @@ fn graph_state_round_trips_successors_and_rework_across_reopen() {
 }
 
 #[test]
+fn retry_repeats_the_active_node_with_clean_memory_and_durable_reason() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, options());
+    let initial = initial_state();
+    store
+        .create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+
+    let outcome = initial
+        .retry_active_attempt_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            attempt_id(2),
+            ReasonV2::new("Repeat the draft with a clean attempt.").unwrap(),
+            UnixMillis::new(20),
+        )
+        .unwrap();
+    let retried = outcome.state();
+    assert_eq!(outcome.graph_node_id(), &node("draft"));
+    assert_eq!(outcome.from_attempt_id(), &attempt_id(1));
+    assert_eq!(outcome.to_attempt_id(), &attempt_id(2));
+    assert_eq!(retried.workspace_revision(), Revision::new(2));
+    assert_eq!(retried.trace().revision(), Revision::new(2));
+    assert_eq!(
+        retried.trace().attempts()[0].lifecycle(),
+        AttemptLifecycle::Abandoned
+    );
+    assert_eq!(
+        retried.trace().attempts()[0].validity(),
+        AttemptValidityV2::Stale
+    );
+    let fresh = retried.trace().active_attempt().unwrap();
+    assert_eq!(fresh.graph_node_id(), &node("draft"));
+    assert_eq!(fresh.number(), AttemptNumberV2::new(2));
+    assert_eq!(fresh.trace(), TraceSequenceV2::new(2));
+    assert_eq!(retried.counters()[0].attempt_count(), 2);
+    assert_eq!(retried.counters()[0].rework_traversal_count(), 0);
+    assert_eq!(
+        retried.attempt_metadata()[0].ended_at(),
+        Some(UnixMillis::new(20))
+    );
+    assert_eq!(
+        retried.attempt_metadata()[0].terminal_reason(),
+        Some("Repeat the draft with a clean attempt.")
+    );
+    assert!(
+        retried.workflow_memory().attempts()[1]
+            .item_slots()
+            .is_empty()
+    );
+    assert!(
+        retried.workflow_memory().attempts()[1]
+            .blockers()
+            .is_empty()
+    );
+    assert!(retried.goal_state().attempt_assessments().is_empty());
+
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(1),
+            Revision::new(1),
+            outcome.into_state(),
+        )
+        .unwrap();
+    drop(store);
+    let reopened = open(&temporary, options());
+    assert_eq!(
+        reopened
+            .read_graph_session_v2(&identity())
+            .unwrap()
+            .unwrap()
+            .attempt_metadata()[0]
+            .terminal_reason(),
+        Some("Repeat the draft with a clean attempt.")
+    );
+}
+
+#[test]
+fn procedure_v2_terminal_reason_accepts_2000_characters_and_reopen_rejects_2001() {
+    let at_limit = "r".repeat(2_000);
+    let over_limit = "r".repeat(2_001);
+    assert!(
+        AttemptMetadataV2::new(
+            attempt_id(1),
+            UnixMillis::new(10),
+            Some(UnixMillis::new(20)),
+            Some(at_limit.clone()),
+        )
+        .is_ok()
+    );
+    assert!(
+        AttemptMetadataV2::new(
+            attempt_id(1),
+            UnixMillis::new(10),
+            Some(UnixMillis::new(20)),
+            Some(over_limit.clone()),
+        )
+        .is_err()
+    );
+
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, options());
+    let initial = initial_state();
+    store
+        .create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+    let retried = initial
+        .retry_active_attempt_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            attempt_id(2),
+            ReasonV2::new(at_limit.clone()).unwrap(),
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(&identity(), Revision::new(1), Revision::new(1), retried)
+        .unwrap();
+    drop(store);
+    let reopened = open(&temporary, options());
+    assert_eq!(
+        reopened
+            .read_graph_session_v2(&identity())
+            .unwrap()
+            .unwrap()
+            .attempt_metadata()[0]
+            .terminal_reason(),
+        Some(at_limit.as_str())
+    );
+    drop(reopened);
+
+    Connection::open(database_path(&temporary))
+        .unwrap()
+        .execute(
+            "UPDATE v2_attempts SET terminal_reason = ?1 WHERE attempt_id = ?2",
+            [&over_limit, attempt_id(1).as_str()],
+        )
+        .unwrap();
+    assert!(
+        SqliteStoreV1::open(
+            database_path(&temporary),
+            &root(),
+            identity(),
+            options(),
+            UnixMillis::new(30),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn graph_workspace_view_reads_graph_queue_and_sequence_from_one_store_boundary() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, options());

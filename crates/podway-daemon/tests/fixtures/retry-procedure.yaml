@@ -1,0 +1,64 @@
+schema: podway.procedure/v2
+id: retry-runtime
+version: "2"
+name: Retry runtime
+purpose: Exercise clean action and decision retries with resolved evidence.
+node_definitions:
+  work:
+    type: action
+    title: Record work
+    intent: Record a value before completing the action.
+    items:
+      - id: result
+        type: text
+        prompt: Record the result.
+        required: true
+        min_length: 1
+        max_length: 200
+        multiline: false
+  review:
+    type: decision
+    title: Review work
+    objective: Choose whether to accept the recorded work.
+    prompt: Accept the work?
+    items:
+      - id: note
+        type: text
+        prompt: Record an optional review note.
+        required: false
+        max_length: 200
+        multiline: false
+    options:
+      - id: accept
+        label: Accept
+      - id: reject
+        label: Reject
+    reason:
+      required: true
+  finish:
+    type: action
+    title: Finish
+    intent: Finish the retry fixture.
+graph:
+  entry: work
+  nodes:
+    - id: work
+      use: work
+      next: review
+    - id: review
+      use: review
+      evidence_from:
+        - node: work
+          required: true
+          items:
+            - result
+      routes:
+        accept:
+          to: finish
+          effect: advance
+        reject:
+          to: work
+          effect: rework
+    - id: finish
+      use: finish
+      terminal: true

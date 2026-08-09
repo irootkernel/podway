@@ -23,11 +23,11 @@ use podway_core::{
     CheckItemV1, ClearItemV1, CommandContextV1, CompleteSessionV1, DomainCommand, DomainError,
     DomainResult, GraphPlacementV2, ItemId, ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1,
     JobId, LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1,
-    ProcedureSourceLabelV1, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1,
-    RetrySessionV1, ReturnSessionV1, Revision, SessionAggregateV1, SessionAttemptV2,
-    SessionCommandV1, SessionId, SessionLifecycle, SessionTraceV2, SetItemV1, Sha256Digest,
-    SkipSessionV1, StageSpecV1, StartReplaceSessionV1, StartSessionV1, TraceSequenceV2,
-    UnblockSessionV1, UncheckItemV1, UnixMillis, WorkspaceId, apply_transition_v1,
+    ProcedureSourceLabelV1, ReasonV2, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1,
+    ResetSessionV1, RetrySessionV1, ReturnSessionV1, Revision, SessionAggregateV1,
+    SessionAttemptV2, SessionCommandV1, SessionId, SessionLifecycle, SessionTraceV2, SetItemV1,
+    Sha256Digest, SkipSessionV1, StageSpecV1, StartReplaceSessionV1, StartSessionV1,
+    TraceSequenceV2, UnblockSessionV1, UncheckItemV1, UnixMillis, WorkspaceId, apply_transition_v1,
     canonicalize_json_v1, required_items_satisfied,
 };
 use podway_presets::lookup as lookup_embedded_preset_v1;
@@ -713,10 +713,11 @@ struct AdmittedProcedureV2MutationV1 {
     attached_artifact: Option<ArtifactValueV1>,
 }
 
-fn is_procedure_v2_action_mutation_v1(command: &SliceCommandV1) -> bool {
+fn is_procedure_v2_graph_mutation_v1(command: &SliceCommandV1) -> bool {
     matches!(
         command,
         SliceCommandV1::SessionComplete(_)
+            | SliceCommandV1::SessionRetry(_)
             | SliceCommandV1::ItemCheck(_)
             | SliceCommandV1::ItemUncheck(_)
             | SliceCommandV1::ItemSet(_)
@@ -779,10 +780,14 @@ fn decode_procedure_v2_mutation_execution_v1(
         value_object_v1(object, "preconditions")?,
         value_object_v1(object, "payload")?,
     )?;
-    if !is_procedure_v2_action_mutation_v1(&command) {
+    if !is_procedure_v2_graph_mutation_v1(&command) {
         return Err(invalid_execution_v1(
             "Procedure v2 mutation command is outside the admitted set",
         ));
+    }
+    if let SliceCommandV1::SessionRetry(input) = &command {
+        ReasonV2::new(input.reason.clone())
+            .map_err(|_| invalid_execution_v1("Procedure v2 retry reason is invalid"))?;
     }
     let fresh_attempt_id = value_optional_typed_v1(object, "fresh_attempt_id")?;
     let attached_artifact = match value_v1(object, "attached_artifact")? {
@@ -796,6 +801,8 @@ fn decode_procedure_v2_mutation_execution_v1(
     };
     match &command {
         SliceCommandV1::SessionComplete(_) if attached_artifact.is_none() => {}
+        SliceCommandV1::SessionRetry(_)
+            if attached_artifact.is_none() && fresh_attempt_id.is_some() => {}
         SliceCommandV1::ItemAttach(_)
             if attached_artifact.is_some() && fresh_attempt_id.is_none() => {}
         SliceCommandV1::ItemCheck(_)
@@ -2689,7 +2696,8 @@ where
             .map_err(ProcedureV2StartPreparationErrorV1::Execution)
     }
 
-    /// Attempts the Procedure v2 action/item path. The immutable execution document freezes all
+    /// Attempts the Procedure v2 action, decision-retry, or item path. The immutable execution
+    /// document freezes all
     /// generated IDs and attachment metadata before admission; an absent graph task preserves the
     /// unchanged v1 fallback.
     pub fn admit_procedure_v2_mutation_for_workspace_with_response_context(
@@ -2699,7 +2707,7 @@ where
         idempotency_key: IdempotencyKeyV1,
         response_context: Option<PersistedResponseContextV1>,
     ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
-        if !is_procedure_v2_action_mutation_v1(request.command()) {
+        if !is_procedure_v2_graph_mutation_v1(request.command()) {
             return Ok(None);
         }
         if let Some(existing) = self
@@ -2789,6 +2797,9 @@ where
         };
         let fresh_attempt_id = if matches!(request.command(), SliceCommandV1::SessionComplete(_)) {
             fresh_complete_attempt_id_v1(state, &self.ids)?
+        } else if let SliceCommandV1::SessionRetry(input) = request.command() {
+            ReasonV2::new(input.reason.clone()).map_err(ExecutionErrorV1::BoundaryDomain)?;
+            Some(self.ids.next_attempt_id())
         } else {
             None
         };
@@ -2960,6 +2971,53 @@ where
                 )
                 .map_err(|_| {
                     invalid_execution_v1("Procedure v2 complete operation cannot be persisted")
+                })?;
+                let result = DomainResult::SessionChanged {
+                    session_id: state.trace().session_id().clone(),
+                    revision_before: state.trace().revision(),
+                    revision_after: outcome.state().trace().revision(),
+                    changed: true,
+                };
+                self.store
+                    .commit_graph_mutation_terminal_v2(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        Some(outcome.into_state()),
+                        TerminalResultV1::Success(result),
+                        operation,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
+            SliceCommandV1::SessionRetry(input) => {
+                let reason = ReasonV2::new(input.reason.clone())
+                    .map_err(|_| invalid_execution_v1("Procedure v2 retry reason is invalid"))?;
+                let fresh_attempt_id = admitted.fresh_attempt_id.clone().ok_or_else(|| {
+                    invalid_execution_v1(
+                        "Procedure v2 retry execution has no fresh attempt identity",
+                    )
+                })?;
+                let outcome = match state.retry_active_attempt_v2(
+                    input.preconditions.expected_session_revision,
+                    &input.preconditions.expected_attempt_id,
+                    fresh_attempt_id,
+                    reason.clone(),
+                    now,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                };
+                let operation = PersistedGraphTerminalOperationV2::retry(
+                    outcome.graph_node_id().clone(),
+                    outcome.from_attempt_id().clone(),
+                    outcome.to_attempt_id().clone(),
+                    reason,
+                )
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 retry operation cannot be persisted")
                 })?;
                 let result = DomainResult::SessionChanged {
                     session_id: state.trace().session_id().clone(),
@@ -4774,5 +4832,40 @@ mod tests {
             validate_procedure_v2_durable_execution_v1(&admitted, &durable),
             Err(ExecutionErrorV1::InvalidPersistedExecution { .. })
         ));
+    }
+
+    #[test]
+    fn v2run004_retry_execution_freezes_fresh_identity_and_fails_closed() {
+        let admitted = AdmittedProcedureV2MutationV1 {
+            selector: WorktreeSelectorWireV1::new(b"/tmp/worktree", "/tmp/worktree", None).unwrap(),
+            workspace_id: WorkspaceId::new("00000000-0000-4000-8000-000000000904").unwrap(),
+            command: SliceCommandV1::SessionRetry(SessionRetryV1 {
+                reason: "Retry with clean attempt-local state.".to_owned(),
+                preconditions: podway_protocol::SessionMutationPreconditionsWireV1 {
+                    expected_session_id: SessionId::new("00000000-0000-4000-8000-000000000902")
+                        .unwrap(),
+                    expected_session_revision: Revision::new(7),
+                    expected_attempt_id: AttemptId::new("00000000-0000-4000-8000-000000000903")
+                        .unwrap(),
+                },
+            }),
+            fresh_attempt_id: Some(AttemptId::new("00000000-0000-4000-8000-000000000905").unwrap()),
+            attached_artifact: None,
+        };
+        let canonical = procedure_v2_mutation_execution_document_v1(&admitted).unwrap();
+        assert_eq!(
+            decode_procedure_v2_mutation_execution_v1(canonical.as_str())
+                .unwrap()
+                .fresh_attempt_id,
+            admitted.fresh_attempt_id
+        );
+
+        let mut missing_fresh: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        missing_fresh["fresh_attempt_id"] = Value::Null;
+        assert!(decode_procedure_v2_mutation_execution_v1(&missing_fresh.to_string()).is_err());
+
+        let mut oversized_reason: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        oversized_reason["payload"]["reason"] = json!("x".repeat(2_001));
+        assert!(decode_procedure_v2_mutation_execution_v1(&oversized_reason.to_string()).is_err());
     }
 }

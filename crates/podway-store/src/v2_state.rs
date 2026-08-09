@@ -6,7 +6,7 @@ use std::sync::Arc;
 use podway_core::{
     AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, CanonicalProcedureJsonV1,
     GoalRevisionNumberV2, GraphNodeId, ItemId, NodeDefinitionId, NodeKindV2, ProcedureSnapshotId,
-    ProcedureSourceKindV1, ProcedureSourceLabelV1, Revision, SessionAttemptV2, SessionId,
+    ProcedureSourceKindV1, ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2, SessionId,
     SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
     canonicalize_json_v1, verify_canonical_json_v1,
 };
@@ -33,7 +33,7 @@ const PROCEDURE_SCHEMA_DOCUMENT_V2: &str =
     include_str!("../../../assets/schemas/procedure-v2.schema.json");
 const MAX_GRAPH_NODES_V2: usize = 64;
 const MAX_TASK_TITLE_CHARACTERS_V2: usize = 500;
-const MAX_TERMINAL_REASON_CHARACTERS_V2: usize = 4_000;
+const MAX_TERMINAL_REASON_CHARACTERS_V2: usize = 2_000;
 type ActiveCursorColumnsV2<'a> = (Option<&'a str>, Option<&'a str>, Option<i64>);
 
 fn invalid(reason: &'static str) -> StoreValueErrorV1 {
@@ -683,6 +683,33 @@ pub struct GraphActionCompletionOutcomeV2 {
     to_attempt_id: Option<AttemptId>,
 }
 
+/// Pure result of retrying the active Procedure v2 action or decision placement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphRetryOutcomeV2 {
+    state: GraphSessionStateV2,
+    graph_node_id: GraphNodeId,
+    from_attempt_id: AttemptId,
+    to_attempt_id: AttemptId,
+}
+
+impl GraphRetryOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+    pub fn graph_node_id(&self) -> &GraphNodeId {
+        &self.graph_node_id
+    }
+    pub fn from_attempt_id(&self) -> &AttemptId {
+        &self.from_attempt_id
+    }
+    pub fn to_attempt_id(&self) -> &AttemptId {
+        &self.to_attempt_id
+    }
+}
+
 impl GraphActionCompletionOutcomeV2 {
     pub fn state(&self) -> &GraphSessionStateV2 {
         &self.state
@@ -1152,6 +1179,112 @@ impl GraphSessionStateV2 {
             from_graph_node_id,
             from_attempt_id,
             to_graph_node_id: target,
+            to_attempt_id,
+        })
+    }
+
+    pub fn retry_active_attempt_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+        fresh_attempt_id: AttemptId,
+        reason: ReasonV2,
+        now: UnixMillis,
+    ) -> Result<GraphRetryOutcomeV2, GraphMutationErrorV2> {
+        if self.trace.lifecycle() != SessionLifecycle::Running {
+            return Err(GraphMutationErrorV2::SessionNotRunning);
+        }
+        if self.trace.revision() != expected_session_revision {
+            return Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: expected_session_revision,
+                actual: self.trace.revision(),
+            });
+        }
+        let active =
+            self.trace
+                .active_attempt()
+                .ok_or_else(|| GraphMutationErrorV2::AttemptNotCurrent {
+                    expected: expected_attempt_id.clone(),
+                    actual: None,
+                })?;
+        if active.attempt_id() != expected_attempt_id {
+            return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                expected: expected_attempt_id.clone(),
+                actual: Some(active.attempt_id().clone()),
+            });
+        }
+        let active_metadata = self
+            .attempt_metadata
+            .iter()
+            .find(|metadata| metadata.attempt_id() == active.attempt_id())
+            .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+        if now < active_metadata.started_at() {
+            return Err(invalid("Procedure v2 retry timestamp regressed").into());
+        }
+
+        let graph_node_id = active.graph_node_id().clone();
+        let from_attempt_id = active.attempt_id().clone();
+        let to_attempt_id = fresh_attempt_id.clone();
+        let mut trace = self.trace.clone();
+        trace.retry(
+            expected_attempt_id,
+            fresh_attempt_id,
+            self.goal_state.current_revision(),
+        )?;
+        let workflow_memory =
+            self.workflow_memory
+                .retry_successor_v2(&self.snapshot, &trace, now)?;
+        let mut metadata = self.attempt_metadata.clone();
+        let active_index = metadata
+            .iter()
+            .position(|candidate| candidate.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+        metadata[active_index] = AttemptMetadataV2::new(
+            expected_attempt_id.clone(),
+            metadata[active_index].started_at(),
+            Some(now),
+            Some(reason.into_inner()),
+        )?;
+        metadata.push(AttemptMetadataV2::new(
+            to_attempt_id.clone(),
+            now,
+            None,
+            None,
+        )?);
+        let counters = self
+            .counters
+            .iter()
+            .map(|counter| {
+                Ok(GraphNodeCounterV2::new(
+                    counter.graph_node_id().clone(),
+                    counter
+                        .attempt_count()
+                        .checked_add(u64::from(counter.graph_node_id() == &graph_node_id))
+                        .ok_or_else(|| invalid("Procedure v2 retry attempt counter overflowed"))?,
+                    counter.rework_traversal_count(),
+                ))
+            })
+            .collect::<Result<Vec<_>, GraphMutationErrorV2>>()?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            counters,
+            metadata,
+            workflow_memory,
+            self.goal_state.clone(),
+            self.created_at,
+            None,
+            None,
+            None,
+        )?;
+        Ok(GraphRetryOutcomeV2 {
+            state,
+            graph_node_id,
+            from_attempt_id,
             to_attempt_id,
         })
     }
