@@ -155,7 +155,7 @@ Dependencies: `V2RUN`.
 | `V2DRW-003` | Rework a valid trace target | Completed | Enforce allowed targets and completed-session reactivation policy. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 | `V2DRW-004` | Invalidate and re-enter a suffix | Completed | Atomically stale the affected trace and activate one fresh target attempt. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 | `V2DRW-005` | Read decisions and rework back | Completed | Expose bounded current and stale workflow history without satisfying progression. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
-| `V2DRW-006` | Close decision and rework failures | Planned | Prove invalid, stale, duplicate, crash, restart, and repeated-cycle one-writer/cursor behavior. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
+| `V2DRW-006` | Close decision and rework failures | Completed | Prove invalid, stale, duplicate, crash, restart, and repeated-cycle one-writer/cursor behavior. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 
 ## V2GOL — Goal Tracking
 

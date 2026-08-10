@@ -1050,6 +1050,9 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 Some(claim.job_id().as_str()),
             )?;
         }
+        if matches!(receipt.result(), TerminalResultV1::Failure(_)) {
+            self.trigger_failpoint(StoreFailpointV1::TerminalFailureBeforeCommit)?;
+        }
         self.trigger_failpoint(StoreFailpointV1::TerminalBeforeCommit)?;
         transaction.commit().map_err(storage)?;
         self.trigger_failpoint(StoreFailpointV1::TerminalAfterCommitBeforeResponse)?;

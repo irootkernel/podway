@@ -54,6 +54,8 @@ mod int_v2drw001_decide;
 mod int_v2drw003_rework;
 #[path = "int_v2drw005_readback.rs"]
 mod int_v2drw005_readback;
+#[path = "int_v2drw006_failures.rs"]
+mod int_v2drw006_failures;
 #[path = "int_v2run001_start.rs"]
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]

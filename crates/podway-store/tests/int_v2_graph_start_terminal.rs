@@ -2675,6 +2675,171 @@ fn graph_mutation_failure_replays_exact_v2_error_without_mutating_state() {
 }
 
 #[test]
+fn v2drw006_graph_mutation_failure_precommit_io_rolls_back_and_retry_freezes_one_receipt() {
+    let temporary = TempDir::new().unwrap();
+    let initial = graph_state_with_required_artifact(820, 830, 10, true);
+    let active = initial.trace().active_attempt().unwrap();
+    let with_artifact = initial
+        .mutate_active_item_v2(
+            active.attempt_id(),
+            &ItemId::new("proof").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Attach {
+                value: ArtifactValueV1::local_path("proof.txt", digest('e'), 42, "text/plain")
+                    .unwrap(),
+            },
+            UnixMillis::new(11),
+        )
+        .unwrap()
+        .into_state();
+    let current = with_artifact
+        .mutate_active_item_v2(
+            with_artifact.trace().active_attempt().unwrap().attempt_id(),
+            &ItemId::new("done").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Check,
+            UnixMillis::new(12),
+        )
+        .unwrap()
+        .into_state();
+    {
+        let seed = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+        seed.create_graph_session_v2(&identity(), current.clone())
+            .unwrap();
+    }
+    let key = IdempotencyKeyV1::new("v2-failure-precommit-io").unwrap();
+    let options = SqliteStoreOptionsV1::new(8)
+        .unwrap()
+        .with_failpoint(Some(StoreFailpointV1::TerminalFailureBeforeCommit))
+        .with_failpoint_action(StoreFailpointActionV1::ReturnInjectedStorageIo);
+    let store = open(&temporary, options, 20);
+    let claimed = admit_complete_and_claim(&store, &current, key.as_str(), 840);
+    let job_id = claimed.job().job_id().clone();
+    let operation = PersistedGraphTerminalOperationV2::failure(
+        PersistedGraphMutationFailureV2::ArtifactChanged,
+    )
+    .unwrap();
+    let failure_result = TerminalResultV1::Failure(DomainError::InvalidState {
+        reason: "Procedure v2 graph mutation failed",
+    });
+
+    assert_eq!(
+        store.commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            None,
+            failure_result.clone(),
+            operation.clone(),
+            UnixMillis::new(33),
+        ),
+        Err(podway_store::StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::StorageIo,
+        })
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    let running = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(running.state(), JobStateV1::Running);
+    assert!(running.terminal_receipt().is_none());
+    assert!(
+        store
+            .read_idempotency_lookup(&identity(), &key)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt()
+            .is_none()
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 34);
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 1);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    let recovered = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(recovered.state(), JobStateV1::Queued);
+    assert!(recovered.terminal_receipt().is_none());
+    assert_eq!(
+        reopened
+            .read_workspace_view(&identity())
+            .unwrap()
+            .queued_job_count(),
+        1
+    );
+    let reclaimed = reopened
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-failure-retry-worker").unwrap(),
+            UnixMillis::new(35),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(reclaimed.job().job_id(), &job_id);
+    reopened
+        .commit_graph_mutation_terminal_v2(
+            reclaimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            None,
+            failure_result,
+            operation.clone(),
+            UnixMillis::new(36),
+        )
+        .unwrap();
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    let failed = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(failed.state(), JobStateV1::Failed);
+    let frozen = failed.terminal_receipt().unwrap().clone();
+    assert_eq!(
+        frozen.graph_session_projection().unwrap().operation(),
+        Some(&operation)
+    );
+    assert_eq!(
+        reopened
+            .read_idempotency_lookup(&identity(), &key)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(&frozen)
+    );
+    drop(reopened);
+
+    let cold = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 37);
+    assert_eq!(cold.startup_recovery_report().requeued_job_count(), 0);
+    assert_eq!(
+        cold.read_workspace_view(&identity())
+            .unwrap()
+            .queued_job_count(),
+        0
+    );
+    assert_eq!(
+        cold.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    assert_eq!(
+        cold.read_job(&identity(), &job_id)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(&frozen)
+    );
+    assert_eq!(
+        cold.read_idempotency_lookup(&identity(), &key)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(&frozen)
+    );
+}
+
+#[test]
 fn graph_mutation_failure_rejects_command_and_revision_mismatches_before_commit() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
