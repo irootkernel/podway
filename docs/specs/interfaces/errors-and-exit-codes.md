@@ -157,6 +157,16 @@ conflicts, while `DIGEST_CONFIRMATION_REQUIRED` is a non-retryable exit-2 usage
 failure and `UNSUPPORTED_V2_CAPABILITY` is a non-retryable exit-3 compatibility
 failure.
 
+Request decoding precedes these domain checks. A missing or blank reason in the
+current public `session.decide` or `session.rework` request shape is malformed and
+returns `REQUEST_INVALID` before durable admission. `DECISION_REASON_MISSING`
+remains the stable fail-closed result at the decision-transition boundary. A
+semantically vetted Procedure has a complete option-to-route map, and coherent
+session reconstruction rejects a valid evidence consumer whose bound source is
+stale. Consequently, `ROUTE_NOT_ALLOWED` and `EVIDENCE_REFERENCE_STALE` also
+remain registered defensive domain results rather than expected outcomes from a
+coherent current public request.
+
 Every registered v2 runtime code uses the closed
 `podway.v2-runtime-error-details/v1` details family inside the retained
 `podway.error/v1` envelope. Its required `kind` exactly equals the outer error
