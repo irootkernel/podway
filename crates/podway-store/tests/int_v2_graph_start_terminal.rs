@@ -711,6 +711,61 @@ fn graph_action_admission_rejects_stale_fences_without_rows_and_replays_first() 
         )
     );
 
+    let stale_rework_revision = action_runtime_admit_request(
+        &state,
+        DomainCommand::SessionRework,
+        "session.rework",
+        "v2drw003-store-stale-rework-revision",
+        2_338,
+        digest('8'),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(Revision::new(2)),
+            Some(active.attempt_id().clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        store.admit(&identity(), stale_rework_revision),
+        Err(
+            podway_store::StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+                failure: PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: Revision::new(2),
+                    actual: Revision::new(1),
+                },
+            }
+        )
+    );
+
+    let wrong_rework_attempt = AttemptId::new(uuid(2_398)).unwrap();
+    let stale_rework_attempt = action_runtime_admit_request(
+        &state,
+        DomainCommand::SessionRework,
+        "session.rework",
+        "v2drw003-store-stale-rework-attempt",
+        2_339,
+        digest('9'),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(Revision::new(1)),
+            Some(wrong_rework_attempt.clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        store.admit(&identity(), stale_rework_attempt),
+        Err(
+            podway_store::StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+                failure: PersistedGraphMutationFailureV2::AttemptNotCurrent {
+                    expected: wrong_rework_attempt,
+                    actual: Some(active.attempt_id().clone()),
+                },
+            }
+        )
+    );
+
     let item_id = ItemId::new("done").unwrap();
     let stale_item = action_runtime_admit_request(
         &state,
@@ -795,6 +850,8 @@ fn graph_action_admission_rejects_stale_fences_without_rows_and_replays_first() 
         (2_332, "v2run007-store-stale-item"),
         (2_336, "v2run007-store-missing-item"),
         (2_337, "v2run007-store-stale-reset"),
+        (2_338, "v2drw003-store-stale-rework-revision"),
+        (2_339, "v2drw003-store-stale-rework-attempt"),
     ] {
         assert!(
             store

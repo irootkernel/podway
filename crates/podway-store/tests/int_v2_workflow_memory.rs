@@ -2349,6 +2349,178 @@ fn manual_rework_reactivates_completed_session_without_rewriting_history() {
 }
 
 #[test]
+fn v2drw003_manual_rework_reenters_running_and_completed_sessions() {
+    let running = gate_state();
+    let running_outcome = running
+        .manual_rework_v2(
+            Revision::new(4),
+            Some(&attempt_id(2)),
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit the capture.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+    assert!(!running_outcome.reactivated());
+    assert_eq!(running_outcome.from_graph_node_id(), &node("gate"));
+    assert_eq!(running_outcome.to_graph_node_id(), &node("capture"));
+    assert_eq!(running_outcome.to_attempt_id(), &attempt_id(3));
+    assert_eq!(running_outcome.record().kind(), ReworkKindV2::Manual);
+    assert_eq!(
+        running_outcome.record().actor().unwrap().as_str(),
+        "operator"
+    );
+    let reentered = running_outcome.into_state();
+    assert_eq!(reentered.trace().lifecycle(), SessionLifecycle::Running);
+    assert_eq!(
+        reentered.trace().active_attempt().unwrap().attempt_id(),
+        &attempt_id(3)
+    );
+    assert_eq!(reentered.workflow_memory().reworks().len(), 1);
+    assert_eq!(reentered.counters()[0].attempt_count(), 2);
+    assert_eq!(reentered.counters()[0].rework_traversal_count(), 1);
+
+    let completed = finish_state(6, true);
+    let completed_outcome = completed
+        .manual_rework_v2(
+            Revision::new(6),
+            None,
+            node("capture"),
+            attempt_id(4),
+            ReasonV2::new("Requirements changed.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(60),
+        )
+        .unwrap();
+    assert!(completed_outcome.reactivated());
+    assert_eq!(completed_outcome.from_graph_node_id(), &node("finish"));
+    let reactivated = completed_outcome.into_state();
+    assert_eq!(reactivated.trace().revision(), Revision::new(7));
+    assert_eq!(reactivated.trace().lifecycle(), SessionLifecycle::Running);
+    assert!(reactivated.completed_at().is_none());
+    assert_eq!(
+        reactivated.trace().active_attempt().unwrap().attempt_id(),
+        &attempt_id(4)
+    );
+    assert_eq!(reactivated, manual_reactivated_state());
+}
+
+#[test]
+fn v2drw003_manual_rework_allows_the_current_node_and_rejects_invalid_policy_state() {
+    let active_finish = finish_state(5, false);
+    let same_node = active_finish
+        .manual_rework_v2(
+            Revision::new(5),
+            Some(&attempt_id(3)),
+            node("finish"),
+            attempt_id(4),
+            ReasonV2::new("Repeat final checks.").unwrap(),
+            None,
+            UnixMillis::new(50),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(
+        same_node.trace().attempts()[2].validity(),
+        AttemptValidityV2::Stale
+    );
+    assert_eq!(
+        same_node.trace().active_attempt().unwrap().graph_node_id(),
+        &node("finish")
+    );
+    assert_eq!(same_node.counters()[2].attempt_count(), 2);
+    assert_eq!(same_node.counters()[2].rework_traversal_count(), 1);
+
+    let state = gate_state();
+    let before = state.clone();
+    assert_eq!(
+        state.manual_rework_v2(
+            Revision::new(3),
+            Some(&attempt_id(2)),
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::SessionRevisionConflict {
+            expected: Revision::new(3),
+            actual: Revision::new(4),
+        })
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        state.manual_rework_v2(
+            Revision::new(4),
+            Some(&attempt_id(2)),
+            node("gate"),
+            attempt_id(3),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::ManualReworkTargetNotAllowed {
+            target_graph_node_id: node("gate"),
+        })
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        initial_state().manual_rework_v2(
+            Revision::new(1),
+            Some(&attempt_id(1)),
+            node("finish"),
+            attempt_id(2),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(20),
+        ),
+        Err(GraphMutationErrorV2::ManualReworkTargetNotOnTrace {
+            target_graph_node_id: node("finish"),
+        })
+    );
+
+    let completed = finish_state(6, true);
+    assert_eq!(
+        completed.manual_rework_v2(
+            Revision::new(6),
+            Some(&attempt_id(3)),
+            node("capture"),
+            attempt_id(4),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(60),
+        ),
+        Err(GraphMutationErrorV2::AttemptNotCurrent {
+            expected: attempt_id(3),
+            actual: None,
+        })
+    );
+
+    let cancelled = gate_state()
+        .cancel_active_session_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            ReasonV2::new("Cancelled.").unwrap(),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(
+        cancelled.manual_rework_v2(
+            Revision::new(5),
+            None,
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(50),
+        ),
+        Err(GraphMutationErrorV2::SessionCancelled)
+    );
+}
+
+#[test]
 fn failpoint_history_rewrite_and_digest_corruption_fail_closed_atomically() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());

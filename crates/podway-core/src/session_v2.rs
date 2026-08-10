@@ -442,6 +442,55 @@ impl SessionTraceV2 {
         Ok(())
     }
 
+    /// Manually re-enters one valid trace target from either a running or completed session.
+    /// Running callers must fence the exact active attempt; completed callers must supply no
+    /// attempt fence. Cancelled sessions cannot be reactivated.
+    pub fn manual_rework(
+        &mut self,
+        expected_active: Option<&AttemptId>,
+        target_node: GraphNodeId,
+        fresh_attempt_id: AttemptId,
+        goal_revision: Option<GoalRevisionNumberV2>,
+    ) -> Result<(), DomainError> {
+        match self.lifecycle {
+            SessionLifecycle::Running => {
+                let expected_active = expected_active
+                    .ok_or_else(|| invalid("running manual rework requires the active attempt"))?;
+                let active_index = self.require_running_active(expected_active)?;
+                let target_trace = self
+                    .valid_attempt_trace(&target_node)
+                    .ok_or_else(|| invalid("rework target has no valid attempt on the trace"))?;
+                let (fresh, next_revision) =
+                    self.prepare_fresh(&target_node, &fresh_attempt_id, goal_revision)?;
+                self.attempts[active_index].lifecycle = AttemptLifecycle::Abandoned;
+                self.stale_suffix_from_trace(target_trace);
+                self.attempts.push(fresh);
+                self.revision = next_revision;
+                Ok(())
+            }
+            SessionLifecycle::Completed => {
+                if expected_active.is_some() {
+                    return Err(invalid(
+                        "completed manual rework accepts no active attempt fence",
+                    ));
+                }
+                let target_trace = self
+                    .valid_attempt_trace(&target_node)
+                    .ok_or_else(|| invalid("rework target has no valid attempt on the trace"))?;
+                let (fresh, next_revision) =
+                    self.prepare_fresh(&target_node, &fresh_attempt_id, goal_revision)?;
+                self.stale_suffix_from_trace(target_trace);
+                self.attempts.push(fresh);
+                self.lifecycle = SessionLifecycle::Running;
+                self.revision = next_revision;
+                Ok(())
+            }
+            SessionLifecycle::Cancelled => {
+                Err(invalid("a cancelled session cannot be manually reworked"))
+            }
+        }
+    }
+
     fn require_running_active(&self, expected: &AttemptId) -> Result<usize, DomainError> {
         if self.lifecycle != SessionLifecycle::Running {
             return Err(invalid("the session is not running"));
@@ -1075,6 +1124,59 @@ mod tests {
         assert_eq!(identity(&trace.attempts()[0]), pre[0]);
         assert_eq!(identity(&trace.attempts()[1]), pre[1]);
         assert_eq!(identity(&trace.attempts()[2]), pre[2]);
+    }
+
+    #[test]
+    fn manual_rework_unifies_running_reentry_and_completed_reactivation() {
+        let mut running =
+            SessionTraceV2::start(session(), node("implement"), attempt_id(1), None).unwrap();
+        running
+            .advance(
+                &attempt_id(1),
+                AdvanceTerminalV2::Completed,
+                node("finish"),
+                attempt_id(2),
+                None,
+            )
+            .unwrap();
+        running
+            .manual_rework(Some(&attempt_id(2)), node("finish"), attempt_id(3), None)
+            .unwrap();
+        assert_eq!(running.lifecycle(), SessionLifecycle::Running);
+        assert_eq!(running.attempts()[1].validity(), AttemptValidityV2::Stale);
+        assert_eq!(
+            running.active_attempt().unwrap().attempt_id(),
+            &attempt_id(3)
+        );
+
+        let mut completed =
+            SessionTraceV2::start(session(), node("implement"), attempt_id(1), None).unwrap();
+        completed
+            .advance(
+                &attempt_id(1),
+                AdvanceTerminalV2::Completed,
+                node("finish"),
+                attempt_id(2),
+                None,
+            )
+            .unwrap();
+        completed
+            .finish(&attempt_id(2), AdvanceTerminalV2::Completed)
+            .unwrap();
+        completed
+            .manual_rework(None, node("implement"), attempt_id(3), None)
+            .unwrap();
+        assert_eq!(completed.lifecycle(), SessionLifecycle::Running);
+        assert!(
+            completed.attempts()[..2]
+                .iter()
+                .all(|attempt| attempt.validity() == AttemptValidityV2::Stale)
+        );
+        assert_eq!(
+            completed.active_attempt().unwrap().attempt_id(),
+            &attempt_id(3)
+        );
+        assert_eq!(completed.revision(), Revision::new(3));
     }
 
     #[test]

@@ -67,7 +67,7 @@ fn registered_command_catalog_route_availability() -> BTreeMap<String, String> {
     assert_eq!(
         routes.len(),
         59,
-        "the registered command catalog must contain the 55 executable routes and 4 reserved v2 routes"
+        "the registered command catalog must contain the 56 executable routes and 3 reserved v2 routes"
     );
     routes
 }
@@ -748,27 +748,34 @@ fn recording_response(request: &RequestEnvelopeV1, reply: RecordingReply) -> Val
             }
             envelope
         }
-        RecordingReply::V2Output(result) => serde_json::json!({
-            "schema": "podway.output/v2",
-            "request_id": request.request_id().as_str(),
-            "command": request.command().as_str(),
-            "generated_at": "2026-07-16T12:34:56.789Z",
-            "workspace": {
-                "uuid": RECORDING_WORKSPACE_ID,
-                "root": request.workspace().expect("recorded request must select a workspace").root(),
-                "latest_workspace_sequence": 1
-            },
-            "job": {
-                "id": RECORDING_JOB_ID,
-                "sequence": 1,
-                "state": "succeeded",
-                "submitted_at": "2026-07-16T12:34:56.789Z",
-                "claimed_at": "2026-07-16T12:34:56.789Z",
-                "finished_at": "2026-07-16T12:34:56.789Z"
-            },
-            "result": result,
-            "warnings": []
-        }),
+        RecordingReply::V2Output(result) => {
+            let envelope = serde_json::json!({
+                "schema": "podway.output/v2",
+                "request_id": request.request_id().as_str(),
+                "command": request.command().as_str(),
+                "generated_at": "2026-07-16T12:34:56.789Z",
+                "workspace": {
+                    "uuid": RECORDING_WORKSPACE_ID,
+                    "root": request.workspace().expect("recorded request must select a workspace").root(),
+                    "latest_workspace_sequence": 1
+                },
+                "job": {
+                    "id": RECORDING_JOB_ID,
+                    "sequence": 1,
+                    "state": "succeeded",
+                    "submitted_at": "2026-07-16T12:34:56.789Z",
+                    "claimed_at": "2026-07-16T12:34:56.789Z",
+                    "finished_at": "2026-07-16T12:34:56.789Z"
+                },
+                "result": result,
+                "warnings": []
+            });
+            podway_protocol::decode_response_payload_v2(
+                &serde_json::to_vec(&envelope).expect("recorded v2 response must serialize"),
+            )
+            .expect("recorded v2 response must satisfy its public envelope contract");
+            envelope
+        }
         RecordingReply::Error => serde_json::json!({
             "schema": "podway.error/v1",
             "request_id": request.request_id().as_str(),
@@ -927,6 +934,23 @@ fn authoritative_decision_result() -> Value {
         "revision": 8,
         "session_state": "running",
         "record": record
+    })
+}
+
+fn authoritative_rework_result() -> Value {
+    serde_json::json!({
+        "schema": "podway.rework-result/v1",
+        "admission": {
+            "admitted": true,
+            "job_id": RECORDING_JOB_ID,
+            "workspace_sequence": 1
+        },
+        "from_graph_node_id": "finish",
+        "to_graph_node_id": "implement",
+        "target_attempt_id": RECORDING_TARGET_ATTEMPT_ID,
+        "reason": "Requirements changed.",
+        "reactivated": true,
+        "revision": 8
     })
 }
 
@@ -2765,12 +2789,7 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
         .collect::<BTreeSet<_>>();
     assert_eq!(
         reserved_v2_routes,
-        BTreeSet::from([
-            "goal.assess_criterion",
-            "goal.define",
-            "goal.revise",
-            "session.rework",
-        ]),
+        BTreeSet::from(["goal.assess_criterion", "goal.define", "goal.revise",]),
         "reserved v2 grammar must remain unavailable until its runtime owner lands",
     );
     assert_eq!(DAEMON_CONTRACTS.len(), 30);
@@ -3262,12 +3281,67 @@ rework:
     assert_eq!(decision_requests[0]["payload"]["option_id"], "approve");
     assert_eq!(decision_requests[0]["preconditions"]["session_revision"], 7);
 
+    let rework_result = authoritative_rework_result();
+    podway_protocol::validate_command_result_v2(
+        "session.rework",
+        rework_result
+            .as_object()
+            .expect("the authoritative rework result must be an object"),
+    )
+    .expect("the authoritative rework result must satisfy its public contract");
+    let rework_daemon =
+        RecordingDaemon::start(&fixture, vec![RecordingReply::V2Output(rework_result)]);
+    let rework_output = fixture.run(&[
+        "--json",
+        "--worktree",
+        fixture.root.to_string_lossy().as_ref(),
+        "rework",
+        "--to",
+        "implement",
+        "--reason",
+        "Requirements changed.",
+        "--actor",
+        "reviewer",
+        "--if-workspace-uuid",
+        RECORDING_WORKSPACE_ID,
+        "--if-session-id",
+        RECORDING_SESSION_ID,
+        "--if-session-revision",
+        "7",
+        "--if-attempt",
+        RECORDING_ATTEMPT_ID,
+    ]);
+    assert!(
+        rework_output.status.success(),
+        "session.rework must accept its executable v2 success contract: {rework_output:?}"
+    );
+    let rework_response = one_json(&rework_output);
+    assert_eq!(rework_response["schema"], "podway.output/v2");
+    assert_eq!(rework_response["command"], "session.rework");
+    assert_eq!(
+        rework_response["result"]["schema"],
+        "podway.rework-result/v1"
+    );
+    let rework_requests = rework_daemon.finish();
+    assert_eq!(rework_requests.len(), 1);
+    assert_eq!(rework_requests[0]["command"], "session.rework");
+    assert_eq!(
+        rework_requests[0]["payload"]["target_graph_node_id"],
+        "implement"
+    );
+    assert_eq!(rework_requests[0]["preconditions"]["session_revision"], 7);
+    assert_eq!(
+        rework_requests[0]["preconditions"]["attempt_id"],
+        RECORDING_ATTEMPT_ID
+    );
+
     let executed_routes = DAEMON_CONTRACTS
         .iter()
         .map(|contract| contract.route)
         .chain(local_successes.iter().map(|(route, _)| *route))
         .chain(service_routes.iter().map(|(route, _)| *route))
         .chain(std::iter::once("session.decide"))
+        .chain(std::iter::once("session.rework"))
         .collect::<BTreeSet<_>>();
     assert_eq!(
         executed_routes,

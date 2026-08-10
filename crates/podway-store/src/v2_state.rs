@@ -714,6 +714,13 @@ pub struct GraphDecisionOutcomeV2 {
     to_attempt_id: AttemptId,
 }
 
+/// Pure result of manually re-entering one allowed valid-trace target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphManualReworkOutcomeV2 {
+    state: GraphSessionStateV2,
+    record: podway_core::ReworkRecordV2,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphBlockOutcomeV2 {
     state: GraphSessionStateV2,
@@ -815,6 +822,30 @@ impl GraphDecisionOutcomeV2 {
     }
     pub fn to_attempt_id(&self) -> &AttemptId {
         &self.to_attempt_id
+    }
+}
+
+impl GraphManualReworkOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+    pub fn record(&self) -> &podway_core::ReworkRecordV2 {
+        &self.record
+    }
+    pub fn from_graph_node_id(&self) -> &GraphNodeId {
+        self.record.from_node()
+    }
+    pub fn to_graph_node_id(&self) -> &GraphNodeId {
+        self.record.to_node()
+    }
+    pub fn to_attempt_id(&self) -> &AttemptId {
+        self.record.target_attempt_id()
+    }
+    pub const fn reactivated(&self) -> bool {
+        self.record.reactivated()
     }
 }
 
@@ -1708,6 +1739,134 @@ impl GraphSessionStateV2 {
             to_graph_node_id,
             to_attempt_id,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn manual_rework_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: Option<&AttemptId>,
+        target_graph_node_id: GraphNodeId,
+        fresh_attempt_id: AttemptId,
+        reason: ReasonV2,
+        actor: Option<ActorAttributionV2>,
+        now: UnixMillis,
+    ) -> Result<GraphManualReworkOutcomeV2, GraphMutationErrorV2> {
+        if self.trace.revision() != expected_session_revision {
+            return Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: expected_session_revision,
+                actual: self.trace.revision(),
+            });
+        }
+        let source = match self.trace.lifecycle() {
+            SessionLifecycle::Cancelled => return Err(GraphMutationErrorV2::SessionCancelled),
+            SessionLifecycle::Running => {
+                let active = self
+                    .trace
+                    .active_attempt()
+                    .ok_or_else(|| invalid("running Procedure v2 session has no active attempt"))?;
+                let expected = expected_attempt_id.ok_or_else(|| {
+                    invalid("running Procedure v2 manual rework requires an attempt fence")
+                })?;
+                if active.attempt_id() != expected {
+                    return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                        expected: expected.clone(),
+                        actual: Some(active.attempt_id().clone()),
+                    });
+                }
+                active
+            }
+            SessionLifecycle::Completed => {
+                if let Some(expected) = expected_attempt_id {
+                    return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                        expected: expected.clone(),
+                        actual: None,
+                    });
+                }
+                self.trace
+                    .attempts()
+                    .last()
+                    .ok_or_else(|| invalid("completed Procedure v2 session has no attempt"))?
+            }
+        };
+        let source_metadata = self
+            .attempt_metadata
+            .iter()
+            .find(|metadata| metadata.attempt_id() == source.attempt_id())
+            .ok_or_else(|| invalid("Procedure v2 manual rework source metadata is absent"))?;
+        if now
+            < source_metadata
+                .ended_at()
+                .unwrap_or(source_metadata.started_at())
+        {
+            return Err(invalid("Procedure v2 manual rework timestamp regressed").into());
+        }
+        let terminal_reason = reason.clone();
+        let transition = self.workflow_memory.manual_rework_v2(
+            &self.snapshot,
+            &self.trace,
+            expected_attempt_id,
+            target_graph_node_id,
+            fresh_attempt_id,
+            self.goal_state.current_revision(),
+            reason,
+            actor,
+            now,
+        )?;
+        let to_graph_node_id = transition.record.to_node().clone();
+        let to_attempt_id = transition.record.target_attempt_id().clone();
+        let mut metadata = self.attempt_metadata.clone();
+        if self.trace.lifecycle() == SessionLifecycle::Running {
+            let source_index = metadata
+                .iter()
+                .position(|candidate| candidate.attempt_id() == source.attempt_id())
+                .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+            metadata[source_index] = AttemptMetadataV2::new(
+                source.attempt_id().clone(),
+                metadata[source_index].started_at(),
+                Some(now),
+                Some(terminal_reason.as_str().to_owned()),
+            )?;
+        }
+        metadata.push(AttemptMetadataV2::new(to_attempt_id, now, None, None)?);
+        let counters = self
+            .counters
+            .iter()
+            .map(|counter| {
+                let is_target = counter.graph_node_id() == &to_graph_node_id;
+                Ok(GraphNodeCounterV2::new(
+                    counter.graph_node_id().clone(),
+                    counter
+                        .attempt_count()
+                        .checked_add(u64::from(is_target))
+                        .ok_or_else(|| {
+                            invalid("Procedure v2 manual rework attempt counter overflowed")
+                        })?,
+                    counter
+                        .rework_traversal_count()
+                        .checked_add(u64::from(is_target))
+                        .ok_or_else(|| invalid("Procedure v2 manual rework counter overflowed"))?,
+                ))
+            })
+            .collect::<Result<Vec<_>, GraphMutationErrorV2>>()?;
+        let record = transition.record;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            transition.trace,
+            counters,
+            metadata,
+            transition.memory,
+            self.goal_state.clone(),
+            self.created_at,
+            None,
+            None,
+            None,
+        )?;
+        Ok(GraphManualReworkOutcomeV2 { state, record })
     }
 
     pub fn skip_active_action_v2(

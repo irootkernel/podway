@@ -1406,9 +1406,17 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         daemon_request: &DaemonRequestV1,
     ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
         if let DaemonRequestV1::ProcedureV2Mutation(typed_request) = daemon_request {
-            if typed_request.command().command_name() != "session.decide" {
+            if !matches!(
+                typed_request.command().command_name(),
+                "session.decide" | "session.rework"
+            ) {
                 return Ok(None);
             }
+            let terminal_kind = match typed_request.command().command_name() {
+                "session.decide" => TerminalCommandKindV1::Decision,
+                "session.rework" => TerminalCommandKindV1::Rework,
+                _ => unreachable!("typed mutation was filtered above"),
+            };
             let runtime = ProductionWorkspaceRuntimeV1::new(
                 Arc::clone(&self.manager),
                 Arc::clone(&self.clock),
@@ -1460,12 +1468,8 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     Some(WorkerWaitResultV1::TimedOut(_)) | None => None,
                 });
             if let Some(receipt) = terminal {
-                return terminal_direct_response_v2(
-                    receipt,
-                    TerminalCommandKindV1::Decision,
-                    request.request_id(),
-                )
-                .map(Some);
+                return terminal_direct_response_v2(receipt, terminal_kind, request.request_id())
+                    .map(Some);
             }
             if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
                 let job = job_output(view)?;
@@ -2817,6 +2821,7 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
         podway_store::CommandV1::SessionReopen => "session.reopen",
         podway_store::CommandV1::SessionReset => "session.reset",
         podway_store::CommandV1::SessionDecide => "session.decide",
+        podway_store::CommandV1::SessionRework => "session.rework",
         podway_store::CommandV1::ItemCheck { .. } => "item.check",
         podway_store::CommandV1::ItemUncheck { .. } => "item.uncheck",
         podway_store::CommandV1::ItemSet { .. } => "item.set",
@@ -2836,6 +2841,7 @@ enum TerminalCommandKindV1 {
     Return,
     Reopen,
     Decision,
+    Rework,
     Other,
 }
 fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> TerminalCommandKindV1 {
@@ -2848,6 +2854,7 @@ fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> Termin
         "session.return" => TerminalCommandKindV1::Return,
         "session.reopen" => TerminalCommandKindV1::Reopen,
         "session.decide" => TerminalCommandKindV1::Decision,
+        "session.rework" => TerminalCommandKindV1::Rework,
         _ => TerminalCommandKindV1::Other,
     }
 }
@@ -2860,6 +2867,7 @@ fn validate_terminal_receipt_projection(
             (
                 None
                 | Some(PersistedGraphTerminalOperationV2::Decide { .. })
+                | Some(PersistedGraphTerminalOperationV2::Rework { .. })
                 | Some(PersistedGraphTerminalOperationV2::Complete { .. })
                 | Some(PersistedGraphTerminalOperationV2::Skip { .. })
                 | Some(PersistedGraphTerminalOperationV2::Retry { .. })
@@ -3054,6 +3062,7 @@ fn validate_frozen_terminal_error(
         }
         Some(
             PersistedGraphTerminalOperationV2::Decide { .. }
+            | PersistedGraphTerminalOperationV2::Rework { .. }
             | PersistedGraphTerminalOperationV2::Complete { .. }
             | PersistedGraphTerminalOperationV2::Skip { .. }
             | PersistedGraphTerminalOperationV2::Retry { .. }
@@ -3158,6 +3167,30 @@ fn validate_frozen_v2_result_projection(
                 && result.get("target_graph_node_id") == record_object.get("target_graph_node_id")
                 && result.get("target_attempt_id").and_then(Value::as_str)
                     == Some(target_attempt_id.as_str())
+        }),
+        (
+            Some("podway.rework-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                revision_after,
+                ..
+            }),
+        ) => graph_session.is_some_and(|projection| {
+            let Some(PersistedGraphTerminalOperationV2::Rework { record }) = projection.operation()
+            else {
+                return false;
+            };
+            let Some(record) = record.as_object() else {
+                return false;
+            };
+            projection.lifecycle() == PersistedSessionLifecycleV1::Running
+                && projection.revision_after() == *revision_after
+                && result.len() == 8
+                && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                && result.get("from_graph_node_id") == record.get("from_graph_node_id")
+                && result.get("to_graph_node_id") == record.get("to_graph_node_id")
+                && result.get("target_attempt_id") == record.get("target_attempt_id")
+                && result.get("reason") == record.get("reason")
+                && result.get("reactivated") == record.get("reactivated")
         }),
         (
             Some("podway.stage-transition-result/v2"),
@@ -3391,6 +3424,7 @@ fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'
         | PersistedDomainCommandV1::SessionReturn
         | PersistedDomainCommandV1::SessionReopen
         | PersistedDomainCommandV1::SessionDecide
+        | PersistedDomainCommandV1::SessionRework
         | PersistedDomainCommandV1::ItemCheck { .. }
         | PersistedDomainCommandV1::ItemUncheck { .. }
         | PersistedDomainCommandV1::ItemSet { .. }
@@ -3458,6 +3492,28 @@ fn graph_terminal_envelope_v2(
             })
             .as_object()
             .expect("graph decision result is an object")
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::Rework { record }) => {
+            if graph.lifecycle() != PersistedSessionLifecycleV1::Running {
+                return Err(terminal_replay_integrity_failure());
+            }
+            let record = record
+                .as_object()
+                .ok_or_else(terminal_replay_integrity_failure)?;
+            let result = json!({
+                "schema": "podway.rework-result/v1",
+                "admission": graph_admission_value_v2(receipt)?,
+                "from_graph_node_id": record.get("from_graph_node_id").ok_or_else(terminal_replay_integrity_failure)?,
+                "to_graph_node_id": record.get("to_graph_node_id").ok_or_else(terminal_replay_integrity_failure)?,
+                "target_attempt_id": record.get("target_attempt_id").ok_or_else(terminal_replay_integrity_failure)?,
+                "reason": record.get("reason").ok_or_else(terminal_replay_integrity_failure)?,
+                "reactivated": record.get("reactivated").ok_or_else(terminal_replay_integrity_failure)?,
+                "revision": graph.revision_after(),
+            })
+            .as_object()
+            .expect("graph rework result is an object")
             .clone();
             graph_success_terminal_envelope_v2(receipt, result)
         }
@@ -4046,6 +4102,7 @@ fn map_terminal_domain_error(
                 | TerminalCommandKindV1::Return
                 | TerminalCommandKindV1::Reopen
                 | TerminalCommandKindV1::Decision
+                | TerminalCommandKindV1::Rework
                 | TerminalCommandKindV1::Start
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionRevisionConflict,
             };
@@ -4080,6 +4137,7 @@ fn map_terminal_domain_error(
                 | TerminalCommandKindV1::SessionReset
                 | TerminalCommandKindV1::Start
                 | TerminalCommandKindV1::Decision
+                | TerminalCommandKindV1::Rework
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionNotRunning,
             };
             DispatchFailureV1::new(kind)
@@ -4120,6 +4178,9 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
         PersistedGraphMutationFailureV2::SessionNotRunning => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionNotRunning)
         }
+        PersistedGraphMutationFailureV2::SessionCancelled => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionCancelled)
+        }
         PersistedGraphMutationFailureV2::SessionRevisionConflict { expected, actual } => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict).with_details(
                 DispatchErrorDetailsV1::default()
@@ -4158,6 +4219,20 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
             DispatchErrorDetailsV1::default()
                 .with_route_not_allowed(graph_node_id.clone(), option_id.clone()),
         ),
+        PersistedGraphMutationFailureV2::ManualReworkTargetNotAllowed {
+            target_graph_node_id,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::ManualReworkTargetNotAllowed)
+            .with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_manual_rework_target_not_allowed(target_graph_node_id.clone()),
+            ),
+        PersistedGraphMutationFailureV2::ManualReworkTargetNotOnTrace {
+            target_graph_node_id,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::ManualReworkTargetNotOnTrace)
+            .with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_manual_rework_target_not_on_trace(target_graph_node_id.clone()),
+            ),
         PersistedGraphMutationFailureV2::DecisionReasonMissing { graph_node_id } => {
             DispatchFailureV1::new(DispatchFailureKindV1::DecisionReasonMissing).with_details(
                 DispatchErrorDetailsV1::default()

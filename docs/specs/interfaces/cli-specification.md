@@ -95,8 +95,8 @@ identity results before using any reported field.
 The status and next shapes below are executable for Procedure v2 sessions.
 Procedure v2 authoring and preview commands are executable and are specified in
 their dedicated sections below. Shared item mutations, `session.complete`, and
-`session.decide` are executable for their matching active attempts and return
-their registered v2 result families. The four remaining reserved mutation routes
+`session.decide`, and `session.rework` are executable for their matching session
+states and return their registered v2 result families. The three remaining reserved mutation routes
 and goal-bearing start are exposed by the CLI grammar, but remain
 `reserved_contract` capabilities until their owning runtime tasks land. For an
 active Procedure v2 session, the CLI uses
@@ -430,8 +430,9 @@ commands; neither retained command is an alias for `rework`.
 The CLI obtains omitted workspace, session, revision, attempt, and goal-revision
 fences from a version-aware standard status preflight. A caller may provide the
 complete command-specific fences to skip that read. The preflight does not
-reinterpret a Procedure v2 session as v1. Until `session.rework` becomes
-executable, its reserved route still returns `UNSUPPORTED_V2_CAPABILITY`.
+reinterpret a Procedure v2 session as v1. Manual rework requires an exact active-
+attempt fence while running, omits that fence when reactivating a completed
+session, and rejects cancelled sessions.
 
 ### Goal
 

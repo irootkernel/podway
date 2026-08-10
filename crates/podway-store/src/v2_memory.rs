@@ -101,6 +101,13 @@ pub enum GraphMutationErrorV2 {
     GoalAssessmentDecisionRequiresAssessment {
         graph_node_id: GraphNodeId,
     },
+    SessionCancelled,
+    ManualReworkTargetNotAllowed {
+        target_graph_node_id: GraphNodeId,
+    },
+    ManualReworkTargetNotOnTrace {
+        target_graph_node_id: GraphNodeId,
+    },
     SkipNotAllowed {
         graph_node_id: GraphNodeId,
     },
@@ -176,6 +183,15 @@ impl fmt::Display for GraphMutationErrorV2 {
             }
             Self::GoalAssessmentDecisionRequiresAssessment { .. } => formatter
                 .write_str("Procedure v2 goal-assessment decision requires assessment state"),
+            Self::SessionCancelled => {
+                formatter.write_str("cancelled Procedure v2 session cannot be reworked")
+            }
+            Self::ManualReworkTargetNotAllowed { .. } => {
+                formatter.write_str("Procedure v2 manual rework target is not allowed")
+            }
+            Self::ManualReworkTargetNotOnTrace { .. } => {
+                formatter.write_str("Procedure v2 manual rework target is not on the valid trace")
+            }
             Self::SkipNotAllowed { .. } => {
                 formatter.write_str("Procedure v2 graph node may not be skipped")
             }
@@ -250,6 +266,12 @@ pub(crate) struct DecisionMemoryTransitionV2 {
     pub memory: WorkflowMemoryStateV2,
     pub decision: DecisionRecordV2,
     pub declared_rework: Option<ReworkRecordV2>,
+}
+
+pub(crate) struct ManualReworkMemoryTransitionV2 {
+    pub trace: SessionTraceV2,
+    pub memory: WorkflowMemoryStateV2,
+    pub record: ReworkRecordV2,
 }
 
 /// One mutable item slot belonging to a Procedure v2 attempt.
@@ -1276,6 +1298,94 @@ impl WorkflowMemoryStateV2 {
             memory,
             decision,
             declared_rework,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn manual_rework_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        previous_trace: &SessionTraceV2,
+        expected_attempt_id: Option<&AttemptId>,
+        target_graph_node_id: GraphNodeId,
+        fresh_attempt_id: AttemptId,
+        goal_revision: Option<GoalRevisionNumberV2>,
+        reason: ReasonV2,
+        actor: Option<ActorAttributionV2>,
+        now: UnixMillis,
+    ) -> Result<ManualReworkMemoryTransitionV2, GraphMutationErrorV2> {
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        if !model.manual_rework_targets.contains(&target_graph_node_id) {
+            return Err(GraphMutationErrorV2::ManualReworkTargetNotAllowed {
+                target_graph_node_id,
+            });
+        }
+        if !previous_trace.attempts().iter().any(|attempt| {
+            attempt.graph_node_id() == &target_graph_node_id
+                && attempt.validity() == AttemptValidityV2::Valid
+        }) {
+            return Err(GraphMutationErrorV2::ManualReworkTargetNotOnTrace {
+                target_graph_node_id,
+            });
+        }
+        let source = previous_trace
+            .active_attempt()
+            .or_else(|| previous_trace.attempts().last())
+            .ok_or_else(|| invalid("Procedure v2 manual rework source is absent"))?;
+        let from_graph_node_id = source.graph_node_id().clone();
+        let reactivated = previous_trace.lifecycle() == SessionLifecycle::Completed;
+        let mut trace = previous_trace.clone();
+        trace.manual_rework(
+            expected_attempt_id,
+            target_graph_node_id.clone(),
+            fresh_attempt_id,
+            goal_revision,
+        )?;
+        let fresh = trace
+            .active_attempt()
+            .ok_or_else(|| invalid("fresh Procedure v2 manual rework target is absent"))?;
+        let target_specification = model.node(fresh.graph_node_id())?;
+        let slots = target_specification
+            .items
+            .iter()
+            .map(|item| {
+                ItemSlotStateV2::new(
+                    fresh.attempt_id().clone(),
+                    item.id().clone(),
+                    item.item_type(),
+                    Revision::ZERO,
+                    None,
+                    now,
+                    now,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let evidence = resolve_evidence_at_activation_v2(target_specification, &trace, self, now)?;
+        let mut attempts = self.attempts.clone();
+        attempts.push(AttemptWorkflowMemoryV2::new(
+            fresh.attempt_id().clone(),
+            slots,
+            Vec::new(),
+            evidence,
+        )?);
+        let record = ReworkRecordV2::new(ReworkRecordInputV2 {
+            trace: fresh.trace(),
+            kind: ReworkKindV2::Manual,
+            from_node: from_graph_node_id,
+            to_node: target_graph_node_id,
+            target_attempt_id: fresh.attempt_id().clone(),
+            reason,
+            reactivated,
+            actor,
+            recorded_at: now,
+        })?;
+        let mut reworks = self.reworks.clone();
+        reworks.push(record.clone());
+        let memory = Self::new(attempts, self.decisions.clone(), reworks)?;
+        Ok(ManualReworkMemoryTransitionV2 {
+            trace,
+            memory,
+            record,
         })
     }
 

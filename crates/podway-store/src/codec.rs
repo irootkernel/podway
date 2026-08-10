@@ -15,8 +15,8 @@ use crate::{
     TerminalReceiptV1, TerminalResultV1,
 };
 use podway_core::{
-    AttemptId, AttemptNumberV2, BlockerId, DomainCommandKind, GraphNodeId, ItemId, ReasonV2,
-    SessionId, SessionLifecycle, Sha256Digest, WorkspaceId,
+    ActorAttributionV2, AttemptId, AttemptNumberV2, BlockerId, DomainCommandKind, GraphNodeId,
+    ItemId, ReasonV2, SessionId, SessionLifecycle, Sha256Digest, WorkspaceId,
 };
 
 pub const STORE_COMMAND_SCHEMA_V1: &str = "podway.store-command/v1";
@@ -191,6 +191,7 @@ pub enum PersistedDomainCommandV1 {
     SessionReopen,
     SessionReset,
     SessionDecide,
+    SessionRework,
     ItemCheck { item_id: ItemId },
     ItemUncheck { item_id: ItemId },
     ItemSet { item_id: ItemId },
@@ -217,6 +218,7 @@ impl PersistedDomainCommandV1 {
             CommandV1::SessionReopen => Self::SessionReopen,
             CommandV1::SessionReset => Self::SessionReset,
             CommandV1::SessionDecide => Self::SessionDecide,
+            CommandV1::SessionRework => Self::SessionRework,
             CommandV1::ItemCheck { item_id } => Self::ItemCheck {
                 item_id: item_id.clone(),
             },
@@ -257,6 +259,7 @@ impl PersistedDomainCommandV1 {
             Self::SessionReopen => CommandV1::SessionReopen,
             Self::SessionReset => CommandV1::SessionReset,
             Self::SessionDecide => CommandV1::SessionDecide,
+            Self::SessionRework => CommandV1::SessionRework,
             Self::ItemCheck { item_id } => CommandV1::ItemCheck { item_id },
             Self::ItemUncheck { item_id } => CommandV1::ItemUncheck { item_id },
             Self::ItemSet { item_id } => CommandV1::ItemSet { item_id },
@@ -287,6 +290,7 @@ impl PersistedDomainCommandV1 {
             Self::SessionReopen => "session.reopen",
             Self::SessionReset => "session.reset",
             Self::SessionDecide => "session.decide",
+            Self::SessionRework => "session.rework",
             Self::ItemCheck { .. } => "item.check",
             Self::ItemUncheck { .. } => "item.uncheck",
             Self::ItemSet { .. } => "item.set",
@@ -532,6 +536,7 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
             | CommandV1::SessionCancel
             | CommandV1::SessionReset
             | CommandV1::SessionDecide
+            | CommandV1::SessionRework
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -553,6 +558,7 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
             | CommandV1::SessionCancel
             | CommandV1::SessionReset
             | CommandV1::SessionDecide
+            | CommandV1::SessionRework
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -582,6 +588,11 @@ fn procedure_v2_preconditions_match(
         CommandV1::SessionDecide => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_attempt_id().is_some()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
+        CommandV1::SessionRework => {
+            preconditions.expected_session_revision().is_some()
                 && preconditions.expected_item_id().is_none()
                 && preconditions.expected_item_revision().is_none()
         }
@@ -625,6 +636,7 @@ pub enum PersistedDomainCommandKindV1 {
     SessionReopen,
     SessionReset,
     SessionDecide,
+    SessionRework,
     ItemCheck,
     ItemUncheck,
     ItemSet,
@@ -651,6 +663,7 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
             DomainCommandKind::SessionReopen => Self::SessionReopen,
             DomainCommandKind::SessionReset => Self::SessionReset,
             DomainCommandKind::SessionDecide => Self::SessionDecide,
+            DomainCommandKind::SessionRework => Self::SessionRework,
             DomainCommandKind::ItemCheck => Self::ItemCheck,
             DomainCommandKind::ItemUncheck => Self::ItemUncheck,
             DomainCommandKind::ItemSet => Self::ItemSet,
@@ -1057,6 +1070,9 @@ pub enum PersistedGraphTerminalOperationV2 {
         record: Value,
         target_attempt_id: AttemptId,
     },
+    Rework {
+        record: Value,
+    },
     Complete {
         from_graph_node_id: GraphNodeId,
         from_attempt_id: AttemptId,
@@ -1118,6 +1134,7 @@ pub enum PersistedGraphTerminalOperationV2 {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PersistedGraphMutationFailureV2 {
     SessionNotRunning,
+    SessionCancelled,
     SessionRevisionConflict {
         expected: RevisionV1,
         actual: RevisionV1,
@@ -1139,6 +1156,12 @@ pub enum PersistedGraphMutationFailureV2 {
     RouteNotAllowed {
         graph_node_id: GraphNodeId,
         option_id: podway_core::OptionId,
+    },
+    ManualReworkTargetNotAllowed {
+        target_graph_node_id: GraphNodeId,
+    },
+    ManualReworkTargetNotOnTrace {
+        target_graph_node_id: GraphNodeId,
     },
     DecisionReasonMissing {
         graph_node_id: GraphNodeId,
@@ -1206,6 +1229,7 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
     fn try_from(error: &crate::GraphMutationErrorV2) -> Result<Self, Self::Error> {
         Ok(match error {
             crate::GraphMutationErrorV2::SessionNotRunning => Self::SessionNotRunning,
+            crate::GraphMutationErrorV2::SessionCancelled => Self::SessionCancelled,
             crate::GraphMutationErrorV2::SessionRevisionConflict { expected, actual } => {
                 Self::SessionRevisionConflict {
                     expected: *expected,
@@ -1244,6 +1268,16 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
             } => Self::RouteNotAllowed {
                 graph_node_id: graph_node_id.clone(),
                 option_id: option_id.clone(),
+            },
+            crate::GraphMutationErrorV2::ManualReworkTargetNotAllowed {
+                target_graph_node_id,
+            } => Self::ManualReworkTargetNotAllowed {
+                target_graph_node_id: target_graph_node_id.clone(),
+            },
+            crate::GraphMutationErrorV2::ManualReworkTargetNotOnTrace {
+                target_graph_node_id,
+            } => Self::ManualReworkTargetNotOnTrace {
+                target_graph_node_id: target_graph_node_id.clone(),
             },
             crate::GraphMutationErrorV2::DecisionReasonMissing { graph_node_id } => {
                 Self::DecisionReasonMissing {
@@ -1344,6 +1378,12 @@ impl PersistedGraphTerminalOperationV2 {
             record,
             target_attempt_id,
         };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn rework(record: Value) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Rework { record };
         operation.validate()?;
         Ok(operation)
     }
@@ -1505,6 +1545,52 @@ impl PersistedGraphTerminalOperationV2 {
                         .is_some()
                     && !target_attempt_id.as_str().is_empty()
             }
+            Self::Rework { record } => record.as_object().is_some_and(|record| {
+                let actor = record.get("actor");
+                let required_keys = [
+                    "trace_sequence",
+                    "kind",
+                    "from_graph_node_id",
+                    "to_graph_node_id",
+                    "target_attempt_id",
+                    "reason",
+                    "reactivated",
+                    "recorded_at_ms",
+                ];
+                record.len() == required_keys.len() + usize::from(actor.is_some())
+                    && required_keys.iter().all(|key| record.contains_key(*key))
+                    && record
+                        .get("trace_sequence")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|trace| trace > 0)
+                    && record.get("kind").and_then(Value::as_str) == Some("manual")
+                    && record
+                        .get("from_graph_node_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| GraphNodeId::new(value.to_owned()).is_ok())
+                    && record
+                        .get("to_graph_node_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| GraphNodeId::new(value.to_owned()).is_ok())
+                    && record
+                        .get("target_attempt_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| AttemptId::new(value.to_owned()).is_ok())
+                    && record
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| ReasonV2::new(value.to_owned()).is_ok())
+                    && record.get("reactivated").and_then(Value::as_bool).is_some()
+                    && record
+                        .get("recorded_at_ms")
+                        .and_then(Value::as_u64)
+                        .is_some()
+                    && actor.is_none_or(|value| {
+                        value
+                            .as_str()
+                            .is_some_and(|actor| ActorAttributionV2::new(actor.to_owned()).is_ok())
+                    })
+            }),
             Self::Complete {
                 to_graph_node_id,
                 to_attempt_id,
@@ -1571,10 +1657,13 @@ impl PersistedGraphMutationFailureV2 {
             }
             Self::FreshGoalAssessmentMissing { goal_revision } => *goal_revision > 0,
             Self::SessionNotRunning
+            | Self::SessionCancelled
             | Self::SessionRevisionConflict { .. }
             | Self::AttemptNotCurrent { .. }
             | Self::OptionNotAllowed { .. }
             | Self::RouteNotAllowed { .. }
+            | Self::ManualReworkTargetNotAllowed { .. }
+            | Self::ManualReworkTargetNotOnTrace { .. }
             | Self::DecisionReasonMissing { .. }
             | Self::EvidenceReferenceUnresolved { .. }
             | Self::EvidenceReferenceStale { .. }
@@ -2049,6 +2138,7 @@ impl PersistedTerminalReceiptV1 {
                 (
                     None
                     | Some(PersistedGraphTerminalOperationV2::Decide { .. })
+                    | Some(PersistedGraphTerminalOperationV2::Rework { .. })
                     | Some(PersistedGraphTerminalOperationV2::Complete { .. })
                     | Some(PersistedGraphTerminalOperationV2::Retry { .. })
                     | Some(PersistedGraphTerminalOperationV2::Skip { .. })
@@ -2759,6 +2849,7 @@ fn validate_success_result_for_command_v1(
             CommandV1::SessionStart
             | CommandV1::SessionComplete
             | CommandV1::SessionDecide
+            | CommandV1::SessionRework
             | CommandV1::SessionSkip
             | CommandV1::SessionRetry
             | CommandV1::SessionReturn

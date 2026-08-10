@@ -786,7 +786,7 @@ commands:
   - podway.decision-result/v1
   - podway.detached-admission-result/v2
 - name: session.rework
-  availability: reserved_contract
+  availability: executable
   cli:
   - rework
   operation: mutate

@@ -107,6 +107,7 @@ pub(crate) fn command_name_v1(command: &CommandV1) -> &'static str {
         CommandV1::SessionReopen => "session.reopen",
         CommandV1::SessionReset => "session.reset",
         CommandV1::SessionDecide => "session.decide",
+        CommandV1::SessionRework => "session.rework",
         CommandV1::ItemCheck { .. } => "item.check",
         CommandV1::ItemUncheck { .. } => "item.uncheck",
         CommandV1::ItemSet { .. } => "item.set",
@@ -128,6 +129,7 @@ pub(crate) fn command_is_session_scoped_v1(command: &CommandV1) -> bool {
             | CommandV1::SessionCancel
             | CommandV1::SessionReopen
             | CommandV1::SessionDecide
+            | CommandV1::SessionRework
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }

@@ -37,8 +37,8 @@ use podway_protocol::{
     ItemUncheckV1, ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1, RequestIdV1,
     Rfc3339MillisV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionDecideV2,
     SessionMutationPreconditionsWireV1, SessionReopenV1, SessionResetV1, SessionRetryV1,
-    SessionReturnV1, SessionSkipV1, SessionStartSourceV1, SessionStartV1, SessionUnblockV1,
-    SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
+    SessionReturnV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1, SessionStartV1,
+    SessionUnblockV1, SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
     canonical_procedure_v2_mutation_identity_v1, canonical_reset_all_identity_v1,
 };
 use podway_store::{
@@ -64,6 +64,7 @@ const EXECUTION_DOCUMENT_VERSION_V6: u8 = 6;
 const EXECUTION_DOCUMENT_VERSION_V7: u8 = 7;
 const EXECUTION_DOCUMENT_VERSION_V8: u8 = 8;
 const EXECUTION_DOCUMENT_VERSION_V9: u8 = 9;
+const EXECUTION_DOCUMENT_VERSION_V10: u8 = 10;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -1026,6 +1027,124 @@ fn decode_procedure_v2_decision_execution_v1(
         command,
         fresh_attempt_id: value_typed_v1(object, "fresh_attempt_id")?,
     })
+}
+
+#[derive(Clone, Debug)]
+struct AdmittedProcedureV2ReworkV1 {
+    selector: WorktreeSelectorWireV1,
+    workspace_id: WorkspaceId,
+    command: SessionReworkV2,
+    fresh_attempt_id: AttemptId,
+}
+
+fn procedure_v2_rework_execution_document_v1(
+    admitted: &AdmittedProcedureV2ReworkV1,
+) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
+    let document = json!({
+        "command": "session.rework",
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V10,
+        "fresh_attempt_id": admitted.fresh_attempt_id,
+        "payload": {
+            "actor": admitted.command.actor,
+            "reason": admitted.command.reason,
+            "target_graph_node_id": admitted.command.target_graph_node_id,
+        },
+        "preconditions": {
+            "attempt_id": admitted.command.preconditions.expected_attempt_id,
+            "session_id": admitted.command.preconditions.expected_session_id,
+            "session_revision": admitted.command.preconditions.expected_session_revision,
+        },
+        "selector": admitted.selector,
+        "workspace_id": admitted.workspace_id,
+    });
+    let canonical = canonicalize_json_v1(&document).map_err(|_| {
+        invalid_execution_v1("Procedure v2 rework execution cannot be canonicalized")
+    })?;
+    CanonicalExecutionJsonV1::new(canonical).map_err(ExecutionErrorV1::InvalidStoreValue)
+}
+
+fn decode_procedure_v2_rework_execution_v1(
+    source: &str,
+) -> Result<AdmittedProcedureV2ReworkV1, ExecutionErrorV1> {
+    let root: Value = serde_json::from_str(source)
+        .map_err(|_| invalid_execution_v1("Procedure v2 rework execution is not JSON"))?;
+    let object = root
+        .as_object()
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 rework execution root is invalid"))?;
+    require_exact_keys_v1(
+        object,
+        &[
+            "command",
+            "execution_version",
+            "fresh_attempt_id",
+            "payload",
+            "preconditions",
+            "selector",
+            "workspace_id",
+        ],
+    )?;
+    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V10)
+        || value_string_v1(object, "command")? != "session.rework"
+    {
+        return Err(invalid_execution_v1(
+            "Procedure v2 rework execution identity is invalid",
+        ));
+    }
+    let payload = value_object_v1(object, "payload")?;
+    require_exact_keys_v1(payload, &["actor", "reason", "target_graph_node_id"])?;
+    let preconditions = value_object_v1(object, "preconditions")?;
+    require_exact_keys_v1(
+        preconditions,
+        &["attempt_id", "session_id", "session_revision"],
+    )?;
+    let command = SessionReworkV2 {
+        target_graph_node_id: value_typed_v1(payload, "target_graph_node_id")?,
+        reason: value_string_v1(payload, "reason")?.to_owned(),
+        actor: value_optional_string_v1(payload, "actor")?,
+        preconditions: podway_protocol::ReworkPreconditionsWireV2 {
+            expected_session_id: value_typed_v1(preconditions, "session_id")?,
+            expected_session_revision: Revision::new(value_u64_v1(
+                preconditions,
+                "session_revision",
+            )?),
+            expected_attempt_id: value_optional_typed_v1(preconditions, "attempt_id")?,
+        },
+    };
+    ReasonV2::new(command.reason.clone())
+        .map_err(|_| invalid_execution_v1("Procedure v2 rework reason is invalid"))?;
+    command
+        .actor
+        .clone()
+        .map(ActorAttributionV2::new)
+        .transpose()
+        .map_err(|_| invalid_execution_v1("Procedure v2 rework actor is invalid"))?;
+    Ok(AdmittedProcedureV2ReworkV1 {
+        selector: serde_json::from_value(value_v1(object, "selector")?.clone())
+            .map_err(|_| invalid_execution_v1("Procedure v2 rework selector is invalid"))?,
+        workspace_id: value_typed_v1(object, "workspace_id")?,
+        command,
+        fresh_attempt_id: value_typed_v1(object, "fresh_attempt_id")?,
+    })
+}
+
+fn rework_record_projection_v1(record: &podway_core::ReworkRecordV2) -> Value {
+    let mut value = json!({
+        "trace_sequence": record.trace().get(),
+        "kind": record.kind().as_str(),
+        "from_graph_node_id": record.from_node(),
+        "to_graph_node_id": record.to_node(),
+        "target_attempt_id": record.target_attempt_id(),
+        "reason": record.reason().as_str(),
+        "reactivated": record.reactivated(),
+        "recorded_at_ms": record.recorded_at().get(),
+    });
+    if let Some(actor) = record.actor() {
+        value
+            .as_object_mut()
+            .expect("rework record projection is an object")
+            .insert("actor".to_owned(), json!(actor.as_str()));
+    }
+    value
 }
 
 fn decision_record_projection_v1(record: &DecisionRecordV2) -> Result<Value, ExecutionErrorV1> {
@@ -3168,9 +3287,37 @@ where
         idempotency_key: IdempotencyKeyV1,
         response_context: Option<PersistedResponseContextV1>,
     ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
-        let ProcedureV2MutationCommandV1::SessionDecide(command) = request.command() else {
-            return Ok(None);
-        };
+        match request.command() {
+            ProcedureV2MutationCommandV1::SessionDecide(command) => self
+                .admit_procedure_v2_decision_for_workspace_with_response_context(
+                    expected_workspace,
+                    request,
+                    command,
+                    idempotency_key,
+                    response_context,
+                ),
+            ProcedureV2MutationCommandV1::SessionRework(command) => self
+                .admit_procedure_v2_rework_for_workspace_with_response_context(
+                    expected_workspace,
+                    request,
+                    command,
+                    idempotency_key,
+                    response_context,
+                ),
+            ProcedureV2MutationCommandV1::GoalDefine(_)
+            | ProcedureV2MutationCommandV1::GoalRevise(_)
+            | ProcedureV2MutationCommandV1::GoalAssessCriterion(_) => Ok(None),
+        }
+    }
+
+    fn admit_procedure_v2_decision_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &ProcedureV2MutationRequestV1,
+        command: &podway_protocol::SessionDecideV2,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
         if let Some(existing) = self
             .store
             .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)?
@@ -3274,6 +3421,139 @@ where
             .map_err(Into::into)
     }
 
+    fn admit_procedure_v2_rework_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &ProcedureV2MutationRequestV1,
+        command: &SessionReworkV2,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        if let Some(existing) = self
+            .store
+            .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)?
+        {
+            let Some(canonical_execution) = existing.canonical_execution() else {
+                return Ok(None);
+            };
+            let version = serde_json::from_str::<Value>(canonical_execution.as_str())
+                .ok()
+                .and_then(|value| value.get("execution_version").and_then(Value::as_u64));
+            if version != Some(u64::from(EXECUTION_DOCUMENT_VERSION_V10)) {
+                return Ok(None);
+            }
+            let admitted = decode_procedure_v2_rework_execution_v1(canonical_execution.as_str())?;
+            if admitted.workspace_id != *expected_workspace.identity().workspace_uuid() {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 rework replay workspace identity is invalid",
+                ));
+            }
+            let actual = procedure_v2_typed_mutation_request_digest_v1(
+                request,
+                expected_workspace.identity().workspace_uuid(),
+            )?;
+            if existing.request_digest() != &actual {
+                return Err(StoreErrorV1::IdempotencyDigestConflictV1 {
+                    expected: existing.request_digest().clone(),
+                    actual,
+                }
+                .into());
+            }
+            return Ok(Some(existing.outcome().clone()));
+        }
+
+        let binding = self
+            .bound_workspace(request.selector())
+            .map_err(ExecutionErrorV1::from_boundary)?;
+        if binding.identity() != expected_workspace.identity() {
+            return Err(ExecutionErrorV1::BoundaryDomain(
+                DomainError::InvalidState {
+                    reason: "revalidated workspace does not match the scheduler identity",
+                },
+            ));
+        }
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(binding.identity())?;
+        let Some(state) = view.graph_state() else {
+            return Ok(None);
+        };
+        if state.trace().session_id() != &command.preconditions.expected_session_id {
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: command.preconditions.expected_session_id.clone(),
+                actual: Some(state.trace().session_id().clone()),
+            });
+        }
+        match (
+            state.trace().lifecycle(),
+            command.preconditions.expected_attempt_id.as_ref(),
+        ) {
+            (SessionLifecycle::Running, Some(_))
+            | (SessionLifecycle::Completed, None)
+            | (SessionLifecycle::Cancelled, _) => {}
+            (SessionLifecycle::Running, None) => {
+                return Err(ExecutionErrorV1::BoundaryDomain(
+                    DomainError::InvalidState {
+                        reason: "running Procedure v2 manual rework requires an attempt fence",
+                    },
+                ));
+            }
+            (SessionLifecycle::Completed, Some(_)) => {
+                return Err(ExecutionErrorV1::BoundaryDomain(
+                    DomainError::InvalidState {
+                        reason: "completed Procedure v2 manual rework forbids an attempt fence",
+                    },
+                ));
+            }
+        }
+        ReasonV2::new(command.reason.clone()).map_err(ExecutionErrorV1::BoundaryDomain)?;
+        command
+            .actor
+            .clone()
+            .map(ActorAttributionV2::new)
+            .transpose()
+            .map_err(ExecutionErrorV1::BoundaryDomain)?;
+        let admitted = AdmittedProcedureV2ReworkV1 {
+            selector: request.selector().clone(),
+            workspace_id: binding.identity().workspace_uuid().clone(),
+            command: command.clone(),
+            fresh_attempt_id: self.ids.next_attempt_id(),
+        };
+        let canonical_execution = procedure_v2_rework_execution_document_v1(&admitted)?;
+        let request_digest = procedure_v2_typed_mutation_request_digest_v1(
+            request,
+            binding.identity().workspace_uuid(),
+        )?;
+        let preconditions = RevisionAttemptItemPreconditionsV1::new(
+            Some(command.preconditions.expected_session_revision),
+            command.preconditions.expected_attempt_id.clone(),
+            None,
+            None,
+        )
+        .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+        let durable = AdmitRequestV1::new_with_canonical_execution(
+            DomainCommand::SessionRework,
+            idempotency_key,
+            self.ids.next_job_id(),
+            preconditions,
+            request_digest,
+            self.clock.now(),
+            canonical_execution,
+        )
+        .with_procedure_v2_execution()
+        .with_session_identity(AdmissionSessionIdentityV1::Exact(
+            command.preconditions.expected_session_id.clone(),
+        ));
+        let durable = match response_context {
+            Some(context) => durable.with_response_context(context),
+            None => durable,
+        };
+        self.store
+            .admit(binding.identity(), durable)
+            .map(Some)
+            .map_err(Into::into)
+    }
+
     /// Claims either durable flavor, reconstructing Procedure v2 exclusively from the admitted
     /// execution document before committing graph state and the terminal receipt atomically.
     pub fn execute_next_with_graph_v2(
@@ -3349,6 +3629,12 @@ where
                 )?;
                 self.execute_procedure_v2_decision_claimed(&workspace, &claimed, admitted, now)?
             }
+            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V10) => {
+                let admitted = decode_procedure_v2_rework_execution_v1(
+                    claimed.execution().canonical_execution().as_str(),
+                )?;
+                self.execute_procedure_v2_rework_claimed(&claimed, admitted, now)?
+            }
             _ => {
                 return Err(invalid_execution_v1(
                     "Procedure v2 execution version is unsupported",
@@ -3356,6 +3642,91 @@ where
             }
         };
         Ok(Some(receipt))
+    }
+
+    fn execute_procedure_v2_rework_claimed(
+        &self,
+        claimed: &ClaimedJobV1,
+        admitted: AdmittedProcedureV2ReworkV1,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        if admitted.workspace_id != *claimed.claim().identity().workspace_uuid() {
+            return Err(invalid_execution_v1(
+                "Procedure v2 rework workspace does not match the claim",
+            ));
+        }
+        let expected_preconditions = RevisionAttemptItemPreconditionsV1::new(
+            Some(admitted.command.preconditions.expected_session_revision),
+            admitted.command.preconditions.expected_attempt_id.clone(),
+            None,
+            None,
+        )
+        .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+        if claimed.execution().command() != &DomainCommand::SessionRework
+            || claimed.execution().preconditions() != &expected_preconditions
+            || claimed.execution().session_identity()
+                != &AdmissionSessionIdentityV1::Exact(
+                    admitted.command.preconditions.expected_session_id.clone(),
+                )
+        {
+            return Err(invalid_execution_v1(
+                "Procedure v2 rework document does not match durable admission metadata",
+            ));
+        }
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(claimed.claim().identity())?;
+        let state = view.graph_state().ok_or_else(|| {
+            invalid_execution_v1("Procedure v2 claimed rework has no current graph session")
+        })?;
+        if state.trace().session_id() != &admitted.command.preconditions.expected_session_id {
+            return Err(invalid_execution_v1(
+                "Procedure v2 claimed rework session identity changed",
+            ));
+        }
+        let reason = ReasonV2::new(admitted.command.reason)
+            .map_err(|_| invalid_execution_v1("Procedure v2 rework reason is invalid"))?;
+        let actor = admitted
+            .command
+            .actor
+            .map(ActorAttributionV2::new)
+            .transpose()
+            .map_err(|_| invalid_execution_v1("Procedure v2 rework actor is invalid"))?;
+        let outcome = match state.manual_rework_v2(
+            admitted.command.preconditions.expected_session_revision,
+            admitted.command.preconditions.expected_attempt_id.as_ref(),
+            admitted.command.target_graph_node_id,
+            admitted.fresh_attempt_id,
+            reason,
+            actor,
+            now,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+            }
+        };
+        let operation = PersistedGraphTerminalOperationV2::rework(rework_record_projection_v1(
+            outcome.record(),
+        ))
+        .map_err(|_| invalid_execution_v1("Procedure v2 rework operation cannot be persisted"))?;
+        let result = DomainResult::SessionChanged {
+            session_id: state.trace().session_id().clone(),
+            revision_before: state.trace().revision(),
+            revision_after: outcome.state().trace().revision(),
+            changed: true,
+        };
+        self.store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                state.workspace_revision(),
+                state.trace().revision(),
+                Some(outcome.into_state()),
+                TerminalResultV1::Success(result),
+                operation,
+                now,
+            )
+            .map_err(Into::into)
     }
 
     fn execute_procedure_v2_decision_claimed(
@@ -4503,7 +4874,8 @@ fn domain_result_v1(
         | DomainCommand::SessionCancel
         | DomainCommand::SessionReopen
         | DomainCommand::SessionReset
-        | DomainCommand::SessionDecide => DomainResult::SessionChanged {
+        | DomainCommand::SessionDecide
+        | DomainCommand::SessionRework => DomainResult::SessionChanged {
             session_id: session_id.ok_or(DomainError::InvalidState {
                 reason: "admitted session transition has no session aggregate",
             })?,

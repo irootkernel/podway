@@ -1400,6 +1400,9 @@ fn assert_command_fields(actual: &DomainCommand, expected: &DomainCommand) {
         DomainCommand::SessionDecide => {
             assert!(matches!(expected, DomainCommand::SessionDecide));
         }
+        DomainCommand::SessionRework => {
+            assert!(matches!(expected, DomainCommand::SessionRework));
+        }
         DomainCommand::ItemCheck { item_id } => match expected {
             DomainCommand::ItemCheck {
                 item_id: expected_item_id,
@@ -1524,6 +1527,9 @@ fn command_golden_v1(command: &DomainCommand) -> &'static str {
         }
         DomainCommand::SessionDecide => {
             r#"{"command":{"kind":"session_decide"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::SessionRework => {
+            r#"{"command":{"kind":"session_rework"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
         }
         DomainCommand::ItemCheck { .. } => {
             r#"{"command":{"item_id":"selected-item","kind":"item_check"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
@@ -1683,6 +1689,7 @@ fn expected_persisted_command_kind(kind: DomainCommandKind) -> PersistedDomainCo
         DomainCommandKind::SessionReopen => PersistedDomainCommandKindV1::SessionReopen,
         DomainCommandKind::SessionReset => PersistedDomainCommandKindV1::SessionReset,
         DomainCommandKind::SessionDecide => PersistedDomainCommandKindV1::SessionDecide,
+        DomainCommandKind::SessionRework => PersistedDomainCommandKindV1::SessionRework,
         DomainCommandKind::ItemCheck => PersistedDomainCommandKindV1::ItemCheck,
         DomainCommandKind::ItemUncheck => PersistedDomainCommandKindV1::ItemUncheck,
         DomainCommandKind::ItemSet => PersistedDomainCommandKindV1::ItemSet,
@@ -2528,6 +2535,72 @@ fn graph_reset_codec_requires_exact_unchanged_positive_revision_and_session_bind
             .with_lookup_command(PersistedDomainCommandV1::SessionReset)
             .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn graph_rework_codec_rejects_open_or_incomplete_record_projections()
+-> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id();
+    let operation = PersistedGraphTerminalOperationV2::rework(serde_json::json!({
+        "trace_sequence": 1,
+        "kind": "manual",
+        "from_graph_node_id": "implement",
+        "to_graph_node_id": "review",
+        "target_attempt_id": "00000000-0000-4000-8000-000000000190",
+        "reason": "Return to review after correcting the implementation.",
+        "reactivated": false,
+        "recorded_at_ms": 22,
+        "actor": "reviewer",
+    }))?;
+    let projection = PersistedGraphTerminalSessionProjectionV2::new(
+        session_id.clone(),
+        "Rework codec session".to_owned(),
+        PersistedSessionLifecycleV1::Running,
+        Revision::new(3),
+        Revision::new(4),
+        digest('b'),
+        GraphNodeId::new("implement")?,
+        false,
+    )?
+    .with_operation(operation)?;
+    let exact = PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(190),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id,
+            revision_before: Revision::new(3),
+            revision_after: Revision::new(4),
+            changed: true,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(20),
+            Some(UnixMillis::new(21)),
+            UnixMillis::new(22),
+        )?,
+        projection,
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::SessionRework)?
+    .with_response_context(PersistedResponseContextV1::new(
+        "00000000-0000-4000-8000-000000000190",
+        "session.rework",
+        workspace_id(),
+        "/safe/worktree",
+        190,
+    )?)?;
+    let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+    assert_eq!(decode_terminal_receipt_v1(&encoded)?, exact);
+
+    let extra_key = encoded.replacen(
+        r#""trace_sequence":1"#,
+        r#""trace_sequence":1,"unknown":true"#,
+        1,
+    );
+    assert!(decode_terminal_receipt_v1(&extra_key).is_err());
+
+    let missing_timestamp = encoded.replacen(r#""recorded_at_ms":22,"#, "", 1);
+    assert_ne!(missing_timestamp, encoded);
+    assert!(decode_terminal_receipt_v1(&missing_timestamp).is_err());
     Ok(())
 }
 

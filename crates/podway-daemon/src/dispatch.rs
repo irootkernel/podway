@@ -111,6 +111,12 @@ enum V2RuntimeErrorDetailsV1 {
         expected_source_attempt_id: AttemptId,
         current_source_attempt_id: Option<AttemptId>,
     },
+    ManualReworkTargetNotAllowed {
+        target_graph_node_id: GraphNodeId,
+    },
+    ManualReworkTargetNotOnTrace {
+        target_graph_node_id: GraphNodeId,
+    },
 }
 
 impl DispatchErrorDetailsV1 {
@@ -259,6 +265,30 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_manual_rework_target_not_allowed(
+        mut self,
+        target_graph_node_id: GraphNodeId,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::ManualReworkTargetNotAllowed {
+                target_graph_node_id,
+            },
+        ));
+        self
+    }
+
+    pub fn with_manual_rework_target_not_on_trace(
+        mut self,
+        target_graph_node_id: GraphNodeId,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::ManualReworkTargetNotOnTrace {
+                target_graph_node_id,
+            },
+        ));
+        self
+    }
+
     pub fn with_decision_reason_missing(mut self, graph_node_id: GraphNodeId) -> Self {
         self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::DecisionReasonMissing {
             graph_node_id,
@@ -367,6 +397,22 @@ impl DispatchErrorDetailsV1 {
                     "graph_node_id": graph_node_id, "source_graph_node_id": source_graph_node_id,
                     "expected_source_attempt_id": expected_source_attempt_id,
                     "current_source_attempt_id": current_source_attempt_id, "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::ManualReworkTargetNotAllowed {
+                    target_graph_node_id,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1",
+                    "kind": "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+                    "target_graph_node_id": target_graph_node_id,
+                    "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::ManualReworkTargetNotOnTrace {
+                    target_graph_node_id,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1",
+                    "kind": "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+                    "target_graph_node_id": target_graph_node_id,
+                    "admission": admission,
                 }),
             };
             return value
@@ -586,6 +632,8 @@ pub enum DispatchFailureKindV1 {
     DecisionReasonMissing,
     EvidenceReferenceUnresolved,
     EvidenceReferenceStale,
+    ManualReworkTargetNotAllowed,
+    ManualReworkTargetNotOnTrace,
     StageNotFound,
     StageNotSkippable,
     ReturnNotAllowed,
@@ -2320,6 +2368,18 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "A resolved evidence reference is stale.",
             true,
             4,
+        ),
+        DispatchFailureKindV1::ManualReworkTargetNotAllowed => (
+            "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+            "The requested manual rework target is not allowed.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::ManualReworkTargetNotOnTrace => (
+            "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+            "The requested manual rework target is not on the current trace.",
+            false,
+            1,
         ),
         DispatchFailureKindV1::StageNotFound => {
             ("STAGE_NOT_FOUND", "The stage does not exist.", false, 1)
