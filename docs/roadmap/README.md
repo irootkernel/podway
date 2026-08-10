@@ -151,7 +151,7 @@ Dependencies: `V2RUN`.
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `V2DRW-001` | Decide the active route | Completed | Validate and atomically record one allowed decision option. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
-| `V2DRW-002` | Persist decision transitions | Planned | Preserve immutable option, route, reason, citation, evidence, and trace records. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
+| `V2DRW-002` | Persist decision transitions | Completed | Preserve immutable option, route, reason, citation, evidence, and trace records. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 | `V2DRW-003` | Rework a valid trace target | Planned | Enforce allowed targets and completed-session reactivation policy. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 | `V2DRW-004` | Invalidate and re-enter a suffix | Planned | Atomically stale the affected trace and activate one fresh target attempt. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 | `V2DRW-005` | Read decisions and rework back | Planned | Expose bounded current and stale workflow history without satisfying progression. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |

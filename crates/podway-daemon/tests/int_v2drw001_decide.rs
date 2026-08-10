@@ -1,4 +1,4 @@
-//! Production vertical coverage for V2DRW-001 typed decision execution.
+//! Production vertical coverage for typed V2DRW decision execution and transition persistence.
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
@@ -423,7 +423,9 @@ fn v2drw001_decide_validates_fences_and_rules_then_persists_exact_replay() {
     assert_eq!(result["record"]["references"][0]["state"], "resolved");
 
     drop(production);
-    let restarted = runtime::dispatcher(Arc::clone(&manager), "v2drw001-restarted");
+    drop(manager);
+    let restarted_manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let restarted = runtime::dispatcher(Arc::clone(&restarted_manager), "v2drw001-restarted");
     let replay = decide_request(
         91_061,
         &selector,
@@ -478,4 +480,150 @@ fn v2drw001_decide_validates_fences_and_rules_then_persists_exact_replay() {
         1
     );
     assert_eq!(verbose["decision_history"]["entries"][0], result["record"]);
+}
+
+#[test]
+fn v2drw002_declared_rework_preserves_the_exact_decision_and_branch_after_restart() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    fs::write(fixture.main().join("decision.yaml"), DECISION_PROCEDURE).unwrap();
+    let selector = runtime::selector(fixture.main());
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let production = runtime::dispatcher(Arc::clone(&manager), "v2drw002-production");
+    let session_id = start_at_decision(&production, &selector);
+
+    runtime::mutate_item(
+        &production,
+        &selector,
+        92_010,
+        &session_id,
+        "item.set",
+        "note",
+        json!({"value": "rework is required"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2drw002-set-note",
+    );
+    let ready = runtime::status(&production, &selector, 92_020, &session_id);
+    let decision_attempt_id = ready["current"]["attempt"]["attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let decide = decide_request(
+        92_021,
+        &selector,
+        "reject",
+        "The reviewed evidence requires another work attempt.",
+        Some("V2DRW transition reviewer"),
+        "v2drw002-declared-rework",
+        runtime::session_preconditions(&ready),
+    );
+    let first_response = runtime::dispatch(&production, &decide);
+    let result = runtime::v2_result(first_response.clone(), "session.decide");
+    assert_eq!(result["option_id"], "reject");
+    assert_eq!(result["effect"], "rework");
+    assert_eq!(result["target_graph_node_id"], "work");
+    assert_eq!(result["record"]["session_id"], session_id);
+    assert_eq!(result["record"]["session_revision"], result["revision"]);
+    assert_eq!(result["record"]["graph_node_id"], "review");
+    assert_eq!(result["record"]["attempt_id"], decision_attempt_id);
+    assert_eq!(result["record"]["option_id"], "reject");
+    assert_eq!(result["record"]["effect"], "rework");
+    assert_eq!(result["record"]["target_graph_node_id"], "work");
+    assert_eq!(
+        result["record"]["reason"],
+        "The reviewed evidence requires another work attempt."
+    );
+    assert_eq!(result["record"]["actor"], "V2DRW transition reviewer");
+    assert_eq!(result["record"]["references"][0]["state"], "resolved");
+    assert_eq!(
+        result["record"]["references"][0]["source_graph_node_id"],
+        "work"
+    );
+    assert!(
+        result["record"]["references"][0]["items_digest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+
+    drop(production);
+    drop(manager);
+    let restarted_manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let restarted = runtime::dispatcher(Arc::clone(&restarted_manager), "v2drw002-restarted");
+    let replay = decide_request(
+        92_022,
+        &selector,
+        "reject",
+        "The reviewed evidence requires another work attempt.",
+        Some("V2DRW transition reviewer"),
+        "v2drw002-declared-rework",
+        runtime::session_preconditions(&ready),
+    );
+    let replayed = runtime::dispatch(&restarted, &replay);
+    assert_eq!(
+        runtime::without_request_id(&replayed),
+        runtime::without_request_id(&first_response),
+        "restart replay must preserve the complete frozen rework decision output"
+    );
+
+    let after = runtime::status(&restarted, &selector, 92_030, &session_id);
+    assert_eq!(after["current"]["node"]["graph_node_id"], "work");
+    assert_eq!(after["current"]["attempt"]["attempt_number"], 2);
+    assert_eq!(
+        after["current"]["attempt"]["attempt_id"],
+        result["target_attempt_id"]
+    );
+    let verbose_request = runtime::request(
+        92_031,
+        "session.status",
+        &selector,
+        json!({"verbose": true}).as_object().unwrap().clone(),
+        "unused-v2drw002-status-key",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let verbose = runtime::v2_result(
+        runtime::dispatch(&restarted, &verbose_request),
+        "session.status",
+    );
+    assert_eq!(
+        verbose["decision_history"]["entries"],
+        json!([result["record"]])
+    );
+    assert_eq!(
+        verbose["rework_history"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(verbose["rework_history"]["entries"][0]["kind"], "declared");
+    assert_eq!(
+        verbose["rework_history"]["entries"][0]["from_graph_node_id"],
+        "review"
+    );
+    assert_eq!(
+        verbose["rework_history"]["entries"][0]["to_graph_node_id"],
+        "work"
+    );
+    assert_eq!(
+        verbose["rework_history"]["entries"][0]["target_attempt_id"],
+        result["target_attempt_id"]
+    );
+    assert!(
+        verbose["stale_attempt_history"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|attempt| attempt["attempt_id"] == decision_attempt_id)
+    );
 }

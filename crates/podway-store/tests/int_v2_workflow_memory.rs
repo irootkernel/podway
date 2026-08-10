@@ -949,6 +949,138 @@ fn v2drw001_decide_declared_rework_stales_the_suffix_and_records_one_reentry() {
 }
 
 #[test]
+fn v2drw002_advance_decision_preserves_complete_provenance_across_sqlite_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    persist_gate(&store);
+    let outcome = gate_state()
+        .decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Proceed to finish.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+    let expected_record = outcome.decision_record().clone();
+    let next = outcome.into_state();
+
+    let record = &next.workflow_memory().decisions()[0];
+    assert_eq!(record.trace(), TraceSequenceV2::new(2));
+    assert_eq!(record.session_id(), &session_id());
+    assert_eq!(record.session_revision(), Revision::new(5));
+    assert_eq!(record.procedure_snapshot_id(), snapshot().snapshot_id());
+    assert_eq!(record.procedure_digest(), snapshot().digest());
+    assert_eq!(record.graph_node_id(), &node("gate"));
+    assert_eq!(
+        record.node_definition_id(),
+        &NodeDefinitionId::new("gate-def").unwrap()
+    );
+    assert_eq!(record.attempt_id(), &attempt_id(2));
+    assert_eq!(record.attempt_number(), AttemptNumberV2::FIRST);
+    assert_eq!(record.goal_revision(), None);
+    assert_eq!(record.selected_option(), &OptionId::new("proceed").unwrap());
+    assert_eq!(record.route_effect(), TransitionEffectV2::Advance);
+    assert_eq!(record.route_target(), &node("finish"));
+    assert_eq!(record.reason().as_str(), "Proceed to finish.");
+    assert_eq!(record.actor().unwrap().as_str(), "reviewer");
+    assert_eq!(record.recorded_at(), UnixMillis::new(40));
+    assert_eq!(record.evidence().references().len(), 2);
+    let resolved = record.evidence().references()[0].snapshot().unwrap();
+    assert_eq!(resolved.source_node(), &node("capture"));
+    assert_eq!(resolved.source_attempt_id(), &attempt_id(1));
+    assert_eq!(resolved.source_attempt_number(), AttemptNumberV2::FIRST);
+    assert_eq!(
+        resolved.items_digest(),
+        &next.workflow_memory().attempts()[0]
+            .recorded_items_digest()
+            .unwrap()
+    );
+    assert_eq!(resolved.resolved_at(), UnixMillis::new(30));
+    assert!(matches!(
+        &record.evidence().references()[1],
+        ResolvedEvidenceReferenceV2::Unresolved { source_node }
+            if source_node == &node("finish")
+    ));
+
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(4),
+            Revision::new(4),
+            next.clone(),
+        )
+        .unwrap();
+    drop(store);
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    let loaded = reopened
+        .read_graph_session_v2(&identity())
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded, next);
+    assert_eq!(loaded.workflow_memory().decisions(), &[expected_record]);
+}
+
+#[test]
+fn v2drw002_declared_rework_keeps_the_exact_decision_after_its_attempt_becomes_stale() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    persist_gate(&store);
+    let outcome = gate_state()
+        .decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("redo").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Redo the capture.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+    let expected_record = outcome.decision_record().clone();
+    let next = outcome.into_state();
+
+    assert_eq!(
+        next.trace().attempts()[1].validity(),
+        AttemptValidityV2::Stale
+    );
+    assert_eq!(
+        next.workflow_memory().decisions(),
+        &[expected_record.clone()]
+    );
+    assert_eq!(
+        next.workflow_memory().decisions()[0]
+            .evidence()
+            .references(),
+        expected_record.evidence().references()
+    );
+    assert!(next.selected_evidence_readback(&attempt_id(2)).unwrap()[0].stale());
+
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(4),
+            Revision::new(4),
+            next.clone(),
+        )
+        .unwrap();
+    drop(store);
+    let loaded = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap())
+        .read_graph_session_v2(&identity())
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded, next);
+    assert_eq!(loaded.workflow_memory().decisions(), &[expected_record]);
+    assert_eq!(
+        loaded.trace().attempts()[1].validity(),
+        AttemptValidityV2::Stale
+    );
+    assert!(loaded.selected_evidence_readback(&attempt_id(2)).unwrap()[0].stale());
+}
+
+#[test]
 fn v2drw001_decide_rejects_stale_fences_option_and_missing_reason_without_mutation() {
     let state = gate_state();
     let before = state.clone();

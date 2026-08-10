@@ -4276,6 +4276,33 @@ fn graph_unblock_successor_matches_v2(
         })
 }
 
+fn rfc3339_millis_graph_terminal_v2(value: podway_core::UnixMillis) -> Option<String> {
+    let seconds = value.get() / 1_000;
+    let millis = value.get() % 1_000;
+    let days = seconds / 86_400;
+    let seconds_of_day = seconds % 86_400;
+    let z = i128::from(days) + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i128::from(month <= 2);
+    if !(0..=9_999).contains(&year) {
+        return None;
+    }
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
+    ))
+}
+
 fn decision_record_projection_matches_v2(
     value: &serde_json::Value,
     record: &podway_core::DecisionRecordV2,
@@ -4290,10 +4317,11 @@ fn decision_record_projection_matches_v2(
     else {
         return false;
     };
-    value
-        .get("trace_sequence")
-        .and_then(serde_json::Value::as_u64)
-        == Some(record.trace().get())
+    value.len() == 17 + usize::from(record.actor().is_some())
+        && value
+            .get("trace_sequence")
+            .and_then(serde_json::Value::as_u64)
+            == Some(record.trace().get())
         && value.get("session_id").and_then(serde_json::Value::as_str)
             == Some(record.session_id().as_str())
         && value
@@ -4342,8 +4370,14 @@ fn decision_record_projection_matches_v2(
             .and_then(serde_json::Value::as_str)
             == Some(record.route_target().as_str())
         && value.get("reason").and_then(serde_json::Value::as_str) == Some(record.reason().as_str())
-        && value.get("actor").and_then(serde_json::Value::as_str)
-            == record.actor().map(podway_core::ActorAttributionV2::as_str)
+        && match record.actor() {
+            Some(actor) => {
+                value.get("actor").and_then(serde_json::Value::as_str) == Some(actor.as_str())
+            }
+            None => !value.contains_key("actor"),
+        }
+        && value.get("recorded_at").and_then(serde_json::Value::as_str)
+            == rfc3339_millis_graph_terminal_v2(record.recorded_at()).as_deref()
         && projected_references.len() == references.len()
         && projected_references
             .iter()
@@ -4364,17 +4398,18 @@ fn decision_record_projection_matches_v2(
                         }
                         podway_core::ResolvedEvidenceReferenceV2::Resolved(snapshot)
                         | podway_core::ResolvedEvidenceReferenceV2::Skipped(snapshot) => {
-                            projected.get("state").and_then(serde_json::Value::as_str)
-                                == Some(
-                                    if matches!(
-                                        reference,
-                                        podway_core::ResolvedEvidenceReferenceV2::Skipped(_)
-                                    ) {
-                                        "skipped"
-                                    } else {
-                                        "resolved"
-                                    },
-                                )
+                            projected.len() == 5
+                                && projected.get("state").and_then(serde_json::Value::as_str)
+                                    == Some(
+                                        if matches!(
+                                            reference,
+                                            podway_core::ResolvedEvidenceReferenceV2::Skipped(_)
+                                        ) {
+                                            "skipped"
+                                        } else {
+                                            "resolved"
+                                        },
+                                    )
                                 && projected
                                     .get("source_attempt_id")
                                     .and_then(serde_json::Value::as_str)
@@ -4469,6 +4504,7 @@ fn validate_graph_mutation_terminal_shape_v2(
                             .map(|actor| serde_json::Value::String(actor.as_str().to_owned()))
                             .unwrap_or(serde_json::Value::Null),
                     )
+                && decision.recorded_at() == now
                 && decision_record_projection_matches_v2(record, decision)
         }
         (
@@ -5895,4 +5931,157 @@ struct RunningJobRow {
 
 fn public_command_name_v1(command: &crate::CommandV1) -> &'static str {
     PersistedDomainCommandV1::from_command(command).public_command_name()
+}
+
+#[cfg(test)]
+mod v2drw002_tests {
+    use super::decision_record_projection_matches_v2;
+    use podway_core::{
+        ActorAttributionV2, AttemptId, AttemptNumberV2, DecisionRecordInputV2, DecisionRecordV2,
+        EvidenceReferenceSnapshotV2, GoalRevisionNumberV2, GraphNodeId, NodeDefinitionId, OptionId,
+        ProcedureSnapshotId, ReasonV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2,
+        Revision, SessionId, Sha256Digest, TraceSequenceV2, TransitionEffectV2, UnixMillis,
+    };
+    use serde_json::{Value, json};
+
+    fn decision_record(actor: Option<&str>) -> DecisionRecordV2 {
+        let resolved = EvidenceReferenceSnapshotV2::new(
+            GraphNodeId::new("source-a").unwrap(),
+            AttemptId::new("00000000-0000-4000-8000-000000000101").unwrap(),
+            AttemptNumberV2::FIRST,
+            Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            UnixMillis::new(7),
+        )
+        .unwrap();
+        let skipped = EvidenceReferenceSnapshotV2::new(
+            GraphNodeId::new("source-b").unwrap(),
+            AttemptId::new("00000000-0000-4000-8000-000000000102").unwrap(),
+            AttemptNumberV2::new(2),
+            Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            UnixMillis::new(8),
+        )
+        .unwrap();
+        DecisionRecordV2::new(DecisionRecordInputV2 {
+            trace: TraceSequenceV2::new(3),
+            session_id: SessionId::new("00000000-0000-4000-8000-000000000103").unwrap(),
+            session_revision: Revision::new(4),
+            procedure_snapshot_id: ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000104")
+                .unwrap(),
+            procedure_digest: Sha256Digest::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
+            graph_node_id: GraphNodeId::new("decision").unwrap(),
+            node_definition_id: NodeDefinitionId::new("decision-definition").unwrap(),
+            attempt_id: AttemptId::new("00000000-0000-4000-8000-000000000105").unwrap(),
+            attempt_number: AttemptNumberV2::new(2),
+            goal_revision: Some(GoalRevisionNumberV2::new(2)),
+            selected_option: OptionId::new("approve").unwrap(),
+            route_effect: TransitionEffectV2::Advance,
+            route_target: GraphNodeId::new("finish").unwrap(),
+            reason: ReasonV2::new("The evidence supports this route.").unwrap(),
+            evidence: ResolvedEvidenceSetV2::new(vec![
+                ResolvedEvidenceReferenceV2::unresolved(
+                    GraphNodeId::new("optional-source").unwrap(),
+                ),
+                ResolvedEvidenceReferenceV2::resolved(resolved),
+                ResolvedEvidenceReferenceV2::skipped(skipped),
+            ])
+            .unwrap(),
+            actor: actor.map(|value| ActorAttributionV2::new(value).unwrap()),
+            recorded_at: UnixMillis::new(9),
+        })
+        .unwrap()
+    }
+
+    fn decision_projection(actor: Option<&str>) -> Value {
+        let mut projection = json!({
+            "trace_sequence": 3,
+            "session_id": "00000000-0000-4000-8000-000000000103",
+            "session_revision": 4,
+            "procedure_schema": "podway.procedure/v2",
+            "procedure_snapshot_id": "00000000-0000-4000-8000-000000000104",
+            "procedure_digest": format!("sha256:{}", "c".repeat(64)),
+            "graph_node_id": "decision",
+            "node_definition_id": "decision-definition",
+            "attempt_id": "00000000-0000-4000-8000-000000000105",
+            "attempt_number": 2,
+            "goal_revision": 2,
+            "option_id": "approve",
+            "effect": "advance",
+            "target_graph_node_id": "finish",
+            "reason": "The evidence supports this route.",
+            "recorded_at": "1970-01-01T00:00:00.009Z",
+            "references": [
+                {"source_graph_node_id": "optional-source", "state": "unresolved"},
+                {
+                    "source_graph_node_id": "source-a",
+                    "source_attempt_id": "00000000-0000-4000-8000-000000000101",
+                    "source_attempt_number": 1,
+                    "items_digest": format!("sha256:{}", "a".repeat(64)),
+                    "state": "resolved"
+                },
+                {
+                    "source_graph_node_id": "source-b",
+                    "source_attempt_id": "00000000-0000-4000-8000-000000000102",
+                    "source_attempt_number": 2,
+                    "items_digest": format!("sha256:{}", "b".repeat(64)),
+                    "state": "skipped"
+                }
+            ]
+        });
+        if let Some(actor) = actor {
+            projection["actor"] = json!(actor);
+        }
+        projection
+    }
+
+    #[test]
+    fn v2drw002_frozen_decision_projection_requires_exact_record_and_reference_members() {
+        let record = decision_record(Some("reviewer"));
+        let projection = decision_projection(Some("reviewer"));
+        assert!(decision_record_projection_matches_v2(&projection, &record));
+
+        let mut timestamp_drift = projection.clone();
+        timestamp_drift["recorded_at"] = json!("1970-01-01T00:00:00.010Z");
+        assert!(!decision_record_projection_matches_v2(
+            &timestamp_drift,
+            &record
+        ));
+
+        let mut assessment_injection = projection.clone();
+        assessment_injection["assessment"] = json!("session_goal");
+        assert!(!decision_record_projection_matches_v2(
+            &assessment_injection,
+            &record
+        ));
+
+        let mut actor_drift = projection.clone();
+        actor_drift["actor"] = Value::Null;
+        assert!(!decision_record_projection_matches_v2(
+            &actor_drift,
+            &record
+        ));
+
+        let mut reference_injection = projection.clone();
+        reference_injection["references"][1]["resolved_at"] = json!("1970-01-01T00:00:00.007Z");
+        assert!(!decision_record_projection_matches_v2(
+            &reference_injection,
+            &record
+        ));
+
+        let mut reordered = projection.clone();
+        reordered["references"].as_array_mut().unwrap().swap(0, 1);
+        assert!(!decision_record_projection_matches_v2(&reordered, &record));
+
+        let actorless_record = decision_record(None);
+        let actorless_projection = decision_projection(None);
+        assert!(decision_record_projection_matches_v2(
+            &actorless_projection,
+            &actorless_record
+        ));
+        let mut null_actor = actorless_projection;
+        null_actor["actor"] = Value::Null;
+        assert!(!decision_record_projection_matches_v2(
+            &null_actor,
+            &actorless_record
+        ));
+    }
 }
