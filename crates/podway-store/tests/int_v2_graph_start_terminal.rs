@@ -19,7 +19,8 @@ use podway_store::{
     ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
     StateTransitionV1, StoreContractV1, StoreFailpointActionV1, StoreFailpointV1,
     StoreGraphMutationContractV2, StoreGraphStateContractV2, StoreIdempotencyReadContractV1,
-    StoreReadContractV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    StoreReadContractV1, StoreUnavailableReasonV1, TerminalResultV1, ValidatedWorkspaceRootV1,
+    WorkerIdV1,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -905,6 +906,166 @@ fn graph_action_admission_rejects_stale_fences_without_rows_and_replays_first() 
         store.admit(&identity(), reused),
         Err(podway_store::StoreErrorV1::IdempotencyDigestConflictV1 { .. })
     ));
+}
+
+#[test]
+fn graph_action_queue_exhaustion_and_running_restart_preserve_one_durable_job_and_cursor() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(1).unwrap(), 1);
+    let state = graph_state(2_400, 2_410, 22);
+    seed_graph_session(&store, &state, 2_420);
+    let active = state.trace().active_attempt().unwrap();
+    let item_id = ItemId::new("done").unwrap();
+    let preconditions = RevisionAttemptItemPreconditionsV1::new(
+        None,
+        Some(active.attempt_id().clone()),
+        Some(item_id.clone()),
+        Some(Revision::ZERO),
+    )
+    .unwrap();
+    let first = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck {
+            item_id: item_id.clone(),
+        },
+        "item.check",
+        "v2run008-durable-first",
+        2_430,
+        digest('8'),
+        preconditions.clone(),
+    );
+    let admitted = store.admit(&identity(), first).unwrap();
+    assert!(matches!(admitted, podway_store::AdmitOutcomeV1::New(_)));
+
+    let replay = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck {
+            item_id: item_id.clone(),
+        },
+        "item.check",
+        "v2run008-durable-first",
+        2_431,
+        digest('8'),
+        preconditions.clone(),
+    );
+    assert!(matches!(
+        store.admit(&identity(), replay),
+        Ok(podway_store::AdmitOutcomeV1::Existing(
+            podway_store::JobReceiptOrTerminalV1::JobReceipt(_)
+        ))
+    ));
+
+    let overflow_job_id = podway_core::JobId::new(uuid(2_432)).unwrap();
+    let overflow = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck { item_id },
+        "item.check",
+        "v2run008-capacity-overflow",
+        2_432,
+        digest('9'),
+        preconditions,
+    );
+    assert_eq!(
+        store.admit(&identity(), overflow),
+        Err(podway_store::StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Busy,
+        })
+    );
+    assert!(
+        store
+            .read_job(&identity(), &overflow_job_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .read_idempotency_lookup(
+                &identity(),
+                &IdempotencyKeyV1::new("v2run008-capacity-overflow").unwrap(),
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(state.clone())
+    );
+    assert_eq!(
+        store
+            .read_workspace_view(&identity())
+            .unwrap()
+            .queued_job_count(),
+        1
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(1).unwrap(), 31);
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 0);
+    assert_eq!(
+        reopened
+            .read_workspace_view(&identity())
+            .unwrap()
+            .queued_job_count(),
+        1
+    );
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(state.clone())
+    );
+    let claimed = reopened
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2run008-restart-worker").unwrap(),
+            UnixMillis::new(32),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.job().job_id().as_str(), uuid(2_430));
+    drop(reopened);
+
+    let recovered = open(&temporary, SqliteStoreOptionsV1::new(1).unwrap(), 33);
+    assert_eq!(recovered.startup_recovery_report().requeued_job_count(), 1);
+    assert_eq!(
+        recovered
+            .read_workspace_view(&identity())
+            .unwrap()
+            .queued_job_count(),
+        1
+    );
+    assert_eq!(
+        recovered.read_graph_session_v2(&identity()).unwrap(),
+        Some(state.clone())
+    );
+    let replay_after_restart = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck {
+            item_id: ItemId::new("done").unwrap(),
+        },
+        "item.check",
+        "v2run008-durable-first",
+        2_433,
+        digest('8'),
+        RevisionAttemptItemPreconditionsV1::new(
+            None,
+            Some(state.trace().active_attempt().unwrap().attempt_id().clone()),
+            Some(ItemId::new("done").unwrap()),
+            Some(Revision::ZERO),
+        )
+        .unwrap(),
+    );
+    assert!(matches!(
+        recovered.admit(&identity(), replay_after_restart),
+        Ok(podway_store::AdmitOutcomeV1::Existing(
+            podway_store::JobReceiptOrTerminalV1::JobReceipt(receipt)
+        )) if receipt.job_id().as_str() == uuid(2_430)
+    ));
+    assert_eq!(
+        recovered
+            .read_workspace_view(&identity())
+            .unwrap()
+            .queued_job_count(),
+        1
+    );
 }
 
 #[test]

@@ -1078,6 +1078,67 @@ mod tests {
     }
 
     #[test]
+    fn repeated_valid_rework_cycle_has_no_semantic_traversal_limit_and_one_cursor() {
+        let mut trace =
+            SessionTraceV2::start(session(), node("implement"), attempt_id(1), None).unwrap();
+        trace
+            .advance(
+                &attempt_id(1),
+                AdvanceTerminalV2::Completed,
+                node("review"),
+                attempt_id(2),
+                None,
+            )
+            .unwrap();
+
+        for traversal in 0..128_u64 {
+            let review_attempt = trace.active_attempt().unwrap().attempt_id().clone();
+            let implement_attempt = attempt_id(3 + traversal * 2);
+            trace
+                .rework_to(
+                    &review_attempt,
+                    node("implement"),
+                    implement_attempt.clone(),
+                    None,
+                )
+                .unwrap();
+            let review_successor = attempt_id(4 + traversal * 2);
+            trace
+                .advance(
+                    &implement_attempt,
+                    AdvanceTerminalV2::Completed,
+                    node("review"),
+                    review_successor,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                trace
+                    .attempts()
+                    .iter()
+                    .filter(|attempt| attempt.lifecycle() == AttemptLifecycle::Active)
+                    .count(),
+                1
+            );
+        }
+
+        assert_eq!(trace.attempts().len(), 258);
+        let cursor = trace.active_cursor().unwrap();
+        assert_eq!(cursor.graph_node_id().as_str(), "review");
+        let active = trace.active_attempt().unwrap();
+        assert_eq!(active.number(), AttemptNumberV2::new(129));
+        assert_eq!(active.trace(), TraceSequenceV2::new(258));
+        assert_eq!(
+            trace
+                .attempts()
+                .iter()
+                .filter(|attempt| attempt.validity().is_valid())
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn failures_leave_trace_bit_for_bit_unchanged() {
         let mut trace =
             SessionTraceV2::start(session(), node("entry"), attempt_id(1), None).unwrap();
