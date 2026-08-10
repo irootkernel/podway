@@ -2725,6 +2725,8 @@ fn validate_rework_history_v2(
                     || decision.route_effect() != TransitionEffectV2::Rework
                     || decision.route_target() != record.to_node()
                     || decision.reason() != record.reason()
+                    || decision.actor() != record.actor()
+                    || decision.recorded_at() != record.recorded_at()
                 {
                     return Err(invalid(
                         "declared Procedure v2 rework record is inconsistent",

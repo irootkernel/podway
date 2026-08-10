@@ -3676,14 +3676,23 @@ where
         let view = self
             .store
             .read_graph_workspace_view_v2(claimed.claim().identity())?;
-        let state = view.graph_state().ok_or_else(|| {
-            invalid_execution_v1("Procedure v2 claimed rework has no current graph session")
-        })?;
-        if state.trace().session_id() != &admitted.command.preconditions.expected_session_id {
-            return Err(invalid_execution_v1(
-                "Procedure v2 claimed rework session identity changed",
-            ));
+        let actual_session_id = view
+            .graph_state()
+            .map(|state| state.trace().session_id().clone());
+        if actual_session_id.as_ref() != Some(&admitted.command.preconditions.expected_session_id) {
+            return self.commit_domain_failure(
+                claimed,
+                Revision::ZERO,
+                DomainError::SessionIdentityMismatch {
+                    expected: admitted.command.preconditions.expected_session_id.clone(),
+                    actual: actual_session_id,
+                },
+                now,
+            );
         }
+        let state = view
+            .graph_state()
+            .expect("matching Procedure v2 session identity requires graph state");
         let reason = ReasonV2::new(admitted.command.reason)
             .map_err(|_| invalid_execution_v1("Procedure v2 rework reason is invalid"))?;
         let actor = admitted
@@ -3762,14 +3771,23 @@ where
         let view = self
             .store
             .read_graph_workspace_view_v2(claimed.claim().identity())?;
-        let state = view.graph_state().ok_or_else(|| {
-            invalid_execution_v1("Procedure v2 claimed decision has no current graph session")
-        })?;
-        if state.trace().session_id() != &admitted.command.preconditions.expected_session_id {
-            return Err(invalid_execution_v1(
-                "Procedure v2 claimed decision session identity changed",
-            ));
+        let actual_session_id = view
+            .graph_state()
+            .map(|state| state.trace().session_id().clone());
+        if actual_session_id.as_ref() != Some(&admitted.command.preconditions.expected_session_id) {
+            return self.commit_domain_failure(
+                claimed,
+                Revision::ZERO,
+                DomainError::SessionIdentityMismatch {
+                    expected: admitted.command.preconditions.expected_session_id.clone(),
+                    actual: actual_session_id,
+                },
+                now,
+            );
         }
+        let state = view
+            .graph_state()
+            .expect("matching Procedure v2 session identity requires graph state");
         let reason = ReasonV2::new(admitted.command.reason.clone())
             .map_err(|_| invalid_execution_v1("Procedure v2 decision reason is invalid"))?;
         let actor = admitted
@@ -3846,17 +3864,26 @@ where
         let view = self
             .store
             .read_graph_workspace_view_v2(claimed.claim().identity())?;
-        let state = view.graph_state().ok_or_else(|| {
-            invalid_execution_v1("Procedure v2 claimed mutation has no current graph session")
-        })?;
         let expected_session = expected_session_id_v1(&admitted.command).ok_or_else(|| {
             invalid_execution_v1("Procedure v2 mutation has no session identity fence")
         })?;
-        if state.trace().session_id() != expected_session {
-            return Err(invalid_execution_v1(
-                "Procedure v2 claimed mutation session identity changed",
-            ));
+        let actual_session_id = view
+            .graph_state()
+            .map(|state| state.trace().session_id().clone());
+        if actual_session_id.as_ref() != Some(expected_session) {
+            return self.commit_domain_failure(
+                claimed,
+                Revision::ZERO,
+                DomainError::SessionIdentityMismatch {
+                    expected: expected_session.clone(),
+                    actual: actual_session_id,
+                },
+                now,
+            );
         }
+        let state = view
+            .graph_state()
+            .expect("matching Procedure v2 session identity requires graph state");
         let expected_workspace_revision = state.workspace_revision();
         let expected_session_revision = state.trace().revision();
         match &admitted.command {

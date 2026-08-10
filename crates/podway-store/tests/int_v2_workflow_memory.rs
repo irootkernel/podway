@@ -2875,9 +2875,7 @@ fn v2drw004_fresh_reentry_reresolves_evidence_without_rewriting_stale_history() 
     assert!(!advanced.selected_evidence_readback(&attempt_id(4)).unwrap()[0].stale());
 }
 
-#[test]
-fn v2drw004_sqlite_reopen_rejects_resurrected_obsolete_attempt_validity() {
-    let temporary = TempDir::new().unwrap();
+fn persisted_reentry_state() -> GraphSessionStateV2 {
     let snapshot = validity_replay_snapshot();
     let initial = GraphSessionStateV2::new(
         Revision::new(1),
@@ -2929,7 +2927,7 @@ fn v2drw004_sqlite_reopen_rejects_resurrected_obsolete_attempt_validity() {
         )
         .unwrap()
         .into_state();
-    let state = reentered
+    reentered
         .complete_active_action_v2(
             Revision::new(3),
             &attempt_id(3),
@@ -2937,7 +2935,13 @@ fn v2drw004_sqlite_reopen_rejects_resurrected_obsolete_attempt_validity() {
             UnixMillis::new(40),
         )
         .unwrap()
-        .into_state();
+        .into_state()
+}
+
+#[test]
+fn v2drw004_sqlite_reopen_rejects_resurrected_obsolete_attempt_validity() {
+    let temporary = TempDir::new().unwrap();
+    let state = persisted_reentry_state();
     assert_eq!(
         state
             .trace()
@@ -2957,6 +2961,9 @@ fn v2drw004_sqlite_reopen_rejects_resurrected_obsolete_attempt_validity() {
     drop(store);
 
     let connection = Connection::open(database_path(&temporary)).unwrap();
+    // The partial unique index permits only one valid attempt per node. Stale the legitimate
+    // successor first so resurrecting the obsolete same-node attempt remains a schema-valid DB
+    // witness and reaches startup semantic validation.
     connection
         .execute(
             "UPDATE v2_attempts SET validity = 'stale' WHERE attempt_id = ?1",
@@ -2979,6 +2986,120 @@ fn v2drw004_sqlite_reopen_rejects_resurrected_obsolete_attempt_validity() {
         UnixMillis::new(100),
     ) {
         Ok(_) => panic!("resurrected obsolete attempt validity must fail startup integrity"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::SessionCursor
+        }
+    ));
+}
+
+#[test]
+fn v2drw004_sqlite_reopen_rejects_fresh_reentry_staling_without_resurrection() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store
+        .create_graph_session_v2(&identity(), persisted_reentry_state())
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_attempts SET validity = 'stale' WHERE attempt_id = ?1",
+            [attempt_id(3).as_str()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let error = match SqliteStoreV1::open(
+        database_path(&temporary),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(100),
+    ) {
+        Ok(_) => panic!("staled fresh reentry must fail startup integrity"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::SessionCursor
+        }
+    ));
+}
+
+#[test]
+fn v2drw_declared_rework_actor_tamper_fails_cold_load() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store
+        .create_graph_session_v2(
+            &identity(),
+            declared_rework_state(5, "Waiting for review.", false),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_rework_records SET actor = 'different-reviewer' WHERE kind = 'declared'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let error = match SqliteStoreV1::open(
+        database_path(&temporary),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(100),
+    ) {
+        Ok(_) => panic!("declared decision/rework actor mismatch must fail startup integrity"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::SessionCursor
+        }
+    ));
+}
+
+#[test]
+fn v2drw_declared_rework_timestamp_tamper_fails_cold_load() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store
+        .create_graph_session_v2(
+            &identity(),
+            declared_rework_state(5, "Waiting for review.", false),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_rework_records SET recorded_at_ms = recorded_at_ms + 1 WHERE kind = 'declared'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let error = match SqliteStoreV1::open(
+        database_path(&temporary),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(100),
+    ) {
+        Ok(_) => panic!("declared decision/rework timestamp mismatch must fail startup integrity"),
         Err(error) => error,
     };
     assert!(matches!(

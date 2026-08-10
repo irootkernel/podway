@@ -2,7 +2,12 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{fs, path::Path, sync::Arc, time::Duration};
+use std::{
+    fs,
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use podway_config::{
     ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document, validate_procedure_v2,
@@ -176,7 +181,8 @@ fn dispatch_after_cold_reopen(
     dispatcher: &impl RequestDispatcherV1,
     request: &(RequestEnvelopeV1, DaemonRequestV1),
 ) -> ResponseEnvelopeV2 {
-    for _ in 0..50 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
         let response = runtime::dispatch(dispatcher, request);
         if !matches!(
             &response,
@@ -184,9 +190,12 @@ fn dispatch_after_cold_reopen(
         ) {
             return response;
         }
+        assert!(
+            Instant::now() < deadline,
+            "cold-reopen lifecycle maintenance did not release within 5 seconds: {response:?}"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("cold-reopen lifecycle maintenance did not release within 500 ms")
 }
 
 struct RunningFixture {

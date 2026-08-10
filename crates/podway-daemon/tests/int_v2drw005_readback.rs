@@ -2,7 +2,11 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{fs, sync::Arc, time::Duration};
+use std::{
+    fs,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
@@ -106,7 +110,8 @@ fn dispatch_after_cold_reopen(
     dispatcher: &impl RequestDispatcherV1,
     request: &(RequestEnvelopeV1, DaemonRequestV1),
 ) -> ResponseEnvelopeV2 {
-    for _ in 0..50 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
         let response = runtime::dispatch(dispatcher, request);
         if !matches!(
             &response,
@@ -114,9 +119,12 @@ fn dispatch_after_cold_reopen(
         ) {
             return response;
         }
+        assert!(
+            Instant::now() < deadline,
+            "cold-reopen lifecycle maintenance did not release within 5 seconds: {response:?}"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("cold-reopen lifecycle maintenance did not release within 500 ms")
 }
 
 fn assert_bounded_response(response: &ResponseEnvelopeV2) {
@@ -516,6 +524,11 @@ fn v2drw005_production_readback_is_bounded_immutable_pageable_and_cold_stable() 
         "result",
         "final accepted work result",
     );
+    let final_work = status(&production, &selector, &session_id, &mut number);
+    let final_work_attempt_id = final_work["current"]["attempt"]["attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     complete(&production, &selector, &session_id, &mut number);
     set_item(
         &production,
@@ -558,6 +571,11 @@ fn v2drw005_production_readback_is_bounded_immutable_pageable_and_cold_stable() 
     assert_eq!(fresh["current"]["attempt"]["attempt_id"], fresh_attempt_id);
     assert_eq!(fresh["current"]["node"]["graph_node_id"], "review");
     assert_eq!(fresh["missing_required_item_ids"], json!(["note"]));
+    assert_eq!(fresh["references"][0]["state"], "resolved");
+    assert_eq!(
+        fresh["references"][0]["source_attempt_id"], final_work_attempt_id,
+        "fresh review must resolve evidence from the latest valid work attempt"
+    );
 
     let standard = status(&production, &selector, &session_id, &mut number);
     for history in HISTORY_KEYS {
@@ -624,7 +642,7 @@ fn v2drw005_production_readback_is_bounded_immutable_pageable_and_cold_stable() 
     expected_reworks_newest.reverse();
     assert_eq!(collected_reworks, expected_reworks_newest);
 
-    let mut stale_attempt_ids = Vec::new();
+    let mut stale_attempts = Vec::new();
     let mut cursor = None;
     loop {
         let page = verbose_status(&production, &selector, &session_id, &mut number, cursor);
@@ -632,11 +650,32 @@ fn v2drw005_production_readback_is_bounded_immutable_pageable_and_cold_stable() 
         if entries.is_empty() {
             break;
         }
-        stale_attempt_ids.push(entries[0]["attempt_id"].as_str().unwrap().to_owned());
+        stale_attempts.push(entries[0].clone());
         cursor = Some(entries[0]["trace_sequence"].as_u64().unwrap());
     }
+    let stale_attempt_ids = stale_attempts
+        .iter()
+        .map(|entry| entry["attempt_id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
     assert!(stale_attempt_ids.contains(&accepted_attempt_id));
     assert!(!stale_attempt_ids.contains(&fresh_attempt_id));
+    let stale_prior_review = stale_attempts
+        .iter()
+        .find(|entry| {
+            entry["graph_node_id"] == "review"
+                && entry["references"].as_array().is_some_and(|references| {
+                    references.first().is_some_and(|reference| {
+                        reference["source_attempt_id"] != final_work_attempt_id
+                    })
+                })
+        })
+        .expect("declared rework must retain an older review with stale source evidence");
+    assert_eq!(stale_prior_review["references"][0]["state"], "stale");
+    assert_ne!(
+        stale_prior_review["references"][0]["source_attempt_id"],
+        fresh["references"][0]["source_attempt_id"],
+        "fresh re-entry must re-resolve evidence instead of inheriting the stale snapshot"
+    );
 
     let after_reads = status(&production, &selector, &session_id, &mut number);
     assert_eq!(read_fingerprint(&after_reads), before_reads);

@@ -94,7 +94,7 @@ identity results before using any reported field.
 
 The status and next shapes below are executable for Procedure v2 sessions.
 Procedure v2 authoring and preview commands are executable and are specified in
-their dedicated sections below. Shared item mutations, `session.complete`, and
+their dedicated sections below. Shared item mutations, `session.complete`,
 `session.decide`, and `session.rework` are executable for their matching session
 states and return their registered v2 result families. The three remaining reserved mutation routes
 and goal-bearing start are exposed by the CLI grammar, but remain

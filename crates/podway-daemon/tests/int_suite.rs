@@ -56,6 +56,8 @@ mod int_v2drw003_rework;
 mod int_v2drw005_readback;
 #[path = "int_v2drw006_failures.rs"]
 mod int_v2drw006_failures;
+#[path = "int_v2drw_epic_identity.rs"]
+mod int_v2drw_epic_identity;
 #[path = "int_v2run001_start.rs"]
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]

@@ -91,7 +91,7 @@
         "V2ACC-035",
         "V2ACC-036"
       ],
-      "required_tasks": ["V2PLT-002", "V2DRW-001", "V2RUN-005", "V2RUN-003", "V2DRW-006", "V2DRW-003", "V2DRW-004", "V2DRW-005", "V2GOL-004", "V2GOL-001", "V2GOL-005", "V2RUN-008", "V2PLT-010"],
+      "required_tasks": ["V2PLT-002", "V2DRW-001", "V2RUN-005", "V2RUN-003", "V2DRW-006", "V2DRW-003", "V2DRW-004", "V2DRW-002", "V2DRW-005", "V2GOL-004", "V2GOL-001", "V2GOL-005", "V2RUN-008", "V2PLT-010"],
       "gate_owner_task": "V2REL-003",
       "gate": "make test-e2e",
       "implementation_status": "planned"

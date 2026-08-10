@@ -2,7 +2,12 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{fs, sync::Arc};
+use std::{
+    fs,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
@@ -136,6 +141,52 @@ fn assert_error(response: ResponseEnvelopeV2, code: &str, admitted: bool) -> Val
     serde_json::to_value(error).unwrap()
 }
 
+fn dispatch_after_cold_reopen(
+    dispatcher: &impl RequestDispatcherV1,
+    request: &(RequestEnvelopeV1, DaemonRequestV1),
+) -> ResponseEnvelopeV2 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = runtime::dispatch(dispatcher, request);
+        if !matches!(
+            &response,
+            ResponseEnvelopeV2::Error(error) if error.code().as_str() == "WORKSPACE_MAINTENANCE"
+        ) {
+            return response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cold-reopen lifecycle maintenance did not release within 5 seconds: {response:?}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn verbose_status(
+    dispatcher: &impl RequestDispatcherV1,
+    selector: &podway_protocol::WorktreeSelectorWireV1,
+    number: u64,
+    session_id: &str,
+) -> Map<String, Value> {
+    let request = runtime::request(
+        number,
+        "session.status",
+        selector,
+        json!({"verbose": true}).as_object().unwrap().clone(),
+        "unused-v2drw001-verbose-status-key",
+        PreconditionsV1::new(
+            Some(SessionId::new(session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.status")
+}
+
 fn start_at_decision(
     dispatcher: &impl RequestDispatcherV1,
     selector: &podway_protocol::WorktreeSelectorWireV1,
@@ -222,6 +273,40 @@ fn start_at_decision(
     let completed =
         runtime::v2_result(runtime::dispatch(dispatcher, &complete), "session.complete");
     assert_eq!(completed["to_graph_node_id"], "review");
+
+    let decision_before = verbose_status(dispatcher, selector, 91_022, &session_id);
+    let wrong_complete = runtime::request(
+        91_023,
+        "session.complete",
+        selector,
+        Map::new(),
+        "v2drw001-complete-decision",
+        runtime::session_preconditions(&decision_before),
+    );
+    let wrong_type = assert_error(
+        runtime::dispatch(dispatcher, &wrong_complete),
+        "GRAPH_NODE_TYPE_MISMATCH",
+        true,
+    );
+    assert_eq!(wrong_type["details"]["graph_node_id"], "review");
+    assert_eq!(wrong_type["details"]["expected_node_type"], "action");
+    assert_eq!(wrong_type["details"]["actual_node_type"], "decision");
+    let decision_after = verbose_status(dispatcher, selector, 91_024, &session_id);
+    for field in [
+        "session",
+        "current",
+        "trace_length",
+        "counters",
+        "decision_history",
+        "rework_history",
+    ] {
+        assert_eq!(
+            decision_after[field], decision_before[field],
+            "rejected completion changed {field}"
+        );
+    }
+    assert_eq!(decision_after["queue"]["queued_count"], 0);
+    assert!(decision_after["queue"]["running_job_id"].is_null());
     session_id
 }
 
@@ -435,7 +520,7 @@ fn v2drw001_decide_validates_fences_and_rules_then_persists_exact_replay() {
         "v2drw001-decide",
         runtime::session_preconditions(&ready),
     );
-    let replayed = runtime::dispatch(&restarted, &replay);
+    let replayed = dispatch_after_cold_reopen(&restarted, &replay);
     assert_eq!(
         runtime::without_request_id(&replayed),
         runtime::without_request_id(&first_response),
@@ -561,7 +646,7 @@ fn v2drw002_declared_rework_preserves_the_exact_decision_and_branch_after_restar
         "v2drw002-declared-rework",
         runtime::session_preconditions(&ready),
     );
-    let replayed = runtime::dispatch(&restarted, &replay);
+    let replayed = dispatch_after_cold_reopen(&restarted, &replay);
     assert_eq!(
         runtime::without_request_id(&replayed),
         runtime::without_request_id(&first_response),

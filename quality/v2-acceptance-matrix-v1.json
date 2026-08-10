@@ -634,6 +634,7 @@
       ],
       "test_class": "runtime-integration",
       "owning_tasks": [
+        "V2DRW-002",
         "V2DRW-005",
         "V2GOL-004"
       ],

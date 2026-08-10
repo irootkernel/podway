@@ -949,7 +949,7 @@ fn authoritative_rework_result() -> Value {
         "to_graph_node_id": "implement",
         "target_attempt_id": RECORDING_TARGET_ATTEMPT_ID,
         "reason": "Requirements changed.",
-        "reactivated": true,
+        "reactivated": false,
         "revision": 8
     })
 }
@@ -3321,6 +3321,10 @@ rework:
     assert_eq!(
         rework_response["result"]["schema"],
         "podway.rework-result/v1"
+    );
+    assert_eq!(
+        rework_response["result"]["reactivated"], false,
+        "a rework carrying an active-attempt fence remains within a running session"
     );
     let rework_requests = rework_daemon.finish();
     assert_eq!(rework_requests.len(), 1);

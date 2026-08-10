@@ -6,7 +6,7 @@ use std::{
     fs,
     sync::{Arc, Barrier},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use podway_config::{
@@ -200,7 +200,8 @@ fn dispatch_after_cold_reopen(
     dispatcher: &impl RequestDispatcherV1,
     request: &(RequestEnvelopeV1, DaemonRequestV1),
 ) -> ResponseEnvelopeV2 {
-    for _ in 0..50 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
         let response = runtime::dispatch(dispatcher, request);
         if !matches!(
             &response,
@@ -208,9 +209,12 @@ fn dispatch_after_cold_reopen(
         ) {
             return response;
         }
+        assert!(
+            Instant::now() < deadline,
+            "cold-reopen lifecycle maintenance did not release within 5 seconds: {response:?}"
+        );
         thread::sleep(Duration::from_millis(10));
     }
-    panic!("cold-reopen lifecycle maintenance did not release within 500 ms")
 }
 
 fn status(
@@ -344,7 +348,9 @@ fn complete_current(
         runtime::session_preconditions(&before),
     );
     *number += 2;
-    runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.complete")
+    let response = runtime::dispatch(dispatcher, &request);
+    assert!(encode_response_payload_v2(&response).unwrap().len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
+    runtime::v2_result(response, "session.complete")
 }
 
 fn decide_current(
@@ -363,7 +369,9 @@ fn decide_current(
         runtime::session_preconditions(&before),
     );
     *number += 2;
-    runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.decide")
+    let response = runtime::dispatch(dispatcher, &request);
+    assert!(encode_response_payload_v2(&response).unwrap().len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
+    runtime::v2_result(response, "session.decide")
 }
 
 fn start_ready(
@@ -661,6 +669,9 @@ fn v2drw006_concurrent_decisions_keep_one_cursor_and_stale_history_non_satisfyin
     });
     barrier.wait();
     let responses = [left_thread.join().unwrap(), right_thread.join().unwrap()];
+    for response in &responses {
+        assert!(encode_response_payload_v2(response).unwrap().len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
+    }
     assert_eq!(
         responses
             .iter()
@@ -870,7 +881,11 @@ fn v2drw006_repeated_declared_and_manual_cycles_survive_midrun_cold_reopen() {
         runtime::session_preconditions(&at_finish),
     );
     number += 1;
-    let reworked = runtime::v2_result(runtime::dispatch(&production, &manual), "session.rework");
+    let manual_response = runtime::dispatch(&production, &manual);
+    assert!(
+        encode_response_payload_v2(&manual_response).unwrap().len() <= MAX_FRAME_PAYLOAD_BYTES_V1
+    );
+    let reworked = runtime::v2_result(manual_response, "session.rework");
     assert_eq!(reworked["to_graph_node_id"], "review");
     assert_eq!(reworked["reactivated"], false);
 

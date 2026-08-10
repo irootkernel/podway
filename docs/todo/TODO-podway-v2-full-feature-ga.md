@@ -3264,7 +3264,7 @@ tree, and `V2REL-006` is the only release-readiness gate.
 | Task | Deliverable | Acceptance and focused gate |
 |---|---|---|
 | `V2DRW-001` | Implement `session.decide`. | The active decision validates option, required items, references, reason policy, attribution, and stale preconditions atomically; run command integration tests. |
-| `V2DRW-002` | Implement decision records and branch transitions. | The selected option, route, reason, citations, evidence snapshots, and trace sequence are immutable and replayable; run transition tests. |
+| `V2DRW-002` | Implement decision records and branch transitions. | The selected option, route, reason, actor attribution, evidence snapshots, and trace sequence are immutable and replayable; run transition tests. |
 | `V2DRW-003` | Implement `session.rework`. | Only allowed valid-trace targets can be selected and completed-session reactivation follows the declared policy; run command tests. |
 | `V2DRW-004` | Implement conservative invalidation and re-entry. | The affected suffix, including routing decisions, becomes stale atomically and a fresh target attempt becomes the only cursor; run property tests. |
 | `V2DRW-005` | Expose immutable decision and rework read-back. | Current and stale records remain bounded, ordered, and inspectable without satisfying current progression; run status/next golden tests. |

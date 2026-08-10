@@ -1,6 +1,9 @@
 //! Atomic Procedure v2 start publication and durable replay.
 
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use podway_core::{
     ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
@@ -26,6 +29,10 @@ use rusqlite::Connection;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+
+const V2_FAILURE_CRASH_DATABASE_PATH_ENV: &str = "PODWAY_V2_FAILURE_CRASH_DATABASE_PATH";
+const V2_FAILURE_CRASH_CHILD_TEST: &str =
+    "int_v2_graph_start_terminal::graph_mutation_failure_precommit_abort_child";
 
 fn digest(nibble: char) -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
@@ -145,6 +152,34 @@ fn graph_state_with_required_artifact(
         None,
     )
     .unwrap()
+}
+
+fn artifact_failure_ready_state(session_number: u64, snapshot_number: u64) -> GraphSessionStateV2 {
+    let initial = graph_state_with_required_artifact(session_number, snapshot_number, 10, true);
+    let active = initial.trace().active_attempt().unwrap();
+    let with_artifact = initial
+        .mutate_active_item_v2(
+            active.attempt_id(),
+            &ItemId::new("proof").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Attach {
+                value: ArtifactValueV1::local_path("proof.txt", digest('e'), 42, "text/plain")
+                    .unwrap(),
+            },
+            UnixMillis::new(11),
+        )
+        .unwrap()
+        .into_state();
+    with_artifact
+        .mutate_active_item_v2(
+            with_artifact.trace().active_attempt().unwrap().attempt_id(),
+            &ItemId::new("done").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Check,
+            UnixMillis::new(12),
+        )
+        .unwrap()
+        .into_state()
 }
 
 fn legacy_aggregate() -> SessionAggregateV1 {
@@ -2819,6 +2854,199 @@ fn v2drw006_graph_mutation_failure_precommit_io_rolls_back_and_retry_freezes_one
             .queued_job_count(),
         0
     );
+    assert_eq!(
+        cold.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    assert_eq!(
+        cold.read_job(&identity(), &job_id)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(&frozen)
+    );
+    assert_eq!(
+        cold.read_idempotency_lookup(&identity(), &key)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(&frozen)
+    );
+}
+
+#[test]
+fn graph_mutation_failure_precommit_abort_child() {
+    let Some(path) = std::env::var_os(V2_FAILURE_CRASH_DATABASE_PATH_ENV).map(PathBuf::from) else {
+        return;
+    };
+    let store = SqliteStoreV1::open(
+        path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8)
+            .unwrap()
+            .with_failpoint(Some(StoreFailpointV1::TerminalFailureBeforeCommit))
+            .with_failpoint_action(StoreFailpointActionV1::AbortProcess),
+        UnixMillis::new(41),
+    )
+    .unwrap();
+    let claimed = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-failure-crash-worker").unwrap(),
+            UnixMillis::new(42),
+        )
+        .unwrap()
+        .expect("prepared v2 graph failure job must be claimable");
+    let current = artifact_failure_ready_state(850, 860);
+    let operation = PersistedGraphTerminalOperationV2::failure(
+        PersistedGraphMutationFailureV2::ArtifactChanged,
+    )
+    .unwrap();
+    let result = store.commit_graph_mutation_terminal_v2(
+        claimed.claim().clone(),
+        current.workspace_revision(),
+        current.trace().revision(),
+        None,
+        TerminalResultV1::Failure(DomainError::InvalidState {
+            reason: "Procedure v2 graph mutation failed",
+        }),
+        operation,
+        UnixMillis::new(43),
+    );
+    panic!("configured v2 graph failure failpoint returned instead of aborting: {result:?}");
+}
+
+#[test]
+fn v2drw006_graph_mutation_failure_precommit_abort_requeues_and_retry_freezes_one_receipt() {
+    let temporary = TempDir::new().unwrap();
+    let path = database_path(&temporary);
+    let current = artifact_failure_ready_state(850, 860);
+    let key = IdempotencyKeyV1::new("v2-failure-precommit-abort").unwrap();
+    let job_id = podway_core::JobId::new(uuid(870)).unwrap();
+    {
+        let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+        store
+            .create_graph_session_v2(&identity(), current.clone())
+            .unwrap();
+        let active = current.trace().active_attempt().unwrap();
+        let request = action_runtime_admit_request(
+            &current,
+            DomainCommand::SessionComplete,
+            "session.complete",
+            key.as_str(),
+            870,
+            digest('e'),
+            RevisionAttemptItemPreconditionsV1::new(
+                Some(current.trace().revision()),
+                Some(active.attempt_id().clone()),
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        store.admit(&identity(), request).unwrap();
+    }
+
+    let output = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(V2_FAILURE_CRASH_CHILD_TEST)
+        .arg("--nocapture")
+        .env(V2_FAILURE_CRASH_DATABASE_PATH_ENV, &path)
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "v2 graph terminal child must abort at TerminalFailureBeforeCommit: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        output.status.signal(),
+        Some(6),
+        "v2 graph terminal child must reach AbortProcess and terminate with SIGABRT"
+    );
+    let raw = Connection::open(&path).unwrap();
+    let raw_terminal: (String, Option<String>, Option<String>) = raw
+        .query_row(
+            "SELECT jobs.state, jobs.terminal_response_json, \
+             idempotency_records.terminal_response_json \
+             FROM jobs JOIN idempotency_records USING (job_id) WHERE jobs.job_id = ?1",
+            [job_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(raw_terminal, ("running".to_owned(), None, None));
+    drop(raw);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 44);
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 1);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    let recovered = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(recovered.state(), JobStateV1::Queued);
+    assert!(recovered.terminal_receipt().is_none());
+    assert!(
+        reopened
+            .read_idempotency_lookup(&identity(), &key)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt()
+            .is_none()
+    );
+
+    let reclaimed = reopened
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-failure-crash-retry-worker").unwrap(),
+            UnixMillis::new(45),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(reclaimed.job().job_id(), &job_id);
+    let operation = PersistedGraphTerminalOperationV2::failure(
+        PersistedGraphMutationFailureV2::ArtifactChanged,
+    )
+    .unwrap();
+    reopened
+        .commit_graph_mutation_terminal_v2(
+            reclaimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            None,
+            TerminalResultV1::Failure(DomainError::InvalidState {
+                reason: "Procedure v2 graph mutation failed",
+            }),
+            operation.clone(),
+            UnixMillis::new(46),
+        )
+        .unwrap();
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    let failed = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(failed.state(), JobStateV1::Failed);
+    let frozen = failed.terminal_receipt().unwrap().clone();
+    assert_eq!(
+        frozen.graph_session_projection().unwrap().operation(),
+        Some(&operation)
+    );
+    assert_eq!(
+        reopened
+            .read_idempotency_lookup(&identity(), &key)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(&frozen)
+    );
+    drop(reopened);
+
+    let cold = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 47);
+    assert_eq!(cold.startup_recovery_report().requeued_job_count(), 0);
     assert_eq!(
         cold.read_graph_session_v2(&identity()).unwrap(),
         Some(current)

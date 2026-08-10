@@ -5279,6 +5279,24 @@ fn graph_mutation_failure_matches_v2(
             ) else {
                 return false;
             };
+            if let PersistedGraphMutationFailureV2::GraphNodeTypeMismatch {
+                graph_node_id,
+                actual,
+            } = error
+            {
+                return current.trace().revision() == expected_revision
+                    && active.is_some_and(|attempt| {
+                        attempt.attempt_id() == expected_attempt
+                            && attempt.graph_node_id() == graph_node_id
+                            && current
+                                .snapshot()
+                                .graph_node(graph_node_id)
+                                .is_some_and(|node| {
+                                    node.node_kind() == podway_core::NodeKindV2::Decision
+                                        && actual == "decision"
+                                })
+                    });
+            }
             let Some(fresh_attempt_id) = graph_completion_validation_attempt_v2(current) else {
                 return false;
             };
