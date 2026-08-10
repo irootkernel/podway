@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use podway_core::{
-    AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
+    ActorAttributionV2, AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
     CanonicalProcedureJsonV1, GoalRevisionNumberV2, GraphNodeId, ItemId, NodeDefinitionId,
-    NodeKindV2, ProcedureSnapshotId, ProcedureSourceKindV1, ProcedureSourceLabelV1, ReasonV2,
-    Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest,
-    TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
+    NodeKindV2, OptionId, ProcedureSnapshotId, ProcedureSourceKindV1, ProcedureSourceLabelV1,
+    ReasonV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2,
+    Sha256Digest, TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
@@ -702,6 +702,18 @@ pub struct GraphActionSkipOutcomeV2 {
     to_attempt_id: Option<AttemptId>,
 }
 
+/// Pure result of selecting one route from the active Procedure v2 decision placement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphDecisionOutcomeV2 {
+    state: GraphSessionStateV2,
+    decision: podway_core::DecisionRecordV2,
+    declared_rework: Option<podway_core::ReworkRecordV2>,
+    from_graph_node_id: GraphNodeId,
+    from_attempt_id: AttemptId,
+    to_graph_node_id: GraphNodeId,
+    to_attempt_id: AttemptId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphBlockOutcomeV2 {
     state: GraphSessionStateV2,
@@ -776,6 +788,33 @@ impl GraphActionSkipOutcomeV2 {
     }
     pub fn to_attempt_id(&self) -> Option<&AttemptId> {
         self.to_attempt_id.as_ref()
+    }
+}
+
+impl GraphDecisionOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+    pub fn decision_record(&self) -> &podway_core::DecisionRecordV2 {
+        &self.decision
+    }
+    pub fn declared_rework_record(&self) -> Option<&podway_core::ReworkRecordV2> {
+        self.declared_rework.as_ref()
+    }
+    pub fn from_graph_node_id(&self) -> &GraphNodeId {
+        &self.from_graph_node_id
+    }
+    pub fn from_attempt_id(&self) -> &AttemptId {
+        &self.from_attempt_id
+    }
+    pub fn to_graph_node_id(&self) -> &GraphNodeId {
+        &self.to_graph_node_id
+    }
+    pub fn to_attempt_id(&self) -> &AttemptId {
+        &self.to_attempt_id
     }
 }
 
@@ -1558,6 +1597,115 @@ impl GraphSessionStateV2 {
             state,
             graph_node_id,
             from_attempt_id,
+            to_attempt_id,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn decide_active_route_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+        selected_option: OptionId,
+        fresh_attempt_id: AttemptId,
+        reason: Option<ReasonV2>,
+        actor: Option<ActorAttributionV2>,
+        now: UnixMillis,
+    ) -> Result<GraphDecisionOutcomeV2, GraphMutationErrorV2> {
+        let active =
+            self.require_running_active_v2(expected_session_revision, expected_attempt_id)?;
+        let active_metadata = self
+            .attempt_metadata
+            .iter()
+            .find(|metadata| metadata.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+        if now < active_metadata.started_at() {
+            return Err(invalid("Procedure v2 decision timestamp regressed").into());
+        }
+        let from_graph_node_id = active.graph_node_id().clone();
+        let from_attempt_id = active.attempt_id().clone();
+        let transition = self.workflow_memory.decide_active_route_v2(
+            &self.snapshot,
+            &self.trace,
+            expected_attempt_id,
+            selected_option,
+            fresh_attempt_id,
+            self.goal_state.current_revision(),
+            reason,
+            actor,
+            now,
+        )?;
+        let to_graph_node_id = transition.decision.route_target().clone();
+        let to_attempt_id = transition
+            .trace
+            .active_attempt()
+            .ok_or_else(|| invalid("fresh Procedure v2 decision target is absent"))?
+            .attempt_id()
+            .clone();
+        let mut metadata = self.attempt_metadata.clone();
+        let active_index = metadata
+            .iter()
+            .position(|candidate| candidate.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+        metadata[active_index] = AttemptMetadataV2::new(
+            expected_attempt_id.clone(),
+            metadata[active_index].started_at(),
+            Some(now),
+            None,
+        )?;
+        metadata.push(AttemptMetadataV2::new(
+            to_attempt_id.clone(),
+            now,
+            None,
+            None,
+        )?);
+        let declared_rework = transition.declared_rework.clone();
+        let counters = self
+            .counters
+            .iter()
+            .map(|counter| {
+                let is_target = counter.graph_node_id() == &to_graph_node_id;
+                Ok(GraphNodeCounterV2::new(
+                    counter.graph_node_id().clone(),
+                    counter
+                        .attempt_count()
+                        .checked_add(u64::from(is_target))
+                        .ok_or_else(|| {
+                            invalid("Procedure v2 decision attempt counter overflowed")
+                        })?,
+                    counter
+                        .rework_traversal_count()
+                        .checked_add(u64::from(is_target && declared_rework.is_some()))
+                        .ok_or_else(|| {
+                            invalid("Procedure v2 decision rework counter overflowed")
+                        })?,
+                ))
+            })
+            .collect::<Result<Vec<_>, GraphMutationErrorV2>>()?;
+        let decision = transition.decision.clone();
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            transition.trace,
+            counters,
+            metadata,
+            transition.memory,
+            self.goal_state.clone(),
+            self.created_at,
+            None,
+            None,
+            None,
+        )?;
+        Ok(GraphDecisionOutcomeV2 {
+            state,
+            decision,
+            declared_rework,
+            from_graph_node_id,
+            from_attempt_id,
+            to_graph_node_id,
             to_attempt_id,
         })
     }

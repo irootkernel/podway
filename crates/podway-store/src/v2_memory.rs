@@ -76,6 +76,31 @@ pub enum GraphMutationErrorV2 {
         graph_node_id: GraphNodeId,
         actual: podway_core::NodeKindV2,
     },
+    OptionNotAllowed {
+        graph_node_id: GraphNodeId,
+        option_id: OptionId,
+        allowed_option_ids: Vec<OptionId>,
+    },
+    RouteNotAllowed {
+        graph_node_id: GraphNodeId,
+        option_id: OptionId,
+    },
+    DecisionReasonMissing {
+        graph_node_id: GraphNodeId,
+    },
+    EvidenceReferenceUnresolved {
+        graph_node_id: GraphNodeId,
+        source_graph_node_ids: Vec<GraphNodeId>,
+    },
+    EvidenceReferenceStale {
+        graph_node_id: GraphNodeId,
+        source_graph_node_id: GraphNodeId,
+        expected_source_attempt_id: AttemptId,
+        current_source_attempt_id: Option<AttemptId>,
+    },
+    GoalAssessmentDecisionRequiresAssessment {
+        graph_node_id: GraphNodeId,
+    },
     SkipNotAllowed {
         graph_node_id: GraphNodeId,
     },
@@ -134,6 +159,23 @@ impl fmt::Display for GraphMutationErrorV2 {
             Self::GraphNodeTypeMismatch { .. } => {
                 formatter.write_str("Procedure v2 graph node has the wrong type")
             }
+            Self::OptionNotAllowed { .. } => {
+                formatter.write_str("Procedure v2 decision option is not allowed")
+            }
+            Self::RouteNotAllowed { .. } => {
+                formatter.write_str("Procedure v2 decision route is not allowed")
+            }
+            Self::DecisionReasonMissing { .. } => {
+                formatter.write_str("Procedure v2 decision reason is required")
+            }
+            Self::EvidenceReferenceUnresolved { .. } => {
+                formatter.write_str("required Procedure v2 evidence is unresolved")
+            }
+            Self::EvidenceReferenceStale { .. } => {
+                formatter.write_str("resolved Procedure v2 evidence is stale")
+            }
+            Self::GoalAssessmentDecisionRequiresAssessment { .. } => formatter
+                .write_str("Procedure v2 goal-assessment decision requires assessment state"),
             Self::SkipNotAllowed { .. } => {
                 formatter.write_str("Procedure v2 graph node may not be skipped")
             }
@@ -201,6 +243,13 @@ pub(crate) struct ActiveItemMemoryMutationV2 {
     pub changed: bool,
     pub item_revision: Revision,
     pub value_digest: Option<Sha256Digest>,
+}
+
+pub(crate) struct DecisionMemoryTransitionV2 {
+    pub trace: SessionTraceV2,
+    pub memory: WorkflowMemoryStateV2,
+    pub decision: DecisionRecordV2,
+    pub declared_rework: Option<ReworkRecordV2>,
 }
 
 /// One mutable item slot belonging to a Procedure v2 attempt.
@@ -997,6 +1046,239 @@ impl WorkflowMemoryStateV2 {
         Self::new(attempts, cleared.decisions, cleared.reworks).map_err(Into::into)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn decide_active_route_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        previous_trace: &SessionTraceV2,
+        expected_attempt_id: &AttemptId,
+        selected_option: OptionId,
+        fresh_attempt_id: AttemptId,
+        goal_revision: Option<GoalRevisionNumberV2>,
+        reason: Option<ReasonV2>,
+        actor: Option<ActorAttributionV2>,
+        now: UnixMillis,
+    ) -> Result<DecisionMemoryTransitionV2, GraphMutationErrorV2> {
+        let active = previous_trace
+            .active_attempt()
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        if active.attempt_id() != expected_attempt_id {
+            return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                expected: expected_attempt_id.clone(),
+                actual: Some(active.attempt_id().clone()),
+            });
+        }
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        let specification = model.node(active.graph_node_id())?;
+        if specification.node_kind != podway_core::NodeKindV2::Decision {
+            return Err(GraphMutationErrorV2::GraphNodeTypeMismatch {
+                graph_node_id: active.graph_node_id().clone(),
+                actual: specification.node_kind,
+            });
+        }
+        if specification.goal_assessment {
+            return Err(
+                GraphMutationErrorV2::GoalAssessmentDecisionRequiresAssessment {
+                    graph_node_id: active.graph_node_id().clone(),
+                },
+            );
+        }
+        if !specification.options.contains(&selected_option) {
+            return Err(GraphMutationErrorV2::OptionNotAllowed {
+                graph_node_id: active.graph_node_id().clone(),
+                option_id: selected_option,
+                allowed_option_ids: specification.options.clone(),
+            });
+        }
+        let (route_target, route_effect) = specification
+            .routes
+            .get(&selected_option)
+            .cloned()
+            .ok_or_else(|| GraphMutationErrorV2::RouteNotAllowed {
+                graph_node_id: active.graph_node_id().clone(),
+                option_id: selected_option.clone(),
+            })?;
+        let reason = match (specification.reason_required, reason) {
+            (true, None) => {
+                return Err(GraphMutationErrorV2::DecisionReasonMissing {
+                    graph_node_id: active.graph_node_id().clone(),
+                });
+            }
+            (_, Some(reason)) => reason,
+            (false, None) => {
+                return Err(invalid("Procedure v2 decision record requires a reason").into());
+            }
+        };
+        let active_memory = self
+            .attempts
+            .iter()
+            .find(|memory| memory.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        let missing = specification
+            .items
+            .iter()
+            .zip(active_memory.item_slots())
+            .filter(|(item, slot)| {
+                item.common().required()
+                    && !slot
+                        .value()
+                        .is_some_and(|value| item.admits_recorded_value(value))
+            })
+            .map(|(item, _)| item.id().clone())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(GraphMutationErrorV2::RequiredItemsMissing { item_ids: missing });
+        }
+        if active_memory
+            .blockers()
+            .iter()
+            .any(|blocker| blocker.state() == BlockerState::Open)
+        {
+            return Err(GraphMutationErrorV2::BlockersPresent);
+        }
+        let unresolved = specification
+            .evidence
+            .iter()
+            .zip(active_memory.evidence())
+            .filter(|(declaration, reference)| {
+                declaration.required && reference.resolution().is_unresolved()
+            })
+            .map(|(declaration, _)| declaration.source_node.clone())
+            .collect::<Vec<_>>();
+        if !unresolved.is_empty() {
+            return Err(GraphMutationErrorV2::EvidenceReferenceUnresolved {
+                graph_node_id: active.graph_node_id().clone(),
+                source_graph_node_ids: unresolved,
+            });
+        }
+        for reference in active_memory.evidence() {
+            match reference.resolution() {
+                ResolvedEvidenceReferenceV2::Unresolved { .. } => {}
+                ResolvedEvidenceReferenceV2::Resolved(snapshot)
+                | ResolvedEvidenceReferenceV2::Skipped(snapshot) => {
+                    let source = previous_trace
+                        .attempts()
+                        .iter()
+                        .find(|attempt| attempt.attempt_id() == snapshot.source_attempt_id())
+                        .ok_or_else(|| invalid("Procedure v2 evidence source trace is absent"))?;
+                    if source.validity() != AttemptValidityV2::Valid {
+                        let current_source_attempt_id = previous_trace
+                            .attempts()
+                            .iter()
+                            .find(|attempt| {
+                                attempt.graph_node_id() == snapshot.source_node()
+                                    && attempt.validity() == AttemptValidityV2::Valid
+                            })
+                            .map(|attempt| attempt.attempt_id().clone());
+                        return Err(GraphMutationErrorV2::EvidenceReferenceStale {
+                            graph_node_id: active.graph_node_id().clone(),
+                            source_graph_node_id: snapshot.source_node().clone(),
+                            expected_source_attempt_id: snapshot.source_attempt_id().clone(),
+                            current_source_attempt_id,
+                        });
+                    }
+                }
+            }
+        }
+        let evidence = ResolvedEvidenceSetV2::new(
+            active_memory
+                .evidence()
+                .iter()
+                .map(|reference| reference.resolution().clone())
+                .collect(),
+        )?;
+
+        let mut trace = previous_trace.clone();
+        match route_effect {
+            TransitionEffectV2::Advance => trace.advance(
+                expected_attempt_id,
+                podway_core::AdvanceTerminalV2::Completed,
+                route_target.clone(),
+                fresh_attempt_id.clone(),
+                goal_revision,
+            )?,
+            TransitionEffectV2::Rework => trace.rework_to(
+                expected_attempt_id,
+                route_target.clone(),
+                fresh_attempt_id.clone(),
+                goal_revision,
+            )?,
+        }
+        let decision = DecisionRecordV2::new(DecisionRecordInputV2 {
+            trace: active.trace(),
+            session_id: previous_trace.session_id().clone(),
+            session_revision: trace.revision(),
+            procedure_snapshot_id: snapshot.snapshot_id().clone(),
+            procedure_digest: snapshot.digest().clone(),
+            graph_node_id: active.graph_node_id().clone(),
+            node_definition_id: specification.node_definition_id.clone(),
+            attempt_id: active.attempt_id().clone(),
+            attempt_number: active.number(),
+            goal_revision: active.goal_revision(),
+            selected_option,
+            route_effect,
+            route_target: route_target.clone(),
+            reason: reason.clone(),
+            evidence,
+            actor: actor.clone(),
+            recorded_at: now,
+        })?;
+        let fresh = trace
+            .active_attempt()
+            .ok_or_else(|| invalid("fresh Procedure v2 decision target is absent"))?;
+        let target_specification = model.node(fresh.graph_node_id())?;
+        let slots = target_specification
+            .items
+            .iter()
+            .map(|item| {
+                ItemSlotStateV2::new(
+                    fresh.attempt_id().clone(),
+                    item.id().clone(),
+                    item.item_type(),
+                    Revision::ZERO,
+                    None,
+                    now,
+                    now,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let fresh_evidence =
+            resolve_evidence_at_activation_v2(target_specification, &trace, self, now)?;
+        let mut attempts = self.attempts.clone();
+        attempts.push(AttemptWorkflowMemoryV2::new(
+            fresh.attempt_id().clone(),
+            slots,
+            Vec::new(),
+            fresh_evidence,
+        )?);
+        let mut decisions = self.decisions.clone();
+        decisions.push(decision.clone());
+        let declared_rework = if route_effect == TransitionEffectV2::Rework {
+            Some(ReworkRecordV2::new(ReworkRecordInputV2 {
+                trace: fresh.trace(),
+                kind: ReworkKindV2::Declared,
+                from_node: active.graph_node_id().clone(),
+                to_node: route_target,
+                target_attempt_id: fresh.attempt_id().clone(),
+                reason,
+                reactivated: false,
+                actor,
+                recorded_at: now,
+            })?)
+        } else {
+            None
+        };
+        let mut reworks = self.reworks.clone();
+        reworks.extend(declared_rework.iter().cloned());
+        let memory = Self::new(attempts, decisions, reworks)?;
+        Ok(DecisionMemoryTransitionV2 {
+            trace,
+            memory,
+            decision,
+            declared_rework,
+        })
+    }
+
     pub fn empty_for_trace(
         snapshot: &ProcedureSnapshotV2,
         trace: &SessionTraceV2,
@@ -1406,6 +1688,9 @@ struct NodeMemorySpecV2 {
     node_definition_id: podway_core::NodeDefinitionId,
     items: Vec<ItemSpecV2>,
     evidence: Vec<EvidenceSpecV2>,
+    options: Vec<OptionId>,
+    reason_required: bool,
+    goal_assessment: bool,
     advance_target: Option<GraphNodeId>,
     routes: BTreeMap<OptionId, (GraphNodeId, TransitionEffectV2)>,
 }
@@ -1478,6 +1763,33 @@ impl SnapshotMemoryModelV2 {
                         })
                         .collect()
                 })?;
+            let options = definition.get("options").and_then(Value::as_array).map_or(
+                Ok(Vec::new()),
+                |options| {
+                    options
+                        .iter()
+                        .map(|option| {
+                            let option = option.as_object().ok_or_else(|| {
+                                invalid("Procedure v2 decision option is invalid")
+                            })?;
+                            OptionId::new(required_text(option, "id")?.to_owned())
+                                .map_err(|_| invalid("Procedure v2 option identity is invalid"))
+                        })
+                        .collect()
+                },
+            )?;
+            let reason_required = definition
+                .get("reason")
+                .and_then(Value::as_object)
+                .and_then(|reason| reason.get("required"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let goal_assessment = definition
+                .get("assessment")
+                .and_then(Value::as_object)
+                .and_then(|assessment| assessment.get("target"))
+                .and_then(Value::as_str)
+                == Some("session_goal");
             let routes =
                 placement.get("routes").and_then(Value::as_object).map_or(
                     Ok(BTreeMap::new()),
@@ -1524,6 +1836,9 @@ impl SnapshotMemoryModelV2 {
                     node_definition_id: node.node_definition_id().clone(),
                     items,
                     evidence,
+                    options,
+                    reason_required,
+                    goal_assessment,
                     advance_target,
                     routes,
                 },
