@@ -18,7 +18,7 @@ use rusqlite::{Connection, Transaction, params};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::v2_state::{AttemptMetadataV2, ProcedureSnapshotV2};
+use crate::v2_state::{AttemptMetadataV2, GraphNodeCounterV2, ProcedureSnapshotV2};
 use crate::{
     RusqliteErrorContextV1, StoreErrorV1, StoreRecordKindV1, StoreValueErrorV1,
     map_rusqlite_error_v1,
@@ -1801,6 +1801,7 @@ struct NodeMemorySpecV2 {
     options: Vec<OptionId>,
     reason_required: bool,
     goal_assessment: bool,
+    terminal: bool,
     advance_target: Option<GraphNodeId>,
     routes: BTreeMap<OptionId, (GraphNodeId, TransitionEffectV2)>,
 }
@@ -1939,6 +1940,7 @@ impl SnapshotMemoryModelV2 {
                         .map_err(|_| invalid("Procedure v2 action target is invalid"))
                 })
                 .transpose()?;
+            let terminal = placement.get("terminal").and_then(Value::as_bool) == Some(true);
             nodes.insert(
                 node.graph_node_id().clone(),
                 NodeMemorySpecV2 {
@@ -1949,6 +1951,7 @@ impl SnapshotMemoryModelV2 {
                     options,
                     reason_required,
                     goal_assessment,
+                    terminal,
                     advance_target,
                     routes,
                 },
@@ -2270,9 +2273,11 @@ fn required_json_text(
 pub(crate) fn validate_workflow_memory_v2(
     snapshot: &ProcedureSnapshotV2,
     trace: &SessionTraceV2,
+    counters: &[GraphNodeCounterV2],
     metadata: &[AttemptMetadataV2],
     memory: &WorkflowMemoryStateV2,
     goal_rework_target_attempt_ids: &BTreeSet<AttemptId>,
+    reactivated_goal_rework_target_attempt_ids: &BTreeSet<AttemptId>,
 ) -> Result<(), StoreValueErrorV1> {
     if memory.attempts().len() != trace.attempts().len() || metadata.len() != trace.attempts().len()
     {
@@ -2412,7 +2417,10 @@ pub(crate) fn validate_workflow_memory_v2(
         memory,
         &model,
         goal_rework_target_attempt_ids,
+        reactivated_goal_rework_target_attempt_ids,
     )?;
+    validate_rework_counters_v2(trace, counters, memory, goal_rework_target_attempt_ids)?;
+    validate_attempt_validity_history_v2(trace, memory, goal_rework_target_attempt_ids)?;
     let _ = metadata_by_id;
     Ok(())
 }
@@ -2577,6 +2585,7 @@ fn validate_rework_history_v2(
     memory: &WorkflowMemoryStateV2,
     model: &SnapshotMemoryModelV2,
     goal_rework_target_attempt_ids: &BTreeSet<AttemptId>,
+    reactivated_goal_rework_target_attempt_ids: &BTreeSet<AttemptId>,
 ) -> Result<(), StoreValueErrorV1> {
     let attempts_by_trace: BTreeMap<_, _> = trace
         .attempts()
@@ -2592,50 +2601,86 @@ fn validate_rework_history_v2(
         .iter()
         .map(|record| (record.attempt_id(), record))
         .collect();
-    let rework_targets: BTreeSet<_> = memory
+    let reworks_by_target: BTreeMap<_, _> = memory
         .reworks()
         .iter()
-        .map(ReworkRecordV2::target_attempt_id)
+        .map(|record| (record.target_attempt_id(), record))
         .collect();
+    if !reactivated_goal_rework_target_attempt_ids.is_subset(goal_rework_target_attempt_ids) {
+        return Err(invalid(
+            "Procedure v2 goal reactivation cause is inconsistent",
+        ));
+    }
     for target_attempt_id in goal_rework_target_attempt_ids {
         let target = trace
             .attempts()
             .iter()
             .find(|attempt| attempt.attempt_id() == target_attempt_id)
             .ok_or_else(|| invalid("Procedure v2 goal rework target is absent"))?;
-        if target.number() == AttemptNumberV2::FIRST || rework_targets.contains(target_attempt_id) {
+        if target.number() == AttemptNumberV2::FIRST
+            || reworks_by_target.contains_key(target_attempt_id)
+        {
             return Err(invalid(
                 "Procedure v2 goal rework target cause is inconsistent",
             ));
         }
     }
     for attempt in trace.attempts() {
-        if attempt.number() == AttemptNumberV2::FIRST {
+        if attempt.trace() == TraceSequenceV2::FIRST {
             continue;
         }
         let predecessor = attempts_by_trace
             .get(&TraceSequenceV2::new(attempt.trace().get() - 1))
             .copied()
             .ok_or_else(|| invalid("Procedure v2 repeated attempt has no predecessor"))?;
-        let retry = predecessor.graph_node_id() == attempt.graph_node_id()
+        let recorded_rework = reworks_by_target.contains_key(attempt.attempt_id());
+        let goal_rework = goal_rework_target_attempt_ids.contains(attempt.attempt_id());
+        if recorded_rework && goal_rework {
+            return Err(invalid(
+                "Procedure v2 appended attempt has conflicting rework causes",
+            ));
+        }
+        let retry = !recorded_rework
+            && !goal_rework
+            && predecessor.graph_node_id() == attempt.graph_node_id()
             && predecessor.lifecycle() == AttemptLifecycle::Abandoned;
-        let predecessor_specification = model.node(predecessor.graph_node_id())?;
-        let ordinary_advance = match predecessor_specification.node_kind {
-            podway_core::NodeKindV2::Action => {
-                predecessor_specification.advance_target.as_ref() == Some(attempt.graph_node_id())
+        if goal_rework {
+            let reactivated =
+                reactivated_goal_rework_target_attempt_ids.contains(attempt.attempt_id());
+            let terminal_source = model
+                .node(predecessor.graph_node_id())
+                .is_ok_and(|source| source.terminal)
+                && matches!(
+                    predecessor.lifecycle(),
+                    AttemptLifecycle::Completed | AttemptLifecycle::Skipped
+                );
+            if reactivated != terminal_source
+                || (!reactivated && predecessor.lifecycle() != AttemptLifecycle::Abandoned)
+            {
+                return Err(invalid("Procedure v2 goal rework source is inconsistent"));
             }
-            podway_core::NodeKindV2::Decision => decisions_by_attempt
-                .get(predecessor.attempt_id())
-                .is_some_and(|decision| {
-                    decision.route_effect() == TransitionEffectV2::Advance
-                        && decision.route_target() == attempt.graph_node_id()
-                }),
-        };
-        if !retry
-            && !ordinary_advance
-            && !rework_targets.contains(attempt.attempt_id())
-            && !goal_rework_target_attempt_ids.contains(attempt.attempt_id())
-        {
+        }
+        let predecessor_specification = model.node(predecessor.graph_node_id())?;
+        let ordinary_advance = !recorded_rework
+            && !goal_rework
+            && !retry
+            && matches!(
+                predecessor.lifecycle(),
+                AttemptLifecycle::Completed | AttemptLifecycle::Skipped
+            )
+            && match predecessor_specification.node_kind {
+                podway_core::NodeKindV2::Action => {
+                    predecessor_specification.advance_target.as_ref()
+                        == Some(attempt.graph_node_id())
+                }
+                podway_core::NodeKindV2::Decision => decisions_by_attempt
+                    .get(predecessor.attempt_id())
+                    .is_some_and(|decision| {
+                        decision.route_effect() == TransitionEffectV2::Advance
+                            && decision.route_target() == attempt.graph_node_id()
+                    }),
+            };
+        if !retry && !ordinary_advance && !recorded_rework && !goal_rework {
             return Err(invalid("Procedure v2 rework history is incomplete"));
         }
     }
@@ -2676,6 +2721,7 @@ fn validate_rework_history_v2(
                     .copied()
                     .ok_or_else(|| invalid("declared Procedure v2 rework has no decision"))?;
                 if record.reactivated()
+                    || source.lifecycle() != AttemptLifecycle::Completed
                     || decision.route_effect() != TransitionEffectV2::Rework
                     || decision.route_target() != record.to_node()
                     || decision.reason() != record.reason()
@@ -2689,8 +2735,134 @@ fn validate_rework_history_v2(
                 if !model.manual_rework_targets.contains(record.to_node()) {
                     return Err(invalid("manual Procedure v2 rework target is not declared"));
                 }
+                let source_metadata = metadata_by_id[source.attempt_id()];
+                let source_matches_lifecycle = if record.reactivated() {
+                    matches!(
+                        source.lifecycle(),
+                        AttemptLifecycle::Completed | AttemptLifecycle::Skipped
+                    )
+                } else {
+                    source.lifecycle() == AttemptLifecycle::Abandoned
+                        && source_metadata.ended_at() == Some(record.recorded_at())
+                        && source_metadata.terminal_reason() == Some(record.reason().as_str())
+                };
+                if !source_matches_lifecycle {
+                    return Err(invalid("manual Procedure v2 rework source is inconsistent"));
+                }
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_rework_counters_v2(
+    trace: &SessionTraceV2,
+    counters: &[GraphNodeCounterV2],
+    memory: &WorkflowMemoryStateV2,
+    goal_rework_target_attempt_ids: &BTreeSet<AttemptId>,
+) -> Result<(), StoreValueErrorV1> {
+    let mut expected_by_node = BTreeMap::<&GraphNodeId, u64>::new();
+    for record in memory.reworks() {
+        let count = expected_by_node.entry(record.to_node()).or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| invalid("Procedure v2 rework counter overflowed"))?;
+    }
+    for target_attempt_id in goal_rework_target_attempt_ids {
+        let target = trace
+            .attempts()
+            .iter()
+            .find(|attempt| attempt.attempt_id() == target_attempt_id)
+            .ok_or_else(|| invalid("Procedure v2 goal rework counter target is absent"))?;
+        let count = expected_by_node.entry(target.graph_node_id()).or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| invalid("Procedure v2 rework counter overflowed"))?;
+    }
+    if counters.iter().any(|counter| {
+        counter.rework_traversal_count()
+            != expected_by_node
+                .get(counter.graph_node_id())
+                .copied()
+                .unwrap_or(0)
+    }) {
+        return Err(invalid(
+            "Procedure v2 rework counter disagrees with transition history",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_attempt_validity_history_v2(
+    trace: &SessionTraceV2,
+    memory: &WorkflowMemoryStateV2,
+    goal_rework_target_attempt_ids: &BTreeSet<AttemptId>,
+) -> Result<(), StoreValueErrorV1> {
+    if trace.attempts().is_empty() {
+        return Err(invalid("Procedure v2 attempt validity history is empty"));
+    }
+    let rework_target_attempt_ids = memory
+        .reworks()
+        .iter()
+        .map(ReworkRecordV2::target_attempt_id)
+        .collect::<BTreeSet<_>>();
+    let mut expected_validity = vec![true];
+
+    for (index, attempt) in trace.attempts().iter().enumerate().skip(1) {
+        if !expected_validity[index - 1] {
+            return Err(invalid(
+                "Procedure v2 transition validity source is not on the valid trace",
+            ));
+        }
+        let explicit_rework = rework_target_attempt_ids.contains(attempt.attempt_id())
+            || goal_rework_target_attempt_ids.contains(attempt.attempt_id());
+        if explicit_rework {
+            let target_index = trace.attempts()[..index]
+                .iter()
+                .enumerate()
+                .find(|(candidate_index, candidate)| {
+                    expected_validity[*candidate_index]
+                        && candidate.graph_node_id() == attempt.graph_node_id()
+                })
+                .map(|(candidate_index, _)| candidate_index)
+                .ok_or_else(|| {
+                    invalid("Procedure v2 rework validity target is not on the valid trace")
+                })?;
+            for validity in &mut expected_validity[target_index..] {
+                *validity = false;
+            }
+        } else {
+            let predecessor = &trace.attempts()[index - 1];
+            if predecessor.graph_node_id() == attempt.graph_node_id()
+                && predecessor.lifecycle() == AttemptLifecycle::Abandoned
+            {
+                expected_validity[index - 1] = false;
+            }
+        }
+        expected_validity.push(true);
+    }
+
+    if trace.lifecycle() == SessionLifecycle::Cancelled {
+        let last = expected_validity
+            .last_mut()
+            .ok_or_else(|| invalid("Procedure v2 cancellation validity source is absent"))?;
+        if !*last {
+            return Err(invalid(
+                "Procedure v2 cancellation validity source is not on the valid trace",
+            ));
+        }
+        *last = false;
+    }
+
+    if trace
+        .attempts()
+        .iter()
+        .zip(expected_validity)
+        .any(|(attempt, expected_valid)| attempt.validity().is_valid() != expected_valid)
+    {
+        return Err(invalid(
+            "Procedure v2 attempt validity is inconsistent with transition history",
+        ));
     }
     Ok(())
 }

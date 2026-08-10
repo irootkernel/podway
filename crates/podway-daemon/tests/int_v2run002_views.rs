@@ -863,14 +863,51 @@ fn decided_assessment_state(
     lifecycle: DecidedFixtureLifecycle,
     assessment_is_stale: bool,
 ) -> GraphSessionStateV2 {
-    let base = fresh_state("assessment.json", ASSESSMENT_PROCEDURE);
+    if assessment_is_stale {
+        assert!(matches!(lifecycle, DecidedFixtureLifecycle::Cancelled));
+        let mut procedure: Value = serde_json::from_slice(ASSESSMENT_PROCEDURE).unwrap();
+        procedure.as_object_mut().unwrap().insert(
+            "manual_rework".to_owned(),
+            json!({"allowed_targets":["assess-goal"]}),
+        );
+        let procedure = serde_json::to_vec(&procedure).unwrap();
+        let finish_attempt_id = second_attempt_id();
+        let fresh_assessment_attempt_id =
+            AttemptId::new("00000000-0000-4000-8000-000000002008").unwrap();
+        let reworked =
+            decided_assessment_state_from_source(DecidedFixtureLifecycle::Running, &procedure)
+                .manual_rework_v2(
+                    Revision::new(2),
+                    Some(&finish_attempt_id),
+                    GraphNodeId::new("assess-goal").unwrap(),
+                    fresh_assessment_attempt_id.clone(),
+                    ReasonV2::new("Reassess before cancellation.").unwrap(),
+                    None,
+                    UnixMillis::new(1_700_000_000_020),
+                )
+                .unwrap()
+                .into_state();
+        return reworked
+            .cancel_active_session_v2(
+                Revision::new(3),
+                &fresh_assessment_attempt_id,
+                ReasonV2::new("Cancelled by test.").unwrap(),
+                UnixMillis::new(1_700_000_000_030),
+            )
+            .unwrap()
+            .into_state();
+    }
+
+    decided_assessment_state_from_source(lifecycle, ASSESSMENT_PROCEDURE)
+}
+
+fn decided_assessment_state_from_source(
+    lifecycle: DecidedFixtureLifecycle,
+    procedure: &[u8],
+) -> GraphSessionStateV2 {
+    let base = fresh_state("assessment.json", procedure);
     let first_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
     let second_attempt_id = second_attempt_id();
-    let assessment_validity = if assessment_is_stale {
-        AttemptValidityV2::Stale
-    } else {
-        AttemptValidityV2::Valid
-    };
     let finish_validity = match lifecycle {
         DecidedFixtureLifecycle::Running | DecidedFixtureLifecycle::Completed => {
             AttemptValidityV2::Valid
@@ -902,7 +939,7 @@ fn decided_assessment_state(
                 AttemptNumberV2::FIRST,
                 TraceSequenceV2::FIRST,
                 AttemptLifecycle::Completed,
-                assessment_validity,
+                AttemptValidityV2::Valid,
                 Some(GoalRevisionNumberV2::FIRST),
             )
             .unwrap(),

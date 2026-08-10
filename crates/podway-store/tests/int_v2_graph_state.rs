@@ -247,7 +247,7 @@ fn reworked_state() -> GraphSessionStateV2 {
                 "review",
                 1,
                 2,
-                AttemptLifecycle::Completed,
+                AttemptLifecycle::Abandoned,
                 AttemptValidityV2::Stale,
             ),
             attempt(
@@ -282,7 +282,7 @@ fn reworked_state() -> GraphSessionStateV2 {
                 attempt_id(2),
                 UnixMillis::new(20),
                 Some(UnixMillis::new(30)),
-                None,
+                Some("Rework the draft.".to_owned()),
             )
             .unwrap(),
             AttemptMetadataV2::new(attempt_id(3), UnixMillis::new(30), None, None).unwrap(),
@@ -320,7 +320,7 @@ fn advanced_after_rework_state(completed: bool) -> GraphSessionStateV2 {
                 "review",
                 1,
                 2,
-                AttemptLifecycle::Completed,
+                AttemptLifecycle::Abandoned,
                 AttemptValidityV2::Stale,
             ),
             attempt(
@@ -367,7 +367,7 @@ fn advanced_after_rework_state(completed: bool) -> GraphSessionStateV2 {
                 attempt_id(2),
                 UnixMillis::new(20),
                 Some(UnixMillis::new(30)),
-                None,
+                Some("Rework the draft.".to_owned()),
             )
             .unwrap(),
             AttemptMetadataV2::new(

@@ -239,6 +239,24 @@ impl GoalStateV2 {
             .map(|attempt| attempt.attempt_id().clone())
             .collect()
     }
+
+    pub(crate) fn reactivated_goal_rework_target_attempt_ids(
+        &self,
+        trace: &SessionTraceV2,
+    ) -> BTreeSet<AttemptId> {
+        self.revisions
+            .iter()
+            .filter(|revision| revision.revision() > GoalRevisionNumberV2::FIRST)
+            .filter(|revision| revision.reactivated())
+            .filter_map(|revision| {
+                trace
+                    .attempts()
+                    .iter()
+                    .find(|attempt| attempt.trace() == revision.binding_trace())
+            })
+            .map(|attempt| attempt.attempt_id().clone())
+            .collect()
+    }
 }
 
 impl Default for GoalStateV2 {
@@ -478,20 +496,42 @@ pub(crate) fn validate_goal_state_v2(
                 ));
             }
         } else {
-            let prior_cursor = trace.attempts().iter().find(|attempt| {
-                attempt.trace().get().checked_add(1) == Some(revision.binding_trace().get())
-            });
-            if revision.reactivated()
-                && !prior_cursor.is_some_and(|attempt| {
-                    model.terminal_nodes.contains(attempt.graph_node_id())
-                        && matches!(
-                            attempt.lifecycle(),
-                            AttemptLifecycle::Completed | AttemptLifecycle::Skipped
-                        )
+            let prior_cursor = trace
+                .attempts()
+                .iter()
+                .find(|attempt| {
+                    attempt.trace().get().checked_add(1) == Some(revision.binding_trace().get())
                 })
+                .ok_or_else(|| invalid("Procedure v2 goal revision prior cursor is absent"))?;
+            let prior_metadata = metadata_by_id
+                .get(prior_cursor.attempt_id())
+                .ok_or_else(|| invalid("Procedure v2 goal revision prior metadata is absent"))?;
+            let terminal_reactivation = model.terminal_nodes.contains(prior_cursor.graph_node_id())
+                && matches!(
+                    prior_cursor.lifecycle(),
+                    AttemptLifecycle::Completed | AttemptLifecycle::Skipped
+                );
+            if revision.reactivated() != terminal_reactivation {
+                return Err(invalid(
+                    "Procedure v2 goal reactivation disagrees with the prior cursor",
+                ));
+            }
+            if revision.reactivated() {
+                if prior_metadata
+                    .ended_at()
+                    .is_none_or(|ended_at| ended_at > revision.created_at())
+                {
+                    return Err(invalid(
+                        "Procedure v2 goal reactivation predates the prior terminal cursor",
+                    ));
+                }
+            } else if prior_cursor.lifecycle() != AttemptLifecycle::Abandoned
+                || prior_metadata.ended_at() != Some(revision.created_at())
+                || prior_metadata.terminal_reason()
+                    != revision.reason().map(GoalRevisionReasonV2::as_str)
             {
                 return Err(invalid(
-                    "Procedure v2 goal reactivation has no prior terminal cursor",
+                    "Procedure v2 running goal revision source is inconsistent",
                 ));
             }
             if revision.created_at() != binding_metadata.started_at()

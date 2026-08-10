@@ -1210,6 +1210,42 @@ fn criterion_citations_final_assessment_and_reactivation_survive_reopen() {
 }
 
 #[test]
+fn v2drw004_completed_goal_reactivation_bit_flip_fails_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store
+        .create_graph_session_v2(&identity(), revised_state())
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_goal_revisions SET reactivated = 0 WHERE goal_revision = 2",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let error = match SqliteStoreV1::open(
+        database_path(&temporary),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(100),
+    ) {
+        Ok(_) => panic!("completed goal reactivation bit flip must fail startup integrity"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::SessionCursor
+        }
+    ));
+}
+
+#[test]
 fn goal_history_is_append_only_and_rewrite_failure_preserves_prior_state() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
@@ -2281,7 +2317,11 @@ fn terminal_skip_with_a_fresh_goal_assessment_completes_without_rewriting_goal_h
     assert_eq!(skipped.completed_at(), Some(UnixMillis::new(70)));
     assert_eq!(skipped.goal_state(), &goal_before);
     assert_eq!(skipped.workflow_memory(), &workflow_before);
+}
 
+#[test]
+fn assessment_cannot_be_staled_without_a_causal_transition() {
+    let ready = decided_state(8, false);
     let mut stale_attempts = ready.trace().attempts().to_vec();
     let assessment = &stale_attempts[1];
     stale_attempts[1] = SessionAttemptV2::new(
@@ -2294,30 +2334,21 @@ fn terminal_skip_with_a_fresh_goal_assessment_completes_without_rewriting_goal_h
         assessment.goal_revision(),
     )
     .unwrap();
-    let stale = state(
-        8,
-        SessionLifecycle::Running,
-        stale_attempts,
-        ready.attempt_metadata().to_vec(),
-        ready.counters().to_vec(),
-        ready.workflow_memory().clone(),
-        ready.goal_state().clone(),
-        None,
-    );
-    let stale_before = stale.clone();
     assert_eq!(
-        stale.skip_active_action_v2(
-            Revision::new(8),
-            &attempt_id(3),
+        try_state(
+            8,
+            SessionLifecycle::Running,
+            stale_attempts,
+            ready.attempt_metadata().to_vec(),
+            ready.counters().to_vec(),
+            ready.workflow_memory().clone(),
+            ready.goal_state().clone(),
             None,
-            None,
-            UnixMillis::new(70),
         ),
-        Err(GraphMutationErrorV2::FreshGoalAssessmentMissing {
-            goal_revision: GoalRevisionNumberV2::FIRST,
+        Err(podway_store::StoreValueErrorV1::InvalidProcedureV2State {
+            reason: "Procedure v2 attempt validity is inconsistent with transition history",
         })
     );
-    assert_eq!(stale, stale_before);
 }
 
 #[test]

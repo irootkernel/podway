@@ -182,6 +182,39 @@ fn required_gate_item_snapshot() -> ProcedureSnapshotV2 {
     .unwrap()
 }
 
+fn validity_replay_snapshot() -> ProcedureSnapshotV2 {
+    let document = json!({
+        "schema": "podway.procedure/v2",
+        "id": "validity-replay",
+        "version": "1",
+        "name": "Validity replay",
+        "purpose": "Prove cold-load validity follows append-only transition causes.",
+        "node_definitions": {
+            "work-def": {"type":"action","title":"Work","intent":"Do the work."},
+            "finish-def": {"type":"action","title":"Finish","intent":"Finish."}
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [
+                {"id":"work","use":"work-def","next":"finish"},
+                {"id":"finish","use":"finish-def","terminal":true}
+            ]
+        },
+        "manual_rework": {"allowed_targets":["work"]}
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000113").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        digest,
+        ProcedureSourceLabelV1::file("validity-replay.yaml").unwrap(),
+        UnixMillis::new(5),
+    )
+    .unwrap()
+}
+
 fn attempt(
     number: u64,
     graph_node: &str,
@@ -2286,7 +2319,7 @@ fn non_rework_successors_cannot_change_rework_counters() {
     persist_gate(&store);
 
     let ordinary = finish_state(5, false);
-    let bad_counters = state_with_memory(
+    let bad_counters = try_state_with_memory(
         5,
         SessionLifecycle::Running,
         ordinary.trace().attempts().to_vec(),
@@ -2299,15 +2332,11 @@ fn non_rework_successors_cannot_change_rework_counters() {
         ordinary.workflow_memory().clone(),
         None,
     );
-    assert!(matches!(
-        store.replace_graph_session_v2(
-            &identity(),
-            Revision::new(4),
-            Revision::new(4),
-            bad_counters
-        ),
-        Err(StoreErrorV1::InvalidStateV1(_))
-    ));
+    assert!(bad_counters.is_err());
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(gate_state())
+    );
 }
 
 #[test]
@@ -2404,6 +2433,649 @@ fn v2drw003_manual_rework_reenters_running_and_completed_sessions() {
         &attempt_id(4)
     );
     assert_eq!(reactivated, manual_reactivated_state());
+}
+
+#[test]
+fn v2drw004_rework_successors_preserve_history_and_stale_exact_suffixes() {
+    struct Case {
+        name: &'static str,
+        before: GraphSessionStateV2,
+        after: GraphSessionStateV2,
+        target: GraphNodeId,
+        fresh_attempt_id: AttemptId,
+        expected_source_lifecycle: AttemptLifecycle,
+        expected_gate_evidence_stale: bool,
+        appended_decision: bool,
+    }
+
+    let declared_before = gate_state();
+    let declared_after = declared_before
+        .decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("redo").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Redo the capture.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+
+    let running_manual_before = gate_state();
+    let running_manual_after = running_manual_before
+        .manual_rework_v2(
+            Revision::new(4),
+            Some(&attempt_id(2)),
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit the capture.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+
+    let same_node_before = finish_state(5, false);
+    let same_node_after = same_node_before
+        .manual_rework_v2(
+            Revision::new(5),
+            Some(&attempt_id(3)),
+            node("finish"),
+            attempt_id(4),
+            ReasonV2::new("Repeat final checks.").unwrap(),
+            None,
+            UnixMillis::new(50),
+        )
+        .unwrap()
+        .into_state();
+
+    let completed_before = finish_state(6, true);
+    let completed_after = completed_before
+        .manual_rework_v2(
+            Revision::new(6),
+            None,
+            node("capture"),
+            attempt_id(4),
+            ReasonV2::new("Requirements changed.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(60),
+        )
+        .unwrap()
+        .into_state();
+
+    let cases = [
+        Case {
+            name: "declared gate to capture",
+            before: declared_before,
+            after: declared_after,
+            target: node("capture"),
+            fresh_attempt_id: attempt_id(3),
+            expected_source_lifecycle: AttemptLifecycle::Completed,
+            expected_gate_evidence_stale: true,
+            appended_decision: true,
+        },
+        Case {
+            name: "running manual gate to capture",
+            before: running_manual_before,
+            after: running_manual_after,
+            target: node("capture"),
+            fresh_attempt_id: attempt_id(3),
+            expected_source_lifecycle: AttemptLifecycle::Abandoned,
+            expected_gate_evidence_stale: true,
+            appended_decision: false,
+        },
+        Case {
+            name: "same-node manual finish to finish",
+            before: same_node_before,
+            after: same_node_after,
+            target: node("finish"),
+            fresh_attempt_id: attempt_id(4),
+            expected_source_lifecycle: AttemptLifecycle::Abandoned,
+            expected_gate_evidence_stale: false,
+            appended_decision: false,
+        },
+        Case {
+            name: "completed manual finish to capture",
+            before: completed_before,
+            after: completed_after,
+            target: node("capture"),
+            fresh_attempt_id: attempt_id(4),
+            expected_source_lifecycle: AttemptLifecycle::Completed,
+            expected_gate_evidence_stale: true,
+            appended_decision: false,
+        },
+    ];
+
+    for case in cases {
+        let old_attempt_count = case.before.trace().attempts().len();
+        let target_trace = case
+            .before
+            .trace()
+            .attempts()
+            .iter()
+            .find(|attempt| {
+                attempt.graph_node_id() == &case.target
+                    && attempt.validity() == AttemptValidityV2::Valid
+            })
+            .unwrap_or_else(|| panic!("{}: valid target is absent", case.name))
+            .trace();
+        let old_source = case.before.trace().attempts().last().unwrap();
+
+        assert_eq!(
+            case.after.workspace_revision(),
+            case.before.workspace_revision().checked_next().unwrap(),
+            "{}: workspace revision",
+            case.name
+        );
+        assert_eq!(
+            case.after.trace().revision(),
+            case.before.trace().revision().checked_next().unwrap(),
+            "{}: session revision",
+            case.name
+        );
+        assert_eq!(
+            case.after.trace().attempts().len(),
+            old_attempt_count + 1,
+            "{}: one fresh attempt",
+            case.name
+        );
+        assert_eq!(
+            &case.after.workflow_memory().attempts()[..old_attempt_count],
+            case.before.workflow_memory().attempts(),
+            "{}: old workflow memory",
+            case.name
+        );
+        assert_eq!(
+            &case.after.workflow_memory().decisions()
+                [..case.before.workflow_memory().decisions().len()],
+            case.before.workflow_memory().decisions(),
+            "{}: decision prefix",
+            case.name
+        );
+        assert_eq!(
+            &case.after.workflow_memory().reworks()
+                [..case.before.workflow_memory().reworks().len()],
+            case.before.workflow_memory().reworks(),
+            "{}: rework prefix",
+            case.name
+        );
+        assert_eq!(
+            case.after.workflow_memory().decisions().len(),
+            case.before.workflow_memory().decisions().len() + usize::from(case.appended_decision),
+            "{}: decision append count",
+            case.name
+        );
+        assert_eq!(
+            case.after.workflow_memory().reworks().len(),
+            case.before.workflow_memory().reworks().len() + 1,
+            "{}: rework append count",
+            case.name
+        );
+
+        for (old, new) in case
+            .before
+            .trace()
+            .attempts()
+            .iter()
+            .zip(case.after.trace().attempts())
+        {
+            assert_eq!(
+                new.attempt_id(),
+                old.attempt_id(),
+                "{}: attempt id",
+                case.name
+            );
+            assert_eq!(
+                new.graph_node_id(),
+                old.graph_node_id(),
+                "{}: graph node id",
+                case.name
+            );
+            assert_eq!(new.number(), old.number(), "{}: attempt number", case.name);
+            assert_eq!(new.trace(), old.trace(), "{}: trace identity", case.name);
+            assert_eq!(
+                new.goal_revision(),
+                old.goal_revision(),
+                "{}: goal binding",
+                case.name
+            );
+            let expected_validity =
+                if old.validity() == AttemptValidityV2::Valid && old.trace() >= target_trace {
+                    AttemptValidityV2::Stale
+                } else {
+                    old.validity()
+                };
+            assert_eq!(
+                new.validity(),
+                expected_validity,
+                "{}: exact suffix validity at trace {}",
+                case.name,
+                old.trace().get()
+            );
+            let expected_lifecycle = if old.attempt_id() == old_source.attempt_id() {
+                case.expected_source_lifecycle
+            } else {
+                old.lifecycle()
+            };
+            assert_eq!(
+                new.lifecycle(),
+                expected_lifecycle,
+                "{}: lifecycle at trace {}",
+                case.name,
+                old.trace().get()
+            );
+        }
+
+        let fresh = case.after.trace().attempts().last().unwrap();
+        assert_eq!(
+            fresh.attempt_id(),
+            &case.fresh_attempt_id,
+            "{}: fresh id",
+            case.name
+        );
+        assert_eq!(
+            fresh.graph_node_id(),
+            &case.target,
+            "{}: fresh target",
+            case.name
+        );
+        assert_eq!(
+            fresh.lifecycle(),
+            AttemptLifecycle::Active,
+            "{}: fresh lifecycle",
+            case.name
+        );
+        assert_eq!(
+            fresh.validity(),
+            AttemptValidityV2::Valid,
+            "{}: fresh validity",
+            case.name
+        );
+        assert_eq!(
+            fresh.trace(),
+            TraceSequenceV2::new(old_attempt_count as u64 + 1),
+            "{}: fresh trace",
+            case.name
+        );
+        assert_eq!(
+            case.after.trace().active_attempt(),
+            Some(fresh),
+            "{}: authoritative cursor",
+            case.name
+        );
+        assert_eq!(
+            case.after
+                .trace()
+                .attempts()
+                .iter()
+                .filter(|attempt| attempt.lifecycle() == AttemptLifecycle::Active)
+                .count(),
+            1,
+            "{}: sole cursor",
+            case.name
+        );
+        let fresh_memory = case.after.workflow_memory().attempts().last().unwrap();
+        assert_eq!(
+            fresh_memory.attempt_id(),
+            fresh.attempt_id(),
+            "{}: fresh memory",
+            case.name
+        );
+        assert!(
+            fresh_memory
+                .item_slots()
+                .iter()
+                .all(|slot| { slot.revision() == Revision::ZERO && slot.value().is_none() }),
+            "{}: fresh item memory",
+            case.name
+        );
+        assert!(
+            fresh_memory.blockers().is_empty(),
+            "{}: fresh blockers",
+            case.name
+        );
+        assert!(
+            fresh_memory.evidence().is_empty(),
+            "{}: fresh evidence",
+            case.name
+        );
+
+        let target_counter_before = case
+            .before
+            .counters()
+            .iter()
+            .find(|counter| counter.graph_node_id() == &case.target)
+            .unwrap();
+        for counter_before in case.before.counters() {
+            let counter_after = case
+                .after
+                .counters()
+                .iter()
+                .find(|counter| counter.graph_node_id() == counter_before.graph_node_id())
+                .unwrap();
+            let target_increment = u64::from(counter_before.graph_node_id() == &case.target);
+            assert_eq!(
+                counter_after.attempt_count(),
+                counter_before.attempt_count() + target_increment,
+                "{}: attempt counter for {}",
+                case.name,
+                counter_before.graph_node_id()
+            );
+            assert_eq!(
+                counter_after.rework_traversal_count(),
+                counter_before.rework_traversal_count() + target_increment,
+                "{}: rework counter for {}",
+                case.name,
+                counter_before.graph_node_id()
+            );
+        }
+        assert_eq!(
+            fresh.number().get(),
+            target_counter_before.attempt_count() + 1,
+            "{}: fresh node attempt number",
+            case.name
+        );
+
+        let gate_readback = case
+            .after
+            .selected_evidence_readback(&attempt_id(2))
+            .unwrap();
+        assert_eq!(
+            gate_readback[0].stale(),
+            case.expected_gate_evidence_stale,
+            "{}: evidence staleness",
+            case.name
+        );
+        assert_eq!(
+            gate_readback[0].reference(),
+            &case.before.workflow_memory().attempts()[1].evidence()[0],
+            "{}: evidence snapshot identity",
+            case.name
+        );
+        if case.appended_decision {
+            let decision = case.after.workflow_memory().decisions().last().unwrap();
+            assert_eq!(decision.attempt_id(), &attempt_id(2));
+            assert_eq!(decision.route_effect(), TransitionEffectV2::Rework);
+            assert_eq!(decision.route_target(), &node("capture"));
+            assert_eq!(
+                case.after.trace().attempts()[1].validity(),
+                AttemptValidityV2::Stale,
+                "{}: routing decision belongs to suffix",
+                case.name
+            );
+            assert_eq!(gate_readback[0].decision(), None);
+        } else if !case.before.workflow_memory().decisions().is_empty() {
+            assert_eq!(
+                case.after.workflow_memory().decisions(),
+                case.before.workflow_memory().decisions(),
+                "{}: retained decision record",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn v2drw004_fresh_reentry_reresolves_evidence_without_rewriting_stale_history() {
+    let reworked = gate_state()
+        .decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("redo").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Redo the capture.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    let stale_gate_memory = reworked.workflow_memory().attempts()[1].clone();
+    let stale_decision = reworked.workflow_memory().decisions()[0].clone();
+
+    let recorded = reworked
+        .mutate_active_item_v2(
+            &attempt_id(3),
+            &item("z-summary"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "reworked proof".to_owned(),
+            },
+            UnixMillis::new(41),
+        )
+        .unwrap()
+        .into_state();
+    let advanced = recorded
+        .complete_active_action_v2(
+            Revision::new(6),
+            &attempt_id(3),
+            Some(attempt_id(4)),
+            UnixMillis::new(42),
+        )
+        .unwrap()
+        .into_state();
+
+    assert_eq!(advanced.workflow_memory().attempts()[1], stale_gate_memory);
+    assert_eq!(advanced.workflow_memory().decisions()[0], stale_decision);
+    assert!(advanced.selected_evidence_readback(&attempt_id(2)).unwrap()[0].stale());
+
+    let fresh_capture = &advanced.workflow_memory().attempts()[2];
+    let fresh_gate = &advanced.workflow_memory().attempts()[3];
+    let fresh_reference = fresh_gate.evidence()[0].resolution().snapshot().unwrap();
+    assert_eq!(fresh_reference.source_attempt_id(), &attempt_id(3));
+    assert_eq!(
+        fresh_reference.source_attempt_number(),
+        AttemptNumberV2::new(2)
+    );
+    assert_eq!(fresh_reference.resolved_at(), UnixMillis::new(42));
+    assert_eq!(
+        fresh_reference.items_digest(),
+        &fresh_capture.recorded_items_digest().unwrap()
+    );
+    assert!(!advanced.selected_evidence_readback(&attempt_id(4)).unwrap()[0].stale());
+}
+
+#[test]
+fn v2drw004_sqlite_reopen_rejects_resurrected_obsolete_attempt_validity() {
+    let temporary = TempDir::new().unwrap();
+    let snapshot = validity_replay_snapshot();
+    let initial = GraphSessionStateV2::new(
+        Revision::new(1),
+        "Replay attempt validity",
+        snapshot,
+        SessionTraceV2::from_parts(
+            session_id(),
+            SessionLifecycle::Running,
+            Revision::new(1),
+            vec![attempt(
+                1,
+                "work",
+                1,
+                1,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+            )],
+        )
+        .unwrap(),
+        vec![
+            GraphNodeCounterV2::new(node("work"), 1, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
+        UnixMillis::new(10),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let first_finish = initial
+        .complete_active_action_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            Some(attempt_id(2)),
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    let reentered = first_finish
+        .manual_rework_v2(
+            Revision::new(2),
+            Some(&attempt_id(2)),
+            node("work"),
+            attempt_id(3),
+            ReasonV2::new("Revisit the work.").unwrap(),
+            None,
+            UnixMillis::new(30),
+        )
+        .unwrap()
+        .into_state();
+    let state = reentered
+        .complete_active_action_v2(
+            Revision::new(3),
+            &attempt_id(3),
+            Some(attempt_id(4)),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(
+        state
+            .trace()
+            .attempts()
+            .iter()
+            .map(SessionAttemptV2::validity)
+            .collect::<Vec<_>>(),
+        vec![
+            AttemptValidityV2::Stale,
+            AttemptValidityV2::Stale,
+            AttemptValidityV2::Valid,
+            AttemptValidityV2::Valid,
+        ]
+    );
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store.create_graph_session_v2(&identity(), state).unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_attempts SET validity = 'stale' WHERE attempt_id = ?1",
+            [attempt_id(3).as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE v2_attempts SET validity = 'valid' WHERE attempt_id = ?1",
+            [attempt_id(1).as_str()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let error = match SqliteStoreV1::open(
+        database_path(&temporary),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(100),
+    ) {
+        Ok(_) => panic!("resurrected obsolete attempt validity must fail startup integrity"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::SessionCursor
+        }
+    ));
+}
+
+#[test]
+fn v2drw004_sqlite_reopen_rejects_running_manual_reactivation_bit_tamper() {
+    let temporary = TempDir::new().unwrap();
+    let state = gate_state()
+        .manual_rework_v2(
+            Revision::new(4),
+            Some(&attempt_id(2)),
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit the capture.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store.create_graph_session_v2(&identity(), state).unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_rework_records SET reactivated = 1 WHERE trace_sequence = 3",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let error = match SqliteStoreV1::open(
+        database_path(&temporary),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(100),
+    ) {
+        Ok(_) => panic!("running manual reactivation tamper must fail startup integrity"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::SessionCursor
+        }
+    ));
+}
+
+#[test]
+fn v2drw004_sqlite_reopen_rejects_deleted_same_node_manual_rework_record() {
+    let temporary = TempDir::new().unwrap();
+    let state = finish_state(5, false)
+        .manual_rework_v2(
+            Revision::new(5),
+            Some(&attempt_id(3)),
+            node("finish"),
+            attempt_id(4),
+            ReasonV2::new("Repeat final checks.").unwrap(),
+            None,
+            UnixMillis::new(50),
+        )
+        .unwrap()
+        .into_state();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store.create_graph_session_v2(&identity(), state).unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute("DELETE FROM v2_rework_records WHERE trace_sequence = 4", [])
+        .unwrap();
+    drop(connection);
+
+    let error = match SqliteStoreV1::open(
+        database_path(&temporary),
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(100),
+    ) {
+        Ok(_) => panic!("deleted same-node manual rework record must fail startup integrity"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::SessionCursor
+        }
+    ));
 }
 
 #[test]

@@ -1416,6 +1416,84 @@ mod tests {
         explore(&start, &mut next_id, &entry, &middle, &terminal, 0, 6);
     }
 
+    #[test]
+    fn manual_rework_preserves_the_exact_suffix_for_every_valid_target() {
+        let mut running =
+            SessionTraceV2::start(session(), node("entry"), attempt_id(1), None).unwrap();
+        running
+            .advance(
+                &attempt_id(1),
+                AdvanceTerminalV2::Completed,
+                node("middle"),
+                attempt_id(2),
+                None,
+            )
+            .unwrap();
+        running
+            .advance(
+                &attempt_id(2),
+                AdvanceTerminalV2::Skipped,
+                node("terminal"),
+                attempt_id(3),
+                None,
+            )
+            .unwrap();
+        running
+            .rework_to(&attempt_id(3), node("entry"), attempt_id(4), None)
+            .unwrap();
+        running
+            .advance(
+                &attempt_id(4),
+                AdvanceTerminalV2::Completed,
+                node("middle"),
+                attempt_id(5),
+                None,
+            )
+            .unwrap();
+        running
+            .advance(
+                &attempt_id(5),
+                AdvanceTerminalV2::Completed,
+                node("terminal"),
+                attempt_id(6),
+                None,
+            )
+            .unwrap();
+
+        let running_targets = valid_targets(&running);
+        for (offset, target) in running_targets.into_iter().enumerate() {
+            let before = running.clone();
+            let source = before.active_attempt().unwrap().attempt_id().clone();
+            let fresh_id = attempt_id(100 + offset as u64);
+            let mut after = before.clone();
+            after
+                .manual_rework(Some(&source), target.clone(), fresh_id.clone(), None)
+                .unwrap();
+            assert_exact_suffix_reentry(
+                &before,
+                &after,
+                &target,
+                &fresh_id,
+                Some(AttemptLifecycle::Abandoned),
+            );
+        }
+
+        let mut completed = running;
+        completed
+            .finish(&attempt_id(6), AdvanceTerminalV2::Completed)
+            .unwrap();
+        let completed_targets = valid_targets(&completed);
+        for (offset, target) in completed_targets.into_iter().enumerate() {
+            let before = completed.clone();
+            let fresh_id = attempt_id(200 + offset as u64);
+            let mut after = before.clone();
+            after
+                .manual_rework(None, target.clone(), fresh_id.clone(), None)
+                .unwrap();
+            assert_exact_suffix_reentry(&before, &after, &target, &fresh_id, None);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn explore(
         trace: &SessionTraceV2,
@@ -1467,10 +1545,18 @@ mod tests {
 
         // rework to the active's own node: degenerate same-node fresh-attempt case.
         let mut same = trace.clone();
+        let same_fresh_id = next_id();
         if same
-            .rework_to(&active_id, active_node.clone(), next_id(), None)
+            .rework_to(&active_id, active_node.clone(), same_fresh_id.clone(), None)
             .is_ok()
         {
+            assert_exact_suffix_reentry(
+                trace,
+                &same,
+                &active_node,
+                &same_fresh_id,
+                Some(AttemptLifecycle::Completed),
+            );
             assert_invariants(&same);
             explore(
                 &same,
@@ -1493,10 +1579,18 @@ mod tests {
                 continue;
             }
             let mut reworked = trace.clone();
+            let fresh_id = next_id();
             if reworked
-                .rework_to(&active_id, target, next_id(), None)
+                .rework_to(&active_id, target.clone(), fresh_id.clone(), None)
                 .is_ok()
             {
+                assert_exact_suffix_reentry(
+                    trace,
+                    &reworked,
+                    &target,
+                    &fresh_id,
+                    Some(AttemptLifecycle::Completed),
+                );
                 assert_invariants(&reworked);
                 explore(
                     &reworked,
@@ -1511,6 +1605,124 @@ mod tests {
                 assert_eq!(reworked, *trace, "rejected rework changed the trace");
             }
         }
+    }
+
+    fn valid_targets(trace: &SessionTraceV2) -> Vec<GraphNodeId> {
+        trace
+            .attempts()
+            .iter()
+            .filter(|attempt| attempt.validity().is_valid())
+            .map(|attempt| attempt.graph_node_id().clone())
+            .collect()
+    }
+
+    fn assert_exact_suffix_reentry(
+        before: &SessionTraceV2,
+        after: &SessionTraceV2,
+        target: &GraphNodeId,
+        fresh_id: &AttemptId,
+        source_lifecycle: Option<AttemptLifecycle>,
+    ) {
+        let target_trace = before
+            .attempts()
+            .iter()
+            .find(|attempt| attempt.validity().is_valid() && attempt.graph_node_id() == target)
+            .expect("a successful rework target must have been valid")
+            .trace();
+        let source_index = before
+            .attempts()
+            .iter()
+            .position(SessionAttemptV2::is_active);
+        assert_eq!(
+            source_index.is_some(),
+            source_lifecycle.is_some(),
+            "only running rework terminalizes a causal source attempt"
+        );
+
+        assert_eq!(after.session_id(), before.session_id());
+        assert_eq!(after.lifecycle(), SessionLifecycle::Running);
+        assert_eq!(
+            after.revision(),
+            before.revision().checked_next().unwrap(),
+            "re-entry must advance the session revision exactly once"
+        );
+        assert_eq!(after.attempts().len(), before.attempts().len() + 1);
+
+        for (index, (prior, current)) in before.attempts().iter().zip(after.attempts()).enumerate()
+        {
+            assert_eq!(
+                identity(current),
+                identity(prior),
+                "re-entry changed pre-existing attempt identity at index {index}"
+            );
+            let expected_lifecycle = if Some(index) == source_index {
+                source_lifecycle.expect("running source lifecycle is specified")
+            } else {
+                prior.lifecycle()
+            };
+            assert_eq!(
+                current.lifecycle(),
+                expected_lifecycle,
+                "re-entry changed a non-causal lifecycle at index {index}"
+            );
+            let expected_validity = if prior.validity().is_valid() && prior.trace() >= target_trace
+            {
+                AttemptValidityV2::Stale
+            } else {
+                prior.validity()
+            };
+            assert_eq!(
+                current.validity(),
+                expected_validity,
+                "re-entry did not invalidate exactly the valid target suffix at index {index}"
+            );
+            if prior.trace() < target_trace {
+                assert_eq!(
+                    current, prior,
+                    "the trace prefix before the target must be preserved bit for bit"
+                );
+            }
+        }
+
+        let prior_target_number = before
+            .attempts()
+            .iter()
+            .filter(|attempt| attempt.graph_node_id() == target)
+            .map(SessionAttemptV2::number)
+            .max()
+            .expect("the target has a prior attempt");
+        let prior_last_trace = before
+            .attempts()
+            .last()
+            .expect("a session has at least one attempt")
+            .trace();
+        let fresh = after.attempts().last().unwrap();
+        assert_eq!(fresh.attempt_id(), fresh_id);
+        assert_eq!(fresh.graph_node_id(), target);
+        assert_eq!(
+            fresh.number(),
+            prior_target_number.checked_next().unwrap(),
+            "the fresh target attempt number must follow its complete history"
+        );
+        assert_eq!(
+            fresh.trace(),
+            prior_last_trace.checked_next().unwrap(),
+            "the fresh attempt must append exactly one trace position"
+        );
+        assert_eq!(fresh.lifecycle(), AttemptLifecycle::Active);
+        assert_eq!(fresh.validity(), AttemptValidityV2::Valid);
+        assert_eq!(fresh.goal_revision(), None);
+        assert_eq!(after.active_attempt(), Some(fresh));
+        assert_eq!(
+            after
+                .attempts()
+                .iter()
+                .filter(|attempt| attempt.is_active())
+                .count(),
+            1,
+            "the fresh target attempt must be the sole active cursor"
+        );
+        assert_invariants(after);
     }
 
     fn assert_invariants(trace: &SessionTraceV2) {

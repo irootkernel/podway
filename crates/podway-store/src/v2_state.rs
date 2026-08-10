@@ -1054,12 +1054,17 @@ impl GraphSessionStateV2 {
             &workflow_memory,
             &goal_state,
         )?;
+        let goal_rework_target_attempt_ids = goal_state.goal_rework_target_attempt_ids(&trace);
+        let reactivated_goal_rework_target_attempt_ids =
+            goal_state.reactivated_goal_rework_target_attempt_ids(&trace);
         validate_workflow_memory_v2(
             &snapshot,
             &trace,
+            &counters,
             &attempt_metadata,
             &workflow_memory,
-            &goal_state.goal_rework_target_attempt_ids(&trace),
+            &goal_rework_target_attempt_ids,
+            &reactivated_goal_rework_target_attempt_ids,
         )?;
         Ok(Self {
             workspace_revision,
