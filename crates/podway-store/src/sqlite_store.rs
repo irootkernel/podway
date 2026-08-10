@@ -1194,6 +1194,14 @@ impl StoreContractV1 for SqliteStoreV1 {
                 actual: actual_session_id,
             });
         }
+        if is_v2 && is_v2_action_runtime {
+            validate_procedure_v2_action_admission_v1(
+                &request,
+                current_graph
+                    .as_ref()
+                    .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?,
+            )?;
+        }
         if is_v2 && matches!(request.command(), crate::CommandV1::SessionStartReplace) {
             let actual_revision = current_session
                 .as_ref()
@@ -1870,6 +1878,96 @@ impl StoreContractV1 for SqliteStoreV1 {
         transaction.commit().map_err(storage)?;
         Ok(view)
     }
+}
+
+fn validate_procedure_v2_action_admission_v1(
+    request: &AdmitRequestV1,
+    current: &GraphSessionStateV2,
+) -> Result<(), StoreErrorV1> {
+    let preconditions = request.preconditions();
+    let current_revision = current.trace().revision();
+    let active_attempt = current
+        .trace()
+        .active_attempt()
+        .map(podway_core::SessionAttemptV2::attempt_id);
+    let reject = |failure| StoreErrorV1::ProcedureV2PreconditionFailedV1 { failure };
+
+    if matches!(
+        request.command(),
+        crate::CommandV1::SessionComplete
+            | crate::CommandV1::SessionRetry
+            | crate::CommandV1::SessionSkip
+            | crate::CommandV1::SessionBlock
+            | crate::CommandV1::SessionUnblock
+            | crate::CommandV1::SessionCancel
+            | crate::CommandV1::SessionReset
+    ) {
+        let expected_revision = preconditions
+            .expected_session_revision()
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        if expected_revision != current_revision {
+            return Err(reject(
+                PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: expected_revision,
+                    actual: current_revision,
+                },
+            ));
+        }
+        if !matches!(request.command(), crate::CommandV1::SessionReset) {
+            let expected_attempt = preconditions
+                .expected_attempt_id()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            if active_attempt != Some(expected_attempt) {
+                return Err(reject(PersistedGraphMutationFailureV2::AttemptNotCurrent {
+                    expected: expected_attempt.clone(),
+                    actual: active_attempt.cloned(),
+                }));
+            }
+        }
+        return Ok(());
+    }
+
+    let expected_attempt = preconditions
+        .expected_attempt_id()
+        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+    if active_attempt != Some(expected_attempt) {
+        return Err(reject(PersistedGraphMutationFailureV2::AttemptNotCurrent {
+            expected: expected_attempt.clone(),
+            actual: active_attempt.cloned(),
+        }));
+    }
+    let item_id = preconditions
+        .expected_item_id()
+        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+    let expected_item_revision = preconditions
+        .expected_item_revision()
+        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+    let actual_item_revision = current
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .find(|memory| memory.attempt_id() == expected_attempt)
+        .and_then(|memory| {
+            memory
+                .item_slots()
+                .iter()
+                .find(|slot| slot.item_id() == item_id)
+        })
+        .map(crate::ItemSlotStateV2::revision)
+        .ok_or_else(|| {
+            reject(PersistedGraphMutationFailureV2::ItemNotFound {
+                item_id: item_id.clone(),
+            })
+        })?;
+    if expected_item_revision != actual_item_revision {
+        return Err(reject(
+            PersistedGraphMutationFailureV2::ItemRevisionConflict {
+                expected: expected_item_revision,
+                actual: actual_item_revision,
+            },
+        ));
+    }
+    Ok(())
 }
 
 impl StoreIdempotencyReadContractV1 for SqliteStoreV1 {

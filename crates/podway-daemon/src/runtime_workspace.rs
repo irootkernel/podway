@@ -2678,6 +2678,7 @@ fn reset_seed_requires_fixed_replacement(error: &StoreErrorV1) -> bool {
         | StoreErrorV1::InvalidStateV1(_)
         | StoreErrorV1::JobNotFoundV1 { .. }
         | StoreErrorV1::PreconditionConflictV1 { .. }
+        | StoreErrorV1::ProcedureV2PreconditionFailedV1 { .. }
         | StoreErrorV1::SessionIdentityConflictV1 { .. }
         | StoreErrorV1::StorageUnavailableV1 { .. } => false,
     }

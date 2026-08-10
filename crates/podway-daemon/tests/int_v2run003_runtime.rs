@@ -255,7 +255,7 @@ pub(super) fn session_preconditions(status: &Map<String, Value>) -> Precondition
     .unwrap()
 }
 
-fn item_preconditions(status: &Map<String, Value>, item_id: &str) -> PreconditionsV1 {
+pub(super) fn item_preconditions(status: &Map<String, Value>, item_id: &str) -> PreconditionsV1 {
     let item = status["items"]
         .as_array()
         .unwrap()

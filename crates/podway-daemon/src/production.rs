@@ -4423,6 +4423,9 @@ fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict)
                 .with_details(details)
         }
+        StoreErrorV1::ProcedureV2PreconditionFailedV1 { failure } => {
+            map_graph_mutation_failure_v2(&failure)
+        }
         StoreErrorV1::SessionIdentityConflictV1 {
             expected: Some(expected),
             actual,

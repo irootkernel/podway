@@ -1987,6 +1987,9 @@ pub enum StoreErrorV1 {
         expected: Option<RevisionV1>,
         actual: Option<RevisionV1>,
     },
+    ProcedureV2PreconditionFailedV1 {
+        failure: PersistedGraphMutationFailureV2,
+    },
     SessionIdentityConflictV1 {
         expected: Option<SessionId>,
         actual: Option<SessionId>,

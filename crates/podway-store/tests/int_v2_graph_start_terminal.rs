@@ -581,6 +581,332 @@ fn admit_uncheck_and_claim(
         .unwrap()
 }
 
+fn seed_graph_session(store: &SqliteStoreV1, state: &GraphSessionStateV2, job_number: u64) {
+    let claimed = admit_and_claim(
+        store,
+        DomainCommand::SessionStart,
+        &format!("v2-seed-{job_number}"),
+        job_number,
+        AdmissionSessionIdentityV1::Absent,
+        None,
+    );
+    store
+        .commit_graph_start_terminal_v2(
+            claimed.claim().clone(),
+            GraphStartCurrentTaskV2::Absent,
+            state.clone(),
+            UnixMillis::new(23),
+        )
+        .unwrap();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn action_runtime_admit_request(
+    state: &GraphSessionStateV2,
+    command: DomainCommand,
+    command_name: &str,
+    key: &str,
+    job_number: u64,
+    request_digest: Sha256Digest,
+    preconditions: RevisionAttemptItemPreconditionsV1,
+) -> AdmitRequestV1 {
+    AdmitRequestV1::new_with_canonical_execution(
+        command,
+        IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new(uuid(job_number)).unwrap(),
+        preconditions,
+        request_digest,
+        UnixMillis::new(30),
+        CanonicalExecutionJsonV1::new(
+            canonicalize_json_v1(&json!({
+                "command": command_name,
+                "execution_version": 8,
+                "test_request": key,
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        state.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            uuid(job_number + 100),
+            command_name,
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-graph-start",
+            0,
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn graph_action_admission_rejects_stale_fences_without_rows_and_replays_first() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let state = graph_state(2_300, 2_310, 22);
+    seed_graph_session(&store, &state, 2_320);
+    let active = state.trace().active_attempt().unwrap();
+    let initial_sequence = store
+        .read_workspace_view(&identity())
+        .unwrap()
+        .latest_workspace_sequence();
+
+    let stale_revision = action_runtime_admit_request(
+        &state,
+        DomainCommand::SessionComplete,
+        "session.complete",
+        "v2run007-store-stale-revision",
+        2_330,
+        digest('1'),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(Revision::new(2)),
+            Some(active.attempt_id().clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        store.admit(&identity(), stale_revision),
+        Err(
+            podway_store::StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+                failure: PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: Revision::new(2),
+                    actual: Revision::new(1),
+                },
+            }
+        )
+    );
+
+    let wrong_attempt = AttemptId::new(uuid(2_399)).unwrap();
+    let stale_attempt = action_runtime_admit_request(
+        &state,
+        DomainCommand::SessionComplete,
+        "session.complete",
+        "v2run007-store-stale-attempt",
+        2_331,
+        digest('2'),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(Revision::new(1)),
+            Some(wrong_attempt.clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        store.admit(&identity(), stale_attempt),
+        Err(
+            podway_store::StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+                failure: PersistedGraphMutationFailureV2::AttemptNotCurrent {
+                    expected: wrong_attempt,
+                    actual: Some(active.attempt_id().clone()),
+                },
+            }
+        )
+    );
+
+    let item_id = ItemId::new("done").unwrap();
+    let stale_item = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck {
+            item_id: item_id.clone(),
+        },
+        "item.check",
+        "v2run007-store-stale-item",
+        2_332,
+        digest('3'),
+        RevisionAttemptItemPreconditionsV1::new(
+            None,
+            Some(active.attempt_id().clone()),
+            Some(item_id.clone()),
+            Some(Revision::new(1)),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        store.admit(&identity(), stale_item),
+        Err(
+            podway_store::StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+                failure: PersistedGraphMutationFailureV2::ItemRevisionConflict {
+                    expected: Revision::new(1),
+                    actual: Revision::ZERO,
+                },
+            }
+        )
+    );
+    let missing_item_id = ItemId::new("missing").unwrap();
+    let missing_item = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck {
+            item_id: missing_item_id.clone(),
+        },
+        "item.check",
+        "v2run007-store-missing-item",
+        2_336,
+        digest('6'),
+        RevisionAttemptItemPreconditionsV1::new(
+            None,
+            Some(active.attempt_id().clone()),
+            Some(missing_item_id.clone()),
+            Some(Revision::ZERO),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        store.admit(&identity(), missing_item),
+        Err(
+            podway_store::StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+                failure: PersistedGraphMutationFailureV2::ItemNotFound {
+                    item_id: missing_item_id,
+                },
+            }
+        )
+    );
+
+    let stale_reset = action_runtime_admit_request(
+        &state,
+        DomainCommand::SessionReset,
+        "session.reset",
+        "v2run007-store-stale-reset",
+        2_337,
+        digest('7'),
+        RevisionAttemptItemPreconditionsV1::new(Some(Revision::new(2)), None, None, None).unwrap(),
+    );
+    assert_eq!(
+        store.admit(&identity(), stale_reset),
+        Err(
+            podway_store::StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+                failure: PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: Revision::new(2),
+                    actual: Revision::new(1),
+                },
+            }
+        )
+    );
+    for (job_number, key) in [
+        (2_330, "v2run007-store-stale-revision"),
+        (2_331, "v2run007-store-stale-attempt"),
+        (2_332, "v2run007-store-stale-item"),
+        (2_336, "v2run007-store-missing-item"),
+        (2_337, "v2run007-store-stale-reset"),
+    ] {
+        assert!(
+            store
+                .read_job(
+                    &identity(),
+                    &podway_core::JobId::new(uuid(job_number)).unwrap()
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .read_idempotency_lookup(&identity(), &IdempotencyKeyV1::new(key).unwrap())
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(
+        store
+            .read_workspace_view(&identity())
+            .unwrap()
+            .latest_workspace_sequence(),
+        initial_sequence
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(state.clone())
+    );
+
+    let valid = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck {
+            item_id: item_id.clone(),
+        },
+        "item.check",
+        "v2run007-store-replay",
+        2_333,
+        digest('4'),
+        RevisionAttemptItemPreconditionsV1::new(
+            None,
+            Some(active.attempt_id().clone()),
+            Some(item_id.clone()),
+            Some(Revision::ZERO),
+        )
+        .unwrap(),
+    );
+    let admitted = store.admit(&identity(), valid).unwrap();
+    let changed = state
+        .mutate_active_item_v2(
+            active.attempt_id(),
+            &item_id,
+            Revision::ZERO,
+            ActiveItemMutationV2::Check,
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            state.workspace_revision(),
+            state.trace().revision(),
+            changed,
+        )
+        .unwrap();
+    let replay = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck {
+            item_id: item_id.clone(),
+        },
+        "item.check",
+        "v2run007-store-replay",
+        2_334,
+        digest('4'),
+        RevisionAttemptItemPreconditionsV1::new(
+            None,
+            Some(active.attempt_id().clone()),
+            Some(item_id.clone()),
+            Some(Revision::ZERO),
+        )
+        .unwrap(),
+    );
+    let replayed = store.admit(&identity(), replay).unwrap();
+    assert!(matches!(
+        (&admitted, &replayed),
+        (
+            podway_store::AdmitOutcomeV1::New(new),
+            podway_store::AdmitOutcomeV1::Existing(
+                podway_store::JobReceiptOrTerminalV1::JobReceipt(existing)
+            )
+        ) if new == existing
+    ));
+    let reused = action_runtime_admit_request(
+        &state,
+        DomainCommand::ItemCheck { item_id },
+        "item.check",
+        "v2run007-store-replay",
+        2_335,
+        digest('5'),
+        RevisionAttemptItemPreconditionsV1::new(
+            None,
+            Some(active.attempt_id().clone()),
+            Some(ItemId::new("done").unwrap()),
+            Some(Revision::ZERO),
+        )
+        .unwrap(),
+    );
+    assert!(matches!(
+        store.admit(&identity(), reused),
+        Err(podway_store::StoreErrorV1::IdempotencyDigestConflictV1 { .. })
+    ));
+}
+
 #[test]
 fn graph_start_state_and_terminal_receipt_survive_reopen() {
     let temporary = TempDir::new().unwrap();

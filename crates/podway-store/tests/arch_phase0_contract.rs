@@ -11,9 +11,9 @@ use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
     ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, EpochMillisV1, IdempotencyKeyV1,
     JobIdV1, JobReceiptOrTerminalV1, JobReceiptV1, MAX_IDEMPOTENCY_KEY_BYTES_V1,
-    MAX_WORKER_ID_BYTES_V1, PersistedSessionMutationV1, PersistedTerminalReceiptV1,
-    RevisionAttemptItemPreconditionsV1, RevisionV1, StateTransitionV1, StoreContractV1,
-    StoreErrorV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreRecordKindV1,
+    MAX_WORKER_ID_BYTES_V1, PersistedGraphMutationFailureV2, PersistedSessionMutationV1,
+    PersistedTerminalReceiptV1, RevisionAttemptItemPreconditionsV1, RevisionV1, StateTransitionV1,
+    StoreContractV1, StoreErrorV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreRecordKindV1,
     StoreUnavailableReasonV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1,
     WorkspaceViewV1,
 };
@@ -457,6 +457,12 @@ fn store_v1_constructs_every_typed_error_variant() {
             expected: Some(Revision::new(4)),
             actual: Some(Revision::new(5)),
         },
+        StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+            failure: PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                expected: Revision::new(4),
+                actual: Revision::new(5),
+            },
+        },
         StoreErrorV1::SessionIdentityConflictV1 {
             expected: Some(SessionId::new("00000000-0000-4000-8000-000000000004").unwrap()),
             actual: Some(SessionId::new("00000000-0000-4000-8000-000000000005").unwrap()),
@@ -538,6 +544,15 @@ fn store_v1_constructs_every_typed_error_variant() {
             StoreErrorV1::PreconditionConflictV1 { expected, actual } => {
                 assert_eq!(expected, Some(Revision::new(4)));
                 assert_eq!(actual, Some(Revision::new(5)));
+            }
+            StoreErrorV1::ProcedureV2PreconditionFailedV1 { failure } => {
+                assert_eq!(
+                    failure,
+                    PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                        expected: Revision::new(4),
+                        actual: Revision::new(5),
+                    }
+                );
             }
             StoreErrorV1::SessionIdentityConflictV1 { expected, actual } => {
                 assert_eq!(

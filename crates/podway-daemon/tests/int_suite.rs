@@ -60,3 +60,5 @@ mod int_v2run004_retry;
 mod int_v2run005_skip;
 #[path = "int_v2run006_states.rs"]
 mod int_v2run006_states;
+#[path = "int_v2run007_preconditions.rs"]
+mod int_v2run007_preconditions;
