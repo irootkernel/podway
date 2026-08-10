@@ -52,6 +52,8 @@ mod int_phase8_observability;
 mod int_v2drw001_decide;
 #[path = "int_v2drw003_rework.rs"]
 mod int_v2drw003_rework;
+#[path = "int_v2drw005_readback.rs"]
+mod int_v2drw005_readback;
 #[path = "int_v2run001_start.rs"]
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]

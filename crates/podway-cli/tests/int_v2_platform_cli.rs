@@ -3,15 +3,17 @@
 use std::{
     fs,
     io::{self, Read, Write},
-    os::unix::{fs::PermissionsExt, net::UnixListener},
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt, net::UnixListener},
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
     thread::{self, JoinHandle},
 };
 
+use podway_core::WorkspaceId;
 use podway_protocol::{
-    RequestEnvelopeV1, decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1,
+    RequestEnvelopeV1, WorktreeSelectorWireV1, decode_request_payload_v1, decode_single_frame_v1,
+    encode_frame_v1,
 };
 use serde_json::{Value, json};
 
@@ -21,6 +23,7 @@ const ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174003";
 const JOB_ID: &str = "123e4567-e89b-42d3-a456-426614174004";
 const NEXT_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174005";
 const BLOCKER_ID: &str = "123e4567-e89b-42d3-a456-426614174006";
+const CURRENT_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174007";
 const PROCEDURE_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -87,6 +90,7 @@ enum Reply {
     WorkspaceError,
     GoalDefinition,
     StatusV2,
+    StatusV2Verbose,
     SharedMutationV2,
     SharedMutationV1,
 }
@@ -260,6 +264,19 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 "warnings": []
             })
         }
+        Reply::StatusV2Verbose => json!({
+            "schema": "podway.output/v2",
+            "request_id": request.request_id().as_str(),
+            "command": "session.status",
+            "generated_at": "2026-08-09T12:34:56.789Z",
+            "workspace": {
+                "uuid": WORKSPACE_ID,
+                "root": request.workspace().expect("status selects a workspace").root(),
+                "latest_workspace_sequence": 10
+            },
+            "result": verbose_status_result(),
+            "warnings": []
+        }),
         Reply::SharedMutationV2 => {
             let mut fixture: Value = serde_json::from_str(include_str!(
                 "../../../tests/fixtures/v2/protocol/result-families.json"
@@ -375,6 +392,154 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             "warnings": []
         }),
     }
+}
+
+fn verbose_status_result() -> Value {
+    let mut fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/result-families.json"
+    ))
+    .expect("v2 result fixtures must parse");
+    let mut result = fixture["fixtures"]["podway.status-result/v2"].take();
+    result["tier"] = json!("verbose");
+    result["session"]["id"] = json!(SESSION_ID);
+    result["session"]["revision"] = json!(10);
+    result["current"]["node"] = json!({
+        "node_definition_id": "finish",
+        "graph_node_id": "finish",
+        "node_type": "action"
+    });
+    result["current"]["attempt"] = json!({
+        "attempt_id": CURRENT_ATTEMPT_ID,
+        "attempt_number": 3
+    });
+    result["trace_length"] = json!(8);
+    result["counters"] = json!([
+        {"graph_node_id": "work", "attempt_count": 2, "rework_traversal_count": 1},
+        {"graph_node_id": "review", "attempt_count": 3, "rework_traversal_count": 1},
+        {"graph_node_id": "finish", "attempt_count": 3, "rework_traversal_count": 0}
+    ]);
+    result["queue"]["latest_workspace_sequence"] = json!(10);
+    result["allowed_manual_rework_targets"] = json!(["review"]);
+    result["current_trace_history"] = json!({
+        "entries": [
+            {
+                "trace_sequence": 8,
+                "graph_node_id": "finish",
+                "node_definition_id": "finish",
+                "attempt_id": CURRENT_ATTEMPT_ID,
+                "attempt_number": 3,
+                "goal_revision": null,
+                "lifecycle": "active",
+                "validity": "valid",
+                "started_at": "2026-08-09T12:34:55.000Z"
+            },
+            {
+                "trace_sequence": 7,
+                "graph_node_id": "review",
+                "node_definition_id": "review",
+                "attempt_id": NEXT_ATTEMPT_ID,
+                "attempt_number": 3,
+                "goal_revision": null,
+                "lifecycle": "completed",
+                "validity": "valid",
+                "started_at": "2026-08-09T12:34:54.000Z",
+                "finished_at": "2026-08-09T12:34:55.000Z"
+            },
+            {
+                "trace_sequence": 4,
+                "graph_node_id": "work",
+                "node_definition_id": "work",
+                "attempt_id": ATTEMPT_ID,
+                "attempt_number": 2,
+                "goal_revision": null,
+                "lifecycle": "completed",
+                "validity": "valid",
+                "started_at": "2026-08-09T12:34:50.000Z",
+                "finished_at": "2026-08-09T12:34:52.000Z"
+            }
+        ],
+        "trace_truncated": false,
+        "trace_window": {"first_sequence": 4, "last_sequence": 8}
+    });
+    result["stale_attempt_history"] = json!({
+        "entries": [{
+            "trace_sequence": 6,
+            "graph_node_id": "finish",
+            "node_definition_id": "finish",
+            "attempt_id": JOB_ID,
+            "attempt_number": 2,
+            "goal_revision": null,
+            "lifecycle": "completed",
+            "validity": "stale",
+            "started_at": "2026-08-09T12:34:53.000Z",
+            "finished_at": "2026-08-09T12:34:54.000Z",
+            "terminal_reason": null,
+            "items": [],
+            "items_total": 0,
+            "items_truncated": false,
+            "references": []
+        }],
+        "trace_truncated": true,
+        "trace_window": {"first_sequence": 6, "last_sequence": 6}
+    });
+    for field in [
+        "stale_goal_revision_history",
+        "stale_goal_assessment_history",
+    ] {
+        result[field] = json!({"entries": [], "trace_truncated": false, "trace_window": null});
+    }
+    result["decision_history"] = json!({
+        "entries": [{
+            "trace_sequence": 7,
+            "session_id": SESSION_ID,
+            "session_revision": 9,
+            "procedure_schema": "podway.procedure/v2",
+            "procedure_snapshot_id": NEXT_ATTEMPT_ID,
+            "procedure_digest": PROCEDURE_DIGEST,
+            "graph_node_id": "review",
+            "node_definition_id": "review",
+            "attempt_id": NEXT_ATTEMPT_ID,
+            "attempt_number": 3,
+            "goal_revision": null,
+            "option_id": "accept",
+            "effect": "advance",
+            "target_graph_node_id": "finish",
+            "reason": "The immutable review record supports acceptance.",
+            "actor": "V2DRW reviewer",
+            "recorded_at": "2026-08-09T12:34:55.000Z",
+            "references": []
+        }],
+        "trace_truncated": true,
+        "trace_window": {"first_sequence": 7, "last_sequence": 7}
+    });
+    result["rework_history"] = json!({
+        "entries": [
+            {
+                "trace_sequence": 7,
+                "kind": "manual",
+                "from_graph_node_id": "finish",
+                "to_graph_node_id": "review",
+                "target_attempt_id": NEXT_ATTEMPT_ID,
+                "reason": "Review the latest evidence again.",
+                "actor": "V2DRW reviewer",
+                "reactivated": true,
+                "recorded_at": "2026-08-09T12:34:54.000Z"
+            },
+            {
+                "trace_sequence": 4,
+                "kind": "declared",
+                "from_graph_node_id": "review",
+                "to_graph_node_id": "work",
+                "target_attempt_id": ATTEMPT_ID,
+                "reason": "The declared branch requires another work attempt.",
+                "reactivated": false,
+                "recorded_at": "2026-08-09T12:34:50.000Z"
+            }
+        ],
+        "trace_truncated": false,
+        "trace_window": {"first_sequence": 4, "last_sequence": 7}
+    });
+    result
 }
 
 fn required_result_schema(command: &str) -> &'static str {
@@ -1257,6 +1422,89 @@ fn verbose_status_sends_one_positive_exclusive_history_cursor() {
     assert_eq!(request["payload"]["verbose"], true);
     assert_eq!(request["payload"]["history_before"], 42);
     assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+}
+
+#[test]
+fn v2drw005_verbose_status_preserves_decision_and_rework_history_in_json_and_text() {
+    let expected_result = verbose_status_result();
+    for json_mode in [true, false] {
+        let fixture = Fixture::new();
+        let daemon = RecordingDaemon::start(&fixture.socket, Reply::StatusV2Verbose);
+        let mut arguments = vec![
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+            "--if-workspace-uuid".to_owned(),
+            WORKSPACE_ID.to_owned(),
+            "--if-session-id".to_owned(),
+            SESSION_ID.to_owned(),
+            "status".to_owned(),
+            "--verbose".to_owned(),
+            "--history-before".to_owned(),
+            "9".to_owned(),
+        ];
+        if json_mode {
+            arguments.insert(0, "--json".to_owned());
+        }
+
+        let output = fixture.run(&arguments);
+        assert!(output.status.success(), "{output:?}");
+        let request = daemon.finish();
+        let canonical_root = fs::canonicalize(&fixture.root).unwrap();
+        let selector = WorktreeSelectorWireV1::new(
+            canonical_root.as_os_str().as_bytes(),
+            canonical_root.display().to_string(),
+            Some(WorkspaceId::new(WORKSPACE_ID).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            request["payload"],
+            json!({
+                "selector": selector,
+                "verbose": true,
+                "history_before": 9
+            })
+        );
+        assert_eq!(request["command"], "session.status");
+        assert_eq!(request["operation"], "query");
+        assert_eq!(request["preconditions"], json!({"session_id": SESSION_ID}));
+
+        if json_mode {
+            assert_eq!(one_json(&output)["result"], expected_result);
+        } else {
+            let text = String::from_utf8(output.stdout).expect("text output must be UTF-8");
+            let expected = serde_json::to_string_pretty(&expected_result).unwrap();
+            assert!(text.ends_with(&format!("result: {expected}\n")), "{text}");
+            let rendered = serde_json::from_str::<Value>(
+                text.split_once("result: ")
+                    .expect("text output must include the generic v2 result")
+                    .1,
+            )
+            .expect("the rendered result must remain JSON");
+            assert_eq!(
+                rendered["decision_history"],
+                expected_result["decision_history"]
+            );
+            assert_eq!(
+                rendered["rework_history"],
+                expected_result["rework_history"]
+            );
+            assert_eq!(
+                rendered["rework_history"]["entries"][0]["trace_sequence"],
+                7
+            );
+            assert_eq!(
+                rendered["rework_history"]["entries"][1]["trace_sequence"],
+                4
+            );
+            assert_eq!(rendered["rework_history"]["trace_truncated"], false);
+            assert_eq!(
+                rendered["rework_history"]["trace_window"],
+                json!({"first_sequence": 4, "last_sequence": 7})
+            );
+        }
+    }
 }
 
 #[test]
