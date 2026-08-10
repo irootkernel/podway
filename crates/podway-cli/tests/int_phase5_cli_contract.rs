@@ -650,6 +650,10 @@ fn authoritative_job_list_result() -> Value {
     })
 }
 const RECORDING_WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174001";
+// This route matrix runs under workspace-wide test parallelism; keep its real socket deadline
+// above scheduler jitter. Timeout parsing and rejection have dedicated focused tests.
+const RECORDING_WAIT_TIMEOUT: &str = "5s";
+const RECORDING_WAIT_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Clone)]
 enum RecordingReply {
@@ -2375,7 +2379,7 @@ fn contract_arguments(
         "--worktree".to_owned(),
         worktree.display().to_string(),
         "--timeout".to_owned(),
-        "17ms".to_owned(),
+        RECORDING_WAIT_TIMEOUT.to_owned(),
     ]);
     if detach {
         arguments.push("--detach".to_owned());
@@ -2452,7 +2456,10 @@ fn assert_recorded_contract(
         assert_eq!(probe["command"], "session.status");
         assert_eq!(probe["operation"], "query");
         assert_eq!(probe["options"]["detach"], false);
-        assert_eq!(probe["options"]["wait_timeout_ms"], 17);
+        assert_eq!(
+            probe["options"]["wait_timeout_ms"],
+            RECORDING_WAIT_TIMEOUT_MS
+        );
         assert_eq!(
             probe
                 .get("preconditions")
@@ -2472,7 +2479,10 @@ fn assert_recorded_contract(
             .expect("operation must have a stable wire representation")
     );
     assert_eq!(request["options"]["detach"], detached);
-    assert_eq!(request["options"]["wait_timeout_ms"], 17);
+    assert_eq!(
+        request["options"]["wait_timeout_ms"],
+        RECORDING_WAIT_TIMEOUT_MS
+    );
     assert_eq!(
         request
             .get("preconditions")
