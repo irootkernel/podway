@@ -89,6 +89,28 @@ enum V2RuntimeErrorDetailsV1 {
     FreshGoalAssessmentMissing {
         goal_revision: u64,
     },
+    OptionNotAllowed {
+        graph_node_id: GraphNodeId,
+        option_id: podway_core::OptionId,
+        allowed_option_ids: Vec<podway_core::OptionId>,
+    },
+    RouteNotAllowed {
+        graph_node_id: GraphNodeId,
+        option_id: podway_core::OptionId,
+    },
+    DecisionReasonMissing {
+        graph_node_id: GraphNodeId,
+    },
+    EvidenceReferenceUnresolved {
+        graph_node_id: GraphNodeId,
+        source_graph_node_ids: Vec<GraphNodeId>,
+    },
+    EvidenceReferenceStale {
+        graph_node_id: GraphNodeId,
+        source_graph_node_id: GraphNodeId,
+        expected_source_attempt_id: AttemptId,
+        current_source_attempt_id: Option<AttemptId>,
+    },
 }
 
 impl DispatchErrorDetailsV1 {
@@ -211,6 +233,69 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_option_not_allowed(
+        mut self,
+        graph_node_id: GraphNodeId,
+        option_id: podway_core::OptionId,
+        allowed_option_ids: Vec<podway_core::OptionId>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::OptionNotAllowed {
+            graph_node_id,
+            option_id,
+            allowed_option_ids,
+        }));
+        self
+    }
+
+    pub fn with_route_not_allowed(
+        mut self,
+        graph_node_id: GraphNodeId,
+        option_id: podway_core::OptionId,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::RouteNotAllowed {
+            graph_node_id,
+            option_id,
+        }));
+        self
+    }
+
+    pub fn with_decision_reason_missing(mut self, graph_node_id: GraphNodeId) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::DecisionReasonMissing {
+            graph_node_id,
+        }));
+        self
+    }
+
+    pub fn with_evidence_reference_unresolved(
+        mut self,
+        graph_node_id: GraphNodeId,
+        source_graph_node_ids: Vec<GraphNodeId>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::EvidenceReferenceUnresolved {
+                graph_node_id,
+                source_graph_node_ids,
+            },
+        ));
+        self
+    }
+
+    pub fn with_evidence_reference_stale(
+        mut self,
+        graph_node_id: GraphNodeId,
+        source_graph_node_id: GraphNodeId,
+        expected_source_attempt_id: AttemptId,
+        current_source_attempt_id: Option<AttemptId>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::EvidenceReferenceStale {
+            graph_node_id,
+            source_graph_node_id,
+            expected_source_attempt_id,
+            current_source_attempt_id,
+        }));
+        self
+    }
+
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
         if let Some(runtime) = self.v2_runtime {
             let admission = admission_value_v1(self.job_id.as_ref(), self.job_sequence);
@@ -218,14 +303,21 @@ impl DispatchErrorDetailsV1 {
                 V2RuntimeErrorDetailsV1::GraphNodeTypeMismatch {
                     graph_node_id,
                     actual_node_type,
-                } => json!({
-                    "schema": "podway.v2-runtime-error-details/v1",
-                    "kind": "GRAPH_NODE_TYPE_MISMATCH",
-                    "graph_node_id": graph_node_id,
-                    "expected_node_type": "action",
-                    "actual_node_type": actual_node_type,
-                    "admission": admission,
-                }),
+                } => {
+                    let expected_node_type = if actual_node_type == "action" {
+                        "decision"
+                    } else {
+                        "action"
+                    };
+                    json!({
+                        "schema": "podway.v2-runtime-error-details/v1",
+                        "kind": "GRAPH_NODE_TYPE_MISMATCH",
+                        "graph_node_id": graph_node_id,
+                        "expected_node_type": expected_node_type,
+                        "actual_node_type": actual_node_type,
+                        "admission": admission,
+                    })
+                }
                 V2RuntimeErrorDetailsV1::SessionGoalMissing => json!({
                     "schema": "podway.v2-runtime-error-details/v1",
                     "kind": "SESSION_GOAL_MISSING",
@@ -236,6 +328,45 @@ impl DispatchErrorDetailsV1 {
                     "kind": "FRESH_GOAL_ASSESSMENT_MISSING",
                     "goal_revision": goal_revision,
                     "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::OptionNotAllowed {
+                    graph_node_id,
+                    option_id,
+                    allowed_option_ids,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "OPTION_NOT_ALLOWED",
+                    "graph_node_id": graph_node_id, "option_id": option_id,
+                    "allowed_option_ids": allowed_option_ids, "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::RouteNotAllowed {
+                    graph_node_id,
+                    option_id,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "ROUTE_NOT_ALLOWED",
+                    "graph_node_id": graph_node_id, "option_id": option_id, "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::DecisionReasonMissing { graph_node_id } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "DECISION_REASON_MISSING",
+                    "graph_node_id": graph_node_id, "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::EvidenceReferenceUnresolved {
+                    graph_node_id,
+                    source_graph_node_ids,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "EVIDENCE_REFERENCE_UNRESOLVED",
+                    "graph_node_id": graph_node_id, "source_graph_node_ids": source_graph_node_ids,
+                    "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::EvidenceReferenceStale {
+                    graph_node_id,
+                    source_graph_node_id,
+                    expected_source_attempt_id,
+                    current_source_attempt_id,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "EVIDENCE_REFERENCE_STALE",
+                    "graph_node_id": graph_node_id, "source_graph_node_id": source_graph_node_id,
+                    "expected_source_attempt_id": expected_source_attempt_id,
+                    "current_source_attempt_id": current_source_attempt_id, "admission": admission,
                 }),
             };
             return value
@@ -450,6 +581,11 @@ pub enum DispatchFailureKindV1 {
     SessionRevisionConflict,
     AttemptNotCurrent,
     GraphNodeTypeMismatch,
+    OptionNotAllowed,
+    RouteNotAllowed,
+    DecisionReasonMissing,
+    EvidenceReferenceUnresolved,
+    EvidenceReferenceStale,
     StageNotFound,
     StageNotSkippable,
     ReturnNotAllowed,
@@ -2154,6 +2290,36 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "The active graph node has the wrong type for this command.",
             false,
             1,
+        ),
+        DispatchFailureKindV1::OptionNotAllowed => (
+            "OPTION_NOT_ALLOWED",
+            "The selected decision option is not allowed.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::RouteNotAllowed => (
+            "ROUTE_NOT_ALLOWED",
+            "The selected transition route is not allowed.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::DecisionReasonMissing => (
+            "DECISION_REASON_MISSING",
+            "The decision requires a reason.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::EvidenceReferenceUnresolved => (
+            "EVIDENCE_REFERENCE_UNRESOLVED",
+            "A required evidence reference is unresolved.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::EvidenceReferenceStale => (
+            "EVIDENCE_REFERENCE_STALE",
+            "A resolved evidence reference is stale.",
+            true,
+            4,
         ),
         DispatchFailureKindV1::StageNotFound => {
             ("STAGE_NOT_FOUND", "The stage does not exist.", false, 1)

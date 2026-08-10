@@ -89,7 +89,7 @@
       "fixture_ids": ["payload-truncation-overflow"],
       "acceptance_ids": ["V2ACC-085", "V2ACC-086", "V2ACC-087"],
       "specialized_ids": ["V2PAY-009", "V2PAY-010", "V2PAY-011"],
-      "owning_tasks": ["V2DOG-001", "V2DOG-002", "V2REL-002", "V2RUN-003", "V2RUN-008"],
+      "owning_tasks": ["V2DOG-001", "V2DOG-002", "V2DRW-006", "V2REL-002", "V2RUN-003"],
       "evidence_level": "contract-recipe",
       "implementation_status": "planned"
     }

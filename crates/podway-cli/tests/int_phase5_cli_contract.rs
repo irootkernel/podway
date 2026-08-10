@@ -67,7 +67,7 @@ fn registered_command_catalog_route_availability() -> BTreeMap<String, String> {
     assert_eq!(
         routes.len(),
         59,
-        "the registered command catalog must contain the 54 executable routes and 5 reserved v2 routes"
+        "the registered command catalog must contain the 55 executable routes and 4 reserved v2 routes"
     );
     routes
 }
@@ -654,6 +654,7 @@ const RECORDING_WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174001";
 #[derive(Clone)]
 enum RecordingReply {
     Output(Value),
+    V2Output(Value),
     Error,
 }
 
@@ -747,6 +748,27 @@ fn recording_response(request: &RequestEnvelopeV1, reply: RecordingReply) -> Val
             }
             envelope
         }
+        RecordingReply::V2Output(result) => serde_json::json!({
+            "schema": "podway.output/v2",
+            "request_id": request.request_id().as_str(),
+            "command": request.command().as_str(),
+            "generated_at": "2026-07-16T12:34:56.789Z",
+            "workspace": {
+                "uuid": RECORDING_WORKSPACE_ID,
+                "root": request.workspace().expect("recorded request must select a workspace").root(),
+                "latest_workspace_sequence": 1
+            },
+            "job": {
+                "id": RECORDING_JOB_ID,
+                "sequence": 1,
+                "state": "succeeded",
+                "submitted_at": "2026-07-16T12:34:56.789Z",
+                "claimed_at": "2026-07-16T12:34:56.789Z",
+                "finished_at": "2026-07-16T12:34:56.789Z"
+            },
+            "result": result,
+            "warnings": []
+        }),
         RecordingReply::Error => serde_json::json!({
             "schema": "podway.error/v1",
             "request_id": request.request_id().as_str(),
@@ -863,8 +885,50 @@ const RECORDING_SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174004";
 const RECORDING_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174002";
 const RECORDING_JOB_ID: &str = "123e4567-e89b-42d3-a456-426614174003";
 const RECORDING_BLOCKER_ID: &str = "123e4567-e89b-42d3-a456-426614174006";
+const RECORDING_TARGET_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174009";
 const EXPLICIT_WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174007";
 const EXPLICIT_SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174008";
+
+fn authoritative_decision_result() -> Value {
+    let record = serde_json::json!({
+        "trace_sequence": 4,
+        "session_id": RECORDING_SESSION_ID,
+        "session_revision": 8,
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_snapshot_id": "123e4567-e89b-42d3-a456-426614174010",
+        "procedure_digest": format!("sha256:{}", "a".repeat(64)),
+        "graph_node_id": "review-decision",
+        "node_definition_id": "review-decision",
+        "attempt_id": RECORDING_ATTEMPT_ID,
+        "attempt_number": 1,
+        "goal_revision": null,
+        "option_id": "approve",
+        "effect": "advance",
+        "target_graph_node_id": "finish",
+        "reason": "The evidence supports this route.",
+        "actor": "reviewer",
+        "recorded_at": "2026-07-16T12:34:56.789Z",
+        "references": []
+    });
+    serde_json::json!({
+        "schema": "podway.decision-result/v1",
+        "admission": {
+            "admitted": true,
+            "job_id": RECORDING_JOB_ID,
+            "workspace_sequence": 1
+        },
+        "graph_node_id": "review-decision",
+        "attempt_id": RECORDING_ATTEMPT_ID,
+        "attempt_number": 1,
+        "option_id": "approve",
+        "effect": "advance",
+        "target_graph_node_id": "finish",
+        "target_attempt_id": RECORDING_TARGET_ATTEMPT_ID,
+        "revision": 8,
+        "session_state": "running",
+        "record": record
+    })
+}
 
 #[derive(Clone, Copy, Debug)]
 enum PayloadValue {
@@ -2705,7 +2769,6 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
             "goal.assess_criterion",
             "goal.define",
             "goal.revise",
-            "session.decide",
             "session.rework",
         ]),
         "reserved v2 grammar must remain unavailable until its runtime owner lands",
@@ -3158,11 +3221,53 @@ rework:
         }
     }
 
+    let decision_daemon = RecordingDaemon::start(
+        &fixture,
+        vec![RecordingReply::V2Output(authoritative_decision_result())],
+    );
+    let decision_output = fixture.run(&[
+        "--json",
+        "--worktree",
+        fixture.root.to_string_lossy().as_ref(),
+        "decide",
+        "--option",
+        "approve",
+        "--reason",
+        "The evidence supports this route.",
+        "--actor",
+        "reviewer",
+        "--if-workspace-uuid",
+        RECORDING_WORKSPACE_ID,
+        "--if-session-id",
+        RECORDING_SESSION_ID,
+        "--if-session-revision",
+        "7",
+        "--if-attempt",
+        RECORDING_ATTEMPT_ID,
+    ]);
+    assert!(
+        decision_output.status.success(),
+        "session.decide must accept its executable v2 success contract: {decision_output:?}"
+    );
+    let decision_response = one_json(&decision_output);
+    assert_eq!(decision_response["schema"], "podway.output/v2");
+    assert_eq!(decision_response["command"], "session.decide");
+    assert_eq!(
+        decision_response["result"]["schema"],
+        "podway.decision-result/v1"
+    );
+    let decision_requests = decision_daemon.finish();
+    assert_eq!(decision_requests.len(), 1);
+    assert_eq!(decision_requests[0]["command"], "session.decide");
+    assert_eq!(decision_requests[0]["payload"]["option_id"], "approve");
+    assert_eq!(decision_requests[0]["preconditions"]["session_revision"], 7);
+
     let executed_routes = DAEMON_CONTRACTS
         .iter()
         .map(|contract| contract.route)
         .chain(local_successes.iter().map(|(route, _)| *route))
         .chain(service_routes.iter().map(|(route, _)| *route))
+        .chain(std::iter::once("session.decide"))
         .collect::<BTreeSet<_>>();
     assert_eq!(
         executed_routes,

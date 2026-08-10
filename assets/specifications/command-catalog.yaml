@@ -768,7 +768,7 @@ commands:
   - podway.procedure-source-result/v1
   - podway.procedure-diagnostics-result/v1
 - name: session.decide
-  availability: reserved_contract
+  availability: executable
   cli:
   - decide
   operation: mutate

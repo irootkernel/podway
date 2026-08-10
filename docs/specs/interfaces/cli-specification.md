@@ -94,11 +94,12 @@ identity results before using any reported field.
 
 The status and next shapes below are executable for Procedure v2 sessions.
 Procedure v2 authoring and preview commands are executable and are specified in
-their dedicated sections below. Shared item mutations and `session.complete` are
-also executable for the active action attempt and return their registered v2
-result families. The five reserved mutation routes and goal-bearing start are
-exposed by the CLI grammar, but remain `reserved_contract` capabilities until
-their owning runtime tasks land. For an active Procedure v2 session, the CLI uses
+their dedicated sections below. Shared item mutations, `session.complete`, and
+`session.decide` are executable for their matching active attempts and return
+their registered v2 result families. The four remaining reserved mutation routes
+and goal-bearing start are exposed by the CLI grammar, but remain
+`reserved_contract` capabilities until their owning runtime tasks land. For an
+active Procedure v2 session, the CLI uses
 the standard status projection to supply omitted command-specific fences. An
 invocation may instead provide every required fence explicitly and skip that
 preflight. Reserved forms reach the daemon's typed
@@ -426,11 +427,11 @@ revision and carries the active attempt when the session is running. These
 Procedure v2 commands are distinct from the retained v1 `return` and `reopen`
 commands; neither retained command is an alias for `rework`.
 
-While these routes remain `reserved_contract`, the CLI obtains omitted workspace,
-session, revision, attempt, and goal-revision fences from a version-aware standard
-status preflight. A caller may provide the complete command-specific fences to skip
-that read. The preflight does not reinterpret a Procedure v2 session as v1 or mask
-the route-specific `UNSUPPORTED_V2_CAPABILITY` response.
+The CLI obtains omitted workspace, session, revision, attempt, and goal-revision
+fences from a version-aware standard status preflight. A caller may provide the
+complete command-specific fences to skip that read. The preflight does not
+reinterpret a Procedure v2 session as v1. Until `session.rework` becomes
+executable, its reserved route still returns `UNSUPPORTED_V2_CAPABILITY`.
 
 ### Goal
 

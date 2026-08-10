@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use podway_protocol::SliceRequestV1;
+use podway_protocol::{ProcedureV2MutationRequestV1, SliceRequestV1};
 use podway_store::{
     AdmitOutcomeV1, IdempotencyKeyV1, JobIdV1, JobReceiptOrTerminalV1, JobViewV1,
     PersistedResponseContextV1, PersistedTerminalReceiptV1, StoreErrorV1, TerminalReceiptV1,
@@ -157,6 +157,17 @@ where
         _workspace: &Context,
         _binding: &WorkspaceBindingV1,
         _request: &SliceRequestV1,
+        _idempotency_key: IdempotencyKeyV1,
+        _response_context: Option<&PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        Ok(None)
+    }
+
+    fn admit_procedure_v2_typed_mutation(
+        &self,
+        _workspace: &Context,
+        _binding: &WorkspaceBindingV1,
+        _request: &ProcedureV2MutationRequestV1,
         _idempotency_key: IdempotencyKeyV1,
         _response_context: Option<&PersistedResponseContextV1>,
     ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
@@ -512,6 +523,42 @@ where
             context
                 .with_claim_permission(|binding| {
                     self.inner.execution.admit_procedure_v2_mutation(
+                        context.as_ref(),
+                        binding,
+                        request,
+                        idempotency_key,
+                        Some(&response_context),
+                    )
+                })
+                .ok_or(WorkerErrorV1::RetirementRejected)?
+                .map_err(WorkerErrorV1::Execution)
+        })?;
+        let Some(outcome) = outcome else {
+            return Ok(None);
+        };
+        self.complete_submission(scheduler, outcome, completion_mode)
+            .map(Some)
+    }
+
+    /// Attempts a typed Procedure v2 mutation that has no legacy request representation.
+    pub fn submit_procedure_v2_typed_mutation_with_response_context(
+        &self,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+        request: &ProcedureV2MutationRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: PersistedResponseContextV1,
+        completion_mode: WorkerCompletionModeV1,
+    ) -> Result<Option<WorkerSubmissionV1>, WorkerErrorV1> {
+        if scheduler.context_snapshot().recovery_required() {
+            return Err(WorkerErrorV1::RetirementRejected);
+        }
+        let outcome = scheduler.with_serialized(|context| {
+            if context.recovery_required() {
+                return Err(WorkerErrorV1::RetirementRejected);
+            }
+            context
+                .with_claim_permission(|binding| {
+                    self.inner.execution.admit_procedure_v2_typed_mutation(
                         context.as_ref(),
                         binding,
                         request,

@@ -17,14 +17,15 @@ use podway_config::{
     vet_procedure_v2,
 };
 use podway_core::{
-    AddItemV1, ArtifactLocationKindV1, ArtifactValueV1, AttachItemV1, AttemptId, AttemptLifecycle,
-    AttemptNumberV2, AttemptV1, AttemptValidityV2, AuthoringSeverity, BlockSessionV1, BlockerId,
-    BlockerState, CancelSessionV1, CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1,
-    CheckItemV1, ClearItemV1, CommandContextV1, CompleteSessionV1, DomainCommand, DomainError,
-    DomainResult, GraphPlacementV2, ItemId, ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1,
-    JobId, LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1,
-    ProcedureSourceLabelV1, ReasonV2, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1,
-    ResetSessionV1, RetrySessionV1, ReturnSessionV1, Revision, SessionAggregateV1,
+    ActorAttributionV2, AddItemV1, ArtifactLocationKindV1, ArtifactValueV1, AttachItemV1,
+    AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptV1, AttemptValidityV2, AuthoringSeverity,
+    BlockSessionV1, BlockerId, BlockerState, CancelSessionV1, CanonicalProcedureJsonV1,
+    CanonicalProcedureSnapshotInputV1, CheckItemV1, ClearItemV1, CommandContextV1,
+    CompleteSessionV1, DecisionRecordV2, DomainCommand, DomainError, DomainResult,
+    GraphPlacementV2, ItemId, ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1, JobId,
+    LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1,
+    ReasonV2, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1,
+    ResolvedEvidenceReferenceV2, RetrySessionV1, ReturnSessionV1, Revision, SessionAggregateV1,
     SessionAttemptV2, SessionCommandV1, SessionId, SessionLifecycle, SessionTraceV2, SetItemV1,
     Sha256Digest, SkipSessionV1, StageSpecV1, StartReplaceSessionV1, StartSessionV1,
     TraceSequenceV2, UnblockSessionV1, UncheckItemV1, UnixMillis, WorkspaceId, apply_transition_v1,
@@ -33,10 +34,12 @@ use podway_core::{
 use podway_presets::lookup as lookup_embedded_preset_v1;
 use podway_protocol::{
     ItemAddV1, ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1, ItemRemoveV1, ItemSetV1,
-    ItemUncheckV1, RequestIdV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1,
-    SessionReopenV1, SessionResetV1, SessionRetryV1, SessionReturnV1, SessionSkipV1,
-    SessionStartSourceV1, SessionStartV1, SessionUnblockV1, SliceCommandV1, SliceRequestV1,
-    WorktreeSelectorWireV1, canonical_reset_all_identity_v1,
+    ItemUncheckV1, ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1, RequestIdV1,
+    Rfc3339MillisV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionDecideV2,
+    SessionMutationPreconditionsWireV1, SessionReopenV1, SessionResetV1, SessionRetryV1,
+    SessionReturnV1, SessionSkipV1, SessionStartSourceV1, SessionStartV1, SessionUnblockV1,
+    SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
+    canonical_procedure_v2_mutation_identity_v1, canonical_reset_all_identity_v1,
 };
 use podway_store::{
     ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1,
@@ -60,6 +63,7 @@ const EXECUTION_DOCUMENT_VERSION_V5: u8 = 5;
 const EXECUTION_DOCUMENT_VERSION_V6: u8 = 6;
 const EXECUTION_DOCUMENT_VERSION_V7: u8 = 7;
 const EXECUTION_DOCUMENT_VERSION_V8: u8 = 8;
+const EXECUTION_DOCUMENT_VERSION_V9: u8 = 9;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -926,6 +930,200 @@ fn decode_procedure_v2_mutation_execution_v1(
     })
 }
 
+#[derive(Clone, Debug)]
+struct AdmittedProcedureV2DecisionV1 {
+    selector: WorktreeSelectorWireV1,
+    workspace_id: WorkspaceId,
+    command: SessionDecideV2,
+    fresh_attempt_id: AttemptId,
+}
+
+fn procedure_v2_decision_execution_document_v1(
+    admitted: &AdmittedProcedureV2DecisionV1,
+) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
+    let document = json!({
+        "command": "session.decide",
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V9,
+        "fresh_attempt_id": admitted.fresh_attempt_id,
+        "payload": {
+            "actor": admitted.command.actor,
+            "option_id": admitted.command.option_id,
+            "reason": admitted.command.reason,
+        },
+        "preconditions": {
+            "attempt_id": admitted.command.preconditions.expected_attempt_id,
+            "session_id": admitted.command.preconditions.expected_session_id,
+            "session_revision": admitted.command.preconditions.expected_session_revision,
+        },
+        "selector": admitted.selector,
+        "workspace_id": admitted.workspace_id,
+    });
+    let canonical = canonicalize_json_v1(&document).map_err(|_| {
+        invalid_execution_v1("Procedure v2 decision execution cannot be canonicalized")
+    })?;
+    CanonicalExecutionJsonV1::new(canonical).map_err(ExecutionErrorV1::InvalidStoreValue)
+}
+
+fn decode_procedure_v2_decision_execution_v1(
+    source: &str,
+) -> Result<AdmittedProcedureV2DecisionV1, ExecutionErrorV1> {
+    let root: Value = serde_json::from_str(source)
+        .map_err(|_| invalid_execution_v1("Procedure v2 decision execution is not JSON"))?;
+    let object = root
+        .as_object()
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 decision execution root is invalid"))?;
+    require_exact_keys_v1(
+        object,
+        &[
+            "command",
+            "execution_version",
+            "fresh_attempt_id",
+            "payload",
+            "preconditions",
+            "selector",
+            "workspace_id",
+        ],
+    )?;
+    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V9)
+        || value_string_v1(object, "command")? != "session.decide"
+    {
+        return Err(invalid_execution_v1(
+            "Procedure v2 decision execution identity is invalid",
+        ));
+    }
+    let payload = value_object_v1(object, "payload")?;
+    require_exact_keys_v1(payload, &["actor", "option_id", "reason"])?;
+    let preconditions = value_object_v1(object, "preconditions")?;
+    require_exact_keys_v1(
+        preconditions,
+        &["attempt_id", "session_id", "session_revision"],
+    )?;
+    let command = SessionDecideV2 {
+        option_id: value_typed_v1(payload, "option_id")?,
+        reason: value_string_v1(payload, "reason")?.to_owned(),
+        actor: value_optional_string_v1(payload, "actor")?,
+        preconditions: SessionMutationPreconditionsWireV1 {
+            expected_session_id: value_typed_v1(preconditions, "session_id")?,
+            expected_session_revision: Revision::new(value_u64_v1(
+                preconditions,
+                "session_revision",
+            )?),
+            expected_attempt_id: value_typed_v1(preconditions, "attempt_id")?,
+        },
+    };
+    ReasonV2::new(command.reason.clone())
+        .map_err(|_| invalid_execution_v1("Procedure v2 decision reason is invalid"))?;
+    command
+        .actor
+        .clone()
+        .map(ActorAttributionV2::new)
+        .transpose()
+        .map_err(|_| invalid_execution_v1("Procedure v2 decision actor is invalid"))?;
+    Ok(AdmittedProcedureV2DecisionV1 {
+        selector: serde_json::from_value(value_v1(object, "selector")?.clone())
+            .map_err(|_| invalid_execution_v1("Procedure v2 decision selector is invalid"))?,
+        workspace_id: value_typed_v1(object, "workspace_id")?,
+        command,
+        fresh_attempt_id: value_typed_v1(object, "fresh_attempt_id")?,
+    })
+}
+
+fn decision_record_projection_v1(record: &DecisionRecordV2) -> Result<Value, ExecutionErrorV1> {
+    let references = record
+        .evidence()
+        .references()
+        .iter()
+        .map(|reference| {
+            let mut value = json!({
+                "source_graph_node_id": reference.source_node(),
+            });
+            let object = value
+                .as_object_mut()
+                .expect("evidence reference projection is an object");
+            match reference {
+                ResolvedEvidenceReferenceV2::Unresolved { .. } => {
+                    object.insert("state".to_owned(), json!("unresolved"));
+                }
+                ResolvedEvidenceReferenceV2::Resolved(snapshot)
+                | ResolvedEvidenceReferenceV2::Skipped(snapshot) => {
+                    object.insert(
+                        "state".to_owned(),
+                        json!(
+                            if matches!(reference, ResolvedEvidenceReferenceV2::Skipped(_)) {
+                                "skipped"
+                            } else {
+                                "resolved"
+                            }
+                        ),
+                    );
+                    object.insert(
+                        "source_attempt_id".to_owned(),
+                        json!(snapshot.source_attempt_id()),
+                    );
+                    object.insert(
+                        "source_attempt_number".to_owned(),
+                        json!(snapshot.source_attempt_number().get()),
+                    );
+                    object.insert("items_digest".to_owned(), json!(snapshot.items_digest()));
+                }
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, ExecutionErrorV1>>()?;
+    let mut value = json!({
+        "trace_sequence": record.trace().get(),
+        "session_id": record.session_id(),
+        "session_revision": record.session_revision().get(),
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_snapshot_id": record.procedure_snapshot_id(),
+        "procedure_digest": record.procedure_digest(),
+        "graph_node_id": record.graph_node_id(),
+        "node_definition_id": record.node_definition_id(),
+        "attempt_id": record.attempt_id(),
+        "attempt_number": record.attempt_number().get(),
+        "goal_revision": record.goal_revision().map(|revision| revision.get()),
+        "option_id": record.selected_option(),
+        "effect": record.route_effect().as_str(),
+        "target_graph_node_id": record.route_target(),
+        "reason": record.reason().as_str(),
+        "recorded_at": rfc3339_millis_execution_v1(record.recorded_at())?,
+        "references": references,
+    });
+    if let Some(actor) = record.actor() {
+        value
+            .as_object_mut()
+            .expect("decision record projection is an object")
+            .insert("actor".to_owned(), json!(actor.as_str()));
+    }
+    Ok(value)
+}
+
+fn rfc3339_millis_execution_v1(value: UnixMillis) -> Result<String, ExecutionErrorV1> {
+    let seconds = value.get() / 1_000;
+    let millis = value.get() % 1_000;
+    let days = seconds / 86_400;
+    let seconds_of_day = seconds % 86_400;
+    let z = i128::from(days) + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    let timestamp =
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z");
+    Rfc3339MillisV1::new(timestamp.clone())
+        .map(|_| timestamp)
+        .map_err(|_| invalid_execution_v1("Procedure v2 decision timestamp is invalid"))
+}
+
 fn artifact_value_v1(artifact: &ArtifactValueV1) -> Value {
     let location_kind = match artifact.location_kind() {
         ArtifactLocationKindV1::LocalPath => "local_path",
@@ -1024,32 +1222,35 @@ fn required_local_artifacts_v2(
         return Ok(Vec::new());
     };
     let procedure = rehydrate_procedure_v2_execution_v1(state)?;
-    let Some(GraphPlacementV2::Action(placement)) =
-        procedure.graph().placement(active.graph_node_id())
-    else {
-        return Ok(Vec::new());
+    let placement = procedure
+        .graph()
+        .placement(active.graph_node_id())
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 active graph placement is absent"))?;
+    let definition_id = match placement {
+        GraphPlacementV2::Action(placement) => placement.definition(),
+        GraphPlacementV2::Decision(placement) => placement.definition(),
     };
-    let definition = procedure
+    let items = procedure
         .node_definitions()
         .iter()
         .find_map(|definition| match definition {
-            ParsedNodeDefinition::Action(definition)
-                if definition.id() == placement.definition() =>
-            {
-                Some(definition)
+            ParsedNodeDefinition::Action(definition) if definition.id() == definition_id => {
+                Some(definition.items())
+            }
+            ParsedNodeDefinition::Decision(definition) if definition.id() == definition_id => {
+                Some(definition.items())
             }
             ParsedNodeDefinition::Action(_) | ParsedNodeDefinition::Decision(_) => None,
         })
-        .ok_or_else(|| invalid_execution_v1("Procedure v2 action definition is absent"))?;
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 active definition is absent"))?;
     let memory = state
         .workflow_memory()
         .attempts()
         .iter()
         .find(|memory| memory.attempt_id() == active.attempt_id())
         .ok_or_else(|| invalid_execution_v1("Procedure v2 active workflow memory is absent"))?;
-    if definition.items().len() != memory.item_slots().len()
-        || definition
-            .items()
+    if items.len() != memory.item_slots().len()
+        || items
             .iter()
             .zip(memory.item_slots())
             .any(|(specification, slot)| {
@@ -1061,8 +1262,7 @@ fn required_local_artifacts_v2(
             "Procedure v2 active items disagree with the snapshot",
         ));
     }
-    Ok(definition
-        .items()
+    Ok(items
         .iter()
         .zip(memory.item_slots())
         .filter_map(|(specification, slot)| {
@@ -2960,6 +3160,120 @@ where
             .map_err(Into::into)
     }
 
+    /// Durably admits the typed `session.decide` route without widening the legacy slice command.
+    pub fn admit_procedure_v2_typed_mutation_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &ProcedureV2MutationRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        let ProcedureV2MutationCommandV1::SessionDecide(command) = request.command() else {
+            return Ok(None);
+        };
+        if let Some(existing) = self
+            .store
+            .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)?
+        {
+            let Some(canonical_execution) = existing.canonical_execution() else {
+                return Ok(None);
+            };
+            let version = serde_json::from_str::<Value>(canonical_execution.as_str())
+                .ok()
+                .and_then(|value| value.get("execution_version").and_then(Value::as_u64));
+            if version != Some(u64::from(EXECUTION_DOCUMENT_VERSION_V9)) {
+                return Ok(None);
+            }
+            let admitted = decode_procedure_v2_decision_execution_v1(canonical_execution.as_str())?;
+            if admitted.workspace_id != *expected_workspace.identity().workspace_uuid() {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 decision replay workspace identity is invalid",
+                ));
+            }
+            let actual = procedure_v2_typed_mutation_request_digest_v1(
+                request,
+                expected_workspace.identity().workspace_uuid(),
+            )?;
+            if existing.request_digest() != &actual {
+                return Err(StoreErrorV1::IdempotencyDigestConflictV1 {
+                    expected: existing.request_digest().clone(),
+                    actual,
+                }
+                .into());
+            }
+            return Ok(Some(existing.outcome().clone()));
+        }
+
+        let binding = self
+            .bound_workspace(request.selector())
+            .map_err(ExecutionErrorV1::from_boundary)?;
+        if binding.identity() != expected_workspace.identity() {
+            return Err(ExecutionErrorV1::BoundaryDomain(
+                DomainError::InvalidState {
+                    reason: "revalidated workspace does not match the scheduler identity",
+                },
+            ));
+        }
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(binding.identity())?;
+        let Some(state) = view.graph_state() else {
+            return Ok(None);
+        };
+        if state.trace().session_id() != &command.preconditions.expected_session_id {
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: command.preconditions.expected_session_id.clone(),
+                actual: Some(state.trace().session_id().clone()),
+            });
+        }
+        ReasonV2::new(command.reason.clone()).map_err(ExecutionErrorV1::BoundaryDomain)?;
+        command
+            .actor
+            .clone()
+            .map(ActorAttributionV2::new)
+            .transpose()
+            .map_err(ExecutionErrorV1::BoundaryDomain)?;
+        let admitted = AdmittedProcedureV2DecisionV1 {
+            selector: request.selector().clone(),
+            workspace_id: binding.identity().workspace_uuid().clone(),
+            command: command.clone(),
+            fresh_attempt_id: self.ids.next_attempt_id(),
+        };
+        let canonical_execution = procedure_v2_decision_execution_document_v1(&admitted)?;
+        let request_digest = procedure_v2_typed_mutation_request_digest_v1(
+            request,
+            binding.identity().workspace_uuid(),
+        )?;
+        let preconditions = RevisionAttemptItemPreconditionsV1::new(
+            Some(command.preconditions.expected_session_revision),
+            Some(command.preconditions.expected_attempt_id.clone()),
+            None,
+            None,
+        )
+        .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+        let durable = AdmitRequestV1::new_with_canonical_execution(
+            DomainCommand::SessionDecide,
+            idempotency_key,
+            self.ids.next_job_id(),
+            preconditions,
+            request_digest,
+            self.clock.now(),
+            canonical_execution,
+        )
+        .with_procedure_v2_execution()
+        .with_session_identity(AdmissionSessionIdentityV1::Exact(
+            command.preconditions.expected_session_id.clone(),
+        ));
+        let durable = match response_context {
+            Some(context) => durable.with_response_context(context),
+            None => durable,
+        };
+        self.store
+            .admit(binding.identity(), durable)
+            .map(Some)
+            .map_err(Into::into)
+    }
+
     /// Claims either durable flavor, reconstructing Procedure v2 exclusively from the admitted
     /// execution document before committing graph state and the terminal receipt atomically.
     pub fn execute_next_with_graph_v2(
@@ -3029,6 +3343,12 @@ where
                 )?;
                 self.execute_procedure_v2_mutation_claimed(&workspace, &claimed, admitted, now)?
             }
+            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V9) => {
+                let admitted = decode_procedure_v2_decision_execution_v1(
+                    claimed.execution().canonical_execution().as_str(),
+                )?;
+                self.execute_procedure_v2_decision_claimed(&workspace, &claimed, admitted, now)?
+            }
             _ => {
                 return Err(invalid_execution_v1(
                     "Procedure v2 execution version is unsupported",
@@ -3036,6 +3356,107 @@ where
             }
         };
         Ok(Some(receipt))
+    }
+
+    fn execute_procedure_v2_decision_claimed(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        claimed: &ClaimedJobV1,
+        admitted: AdmittedProcedureV2DecisionV1,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        if admitted.workspace_id != *claimed.claim().identity().workspace_uuid() {
+            return Err(invalid_execution_v1(
+                "Procedure v2 decision workspace does not match the claim",
+            ));
+        }
+        let expected_preconditions = RevisionAttemptItemPreconditionsV1::new(
+            Some(admitted.command.preconditions.expected_session_revision),
+            Some(admitted.command.preconditions.expected_attempt_id.clone()),
+            None,
+            None,
+        )
+        .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+        if claimed.execution().command() != &DomainCommand::SessionDecide
+            || claimed.execution().preconditions() != &expected_preconditions
+            || claimed.execution().session_identity()
+                != &AdmissionSessionIdentityV1::Exact(
+                    admitted.command.preconditions.expected_session_id.clone(),
+                )
+        {
+            return Err(invalid_execution_v1(
+                "Procedure v2 decision document does not match durable admission metadata",
+            ));
+        }
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(claimed.claim().identity())?;
+        let state = view.graph_state().ok_or_else(|| {
+            invalid_execution_v1("Procedure v2 claimed decision has no current graph session")
+        })?;
+        if state.trace().session_id() != &admitted.command.preconditions.expected_session_id {
+            return Err(invalid_execution_v1(
+                "Procedure v2 claimed decision session identity changed",
+            ));
+        }
+        let reason = ReasonV2::new(admitted.command.reason.clone())
+            .map_err(|_| invalid_execution_v1("Procedure v2 decision reason is invalid"))?;
+        let actor = admitted
+            .command
+            .actor
+            .clone()
+            .map(ActorAttributionV2::new)
+            .transpose()
+            .map_err(|_| invalid_execution_v1("Procedure v2 decision actor is invalid"))?;
+        let outcome = match state.decide_active_route_v2(
+            admitted.command.preconditions.expected_session_revision,
+            &admitted.command.preconditions.expected_attempt_id,
+            admitted.command.option_id,
+            admitted.fresh_attempt_id,
+            Some(reason),
+            actor,
+            now,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+            }
+        };
+        for (item_id, artifact) in required_local_artifacts_v2(state)? {
+            if let Err(error) = self
+                .artifacts
+                .revalidate_local_artifact(workspace, &item_id, &artifact)
+            {
+                return match error {
+                    ExecutionBoundaryErrorV1::Domain(DomainError::ArtifactChanged) => {
+                        self.commit_graph_artifact_changed_failure_v2(claimed, state, now)
+                    }
+                    error => Err(ExecutionErrorV1::from_boundary(error.into())),
+                };
+            }
+        }
+        let operation = PersistedGraphTerminalOperationV2::decide(
+            decision_record_projection_v1(outcome.decision_record())?,
+            outcome.to_attempt_id().clone(),
+        )
+        .map_err(|_| invalid_execution_v1("Procedure v2 decision operation cannot be persisted"))?;
+        let result = DomainResult::SessionChanged {
+            session_id: state.trace().session_id().clone(),
+            revision_before: state.trace().revision(),
+            revision_after: outcome.state().trace().revision(),
+            changed: true,
+        };
+        self.store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                state.workspace_revision(),
+                state.trace().revision(),
+                Some(outcome.into_state()),
+                TerminalResultV1::Success(result),
+                operation,
+                now,
+            )
+            .map_err(Into::into)
     }
 
     fn execute_procedure_v2_mutation_claimed(
@@ -4081,7 +4502,8 @@ fn domain_result_v1(
         | DomainCommand::SessionUnblock
         | DomainCommand::SessionCancel
         | DomainCommand::SessionReopen
-        | DomainCommand::SessionReset => DomainResult::SessionChanged {
+        | DomainCommand::SessionReset
+        | DomainCommand::SessionDecide => DomainResult::SessionChanged {
             session_id: session_id.ok_or(DomainError::InvalidState {
                 reason: "admitted session transition has no session aggregate",
             })?,
@@ -4141,6 +4563,23 @@ fn request_digest_v1(
     Sha256Digest::new(format!("sha256:{}", sha256_hex_v1(canonical.as_bytes()))).map_err(|_| {
         ExecutionErrorV1::InvalidPersistedExecution {
             reason: "request identity digest is invalid",
+        }
+    })
+}
+
+fn procedure_v2_typed_mutation_request_digest_v1(
+    request: &ProcedureV2MutationRequestV1,
+    workspace_id: &WorkspaceId,
+) -> Result<Sha256Digest, ExecutionErrorV1> {
+    let canonical =
+        canonical_procedure_v2_mutation_identity_v1(request, workspace_id).map_err(|_| {
+            ExecutionErrorV1::InvalidPersistedExecution {
+                reason: "Procedure v2 mutation identity cannot be canonicalized",
+            }
+        })?;
+    Sha256Digest::new(format!("sha256:{}", sha256_hex_v1(canonical.as_bytes()))).map_err(|_| {
+        ExecutionErrorV1::InvalidPersistedExecution {
+            reason: "Procedure v2 mutation identity digest is invalid",
         }
     })
 }
@@ -5235,5 +5674,38 @@ mod tests {
         let mut oversized_reason: Value = serde_json::from_str(canonical.as_str()).unwrap();
         oversized_reason["payload"]["reason"] = json!("x".repeat(2_001));
         assert!(decode_procedure_v2_mutation_execution_v1(&oversized_reason.to_string()).is_err());
+    }
+
+    #[test]
+    fn v2drw001_decision_execution_freezes_every_semantic_field_and_fresh_identity() {
+        let admitted = AdmittedProcedureV2DecisionV1 {
+            selector: WorktreeSelectorWireV1::new(b"/tmp/worktree", "/tmp/worktree", None).unwrap(),
+            workspace_id: WorkspaceId::new("00000000-0000-4000-8000-000000000924").unwrap(),
+            command: SessionDecideV2 {
+                option_id: podway_core::OptionId::new("accept").unwrap(),
+                reason: "The resolved evidence supports this route.".to_owned(),
+                actor: Some("reviewer".to_owned()),
+                preconditions: SessionMutationPreconditionsWireV1 {
+                    expected_session_id: SessionId::new("00000000-0000-4000-8000-000000000922")
+                        .unwrap(),
+                    expected_session_revision: Revision::new(7),
+                    expected_attempt_id: AttemptId::new("00000000-0000-4000-8000-000000000923")
+                        .unwrap(),
+                },
+            },
+            fresh_attempt_id: AttemptId::new("00000000-0000-4000-8000-000000000925").unwrap(),
+        };
+        let canonical = procedure_v2_decision_execution_document_v1(&admitted).unwrap();
+        let decoded = decode_procedure_v2_decision_execution_v1(canonical.as_str()).unwrap();
+        assert_eq!(decoded.command, admitted.command);
+        assert_eq!(decoded.fresh_attempt_id, admitted.fresh_attempt_id);
+
+        let mut missing_fresh: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        missing_fresh["fresh_attempt_id"] = Value::Null;
+        assert!(decode_procedure_v2_decision_execution_v1(&missing_fresh.to_string()).is_err());
+
+        let mut blank_actor: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        blank_actor["payload"]["actor"] = json!("   ");
+        assert!(decode_procedure_v2_decision_execution_v1(&blank_actor.to_string()).is_err());
     }
 }

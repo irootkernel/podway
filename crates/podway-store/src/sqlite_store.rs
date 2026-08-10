@@ -865,6 +865,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             || !matches!(
                 execution.command(),
                 crate::CommandV1::SessionComplete
+                    | crate::CommandV1::SessionDecide
                     | crate::CommandV1::SessionRetry
                     | crate::CommandV1::SessionSkip
                     | crate::CommandV1::SessionBlock
@@ -1100,6 +1101,7 @@ impl StoreContractV1 for SqliteStoreV1 {
         let is_v2_action_runtime = matches!(
             request.command(),
             crate::CommandV1::SessionComplete
+                | crate::CommandV1::SessionDecide
                 | crate::CommandV1::SessionRetry
                 | crate::CommandV1::SessionSkip
                 | crate::CommandV1::SessionBlock
@@ -1895,6 +1897,7 @@ fn validate_procedure_v2_action_admission_v1(
     if matches!(
         request.command(),
         crate::CommandV1::SessionComplete
+            | crate::CommandV1::SessionDecide
             | crate::CommandV1::SessionRetry
             | crate::CommandV1::SessionSkip
             | crate::CommandV1::SessionBlock
@@ -4116,8 +4119,19 @@ fn procedure_v2_operation_payload_v1(
         "selector",
         "workspace_id",
     ];
+    let v9_keys = [
+        "command",
+        "execution_version",
+        "fresh_attempt_id",
+        "payload",
+        "preconditions",
+        "selector",
+        "workspace_id",
+    ];
     let expected_keys = if version == 8 {
         &v8_keys[..]
+    } else if version == 9 {
+        &v9_keys[..]
     } else {
         &v7_keys[..]
     };
@@ -4128,9 +4142,10 @@ fn procedure_v2_operation_payload_v1(
             .get("execution_version")
             .and_then(serde_json::Value::as_u64)
             != Some(version)
-        || !object
-            .get("attached_artifact")
-            .is_some_and(serde_json::Value::is_null)
+        || (version != 9
+            && !object
+                .get("attached_artifact")
+                .is_some_and(serde_json::Value::is_null))
     {
         return Err(invalid());
     }
@@ -4261,6 +4276,122 @@ fn graph_unblock_successor_matches_v2(
         })
 }
 
+fn decision_record_projection_matches_v2(
+    value: &serde_json::Value,
+    record: &podway_core::DecisionRecordV2,
+) -> bool {
+    let Some(value) = value.as_object() else {
+        return false;
+    };
+    let references = record.evidence().references();
+    let Some(projected_references) = value
+        .get("references")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+    value
+        .get("trace_sequence")
+        .and_then(serde_json::Value::as_u64)
+        == Some(record.trace().get())
+        && value.get("session_id").and_then(serde_json::Value::as_str)
+            == Some(record.session_id().as_str())
+        && value
+            .get("session_revision")
+            .and_then(serde_json::Value::as_u64)
+            == Some(record.session_revision().get())
+        && value
+            .get("procedure_schema")
+            .and_then(serde_json::Value::as_str)
+            == Some("podway.procedure/v2")
+        && value
+            .get("procedure_snapshot_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(record.procedure_snapshot_id().as_str())
+        && value
+            .get("procedure_digest")
+            .and_then(serde_json::Value::as_str)
+            == Some(record.procedure_digest().as_str())
+        && value
+            .get("graph_node_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(record.graph_node_id().as_str())
+        && value
+            .get("node_definition_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(record.node_definition_id().as_str())
+        && value.get("attempt_id").and_then(serde_json::Value::as_str)
+            == Some(record.attempt_id().as_str())
+        && value
+            .get("attempt_number")
+            .and_then(serde_json::Value::as_u64)
+            == Some(record.attempt_number().get())
+        && value.get("goal_revision")
+            == Some(
+                &record
+                    .goal_revision()
+                    .map(|revision| serde_json::json!(revision.get()))
+                    .unwrap_or(serde_json::Value::Null),
+            )
+        && value.get("option_id").and_then(serde_json::Value::as_str)
+            == Some(record.selected_option().as_str())
+        && value.get("effect").and_then(serde_json::Value::as_str)
+            == Some(record.route_effect().as_str())
+        && value
+            .get("target_graph_node_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(record.route_target().as_str())
+        && value.get("reason").and_then(serde_json::Value::as_str) == Some(record.reason().as_str())
+        && value.get("actor").and_then(serde_json::Value::as_str)
+            == record.actor().map(podway_core::ActorAttributionV2::as_str)
+        && projected_references.len() == references.len()
+        && projected_references
+            .iter()
+            .zip(references)
+            .all(|(projected, reference)| {
+                let Some(projected) = projected.as_object() else {
+                    return false;
+                };
+                projected
+                    .get("source_graph_node_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(reference.source_node().as_str())
+                    && match reference {
+                        podway_core::ResolvedEvidenceReferenceV2::Unresolved { .. } => {
+                            projected.len() == 2
+                                && projected.get("state").and_then(serde_json::Value::as_str)
+                                    == Some("unresolved")
+                        }
+                        podway_core::ResolvedEvidenceReferenceV2::Resolved(snapshot)
+                        | podway_core::ResolvedEvidenceReferenceV2::Skipped(snapshot) => {
+                            projected.get("state").and_then(serde_json::Value::as_str)
+                                == Some(
+                                    if matches!(
+                                        reference,
+                                        podway_core::ResolvedEvidenceReferenceV2::Skipped(_)
+                                    ) {
+                                        "skipped"
+                                    } else {
+                                        "resolved"
+                                    },
+                                )
+                                && projected
+                                    .get("source_attempt_id")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(snapshot.source_attempt_id().as_str())
+                                && projected
+                                    .get("source_attempt_number")
+                                    .and_then(serde_json::Value::as_u64)
+                                    == Some(snapshot.source_attempt_number().get())
+                                && projected
+                                    .get("items_digest")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(snapshot.items_digest().as_str())
+                        }
+                    }
+            })
+}
+
 fn validate_graph_mutation_terminal_shape_v2(
     execution: &ClaimedExecutionV1,
     current: &GraphSessionStateV2,
@@ -4271,6 +4402,75 @@ fn validate_graph_mutation_terminal_shape_v2(
 ) -> Result<(), StoreErrorV1> {
     let preconditions = execution.preconditions();
     let valid = match (execution.command(), result, operation) {
+        (
+            crate::CommandV1::SessionDecide,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Decide {
+                record,
+                target_attempt_id,
+            },
+        ) => {
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next_active = next
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let decision = next
+                .workflow_memory()
+                .decisions()
+                .last()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let (document, payload) =
+                procedure_v2_operation_payload_v1(execution, "session.decide", 9)?;
+            let document_preconditions = document
+                .get("preconditions")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            *changed
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && current.trace().revision().checked_next().ok() == Some(next.trace().revision())
+                && next.trace().session_id() == current.trace().session_id()
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+                && target_attempt_id == next_active.attempt_id()
+                && document_preconditions
+                    .get("session_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(current.trace().session_id().as_str())
+                && document_preconditions
+                    .get("session_revision")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(current.trace().revision().get())
+                && document_preconditions
+                    .get("attempt_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(active.attempt_id().as_str())
+                && payload.get("option_id").and_then(serde_json::Value::as_str)
+                    == Some(decision.selected_option().as_str())
+                && payload.get("reason").and_then(serde_json::Value::as_str)
+                    == Some(decision.reason().as_str())
+                && payload.get("actor")
+                    == Some(
+                        &decision
+                            .actor()
+                            .map(|actor| serde_json::Value::String(actor.as_str().to_owned()))
+                            .unwrap_or(serde_json::Value::Null),
+                    )
+                && decision_record_projection_matches_v2(record, decision)
+        }
         (
             crate::CommandV1::SessionReset,
             TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
@@ -4721,6 +4921,61 @@ fn graph_mutation_failure_matches_v2(
     let command = execution.command();
     let active = current.trace().active_attempt();
     match command {
+        crate::CommandV1::SessionDecide => {
+            let (Some(expected_revision), Some(expected_attempt)) = (
+                preconditions.expected_session_revision(),
+                preconditions.expected_attempt_id(),
+            ) else {
+                return false;
+            };
+            let Ok((document, payload)) =
+                procedure_v2_operation_payload_v1(execution, "session.decide", 9)
+            else {
+                return false;
+            };
+            let (Some(fresh_attempt_id), Some(option_id), Some(reason)) = (
+                document
+                    .get("fresh_attempt_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| podway_core::AttemptId::new(value.to_owned()).ok()),
+                payload
+                    .get("option_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| podway_core::OptionId::new(value.to_owned()).ok()),
+                payload
+                    .get("reason")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| podway_core::ReasonV2::new(value.to_owned()).ok()),
+            ) else {
+                return false;
+            };
+            let actor = match payload.get("actor") {
+                Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(value)) => {
+                    let Ok(actor) = podway_core::ActorAttributionV2::new(value.clone()) else {
+                        return false;
+                    };
+                    Some(actor)
+                }
+                _ => return false,
+            };
+            let observed = current.decide_active_route_v2(
+                expected_revision,
+                expected_attempt,
+                option_id,
+                fresh_attempt_id,
+                Some(reason),
+                actor,
+                podway_core::UnixMillis::new(u64::MAX),
+            );
+            if matches!(error, PersistedGraphMutationFailureV2::ArtifactChanged) {
+                return observed.is_ok() && graph_has_recorded_required_artifact_v2(current);
+            }
+            let projected = observed
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok());
+            projected.is_some_and(|failure| &failure == error)
+        }
         crate::CommandV1::SessionComplete => {
             let (Some(expected_revision), Some(expected_attempt)) = (
                 preconditions.expected_session_revision(),

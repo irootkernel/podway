@@ -18,10 +18,10 @@ use podway_git::{
 };
 use podway_protocol::{
     CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OutputEnvelopeInputV2,
-    OutputEnvelopeV2, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV1, ResponseEnvelopeV2,
-    Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, SessionStartSourceV1, SliceCommandV1,
-    SliceRequestV1, TerminalJobCancellationProjectionV1, TerminalJobResponseV1,
-    TerminalJobSuccessResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
+    OutputEnvelopeV2, ProcedureV2MutationRequestV1, RequestEnvelopeV1, RequestIdV1,
+    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
+    SessionStartSourceV1, SliceCommandV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
+    TerminalJobResponseV1, TerminalJobSuccessResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
     canonical_reset_all_identity_v1, decode_response_payload_v2,
 };
 use podway_store::{
@@ -573,6 +573,28 @@ impl WorkerExecutionV1<WorkspaceSchedulerContextV1> for NativeContextExecutionV1
         }
         Self::engine(context, self.observability.clone())?
             .admit_procedure_v2_mutation_for_workspace_with_response_context(
+                binding,
+                request,
+                idempotency_key,
+                response_context.cloned(),
+            )
+    }
+
+    fn admit_procedure_v2_typed_mutation(
+        &self,
+        context: &WorkspaceSchedulerContextV1,
+        binding: &WorkspaceBindingV1,
+        request: &ProcedureV2MutationRequestV1,
+        idempotency_key: StoreIdempotencyKeyV1,
+        response_context: Option<&podway_store::PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        if context.binding() != binding {
+            return Err(ExecutionErrorV1::InvalidPersistedExecution {
+                reason: "scheduler context binding changed during typed Procedure v2 admission",
+            });
+        }
+        Self::engine(context, self.observability.clone())?
+            .admit_procedure_v2_typed_mutation_for_workspace_with_response_context(
                 binding,
                 request,
                 idempotency_key,
@@ -1383,6 +1405,101 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         request: &RequestEnvelopeV1,
         daemon_request: &DaemonRequestV1,
     ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
+        if let DaemonRequestV1::ProcedureV2Mutation(typed_request) = daemon_request {
+            if typed_request.command().command_name() != "session.decide" {
+                return Ok(None);
+            }
+            let runtime = ProductionWorkspaceRuntimeV1::new(
+                Arc::clone(&self.manager),
+                Arc::clone(&self.clock),
+            );
+            let workspace = runtime.resolve_existing(typed_request.selector())?;
+            let idempotency_key = StoreIdempotencyKeyV1::new(
+                request
+                    .idempotency_key()
+                    .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?
+                    .as_str(),
+            )
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+            let response_context = podway_store::PersistedResponseContextV1::new(
+                request.request_id().as_str(),
+                request.command().as_str(),
+                workspace.output.uuid().clone(),
+                workspace.output.root(),
+                workspace.output.latest_workspace_sequence(),
+            )
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?
+            .with_frozen_public_terminal_envelope();
+            let completion_mode = if request.options().detach() {
+                WorkerCompletionModeV1::Detached
+            } else {
+                WorkerCompletionModeV1::WaitUntil(
+                    MonotonicDeadlineV1::after(
+                        self.clock.as_ref(),
+                        request.options().wait_timeout_ms(),
+                    )
+                    .map_err(map_read_error)?,
+                )
+            };
+            let Some(submission) = self
+                .worker
+                .submit_procedure_v2_typed_mutation_with_response_context(
+                    &workspace.scheduler,
+                    typed_request,
+                    idempotency_key,
+                    response_context,
+                    completion_mode,
+                )
+                .map_err(map_worker_error)?
+            else {
+                return Ok(None);
+            };
+            let terminal =
+                terminal_replay(submission.admission()).or_else(|| match submission.completion() {
+                    Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
+                    Some(WorkerWaitResultV1::TimedOut(_)) | None => None,
+                });
+            if let Some(receipt) = terminal {
+                return terminal_direct_response_v2(
+                    receipt,
+                    TerminalCommandKindV1::Decision,
+                    request.request_id(),
+                )
+                .map(Some);
+            }
+            if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
+                let job = job_output(view)?;
+                return Err(
+                    DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job),
+                );
+            }
+            let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
+            let result = json!({
+                "schema": "podway.detached-admission-result/v2",
+                "detached": true,
+                "admission": {
+                    "admitted": true,
+                    "job_id": job.id(),
+                    "workspace_sequence": job.sequence(),
+                },
+            });
+            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.clock.generated_at(),
+                workspace: Some(workspace.output),
+                job: Some(job),
+                session: None,
+                result: result
+                    .as_object()
+                    .expect("Procedure v2 detached result is an object")
+                    .clone(),
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+        }
         let Some(slice_request) = daemon_request.legacy() else {
             // Goal-bearing v2 start DTOs remain closed until durable initial-goal admission lands.
             return Ok(None);
@@ -2699,6 +2816,7 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
         podway_store::CommandV1::SessionCancel => "session.cancel",
         podway_store::CommandV1::SessionReopen => "session.reopen",
         podway_store::CommandV1::SessionReset => "session.reset",
+        podway_store::CommandV1::SessionDecide => "session.decide",
         podway_store::CommandV1::ItemCheck { .. } => "item.check",
         podway_store::CommandV1::ItemUncheck { .. } => "item.uncheck",
         podway_store::CommandV1::ItemSet { .. } => "item.set",
@@ -2717,6 +2835,7 @@ enum TerminalCommandKindV1 {
     Skip,
     Return,
     Reopen,
+    Decision,
     Other,
 }
 fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> TerminalCommandKindV1 {
@@ -2728,6 +2847,7 @@ fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> Termin
         "session.skip" => TerminalCommandKindV1::Skip,
         "session.return" => TerminalCommandKindV1::Return,
         "session.reopen" => TerminalCommandKindV1::Reopen,
+        "session.decide" => TerminalCommandKindV1::Decision,
         _ => TerminalCommandKindV1::Other,
     }
 }
@@ -2739,6 +2859,7 @@ fn validate_terminal_receipt_projection(
         return match (graph.operation(), receipt.result()) {
             (
                 None
+                | Some(PersistedGraphTerminalOperationV2::Decide { .. })
                 | Some(PersistedGraphTerminalOperationV2::Complete { .. })
                 | Some(PersistedGraphTerminalOperationV2::Skip { .. })
                 | Some(PersistedGraphTerminalOperationV2::Retry { .. })
@@ -2932,7 +3053,8 @@ fn validate_frozen_terminal_error(
             map_graph_mutation_failure_v2(error)
         }
         Some(
-            PersistedGraphTerminalOperationV2::Complete { .. }
+            PersistedGraphTerminalOperationV2::Decide { .. }
+            | PersistedGraphTerminalOperationV2::Complete { .. }
             | PersistedGraphTerminalOperationV2::Skip { .. }
             | PersistedGraphTerminalOperationV2::Retry { .. }
             | PersistedGraphTerminalOperationV2::Block { .. }
@@ -3006,6 +3128,37 @@ fn validate_frozen_v2_result_projection(
                         && result.get("goal_defined").and_then(Value::as_bool) == Some(false)
                 }))
         }
+        (
+            Some("podway.decision-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                revision_after,
+                ..
+            }),
+        ) => graph_session.is_some_and(|projection| {
+            let Some(PersistedGraphTerminalOperationV2::Decide {
+                record,
+                target_attempt_id,
+            }) = projection.operation()
+            else {
+                return false;
+            };
+            let Some(record_object) = record.as_object() else {
+                return false;
+            };
+            projection.lifecycle() == PersistedSessionLifecycleV1::Running
+                && projection.revision_after() == *revision_after
+                && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                && result.get("session_state").and_then(Value::as_str) == Some("running")
+                && result.get("record") == Some(record)
+                && result.get("graph_node_id") == record_object.get("graph_node_id")
+                && result.get("attempt_id") == record_object.get("attempt_id")
+                && result.get("attempt_number") == record_object.get("attempt_number")
+                && result.get("option_id") == record_object.get("option_id")
+                && result.get("effect") == record_object.get("effect")
+                && result.get("target_graph_node_id") == record_object.get("target_graph_node_id")
+                && result.get("target_attempt_id").and_then(Value::as_str)
+                    == Some(target_attempt_id.as_str())
+        }),
         (
             Some("podway.stage-transition-result/v2"),
             PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
@@ -3237,6 +3390,7 @@ fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'
         | PersistedDomainCommandV1::SessionStartReplace
         | PersistedDomainCommandV1::SessionReturn
         | PersistedDomainCommandV1::SessionReopen
+        | PersistedDomainCommandV1::SessionDecide
         | PersistedDomainCommandV1::ItemCheck { .. }
         | PersistedDomainCommandV1::ItemUncheck { .. }
         | PersistedDomainCommandV1::ItemSet { .. }
@@ -3278,6 +3432,35 @@ fn graph_terminal_envelope_v2(
     match graph.operation() {
         None => serde_json::to_value(graph_start_terminal_envelope_v2(receipt)?)
             .map_err(|_| terminal_replay_integrity_failure()),
+        Some(PersistedGraphTerminalOperationV2::Decide {
+            record,
+            target_attempt_id,
+        }) => {
+            if graph.lifecycle() != PersistedSessionLifecycleV1::Running {
+                return Err(terminal_replay_integrity_failure());
+            }
+            let record_object = record
+                .as_object()
+                .ok_or_else(terminal_replay_integrity_failure)?;
+            let result = json!({
+                "schema": "podway.decision-result/v1",
+                "admission": graph_admission_value_v2(receipt)?,
+                "graph_node_id": record_object.get("graph_node_id").ok_or_else(terminal_replay_integrity_failure)?,
+                "attempt_id": record_object.get("attempt_id").ok_or_else(terminal_replay_integrity_failure)?,
+                "attempt_number": record_object.get("attempt_number").ok_or_else(terminal_replay_integrity_failure)?,
+                "option_id": record_object.get("option_id").ok_or_else(terminal_replay_integrity_failure)?,
+                "effect": record_object.get("effect").ok_or_else(terminal_replay_integrity_failure)?,
+                "target_graph_node_id": record_object.get("target_graph_node_id").ok_or_else(terminal_replay_integrity_failure)?,
+                "target_attempt_id": target_attempt_id,
+                "revision": graph.revision_after(),
+                "session_state": "running",
+                "record": record,
+            })
+            .as_object()
+            .expect("graph decision result is an object")
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
         Some(PersistedGraphTerminalOperationV2::Complete {
             from_graph_node_id,
             from_attempt_id,
@@ -3862,6 +4045,7 @@ fn map_terminal_domain_error(
                 | TerminalCommandKindV1::Skip
                 | TerminalCommandKindV1::Return
                 | TerminalCommandKindV1::Reopen
+                | TerminalCommandKindV1::Decision
                 | TerminalCommandKindV1::Start
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionRevisionConflict,
             };
@@ -3895,6 +4079,7 @@ fn map_terminal_domain_error(
                 TerminalCommandKindV1::ItemMutation
                 | TerminalCommandKindV1::SessionReset
                 | TerminalCommandKindV1::Start
+                | TerminalCommandKindV1::Decision
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionNotRunning,
             };
             DispatchFailureV1::new(kind)
@@ -3955,6 +4140,56 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
             DispatchErrorDetailsV1::default()
                 .with_graph_node_type_mismatch(graph_node_id.clone(), actual),
         ),
+        PersistedGraphMutationFailureV2::OptionNotAllowed {
+            graph_node_id,
+            option_id,
+            allowed_option_ids,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::OptionNotAllowed).with_details(
+            DispatchErrorDetailsV1::default().with_option_not_allowed(
+                graph_node_id.clone(),
+                option_id.clone(),
+                allowed_option_ids.clone(),
+            ),
+        ),
+        PersistedGraphMutationFailureV2::RouteNotAllowed {
+            graph_node_id,
+            option_id,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::RouteNotAllowed).with_details(
+            DispatchErrorDetailsV1::default()
+                .with_route_not_allowed(graph_node_id.clone(), option_id.clone()),
+        ),
+        PersistedGraphMutationFailureV2::DecisionReasonMissing { graph_node_id } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::DecisionReasonMissing).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_decision_reason_missing(graph_node_id.clone()),
+            )
+        }
+        PersistedGraphMutationFailureV2::EvidenceReferenceUnresolved {
+            graph_node_id,
+            source_graph_node_ids,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::EvidenceReferenceUnresolved)
+            .with_details(
+                DispatchErrorDetailsV1::default().with_evidence_reference_unresolved(
+                    graph_node_id.clone(),
+                    source_graph_node_ids.clone(),
+                ),
+            ),
+        PersistedGraphMutationFailureV2::EvidenceReferenceStale {
+            graph_node_id,
+            source_graph_node_id,
+            expected_source_attempt_id,
+            current_source_attempt_id,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::EvidenceReferenceStale).with_details(
+            DispatchErrorDetailsV1::default().with_evidence_reference_stale(
+                graph_node_id.clone(),
+                source_graph_node_id.clone(),
+                expected_source_attempt_id.clone(),
+                current_source_attempt_id.clone(),
+            ),
+        ),
+        PersistedGraphMutationFailureV2::GoalAssessmentDecisionRequiresAssessment { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid)
+        }
         PersistedGraphMutationFailureV2::SkipNotAllowed { .. }
         | PersistedGraphMutationFailureV2::SkipReasonRequired { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::StageNotSkippable)
