@@ -112,6 +112,30 @@ fn v2run007_preadmission_fences_reject_without_jobs_and_exact_replay_wins() {
     let session_revision = before["session"]["revision"].as_u64().unwrap();
     let attempt_id = before["current"]["attempt"]["attempt_id"].as_str().unwrap();
 
+    let wrong_session = runtime::request(
+        70_009,
+        "session.block",
+        &selector,
+        json!({"reason": "wrong session identity"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2run007-wrong-session",
+        PreconditionsV1::new(
+            Some(SessionId::new("00000000-0000-4000-8000-000000007778").unwrap()),
+            Some(Revision::new(session_revision)),
+            Some(AttemptId::new(attempt_id).unwrap()),
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    assert_not_admitted_error(
+        runtime::dispatch(&dispatcher, &wrong_session),
+        "SESSION_ID_MISMATCH",
+    );
+
     let stale_revision = runtime::request(
         70_011,
         "session.block",
@@ -179,6 +203,27 @@ fn v2run007_preadmission_fences_reject_without_jobs_and_exact_replay_wins() {
     assert_not_admitted_error(
         runtime::dispatch(&dispatcher, &wrong_item_revision),
         "ITEM_REVISION_CONFLICT",
+    );
+
+    let missing_item = item_set_request(
+        70_014,
+        &selector,
+        "missing",
+        "missing item",
+        "v2run007-missing-item",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            Some(AttemptId::new(attempt_id).unwrap()),
+            Some(Revision::ZERO),
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    assert_not_admitted_error(
+        runtime::dispatch(&dispatcher, &missing_item),
+        "ITEM_NOT_FOUND",
     );
 
     let summary_preconditions = runtime::item_preconditions(&before, "summary");

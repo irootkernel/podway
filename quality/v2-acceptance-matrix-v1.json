@@ -691,7 +691,8 @@
       ],
       "test_class": "runtime-integration",
       "owning_tasks": [
-        "V2RUN-008"
+        "V2RUN-008",
+        "V2DRW-006"
       ],
       "implementation_status": "planned",
       "contract_refs": [
@@ -1733,7 +1734,7 @@
       ],
       "test_class": "payload-boundary",
       "owning_tasks": [
-        "V2RUN-008",
+        "V2DRW-006",
         "V2REL-002"
       ],
       "implementation_status": "planned",

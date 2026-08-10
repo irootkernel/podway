@@ -142,7 +142,7 @@ Dependencies: `V2GRF` and `V2PLT`.
 | `V2RUN-005` | Skip eligible placements | Completed | Enforce declared skip policy and terminal readiness. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
 | `V2RUN-006` | Derive terminal and blocked states | Completed | Present completed, blocked, and dead-end states without ambiguity. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
 | `V2RUN-007` | Enforce runtime preconditions | Completed | Reject stale mutations and replay exact idempotent receipts. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
-| `V2RUN-008` | Close action runtime recovery | Completed | Prove concurrency, restart, durable-job, storage, and cycle behavior. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
+| `V2RUN-008` | Close action runtime recovery | Completed | Prove concurrency, restart, durable-job, storage, and repeated-retry behavior. | [V2RUN plan](../todo/TODO-podway-v2-full-feature-ga.md#196-epic-v2run-action-runtime) |
 
 ## V2DRW — Decisions and Rework
 
@@ -155,7 +155,7 @@ Dependencies: `V2RUN`.
 | `V2DRW-003` | Rework a valid trace target | Planned | Enforce allowed targets and completed-session reactivation policy. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 | `V2DRW-004` | Invalidate and re-enter a suffix | Planned | Atomically stale the affected trace and activate one fresh target attempt. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 | `V2DRW-005` | Read decisions and rework back | Planned | Expose bounded current and stale workflow history without satisfying progression. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
-| `V2DRW-006` | Close decision and rework failures | Planned | Prove invalid, stale, duplicate, crash, restart, and repeated-cycle behavior. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
+| `V2DRW-006` | Close decision and rework failures | Planned | Prove invalid, stale, duplicate, crash, restart, and repeated-cycle one-writer/cursor behavior. | [V2DRW plan](../todo/TODO-podway-v2-full-feature-ga.md#197-epic-v2drw-decisions-and-rework) |
 
 ## V2GOL — Goal Tracking
 

@@ -328,7 +328,7 @@
       "acceptance_id": "V2ACC-087",
       "test_class": "payload-boundary",
       "owning_tasks": [
-        "V2RUN-008",
+        "V2DRW-006",
         "V2REL-002"
       ],
       "implementation_status": "planned"

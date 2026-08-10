@@ -3257,7 +3257,7 @@ tree, and `V2REL-006` is the only release-readiness gate.
 | `V2RUN-005` | Implement placement-level skip. | Only declared eligible actions skip, required evidence sources cannot be skippable, and terminal readiness still applies; run vet and runtime tests. |
 | `V2RUN-006` | Derive completed, blocked, and dead-end states. | Lifecycle and recorded outcome remain distinct and no invalid cursor state is presented as actionable; run state-table tests. |
 | `V2RUN-007` | Enforce mutation preconditions and idempotency. | Session, revision, cursor, attempt, item, and request identities reject stale writes or replay the exact receipt; run concurrency tests. |
-| `V2RUN-008` | Close action-runtime concurrency and recovery. | Concurrent callers, daemon restart, durable jobs, storage exhaustion, and arbitrary valid cycle traversal preserve one writer and one cursor; run `make test-e2e`. |
+| `V2RUN-008` | Close action-runtime concurrency and recovery. | Concurrent callers, daemon restart, durable jobs, storage exhaustion, and repeated retries preserve one writer and one cursor; run `make test-e2e`. |
 
 ### 19.7 Epic V2DRW: Decisions and rework
 
@@ -3268,7 +3268,7 @@ tree, and `V2REL-006` is the only release-readiness gate.
 | `V2DRW-003` | Implement `session.rework`. | Only allowed valid-trace targets can be selected and completed-session reactivation follows the declared policy; run command tests. |
 | `V2DRW-004` | Implement conservative invalidation and re-entry. | The affected suffix, including routing decisions, becomes stale atomically and a fresh target attempt becomes the only cursor; run property tests. |
 | `V2DRW-005` | Expose immutable decision and rework read-back. | Current and stale records remain bounded, ordered, and inspectable without satisfying current progression; run status/next golden tests. |
-| `V2DRW-006` | Close decision and rework failure behavior. | Invalid options, missing reasons, stale evidence, invalid targets, duplicates, crash, restart, and repeated cycles fail or replay deterministically; run `make test-int`. |
+| `V2DRW-006` | Close decision and rework failure behavior. | Invalid options, missing reasons, stale evidence, invalid targets, duplicates, crash, restart, and arbitrary valid repeated cycles fail or replay deterministically while preserving one writer and one cursor; run `make test-int`. |
 
 ### 19.8 Epic V2GOL: Goal tracking
 
