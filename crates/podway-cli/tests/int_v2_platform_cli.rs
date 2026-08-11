@@ -844,6 +844,40 @@ fn v2gol003_fully_fenced_general_decide_skips_status_preflight() {
 }
 
 #[test]
+fn v2gol001_fully_fenced_completed_goal_revise_skips_status_preflight() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::Unsupported);
+    let mut arguments = fixture.daemon_arguments(&[]);
+    arguments.extend([
+        "--if-goal-revision".to_owned(),
+        "1".to_owned(),
+        "goal".to_owned(),
+        "revise".to_owned(),
+        "--goal".to_owned(),
+        "Ship after reactivation.".to_owned(),
+        "--criterion".to_owned(),
+        "restart-safe=Restart passes.".to_owned(),
+        "--rework-to".to_owned(),
+        "implement".to_owned(),
+        "--reason".to_owned(),
+        "Requirements changed after completion.".to_owned(),
+        "--reactivate".to_owned(),
+    ]);
+
+    let output = fixture.run(&arguments);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert_eq!(one_json(&output)["code"], "UNSUPPORTED_V2_CAPABILITY");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "goal.revise");
+    assert_eq!(request["operation"], "mutate");
+    assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(request["preconditions"]["session_revision"], 7);
+    assert_eq!(request["preconditions"]["goal_revision"], 1);
+    assert!(request["preconditions"].get("attempt_id").is_none());
+    assert_eq!(request["payload"]["reactivate"], true);
+}
+
+#[test]
 fn shared_item_complete_retry_and_skip_use_v2_status_fences_and_render_output_v2() {
     for (command, arguments, expected_schema) in [
         (

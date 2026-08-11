@@ -1832,7 +1832,7 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
         } => true,
         Command::Goal {
             command: GoalCommand::Revise(_),
-        } => explicit.goal_revision.is_some() && explicit.attempt_id.is_some(),
+        } => explicit.goal_revision.is_some(),
         _ => false,
     }
 }
