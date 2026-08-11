@@ -352,6 +352,39 @@ impl SessionTraceV2 {
         self.active_attempt().map(ActiveCursorV2::from_attempt)
     }
 
+    /// Binds immutable goal revision 1 to the unchanged active attempt.
+    pub fn bind_initial_goal_revision(
+        &mut self,
+        expected_active: &AttemptId,
+    ) -> Result<(), DomainError> {
+        let active_index = self.require_running_active(expected_active)?;
+        if self.attempts[active_index].goal_revision.is_some() {
+            return Err(invalid("the active attempt already has a goal revision"));
+        }
+        self.attempts[active_index].goal_revision = Some(GoalRevisionNumberV2::FIRST);
+        self.revision = self.revision.checked_next()?;
+        Ok(())
+    }
+
+    /// Binds revision 1 while constructing a brand-new admitted session without creating a
+    /// second session revision.
+    pub fn bind_initial_goal_revision_at_start(
+        &mut self,
+        expected_active: &AttemptId,
+    ) -> Result<(), DomainError> {
+        if self.revision != Revision::new(1) || self.attempts.len() != 1 {
+            return Err(invalid(
+                "initial goal admission requires a fresh session trace",
+            ));
+        }
+        let active_index = self.require_running_active(expected_active)?;
+        if self.attempts[active_index].goal_revision.is_some() {
+            return Err(invalid("the active attempt already has a goal revision"));
+        }
+        self.attempts[active_index].goal_revision = Some(GoalRevisionNumberV2::FIRST);
+        Ok(())
+    }
+
     /// Advances the cursor: terminalizes the active attempt and activates a fresh attempt of the
     /// next graph node. Covers completing or skipping a non-terminal action and a decision option
     /// whose route declares `effect: advance`.

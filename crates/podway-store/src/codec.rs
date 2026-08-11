@@ -192,6 +192,8 @@ pub enum PersistedDomainCommandV1 {
     SessionReset,
     SessionDecide,
     SessionRework,
+    GoalDefine,
+    GoalRevise,
     ItemCheck { item_id: ItemId },
     ItemUncheck { item_id: ItemId },
     ItemSet { item_id: ItemId },
@@ -219,6 +221,8 @@ impl PersistedDomainCommandV1 {
             CommandV1::SessionReset => Self::SessionReset,
             CommandV1::SessionDecide => Self::SessionDecide,
             CommandV1::SessionRework => Self::SessionRework,
+            CommandV1::GoalDefine => Self::GoalDefine,
+            CommandV1::GoalRevise => Self::GoalRevise,
             CommandV1::ItemCheck { item_id } => Self::ItemCheck {
                 item_id: item_id.clone(),
             },
@@ -260,6 +264,8 @@ impl PersistedDomainCommandV1 {
             Self::SessionReset => CommandV1::SessionReset,
             Self::SessionDecide => CommandV1::SessionDecide,
             Self::SessionRework => CommandV1::SessionRework,
+            Self::GoalDefine => CommandV1::GoalDefine,
+            Self::GoalRevise => CommandV1::GoalRevise,
             Self::ItemCheck { item_id } => CommandV1::ItemCheck { item_id },
             Self::ItemUncheck { item_id } => CommandV1::ItemUncheck { item_id },
             Self::ItemSet { item_id } => CommandV1::ItemSet { item_id },
@@ -291,6 +297,8 @@ impl PersistedDomainCommandV1 {
             Self::SessionReset => "session.reset",
             Self::SessionDecide => "session.decide",
             Self::SessionRework => "session.rework",
+            Self::GoalDefine => "goal.define",
+            Self::GoalRevise => "goal.revise",
             Self::ItemCheck { .. } => "item.check",
             Self::ItemUncheck { .. } => "item.uncheck",
             Self::ItemSet { .. } => "item.set",
@@ -537,6 +545,8 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
             | CommandV1::SessionReset
             | CommandV1::SessionDecide
             | CommandV1::SessionRework
+            | CommandV1::GoalDefine
+            | CommandV1::GoalRevise
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -559,6 +569,8 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
             | CommandV1::SessionReset
             | CommandV1::SessionDecide
             | CommandV1::SessionRework
+            | CommandV1::GoalDefine
+            | CommandV1::GoalRevise
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -592,6 +604,17 @@ fn procedure_v2_preconditions_match(
                 && preconditions.expected_item_revision().is_none()
         }
         CommandV1::SessionRework => {
+            preconditions.expected_session_revision().is_some()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
+        CommandV1::GoalDefine => {
+            preconditions.expected_session_revision().is_some()
+                && preconditions.expected_attempt_id().is_none()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
+        CommandV1::GoalRevise => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_item_id().is_none()
                 && preconditions.expected_item_revision().is_none()
@@ -637,6 +660,8 @@ pub enum PersistedDomainCommandKindV1 {
     SessionReset,
     SessionDecide,
     SessionRework,
+    GoalDefine,
+    GoalRevise,
     ItemCheck,
     ItemUncheck,
     ItemSet,
@@ -664,6 +689,8 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
             DomainCommandKind::SessionReset => Self::SessionReset,
             DomainCommandKind::SessionDecide => Self::SessionDecide,
             DomainCommandKind::SessionRework => Self::SessionRework,
+            DomainCommandKind::GoalDefine => Self::GoalDefine,
+            DomainCommandKind::GoalRevise => Self::GoalRevise,
             DomainCommandKind::ItemCheck => Self::ItemCheck,
             DomainCommandKind::ItemUncheck => Self::ItemUncheck,
             DomainCommandKind::ItemSet => Self::ItemSet,
@@ -1066,6 +1093,13 @@ impl PersistedTerminalSessionProjectionV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PersistedGraphTerminalOperationV2 {
+    GoalDefine {
+        record: Value,
+    },
+    GoalRevise {
+        record: Value,
+        target_attempt_id: AttemptId,
+    },
     Decide {
         record: Value,
         target_attempt_id: AttemptId,
@@ -1133,6 +1167,21 @@ pub enum PersistedGraphTerminalOperationV2 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PersistedGraphMutationFailureV2 {
+    GoalTrackingNotEnabled,
+    SessionGoalAlreadyDefined {
+        goal_revision: u64,
+    },
+    GoalRevisionStale {
+        expected_goal_revision: u64,
+        actual_goal_revision: u64,
+    },
+    GoalRevisionTargetNotAllowed {
+        target_graph_node_id: GraphNodeId,
+    },
+    GoalRevisionTargetNotRevisionSafe {
+        target_graph_node_id: GraphNodeId,
+    },
+    ReactivationFlagRequired,
     SessionNotRunning,
     SessionCancelled,
     SessionRevisionConflict {
@@ -1228,6 +1277,29 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
 
     fn try_from(error: &crate::GraphMutationErrorV2) -> Result<Self, Self::Error> {
         Ok(match error {
+            crate::GraphMutationErrorV2::GoalTrackingNotEnabled => Self::GoalTrackingNotEnabled,
+            crate::GraphMutationErrorV2::SessionGoalAlreadyDefined { goal_revision } => {
+                Self::SessionGoalAlreadyDefined {
+                    goal_revision: goal_revision.get(),
+                }
+            }
+            crate::GraphMutationErrorV2::GoalRevisionStale { expected, actual } => {
+                Self::GoalRevisionStale {
+                    expected_goal_revision: expected.get(),
+                    actual_goal_revision: actual.get(),
+                }
+            }
+            crate::GraphMutationErrorV2::GoalRevisionTargetNotAllowed {
+                target_graph_node_id,
+            } => Self::GoalRevisionTargetNotAllowed {
+                target_graph_node_id: target_graph_node_id.clone(),
+            },
+            crate::GraphMutationErrorV2::GoalRevisionTargetNotRevisionSafe {
+                target_graph_node_id,
+            } => Self::GoalRevisionTargetNotRevisionSafe {
+                target_graph_node_id: target_graph_node_id.clone(),
+            },
+            crate::GraphMutationErrorV2::ReactivationFlagRequired => Self::ReactivationFlagRequired,
             crate::GraphMutationErrorV2::SessionNotRunning => Self::SessionNotRunning,
             crate::GraphMutationErrorV2::SessionCancelled => Self::SessionCancelled,
             crate::GraphMutationErrorV2::SessionRevisionConflict { expected, actual } => {
@@ -1372,7 +1444,103 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
     }
 }
 
+fn goal_revision_record_projection_shape_v2(record: &Value, define: bool) -> bool {
+    let Some(record) = record.as_object() else {
+        return false;
+    };
+    let required = if define {
+        &["goal_revision", "statement", "criteria", "recorded_at"][..]
+    } else {
+        &[
+            "goal_revision",
+            "statement",
+            "criteria",
+            "reason",
+            "recorded_at",
+            "rework_to",
+            "reactivated",
+        ][..]
+    };
+    let actor = record.get("actor");
+    if record.len() != required.len() + usize::from(actor.is_some())
+        || required.iter().any(|key| !record.contains_key(*key))
+    {
+        return false;
+    }
+    let Some(goal_revision) = record.get("goal_revision").and_then(Value::as_u64) else {
+        return false;
+    };
+    if (define && goal_revision != 1) || (!define && goal_revision < 2) {
+        return false;
+    }
+    if !record
+        .get("statement")
+        .and_then(Value::as_str)
+        .is_some_and(|value| podway_core::GoalStatementV2::new(value.to_owned()).is_ok())
+        || !record
+            .get("recorded_at")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty() && value.len() <= 32)
+        || !actor.is_none_or(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| ActorAttributionV2::new(value.to_owned()).is_ok())
+        })
+    {
+        return false;
+    }
+    let Some(criteria) = record.get("criteria").and_then(Value::as_array) else {
+        return false;
+    };
+    let criteria = criteria
+        .iter()
+        .map(|criterion| {
+            let criterion = criterion.as_object()?;
+            if criterion.len() != 2 {
+                return None;
+            }
+            let id = criterion
+                .get("criterion_id")
+                .and_then(Value::as_str)
+                .and_then(|value| podway_core::CriterionId::new(value.to_owned()).ok())?;
+            let statement = criterion.get("statement").and_then(Value::as_str)?;
+            podway_core::GoalCriterionV2::new(id, statement.to_owned()).ok()
+        })
+        .collect::<Option<Vec<_>>>();
+    if !criteria.is_some_and(|criteria| podway_core::GoalDefinitionV2::new(criteria).is_ok()) {
+        return false;
+    }
+    define
+        || (record
+            .get("reason")
+            .and_then(Value::as_str)
+            .is_some_and(|value| podway_core::GoalRevisionReasonV2::new(value.to_owned()).is_ok())
+            && record
+                .get("rework_to")
+                .and_then(Value::as_str)
+                .is_some_and(|value| GraphNodeId::new(value.to_owned()).is_ok())
+            && record.get("reactivated").and_then(Value::as_bool).is_some())
+}
+
 impl PersistedGraphTerminalOperationV2 {
+    pub fn goal_define(record: Value) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::GoalDefine { record };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn goal_revise(
+        record: Value,
+        target_attempt_id: AttemptId,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::GoalRevise {
+            record,
+            target_attempt_id,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
     pub fn decide(record: Value, target_attempt_id: AttemptId) -> Result<Self, StoreCodecErrorV1> {
         let operation = Self::Decide {
             record,
@@ -1516,6 +1684,14 @@ impl PersistedGraphTerminalOperationV2 {
 
     fn validate(&self) -> Result<(), StoreCodecErrorV1> {
         let valid = match self {
+            Self::GoalDefine { record } => goal_revision_record_projection_shape_v2(record, true),
+            Self::GoalRevise {
+                record,
+                target_attempt_id,
+            } => {
+                goal_revision_record_projection_shape_v2(record, false)
+                    && !target_attempt_id.as_str().is_empty()
+            }
             Self::Decide {
                 record,
                 target_attempt_id,
@@ -1643,6 +1819,11 @@ impl PersistedGraphTerminalOperationV2 {
 impl PersistedGraphMutationFailureV2 {
     fn validate(&self) -> bool {
         match self {
+            Self::SessionGoalAlreadyDefined { goal_revision } => *goal_revision > 0,
+            Self::GoalRevisionStale {
+                expected_goal_revision,
+                actual_goal_revision,
+            } => *expected_goal_revision > 0 && *actual_goal_revision > 0,
             Self::GraphNodeTypeMismatch { actual, .. } => {
                 matches!(actual.as_str(), "action" | "decision")
             }
@@ -1657,6 +1838,10 @@ impl PersistedGraphMutationFailureV2 {
             }
             Self::FreshGoalAssessmentMissing { goal_revision } => *goal_revision > 0,
             Self::SessionNotRunning
+            | Self::GoalTrackingNotEnabled
+            | Self::GoalRevisionTargetNotAllowed { .. }
+            | Self::GoalRevisionTargetNotRevisionSafe { .. }
+            | Self::ReactivationFlagRequired
             | Self::SessionCancelled
             | Self::SessionRevisionConflict { .. }
             | Self::AttemptNotCurrent { .. }
@@ -1700,6 +1885,8 @@ pub struct PersistedGraphTerminalSessionProjectionV2 {
     procedure_digest: Sha256Digest,
     entry_graph_node_id: podway_core::GraphNodeId,
     goal_tracking: bool,
+    #[serde(default)]
+    goal_defined: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     operation: Option<PersistedGraphTerminalOperationV2>,
 }
@@ -1715,6 +1902,7 @@ impl PersistedGraphTerminalSessionProjectionV2 {
         procedure_digest: Sha256Digest,
         entry_graph_node_id: podway_core::GraphNodeId,
         goal_tracking: bool,
+        goal_defined: bool,
     ) -> Result<Self, StoreCodecErrorV1> {
         let projection = Self {
             session_id,
@@ -1725,6 +1913,7 @@ impl PersistedGraphTerminalSessionProjectionV2 {
             procedure_digest,
             entry_graph_node_id,
             goal_tracking,
+            goal_defined,
             operation: None,
         };
         projection.validate()?;
@@ -1755,6 +1944,9 @@ impl PersistedGraphTerminalSessionProjectionV2 {
     pub const fn goal_tracking(&self) -> bool {
         self.goal_tracking
     }
+    pub const fn goal_defined(&self) -> bool {
+        self.goal_defined
+    }
 
     pub fn operation(&self) -> Option<&PersistedGraphTerminalOperationV2> {
         self.operation.as_ref()
@@ -1774,6 +1966,7 @@ impl PersistedGraphTerminalSessionProjectionV2 {
         if self.task_title.trim().is_empty()
             || self.task_title.chars().count() > 500
             || self.revision_after == RevisionV1::ZERO
+            || (self.goal_defined && !self.goal_tracking)
             || (self.revision_after < self.revision_before
                 && !(self.revision_after == RevisionV1::new(1)
                     && self.revision_before > RevisionV1::ZERO))
@@ -1783,6 +1976,16 @@ impl PersistedGraphTerminalSessionProjectionV2 {
             });
         }
         if let Some(operation) = &self.operation {
+            if matches!(
+                operation,
+                PersistedGraphTerminalOperationV2::GoalDefine { .. }
+                    | PersistedGraphTerminalOperationV2::GoalRevise { .. }
+            ) && !self.goal_defined
+            {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 goal terminal projection",
+                });
+            }
             operation.validate()?;
         }
         Ok(())
@@ -2137,6 +2340,8 @@ impl PersistedTerminalReceiptV1 {
             match (graph.operation(), &self.result) {
                 (
                     None
+                    | Some(PersistedGraphTerminalOperationV2::GoalDefine { .. })
+                    | Some(PersistedGraphTerminalOperationV2::GoalRevise { .. })
                     | Some(PersistedGraphTerminalOperationV2::Decide { .. })
                     | Some(PersistedGraphTerminalOperationV2::Rework { .. })
                     | Some(PersistedGraphTerminalOperationV2::Complete { .. })
@@ -2630,6 +2835,13 @@ pub fn decode_terminal_receipt_v1(
         .ok_or(StoreCodecErrorV1::InvalidValue {
             field: "terminal schema",
         })?;
+    let legacy_goal_defined_absent = matches!(
+        schema.as_str(),
+        STORE_GRAPH_TERMINAL_SCHEMA_V1 | STORE_GRAPH_TERMINAL_SCHEMA_V2
+    ) && document
+        .get("graph_session_projection")
+        .and_then(Value::as_object)
+        .is_some_and(|projection| !projection.contains_key("goal_defined"));
     let receipt = match schema.as_str() {
         STORE_TERMINAL_SCHEMA_V0 => {
             let envelope: TerminalEnvelopeV0 =
@@ -2768,7 +2980,47 @@ pub fn decode_terminal_receipt_v1(
             });
         }
     };
-    if encode_persisted_terminal_receipt_v1(&receipt)? != value {
+    let goal_operation = receipt
+        .graph_session_projection()
+        .and_then(PersistedGraphTerminalSessionProjectionV2::operation)
+        .is_some_and(|operation| {
+            matches!(
+                operation,
+                PersistedGraphTerminalOperationV2::GoalDefine { .. }
+                    | PersistedGraphTerminalOperationV2::GoalRevise { .. }
+            )
+        });
+    let goal_bearing_start = matches!(
+        receipt.lookup_command(),
+        Some(
+            PersistedDomainCommandV1::SessionStart | PersistedDomainCommandV1::SessionStartReplace
+        )
+    ) && receipt
+        .public_terminal_envelope()
+        .and_then(|envelope| envelope.get("result"))
+        .and_then(|result| result.get("goal_defined"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let legacy_goal_defined_allowed =
+        legacy_goal_defined_absent && !goal_operation && !goal_bearing_start;
+    let encoded = encode_persisted_terminal_receipt_v1(&receipt)?;
+    let legacy_canonical = if legacy_goal_defined_allowed {
+        let mut document: Value =
+            serde_json::from_str(&encoded).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+        if let Some(projection) = document
+            .get_mut("graph_session_projection")
+            .and_then(Value::as_object_mut)
+        {
+            projection.remove("goal_defined");
+        }
+        Some(
+            serde_json::to_string(&canonicalize_json(document))
+                .map_err(|_| StoreCodecErrorV1::InvalidJson)?,
+        )
+    } else {
+        None
+    };
+    if encoded != value && legacy_canonical.as_deref() != Some(value) {
         return Err(StoreCodecErrorV1::InvalidValue {
             field: "canonical terminal receipt",
         });
@@ -2850,6 +3102,8 @@ fn validate_success_result_for_command_v1(
             | CommandV1::SessionComplete
             | CommandV1::SessionDecide
             | CommandV1::SessionRework
+            | CommandV1::GoalDefine
+            | CommandV1::GoalRevise
             | CommandV1::SessionSkip
             | CommandV1::SessionRetry
             | CommandV1::SessionReturn

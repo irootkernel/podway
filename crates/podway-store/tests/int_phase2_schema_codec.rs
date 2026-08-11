@@ -1403,6 +1403,12 @@ fn assert_command_fields(actual: &DomainCommand, expected: &DomainCommand) {
         DomainCommand::SessionRework => {
             assert!(matches!(expected, DomainCommand::SessionRework));
         }
+        DomainCommand::GoalDefine => {
+            assert!(matches!(expected, DomainCommand::GoalDefine));
+        }
+        DomainCommand::GoalRevise => {
+            assert!(matches!(expected, DomainCommand::GoalRevise));
+        }
         DomainCommand::ItemCheck { item_id } => match expected {
             DomainCommand::ItemCheck {
                 item_id: expected_item_id,
@@ -1530,6 +1536,12 @@ fn command_golden_v1(command: &DomainCommand) -> &'static str {
         }
         DomainCommand::SessionRework => {
             r#"{"command":{"kind":"session_rework"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::GoalDefine => {
+            r#"{"command":{"kind":"goal_define"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::GoalRevise => {
+            r#"{"command":{"kind":"goal_revise"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
         }
         DomainCommand::ItemCheck { .. } => {
             r#"{"command":{"item_id":"selected-item","kind":"item_check"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
@@ -1690,6 +1702,8 @@ fn expected_persisted_command_kind(kind: DomainCommandKind) -> PersistedDomainCo
         DomainCommandKind::SessionReset => PersistedDomainCommandKindV1::SessionReset,
         DomainCommandKind::SessionDecide => PersistedDomainCommandKindV1::SessionDecide,
         DomainCommandKind::SessionRework => PersistedDomainCommandKindV1::SessionRework,
+        DomainCommandKind::GoalDefine => PersistedDomainCommandKindV1::GoalDefine,
+        DomainCommandKind::GoalRevise => PersistedDomainCommandKindV1::GoalRevise,
         DomainCommandKind::ItemCheck => PersistedDomainCommandKindV1::ItemCheck,
         DomainCommandKind::ItemUncheck => PersistedDomainCommandKindV1::ItemUncheck,
         DomainCommandKind::ItemSet => PersistedDomainCommandKindV1::ItemSet,
@@ -2478,6 +2492,7 @@ fn graph_reset_codec_requires_exact_unchanged_positive_revision_and_session_bind
             digest('a'),
             graph_node_id.clone(),
             false,
+            false,
         )?
         .with_operation(PersistedGraphTerminalOperationV2::reset(
             operation_session_id,
@@ -2562,6 +2577,7 @@ fn graph_rework_codec_rejects_open_or_incomplete_record_projections()
         digest('b'),
         GraphNodeId::new("implement")?,
         false,
+        false,
     )?
     .with_operation(operation)?;
     let exact = PersistedTerminalReceiptV1::new_with_graph_projection(
@@ -2590,6 +2606,15 @@ fn graph_rework_codec_rejects_open_or_incomplete_record_projections()
     )?)?;
     let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
     assert_eq!(decode_terminal_receipt_v1(&encoded)?, exact);
+    let legacy_without_goal_defined = encoded.replacen(r#""goal_defined":false,"#, "", 1);
+    assert_ne!(legacy_without_goal_defined, encoded);
+    assert_eq!(
+        decode_terminal_receipt_v1(&legacy_without_goal_defined)?
+            .graph_session_projection()
+            .map(PersistedGraphTerminalSessionProjectionV2::goal_defined),
+        Some(false),
+        "pre-V2GOL durable receipts must decode with an absent goal projection",
+    );
 
     let extra_key = encoded.replacen(
         r#""trace_sequence":1"#,
@@ -2601,6 +2626,105 @@ fn graph_rework_codec_rejects_open_or_incomplete_record_projections()
     let missing_timestamp = encoded.replacen(r#""recorded_at_ms":22,"#, "", 1);
     assert_ne!(missing_timestamp, encoded);
     assert!(decode_terminal_receipt_v1(&missing_timestamp).is_err());
+    Ok(())
+}
+
+#[test]
+fn graph_goal_codec_rejects_missing_goal_defined_projection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id();
+    let projection = PersistedGraphTerminalSessionProjectionV2::new(
+        session_id.clone(),
+        "Goal codec session".to_owned(),
+        PersistedSessionLifecycleV1::Running,
+        Revision::new(1),
+        Revision::new(2),
+        digest('c'),
+        GraphNodeId::new("implement")?,
+        true,
+        true,
+    )?
+    .with_operation(PersistedGraphTerminalOperationV2::goal_define(
+        serde_json::json!({
+            "goal_revision": 1,
+            "statement": "Ship the verified goal.",
+            "criteria": [{"criterion_id": "verified", "statement": "The goal is verified."}],
+            "actor": "reviewer",
+            "recorded_at": "2026-07-16T12:34:56.789Z"
+        }),
+    )?)?;
+    let exact = PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(191),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id,
+            revision_before: Revision::new(1),
+            revision_after: Revision::new(2),
+            changed: true,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(20),
+            Some(UnixMillis::new(21)),
+            UnixMillis::new(22),
+        )?,
+        projection,
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::GoalDefine)?
+    .with_response_context(PersistedResponseContextV1::new(
+        "00000000-0000-4000-8000-000000000191",
+        "goal.define",
+        workspace_id(),
+        "/safe/worktree",
+        191,
+    )?)?;
+    let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+    let missing_goal_defined = encoded.replacen(r#""goal_defined":true,"#, "", 1);
+    assert_ne!(missing_goal_defined, encoded);
+    assert!(decode_terminal_receipt_v1(&missing_goal_defined).is_err());
+
+    let start_session_id = SessionId::new("00000000-0000-4000-8000-000000000192")?;
+    let start = PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(192),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id: start_session_id.clone(),
+            revision_before: Revision::ZERO,
+            revision_after: Revision::new(1),
+            changed: true,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(20),
+            Some(UnixMillis::new(21)),
+            UnixMillis::new(22),
+        )?,
+        PersistedGraphTerminalSessionProjectionV2::new(
+            start_session_id,
+            "Goal-bearing start codec session".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::ZERO,
+            Revision::new(1),
+            digest('d'),
+            GraphNodeId::new("implement")?,
+            true,
+            true,
+        )?,
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::SessionStart)?
+    .with_response_context(PersistedResponseContextV1::new(
+        "00000000-0000-4000-8000-000000000192",
+        "session.start",
+        workspace_id(),
+        "/safe/worktree",
+        192,
+    )?)?
+    .with_public_terminal_envelope(serde_json::json!({
+        "schema": "podway.output/v2",
+        "result": {"goal_defined": true}
+    }))?;
+    let encoded_start = encode_persisted_terminal_receipt_v1(&start)?;
+    let missing_start_goal_defined = encoded_start.replacen(r#""goal_defined":true,"#, "", 1);
+    assert_ne!(missing_start_goal_defined, encoded_start);
+    assert!(decode_terminal_receipt_v1(&missing_start_goal_defined).is_err());
     Ok(())
 }
 

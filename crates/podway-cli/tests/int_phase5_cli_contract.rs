@@ -958,6 +958,43 @@ fn authoritative_rework_result() -> Value {
     })
 }
 
+fn authoritative_goal_definition_result() -> Value {
+    serde_json::json!({
+        "schema": "podway.goal-definition-result/v1",
+        "admission": {
+            "admitted": true,
+            "job_id": RECORDING_JOB_ID,
+            "workspace_sequence": 1
+        },
+        "goal_revision": 1,
+        "statement": "Ship the verified goal.",
+        "criteria": [{"criterion_id": "verified", "statement": "The goal is verified."}],
+        "actor": "reviewer",
+        "recorded_at": "2026-07-16T12:34:56.789Z",
+        "revision": 8
+    })
+}
+
+fn authoritative_goal_revision_result() -> Value {
+    serde_json::json!({
+        "schema": "podway.goal-revision-result/v1",
+        "admission": {
+            "admitted": true,
+            "job_id": RECORDING_JOB_ID,
+            "workspace_sequence": 1
+        },
+        "goal_revision": 2,
+        "statement": "Ship the revised verified goal.",
+        "criteria": [{"criterion_id": "verified", "statement": "The revised goal is verified."}],
+        "reason": "The requirement changed.",
+        "actor": "reviewer",
+        "recorded_at": "2026-07-16T12:34:56.789Z",
+        "rework_to": "implement",
+        "reactivated": false,
+        "revision": 8
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 enum PayloadValue {
     Bool(bool),
@@ -2799,7 +2836,7 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
         .collect::<BTreeSet<_>>();
     assert_eq!(
         reserved_v2_routes,
-        BTreeSet::from(["goal.assess_criterion", "goal.define", "goal.revise",]),
+        BTreeSet::from(["goal.assess_criterion"]),
         "reserved v2 grammar must remain unavailable until its runtime owner lands",
     );
     assert_eq!(DAEMON_CONTRACTS.len(), 30);
@@ -3349,6 +3386,83 @@ rework:
         RECORDING_ATTEMPT_ID
     );
 
+    let goal_define_daemon = RecordingDaemon::start(
+        &fixture,
+        vec![RecordingReply::V2Output(
+            authoritative_goal_definition_result(),
+        )],
+    );
+    let goal_define_output = fixture.run(&[
+        "--json",
+        "--worktree",
+        fixture.root.to_string_lossy().as_ref(),
+        "goal",
+        "define",
+        "--goal",
+        "Ship the verified goal.",
+        "--criterion",
+        "verified=The goal is verified.",
+        "--actor",
+        "reviewer",
+        "--if-workspace-uuid",
+        RECORDING_WORKSPACE_ID,
+        "--if-session-id",
+        RECORDING_SESSION_ID,
+        "--if-session-revision",
+        "7",
+    ]);
+    assert!(goal_define_output.status.success());
+    let goal_define_response = one_json(&goal_define_output);
+    assert_eq!(goal_define_response["command"], "goal.define");
+    assert_eq!(goal_define_response["result"]["goal_revision"], 1);
+    let goal_define_requests = goal_define_daemon.finish();
+    assert_eq!(goal_define_requests[0]["command"], "goal.define");
+    assert_eq!(
+        goal_define_requests[0]["payload"]["goal"],
+        "Ship the verified goal."
+    );
+
+    let goal_revise_daemon = RecordingDaemon::start(
+        &fixture,
+        vec![RecordingReply::V2Output(
+            authoritative_goal_revision_result(),
+        )],
+    );
+    let goal_revise_output = fixture.run(&[
+        "--json",
+        "--worktree",
+        fixture.root.to_string_lossy().as_ref(),
+        "goal",
+        "revise",
+        "--goal",
+        "Ship the revised verified goal.",
+        "--criterion",
+        "verified=The revised goal is verified.",
+        "--rework-to",
+        "implement",
+        "--reason",
+        "The requirement changed.",
+        "--actor",
+        "reviewer",
+        "--if-workspace-uuid",
+        RECORDING_WORKSPACE_ID,
+        "--if-session-id",
+        RECORDING_SESSION_ID,
+        "--if-session-revision",
+        "7",
+        "--if-attempt",
+        RECORDING_ATTEMPT_ID,
+        "--if-goal-revision",
+        "1",
+    ]);
+    assert!(goal_revise_output.status.success());
+    let goal_revise_response = one_json(&goal_revise_output);
+    assert_eq!(goal_revise_response["command"], "goal.revise");
+    assert_eq!(goal_revise_response["result"]["goal_revision"], 2);
+    let goal_revise_requests = goal_revise_daemon.finish();
+    assert_eq!(goal_revise_requests[0]["command"], "goal.revise");
+    assert_eq!(goal_revise_requests[0]["preconditions"]["goal_revision"], 1);
+
     let executed_routes = DAEMON_CONTRACTS
         .iter()
         .map(|contract| contract.route)
@@ -3356,6 +3470,8 @@ rework:
         .chain(service_routes.iter().map(|(route, _)| *route))
         .chain(std::iter::once("session.decide"))
         .chain(std::iter::once("session.rework"))
+        .chain(std::iter::once("goal.define"))
+        .chain(std::iter::once("goal.revise"))
         .collect::<BTreeSet<_>>();
     assert_eq!(
         executed_routes,

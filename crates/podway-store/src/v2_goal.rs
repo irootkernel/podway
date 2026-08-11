@@ -410,6 +410,26 @@ impl GoalSnapshotModelV2 {
     }
 }
 
+pub(crate) fn validate_goal_revision_target_v2(
+    snapshot: &ProcedureSnapshotV2,
+    target: &GraphNodeId,
+) -> Result<(), crate::GraphMutationErrorV2> {
+    let model = GoalSnapshotModelV2::parse(snapshot)?;
+    if !model.manual_targets.contains(target) {
+        return Err(crate::GraphMutationErrorV2::GoalRevisionTargetNotAllowed {
+            target_graph_node_id: target.clone(),
+        });
+    }
+    if !model.revision_safe(target) {
+        return Err(
+            crate::GraphMutationErrorV2::GoalRevisionTargetNotRevisionSafe {
+                target_graph_node_id: target.clone(),
+            },
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_goal_state_v2(
     snapshot: &ProcedureSnapshotV2,
     trace: &SessionTraceV2,

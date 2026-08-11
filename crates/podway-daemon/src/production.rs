@@ -18,11 +18,12 @@ use podway_git::{
 };
 use podway_protocol::{
     CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OutputEnvelopeInputV2,
-    OutputEnvelopeV2, ProcedureV2MutationRequestV1, RequestEnvelopeV1, RequestIdV1,
-    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
-    SessionStartSourceV1, SliceCommandV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
-    TerminalJobResponseV1, TerminalJobSuccessResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
-    canonical_reset_all_identity_v1, decode_response_payload_v2,
+    OutputEnvelopeV2, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1, RequestEnvelopeV1,
+    RequestIdV1, ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1,
+    SessionOutputV1, SessionStartSourceV1, SliceCommandV1, SliceRequestV1,
+    TerminalJobCancellationProjectionV1, TerminalJobResponseV1, TerminalJobSuccessResultV1,
+    WorkspaceOutputV1, WorktreeSelectorWireV1, canonical_reset_all_identity_v1,
+    decode_response_payload_v2,
 };
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
@@ -58,8 +59,8 @@ use crate::{
         DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1, ExecutionIdSourceV1,
         ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
         ResetAllPreparationOutcomeV1, admitted_procedure_v2_start_projection_v1,
-        admitted_start_procedure_digest_v1, prepare_custom_procedure_v2_start,
-        prepare_preset_procedure_v2_start,
+        admitted_start_procedure_digest_v1, bind_initial_goal_for_start_v2,
+        prepare_custom_procedure_v2_start, prepare_preset_procedure_v2_start,
     },
     native_execution::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeProcedureProviderV1,
@@ -551,6 +552,31 @@ impl WorkerExecutionV1<WorkspaceSchedulerContextV1> for NativeContextExecutionV1
         Self::engine(context, self.observability.clone())
             .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
             .admit_procedure_v2_start_for_workspace_with_response_context(
+                binding,
+                request,
+                idempotency_key,
+                response_context.cloned(),
+            )
+    }
+
+    fn admit_procedure_v2_typed_start(
+        &self,
+        context: &WorkspaceSchedulerContextV1,
+        binding: &WorkspaceBindingV1,
+        request: &ProcedureV2StartRequestV1,
+        idempotency_key: StoreIdempotencyKeyV1,
+        response_context: Option<&podway_store::PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ProcedureV2StartPreparationErrorV1> {
+        if context.binding() != binding {
+            return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                ExecutionErrorV1::InvalidPersistedExecution {
+                    reason: "scheduler context changed during typed Procedure v2 start admission",
+                },
+            ));
+        }
+        Self::engine(context, self.observability.clone())
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
+            .admit_procedure_v2_typed_start_for_workspace_with_response_context(
                 binding,
                 request,
                 idempotency_key,
@@ -1408,13 +1434,15 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         if let DaemonRequestV1::ProcedureV2Mutation(typed_request) = daemon_request {
             if !matches!(
                 typed_request.command().command_name(),
-                "session.decide" | "session.rework"
+                "session.decide" | "session.rework" | "goal.define" | "goal.revise"
             ) {
                 return Ok(None);
             }
             let terminal_kind = match typed_request.command().command_name() {
                 "session.decide" => TerminalCommandKindV1::Decision,
                 "session.rework" => TerminalCommandKindV1::Rework,
+                "goal.define" => TerminalCommandKindV1::GoalDefinition,
+                "goal.revise" => TerminalCommandKindV1::GoalRevision,
                 _ => unreachable!("typed mutation was filtered above"),
             };
             let runtime = ProductionWorkspaceRuntimeV1::new(
@@ -1504,8 +1532,184 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             .map(Some)
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
         }
+        if let DaemonRequestV1::ProcedureV2Start(typed_request) = daemon_request {
+            if !typed_request.command().is_mutation() {
+                let (start, initial_goal, expected_current) = match typed_request.command() {
+                    podway_protocol::ProcedureV2StartCommandV1::SessionStart(input) => (
+                        &input.start,
+                        input.initial_goal.as_ref(),
+                        GraphStartCurrentTaskV2::Absent,
+                    ),
+                    podway_protocol::ProcedureV2StartCommandV1::SessionStartReplace(input) => (
+                        &input.start.start,
+                        input.start.initial_goal.as_ref(),
+                        GraphStartCurrentTaskV2::Exact {
+                            session_id: input.preconditions.expected_session_id.clone(),
+                            session_revision: input.preconditions.expected_session_revision,
+                        },
+                    ),
+                };
+                let Some(initial_goal) = initial_goal else {
+                    return Ok(None);
+                };
+                let selector = selector_from_wire(typed_request.selector())?;
+                let readonly = self
+                    .manager
+                    .resolve_existing_readonly(selector, typed_request.selector().expected_uuid())
+                    .map_err(map_runtime_error)?;
+                let provider = NativeProcedureProviderV1::new(
+                    SqliteWorkspaceBindingInspectorV1::new(readonly.store_options().clone()),
+                );
+                let ids = NativeExecutionIdSourceV1;
+                let now = self.clock.now();
+                let state = match &start.source {
+                    SessionStartSourceV1::Procedure { procedure } => {
+                        prepare_custom_procedure_v2_start(
+                            &provider,
+                            readonly.binding(),
+                            procedure,
+                            start.expected_procedure_digest.as_ref(),
+                            &start.task_title,
+                            ids.next_session_id(),
+                            ids.next_attempt_id(),
+                            ids.next_procedure_snapshot_id(),
+                            now,
+                        )
+                        .map(Some)
+                    }
+                    SessionStartSourceV1::Preset { preset } => prepare_preset_procedure_v2_start(
+                        &provider,
+                        preset,
+                        &start.task_title,
+                        ids.next_session_id(),
+                        ids.next_attempt_id(),
+                        ids.next_procedure_snapshot_id(),
+                        now,
+                    ),
+                }
+                .map_err(map_procedure_v2_start_preparation_error)?;
+                let Some(state) = state else {
+                    return Ok(None);
+                };
+                let state = bind_initial_goal_for_start_v2(state, initial_goal, now)
+                    .map_err(map_procedure_v2_start_preparation_error)?;
+                let actual_current = SqliteStoreV1::inspect_graph_start_current_task_v2(
+                    readonly.database_path(),
+                    readonly.binding().identity(),
+                    readonly.store_options(),
+                    podway_store::EpochMillisV1::new(now.get()),
+                )
+                .map_err(map_store_error)?;
+                validate_graph_start_dry_run_fence_v2(&expected_current, &actual_current)?;
+                let result = json!({
+                    "schema":"podway.session-start-result/v2", "procedure_schema":"podway.procedure/v2",
+                    "procedure_digest":state.snapshot().digest(), "dry_run":true,
+                    "goal_tracking":state.snapshot().goal_tracking(), "goal_defined":true,
+                });
+                return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                    request_id: request.request_id().clone(),
+                    command: request.command().clone(),
+                    generated_at: self.clock.generated_at(),
+                    workspace: None,
+                    job: None,
+                    session: None,
+                    result: result
+                        .as_object()
+                        .expect("typed start preview is an object")
+                        .clone(),
+                    warnings: Vec::new(),
+                })
+                .map(ResponseEnvelopeV2::OutputV2)
+                .map(Some)
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+            }
+            let runtime = ProductionWorkspaceRuntimeV1::new(
+                Arc::clone(&self.manager),
+                Arc::clone(&self.clock),
+            );
+            let workspace = runtime.resolve_existing(typed_request.selector())?;
+            let idempotency_key = StoreIdempotencyKeyV1::new(
+                request
+                    .idempotency_key()
+                    .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?
+                    .as_str(),
+            )
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+            let response_context = podway_store::PersistedResponseContextV1::new(
+                request.request_id().as_str(),
+                request.command().as_str(),
+                workspace.output.uuid().clone(),
+                workspace.output.root(),
+                workspace.output.latest_workspace_sequence(),
+            )
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?
+            .with_frozen_public_terminal_envelope();
+            let completion_mode = if request.options().detach() {
+                WorkerCompletionModeV1::Detached
+            } else {
+                WorkerCompletionModeV1::WaitUntil(
+                    MonotonicDeadlineV1::after(
+                        self.clock.as_ref(),
+                        request.options().wait_timeout_ms(),
+                    )
+                    .map_err(map_read_error)?,
+                )
+            };
+            let Some(submission) = self
+                .worker
+                .submit_procedure_v2_typed_start_with_response_context(
+                    &workspace.scheduler,
+                    typed_request,
+                    idempotency_key,
+                    response_context,
+                    completion_mode,
+                )
+                .map_err(map_worker_error)?
+            else {
+                return Ok(None);
+            };
+            let terminal =
+                terminal_replay(submission.admission()).or_else(|| match submission.completion() {
+                    Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
+                    Some(WorkerWaitResultV1::TimedOut(_)) | None => None,
+                });
+            if let Some(receipt) = terminal {
+                return terminal_direct_response_v2(
+                    receipt,
+                    TerminalCommandKindV1::Start,
+                    request.request_id(),
+                )
+                .map(Some);
+            }
+            if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
+                return Err(
+                    DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout)
+                        .with_job(&job_output(view)?),
+                );
+            }
+            let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
+            let result = json!({
+                "schema": "podway.detached-admission-result/v2", "detached": true,
+                "admission": { "admitted": true, "job_id": job.id(), "workspace_sequence": job.sequence() },
+            });
+            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.clock.generated_at(),
+                workspace: Some(workspace.output),
+                job: Some(job),
+                session: None,
+                result: result
+                    .as_object()
+                    .expect("detached result is an object")
+                    .clone(),
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+        }
         let Some(slice_request) = daemon_request.legacy() else {
-            // Goal-bearing v2 start DTOs remain closed until durable initial-goal admission lands.
             return Ok(None);
         };
         if let SliceCommandV1::SessionReset(input) = slice_request.command()
@@ -2822,6 +3026,8 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
         podway_store::CommandV1::SessionReset => "session.reset",
         podway_store::CommandV1::SessionDecide => "session.decide",
         podway_store::CommandV1::SessionRework => "session.rework",
+        podway_store::CommandV1::GoalDefine => "goal.define",
+        podway_store::CommandV1::GoalRevise => "goal.revise",
         podway_store::CommandV1::ItemCheck { .. } => "item.check",
         podway_store::CommandV1::ItemUncheck { .. } => "item.uncheck",
         podway_store::CommandV1::ItemSet { .. } => "item.set",
@@ -2842,6 +3048,8 @@ enum TerminalCommandKindV1 {
     Reopen,
     Decision,
     Rework,
+    GoalDefinition,
+    GoalRevision,
     Other,
 }
 fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> TerminalCommandKindV1 {
@@ -2855,6 +3063,8 @@ fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> Termin
         "session.reopen" => TerminalCommandKindV1::Reopen,
         "session.decide" => TerminalCommandKindV1::Decision,
         "session.rework" => TerminalCommandKindV1::Rework,
+        "goal.define" => TerminalCommandKindV1::GoalDefinition,
+        "goal.revise" => TerminalCommandKindV1::GoalRevision,
         _ => TerminalCommandKindV1::Other,
     }
 }
@@ -2868,6 +3078,8 @@ fn validate_terminal_receipt_projection(
                 None
                 | Some(PersistedGraphTerminalOperationV2::Decide { .. })
                 | Some(PersistedGraphTerminalOperationV2::Rework { .. })
+                | Some(PersistedGraphTerminalOperationV2::GoalDefine { .. })
+                | Some(PersistedGraphTerminalOperationV2::GoalRevise { .. })
                 | Some(PersistedGraphTerminalOperationV2::Complete { .. })
                 | Some(PersistedGraphTerminalOperationV2::Skip { .. })
                 | Some(PersistedGraphTerminalOperationV2::Retry { .. })
@@ -3063,6 +3275,8 @@ fn validate_frozen_terminal_error(
         Some(
             PersistedGraphTerminalOperationV2::Decide { .. }
             | PersistedGraphTerminalOperationV2::Rework { .. }
+            | PersistedGraphTerminalOperationV2::GoalDefine { .. }
+            | PersistedGraphTerminalOperationV2::GoalRevise { .. }
             | PersistedGraphTerminalOperationV2::Complete { .. }
             | PersistedGraphTerminalOperationV2::Skip { .. }
             | PersistedGraphTerminalOperationV2::Retry { .. }
@@ -3134,7 +3348,8 @@ fn validate_frozen_v2_result_projection(
                             == Some(projection.entry_graph_node_id().as_str())
                         && result.get("goal_tracking").and_then(Value::as_bool)
                             == Some(projection.goal_tracking())
-                        && result.get("goal_defined").and_then(Value::as_bool) == Some(false)
+                        && result.get("goal_defined").and_then(Value::as_bool)
+                            == Some(projection.goal_defined())
                 }))
         }
         (
@@ -3399,6 +3614,42 @@ fn validate_frozen_v2_result_projection(
                     && result.get("changed").and_then(Value::as_bool) == Some(*changed)
             }
         }
+        (
+            Some("podway.goal-definition-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                revision_after,
+                ..
+            }),
+        ) => graph_session
+            .and_then(|projection| projection.operation())
+            .is_some_and(|operation| {
+                let PersistedGraphTerminalOperationV2::GoalDefine { record } = operation else {
+                    return false;
+                };
+                record.as_object().is_some_and(|record| {
+                    record
+                        .iter()
+                        .all(|(key, value)| result.get(key) == Some(value))
+                }) && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+            }),
+        (
+            Some("podway.goal-revision-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                revision_after,
+                ..
+            }),
+        ) => graph_session
+            .and_then(|projection| projection.operation())
+            .is_some_and(|operation| {
+                let PersistedGraphTerminalOperationV2::GoalRevise { record, .. } = operation else {
+                    return false;
+                };
+                record.as_object().is_some_and(|record| {
+                    record
+                        .iter()
+                        .all(|(key, value)| result.get(key) == Some(value))
+                }) && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+            }),
         _ => false,
     };
     if matches_projection {
@@ -3425,6 +3676,8 @@ fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'
         | PersistedDomainCommandV1::SessionReopen
         | PersistedDomainCommandV1::SessionDecide
         | PersistedDomainCommandV1::SessionRework
+        | PersistedDomainCommandV1::GoalDefine
+        | PersistedDomainCommandV1::GoalRevise
         | PersistedDomainCommandV1::ItemCheck { .. }
         | PersistedDomainCommandV1::ItemUncheck { .. }
         | PersistedDomainCommandV1::ItemSet { .. }
@@ -3515,6 +3768,29 @@ fn graph_terminal_envelope_v2(
             .as_object()
             .expect("graph rework result is an object")
             .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::GoalDefine { record }) => {
+            let mut result = record
+                .as_object()
+                .cloned()
+                .ok_or_else(terminal_replay_integrity_failure)?;
+            result.insert(
+                "schema".to_owned(),
+                json!("podway.goal-definition-result/v1"),
+            );
+            result.insert("admission".to_owned(), graph_admission_value_v2(receipt)?);
+            result.insert("revision".to_owned(), json!(graph.revision_after()));
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::GoalRevise { record, .. }) => {
+            let mut result = record
+                .as_object()
+                .cloned()
+                .ok_or_else(terminal_replay_integrity_failure)?;
+            result.insert("schema".to_owned(), json!("podway.goal-revision-result/v1"));
+            result.insert("admission".to_owned(), graph_admission_value_v2(receipt)?);
+            result.insert("revision".to_owned(), json!(graph.revision_after()));
             graph_success_terminal_envelope_v2(receipt, result)
         }
         Some(PersistedGraphTerminalOperationV2::Complete {
@@ -3819,7 +4095,7 @@ fn graph_start_terminal_envelope_v2(
         "procedure_digest": graph.procedure_digest(),
         "dry_run": false,
         "goal_tracking": graph.goal_tracking(),
-        "goal_defined": false,
+        "goal_defined": graph.goal_defined(),
         "admission": {
             "admitted": true,
             "job_id": job.id(),
@@ -4103,6 +4379,8 @@ fn map_terminal_domain_error(
                 | TerminalCommandKindV1::Reopen
                 | TerminalCommandKindV1::Decision
                 | TerminalCommandKindV1::Rework
+                | TerminalCommandKindV1::GoalDefinition
+                | TerminalCommandKindV1::GoalRevision
                 | TerminalCommandKindV1::Start
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionRevisionConflict,
             };
@@ -4138,6 +4416,8 @@ fn map_terminal_domain_error(
                 | TerminalCommandKindV1::Start
                 | TerminalCommandKindV1::Decision
                 | TerminalCommandKindV1::Rework
+                | TerminalCommandKindV1::GoalDefinition
+                | TerminalCommandKindV1::GoalRevision
                 | TerminalCommandKindV1::Other => DispatchFailureKindV1::SessionNotRunning,
             };
             DispatchFailureV1::new(kind)
@@ -4175,6 +4455,40 @@ fn map_terminal_domain_error(
 
 fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> DispatchFailureV1 {
     match error {
+        PersistedGraphMutationFailureV2::GoalTrackingNotEnabled => {
+            DispatchFailureV1::new(DispatchFailureKindV1::GoalTrackingNotEnabled)
+                .with_details(DispatchErrorDetailsV1::default().with_goal_tracking_not_enabled())
+        }
+        PersistedGraphMutationFailureV2::SessionGoalAlreadyDefined { goal_revision } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionGoalAlreadyDefined).with_details(
+                DispatchErrorDetailsV1::default().with_session_goal_already_defined(*goal_revision),
+            )
+        }
+        PersistedGraphMutationFailureV2::GoalRevisionStale {
+            expected_goal_revision,
+            actual_goal_revision,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::GoalRevisionStale).with_details(
+            DispatchErrorDetailsV1::default()
+                .with_goal_revision_stale(*expected_goal_revision, *actual_goal_revision),
+        ),
+        PersistedGraphMutationFailureV2::GoalRevisionTargetNotAllowed {
+            target_graph_node_id,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::GoalRevisionTargetNotAllowed)
+            .with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_goal_revision_target_not_allowed(target_graph_node_id.clone()),
+            ),
+        PersistedGraphMutationFailureV2::GoalRevisionTargetNotRevisionSafe {
+            target_graph_node_id,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::GoalRevisionTargetNotRevisionSafe)
+            .with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_goal_revision_target_not_revision_safe(target_graph_node_id.clone()),
+            ),
+        PersistedGraphMutationFailureV2::ReactivationFlagRequired => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ReactivationFlagRequired)
+                .with_details(DispatchErrorDetailsV1::default().with_reactivation_flag_required())
+        }
         PersistedGraphMutationFailureV2::SessionNotRunning => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionNotRunning)
         }
@@ -4455,6 +4769,13 @@ fn map_procedure_v2_start_preparation_error(
         ) => DispatchFailureV1::new(DispatchFailureKindV1::ProcedureInvalid),
         ProcedureV2StartPreparationErrorV1::PinnedPresetDigestMismatch { expected, actual } => {
             procedure_digest_mismatch_failure(expected, actual)
+        }
+        ProcedureV2StartPreparationErrorV1::GoalMutation(
+            podway_store::GraphMutationErrorV2::GoalTrackingNotEnabled,
+        ) => DispatchFailureV1::new(DispatchFailureKindV1::GoalTrackingNotEnabled)
+            .with_details(DispatchErrorDetailsV1::default().with_goal_tracking_not_enabled()),
+        ProcedureV2StartPreparationErrorV1::GoalMutation(_) => {
+            DispatchFailureV1::new(DispatchFailureKindV1::Internal)
         }
         ProcedureV2StartPreparationErrorV1::Domain(_)
         | ProcedureV2StartPreparationErrorV1::InvalidStoreValue(_) => {
@@ -5680,6 +6001,7 @@ mod tests {
             Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
             graph_node_id.clone(),
             false,
+            false,
         )
         .unwrap()
         .with_operation(operation)
@@ -5749,6 +6071,7 @@ mod tests {
             Revision::new(5),
             Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
             GraphNodeId::new("entry").unwrap(),
+            false,
             false,
         )
         .unwrap()

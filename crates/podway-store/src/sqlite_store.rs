@@ -706,6 +706,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             state.snapshot().digest().clone(),
             state.snapshot().entry_graph_node_id().clone(),
             state.snapshot().goal_tracking(),
+            state.goal_state().current_revision().is_some(),
         )
         .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         let mut persisted = PersistedTerminalReceiptV1::new_with_graph_projection(
@@ -867,6 +868,8 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 crate::CommandV1::SessionComplete
                     | crate::CommandV1::SessionDecide
                     | crate::CommandV1::SessionRework
+                    | crate::CommandV1::GoalDefine
+                    | crate::CommandV1::GoalRevise
                     | crate::CommandV1::SessionRetry
                     | crate::CommandV1::SessionSkip
                     | crate::CommandV1::SessionBlock
@@ -962,6 +965,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             post_state.snapshot().digest().clone(),
             post_state.snapshot().entry_graph_node_id().clone(),
             post_state.snapshot().goal_tracking(),
+            post_state.goal_state().current_revision().is_some(),
         )
         .and_then(|projection| projection.with_operation(operation))
         .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
@@ -1107,6 +1111,8 @@ impl StoreContractV1 for SqliteStoreV1 {
             crate::CommandV1::SessionComplete
                 | crate::CommandV1::SessionDecide
                 | crate::CommandV1::SessionRework
+                | crate::CommandV1::GoalDefine
+                | crate::CommandV1::GoalRevise
                 | crate::CommandV1::SessionRetry
                 | crate::CommandV1::SessionSkip
                 | crate::CommandV1::SessionBlock
@@ -1899,7 +1905,10 @@ fn validate_procedure_v2_action_admission_v1(
         .map(podway_core::SessionAttemptV2::attempt_id);
     let reject = |failure| StoreErrorV1::ProcedureV2PreconditionFailedV1 { failure };
 
-    if matches!(request.command(), crate::CommandV1::SessionRework) {
+    if matches!(
+        request.command(),
+        crate::CommandV1::SessionRework | crate::CommandV1::GoalRevise
+    ) {
         let expected_revision = preconditions
             .expected_session_revision()
             .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
@@ -1917,17 +1926,18 @@ fn validate_procedure_v2_action_admission_v1(
             ));
         }
         match current.trace().lifecycle() {
-            podway_core::SessionLifecycle::Running => {
-                let expected_attempt = preconditions
-                    .expected_attempt_id()
-                    .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
-                if active_attempt != Some(expected_attempt) {
+            podway_core::SessionLifecycle::Running => match preconditions.expected_attempt_id() {
+                Some(expected_attempt) if active_attempt != Some(expected_attempt) => {
                     return Err(reject(PersistedGraphMutationFailureV2::AttemptNotCurrent {
                         expected: expected_attempt.clone(),
                         actual: active_attempt.cloned(),
                     }));
                 }
-            }
+                None if !matches!(request.command(), crate::CommandV1::GoalRevise) => {
+                    return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                }
+                Some(_) | None => {}
+            },
             podway_core::SessionLifecycle::Completed | podway_core::SessionLifecycle::Cancelled => {
                 if let Some(expected_attempt) = preconditions.expected_attempt_id() {
                     return Err(reject(PersistedGraphMutationFailureV2::AttemptNotCurrent {
@@ -1936,6 +1946,27 @@ fn validate_procedure_v2_action_admission_v1(
                     }));
                 }
             }
+        }
+        return Ok(());
+    }
+
+    if matches!(request.command(), crate::CommandV1::GoalDefine) {
+        let expected_revision = preconditions
+            .expected_session_revision()
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        if preconditions.expected_attempt_id().is_some()
+            || preconditions.expected_item_id().is_some()
+            || preconditions.expected_item_revision().is_some()
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+        if expected_revision != current_revision {
+            return Err(reject(
+                PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: expected_revision,
+                    actual: current_revision,
+                },
+            ));
         }
         return Ok(());
     }
@@ -4180,7 +4211,7 @@ fn procedure_v2_operation_payload_v1(
     ];
     let expected_keys = if version == 8 {
         &v8_keys[..]
-    } else if version == 9 || version == 10 {
+    } else if matches!(version, 9..=11) {
         &v9_keys[..]
     } else {
         &v7_keys[..]
@@ -4192,7 +4223,7 @@ fn procedure_v2_operation_payload_v1(
             .get("execution_version")
             .and_then(serde_json::Value::as_u64)
             != Some(version)
-        || (![9, 10].contains(&version)
+        || (!(9..=11).contains(&version)
             && !object
                 .get("attached_artifact")
                 .is_some_and(serde_json::Value::is_null))
@@ -4204,6 +4235,84 @@ fn procedure_v2_operation_payload_v1(
         .and_then(serde_json::Value::as_object)
         .ok_or_else(invalid)?;
     Ok((object.clone(), payload.clone()))
+}
+
+fn procedure_v2_goal_definition_v1(
+    payload: &serde_json::Map<String, serde_json::Value>,
+) -> Result<
+    (
+        podway_core::GoalStatementV2,
+        podway_core::GoalDefinitionV2,
+        Option<podway_core::ActorAttributionV2>,
+    ),
+    StoreErrorV1,
+> {
+    let invalid = || invariant(StoreInvariantV1::TransitionMutationShape);
+    let statement = payload
+        .get("goal")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(invalid)
+        .and_then(|value| {
+            podway_core::GoalStatementV2::new(value.to_owned()).map_err(|_| invalid())
+        })?;
+    let criteria = payload
+        .get("criteria")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(invalid)?
+        .iter()
+        .map(|value| {
+            let value = value.as_object().ok_or_else(invalid)?;
+            if value.len() != 2 {
+                return Err(invalid());
+            }
+            let criterion_id = value
+                .get("criterion_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(invalid)
+                .and_then(|value| {
+                    podway_core::CriterionId::new(value.to_owned()).map_err(|_| invalid())
+                })?;
+            let statement = value
+                .get("statement")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(invalid)?;
+            podway_core::GoalCriterionV2::new(criterion_id, statement.to_owned())
+                .map_err(|_| invalid())
+        })
+        .collect::<Result<Vec<_>, StoreErrorV1>>()?;
+    let criteria = podway_core::GoalDefinitionV2::new(criteria).map_err(|_| invalid())?;
+    let actor = match payload.get("actor") {
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(value)) => {
+            Some(podway_core::ActorAttributionV2::new(value.clone()).map_err(|_| invalid())?)
+        }
+        _ => return Err(invalid()),
+    };
+    Ok((statement, criteria, actor))
+}
+
+fn procedure_v2_goal_revision_fence_v1(
+    document: &serde_json::Map<String, serde_json::Value>,
+    current: &GraphSessionStateV2,
+) -> Result<podway_core::GoalRevisionNumberV2, StoreErrorV1> {
+    let invalid = || invariant(StoreInvariantV1::TransitionMutationShape);
+    let preconditions = document
+        .get("preconditions")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(invalid)?;
+    if preconditions
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(current.trace().session_id().as_str())
+    {
+        return Err(invalid());
+    }
+    let revision = preconditions
+        .get("goal_revision")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|revision| *revision > 0)
+        .ok_or_else(invalid)?;
+    Ok(podway_core::GoalRevisionNumberV2::new(revision))
 }
 
 fn graph_cursor_stable_non_memory_exact_v2(
@@ -4477,6 +4586,67 @@ fn decision_record_projection_matches_v2(
             })
 }
 
+fn goal_revision_record_projection_matches_v2(
+    value: &serde_json::Value,
+    record: &podway_core::GoalRevisionRecordV2,
+) -> bool {
+    let Some(value) = value.as_object() else {
+        return false;
+    };
+    let criteria = record.criteria().criteria();
+    let Some(projected_criteria) = value.get("criteria").and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+    let first = record.revision() == podway_core::GoalRevisionNumberV2::FIRST;
+    value.len() == (if first { 4 } else { 7 }) + usize::from(record.actor().is_some())
+        && value
+            .get("goal_revision")
+            .and_then(serde_json::Value::as_u64)
+            == Some(record.revision().get())
+        && value.get("statement").and_then(serde_json::Value::as_str)
+            == Some(record.statement().as_str())
+        && projected_criteria.len() == criteria.len()
+        && projected_criteria
+            .iter()
+            .zip(criteria)
+            .all(|(projected, criterion)| {
+                projected.as_object().is_some_and(|projected| {
+                    projected.len() == 2
+                        && projected
+                            .get("criterion_id")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(criterion.id().as_str())
+                        && projected
+                            .get("statement")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(criterion.statement())
+                })
+            })
+        && match record.actor() {
+            Some(actor) => {
+                value.get("actor").and_then(serde_json::Value::as_str) == Some(actor.as_str())
+            }
+            None => !value.contains_key("actor"),
+        }
+        && value.get("recorded_at").and_then(serde_json::Value::as_str)
+            == rfc3339_millis_graph_terminal_v2(record.created_at()).as_deref()
+        && if first {
+            true
+        } else {
+            value.get("reason").and_then(serde_json::Value::as_str)
+                == record
+                    .reason()
+                    .map(podway_core::GoalRevisionReasonV2::as_str)
+                && value.get("rework_to").and_then(serde_json::Value::as_str)
+                    == record.rework_to().map(podway_core::GraphNodeId::as_str)
+                && value
+                    .get("reactivated")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(record.reactivated())
+        }
+}
+
 fn rework_record_projection_matches_v2(
     value: &serde_json::Value,
     record: &podway_core::ReworkRecordV2,
@@ -4529,6 +4699,111 @@ fn validate_graph_mutation_terminal_shape_v2(
 ) -> Result<(), StoreErrorV1> {
     let preconditions = execution.preconditions();
     let valid = match (execution.command(), result, operation) {
+        (
+            crate::CommandV1::GoalDefine,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::GoalDefine { record },
+        ) => {
+            let (document, payload) =
+                procedure_v2_operation_payload_v1(execution, "goal.define", 11)?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let (statement, criteria, actor) = procedure_v2_goal_definition_v1(&payload)?;
+            let expected_session_id = document
+                .get("preconditions")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|value| value.get("session_id"))
+                .and_then(serde_json::Value::as_str);
+            let observed = current
+                .define_goal_v2(
+                    preconditions
+                        .expected_session_revision()
+                        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+                    statement,
+                    criteria,
+                    actor,
+                    now,
+                )
+                .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            *changed
+                && payload.len() == 3
+                && document
+                    .get("fresh_attempt_id")
+                    .is_some_and(serde_json::Value::is_null)
+                && expected_session_id == Some(current.trace().session_id().as_str())
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && observed.state() == next
+                && goal_revision_record_projection_matches_v2(record, observed.revision())
+        }
+        (
+            crate::CommandV1::GoalRevise,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::GoalRevise {
+                record,
+                target_attempt_id,
+            },
+        ) => {
+            let (document, payload) =
+                procedure_v2_operation_payload_v1(execution, "goal.revise", 11)?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let (statement, criteria, actor) = procedure_v2_goal_definition_v1(&payload)?;
+            let expected_goal_revision = procedure_v2_goal_revision_fence_v1(&document, current)?;
+            let fresh_attempt_id = document
+                .get("fresh_attempt_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::AttemptId::new(value.to_owned()).ok())
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let target_graph_node_id = payload
+                .get("target_graph_node_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::GraphNodeId::new(value.to_owned()).ok())
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let reason = payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::GoalRevisionReasonV2::new(value.to_owned()).ok())
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let reactivate = payload
+                .get("reactivate")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let observed = current
+                .revise_goal_v2(
+                    preconditions
+                        .expected_session_revision()
+                        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+                    preconditions.expected_attempt_id(),
+                    expected_goal_revision,
+                    statement,
+                    criteria,
+                    target_graph_node_id,
+                    fresh_attempt_id,
+                    reason,
+                    actor,
+                    reactivate,
+                    now,
+                )
+                .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            *changed
+                && payload.len() == 6
+                && session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next.trace().revision()
+                && observed.state() == next
+                && goal_revision_record_projection_matches_v2(record, observed.revision())
+                && target_attempt_id == observed.target_attempt_id()
+        }
         (
             crate::CommandV1::SessionRework,
             TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
@@ -5204,6 +5479,100 @@ fn graph_mutation_failure_matches_v2(
     let command = execution.command();
     let active = current.trace().active_attempt();
     match command {
+        crate::CommandV1::GoalDefine => {
+            let Some(expected_revision) = preconditions.expected_session_revision() else {
+                return false;
+            };
+            let Ok((document, payload)) =
+                procedure_v2_operation_payload_v1(execution, "goal.define", 11)
+            else {
+                return false;
+            };
+            if document
+                .get("preconditions")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|value| value.get("session_id"))
+                .and_then(serde_json::Value::as_str)
+                != Some(current.trace().session_id().as_str())
+            {
+                return false;
+            }
+            let Ok((statement, criteria, actor)) = procedure_v2_goal_definition_v1(&payload) else {
+                return false;
+            };
+            current
+                .define_goal_v2(
+                    expected_revision,
+                    statement,
+                    criteria,
+                    actor,
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+                .as_ref()
+                == Some(error)
+        }
+        crate::CommandV1::GoalRevise => {
+            let Some(expected_revision) = preconditions.expected_session_revision() else {
+                return false;
+            };
+            let Ok((document, payload)) =
+                procedure_v2_operation_payload_v1(execution, "goal.revise", 11)
+            else {
+                return false;
+            };
+            let Ok(expected_goal_revision) =
+                procedure_v2_goal_revision_fence_v1(&document, current)
+            else {
+                return false;
+            };
+            let Some(fresh_attempt_id) = document
+                .get("fresh_attempt_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::AttemptId::new(value.to_owned()).ok())
+            else {
+                return false;
+            };
+            let Ok((statement, criteria, actor)) = procedure_v2_goal_definition_v1(&payload) else {
+                return false;
+            };
+            let (Some(target_graph_node_id), Some(reason), Some(reactivate)) = (
+                payload
+                    .get("target_graph_node_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| podway_core::GraphNodeId::new(value.to_owned()).ok()),
+                payload
+                    .get("reason")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| {
+                        podway_core::GoalRevisionReasonV2::new(value.to_owned()).ok()
+                    }),
+                payload
+                    .get("reactivate")
+                    .and_then(serde_json::Value::as_bool),
+            ) else {
+                return false;
+            };
+            current
+                .revise_goal_v2(
+                    expected_revision,
+                    preconditions.expected_attempt_id(),
+                    expected_goal_revision,
+                    statement,
+                    criteria,
+                    target_graph_node_id,
+                    fresh_attempt_id,
+                    reason,
+                    actor,
+                    reactivate,
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+                .as_ref()
+                == Some(error)
+        }
         crate::CommandV1::SessionRework => {
             let Some(expected_revision) = preconditions.expected_session_revision() else {
                 return false;

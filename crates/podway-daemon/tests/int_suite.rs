@@ -58,6 +58,8 @@ mod int_v2drw005_readback;
 mod int_v2drw006_failures;
 #[path = "int_v2drw_epic_identity.rs"]
 mod int_v2drw_epic_identity;
+#[path = "int_v2gol001_goal_revision.rs"]
+mod int_v2gol001_goal_revision;
 #[path = "int_v2run001_start.rs"]
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]

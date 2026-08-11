@@ -721,8 +721,8 @@ impl ProcedureV2StartCommandV1 {
 /// One decoded Procedure v2 start plus its lossless worktree selector.
 ///
 /// This protocol boundary is intentionally separate from [`SliceRequestV1`] so goal-bearing
-/// starts do not expand the released v1 request parser. The daemon recognizes this boundary but
-/// returns `UNSUPPORTED_V2_CAPABILITY` until V2RUN-001 supplies the Procedure v2 runtime handler.
+/// starts do not expand the released v1 request parser. The daemon admits it through the typed
+/// Procedure v2 runtime path.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcedureV2StartRequestV1 {
@@ -806,7 +806,7 @@ pub struct GoalAssessCriterionV2 {
     pub expected_goal_revision: u64,
 }
 
-/// The five daemon mutation routes reserved by the Procedure v2 contract.
+/// The five typed daemon mutation routes owned by the Procedure v2 contract.
 pub const RESERVED_V2_MUTATION_COMMAND_NAMES_V1: [&str; 5] = [
     "session.decide",
     "session.rework",
@@ -815,7 +815,7 @@ pub const RESERVED_V2_MUTATION_COMMAND_NAMES_V1: [&str; 5] = [
     "goal.assess_criterion",
 ];
 
-/// Typed request data for the reserved Procedure v2 daemon mutation boundary.
+/// Typed request data for the Procedure v2 daemon mutation boundary.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcedureV2MutationCommandV1 {

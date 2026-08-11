@@ -81,6 +81,21 @@ struct UnsupportedV2CapabilityDetailsV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum V2RuntimeErrorDetailsV1 {
+    GoalTrackingNotEnabled,
+    SessionGoalAlreadyDefined {
+        goal_revision: u64,
+    },
+    GoalRevisionStale {
+        expected: u64,
+        actual: u64,
+    },
+    GoalRevisionTargetNotAllowed {
+        target_graph_node_id: GraphNodeId,
+    },
+    GoalRevisionTargetNotRevisionSafe {
+        target_graph_node_id: GraphNodeId,
+    },
+    ReactivationFlagRequired,
     GraphNodeTypeMismatch {
         graph_node_id: GraphNodeId,
         actual_node_type: String,
@@ -232,6 +247,50 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_goal_tracking_not_enabled(mut self) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::GoalTrackingNotEnabled));
+        self
+    }
+    pub fn with_session_goal_already_defined(mut self, goal_revision: u64) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::SessionGoalAlreadyDefined { goal_revision },
+        ));
+        self
+    }
+    pub fn with_goal_revision_stale(mut self, expected: u64, actual: u64) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::GoalRevisionStale {
+            expected,
+            actual,
+        }));
+        self
+    }
+    pub fn with_goal_revision_target_not_allowed(
+        mut self,
+        target_graph_node_id: GraphNodeId,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::GoalRevisionTargetNotAllowed {
+                target_graph_node_id,
+            },
+        ));
+        self
+    }
+    pub fn with_goal_revision_target_not_revision_safe(
+        mut self,
+        target_graph_node_id: GraphNodeId,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::GoalRevisionTargetNotRevisionSafe {
+                target_graph_node_id,
+            },
+        ));
+        self
+    }
+    pub fn with_reactivation_flag_required(mut self) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::ReactivationFlagRequired));
+        self
+    }
+
     pub fn with_fresh_goal_assessment_missing(mut self, goal_revision: u64) -> Self {
         self.v2_runtime = Some(Box::new(
             V2RuntimeErrorDetailsV1::FreshGoalAssessmentMissing { goal_revision },
@@ -330,6 +389,28 @@ impl DispatchErrorDetailsV1 {
         if let Some(runtime) = self.v2_runtime {
             let admission = admission_value_v1(self.job_id.as_ref(), self.job_sequence);
             let value = match *runtime {
+                V2RuntimeErrorDetailsV1::GoalTrackingNotEnabled => {
+                    json!({"schema":"podway.v2-runtime-error-details/v1","kind":"GOAL_TRACKING_NOT_ENABLED","admission":admission})
+                }
+                V2RuntimeErrorDetailsV1::SessionGoalAlreadyDefined { goal_revision } => {
+                    json!({"schema":"podway.v2-runtime-error-details/v1","kind":"SESSION_GOAL_ALREADY_DEFINED","goal_revision":goal_revision,"admission":admission})
+                }
+                V2RuntimeErrorDetailsV1::GoalRevisionStale { expected, actual } => {
+                    json!({"schema":"podway.v2-runtime-error-details/v1","kind":"GOAL_REVISION_STALE","expected_goal_revision":expected,"actual_goal_revision":actual,"admission":admission})
+                }
+                V2RuntimeErrorDetailsV1::GoalRevisionTargetNotAllowed {
+                    target_graph_node_id,
+                } => {
+                    json!({"schema":"podway.v2-runtime-error-details/v1","kind":"GOAL_REVISION_TARGET_NOT_ALLOWED","target_graph_node_id":target_graph_node_id,"admission":admission})
+                }
+                V2RuntimeErrorDetailsV1::GoalRevisionTargetNotRevisionSafe {
+                    target_graph_node_id,
+                } => {
+                    json!({"schema":"podway.v2-runtime-error-details/v1","kind":"GOAL_REVISION_TARGET_NOT_REVISION_SAFE","target_graph_node_id":target_graph_node_id,"admission":admission})
+                }
+                V2RuntimeErrorDetailsV1::ReactivationFlagRequired => {
+                    json!({"schema":"podway.v2-runtime-error-details/v1","kind":"REACTIVATION_FLAG_REQUIRED","admission":admission})
+                }
                 V2RuntimeErrorDetailsV1::GraphNodeTypeMismatch {
                     graph_node_id,
                     actual_node_type,
@@ -641,6 +722,12 @@ pub enum DispatchFailureKindV1 {
     RequiredItemsMissing,
     BlockersPresent,
     SessionGoalMissing,
+    GoalTrackingNotEnabled,
+    SessionGoalAlreadyDefined,
+    GoalRevisionStale,
+    GoalRevisionTargetNotAllowed,
+    GoalRevisionTargetNotRevisionSafe,
+    ReactivationFlagRequired,
     FreshGoalAssessmentMissing,
     BlockerLimitReached,
     ItemNotFound,
@@ -2378,6 +2465,42 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::ManualReworkTargetNotOnTrace => (
             "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
             "The requested manual rework target is not on the current trace.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::GoalTrackingNotEnabled => (
+            "GOAL_TRACKING_NOT_ENABLED",
+            "Goal tracking is not enabled for this procedure.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::SessionGoalAlreadyDefined => (
+            "SESSION_GOAL_ALREADY_DEFINED",
+            "The session goal is already defined.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::GoalRevisionStale => (
+            "GOAL_REVISION_STALE",
+            "The expected goal revision is stale.",
+            true,
+            4,
+        ),
+        DispatchFailureKindV1::GoalRevisionTargetNotAllowed => (
+            "GOAL_REVISION_TARGET_NOT_ALLOWED",
+            "The goal revision target is not allowed.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::GoalRevisionTargetNotRevisionSafe => (
+            "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
+            "The goal revision target is not revision-safe.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::ReactivationFlagRequired => (
+            "REACTIVATION_FLAG_REQUIRED",
+            "Revising a completed session requires reactivation.",
             false,
             1,
         ),

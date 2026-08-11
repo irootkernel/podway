@@ -63,6 +63,21 @@ pub enum ActiveItemMutationV2 {
 /// Stable typed failures produced before a Procedure v2 graph mutation reaches persistence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphMutationErrorV2 {
+    GoalTrackingNotEnabled,
+    SessionGoalAlreadyDefined {
+        goal_revision: GoalRevisionNumberV2,
+    },
+    GoalRevisionStale {
+        expected: GoalRevisionNumberV2,
+        actual: GoalRevisionNumberV2,
+    },
+    GoalRevisionTargetNotAllowed {
+        target_graph_node_id: GraphNodeId,
+    },
+    GoalRevisionTargetNotRevisionSafe {
+        target_graph_node_id: GraphNodeId,
+    },
+    ReactivationFlagRequired,
     SessionNotRunning,
     SessionRevisionConflict {
         expected: Revision,
@@ -156,6 +171,24 @@ pub enum GraphMutationErrorV2 {
 impl fmt::Display for GraphMutationErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::GoalTrackingNotEnabled => {
+                formatter.write_str("Procedure v2 goal tracking is not enabled")
+            }
+            Self::SessionGoalAlreadyDefined { .. } => {
+                formatter.write_str("the Procedure v2 session goal is already defined")
+            }
+            Self::GoalRevisionStale { .. } => {
+                formatter.write_str("the Procedure v2 goal revision changed")
+            }
+            Self::GoalRevisionTargetNotAllowed { .. } => {
+                formatter.write_str("the Procedure v2 goal revision target is not allowed")
+            }
+            Self::GoalRevisionTargetNotRevisionSafe { .. } => {
+                formatter.write_str("the Procedure v2 goal revision target is not revision-safe")
+            }
+            Self::ReactivationFlagRequired => {
+                formatter.write_str("completed Procedure v2 goal revision requires reactivation")
+            }
             Self::SessionNotRunning => formatter.write_str("Procedure v2 session is not running"),
             Self::SessionRevisionConflict { .. } => {
                 formatter.write_str("Procedure v2 session revision changed")
@@ -272,6 +305,11 @@ pub(crate) struct ManualReworkMemoryTransitionV2 {
     pub trace: SessionTraceV2,
     pub memory: WorkflowMemoryStateV2,
     pub record: ReworkRecordV2,
+}
+
+pub(crate) struct GoalReworkMemoryTransitionV2 {
+    pub trace: SessionTraceV2,
+    pub memory: WorkflowMemoryStateV2,
 }
 
 /// One mutable item slot belonging to a Procedure v2 attempt.
@@ -1387,6 +1425,56 @@ impl WorkflowMemoryStateV2 {
             memory,
             record,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn goal_rework_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        previous_trace: &SessionTraceV2,
+        expected_attempt_id: Option<&AttemptId>,
+        target_graph_node_id: GraphNodeId,
+        fresh_attempt_id: AttemptId,
+        goal_revision: GoalRevisionNumberV2,
+        now: UnixMillis,
+    ) -> Result<GoalReworkMemoryTransitionV2, GraphMutationErrorV2> {
+        let mut trace = previous_trace.clone();
+        trace.manual_rework(
+            expected_attempt_id,
+            target_graph_node_id,
+            fresh_attempt_id,
+            Some(goal_revision),
+        )?;
+        let fresh = trace
+            .active_attempt()
+            .ok_or_else(|| invalid("fresh Procedure v2 goal rework target is absent"))?;
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        let target_specification = model.node(fresh.graph_node_id())?;
+        let slots = target_specification
+            .items
+            .iter()
+            .map(|item| {
+                ItemSlotStateV2::new(
+                    fresh.attempt_id().clone(),
+                    item.id().clone(),
+                    item.item_type(),
+                    Revision::ZERO,
+                    None,
+                    now,
+                    now,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let evidence = resolve_evidence_at_activation_v2(target_specification, &trace, self, now)?;
+        let mut attempts = self.attempts.clone();
+        attempts.push(AttemptWorkflowMemoryV2::new(
+            fresh.attempt_id().clone(),
+            slots,
+            Vec::new(),
+            evidence,
+        )?);
+        let memory = Self::new(attempts, self.decisions.clone(), self.reworks.clone())?;
+        Ok(GoalReworkMemoryTransitionV2 { trace, memory })
     }
 
     pub fn empty_for_trace(

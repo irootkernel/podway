@@ -169,6 +169,8 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "procedure.convert",
         "session.decide",
         "session.rework",
+        "goal.define",
+        "goal.revise",
     }
 )
 V1_ROUTE_BASELINE = {

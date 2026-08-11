@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use podway_core::{
     ActorAttributionV2, AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
-    CanonicalProcedureJsonV1, GoalRevisionNumberV2, GraphNodeId, ItemId, NodeDefinitionId,
-    NodeKindV2, OptionId, ProcedureSnapshotId, ProcedureSourceKindV1, ProcedureSourceLabelV1,
-    ReasonV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2,
-    Sha256Digest, TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
+    CanonicalProcedureJsonV1, GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2,
+    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, NodeDefinitionId, NodeKindV2,
+    OptionId, ProcedureSnapshotId, ProcedureSourceKindV1, ProcedureSourceLabelV1, ReasonV2,
+    Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest,
+    TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
@@ -16,7 +17,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::v2_goal::{
     GoalStateV2, insert_goal_state_v2, load_goal_state_v2, replace_goal_state_v2,
-    validate_goal_state_successor_v2, validate_goal_state_v2,
+    validate_goal_revision_target_v2, validate_goal_state_successor_v2, validate_goal_state_v2,
 };
 use crate::v2_memory::{
     ActiveItemMutationV2, EvidenceReadbackV2, GraphMutationErrorV2, WorkflowGoalTransitionV2,
@@ -722,6 +723,19 @@ pub struct GraphManualReworkOutcomeV2 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphGoalDefinitionOutcomeV2 {
+    state: GraphSessionStateV2,
+    revision: GoalRevisionRecordV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphGoalRevisionOutcomeV2 {
+    state: GraphSessionStateV2,
+    revision: GoalRevisionRecordV2,
+    target_attempt_id: AttemptId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphBlockOutcomeV2 {
     state: GraphSessionStateV2,
     graph_node_id: GraphNodeId,
@@ -846,6 +860,33 @@ impl GraphManualReworkOutcomeV2 {
     }
     pub const fn reactivated(&self) -> bool {
         self.record.reactivated()
+    }
+}
+
+impl GraphGoalDefinitionOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+    pub fn revision(&self) -> &GoalRevisionRecordV2 {
+        &self.revision
+    }
+}
+
+impl GraphGoalRevisionOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+    pub fn revision(&self) -> &GoalRevisionRecordV2 {
+        &self.revision
+    }
+    pub fn target_attempt_id(&self) -> &AttemptId {
+        &self.target_attempt_id
     }
 }
 
@@ -1743,6 +1784,303 @@ impl GraphSessionStateV2 {
             from_attempt_id,
             to_graph_node_id,
             to_attempt_id,
+        })
+    }
+
+    pub fn bind_initial_goal_at_start_v2(
+        &self,
+        statement: GoalStatementV2,
+        criteria: GoalDefinitionV2,
+        actor: Option<ActorAttributionV2>,
+        now: UnixMillis,
+    ) -> Result<GraphGoalDefinitionOutcomeV2, GraphMutationErrorV2> {
+        if !self.snapshot.goal_tracking() {
+            return Err(GraphMutationErrorV2::GoalTrackingNotEnabled);
+        }
+        if let Some(goal_revision) = self.goal_state.current_revision() {
+            return Err(GraphMutationErrorV2::SessionGoalAlreadyDefined { goal_revision });
+        }
+        let active = self
+            .trace
+            .active_attempt()
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        let mut trace = self.trace.clone();
+        trace.bind_initial_goal_revision_at_start(active.attempt_id())?;
+        let revision = GoalRevisionRecordV2::new(
+            GoalRevisionNumberV2::FIRST,
+            None,
+            statement,
+            criteria,
+            None,
+            None,
+            false,
+            actor,
+            active.trace(),
+            now,
+        )?;
+        let goal_state = GoalStateV2::new(
+            Some(GoalRevisionNumberV2::FIRST),
+            vec![revision.clone()],
+            Vec::new(),
+            Vec::new(),
+        )?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            self.counters.clone(),
+            self.attempt_metadata.clone(),
+            self.workflow_memory.clone(),
+            goal_state,
+            self.created_at,
+            self.completed_at,
+            self.cancelled_at,
+            self.cancel_reason.clone(),
+        )?;
+        Ok(GraphGoalDefinitionOutcomeV2 { state, revision })
+    }
+
+    pub fn define_goal_v2(
+        &self,
+        expected_session_revision: Revision,
+        statement: GoalStatementV2,
+        criteria: GoalDefinitionV2,
+        actor: Option<ActorAttributionV2>,
+        now: UnixMillis,
+    ) -> Result<GraphGoalDefinitionOutcomeV2, GraphMutationErrorV2> {
+        if !self.snapshot.goal_tracking() {
+            return Err(GraphMutationErrorV2::GoalTrackingNotEnabled);
+        }
+        if let Some(goal_revision) = self.goal_state.current_revision() {
+            return Err(GraphMutationErrorV2::SessionGoalAlreadyDefined { goal_revision });
+        }
+        if self.trace.lifecycle() != SessionLifecycle::Running {
+            return Err(GraphMutationErrorV2::SessionNotRunning);
+        }
+        if self.trace.revision() != expected_session_revision {
+            return Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: expected_session_revision,
+                actual: self.trace.revision(),
+            });
+        }
+        let active = self
+            .trace
+            .active_attempt()
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        let mut trace = self.trace.clone();
+        trace.bind_initial_goal_revision(active.attempt_id())?;
+        let revision = GoalRevisionRecordV2::new(
+            GoalRevisionNumberV2::FIRST,
+            None,
+            statement,
+            criteria,
+            None,
+            None,
+            false,
+            actor,
+            active.trace(),
+            now,
+        )?;
+        let goal_state = GoalStateV2::new(
+            Some(GoalRevisionNumberV2::FIRST),
+            vec![revision.clone()],
+            Vec::new(),
+            Vec::new(),
+        )?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            self.counters.clone(),
+            self.attempt_metadata.clone(),
+            self.workflow_memory.clone(),
+            goal_state,
+            self.created_at,
+            self.completed_at,
+            self.cancelled_at,
+            self.cancel_reason.clone(),
+        )?;
+        Ok(GraphGoalDefinitionOutcomeV2 { state, revision })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn revise_goal_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: Option<&AttemptId>,
+        expected_goal_revision: GoalRevisionNumberV2,
+        statement: GoalStatementV2,
+        criteria: GoalDefinitionV2,
+        target_graph_node_id: GraphNodeId,
+        fresh_attempt_id: AttemptId,
+        reason: GoalRevisionReasonV2,
+        actor: Option<ActorAttributionV2>,
+        reactivate: bool,
+        now: UnixMillis,
+    ) -> Result<GraphGoalRevisionOutcomeV2, GraphMutationErrorV2> {
+        if !self.snapshot.goal_tracking() {
+            return Err(GraphMutationErrorV2::GoalTrackingNotEnabled);
+        }
+        if self.trace.revision() != expected_session_revision {
+            return Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: expected_session_revision,
+                actual: self.trace.revision(),
+            });
+        }
+        let current = self
+            .goal_state
+            .current_revision()
+            .ok_or(GraphMutationErrorV2::SessionGoalMissing)?;
+        if current != expected_goal_revision {
+            return Err(GraphMutationErrorV2::GoalRevisionStale {
+                expected: expected_goal_revision,
+                actual: current,
+            });
+        }
+        match self.trace.lifecycle() {
+            SessionLifecycle::Cancelled => return Err(GraphMutationErrorV2::SessionCancelled),
+            SessionLifecycle::Completed if !reactivate => {
+                return Err(GraphMutationErrorV2::ReactivationFlagRequired);
+            }
+            SessionLifecycle::Completed => {
+                if let Some(expected) = expected_attempt_id {
+                    return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                        expected: expected.clone(),
+                        actual: None,
+                    });
+                }
+            }
+            SessionLifecycle::Running => {
+                let active = self
+                    .trace
+                    .active_attempt()
+                    .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+                let expected =
+                    expected_attempt_id.ok_or_else(|| GraphMutationErrorV2::AttemptNotCurrent {
+                        expected: active.attempt_id().clone(),
+                        actual: Some(active.attempt_id().clone()),
+                    })?;
+                if active.attempt_id() != expected {
+                    return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                        expected: expected.clone(),
+                        actual: Some(active.attempt_id().clone()),
+                    });
+                }
+            }
+        }
+        validate_goal_revision_target_v2(&self.snapshot, &target_graph_node_id)?;
+        if !self.trace.attempts().iter().any(|attempt| {
+            attempt.graph_node_id() == &target_graph_node_id
+                && attempt.validity() == podway_core::AttemptValidityV2::Valid
+        }) {
+            return Err(GraphMutationErrorV2::ManualReworkTargetNotOnTrace {
+                target_graph_node_id,
+            });
+        }
+        let next_revision = GoalRevisionNumberV2::new(
+            current
+                .get()
+                .checked_add(1)
+                .ok_or_else(|| invalid("Procedure v2 goal revision overflowed"))?,
+        );
+        let transition = self.workflow_memory.goal_rework_v2(
+            &self.snapshot,
+            &self.trace,
+            expected_attempt_id,
+            target_graph_node_id.clone(),
+            fresh_attempt_id.clone(),
+            next_revision,
+            now,
+        )?;
+        let target = transition
+            .trace
+            .active_attempt()
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        let revision = GoalRevisionRecordV2::new(
+            next_revision,
+            Some(current),
+            statement,
+            criteria,
+            Some(reason.clone()),
+            Some(target_graph_node_id.clone()),
+            self.trace.lifecycle() == SessionLifecycle::Completed,
+            actor,
+            target.trace(),
+            now,
+        )?;
+        let mut revisions = self.goal_state.revisions().to_vec();
+        revisions.push(revision.clone());
+        let goal_state = GoalStateV2::new(
+            Some(next_revision),
+            revisions,
+            self.goal_state.attempt_assessments().to_vec(),
+            self.goal_state.assessments().to_vec(),
+        )?;
+        let mut metadata = self.attempt_metadata.clone();
+        if self.trace.lifecycle() == SessionLifecycle::Running {
+            let source = self
+                .trace
+                .active_attempt()
+                .expect("running trace checked above");
+            let source_index = metadata
+                .iter()
+                .position(|candidate| candidate.attempt_id() == source.attempt_id())
+                .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+            metadata[source_index] = AttemptMetadataV2::new(
+                source.attempt_id().clone(),
+                metadata[source_index].started_at(),
+                Some(now),
+                Some(reason.as_str().to_owned()),
+            )?;
+        }
+        metadata.push(AttemptMetadataV2::new(
+            fresh_attempt_id.clone(),
+            now,
+            None,
+            None,
+        )?);
+        let counters = self
+            .counters
+            .iter()
+            .map(|counter| {
+                let is_target = counter.graph_node_id() == &target_graph_node_id;
+                Ok(GraphNodeCounterV2::new(
+                    counter.graph_node_id().clone(),
+                    counter
+                        .attempt_count()
+                        .checked_add(u64::from(is_target))
+                        .ok_or_else(|| invalid("Procedure v2 goal attempt counter overflowed"))?,
+                    counter
+                        .rework_traversal_count()
+                        .checked_add(u64::from(is_target))
+                        .ok_or_else(|| invalid("Procedure v2 goal rework counter overflowed"))?,
+                ))
+            })
+            .collect::<Result<Vec<_>, GraphMutationErrorV2>>()?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            transition.trace,
+            counters,
+            metadata,
+            transition.memory,
+            goal_state,
+            self.created_at,
+            None,
+            None,
+            None,
+        )?;
+        Ok(GraphGoalRevisionOutcomeV2 {
+            state,
+            revision,
+            target_attempt_id: fresh_attempt_id,
         })
     }
 

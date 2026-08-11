@@ -3,7 +3,7 @@
     {
       "kind": "catalog",
       "path": "contracts/command-routes.json",
-      "sha256": "sha256:b288aa6bff92369c48f239f44aac63e79d3e34d9148df6c78bc5882ae3be8575"
+      "sha256": "sha256:2ac28a3c755ff8686f88fa5a86f807fa0ad8e635d78dce8e426c1aa6b60ffe65"
     },
     {
       "kind": "known_answer_fixture",
@@ -343,7 +343,7 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:2f96939cabc1bced836d51eaff4da065faff66a534144c2fbdeea93aec2c486f"
+      "sha256": "sha256:1d7efd5d420ac6d9bb89fdf176b9788f90270c1e4b7a92de7aed0cfe7c3d41f1"
     },
     {
       "kind": "catalog",
@@ -446,7 +446,7 @@
       "sha256": "sha256:326ac9e1e41126e83390fa390b875edc4e584cfb280f009b6dce25e8484c641b"
     }
   ],
-  "digest": "sha256:a62c38d15e5fba3c954a610d01c9372677695b2ae726aa3c96bbe71f895f16cf",
+  "digest": "sha256:3532aebfdd318fc71b1377ea98086f80b8a924f796888e461264ca7e692ad2ee",
   "product": "podway",
   "product_version": "0.1.2",
   "schema_version": "podway.contract-manifest/v1",

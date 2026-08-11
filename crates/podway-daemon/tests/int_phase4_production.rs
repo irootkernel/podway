@@ -538,45 +538,6 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
         "v2run001-live",
         PreconditionsV1::default(),
     );
-    let mut goal_bearing_value = serde_json::to_value(&live.0).unwrap();
-    goal_bearing_value["request_id"] = json!("00000000-0000-4000-8000-000000010012");
-    goal_bearing_value["idempotency_key"] = json!("v2run001-goal-bearing");
-    goal_bearing_value["payload"]["goal"] = json!("Ship the complete v2 runtime.");
-    goal_bearing_value["payload"]["criteria"] = json!([{
-        "criterion_id": "verified",
-        "statement": "The focused daemon tests pass."
-    }]);
-    let goal_bearing: RequestEnvelopeV1 = serde_json::from_value(goal_bearing_value).unwrap();
-    let goal_bearing_daemon = DaemonRequestV1::from_envelope(&goal_bearing).unwrap();
-    assert!(matches!(
-        goal_bearing_daemon,
-        DaemonRequestV1::ProcedureV2Start(_)
-    ));
-    assert!(
-        composition
-            .worker()
-            .dispatch_development_v2(
-                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
-                &goal_bearing,
-                &goal_bearing_daemon,
-            )
-            .unwrap()
-            .is_none(),
-        "goal-bearing start remains unsupported until V2GOL-001"
-    );
-    assert!(
-        direct_store
-            .read_graph_session_v2(identity)
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        direct_store
-            .list_jobs(identity, JobListQueryV1::new(100).unwrap())
-            .unwrap()
-            .len(),
-        baseline_jobs
-    );
     let live_daemon = DaemonRequestV1::from_envelope(&live.0).unwrap();
     let live_response = composition
         .worker()

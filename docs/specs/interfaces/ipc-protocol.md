@@ -135,9 +135,8 @@ The protocol decoder also owns a closed Procedure v2 form of `session.start` and
 `session.start_replace` that may carry one complete initial goal definition
 (`goal`, ordered `criteria`, and optional `actor`). Its semantic mutation
 identity includes that definition and the resolved Procedure digest. This typed
-form remains separate from executable daemon dispatch until the Procedure v2
-admission route is registered; the retained v1 start decoder rejects these
-additional fields instead of discarding them.
+form is executable through Procedure v2 daemon dispatch; the retained v1 start
+decoder rejects these additional fields instead of discarding them.
 
 The daemon compares these identities with the same authoritative Store view used by the operation.
 Waiting reads recheck the session identity on every Store observation. New mutations check identity

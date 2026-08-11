@@ -95,11 +95,12 @@ identity results before using any reported field.
 The status and next shapes below are executable for Procedure v2 sessions.
 Procedure v2 authoring and preview commands are executable and are specified in
 their dedicated sections below. Shared item mutations, `session.complete`,
-`session.decide`, and `session.rework` are executable for their matching session
-states and return their registered v2 result families. The three remaining reserved mutation routes
-and goal-bearing start are exposed by the CLI grammar, but remain
-`reserved_contract` capabilities until their owning runtime tasks land. For an
-active Procedure v2 session, the CLI uses
+`session.decide`, `session.rework`, `goal.define`, and `goal.revise` are executable
+for their matching session states and return their registered v2 result families.
+Goal-bearing start and replacement are executable through the typed Procedure v2
+request boundary. The remaining reserved mutation route, `goal.assess_criterion`,
+is exposed by the CLI grammar but remains a `reserved_contract` capability until
+its owning runtime task lands. For an active Procedure v2 session, the CLI uses
 the standard status projection to supply omitted command-specific fences. An
 invocation may instead provide every required fence explicitly and skip that
 preflight. Reserved forms reach the daemon's typed
@@ -326,11 +327,10 @@ Exactly one of `--preset` or `--procedure` is required. `--replace` deletes an e
 
 An initial goal requires one to sixteen ordered, uniquely identified criteria.
 `--criterion` and `--actor` are invalid without `--goal`. Goal-bearing start and
-start replacement use the typed Procedure v2 request boundary; a retained v1
-start contains none of those fields and preserves its released wire shape.
-Until initial-goal admission lands, goal-bearing replacement requires explicit
-workspace UUID, session ID, and session revision fences so the request reaches
-the typed pre-admission capability response without a legacy status preflight.
+start replacement use the executable typed Procedure v2 request boundary and
+atomically create immutable goal revision 1 with the new session. The Procedure
+must opt in to goal tracking. A retained v1 start contains none of those fields
+and preserves its released wire shape.
 
 A non-dry-run replacement with explicit `--if-workspace-uuid`, `--if-session-id`, and
 `--if-session-revision` sends those complete identity fences directly without a status preflight.
@@ -448,9 +448,10 @@ podway goal assess-criterion <criterion-id> \
 Definitions and revisions carry one to sixteen ordered, uniquely identified
 criteria. Revision and criterion assessment require `--if-goal-revision`.
 Assessment accepts at most four citations in total; `not_applicable` forbids
-citations. The same version-aware preflight rule applies to all three goal commands. All
-five Procedure v2 mutation routes preserve the daemon's typed pre-admission
-unsupported response until their owning runtime capability is enabled.
+citations. The same version-aware preflight rule applies to all three goal commands.
+Definition and revision are executable durable mutations. Criterion assessment
+preserves the daemon's typed pre-admission unsupported response until its owning
+runtime capability is enabled.
 
 ### Return
 

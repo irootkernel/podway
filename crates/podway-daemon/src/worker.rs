@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use podway_protocol::{ProcedureV2MutationRequestV1, SliceRequestV1};
+use podway_protocol::{ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1, SliceRequestV1};
 use podway_store::{
     AdmitOutcomeV1, IdempotencyKeyV1, JobIdV1, JobReceiptOrTerminalV1, JobViewV1,
     PersistedResponseContextV1, PersistedTerminalReceiptV1, StoreErrorV1, TerminalReceiptV1,
@@ -146,6 +146,17 @@ where
         _workspace: &Context,
         _binding: &WorkspaceBindingV1,
         _request: &SliceRequestV1,
+        _idempotency_key: IdempotencyKeyV1,
+        _response_context: Option<&PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ProcedureV2StartPreparationErrorV1> {
+        Ok(None)
+    }
+
+    fn admit_procedure_v2_typed_start(
+        &self,
+        _workspace: &Context,
+        _binding: &WorkspaceBindingV1,
+        _request: &ProcedureV2StartRequestV1,
         _idempotency_key: IdempotencyKeyV1,
         _response_context: Option<&PersistedResponseContextV1>,
     ) -> Result<Option<AdmitOutcomeV1>, ProcedureV2StartPreparationErrorV1> {
@@ -486,6 +497,41 @@ where
             context
                 .with_claim_permission(|binding| {
                     self.inner.execution.admit_procedure_v2_start(
+                        context.as_ref(),
+                        binding,
+                        request,
+                        idempotency_key,
+                        Some(&response_context),
+                    )
+                })
+                .ok_or(WorkerErrorV1::RetirementRejected)?
+                .map_err(WorkerErrorV1::ProcedureV2Preparation)
+        })?;
+        let Some(outcome) = outcome else {
+            return Ok(None);
+        };
+        self.complete_submission(scheduler, outcome, completion_mode)
+            .map(Some)
+    }
+
+    pub fn submit_procedure_v2_typed_start_with_response_context(
+        &self,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+        request: &ProcedureV2StartRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: PersistedResponseContextV1,
+        completion_mode: WorkerCompletionModeV1,
+    ) -> Result<Option<WorkerSubmissionV1>, WorkerErrorV1> {
+        if scheduler.context_snapshot().recovery_required() {
+            return Err(WorkerErrorV1::RetirementRejected);
+        }
+        let outcome = scheduler.with_serialized(|context| {
+            if context.recovery_required() {
+                return Err(WorkerErrorV1::RetirementRejected);
+            }
+            context
+                .with_claim_permission(|binding| {
+                    self.inner.execution.admit_procedure_v2_typed_start(
                         context.as_ref(),
                         binding,
                         request,

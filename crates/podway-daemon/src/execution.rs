@@ -21,7 +21,8 @@ use podway_core::{
     AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptV1, AttemptValidityV2, AuthoringSeverity,
     BlockSessionV1, BlockerId, BlockerState, CancelSessionV1, CanonicalProcedureJsonV1,
     CanonicalProcedureSnapshotInputV1, CheckItemV1, ClearItemV1, CommandContextV1,
-    CompleteSessionV1, DecisionRecordV2, DomainCommand, DomainError, DomainResult,
+    CompleteSessionV1, DecisionRecordV2, DomainCommand, DomainError, DomainResult, GoalCriterionV2,
+    GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2,
     GraphPlacementV2, ItemId, ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1, JobId,
     LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1,
     ReasonV2, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1,
@@ -33,13 +34,15 @@ use podway_core::{
 };
 use podway_presets::lookup as lookup_embedded_preset_v1;
 use podway_protocol::{
-    ItemAddV1, ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1, ItemRemoveV1, ItemSetV1,
-    ItemUncheckV1, ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1, RequestIdV1,
-    Rfc3339MillisV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionDecideV2,
-    SessionMutationPreconditionsWireV1, SessionReopenV1, SessionResetV1, SessionRetryV1,
-    SessionReturnV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1, SessionStartV1,
-    SessionUnblockV1, SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
-    canonical_procedure_v2_mutation_identity_v1, canonical_reset_all_identity_v1,
+    GoalCriterionWireV2, GoalDefineV2, GoalReviseV2, ItemAddV1, ItemAttachSourceV1, ItemAttachV1,
+    ItemCheckV1, ItemClearV1, ItemRemoveV1, ItemSetV1, ItemUncheckV1, ProcedureV2MutationCommandV1,
+    ProcedureV2MutationRequestV1, ProcedureV2StartCommandV1, ProcedureV2StartRequestV1,
+    RequestIdV1, Rfc3339MillisV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1,
+    SessionDecideV2, SessionMutationPreconditionsWireV1, SessionReopenV1, SessionResetV1,
+    SessionRetryV1, SessionReturnV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1,
+    SessionStartV1, SessionUnblockV1, SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
+    canonical_procedure_v2_mutation_identity_v1, canonical_procedure_v2_start_identity_v1,
+    canonical_reset_all_identity_v1,
 };
 use podway_store::{
     ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1,
@@ -65,6 +68,8 @@ const EXECUTION_DOCUMENT_VERSION_V7: u8 = 7;
 const EXECUTION_DOCUMENT_VERSION_V8: u8 = 8;
 const EXECUTION_DOCUMENT_VERSION_V9: u8 = 9;
 const EXECUTION_DOCUMENT_VERSION_V10: u8 = 10;
+const EXECUTION_DOCUMENT_VERSION_V11: u8 = 11;
+const EXECUTION_DOCUMENT_VERSION_V12: u8 = 12;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -222,6 +227,7 @@ pub enum ProcedureV2StartPreparationErrorV1 {
         expected: Sha256Digest,
         actual: Sha256Digest,
     },
+    GoalMutation(GraphMutationErrorV2),
 }
 
 fn verify_pinned_procedure_v2_snapshot(
@@ -545,6 +551,27 @@ pub fn graph_session_state_from_procedure_v2_snapshot(
     .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)
 }
 
+pub fn bind_initial_goal_for_start_v2(
+    state: GraphSessionStateV2,
+    initial_goal: &podway_protocol::InitialGoalWireV2,
+    now: UnixMillis,
+) -> Result<GraphSessionStateV2, ProcedureV2StartPreparationErrorV1> {
+    let statement = GoalStatementV2::new(initial_goal.goal.clone())
+        .map_err(ProcedureV2StartPreparationErrorV1::Domain)?;
+    let criteria = goal_definition_from_wire_v2(&initial_goal.criteria)
+        .map_err(ProcedureV2StartPreparationErrorV1::Domain)?;
+    let actor = initial_goal
+        .actor
+        .clone()
+        .map(ActorAttributionV2::new)
+        .transpose()
+        .map_err(ProcedureV2StartPreparationErrorV1::Domain)?;
+    state
+        .bind_initial_goal_at_start_v2(statement, criteria, actor, now)
+        .map(|outcome| outcome.into_state())
+        .map_err(ProcedureV2StartPreparationErrorV1::GoalMutation)
+}
+
 #[derive(Clone, Debug)]
 struct AdmittedProcedureV2StartV1 {
     selector: WorktreeSelectorWireV1,
@@ -616,6 +643,58 @@ fn procedure_v2_start_execution_document_v1(
     CanonicalExecutionJsonV1::new(canonical).map_err(ExecutionErrorV1::InvalidStoreValue)
 }
 
+fn procedure_v2_typed_start_execution_document_v1(
+    admitted: &AdmittedProcedureV2StartV1,
+    request: &ProcedureV2StartRequestV1,
+) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
+    let snapshot = admitted.state.snapshot();
+    let expected_current = match &admitted.expected_current {
+        GraphStartCurrentTaskV2::Absent => Value::Null,
+        GraphStartCurrentTaskV2::Exact {
+            session_id,
+            session_revision,
+        } => json!({
+            "session_id": session_id,
+            "session_revision": session_revision,
+        }),
+    };
+    let initial_goal = match request.command() {
+        ProcedureV2StartCommandV1::SessionStart(start) => start.initial_goal.as_ref(),
+        ProcedureV2StartCommandV1::SessionStartReplace(replace) => {
+            replace.start.initial_goal.as_ref()
+        }
+    }
+    .map(|goal| {
+        json!({
+            "actor": goal.actor,
+            "criteria": goal.criteria,
+            "goal": goal.goal,
+        })
+    });
+    let document = json!({
+        "command": request.command().command_name(),
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V12,
+        "expected_current": expected_current,
+        "first_attempt_id": admitted.state.trace().active_attempt().expect("fresh graph state has an active attempt").attempt_id(),
+        "initial_goal": initial_goal,
+        "selector": admitted.selector,
+        "session_id": admitted.state.trace().session_id(),
+        "snapshot": {
+            "canonical_json": snapshot.canonical_json().as_str(),
+            "created_at": snapshot.created_at().get(),
+            "digest": snapshot.digest(),
+            "snapshot_id": snapshot.snapshot_id(),
+            "source_label": snapshot.source().as_str(),
+        },
+        "task_title": admitted.state.task_title(),
+        "workspace_id": admitted.workspace_id,
+    });
+    let canonical = canonicalize_json_v1(&document).map_err(|_| {
+        invalid_execution_v1("Procedure v2 goal-bearing start execution cannot be canonicalized")
+    })?;
+    CanonicalExecutionJsonV1::new(canonical).map_err(ExecutionErrorV1::InvalidStoreValue)
+}
+
 fn decode_procedure_v2_start_execution_v1(
     source: &str,
 ) -> Result<AdmittedProcedureV2StartV1, ExecutionErrorV1> {
@@ -624,8 +703,21 @@ fn decode_procedure_v2_start_execution_v1(
     let object = root
         .as_object()
         .ok_or_else(|| invalid_execution_v1("Procedure v2 execution root is invalid"))?;
-    require_exact_keys_v1(
-        object,
+    let execution_version = value_u64_v1(object, "execution_version")?;
+    let keys = if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V12) {
+        &[
+            "command",
+            "execution_version",
+            "expected_current",
+            "first_attempt_id",
+            "initial_goal",
+            "selector",
+            "session_id",
+            "snapshot",
+            "task_title",
+            "workspace_id",
+        ][..]
+    } else {
         &[
             "command",
             "execution_version",
@@ -636,9 +728,12 @@ fn decode_procedure_v2_start_execution_v1(
             "snapshot",
             "task_title",
             "workspace_id",
-        ],
-    )?;
-    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V6) {
+        ][..]
+    };
+    require_exact_keys_v1(object, keys)?;
+    if execution_version != u64::from(EXECUTION_DOCUMENT_VERSION_V6)
+        && execution_version != u64::from(EXECUTION_DOCUMENT_VERSION_V12)
+    {
         return Err(invalid_execution_v1(
             "Procedure v2 execution version is unsupported",
         ));
@@ -689,7 +784,7 @@ fn decode_procedure_v2_start_execution_v1(
         }
     };
     let task_title = value_string_v1(object, "task_title")?;
-    let state = graph_session_state_from_procedure_v2_snapshot(
+    let mut state = graph_session_state_from_procedure_v2_snapshot(
         snapshot,
         task_title,
         value_typed_v1(object, "session_id")?,
@@ -700,6 +795,28 @@ fn decode_procedure_v2_start_execution_v1(
         )?),
     )
     .map_err(|_| invalid_execution_v1("Procedure v2 graph state cannot be reconstructed"))?;
+    if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V12) {
+        let initial_goal = value_v1(object, "initial_goal")?;
+        if !initial_goal.is_null() {
+            let goal = initial_goal
+                .as_object()
+                .ok_or_else(|| invalid_execution_v1("Procedure v2 initial goal is invalid"))?;
+            require_exact_keys_v1(goal, &["actor", "criteria", "goal"])?;
+            let statement = GoalStatementV2::new(value_string_v1(goal, "goal")?.to_owned())
+                .map_err(ExecutionErrorV1::BoundaryDomain)?;
+            let criteria = decode_goal_criteria_v2(value_v1(goal, "criteria")?)?;
+            let actor = optional_string_v1(goal, "actor")?
+                .map(|actor| ActorAttributionV2::new(actor.to_owned()))
+                .transpose()
+                .map_err(ExecutionErrorV1::BoundaryDomain)?;
+            state = state
+                .bind_initial_goal_at_start_v2(statement, criteria, actor, state.created_at())
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 initial goal cannot be reconstructed")
+                })?
+                .into_state();
+        }
+    }
     Ok(AdmittedProcedureV2StartV1 {
         selector: serde_json::from_value(value_v1(object, "selector")?.clone())
             .map_err(|_| invalid_execution_v1("Procedure v2 selector is invalid"))?,
@@ -1127,6 +1244,204 @@ fn decode_procedure_v2_rework_execution_v1(
     })
 }
 
+#[derive(Clone, Debug)]
+enum AdmittedProcedureV2GoalMutationV1 {
+    Define {
+        selector: WorktreeSelectorWireV1,
+        workspace_id: WorkspaceId,
+        command: GoalDefineV2,
+    },
+    Revise {
+        selector: WorktreeSelectorWireV1,
+        workspace_id: WorkspaceId,
+        command: GoalReviseV2,
+        fresh_attempt_id: AttemptId,
+    },
+}
+
+fn procedure_v2_goal_execution_document_v1(
+    admitted: &AdmittedProcedureV2GoalMutationV1,
+) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
+    let document = match admitted {
+        AdmittedProcedureV2GoalMutationV1::Define {
+            selector,
+            workspace_id,
+            command,
+        } => json!({
+            "command": "goal.define",
+            "execution_version": EXECUTION_DOCUMENT_VERSION_V11,
+            "fresh_attempt_id": null,
+            "payload": { "actor": command.actor, "criteria": command.criteria, "goal": command.goal },
+            "preconditions": {
+                "attempt_id": null,
+                "goal_revision": null,
+                "session_id": command.preconditions.expected_session_id,
+                "session_revision": command.preconditions.expected_session_revision,
+            },
+            "selector": selector,
+            "workspace_id": workspace_id,
+        }),
+        AdmittedProcedureV2GoalMutationV1::Revise {
+            selector,
+            workspace_id,
+            command,
+            fresh_attempt_id,
+        } => json!({
+            "command": "goal.revise",
+            "execution_version": EXECUTION_DOCUMENT_VERSION_V11,
+            "fresh_attempt_id": fresh_attempt_id,
+            "payload": {
+                "actor": command.actor,
+                "criteria": command.criteria,
+                "goal": command.goal,
+                "reactivate": command.reactivate,
+                "reason": command.reason,
+                "target_graph_node_id": command.target_graph_node_id,
+            },
+            "preconditions": {
+                "attempt_id": command.preconditions.expected_attempt_id,
+                "goal_revision": command.preconditions.expected_goal_revision,
+                "session_id": command.preconditions.expected_session_id,
+                "session_revision": command.preconditions.expected_session_revision,
+            },
+            "selector": selector,
+            "workspace_id": workspace_id,
+        }),
+    };
+    let canonical = canonicalize_json_v1(&document)
+        .map_err(|_| invalid_execution_v1("Procedure v2 goal execution cannot be canonicalized"))?;
+    CanonicalExecutionJsonV1::new(canonical).map_err(ExecutionErrorV1::InvalidStoreValue)
+}
+
+fn decode_goal_criteria_wire_v2(
+    value: &Value,
+) -> Result<Vec<GoalCriterionWireV2>, ExecutionErrorV1> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 goal criteria are invalid"))?;
+    values
+        .iter()
+        .map(|value| {
+            let object = value
+                .as_object()
+                .ok_or_else(|| invalid_execution_v1("Procedure v2 goal criterion is invalid"))?;
+            require_exact_keys_v1(object, &["criterion_id", "statement"])?;
+            Ok(GoalCriterionWireV2 {
+                criterion_id: value_typed_v1(object, "criterion_id")?,
+                statement: value_string_v1(object, "statement")?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn decode_procedure_v2_goal_execution_v1(
+    source: &str,
+) -> Result<AdmittedProcedureV2GoalMutationV1, ExecutionErrorV1> {
+    let root: Value = serde_json::from_str(source)
+        .map_err(|_| invalid_execution_v1("Procedure v2 goal execution is not JSON"))?;
+    let object = root
+        .as_object()
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 goal execution root is invalid"))?;
+    require_exact_keys_v1(
+        object,
+        &[
+            "command",
+            "execution_version",
+            "fresh_attempt_id",
+            "payload",
+            "preconditions",
+            "selector",
+            "workspace_id",
+        ],
+    )?;
+    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V11) {
+        return Err(invalid_execution_v1(
+            "Procedure v2 goal execution version is invalid",
+        ));
+    }
+    let payload = value_object_v1(object, "payload")?;
+    let preconditions = value_object_v1(object, "preconditions")?;
+    require_exact_keys_v1(
+        preconditions,
+        &[
+            "attempt_id",
+            "goal_revision",
+            "session_id",
+            "session_revision",
+        ],
+    )?;
+    let selector = serde_json::from_value(value_v1(object, "selector")?.clone())
+        .map_err(|_| invalid_execution_v1("Procedure v2 goal selector is invalid"))?;
+    let workspace_id = value_typed_v1(object, "workspace_id")?;
+    match value_string_v1(object, "command")? {
+        "goal.define" => {
+            require_exact_keys_v1(payload, &["actor", "criteria", "goal"])?;
+            if !value_v1(object, "fresh_attempt_id")?.is_null()
+                || !value_v1(preconditions, "attempt_id")?.is_null()
+                || !value_v1(preconditions, "goal_revision")?.is_null()
+            {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 goal definition resolutions are invalid",
+                ));
+            }
+            Ok(AdmittedProcedureV2GoalMutationV1::Define {
+                selector,
+                workspace_id,
+                command: GoalDefineV2 {
+                    goal: value_string_v1(payload, "goal")?.to_owned(),
+                    criteria: decode_goal_criteria_wire_v2(value_v1(payload, "criteria")?)?,
+                    actor: value_optional_string_v1(payload, "actor")?,
+                    preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
+                        expected_session_id: value_typed_v1(preconditions, "session_id")?,
+                        expected_session_revision: Revision::new(value_u64_v1(
+                            preconditions,
+                            "session_revision",
+                        )?),
+                    },
+                },
+            })
+        }
+        "goal.revise" => {
+            require_exact_keys_v1(
+                payload,
+                &[
+                    "actor",
+                    "criteria",
+                    "goal",
+                    "reactivate",
+                    "reason",
+                    "target_graph_node_id",
+                ],
+            )?;
+            Ok(AdmittedProcedureV2GoalMutationV1::Revise {
+                selector,
+                workspace_id,
+                fresh_attempt_id: value_typed_v1(object, "fresh_attempt_id")?,
+                command: GoalReviseV2 {
+                    goal: value_string_v1(payload, "goal")?.to_owned(),
+                    criteria: decode_goal_criteria_wire_v2(value_v1(payload, "criteria")?)?,
+                    target_graph_node_id: value_typed_v1(payload, "target_graph_node_id")?,
+                    reason: value_string_v1(payload, "reason")?.to_owned(),
+                    actor: value_optional_string_v1(payload, "actor")?,
+                    reactivate: value_v1(payload, "reactivate")?.as_bool().ok_or_else(|| {
+                        invalid_execution_v1("Procedure v2 goal reactivate flag is invalid")
+                    })?,
+                    preconditions: podway_protocol::GoalRevisionPreconditionsWireV2 {
+                        expected_session_id: value_typed_v1(preconditions, "session_id")?,
+                        expected_session_revision: Revision::new(value_u64_v1(
+                            preconditions,
+                            "session_revision",
+                        )?),
+                        expected_attempt_id: value_optional_typed_v1(preconditions, "attempt_id")?,
+                        expected_goal_revision: value_u64_v1(preconditions, "goal_revision")?,
+                    },
+                },
+            })
+        }
+        _ => Err(invalid_execution_v1("Procedure v2 goal command is invalid")),
+    }
+}
+
 fn rework_record_projection_v1(record: &podway_core::ReworkRecordV2) -> Value {
     let mut value = json!({
         "trace_sequence": record.trace().get(),
@@ -1145,6 +1460,47 @@ fn rework_record_projection_v1(record: &podway_core::ReworkRecordV2) -> Value {
             .insert("actor".to_owned(), json!(actor.as_str()));
     }
     value
+}
+
+fn goal_revision_record_projection_v1(
+    record: &podway_core::GoalRevisionRecordV2,
+) -> Result<Value, ExecutionErrorV1> {
+    let criteria = record
+        .criteria()
+        .criteria()
+        .iter()
+        .map(|criterion| {
+            json!({
+                "criterion_id": criterion.id(),
+                "statement": criterion.statement(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut value = if record.revision() == GoalRevisionNumberV2::FIRST {
+        json!({
+            "goal_revision": record.revision().get(),
+            "statement": record.statement().as_str(),
+            "criteria": criteria,
+            "recorded_at": rfc3339_millis_execution_v1(record.created_at())?,
+        })
+    } else {
+        json!({
+            "goal_revision": record.revision().get(),
+            "statement": record.statement().as_str(),
+            "criteria": criteria,
+            "reason": record.reason().expect("later goal revision has a reason").as_str(),
+            "recorded_at": rfc3339_millis_execution_v1(record.created_at())?,
+            "rework_to": record.rework_to().expect("later goal revision has a target"),
+            "reactivated": record.reactivated(),
+        })
+    };
+    if let Some(actor) = record.actor() {
+        value
+            .as_object_mut()
+            .expect("goal record is an object")
+            .insert("actor".to_owned(), json!(actor.as_str()));
+    }
+    Ok(value)
 }
 
 fn decision_record_projection_v1(record: &DecisionRecordV2) -> Result<Value, ExecutionErrorV1> {
@@ -3113,6 +3469,166 @@ where
             .map_err(ProcedureV2StartPreparationErrorV1::Execution)
     }
 
+    /// Durably admits the typed start boundary used when revision 1 is supplied at session start.
+    pub fn admit_procedure_v2_typed_start_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &ProcedureV2StartRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ProcedureV2StartPreparationErrorV1> {
+        let (start, initial_goal, expected_current, command) = match request.command() {
+            ProcedureV2StartCommandV1::SessionStart(input) => (
+                &input.start,
+                input.initial_goal.as_ref(),
+                GraphStartCurrentTaskV2::Absent,
+                DomainCommand::SessionStart,
+            ),
+            ProcedureV2StartCommandV1::SessionStartReplace(input) => (
+                &input.start.start,
+                input.start.initial_goal.as_ref(),
+                GraphStartCurrentTaskV2::Exact {
+                    session_id: input.preconditions.expected_session_id.clone(),
+                    session_revision: input.preconditions.expected_session_revision,
+                },
+                DomainCommand::SessionStartReplace,
+            ),
+        };
+        if initial_goal.is_none() {
+            return Ok(None);
+        }
+        if let Some(existing) = self
+            .store
+            .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)
+            .map_err(ExecutionErrorV1::from)
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
+        {
+            let Some(canonical_execution) = existing.canonical_execution() else {
+                return Ok(None);
+            };
+            let admitted = decode_procedure_v2_start_execution_v1(canonical_execution.as_str())
+                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+            let actual = procedure_v2_typed_start_request_digest_v1(
+                request,
+                expected_workspace.identity().workspace_uuid(),
+                admitted.state.snapshot().digest(),
+            )
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+            if existing.request_digest() != &actual {
+                return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                    StoreErrorV1::IdempotencyDigestConflictV1 {
+                        expected: existing.request_digest().clone(),
+                        actual,
+                    }
+                    .into(),
+                ));
+            }
+            return Ok(Some(existing.outcome().clone()));
+        }
+        let binding = self
+            .bound_workspace(request.selector())
+            .map_err(ExecutionErrorV1::from_boundary)
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+        if binding.identity() != expected_workspace.identity() {
+            return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                invalid_execution_v1("typed Procedure v2 start workspace identity changed"),
+            ));
+        }
+        let now = self.clock.now();
+        let session_id = self.ids.next_session_id();
+        let first_attempt_id = self.ids.next_attempt_id();
+        let snapshot_id = self.ids.next_procedure_snapshot_id();
+        let mut state = match &start.source {
+            SessionStartSourceV1::Procedure { procedure } => prepare_custom_procedure_v2_start(
+                &self.procedures,
+                &binding,
+                procedure,
+                start.expected_procedure_digest.as_ref(),
+                &start.task_title,
+                session_id,
+                first_attempt_id,
+                snapshot_id,
+                now,
+            )?,
+            SessionStartSourceV1::Preset { preset } => {
+                let Some(state) = prepare_preset_procedure_v2_start(
+                    &self.procedures,
+                    preset,
+                    &start.task_title,
+                    session_id,
+                    first_attempt_id,
+                    snapshot_id,
+                    now,
+                )?
+                else {
+                    return Ok(None);
+                };
+                state
+            }
+        };
+        let initial_goal = initial_goal.expect("goal-bearing start was checked above");
+        state = bind_initial_goal_for_start_v2(state, initial_goal, now)?;
+        let admitted = AdmittedProcedureV2StartV1 {
+            selector: request.selector().clone(),
+            workspace_id: binding.identity().workspace_uuid().clone(),
+            replace: matches!(
+                request.command(),
+                ProcedureV2StartCommandV1::SessionStartReplace(_)
+            ),
+            expected_current,
+            state,
+        };
+        let canonical_execution =
+            procedure_v2_typed_start_execution_document_v1(&admitted, request)
+                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+        let request_digest = procedure_v2_typed_start_request_digest_v1(
+            request,
+            binding.identity().workspace_uuid(),
+            admitted.state.snapshot().digest(),
+        )
+        .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+        let preconditions = match request.command() {
+            ProcedureV2StartCommandV1::SessionStart(_) => {
+                RevisionAttemptItemPreconditionsV1::new(None, None, None, None)
+                    .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)?
+            }
+            ProcedureV2StartCommandV1::SessionStartReplace(input) => {
+                RevisionAttemptItemPreconditionsV1::new(
+                    Some(input.preconditions.expected_session_revision),
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)?
+            }
+        };
+        let durable = AdmitRequestV1::new_with_canonical_execution(
+            command,
+            idempotency_key,
+            self.ids.next_job_id(),
+            preconditions,
+            request_digest,
+            now,
+            canonical_execution,
+        )
+        .with_procedure_v2_execution()
+        .with_session_identity(match request.command() {
+            ProcedureV2StartCommandV1::SessionStart(_) => AdmissionSessionIdentityV1::Absent,
+            ProcedureV2StartCommandV1::SessionStartReplace(input) => {
+                AdmissionSessionIdentityV1::Exact(input.preconditions.expected_session_id.clone())
+            }
+        });
+        let durable = match response_context {
+            Some(context) => durable.with_response_context(context),
+            None => durable,
+        };
+        self.store
+            .admit(binding.identity(), durable)
+            .map(Some)
+            .map_err(ExecutionErrorV1::from)
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)
+    }
+
     /// Attempts the Procedure v2 complete, skip, retry, or item path. The immutable execution
     /// document freezes all generated IDs and attachment metadata before admission; an absent
     /// graph task preserves the unchanged v1 fallback.
@@ -3305,9 +3821,169 @@ where
                     response_context,
                 ),
             ProcedureV2MutationCommandV1::GoalDefine(_)
-            | ProcedureV2MutationCommandV1::GoalRevise(_)
-            | ProcedureV2MutationCommandV1::GoalAssessCriterion(_) => Ok(None),
+            | ProcedureV2MutationCommandV1::GoalRevise(_) => self
+                .admit_procedure_v2_goal_mutation_for_workspace_with_response_context(
+                    expected_workspace,
+                    request,
+                    idempotency_key,
+                    response_context,
+                ),
+            ProcedureV2MutationCommandV1::GoalAssessCriterion(_) => Ok(None),
         }
+    }
+
+    fn admit_procedure_v2_goal_mutation_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &ProcedureV2MutationRequestV1,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        if let Some(existing) = self
+            .store
+            .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)?
+        {
+            let Some(canonical_execution) = existing.canonical_execution() else {
+                return Ok(None);
+            };
+            let admitted = decode_procedure_v2_goal_execution_v1(canonical_execution.as_str())?;
+            let workspace_id = match &admitted {
+                AdmittedProcedureV2GoalMutationV1::Define { workspace_id, .. }
+                | AdmittedProcedureV2GoalMutationV1::Revise { workspace_id, .. } => workspace_id,
+            };
+            if workspace_id != expected_workspace.identity().workspace_uuid() {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 goal replay workspace identity is invalid",
+                ));
+            }
+            let actual = procedure_v2_typed_mutation_request_digest_v1(
+                request,
+                expected_workspace.identity().workspace_uuid(),
+            )?;
+            if existing.request_digest() != &actual {
+                return Err(StoreErrorV1::IdempotencyDigestConflictV1 {
+                    expected: existing.request_digest().clone(),
+                    actual,
+                }
+                .into());
+            }
+            return Ok(Some(existing.outcome().clone()));
+        }
+        let binding = self
+            .bound_workspace(request.selector())
+            .map_err(ExecutionErrorV1::from_boundary)?;
+        if binding.identity() != expected_workspace.identity() {
+            return Err(invalid_execution_v1(
+                "Procedure v2 goal workspace identity changed",
+            ));
+        }
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(binding.identity())?;
+        let Some(state) = view.graph_state() else {
+            return Ok(None);
+        };
+        let (admitted, domain_command, preconditions, session_id) = match request.command() {
+            ProcedureV2MutationCommandV1::GoalDefine(command) => {
+                GoalStatementV2::new(command.goal.clone())
+                    .map_err(ExecutionErrorV1::BoundaryDomain)?;
+                goal_definition_from_wire_v2(&command.criteria)
+                    .map_err(ExecutionErrorV1::BoundaryDomain)?;
+                command
+                    .actor
+                    .clone()
+                    .map(ActorAttributionV2::new)
+                    .transpose()
+                    .map_err(ExecutionErrorV1::BoundaryDomain)?;
+                (
+                    AdmittedProcedureV2GoalMutationV1::Define {
+                        selector: request.selector().clone(),
+                        workspace_id: binding.identity().workspace_uuid().clone(),
+                        command: command.clone(),
+                    },
+                    DomainCommand::GoalDefine,
+                    RevisionAttemptItemPreconditionsV1::new(
+                        Some(command.preconditions.expected_session_revision),
+                        None,
+                        None,
+                        None,
+                    )
+                    .map_err(ExecutionErrorV1::InvalidStoreValue)?,
+                    command.preconditions.expected_session_id.clone(),
+                )
+            }
+            ProcedureV2MutationCommandV1::GoalRevise(command) => {
+                if state.trace().lifecycle() == podway_core::SessionLifecycle::Running
+                    && command.preconditions.expected_attempt_id.is_none()
+                {
+                    return Err(ExecutionErrorV1::BoundaryDomain(
+                        DomainError::InvalidState {
+                            reason: "running Procedure v2 goal revision requires an attempt fence",
+                        },
+                    ));
+                }
+                GoalStatementV2::new(command.goal.clone())
+                    .map_err(ExecutionErrorV1::BoundaryDomain)?;
+                goal_definition_from_wire_v2(&command.criteria)
+                    .map_err(ExecutionErrorV1::BoundaryDomain)?;
+                GoalRevisionReasonV2::new(command.reason.clone())
+                    .map_err(ExecutionErrorV1::BoundaryDomain)?;
+                command
+                    .actor
+                    .clone()
+                    .map(ActorAttributionV2::new)
+                    .transpose()
+                    .map_err(ExecutionErrorV1::BoundaryDomain)?;
+                (
+                    AdmittedProcedureV2GoalMutationV1::Revise {
+                        selector: request.selector().clone(),
+                        workspace_id: binding.identity().workspace_uuid().clone(),
+                        command: command.clone(),
+                        fresh_attempt_id: self.ids.next_attempt_id(),
+                    },
+                    DomainCommand::GoalRevise,
+                    RevisionAttemptItemPreconditionsV1::new(
+                        Some(command.preconditions.expected_session_revision),
+                        command.preconditions.expected_attempt_id.clone(),
+                        None,
+                        None,
+                    )
+                    .map_err(ExecutionErrorV1::InvalidStoreValue)?,
+                    command.preconditions.expected_session_id.clone(),
+                )
+            }
+            _ => return Ok(None),
+        };
+        if state.trace().session_id() != &session_id {
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: session_id,
+                actual: Some(state.trace().session_id().clone()),
+            });
+        }
+        let canonical_execution = procedure_v2_goal_execution_document_v1(&admitted)?;
+        let request_digest = procedure_v2_typed_mutation_request_digest_v1(
+            request,
+            binding.identity().workspace_uuid(),
+        )?;
+        let durable = AdmitRequestV1::new_with_canonical_execution(
+            domain_command,
+            idempotency_key,
+            self.ids.next_job_id(),
+            preconditions,
+            request_digest,
+            self.clock.now(),
+            canonical_execution,
+        )
+        .with_procedure_v2_execution()
+        .with_session_identity(AdmissionSessionIdentityV1::Exact(session_id));
+        let durable = match response_context {
+            Some(context) => durable.with_response_context(context),
+            None => durable,
+        };
+        self.store
+            .admit(binding.identity(), durable)
+            .map(Some)
+            .map_err(Into::into)
     }
 
     fn admit_procedure_v2_decision_for_workspace_with_response_context(
@@ -3635,6 +4311,29 @@ where
                 )?;
                 self.execute_procedure_v2_rework_claimed(&claimed, admitted, now)?
             }
+            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V11) => {
+                let admitted = decode_procedure_v2_goal_execution_v1(
+                    claimed.execution().canonical_execution().as_str(),
+                )?;
+                self.execute_procedure_v2_goal_mutation_claimed(&claimed, admitted, now)?
+            }
+            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V12) => {
+                let admitted = decode_procedure_v2_start_execution_v1(
+                    claimed.execution().canonical_execution().as_str(),
+                )?;
+                if admitted.workspace_id != *claimed.claim().identity().workspace_uuid() {
+                    return Err(invalid_execution_v1(
+                        "Procedure v2 typed start workspace does not match the claim",
+                    ));
+                }
+                validate_procedure_v2_durable_execution_v1(&admitted, claimed.execution())?;
+                self.store.commit_graph_start_terminal_v2(
+                    claimed.claim().clone(),
+                    admitted.expected_current,
+                    admitted.state,
+                    now,
+                )?
+            }
             _ => {
                 return Err(invalid_execution_v1(
                     "Procedure v2 execution version is unsupported",
@@ -3642,6 +4341,152 @@ where
             }
         };
         Ok(Some(receipt))
+    }
+
+    fn execute_procedure_v2_goal_mutation_claimed(
+        &self,
+        claimed: &ClaimedJobV1,
+        admitted: AdmittedProcedureV2GoalMutationV1,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(claimed.claim().identity())?;
+        let state = view.graph_state().ok_or_else(|| {
+            invalid_execution_v1("Procedure v2 goal mutation has no graph session")
+        })?;
+        let (expected_session_id, expected_preconditions, domain_command) = match &admitted {
+            AdmittedProcedureV2GoalMutationV1::Define { command, .. } => (
+                &command.preconditions.expected_session_id,
+                RevisionAttemptItemPreconditionsV1::new(
+                    Some(command.preconditions.expected_session_revision),
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(ExecutionErrorV1::InvalidStoreValue)?,
+                DomainCommand::GoalDefine,
+            ),
+            AdmittedProcedureV2GoalMutationV1::Revise { command, .. } => (
+                &command.preconditions.expected_session_id,
+                RevisionAttemptItemPreconditionsV1::new(
+                    Some(command.preconditions.expected_session_revision),
+                    command.preconditions.expected_attempt_id.clone(),
+                    None,
+                    None,
+                )
+                .map_err(ExecutionErrorV1::InvalidStoreValue)?,
+                DomainCommand::GoalRevise,
+            ),
+        };
+        if claimed.execution().command() != &domain_command
+            || claimed.execution().preconditions() != &expected_preconditions
+            || claimed.execution().session_identity()
+                != &AdmissionSessionIdentityV1::Exact(expected_session_id.clone())
+        {
+            return Err(invalid_execution_v1(
+                "Procedure v2 goal document does not match durable metadata",
+            ));
+        }
+        if state.trace().session_id() != expected_session_id {
+            return self.commit_domain_failure(
+                claimed,
+                Revision::ZERO,
+                DomainError::SessionIdentityMismatch {
+                    expected: expected_session_id.clone(),
+                    actual: Some(state.trace().session_id().clone()),
+                },
+                now,
+            );
+        }
+        let revision_before = state.trace().revision();
+        let outcome = match admitted {
+            AdmittedProcedureV2GoalMutationV1::Define { command, .. } => {
+                let result = state.define_goal_v2(
+                    command.preconditions.expected_session_revision,
+                    GoalStatementV2::new(command.goal).map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    goal_definition_from_wire_v2(&command.criteria)
+                        .map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    command
+                        .actor
+                        .map(ActorAttributionV2::new)
+                        .transpose()
+                        .map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    now,
+                );
+                match result {
+                    Ok(outcome) => {
+                        let operation = PersistedGraphTerminalOperationV2::goal_define(
+                            goal_revision_record_projection_v1(outcome.revision())?,
+                        )
+                        .map_err(|_| {
+                            invalid_execution_v1("goal definition terminal operation is invalid")
+                        })?;
+                        (outcome.into_state(), operation)
+                    }
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                }
+            }
+            AdmittedProcedureV2GoalMutationV1::Revise {
+                command,
+                fresh_attempt_id,
+                ..
+            } => {
+                let result = state.revise_goal_v2(
+                    command.preconditions.expected_session_revision,
+                    command.preconditions.expected_attempt_id.as_ref(),
+                    GoalRevisionNumberV2::new(command.preconditions.expected_goal_revision),
+                    GoalStatementV2::new(command.goal).map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    goal_definition_from_wire_v2(&command.criteria)
+                        .map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    command.target_graph_node_id,
+                    fresh_attempt_id,
+                    GoalRevisionReasonV2::new(command.reason)
+                        .map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    command
+                        .actor
+                        .map(ActorAttributionV2::new)
+                        .transpose()
+                        .map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    command.reactivate,
+                    now,
+                );
+                match result {
+                    Ok(outcome) => {
+                        let operation = PersistedGraphTerminalOperationV2::goal_revise(
+                            goal_revision_record_projection_v1(outcome.revision())?,
+                            outcome.target_attempt_id().clone(),
+                        )
+                        .map_err(|_| {
+                            invalid_execution_v1("goal revision terminal operation is invalid")
+                        })?;
+                        (outcome.into_state(), operation)
+                    }
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                }
+            }
+        };
+        let result = DomainResult::SessionChanged {
+            session_id: state.trace().session_id().clone(),
+            revision_before,
+            revision_after: outcome.0.trace().revision(),
+            changed: true,
+        };
+        self.store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                state.workspace_revision(),
+                revision_before,
+                Some(outcome.0),
+                TerminalResultV1::Success(result),
+                outcome.1,
+                now,
+            )
+            .map_err(Into::into)
     }
 
     fn execute_procedure_v2_rework_claimed(
@@ -4902,7 +5747,9 @@ fn domain_result_v1(
         | DomainCommand::SessionReopen
         | DomainCommand::SessionReset
         | DomainCommand::SessionDecide
-        | DomainCommand::SessionRework => DomainResult::SessionChanged {
+        | DomainCommand::SessionRework
+        | DomainCommand::GoalDefine
+        | DomainCommand::GoalRevise => DomainResult::SessionChanged {
             session_id: session_id.ok_or(DomainError::InvalidState {
                 reason: "admitted session transition has no session aggregate",
             })?,
@@ -4981,6 +5828,32 @@ fn procedure_v2_typed_mutation_request_digest_v1(
             reason: "Procedure v2 mutation identity digest is invalid",
         }
     })
+}
+
+fn procedure_v2_typed_start_request_digest_v1(
+    request: &ProcedureV2StartRequestV1,
+    workspace_id: &WorkspaceId,
+    procedure_digest: &Sha256Digest,
+) -> Result<Sha256Digest, ExecutionErrorV1> {
+    let canonical =
+        canonical_procedure_v2_start_identity_v1(request, workspace_id, procedure_digest).map_err(
+            |_| invalid_execution_v1("Procedure v2 start identity cannot be canonicalized"),
+        )?;
+    Sha256Digest::new(format!("sha256:{}", sha256_hex_v1(canonical.as_bytes())))
+        .map_err(|_| invalid_execution_v1("Procedure v2 start identity digest is invalid"))
+}
+
+fn goal_definition_from_wire_v2(
+    criteria: &[GoalCriterionWireV2],
+) -> Result<GoalDefinitionV2, DomainError> {
+    GoalDefinitionV2::new(
+        criteria
+            .iter()
+            .map(|criterion| {
+                GoalCriterionV2::new(criterion.criterion_id.clone(), criterion.statement.clone())
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    )
 }
 fn reset_all_request_digest_v1(
     request: &SliceRequestV1,
@@ -5851,6 +6724,38 @@ fn value_string_v1<'a>(
     value_v1(object, field)?
         .as_str()
         .ok_or_else(|| invalid_execution_v1("field is not a string"))
+}
+
+fn optional_string_v1<'a>(
+    object: &'a Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<&'a str>, ExecutionErrorV1> {
+    match value_v1(object, field)? {
+        Value::Null => Ok(None),
+        Value::String(value) => Ok(Some(value)),
+        _ => Err(invalid_execution_v1("persisted optional string is invalid")),
+    }
+}
+
+fn decode_goal_criteria_v2(value: &Value) -> Result<GoalDefinitionV2, ExecutionErrorV1> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| invalid_execution_v1("Procedure v2 goal criteria are invalid"))?;
+    let criteria = values
+        .iter()
+        .map(|value| {
+            let criterion = value
+                .as_object()
+                .ok_or_else(|| invalid_execution_v1("Procedure v2 goal criterion is invalid"))?;
+            require_exact_keys_v1(criterion, &["criterion_id", "statement"])?;
+            GoalCriterionV2::new(
+                value_typed_v1(criterion, "criterion_id")?,
+                value_string_v1(criterion, "statement")?.to_owned(),
+            )
+            .map_err(ExecutionErrorV1::BoundaryDomain)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    GoalDefinitionV2::new(criteria).map_err(ExecutionErrorV1::BoundaryDomain)
 }
 
 fn value_u64_v1(object: &Map<String, Value>, field: &'static str) -> Result<u64, ExecutionErrorV1> {
