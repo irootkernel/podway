@@ -1247,47 +1247,10 @@ fn readback_value(
         );
     }
     if let Some(decision) = readback.decision() {
-        let mut decision_value = decision_value(decision)?;
-        if let Some(assessment) = state
-            .goal_state()
-            .assessments()
-            .iter()
-            .find(|assessment| assessment.decision_attempt_id() == decision.attempt_id())
-        {
-            let decision_object =
-                decision_value
-                    .as_object_mut()
-                    .ok_or(GraphViewErrorV2::InconsistentState(
-                        "decision readback is not an object",
-                    ))?;
-            decision_object.insert("assessment".to_owned(), json!("session_goal"));
-            decision_object.insert(
-                "assessment_mode".to_owned(),
-                json!(assessment.mode().as_str()),
-            );
-            decision_object.insert(
-                "goal_outcome".to_owned(),
-                json!(assessment.outcome().as_str()),
-            );
-            decision_object.insert(
-                "criterion_results".to_owned(),
-                Value::Array(
-                    assessment
-                        .criterion_results()
-                        .iter()
-                        .map(|result| {
-                            json!({
-                                "criterion_id": result.criterion_id().as_str(),
-                                "status": result.status().as_str(),
-                                "reason": result.reason().as_str(),
-                                "citations": result.citations().iter().map(citation_value).collect::<Vec<_>>(),
-                            })
-                        })
-                        .collect(),
-                ),
-            );
-        }
-        value.insert("decision_record".to_owned(), decision_value);
+        value.insert(
+            "decision_record".to_owned(),
+            decision_readback_projection(state, decision)?,
+        );
     }
     Ok(Value::Object(value))
 }
@@ -1391,7 +1354,7 @@ fn add_histories(
         .rev()
         .filter(|record| Some(record.revision()) != current_revision)
         .filter(|record| before_cursor(record.binding_trace(), cursor))
-        .map(stale_goal_revision_value);
+        .map(|record| stale_goal_revision_value(state, record));
     result.insert(
         "stale_goal_revision_history".to_owned(),
         history_window(entries, 1)?,
@@ -1594,6 +1557,53 @@ fn decision_value(record: &podway_core::DecisionRecordV2) -> Result<Value, Graph
     Ok(value)
 }
 
+fn decision_readback_projection(
+    state: &GraphSessionStateV2,
+    decision: &podway_core::DecisionRecordV2,
+) -> Result<Value, GraphViewErrorV2> {
+    let mut value = decision_value(decision)?;
+    let Some(assessment) = state.goal_state().assessments().iter().find(|assessment| {
+        assessment.decision_attempt_id() == decision.attempt_id()
+            && assessment.decision_graph_node_id() == decision.graph_node_id()
+            && assessment.decision_trace() == decision.trace()
+            && decision.goal_revision() == Some(assessment.goal_revision())
+    }) else {
+        return Ok(value);
+    };
+    let object = value
+        .as_object_mut()
+        .ok_or(GraphViewErrorV2::InconsistentState(
+            "decision projection is not an object",
+        ))?;
+    object.insert("assessment".to_owned(), json!("session_goal"));
+    object.insert(
+        "assessment_mode".to_owned(),
+        json!(assessment.mode().as_str()),
+    );
+    object.insert(
+        "goal_outcome".to_owned(),
+        json!(assessment.outcome().as_str()),
+    );
+    object.insert(
+        "criterion_results".to_owned(),
+        Value::Array(
+            assessment
+                .criterion_results()
+                .iter()
+                .map(|result| {
+                    json!({
+                        "criterion_id": result.criterion_id().as_str(),
+                        "status": result.status().as_str(),
+                        "reason": result.reason().as_str(),
+                        "citations": result.citations().iter().map(citation_value).collect::<Vec<_>>(),
+                    })
+                })
+                .collect(),
+        ),
+    );
+    Ok(value)
+}
+
 fn reference_snapshot_value(reference: &ResolvedEvidenceReferenceV2) -> Value {
     let mut value = Map::new();
     value.insert(
@@ -1635,8 +1645,15 @@ fn add_reference_snapshot_fields(
 }
 
 fn stale_goal_revision_value(
+    state: &GraphSessionStateV2,
     record: &podway_core::GoalRevisionRecordV2,
 ) -> Result<Value, GraphViewErrorV2> {
+    let assessment = state
+        .goal_state()
+        .assessments()
+        .iter()
+        .filter(|assessment| assessment.goal_revision() == record.revision())
+        .max_by_key(|assessment| assessment.decision_trace());
     Ok(json!({
         "trace_sequence": record.binding_trace().get(),
         "revision": record.revision().get(),
@@ -1645,7 +1662,7 @@ fn stale_goal_revision_value(
         "criteria": record.criteria().criteria().iter().map(|criterion| json!({
             "criterion_id": criterion.id().as_str(),
             "statement": criterion.statement(),
-            "status": "unassessed",
+            "status": assessment.and_then(|assessment| assessment.criterion_results().iter().find(|result| result.criterion_id() == criterion.id())).map_or("unassessed", |result| result.status().as_str()),
         })).collect::<Vec<_>>(),
         "actor": record.actor().map(|actor| actor.as_str()),
         "recorded_at": timestamp(record.created_at())?,

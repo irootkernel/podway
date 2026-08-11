@@ -620,7 +620,8 @@
       "contract_paths": [
         "docs/specs/domain/state-transitions.md",
         "docs/specs/storage/transactions-concurrency-and-idempotency.md",
-        "assets/schemas/status-result-v2.schema.json"
+        "assets/schemas/status-result-v2.schema.json",
+        "assets/schemas/v2-result-components-v1.schema.json"
       ],
       "contract_refs": [
         {
@@ -630,6 +631,22 @@
         {
           "path": "assets/schemas/status-result-v2.schema.json",
           "anchor": "/properties/rework_history"
+        },
+        {
+          "path": "assets/schemas/status-result-v2.schema.json",
+          "anchor": "/properties/stale_goal_revision_history"
+        },
+        {
+          "path": "assets/schemas/status-result-v2.schema.json",
+          "anchor": "/properties/stale_goal_assessment_history"
+        },
+        {
+          "path": "assets/schemas/v2-result-components-v1.schema.json",
+          "anchor": "/$defs/staleGoalRevisionSummary"
+        },
+        {
+          "path": "assets/schemas/v2-result-components-v1.schema.json",
+          "anchor": "/$defs/goalAssessmentSummary"
         }
       ],
       "test_class": "runtime-integration",
@@ -956,7 +973,9 @@
       "text": "completed lifecycle and recorded goal outcome remain distinct.",
       "contract_paths": [
         "docs/specs/domain/domain-model.md",
-        "docs/specs/domain/state-transitions.md"
+        "docs/specs/domain/state-transitions.md",
+        "assets/schemas/status-result-v2.schema.json",
+        "assets/schemas/compact-status-result-v2.schema.json"
       ],
       "test_class": "goal-state-table",
       "owning_tasks": [
@@ -964,7 +983,11 @@
       ],
       "implementation_status": "planned",
       "contract_refs": [
-        {"path": "docs/specs/domain/domain-model.md", "anchor": "## Procedure v2 goals and criterion state"}
+        {"path": "docs/specs/domain/domain-model.md", "anchor": "## Procedure v2 goals and criterion state"},
+        {"path": "assets/schemas/status-result-v2.schema.json", "anchor": "/properties/session"},
+        {"path": "assets/schemas/status-result-v2.schema.json", "anchor": "/properties/latest_goal_outcome"},
+        {"path": "assets/schemas/compact-status-result-v2.schema.json", "anchor": "/properties/session"},
+        {"path": "assets/schemas/compact-status-result-v2.schema.json", "anchor": "/properties/latest_goal_outcome"}
       ]
     },
     {

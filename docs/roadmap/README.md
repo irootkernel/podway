@@ -166,7 +166,7 @@ Dependencies: `V2DRW`.
 | `V2GOL-001` | Define and revise session goals | Completed | Enforce opt-in, revisions, criteria, rework, stale checks, and reactivation. | [V2GOL plan](../todo/TODO-podway-v2-full-feature-ga.md#198-epic-v2gol-goal-tracking) |
 | `V2GOL-002` | Assess goal criteria | Completed | Record homogeneous bounded cited criterion results atomically. | [V2GOL plan](../todo/TODO-podway-v2-full-feature-ga.md#198-epic-v2gol-goal-tracking) |
 | `V2GOL-003` | Derive goal outcomes | Completed | Map assessments to outcomes and gate terminal progression on fresh results. | [V2GOL plan](../todo/TODO-podway-v2-full-feature-ga.md#198-epic-v2gol-goal-tracking) |
-| `V2GOL-004` | Read goal history back | Planned | Expose bounded immutable revisions and assessments with stale state distinguished. | [V2GOL plan](../todo/TODO-podway-v2-full-feature-ga.md#198-epic-v2gol-goal-tracking) |
+| `V2GOL-004` | Read goal history back | Completed | Expose bounded immutable revisions and assessments with stale state distinguished. | [V2GOL plan](../todo/TODO-podway-v2-full-feature-ga.md#198-epic-v2gol-goal-tracking) |
 | `V2GOL-005` | Close goal failure and recovery | Planned | Prove mode, citation, revision, target, cancellation, restart, and budget errors. | [V2GOL plan](../todo/TODO-podway-v2-full-feature-ga.md#198-epic-v2gol-goal-tracking) |
 
 ## V2DOG — Presets and Dogfood

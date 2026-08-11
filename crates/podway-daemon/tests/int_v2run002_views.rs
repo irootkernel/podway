@@ -1485,7 +1485,12 @@ fn v2run002_goal_assessment_decision_readback_retains_reasons_and_citations() {
         decision["criterion_results"][1]["reason"],
         "The note records test coverage."
     );
+    let verbose = project_graph_status_v2(&view, GraphStatusTierV2::Verbose, None).unwrap();
+    let history_decision = &verbose["decision_history"]["entries"][0];
+    assert!(history_decision.get("assessment").is_none());
+    assert!(history_decision.get("criterion_results").is_none());
     assert_output_v2("session.next", next);
+    assert_output_v2("session.status", verbose);
 }
 
 #[test]

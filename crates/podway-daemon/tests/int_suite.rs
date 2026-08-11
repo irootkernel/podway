@@ -64,6 +64,8 @@ mod int_v2gol001_goal_revision;
 mod int_v2gol002_criterion_assessment;
 #[path = "int_v2gol003_goal_outcomes.rs"]
 mod int_v2gol003_goal_outcomes;
+#[path = "int_v2gol004_goal_readback.rs"]
+mod int_v2gol004_goal_readback;
 #[path = "int_v2run001_start.rs"]
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]
