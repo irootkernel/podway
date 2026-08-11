@@ -677,7 +677,7 @@ pub struct InitialGoalWireV2 {
     pub actor: Option<String>,
 }
 
-/// A closed Procedure v2 start payload decoded without making the route executable.
+/// A closed Procedure v2 start payload decoded for the typed executable route.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcedureV2SessionStartV1 {
@@ -685,7 +685,7 @@ pub struct ProcedureV2SessionStartV1 {
     pub initial_goal: Option<InitialGoalWireV2>,
 }
 
-/// A closed Procedure v2 replacement-start payload decoded without dispatching it.
+/// A closed Procedure v2 replacement-start payload decoded for typed dispatch.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcedureV2SessionStartReplaceV1 {
@@ -694,7 +694,7 @@ pub struct ProcedureV2SessionStartReplaceV1 {
     pub preconditions: SessionIdentityPreconditionsWireV1,
 }
 
-/// Typed protocol-only Procedure v2 start routes reserved for daemon integration.
+/// Typed Procedure v2 start routes owned by daemon integration.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcedureV2StartCommandV1 {
@@ -839,7 +839,7 @@ impl ProcedureV2MutationCommandV1 {
     }
 }
 
-/// One decoded reserved Procedure v2 mutation plus its lossless worktree selector.
+/// One decoded typed Procedure v2 mutation plus its lossless worktree selector.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcedureV2MutationRequestV1 {
@@ -2884,7 +2884,7 @@ fn validate_scalar_bound(
     Ok(())
 }
 
-/// Canonical semantic identity for one reserved Procedure v2 mutation.
+/// Canonical semantic identity for one typed Procedure v2 mutation.
 ///
 /// It excludes request correlation, client metadata, selector hints, detach, and wait timeout in
 /// the same way as the released mutation identity. Every semantic payload field and concurrency
@@ -3150,7 +3150,7 @@ pub fn canonical_start_mutation_identity_v1(
     })
 }
 
-/// Canonical semantic identity for a protocol-only Procedure v2 start.
+/// Canonical semantic identity for a typed Procedure v2 start.
 ///
 /// The identity is byte-identical to the retained start identity when no initial goal is present.
 /// A supplied revision 1 definition is encoded in authored criterion order and therefore changes

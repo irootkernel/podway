@@ -67,7 +67,7 @@ fn registered_command_catalog_route_availability() -> BTreeMap<String, String> {
     assert_eq!(
         routes.len(),
         59,
-        "the registered command catalog must contain the 56 executable routes and 3 reserved v2 routes"
+        "the registered command catalog must contain all 59 executable routes"
     );
     routes
 }
@@ -3342,6 +3342,8 @@ rework:
         "7",
         "--if-attempt",
         RECORDING_ATTEMPT_ID,
+        "--if-goal-revision",
+        "1",
     ]);
     assert!(
         decision_output.status.success(),
@@ -3359,6 +3361,7 @@ rework:
     assert_eq!(decision_requests[0]["command"], "session.decide");
     assert_eq!(decision_requests[0]["payload"]["option_id"], "approve");
     assert_eq!(decision_requests[0]["preconditions"]["session_revision"], 7);
+    assert_eq!(decision_requests[0]["preconditions"]["goal_revision"], 1);
 
     let rework_result = authoritative_rework_result();
     podway_protocol::validate_command_result_v2(

@@ -58,7 +58,7 @@ fn criteria() -> Value {
 }
 
 #[test]
-fn v2plt006_decodes_every_reserved_mutation_with_closed_bounded_payloads() {
+fn v2plt006_decodes_every_typed_mutation_with_closed_bounded_payloads() {
     let cases = [
         (
             "session.decide",
@@ -379,7 +379,7 @@ fn v2plt006_canonical_identity_excludes_transport_metadata_and_binds_semantics()
 }
 
 #[test]
-fn v2plt006_start_initial_goal_is_bounded_but_not_executable_before_dispatch_support() {
+fn v2plt006_start_initial_goal_uses_typed_boundary_and_preserves_legacy_identity() {
     let base = envelope(
         "session.start",
         json!({}),

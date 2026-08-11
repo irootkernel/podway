@@ -16,8 +16,10 @@ use crate::{
     TerminalReceiptV1, TerminalResultV1,
 };
 use podway_core::{
-    ActorAttributionV2, AttemptId, AttemptNumberV2, BlockerId, DomainCommandKind, GraphNodeId,
-    ItemId, ReasonV2, SessionId, SessionLifecycle, Sha256Digest, WorkspaceId,
+    ActorAttributionV2, AttemptId, AttemptNumberV2, BlockerId, CriterionAssessmentReasonV2,
+    CriterionAssessmentResultV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
+    DomainCommandKind, GoalOutcome, GraphNodeId, ItemId, NodeDefinitionId, OptionId,
+    ProcedureSnapshotId, ReasonV2, SessionId, SessionLifecycle, Sha256Digest, WorkspaceId,
 };
 
 pub const STORE_COMMAND_SCHEMA_V1: &str = "podway.store-command/v1";
@@ -30,6 +32,7 @@ pub const STORE_TERMINAL_SCHEMA_V3: &str = "podway.store-terminal/v3";
 pub const STORE_TERMINAL_SCHEMA_V4: &str = "podway.store-terminal/v4";
 pub const STORE_GRAPH_TERMINAL_SCHEMA_V1: &str = "podway.store-graph-terminal/v1";
 pub const STORE_GRAPH_TERMINAL_SCHEMA_V2: &str = "podway.store-graph-terminal/v2";
+pub const STORE_GRAPH_TERMINAL_SCHEMA_V3: &str = "podway.store-graph-terminal/v3";
 
 /// Minimal immutable response correlation retained independently of semantic request identity.
 ///
@@ -1544,6 +1547,280 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
     }
 }
 
+fn rfc3339_millis_shape_v2(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if !(bytes.len() == 24
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'T'
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && bytes[19] == b'.'
+        && bytes[23] == b'Z'
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7 | 10 | 13 | 16 | 19 | 23) || byte.is_ascii_digit()
+        }))
+    {
+        return false;
+    }
+    let number = |range: std::ops::Range<usize>| {
+        value[range]
+            .parse::<u32>()
+            .expect("ASCII digit range is a number")
+    };
+    let year = number(0..4);
+    let month = number(5..7);
+    let day = number(8..10);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day) && number(11..13) < 24 && number(14..16) < 60 && number(17..19) < 60
+}
+
+fn decision_reference_projection_shape_v2(reference: &Value) -> Option<GraphNodeId> {
+    let reference = reference.as_object()?;
+    let source = reference
+        .get("source_graph_node_id")
+        .and_then(Value::as_str)
+        .and_then(|value| GraphNodeId::new(value.to_owned()).ok())?;
+    match reference.get("state").and_then(Value::as_str) {
+        Some("unresolved") if reference.len() == 2 => Some(source),
+        Some("resolved" | "skipped")
+            if reference.len() == 5
+                && reference
+                    .get("source_attempt_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| AttemptId::new(value.to_owned()).is_ok())
+                && reference
+                    .get("source_attempt_number")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|value| value > 0)
+                && reference
+                    .get("items_digest")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| Sha256Digest::new(value.to_owned()).is_ok()) =>
+        {
+            Some(source)
+        }
+        _ => None,
+    }
+}
+
+fn decision_criterion_projection_v2(value: &Value) -> Option<CriterionAssessmentResultV2> {
+    let value = value.as_object()?;
+    if value.len() != 4 {
+        return None;
+    }
+    let criterion_id = value
+        .get("criterion_id")
+        .and_then(Value::as_str)
+        .and_then(|value| CriterionId::new(value.to_owned()).ok())?;
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .and_then(|value| CriterionStatusV2::from_str(value).ok())?;
+    let reason = value
+        .get("reason")
+        .and_then(Value::as_str)
+        .and_then(|value| CriterionAssessmentReasonV2::new(value.to_owned()).ok())?;
+    let citations = value
+        .get("citations")
+        .and_then(Value::as_array)?
+        .iter()
+        .map(|citation| {
+            let citation = citation.as_object()?;
+            if citation.len() != 1 {
+                return None;
+            }
+            if let Some(source) = citation
+                .get("reference_graph_node_id")
+                .and_then(Value::as_str)
+                .and_then(|value| GraphNodeId::new(value.to_owned()).ok())
+            {
+                Some(CriterionCitationV2::Evidence(source))
+            } else {
+                citation
+                    .get("local_item_id")
+                    .and_then(Value::as_str)
+                    .and_then(|value| ItemId::new(value.to_owned()).ok())
+                    .map(CriterionCitationV2::Item)
+            }
+        })
+        .collect::<Option<Vec<_>>>()?;
+    CriterionAssessmentResultV2::new(criterion_id, status, reason, citations).ok()
+}
+
+fn decision_record_projection_shape_v2(record: &Value) -> bool {
+    let Some(record) = record.as_object() else {
+        return false;
+    };
+    const BASE_KEYS: [&str; 17] = [
+        "trace_sequence",
+        "session_id",
+        "session_revision",
+        "procedure_schema",
+        "procedure_snapshot_id",
+        "procedure_digest",
+        "graph_node_id",
+        "node_definition_id",
+        "attempt_id",
+        "attempt_number",
+        "goal_revision",
+        "option_id",
+        "effect",
+        "target_graph_node_id",
+        "reason",
+        "recorded_at",
+        "references",
+    ];
+    const ASSESSMENT_KEYS: [&str; 4] = [
+        "assessment",
+        "assessment_mode",
+        "goal_outcome",
+        "criterion_results",
+    ];
+    let assessment_fields = ASSESSMENT_KEYS
+        .iter()
+        .filter(|key| record.contains_key(**key))
+        .count();
+    let assessment = assessment_fields == ASSESSMENT_KEYS.len();
+    if !matches!(assessment_fields, 0 | 4)
+        || record.len()
+            != BASE_KEYS.len() + usize::from(record.contains_key("actor")) + assessment_fields
+        || BASE_KEYS.iter().any(|key| !record.contains_key(*key))
+        || !record
+            .get("trace_sequence")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0)
+        || !record
+            .get("session_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| SessionId::new(value.to_owned()).is_ok())
+        || !record
+            .get("session_revision")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0)
+        || record.get("procedure_schema").and_then(Value::as_str) != Some("podway.procedure/v2")
+        || !record
+            .get("procedure_snapshot_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| ProcedureSnapshotId::new(value.to_owned()).is_ok())
+        || !record
+            .get("procedure_digest")
+            .and_then(Value::as_str)
+            .is_some_and(|value| Sha256Digest::new(value.to_owned()).is_ok())
+        || !record
+            .get("graph_node_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| GraphNodeId::new(value.to_owned()).is_ok())
+        || !record
+            .get("node_definition_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| NodeDefinitionId::new(value.to_owned()).is_ok())
+        || !record
+            .get("attempt_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| AttemptId::new(value.to_owned()).is_ok())
+        || !record
+            .get("attempt_number")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0)
+        || !record.get("goal_revision").is_some_and(|value| {
+            value.is_null() || value.as_u64().is_some_and(|revision| revision > 0)
+        })
+        || !record
+            .get("option_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| OptionId::new(value.to_owned()).is_ok())
+        || !matches!(
+            record.get("effect").and_then(Value::as_str),
+            Some("advance" | "rework")
+        )
+        || !record
+            .get("target_graph_node_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| GraphNodeId::new(value.to_owned()).is_ok())
+        || !record
+            .get("reason")
+            .and_then(Value::as_str)
+            .is_some_and(|value| ReasonV2::new(value.to_owned()).is_ok())
+        || !record.get("actor").is_none_or(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| ActorAttributionV2::new(value.to_owned()).is_ok())
+        })
+        || !record
+            .get("recorded_at")
+            .and_then(Value::as_str)
+            .is_some_and(rfc3339_millis_shape_v2)
+    {
+        return false;
+    }
+    let Some(references) = record.get("references").and_then(Value::as_array) else {
+        return false;
+    };
+    let references = references
+        .iter()
+        .map(decision_reference_projection_shape_v2)
+        .collect::<Option<Vec<_>>>();
+    if !references.is_some_and(|references| references.len() <= 8) {
+        return false;
+    }
+    if !assessment {
+        return true;
+    }
+    if record.get("assessment").and_then(Value::as_str) != Some("session_goal")
+        || record
+            .get("goal_revision")
+            .and_then(Value::as_u64)
+            .is_none()
+    {
+        return false;
+    }
+    let Some(results) = record
+        .get("criterion_results")
+        .and_then(Value::as_array)
+        .filter(|results| (1..=16).contains(&results.len()))
+        .and_then(|results| {
+            results
+                .iter()
+                .map(decision_criterion_projection_v2)
+                .collect::<Option<Vec<_>>>()
+        })
+    else {
+        return false;
+    };
+    if results
+        .iter()
+        .map(CriterionAssessmentResultV2::criterion_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        != results.len()
+        || results
+            .iter()
+            .any(|result| result.mode() != results[0].mode())
+        || record.get("assessment_mode").and_then(Value::as_str) != Some(results[0].mode().as_str())
+    {
+        return false;
+    }
+    let outcome = if results[0].mode() == podway_core::CriterionAssessmentModeV2::Applicability {
+        GoalOutcome::Superseded
+    } else if results
+        .iter()
+        .all(|result| result.status() == CriterionStatusV2::Satisfied)
+    {
+        GoalOutcome::Achieved
+    } else {
+        GoalOutcome::NotAchieved
+    };
+    record.get("goal_outcome").and_then(Value::as_str) == Some(outcome.as_str())
+}
+
 fn goal_revision_record_projection_shape_v2(record: &Value, define: bool) -> bool {
     let Some(record) = record.as_object() else {
         return false;
@@ -1904,29 +2181,7 @@ impl PersistedGraphTerminalOperationV2 {
                 record,
                 target_attempt_id,
             } => {
-                let Some(record) = record.as_object() else {
-                    return Err(StoreCodecErrorV1::InvalidValue {
-                        field: "Procedure v2 decision record projection",
-                    });
-                };
-                record.get("attempt_id").and_then(Value::as_str).is_some()
-                    && record
-                        .get("attempt_number")
-                        .and_then(Value::as_u64)
-                        .is_some()
-                    && record
-                        .get("graph_node_id")
-                        .and_then(Value::as_str)
-                        .is_some()
-                    && record.get("option_id").and_then(Value::as_str).is_some()
-                    && matches!(
-                        record.get("effect").and_then(Value::as_str),
-                        Some("advance" | "rework")
-                    )
-                    && record
-                        .get("target_graph_node_id")
-                        .and_then(Value::as_str)
-                        .is_some()
+                decision_record_projection_shape_v2(record)
                     && !target_attempt_id.as_str().is_empty()
             }
             Self::Rework { record } => record.as_object().is_some_and(|record| {
@@ -2031,7 +2286,11 @@ impl PersistedGraphMutationFailureV2 {
             Self::GoalRevisionStale {
                 expected_goal_revision,
                 actual_goal_revision,
-            } => *expected_goal_revision > 0 && *actual_goal_revision > 0,
+            } => {
+                *expected_goal_revision > 0
+                    && *actual_goal_revision > 0
+                    && expected_goal_revision != actual_goal_revision
+            }
             Self::GraphNodeTypeMismatch { actual, .. } => {
                 matches!(actual.as_str(), "action" | "decision")
             }
@@ -2049,20 +2308,21 @@ impl PersistedGraphMutationFailureV2 {
                 expected_mode,
                 actual_status,
                 ..
-            } => {
-                matches!(expected_mode.as_str(), "assessment" | "applicability")
-                    && matches!(
-                        actual_status.as_str(),
-                        "satisfied" | "unsatisfied" | "not_applicable"
-                    )
-            }
+            } => matches!(
+                (expected_mode.as_str(), actual_status.as_str()),
+                ("assessment", "not_applicable") | ("applicability", "satisfied" | "unsatisfied")
+            ),
             Self::CriterionCitationInvalid { citation, .. } => {
                 citation.as_object().is_some_and(|citation| {
                     match citation.get("kind").and_then(Value::as_str) {
-                        Some("evidence") => {
-                            citation.len() == 2 && citation.contains_key("graph_node_id")
-                        }
-                        Some("item") => citation.len() == 2 && citation.contains_key("item_id"),
+                        Some("evidence") if citation.len() == 2 => citation
+                            .get("graph_node_id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|value| GraphNodeId::new(value.to_owned()).is_ok()),
+                        Some("item") if citation.len() == 2 => citation
+                            .get("item_id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|value| ItemId::new(value.to_owned()).is_ok()),
                         _ => false,
                     }
                 })
@@ -2240,6 +2500,16 @@ impl PersistedGraphTerminalSessionProjectionV2 {
                 PersistedGraphTerminalOperationV2::GoalDefine { .. }
                     | PersistedGraphTerminalOperationV2::GoalRevise { .. }
                     | PersistedGraphTerminalOperationV2::GoalAssessCriterion { .. }
+            ) && !self.goal_defined
+            {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 goal terminal projection",
+                });
+            }
+            if matches!(
+                operation,
+                PersistedGraphTerminalOperationV2::Decide { record, .. }
+                    if record.get("goal_revision").is_some_and(|value| !value.is_null())
             ) && !self.goal_defined
             {
                 return Err(StoreCodecErrorV1::InvalidValue {
@@ -2944,6 +3214,7 @@ struct TerminalEnvelopeV5 {
 }
 
 type TerminalEnvelopeV6 = TerminalEnvelopeV5;
+type TerminalEnvelopeV7 = TerminalEnvelopeV5;
 
 /// Core terminal receipts lack the immutable projections required by terminal schema v1, so they
 /// canonically encode as legacy schema v0.
@@ -2972,7 +3243,9 @@ pub fn encode_persisted_terminal_receipt_v1(
             let _ = public_terminal_envelope;
         }
         return canonical_json(&TerminalEnvelopeV5 {
-            schema: if graph_session_projection.operation().is_some() {
+            schema: if graph_session_projection.goal_defined() {
+                STORE_GRAPH_TERMINAL_SCHEMA_V3
+            } else if graph_session_projection.operation().is_some() {
                 STORE_GRAPH_TERMINAL_SCHEMA_V2
             } else {
                 STORE_GRAPH_TERMINAL_SCHEMA_V1
@@ -3103,6 +3376,15 @@ pub fn decode_terminal_receipt_v1(
         .get("graph_session_projection")
         .and_then(Value::as_object)
         .is_some_and(|projection| !projection.contains_key("goal_defined"));
+    let legacy_goal_defined_explicit = matches!(
+        schema.as_str(),
+        STORE_GRAPH_TERMINAL_SCHEMA_V1 | STORE_GRAPH_TERMINAL_SCHEMA_V2
+    ) && document
+        .get("graph_session_projection")
+        .and_then(Value::as_object)
+        .and_then(|projection| projection.get("goal_defined"))
+        .and_then(Value::as_bool)
+        == Some(true);
     let receipt = match schema.as_str() {
         STORE_TERMINAL_SCHEMA_V0 => {
             let envelope: TerminalEnvelopeV0 =
@@ -3234,6 +3516,32 @@ pub fn decode_terminal_receipt_v1(
             }
             receipt
         }
+        STORE_GRAPH_TERMINAL_SCHEMA_V3 => {
+            let envelope: TerminalEnvelopeV7 =
+                serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+            if envelope.job.identity_sequence == 0
+                || !envelope.graph_session_projection.goal_defined()
+            {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 goal terminal projection",
+                });
+            }
+            let mut receipt = PersistedTerminalReceiptV1::new_with_graph_projection(
+                envelope.job.into(),
+                envelope.result,
+                envelope.job_projection,
+                envelope.graph_session_projection,
+            )?
+            .with_lookup_command(envelope.command)?
+            .with_response_context(envelope.response_context)?;
+            if let Some(start_identity) = envelope.start_identity {
+                receipt = receipt.with_start_identity(start_identity);
+            }
+            if let Some(public_terminal_envelope) = envelope.public_terminal_envelope {
+                receipt = receipt.with_public_terminal_envelope(public_terminal_envelope)?;
+            }
+            receipt
+        }
         found => {
             return Err(StoreCodecErrorV1::UnsupportedSchema {
                 expected: STORE_TERMINAL_SCHEMA_V4,
@@ -3282,7 +3590,24 @@ pub fn decode_terminal_receipt_v1(
     } else {
         None
     };
-    if encoded != value && legacy_canonical.as_deref() != Some(value) {
+    let legacy_explicit_canonical = if legacy_goal_defined_explicit {
+        let mut document: Value =
+            serde_json::from_str(&encoded).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+        document
+            .as_object_mut()
+            .ok_or(StoreCodecErrorV1::InvalidJson)?
+            .insert("schema".to_owned(), Value::String(schema));
+        Some(
+            serde_json::to_string(&canonicalize_json(document))
+                .map_err(|_| StoreCodecErrorV1::InvalidJson)?,
+        )
+    } else {
+        None
+    };
+    if encoded != value
+        && legacy_canonical.as_deref() != Some(value)
+        && legacy_explicit_canonical.as_deref() != Some(value)
+    {
         return Err(StoreCodecErrorV1::InvalidValue {
             field: "canonical terminal receipt",
         });

@@ -319,7 +319,7 @@ fn v2_start_output_payload() -> Vec<u8> {
     .expect("fixture Procedure v2 output must serialize")
 }
 
-fn reserved_v2_mutation_output_v1_payload() -> Vec<u8> {
+fn typed_v2_mutation_output_v1_payload() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "schema": "podway.output/v1",
         "request_id": REQUEST_ID,
@@ -640,15 +640,15 @@ fn version_aware_request_rejects_output_v1_for_goal_bearing_v2_start() {
 }
 
 #[test]
-fn version_aware_request_rejects_output_v1_for_reserved_v2_mutation() {
+fn version_aware_request_rejects_output_v1_for_typed_v2_mutation() {
     let fixture = RuntimeFixture::new();
-    let frame = encode_frame_v1(&reserved_v2_mutation_output_v1_payload())
-        .expect("legacy output must frame");
+    let frame =
+        encode_frame_v1(&typed_v2_mutation_output_v1_payload()).expect("legacy output must frame");
     let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
 
     let error = client(&fixture)
         .request_v2(&v2_decide_request())
-        .expect_err("a reserved v2 mutation must require output/v2");
+        .expect_err("a typed v2 mutation must require output/v2");
     assert!(matches!(
         transmitted_source(error),
         DaemonClientErrorV1::ResponseMismatch {
@@ -679,11 +679,11 @@ fn version_aware_request_preserves_output_v1_for_legacy_reads() {
 }
 
 #[test]
-fn version_aware_request_admits_reserved_v2_mutations_before_transport() {
+fn version_aware_request_admits_typed_v2_mutations_before_transport() {
     let fixture = RuntimeFixture::new();
     let request = v2_decide_request();
     ProcedureV2MutationRequestV1::from_envelope(&request)
-        .expect("decision fixture must satisfy the reserved v2 mutation contract");
+        .expect("decision fixture must satisfy the typed v2 mutation contract");
 
     let error = client(&fixture)
         .request_v2(&request)

@@ -1107,7 +1107,27 @@ fn v2gol005_concurrent_distinct_criteria_commit_exactly_one_result() {
         .iter()
         .find(|response| matches!(response, ResponseEnvelopeV2::Error(_)))
         .unwrap();
-    public_error(loser, "SESSION_REVISION_CONFLICT", true);
+    let ResponseEnvelopeV2::Error(loser) = loser else {
+        unreachable!()
+    };
+    assert_eq!(loser.code().as_str(), "SESSION_REVISION_CONFLICT");
+    let admission = &loser.details()["admission"];
+    let admitted = admission["admitted"]
+        .as_bool()
+        .expect("the race loser must report a boolean admission outcome");
+    if admitted {
+        assert!(
+            admission["job_id"].as_str().is_some(),
+            "a post-admission conflict must identify its durable job"
+        );
+        assert!(
+            admission["workspace_sequence"].as_u64().is_some(),
+            "a post-admission conflict must identify its workspace sequence"
+        );
+    } else {
+        assert!(admission.get("job_id").is_none());
+        assert!(admission.get("workspace_sequence").is_none());
+    }
 
     let after = status(production.as_ref(), &fixture, 107_022);
     assert_eq!(after["current"]["attempt"]["attempt_id"], attempt_id);

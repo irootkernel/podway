@@ -2510,6 +2510,42 @@ fn fk_off_orphan_goal_rows_fail_reopen() {
 }
 
 #[test]
+fn duplicate_persisted_criterion_citation_values_fail_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store
+        .create_graph_session_v2(
+            &identity(),
+            assessment_state(6, true, vec![partial_criterion_state()]),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_criterion_citations SET citation_kind = 'evidence', \
+             source_graph_node_id = 'clarify', item_id = NULL \
+             WHERE attempt_id = ?1 AND criterion_id = 'z-proof' AND citation_ordinal = 1",
+            [attempt_id(2).as_str()],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(
+        SqliteStoreV1::open(
+            database_path(&temporary),
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(100),
+        )
+        .is_err(),
+        "an ordinal-distinct duplicate citation target is not a supported persisted state"
+    );
+}
+
+#[test]
 fn retrying_a_goal_decision_retains_history_but_starts_without_criterion_state() {
     let state = assessment_state(6, true, vec![partial_criterion_state()]);
     let historical = state.goal_state().attempt_assessments()[0].clone();

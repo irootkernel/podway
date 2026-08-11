@@ -801,25 +801,21 @@ fn decode_procedure_v2_start_execution_v1(
     .map_err(|_| invalid_execution_v1("Procedure v2 graph state cannot be reconstructed"))?;
     if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V12) {
         let initial_goal = value_v1(object, "initial_goal")?;
-        if !initial_goal.is_null() {
-            let goal = initial_goal
-                .as_object()
-                .ok_or_else(|| invalid_execution_v1("Procedure v2 initial goal is invalid"))?;
-            require_exact_keys_v1(goal, &["actor", "criteria", "goal"])?;
-            let statement = GoalStatementV2::new(value_string_v1(goal, "goal")?.to_owned())
-                .map_err(ExecutionErrorV1::BoundaryDomain)?;
-            let criteria = decode_goal_criteria_v2(value_v1(goal, "criteria")?)?;
-            let actor = optional_string_v1(goal, "actor")?
-                .map(|actor| ActorAttributionV2::new(actor.to_owned()))
-                .transpose()
-                .map_err(ExecutionErrorV1::BoundaryDomain)?;
-            state = state
-                .bind_initial_goal_at_start_v2(statement, criteria, actor, state.created_at())
-                .map_err(|_| {
-                    invalid_execution_v1("Procedure v2 initial goal cannot be reconstructed")
-                })?
-                .into_state();
-        }
+        let goal = initial_goal
+            .as_object()
+            .ok_or_else(|| invalid_execution_v1("Procedure v2 initial goal is invalid"))?;
+        require_exact_keys_v1(goal, &["actor", "criteria", "goal"])?;
+        let statement = GoalStatementV2::new(value_string_v1(goal, "goal")?.to_owned())
+            .map_err(ExecutionErrorV1::BoundaryDomain)?;
+        let criteria = decode_goal_criteria_v2(value_v1(goal, "criteria")?)?;
+        let actor = optional_string_v1(goal, "actor")?
+            .map(|actor| ActorAttributionV2::new(actor.to_owned()))
+            .transpose()
+            .map_err(ExecutionErrorV1::BoundaryDomain)?;
+        state = state
+            .bind_initial_goal_at_start_v2(statement, criteria, actor, state.created_at())
+            .map_err(|_| invalid_execution_v1("Procedure v2 initial goal cannot be reconstructed"))?
+            .into_state();
     }
     Ok(AdmittedProcedureV2StartV1 {
         selector: serde_json::from_value(value_v1(object, "selector")?.clone())
@@ -829,6 +825,25 @@ fn decode_procedure_v2_start_execution_v1(
         expected_current,
         state,
     })
+}
+
+fn decode_typed_start_replay_execution_v1(
+    execution: &CanonicalExecutionJsonV1,
+    expected_workspace_id: &WorkspaceId,
+) -> Result<Option<AdmittedProcedureV2StartV1>, ExecutionErrorV1> {
+    let version = serde_json::from_str::<Value>(execution.as_str())
+        .ok()
+        .and_then(|value| value.get("execution_version").and_then(Value::as_u64));
+    if version != Some(u64::from(EXECUTION_DOCUMENT_VERSION_V12)) {
+        return Ok(None);
+    }
+    let admitted = decode_procedure_v2_start_execution_v1(execution.as_str())?;
+    if &admitted.workspace_id != expected_workspace_id {
+        return Err(invalid_execution_v1(
+            "typed Procedure v2 start replay workspace identity is invalid",
+        ));
+    }
+    Ok(Some(admitted))
 }
 
 #[derive(Clone, Debug)]
@@ -1447,6 +1462,12 @@ fn decode_procedure_v2_goal_execution_v1(
                     "target_graph_node_id",
                 ],
             )?;
+            let expected_goal_revision = value_u64_v1(preconditions, "goal_revision")?;
+            if expected_goal_revision == 0 {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 goal revision is invalid",
+                ));
+            }
             Ok(AdmittedProcedureV2GoalMutationV1::Revise {
                 selector,
                 workspace_id,
@@ -1467,13 +1488,29 @@ fn decode_procedure_v2_goal_execution_v1(
                             "session_revision",
                         )?),
                         expected_attempt_id: value_optional_typed_v1(preconditions, "attempt_id")?,
-                        expected_goal_revision: value_u64_v1(preconditions, "goal_revision")?,
+                        expected_goal_revision,
                     },
                 },
             })
         }
         _ => Err(invalid_execution_v1("Procedure v2 goal command is invalid")),
     }
+}
+
+fn validate_goal_claim_workspace_v1(
+    admitted: &AdmittedProcedureV2GoalMutationV1,
+    claimed_workspace_id: &WorkspaceId,
+) -> Result<(), ExecutionErrorV1> {
+    let admitted_workspace_id = match admitted {
+        AdmittedProcedureV2GoalMutationV1::Define { workspace_id, .. }
+        | AdmittedProcedureV2GoalMutationV1::Revise { workspace_id, .. } => workspace_id,
+    };
+    if admitted_workspace_id != claimed_workspace_id {
+        return Err(invalid_execution_v1(
+            "Procedure v2 goal workspace does not match the claim",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -3801,8 +3838,14 @@ where
             let Some(canonical_execution) = existing.canonical_execution() else {
                 return Ok(None);
             };
-            let admitted = decode_procedure_v2_start_execution_v1(canonical_execution.as_str())
-                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+            let Some(admitted) = decode_typed_start_replay_execution_v1(
+                canonical_execution,
+                expected_workspace.identity().workspace_uuid(),
+            )
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
+            else {
+                return Ok(None);
+            };
             let actual = procedure_v2_typed_start_request_digest_v1(
                 request,
                 expected_workspace.identity().workspace_uuid(),
@@ -4876,6 +4919,7 @@ where
         admitted: AdmittedProcedureV2GoalMutationV1,
         now: UnixMillis,
     ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        validate_goal_claim_workspace_v1(&admitted, claimed.claim().identity().workspace_uuid())?;
         let view = self
             .store
             .read_graph_workspace_view_v2(claimed.claim().identity())?;
@@ -7642,3 +7686,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod int_v2gol_epic_execution_integrity;

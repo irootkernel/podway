@@ -250,6 +250,9 @@ impl CriterionAssessmentResultV2 {
         if citations.len() > MAX_CRITERION_CITATIONS {
             return Err(invalid("a criterion result carries at most four citations"));
         }
+        if citations.iter().collect::<BTreeSet<_>>().len() != citations.len() {
+            return Err(invalid("criterion result citations must be unique"));
+        }
         if status == CriterionStatusV2::NotApplicable && !citations.is_empty() {
             return Err(invalid(
                 "a not_applicable criterion result must not cite evidence",
@@ -551,6 +554,18 @@ mod tests {
             )
             .unwrap_err(),
             invalid("a criterion result carries at most four citations")
+        );
+
+        let duplicate = CriterionCitationV2::Evidence(graph_node("source"));
+        assert_eq!(
+            CriterionAssessmentResultV2::new(
+                criterion_id("c"),
+                CriterionStatusV2::Satisfied,
+                crate::procedure_v2::CriterionAssessmentReasonV2::new("ok").unwrap(),
+                vec![duplicate.clone(), duplicate],
+            )
+            .unwrap_err(),
+            invalid("criterion result citations must be unique")
         );
 
         let not_applicable_with_citation = CriterionAssessmentResultV2::new(

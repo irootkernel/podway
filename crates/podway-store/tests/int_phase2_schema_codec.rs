@@ -12,14 +12,14 @@ use podway_core::{
 };
 use podway_store::codec::{
     PersistedDomainCommandKindV1, PersistedDomainCommandV1, PersistedDomainErrorV1,
-    PersistedDomainResultV1, PersistedGraphTerminalOperationV2,
+    PersistedDomainResultV1, PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2,
     PersistedGraphTerminalSessionProjectionV2, PersistedResponseContextV1,
     PersistedSessionLifecycleV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
     PersistedTerminalReceiptV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
-    STORE_COMMAND_SCHEMA_V1, STORE_COMMAND_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V0,
-    STORE_TERMINAL_SCHEMA_V1, STORE_TERMINAL_SCHEMA_V2, STORE_TERMINAL_SCHEMA_V3,
-    StoreCodecErrorV1, decode_command_v1, decode_terminal_receipt_v1, encode_command_v1,
-    encode_persisted_terminal_receipt_v1, encode_terminal_receipt_v1,
+    STORE_COMMAND_SCHEMA_V1, STORE_COMMAND_SCHEMA_V2, STORE_GRAPH_TERMINAL_SCHEMA_V3,
+    STORE_TERMINAL_SCHEMA_V0, STORE_TERMINAL_SCHEMA_V1, STORE_TERMINAL_SCHEMA_V2,
+    STORE_TERMINAL_SCHEMA_V3, StoreCodecErrorV1, decode_command_v1, decode_terminal_receipt_v1,
+    encode_command_v1, encode_persisted_terminal_receipt_v1, encode_terminal_receipt_v1,
 };
 use podway_store::schema::{
     SQLITE_INITIAL_MIGRATION_NAME_V1, SQLITE_PROCEDURE_V2_STATE_MIGRATION_NAME_V3,
@@ -45,6 +45,135 @@ const EXPECTED_SQLITE_V3_MIGRATION_SHA256: &str =
 fn digest(hex_digit: char) -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", hex_digit.to_string().repeat(64)))
         .expect("fixture digest must be valid")
+}
+
+fn goal_assessment_decision_projection() -> serde_json::Value {
+    serde_json::json!({
+        "trace_sequence": 2,
+        "session_id": "00000000-0000-4000-8000-000000000004",
+        "session_revision": 3,
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_snapshot_id": "00000000-0000-4000-8000-000000000200",
+        "procedure_digest": digest('a'),
+        "graph_node_id": "assess",
+        "node_definition_id": "assess-def",
+        "attempt_id": "00000000-0000-4000-8000-000000000201",
+        "attempt_number": 1,
+        "goal_revision": 1,
+        "option_id": "achieved",
+        "effect": "advance",
+        "target_graph_node_id": "finish",
+        "reason": "Every recorded criterion is satisfied.",
+        "actor": "reviewer",
+        "recorded_at": "2026-07-16T12:34:56.789Z",
+        "references": [{
+            "source_graph_node_id": "perform",
+            "state": "resolved",
+            "source_attempt_id": "00000000-0000-4000-8000-000000000202",
+            "source_attempt_number": 1,
+            "items_digest": digest('b'),
+        }],
+        "assessment": "session_goal",
+        "assessment_mode": "assessment",
+        "goal_outcome": "achieved",
+        "criterion_results": [{
+            "criterion_id": "verified",
+            "status": "satisfied",
+            "reason": "The recorded evidence verifies the result.",
+            "citations": [{"reference_graph_node_id": "perform"}],
+        }],
+    })
+}
+
+fn graph_terminal_receipt_with_operation(
+    sequence: u64,
+    command: PersistedDomainCommandV1,
+    operation: PersistedGraphTerminalOperationV2,
+) -> Result<PersistedTerminalReceiptV1, Box<dyn std::error::Error>> {
+    graph_terminal_receipt_with_operation_and_goal(sequence, command, operation, true)
+}
+
+fn graph_terminal_receipt_with_operation_and_goal(
+    sequence: u64,
+    command: PersistedDomainCommandV1,
+    operation: PersistedGraphTerminalOperationV2,
+    goal_defined: bool,
+) -> Result<PersistedTerminalReceiptV1, Box<dyn std::error::Error>> {
+    let session_id = session_id();
+    Ok(PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(sequence),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: Revision::new(2),
+            revision_after: Revision::new(3),
+            changed: true,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(20),
+            Some(UnixMillis::new(21)),
+            UnixMillis::new(22),
+        )?,
+        PersistedGraphTerminalSessionProjectionV2::new(
+            session_id,
+            "Goal codec session".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::new(2),
+            Revision::new(3),
+            digest('c'),
+            GraphNodeId::new("finish")?,
+            true,
+            goal_defined,
+        )?
+        .with_operation(operation)?,
+    )?
+    .with_lookup_command(command)?
+    .with_response_context(PersistedResponseContextV1::new(
+        format!("00000000-0000-4000-8000-{sequence:012}"),
+        "session.decide",
+        workspace_id(),
+        "/safe/worktree",
+        sequence,
+    )?)?)
+}
+
+fn graph_failure_receipt(
+    sequence: u64,
+    error: PersistedGraphMutationFailureV2,
+) -> Result<PersistedTerminalReceiptV1, Box<dyn std::error::Error>> {
+    let session_id = session_id();
+    Ok(PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(sequence),
+        PersistedTerminalResultV1::Failure(PersistedDomainErrorV1::InvalidState {
+            reason: "Procedure v2 graph mutation failed".to_owned(),
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Failed,
+            UnixMillis::new(20),
+            Some(UnixMillis::new(21)),
+            UnixMillis::new(22),
+        )?,
+        PersistedGraphTerminalSessionProjectionV2::new(
+            session_id,
+            "Goal failure codec session".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::new(2),
+            Revision::new(2),
+            digest('d'),
+            GraphNodeId::new("assess")?,
+            true,
+            true,
+        )?
+        .with_operation(PersistedGraphTerminalOperationV2::failure(error)?)?,
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::SessionDecide)?
+    .with_response_context(PersistedResponseContextV1::new(
+        format!("00000000-0000-4000-8000-{sequence:012}"),
+        "session.decide",
+        workspace_id(),
+        "/safe/worktree",
+        sequence,
+    )?)?)
 }
 
 #[test]
@@ -2733,6 +2862,230 @@ fn graph_goal_codec_rejects_missing_goal_defined_projection()
     let missing_start_goal_defined = encoded_start.replacen(r#""goal_defined":true,"#, "", 1);
     assert_ne!(missing_start_goal_defined, encoded_start);
     assert!(decode_terminal_receipt_v1(&missing_start_goal_defined).is_err());
+    Ok(())
+}
+
+#[test]
+fn graph_goal_assessment_decision_codec_is_exact_and_outcome_consistent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let target_attempt_id = AttemptId::new("00000000-0000-4000-8000-000000000203")?;
+    let exact = graph_terminal_receipt_with_operation(
+        203,
+        PersistedDomainCommandV1::SessionDecide,
+        PersistedGraphTerminalOperationV2::decide(
+            goal_assessment_decision_projection(),
+            target_attempt_id,
+        )?,
+    )?;
+    let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+    assert!(encoded.contains(STORE_GRAPH_TERMINAL_SCHEMA_V3));
+    assert_eq!(decode_terminal_receipt_v1(&encoded)?, exact);
+
+    for mutation in ["missing", "extra", "outcome", "citation"] {
+        let mut document: serde_json::Value = serde_json::from_str(&encoded)?;
+        let record = document
+            .get_mut("graph_session_projection")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|projection| projection.get_mut("operation"))
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|operation| operation.get_mut("record"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("encoded decision record");
+        match mutation {
+            "missing" => {
+                record.remove("assessment_mode");
+            }
+            "extra" => {
+                record.insert("unexpected".to_owned(), serde_json::Value::Bool(true));
+            }
+            "outcome" => {
+                record.insert(
+                    "goal_outcome".to_owned(),
+                    serde_json::Value::String("not_achieved".to_owned()),
+                );
+            }
+            "citation" => {
+                record["criterion_results"][0]["citations"][0]["reference_graph_node_id"] =
+                    serde_json::Value::Null;
+            }
+            _ => unreachable!(),
+        }
+        let tampered = canonicalize_json_v1(&document)?;
+        assert!(
+            decode_terminal_receipt_v1(&tampered).is_err(),
+            "{mutation} goal-assessment projection tamper must fail closed"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn graph_decision_codec_preserves_repeated_source_references_at_distinct_ordinals()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut record = goal_assessment_decision_projection();
+    let references = record["references"]
+        .as_array_mut()
+        .expect("decision references");
+    let repeated_source = references[0].clone();
+    references.push(repeated_source);
+    let exact = graph_terminal_receipt_with_operation(
+        208,
+        PersistedDomainCommandV1::SessionDecide,
+        PersistedGraphTerminalOperationV2::decide(
+            record,
+            AttemptId::new("00000000-0000-4000-8000-000000000208")?,
+        )?,
+    )?;
+
+    let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+    assert_eq!(decode_terminal_receipt_v1(&encoded)?, exact);
+    Ok(())
+}
+
+#[test]
+fn graph_goal_failure_codec_rejects_impossible_tampered_payloads()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        graph_failure_receipt(
+            204,
+            PersistedGraphMutationFailureV2::GoalRevisionStale {
+                expected_goal_revision: 1,
+                actual_goal_revision: 2,
+            },
+        )?,
+        graph_failure_receipt(
+            205,
+            PersistedGraphMutationFailureV2::CriterionModeMixed {
+                criterion_id: podway_core::CriterionId::new("verified")?,
+                expected_mode: "assessment".to_owned(),
+                actual_status: "not_applicable".to_owned(),
+            },
+        )?,
+        graph_failure_receipt(
+            206,
+            PersistedGraphMutationFailureV2::CriterionCitationInvalid {
+                criterion_id: podway_core::CriterionId::new("verified")?,
+                citation: serde_json::json!({"kind": "evidence", "graph_node_id": "perform"}),
+            },
+        )?,
+    ];
+    for (index, receipt) in cases.into_iter().enumerate() {
+        let encoded = encode_persisted_terminal_receipt_v1(&receipt)?;
+        assert_eq!(decode_terminal_receipt_v1(&encoded)?, receipt);
+        let mut document: serde_json::Value = serde_json::from_str(&encoded)?;
+        let error = &mut document["graph_session_projection"]["operation"]["error"];
+        match index {
+            0 => error["actual_goal_revision"] = serde_json::json!(1),
+            1 => error["actual_status"] = serde_json::json!("satisfied"),
+            2 => error["citation"]["graph_node_id"] = serde_json::Value::Null,
+            _ => unreachable!(),
+        }
+        let tampered = canonicalize_json_v1(&document)?;
+        assert!(decode_terminal_receipt_v1(&tampered).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn graph_goal_defined_v3_rejects_stripped_true_on_non_goal_operation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exact = graph_terminal_receipt_with_operation(
+        207,
+        PersistedDomainCommandV1::SessionDecide,
+        PersistedGraphTerminalOperationV2::decide(
+            goal_assessment_decision_projection(),
+            AttemptId::new("00000000-0000-4000-8000-000000000207")?,
+        )?,
+    )?;
+    let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+    assert!(encoded.contains(STORE_GRAPH_TERMINAL_SCHEMA_V3));
+    let legacy_explicit_true = encoded.replacen(
+        STORE_GRAPH_TERMINAL_SCHEMA_V3,
+        "podway.store-graph-terminal/v2",
+        1,
+    );
+    assert_eq!(decode_terminal_receipt_v1(&legacy_explicit_true)?, exact);
+    assert_eq!(
+        encode_persisted_terminal_receipt_v1(&decode_terminal_receipt_v1(&legacy_explicit_true)?)?,
+        encoded,
+        "an explicit pre-v3 goal projection remains readable and upgrades canonically"
+    );
+    let stripped = encoded.replacen(r#""goal_defined":true,"#, "", 1);
+    assert_ne!(stripped, encoded);
+    assert!(decode_terminal_receipt_v1(&stripped).is_err());
+
+    let legacy_false =
+        legacy_explicit_true.replacen(r#""goal_defined":true"#, r#""goal_defined":false"#, 1);
+    assert_ne!(legacy_false, legacy_explicit_true);
+    assert!(decode_terminal_receipt_v1(&legacy_false).is_err());
+
+    let downgraded_and_stripped = stripped.replacen(
+        STORE_GRAPH_TERMINAL_SCHEMA_V3,
+        "podway.store-graph-terminal/v2",
+        1,
+    );
+    assert_ne!(downgraded_and_stripped, stripped);
+    assert!(decode_terminal_receipt_v1(&downgraded_and_stripped).is_err());
+    Ok(())
+}
+
+#[test]
+fn graph_goal_defined_requires_true_for_general_goal_bearing_decisions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut record = goal_assessment_decision_projection();
+    let record = record.as_object_mut().expect("decision record");
+    for field in [
+        "assessment",
+        "assessment_mode",
+        "goal_outcome",
+        "criterion_results",
+    ] {
+        record.remove(field);
+    }
+    let exact = graph_terminal_receipt_with_operation(
+        209,
+        PersistedDomainCommandV1::SessionDecide,
+        PersistedGraphTerminalOperationV2::decide(
+            serde_json::Value::Object(record.clone()),
+            AttemptId::new("00000000-0000-4000-8000-000000000209")?,
+        )?,
+    )?;
+    let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+    assert!(encoded.contains(STORE_GRAPH_TERMINAL_SCHEMA_V3));
+
+    let legacy_false = encoded
+        .replacen(
+            STORE_GRAPH_TERMINAL_SCHEMA_V3,
+            "podway.store-graph-terminal/v2",
+            1,
+        )
+        .replacen(r#""goal_defined":true"#, r#""goal_defined":false"#, 1);
+    assert!(decode_terminal_receipt_v1(&legacy_false).is_err());
+
+    let downgraded_and_stripped = encoded
+        .replacen(
+            STORE_GRAPH_TERMINAL_SCHEMA_V3,
+            "podway.store-graph-terminal/v2",
+            1,
+        )
+        .replacen(r#""goal_defined":true,"#, "", 1);
+    assert!(decode_terminal_receipt_v1(&downgraded_and_stripped).is_err());
+
+    let mut goal_free_record = serde_json::Value::Object(record.clone());
+    goal_free_record["goal_revision"] = serde_json::Value::Null;
+    let goal_free = graph_terminal_receipt_with_operation_and_goal(
+        210,
+        PersistedDomainCommandV1::SessionDecide,
+        PersistedGraphTerminalOperationV2::decide(
+            goal_free_record,
+            AttemptId::new("00000000-0000-4000-8000-000000000210")?,
+        )?,
+        false,
+    )?;
+    let encoded_goal_free = encode_persisted_terminal_receipt_v1(&goal_free)?;
+    assert_eq!(decode_terminal_receipt_v1(&encoded_goal_free)?, goal_free);
+    let legacy_goal_free = encoded_goal_free.replacen(r#""goal_defined":false,"#, "", 1);
+    assert_eq!(decode_terminal_receipt_v1(&legacy_goal_free)?, goal_free);
     Ok(())
 }
 

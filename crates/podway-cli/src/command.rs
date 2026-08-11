@@ -1812,13 +1812,10 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
         return false;
     }
     match command {
-        Command::Decide(_)
-        | Command::Goal {
+        Command::Decide(_) => explicit.attempt_id.is_some() && explicit.goal_revision.is_some(),
+        Command::Goal {
             command: GoalCommand::AssessCriterion(_),
-        } => {
-            explicit.attempt_id.is_some()
-                && (!matches!(command, Command::Goal { .. }) || explicit.goal_revision.is_some())
-        }
+        } => explicit.attempt_id.is_some() && explicit.goal_revision.is_some(),
         Command::Rework(_) => explicit.attempt_id.is_some(),
         Command::Retry { .. } => explicit.attempt_id.is_some(),
         Command::Skip { .. } => explicit.attempt_id.is_some(),
@@ -4875,19 +4872,6 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
         ));
     }
     let explicit = ExplicitPreconditions::parse(cli)?;
-    if matches!(
-        command,
-        Command::Start(StartArgs {
-            replace: true,
-            goal: Some(_),
-            ..
-        })
-    ) && !fully_fenced_v2_start_replace(command, &explicit)
-    {
-        return Err(LocalFailure::request_invalid(
-            "goal-bearing start replacement requires explicit workspace and session identity preconditions",
-        ));
-    }
     if cli.if_workspace_uuid.is_some() && !command.accepts_workspace_identity() {
         return Err(LocalFailure::request_invalid(
             "--if-workspace-uuid does not apply to this command",
@@ -6848,7 +6832,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway goal assess-criterion <criterion-id> --status <satisfied|unsatisfied|not_applicable> --reason <text> [--evidence <graph-node-id>]... [--item <item-id>]... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> --if-goal-revision <n>\n\nExample:\n  podway goal assess-criterion tested --status satisfied --reason 'The test passed.' --evidence test --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid> --if-goal-revision 1"
         }
         "session.start_replace" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --goal <text> --criterion <id>=<statement>... [--actor <text>] --replace --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'replace goal' --goal 'Ship safely.' --criterion tested='Tests pass.' --replace --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --goal <text> --criterion <id>=<statement>... [--actor <text>] --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'replace goal' --goal 'Ship safely.' --criterion tested='Tests pass.' --replace --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
         }
         "session.status" => {
             "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --verbose --history-before 42\n  podway status --wait-for-idle --compact"

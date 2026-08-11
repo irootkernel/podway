@@ -68,6 +68,8 @@ mod int_v2gol003_goal_outcomes;
 mod int_v2gol004_goal_readback;
 #[path = "int_v2gol005_failures.rs"]
 mod int_v2gol005_failures;
+#[path = "int_v2gol_epic_acceptance.rs"]
+mod int_v2gol_epic_acceptance;
 #[path = "int_v2run001_start.rs"]
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]

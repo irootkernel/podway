@@ -591,24 +591,8 @@ fn one_json(output: &Output) -> Value {
 }
 
 #[test]
-fn reserved_v2_commands_shape_exact_requests_and_preserve_unsupported_errors() {
+fn typed_v2_commands_shape_exact_requests_and_preserve_capability_errors() {
     let cases = [
-        (
-            "session.decide",
-            vec![
-                "--if-attempt",
-                ATTEMPT_ID,
-                "decide",
-                "--option",
-                "approve",
-                "--reason",
-                "evidence is sufficient",
-                "--actor",
-                "reviewer",
-            ],
-            json!({ "option_id": "approve", "reason": "evidence is sufficient", "actor": "reviewer" }),
-            json!({ "session_id": SESSION_ID, "session_revision": 7, "attempt_id": ATTEMPT_ID }),
-        ),
         (
             "session.decide",
             vec![
@@ -795,6 +779,44 @@ fn v2_status_preflight_supplies_omitted_attempt_fences() {
     let requests = daemon.finish();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1]["command"], "session.decide");
+    assert_eq!(requests[1]["preconditions"]["goal_revision"], 1);
+
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![Reply::StatusV2GoalDefined, Reply::Unsupported],
+    );
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "--if-session-revision".to_owned(),
+        "7".to_owned(),
+        "--if-attempt".to_owned(),
+        ATTEMPT_ID.to_owned(),
+        "--idempotency-key".to_owned(),
+        "v2gol-assessment-decide-partial-fence".to_owned(),
+        "decide".to_owned(),
+        "--option".to_owned(),
+        "approve".to_owned(),
+        "--reason".to_owned(),
+        "Use the observed goal revision.".to_owned(),
+    ];
+    let output = fixture.run(&arguments);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.decide");
+    assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+    assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
     assert_eq!(requests[1]["preconditions"]["goal_revision"], 1);
 
     let fixture = Fixture::new();
@@ -1316,6 +1338,66 @@ fn goal_bearing_start_is_typed_and_a_plain_v1_start_remains_unchanged() {
 }
 
 #[test]
+fn goal_bearing_start_replace_preflights_omitted_and_partial_identity_fences() {
+    for explicit_session_id in [false, true] {
+        let fixture = Fixture::new();
+        let daemon = SequenceRecordingDaemon::start(
+            &fixture.socket,
+            vec![Reply::StatusV2, Reply::Unsupported],
+        );
+        let mut arguments = vec![
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+            "--idempotency-key".to_owned(),
+            format!("v2gol-start-replace-preflight-{explicit_session_id}"),
+        ];
+        if explicit_session_id {
+            arguments.extend(["--if-session-id".to_owned(), SESSION_ID.to_owned()]);
+        }
+        arguments.extend([
+            "start".to_owned(),
+            "--preset".to_owned(),
+            "sw-dev".to_owned(),
+            "--task".to_owned(),
+            "Replace with a goal".to_owned(),
+            "--goal".to_owned(),
+            "Ship safely.".to_owned(),
+            "--criterion".to_owned(),
+            "tested=Tests pass.".to_owned(),
+            "--replace".to_owned(),
+            "--yes".to_owned(),
+        ]);
+
+        let output = fixture.run(&arguments);
+        assert_eq!(output.status.code(), Some(3), "{output:?}");
+        assert_eq!(one_json(&output)["code"], "UNSUPPORTED_V2_CAPABILITY");
+        let requests = daemon.finish();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["command"], "session.status");
+        assert_eq!(requests[0]["operation"], "query");
+        if explicit_session_id {
+            assert_eq!(requests[0]["preconditions"]["session_id"], SESSION_ID);
+        } else {
+            assert!(requests[0].get("preconditions").is_none());
+        }
+        assert_eq!(requests[1]["command"], "session.start_replace");
+        assert_eq!(requests[1]["operation"], "mutate");
+        assert_eq!(requests[1]["workspace"]["expected_uuid"], WORKSPACE_ID);
+        assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+        assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+        assert_eq!(requests[1]["payload"]["goal"], "Ship safely.");
+        assert_eq!(
+            requests[1]["payload"]["criteria"],
+            json!([{"criterion_id":"tested","statement":"Tests pass."}])
+        );
+        assert_eq!(requests[1]["payload"]["confirmed"], true);
+    }
+}
+
+#[test]
 fn v2_goal_success_has_stable_json_human_and_quiet_rendering() {
     for mode in ["json", "human", "quiet"] {
         let fixture = Fixture::new();
@@ -1367,19 +1449,6 @@ fn v2_goal_success_has_stable_json_human_and_quiet_rendering() {
 #[test]
 fn v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon() {
     let invalid = [
-        vec![
-            "start",
-            "--preset",
-            "sw-dev",
-            "--task",
-            "Replace with a goal",
-            "--goal",
-            "Ship safely.",
-            "--criterion",
-            "tested=Tests pass.",
-            "--replace",
-            "--yes",
-        ],
         vec!["goal", "define", "--goal", "Missing criteria."],
         vec!["goal", "define", "--criterion", "tested=Tests pass."],
         vec![
@@ -1610,7 +1679,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         .to_owned();
     assert!(replacement_help.contains(
         "--goal <text> --criterion <id>=<statement>... [--actor <text>] --replace \
-         --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> \
+         [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] \
          [--dry-run] [--yes]"
     ));
     for shell in ["bash", "zsh", "fish"] {

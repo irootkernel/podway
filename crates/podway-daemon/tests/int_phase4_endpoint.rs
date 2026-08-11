@@ -260,6 +260,7 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
         "dispatch.rs",
         "endpoint.rs",
         "execution.rs",
+        "execution/int_v2gol_epic_execution_integrity/mod.rs",
         "lib.rs",
         "main.rs",
         "native_execution.rs",
@@ -365,10 +366,22 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
                         ] if attribute == "path" => Some(path),
                         _ => None,
                     });
-                let flat = parent.join(format!("{module}.rs"));
-                let nested = parent.join(module).join("mod.rs");
+                let module_parent = match source_path.file_name().and_then(|name| name.to_str()) {
+                    Some("lib.rs" | "main.rs" | "mod.rs") => parent.to_owned(),
+                    Some(_) => parent.join(
+                        source_path
+                            .file_stem()
+                            .expect("daemon module source must have a file stem"),
+                    ),
+                    None => panic!(
+                        "daemon source {} must have a file name",
+                        source_path.display()
+                    ),
+                };
+                let flat = module_parent.join(format!("{module}.rs"));
+                let nested = module_parent.join(module).join("mod.rs");
                 let input = path_attribute
-                    .map(|path| parent.join(path))
+                    .map(|path| module_parent.join(path))
                     .unwrap_or_else(|| if flat.is_file() { flat } else { nested });
                 let relative_input = input.strip_prefix(source_root).unwrap_or_else(|_| {
                     panic!(
