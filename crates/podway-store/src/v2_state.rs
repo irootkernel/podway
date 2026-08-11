@@ -5,18 +5,20 @@ use std::sync::Arc;
 
 use podway_core::{
     ActorAttributionV2, AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
-    CanonicalProcedureJsonV1, GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2,
-    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, NodeDefinitionId, NodeKindV2,
-    OptionId, ProcedureSnapshotId, ProcedureSourceKindV1, ProcedureSourceLabelV1, ReasonV2,
-    Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest,
-    TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
+    CanonicalProcedureJsonV1, CriterionAssessmentResultV2, CriterionCitationV2, GoalDefinitionV2,
+    GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalRevisionRecordV2, GoalStatementV2,
+    GraphNodeId, ItemId, NodeDefinitionId, NodeKindV2, OptionId, ProcedureSnapshotId,
+    ProcedureSourceKindV1, ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2, SessionId,
+    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
+    canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use crate::v2_goal::{
-    GoalStateV2, insert_goal_state_v2, load_goal_state_v2, replace_goal_state_v2,
+    AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2,
+    insert_goal_state_v2, load_goal_state_v2, replace_goal_state_v2,
     validate_goal_revision_target_v2, validate_goal_state_successor_v2, validate_goal_state_v2,
 };
 use crate::v2_memory::{
@@ -736,6 +738,17 @@ pub struct GraphGoalRevisionOutcomeV2 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphCriterionAssessmentOutcomeV2 {
+    state: GraphSessionStateV2,
+    assessment: CriterionAssessmentStateV2,
+    graph_node_id: GraphNodeId,
+    attempt_id: AttemptId,
+    goal_revision: GoalRevisionNumberV2,
+    complete: bool,
+    determined_outcome: Option<GoalOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphBlockOutcomeV2 {
     state: GraphSessionStateV2,
     graph_node_id: GraphNodeId,
@@ -887,6 +900,33 @@ impl GraphGoalRevisionOutcomeV2 {
     }
     pub fn target_attempt_id(&self) -> &AttemptId {
         &self.target_attempt_id
+    }
+}
+
+impl GraphCriterionAssessmentOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+    pub fn assessment(&self) -> &CriterionAssessmentStateV2 {
+        &self.assessment
+    }
+    pub fn graph_node_id(&self) -> &GraphNodeId {
+        &self.graph_node_id
+    }
+    pub fn attempt_id(&self) -> &AttemptId {
+        &self.attempt_id
+    }
+    pub const fn goal_revision(&self) -> GoalRevisionNumberV2 {
+        self.goal_revision
+    }
+    pub const fn complete(&self) -> bool {
+        self.complete
+    }
+    pub const fn determined_outcome(&self) -> Option<GoalOutcome> {
+        self.determined_outcome
     }
 }
 
@@ -1905,6 +1945,226 @@ impl GraphSessionStateV2 {
             self.cancel_reason.clone(),
         )?;
         Ok(GraphGoalDefinitionOutcomeV2 { state, revision })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn assess_goal_criterion_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+        expected_goal_revision: GoalRevisionNumberV2,
+        result: CriterionAssessmentResultV2,
+        actor: Option<ActorAttributionV2>,
+        now: UnixMillis,
+    ) -> Result<GraphCriterionAssessmentOutcomeV2, GraphMutationErrorV2> {
+        if !self.snapshot.goal_tracking() {
+            return Err(GraphMutationErrorV2::GoalTrackingNotEnabled);
+        }
+        let active =
+            self.require_running_active_v2(expected_session_revision, expected_attempt_id)?;
+        let current_goal_revision = self
+            .goal_state
+            .current_revision()
+            .ok_or(GraphMutationErrorV2::SessionGoalMissing)?;
+        if current_goal_revision != expected_goal_revision {
+            return Err(GraphMutationErrorV2::GoalRevisionStale {
+                expected: expected_goal_revision,
+                actual: current_goal_revision,
+            });
+        }
+        if active.goal_revision() != Some(current_goal_revision) {
+            return Err(GraphMutationErrorV2::GoalRevisionStale {
+                expected: expected_goal_revision,
+                actual: active.goal_revision().unwrap_or(current_goal_revision),
+            });
+        }
+        let node = self
+            .snapshot
+            .graph_node(active.graph_node_id())
+            .ok_or_else(|| invalid("active Procedure v2 graph node is absent"))?;
+        if node.node_kind() != NodeKindV2::Decision {
+            return Err(GraphMutationErrorV2::GraphNodeTypeMismatch {
+                graph_node_id: active.graph_node_id().clone(),
+                actual: node.node_kind(),
+            });
+        }
+        if !node.goal_assessment() {
+            return Err(GraphMutationErrorV2::GoalAssessmentDecisionRequired {
+                graph_node_id: active.graph_node_id().clone(),
+            });
+        }
+
+        let revision = self
+            .goal_state
+            .revisions()
+            .iter()
+            .find(|revision| revision.revision() == current_goal_revision)
+            .ok_or(GraphMutationErrorV2::SessionGoalMissing)?;
+        let criterion_order = revision
+            .criteria()
+            .criteria()
+            .iter()
+            .enumerate()
+            .map(|(index, criterion)| (criterion.id(), index))
+            .collect::<BTreeMap<_, _>>();
+        if !criterion_order.contains_key(result.criterion_id()) {
+            return Err(GraphMutationErrorV2::CriterionNotFound {
+                criterion_id: result.criterion_id().clone(),
+            });
+        }
+
+        let active_memory = self
+            .workflow_memory
+            .attempts()
+            .iter()
+            .find(|memory| memory.attempt_id() == active.attempt_id())
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        let existing = self
+            .goal_state
+            .attempt_assessments()
+            .iter()
+            .find(|assessment| assessment.attempt_id() == active.attempt_id());
+        if existing.is_some_and(|assessment| {
+            assessment
+                .results()
+                .iter()
+                .any(|state| state.result().criterion_id() == result.criterion_id())
+        }) {
+            return Err(GraphMutationErrorV2::CriterionResultAlreadyRecorded {
+                criterion_id: result.criterion_id().clone(),
+            });
+        }
+        if let Some(expected_mode) = existing
+            .and_then(|assessment| assessment.results().first())
+            .map(|state| state.result().mode())
+            && expected_mode != result.mode()
+        {
+            return Err(GraphMutationErrorV2::CriterionModeMixed {
+                criterion_id: result.criterion_id().clone(),
+                expected_mode,
+                actual_status: result.status(),
+            });
+        }
+        if result.citations().iter().collect::<BTreeSet<_>>().len() != result.citations().len() {
+            return Err(GraphMutationErrorV2::CriterionCitationInvalid {
+                criterion_id: result.criterion_id().clone(),
+                citation: result.citations()[0].clone(),
+            });
+        }
+        for citation in result.citations() {
+            let valid = match citation {
+                CriterionCitationV2::Evidence(source_graph_node_id) => active_memory
+                    .evidence()
+                    .iter()
+                    .find(|reference| reference.resolution().source_node() == source_graph_node_id)
+                    .and_then(|reference| match reference.resolution() {
+                        podway_core::ResolvedEvidenceReferenceV2::Resolved(snapshot) => {
+                            Some(snapshot.source_attempt_id())
+                        }
+                        podway_core::ResolvedEvidenceReferenceV2::Skipped(_)
+                        | podway_core::ResolvedEvidenceReferenceV2::Unresolved { .. } => None,
+                    })
+                    .is_some_and(|source_attempt_id| {
+                        self.trace.attempts().iter().any(|source| {
+                            source.attempt_id() == source_attempt_id
+                                && source.validity() == podway_core::AttemptValidityV2::Valid
+                        })
+                    }),
+                CriterionCitationV2::Item(item_id) => active_memory
+                    .item_slots()
+                    .iter()
+                    .any(|slot| slot.item_id() == item_id && slot.value().is_some()),
+            };
+            if !valid {
+                return Err(GraphMutationErrorV2::CriterionCitationInvalid {
+                    criterion_id: result.criterion_id().clone(),
+                    citation: citation.clone(),
+                });
+            }
+        }
+
+        let assessment = CriterionAssessmentStateV2::new(result, actor, now);
+        let mut attempt_assessments = self.goal_state.attempt_assessments().to_vec();
+        if let Some(index) = attempt_assessments
+            .iter()
+            .position(|value| value.attempt_id() == active.attempt_id())
+        {
+            let mut results = attempt_assessments[index].results().to_vec();
+            results.push(assessment.clone());
+            results.sort_by_key(|state| criterion_order[state.result().criterion_id()]);
+            attempt_assessments[index] = AttemptCriterionAssessmentStateV2::new(
+                active.attempt_id().clone(),
+                current_goal_revision,
+                results,
+            )?;
+        } else {
+            attempt_assessments.push(AttemptCriterionAssessmentStateV2::new(
+                active.attempt_id().clone(),
+                current_goal_revision,
+                vec![assessment.clone()],
+            )?);
+        }
+        let complete = attempt_assessments
+            .iter()
+            .find(|value| value.attempt_id() == active.attempt_id())
+            .is_some_and(|value| value.results().len() == criterion_order.len());
+        let determined_outcome = complete.then(|| {
+            let results = attempt_assessments
+                .iter()
+                .find(|value| value.attempt_id() == active.attempt_id())
+                .expect("complete assessment owner exists")
+                .results();
+            if results[0].result().mode() == podway_core::CriterionAssessmentModeV2::Applicability {
+                GoalOutcome::Superseded
+            } else if results
+                .iter()
+                .all(|state| state.result().status() == podway_core::CriterionStatusV2::Satisfied)
+            {
+                GoalOutcome::Achieved
+            } else {
+                GoalOutcome::NotAchieved
+            }
+        });
+        let goal_state = GoalStateV2::new(
+            Some(current_goal_revision),
+            self.goal_state.revisions().to_vec(),
+            attempt_assessments,
+            self.goal_state.assessments().to_vec(),
+        )?;
+        let trace = SessionTraceV2::from_parts(
+            self.trace.session_id().clone(),
+            self.trace.lifecycle(),
+            self.trace
+                .revision()
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.trace.attempts().to_vec(),
+        )?;
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            self.counters.clone(),
+            self.attempt_metadata.clone(),
+            self.workflow_memory.clone(),
+            goal_state,
+            self.created_at,
+            self.completed_at,
+            self.cancelled_at,
+            self.cancel_reason.clone(),
+        )?;
+        Ok(GraphCriterionAssessmentOutcomeV2 {
+            state,
+            assessment,
+            graph_node_id: active.graph_node_id().clone(),
+            attempt_id: active.attempt_id().clone(),
+            goal_revision: current_goal_revision,
+            complete,
+            determined_outcome,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

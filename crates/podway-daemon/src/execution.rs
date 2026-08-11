@@ -21,26 +21,28 @@ use podway_core::{
     AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptV1, AttemptValidityV2, AuthoringSeverity,
     BlockSessionV1, BlockerId, BlockerState, CancelSessionV1, CanonicalProcedureJsonV1,
     CanonicalProcedureSnapshotInputV1, CheckItemV1, ClearItemV1, CommandContextV1,
-    CompleteSessionV1, DecisionRecordV2, DomainCommand, DomainError, DomainResult, GoalCriterionV2,
-    GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2,
-    GraphPlacementV2, ItemId, ItemMutationPreconditionsV1, ItemTypeV1, ItemValueV1, JobId,
-    LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1, ProcedureSourceLabelV1,
-    ReasonV2, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1, ResetSessionV1,
-    ResolvedEvidenceReferenceV2, RetrySessionV1, ReturnSessionV1, Revision, SessionAggregateV1,
-    SessionAttemptV2, SessionCommandV1, SessionId, SessionLifecycle, SessionTraceV2, SetItemV1,
-    Sha256Digest, SkipSessionV1, StageSpecV1, StartReplaceSessionV1, StartSessionV1,
-    TraceSequenceV2, UnblockSessionV1, UncheckItemV1, UnixMillis, WorkspaceId, apply_transition_v1,
-    canonicalize_json_v1, required_items_satisfied,
+    CompleteSessionV1, CriterionAssessmentReasonV2, CriterionAssessmentResultV2,
+    CriterionCitationV2, CriterionStatusV2, DecisionRecordV2, DomainCommand, DomainError,
+    DomainResult, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2,
+    GoalStatementV2, GraphPlacementV2, ItemId, ItemMutationPreconditionsV1, ItemTypeV1,
+    ItemValueV1, JobId, LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1,
+    ProcedureSourceLabelV1, ReasonV2, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1,
+    ResetSessionV1, ResolvedEvidenceReferenceV2, RetrySessionV1, ReturnSessionV1, Revision,
+    SessionAggregateV1, SessionAttemptV2, SessionCommandV1, SessionId, SessionLifecycle,
+    SessionTraceV2, SetItemV1, Sha256Digest, SkipSessionV1, StageSpecV1, StartReplaceSessionV1,
+    StartSessionV1, TraceSequenceV2, UnblockSessionV1, UncheckItemV1, UnixMillis, WorkspaceId,
+    apply_transition_v1, canonicalize_json_v1, required_items_satisfied,
 };
 use podway_presets::lookup as lookup_embedded_preset_v1;
 use podway_protocol::{
-    GoalCriterionWireV2, GoalDefineV2, GoalReviseV2, ItemAddV1, ItemAttachSourceV1, ItemAttachV1,
-    ItemCheckV1, ItemClearV1, ItemRemoveV1, ItemSetV1, ItemUncheckV1, ProcedureV2MutationCommandV1,
-    ProcedureV2MutationRequestV1, ProcedureV2StartCommandV1, ProcedureV2StartRequestV1,
-    RequestIdV1, Rfc3339MillisV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1,
-    SessionDecideV2, SessionMutationPreconditionsWireV1, SessionReopenV1, SessionResetV1,
-    SessionRetryV1, SessionReturnV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1,
-    SessionStartV1, SessionUnblockV1, SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
+    GoalAssessCriterionV2, GoalCriterionWireV2, GoalDefineV2, GoalReviseV2, ItemAddV1,
+    ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1, ItemRemoveV1, ItemSetV1,
+    ItemUncheckV1, ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1,
+    ProcedureV2StartCommandV1, ProcedureV2StartRequestV1, RequestIdV1, Rfc3339MillisV1,
+    SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionDecideV2,
+    SessionMutationPreconditionsWireV1, SessionReopenV1, SessionResetV1, SessionRetryV1,
+    SessionReturnV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1, SessionStartV1,
+    SessionUnblockV1, SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
     canonical_procedure_v2_mutation_identity_v1, canonical_procedure_v2_start_identity_v1,
     canonical_reset_all_identity_v1,
 };
@@ -70,6 +72,7 @@ const EXECUTION_DOCUMENT_VERSION_V9: u8 = 9;
 const EXECUTION_DOCUMENT_VERSION_V10: u8 = 10;
 const EXECUTION_DOCUMENT_VERSION_V11: u8 = 11;
 const EXECUTION_DOCUMENT_VERSION_V12: u8 = 12;
+const EXECUTION_DOCUMENT_VERSION_V13: u8 = 13;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -1442,6 +1445,176 @@ fn decode_procedure_v2_goal_execution_v1(
     }
 }
 
+#[derive(Clone, Debug)]
+struct AdmittedProcedureV2CriterionAssessmentV1 {
+    selector: WorktreeSelectorWireV1,
+    workspace_id: WorkspaceId,
+    command: GoalAssessCriterionV2,
+}
+
+fn procedure_v2_criterion_assessment_execution_document_v1(
+    admitted: &AdmittedProcedureV2CriterionAssessmentV1,
+) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
+    let command = &admitted.command;
+    let document = json!({
+        "command": "goal.assess_criterion",
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V13,
+        "payload": {
+            "actor": command.actor,
+            "criterion_id": command.criterion_id,
+            "evidence": command.evidence,
+            "items": command.items,
+            "reason": command.reason,
+            "status": command.status,
+        },
+        "preconditions": {
+            "attempt_id": command.preconditions.expected_attempt_id,
+            "goal_revision": command.expected_goal_revision,
+            "session_id": command.preconditions.expected_session_id,
+            "session_revision": command.preconditions.expected_session_revision,
+        },
+        "selector": admitted.selector,
+        "workspace_id": admitted.workspace_id,
+    });
+    let canonical = canonicalize_json_v1(&document).map_err(|_| {
+        invalid_execution_v1("Procedure v2 criterion assessment execution cannot be canonicalized")
+    })?;
+    CanonicalExecutionJsonV1::new(canonical).map_err(ExecutionErrorV1::InvalidStoreValue)
+}
+
+fn decode_procedure_v2_criterion_assessment_execution_v1(
+    source: &str,
+) -> Result<AdmittedProcedureV2CriterionAssessmentV1, ExecutionErrorV1> {
+    let root: Value = serde_json::from_str(source).map_err(|_| {
+        invalid_execution_v1("Procedure v2 criterion assessment execution is not JSON")
+    })?;
+    let object = root.as_object().ok_or_else(|| {
+        invalid_execution_v1("Procedure v2 criterion assessment execution root is invalid")
+    })?;
+    require_exact_keys_v1(
+        object,
+        &[
+            "command",
+            "execution_version",
+            "payload",
+            "preconditions",
+            "selector",
+            "workspace_id",
+        ],
+    )?;
+    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V13)
+        || value_string_v1(object, "command")? != "goal.assess_criterion"
+    {
+        return Err(invalid_execution_v1(
+            "Procedure v2 criterion assessment execution identity is invalid",
+        ));
+    }
+    let payload = value_object_v1(object, "payload")?;
+    require_exact_keys_v1(
+        payload,
+        &[
+            "actor",
+            "criterion_id",
+            "evidence",
+            "items",
+            "reason",
+            "status",
+        ],
+    )?;
+    let preconditions = value_object_v1(object, "preconditions")?;
+    require_exact_keys_v1(
+        preconditions,
+        &[
+            "attempt_id",
+            "goal_revision",
+            "session_id",
+            "session_revision",
+        ],
+    )?;
+    let command = GoalAssessCriterionV2 {
+        criterion_id: value_typed_v1(payload, "criterion_id")?,
+        status: value_string_v1(payload, "status")?.to_owned(),
+        reason: value_string_v1(payload, "reason")?.to_owned(),
+        evidence: value_typed_v1(payload, "evidence")?,
+        items: value_typed_v1(payload, "items")?,
+        actor: value_optional_string_v1(payload, "actor")?,
+        preconditions: SessionMutationPreconditionsWireV1 {
+            expected_session_id: value_typed_v1(preconditions, "session_id")?,
+            expected_session_revision: Revision::new(value_u64_v1(
+                preconditions,
+                "session_revision",
+            )?),
+            expected_attempt_id: value_typed_v1(preconditions, "attempt_id")?,
+        },
+        expected_goal_revision: value_u64_v1(preconditions, "goal_revision")?,
+    };
+    validate_criterion_assessment_command_v2(&command)?;
+    Ok(AdmittedProcedureV2CriterionAssessmentV1 {
+        selector: serde_json::from_value(value_v1(object, "selector")?.clone()).map_err(|_| {
+            invalid_execution_v1("Procedure v2 criterion assessment selector is invalid")
+        })?,
+        workspace_id: value_typed_v1(object, "workspace_id")?,
+        command,
+    })
+}
+
+fn criterion_assessment_result_from_wire_v2(
+    command: &GoalAssessCriterionV2,
+) -> Result<CriterionAssessmentResultV2, ExecutionErrorV1> {
+    let status = command
+        .status
+        .parse::<CriterionStatusV2>()
+        .map_err(|_| invalid_execution_v1("Procedure v2 criterion assessment status is invalid"))?;
+    let citations = command
+        .evidence
+        .iter()
+        .cloned()
+        .map(CriterionCitationV2::Evidence)
+        .chain(command.items.iter().cloned().map(CriterionCitationV2::Item))
+        .collect();
+    CriterionAssessmentResultV2::new(
+        command.criterion_id.clone(),
+        status,
+        CriterionAssessmentReasonV2::new(command.reason.clone())
+            .map_err(ExecutionErrorV1::BoundaryDomain)?,
+        citations,
+    )
+    .map_err(ExecutionErrorV1::BoundaryDomain)
+}
+
+fn validate_criterion_assessment_command_v2(
+    command: &GoalAssessCriterionV2,
+) -> Result<(), ExecutionErrorV1> {
+    if command.expected_goal_revision == 0 {
+        return Err(invalid_execution_v1(
+            "Procedure v2 criterion assessment goal revision is invalid",
+        ));
+    }
+    criterion_assessment_result_from_wire_v2(command)?;
+    command
+        .actor
+        .clone()
+        .map(ActorAttributionV2::new)
+        .transpose()
+        .map_err(ExecutionErrorV1::BoundaryDomain)?;
+    if command
+        .evidence
+        .iter()
+        .enumerate()
+        .any(|(index, value)| command.evidence[..index].contains(value))
+        || command
+            .items
+            .iter()
+            .enumerate()
+            .any(|(index, value)| command.items[..index].contains(value))
+    {
+        return Err(invalid_execution_v1(
+            "Procedure v2 criterion assessment citations are duplicated",
+        ));
+    }
+    Ok(())
+}
+
 fn rework_record_projection_v1(record: &podway_core::ReworkRecordV2) -> Value {
     let mut value = json!({
         "trace_sequence": record.trace().get(),
@@ -1499,6 +1672,52 @@ fn goal_revision_record_projection_v1(
             .as_object_mut()
             .expect("goal record is an object")
             .insert("actor".to_owned(), json!(actor.as_str()));
+    }
+    Ok(value)
+}
+
+fn criterion_assessment_record_projection_v1(
+    outcome: &podway_store::GraphCriterionAssessmentOutcomeV2,
+) -> Result<Value, ExecutionErrorV1> {
+    let assessment = outcome.assessment();
+    let result = assessment.result();
+    let citations = result
+        .citations()
+        .iter()
+        .map(|citation| match citation {
+            CriterionCitationV2::Evidence(graph_node_id) => {
+                json!({"kind":"evidence", "graph_node_id":graph_node_id})
+            }
+            CriterionCitationV2::Item(item_id) => {
+                json!({"kind":"item", "item_id":item_id})
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut value = json!({
+        "graph_node_id": outcome.graph_node_id(),
+        "attempt_id": outcome.attempt_id(),
+        "goal_revision": outcome.goal_revision().get(),
+        "mode": result.mode().as_str(),
+        "result": {
+            "criterion_id": result.criterion_id(),
+            "status": result.status().as_str(),
+            "reason": result.reason().as_str(),
+            "citations": citations,
+        },
+        "recorded_at": rfc3339_millis_execution_v1(assessment.recorded_at())?,
+        "complete": outcome.complete(),
+    });
+    if let Some(actor) = assessment.actor() {
+        value
+            .as_object_mut()
+            .expect("criterion assessment projection is an object")
+            .insert("actor".to_owned(), json!(actor.as_str()));
+    }
+    if let Some(determined) = outcome.determined_outcome() {
+        value
+            .as_object_mut()
+            .expect("criterion assessment projection is an object")
+            .insert("determined_outcome".to_owned(), json!(determined.as_str()));
     }
     Ok(value)
 }
@@ -3828,8 +4047,113 @@ where
                     idempotency_key,
                     response_context,
                 ),
-            ProcedureV2MutationCommandV1::GoalAssessCriterion(_) => Ok(None),
+            ProcedureV2MutationCommandV1::GoalAssessCriterion(command) => self
+                .admit_procedure_v2_criterion_assessment_for_workspace_with_response_context(
+                    expected_workspace,
+                    request,
+                    command,
+                    idempotency_key,
+                    response_context,
+                ),
         }
+    }
+
+    fn admit_procedure_v2_criterion_assessment_for_workspace_with_response_context(
+        &self,
+        expected_workspace: &WorkspaceBindingV1,
+        request: &ProcedureV2MutationRequestV1,
+        command: &GoalAssessCriterionV2,
+        idempotency_key: IdempotencyKeyV1,
+        response_context: Option<PersistedResponseContextV1>,
+    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
+        if let Some(existing) = self
+            .store
+            .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)?
+        {
+            let Some(canonical_execution) = existing.canonical_execution() else {
+                return Ok(None);
+            };
+            let admitted = decode_procedure_v2_criterion_assessment_execution_v1(
+                canonical_execution.as_str(),
+            )?;
+            if admitted.workspace_id != *expected_workspace.identity().workspace_uuid() {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 criterion assessment replay workspace identity is invalid",
+                ));
+            }
+            let actual = procedure_v2_typed_mutation_request_digest_v1(
+                request,
+                expected_workspace.identity().workspace_uuid(),
+            )?;
+            if existing.request_digest() != &actual {
+                return Err(StoreErrorV1::IdempotencyDigestConflictV1 {
+                    expected: existing.request_digest().clone(),
+                    actual,
+                }
+                .into());
+            }
+            return Ok(Some(existing.outcome().clone()));
+        }
+        let binding = self
+            .bound_workspace(request.selector())
+            .map_err(ExecutionErrorV1::from_boundary)?;
+        if binding.identity() != expected_workspace.identity() {
+            return Err(invalid_execution_v1(
+                "Procedure v2 criterion assessment workspace identity changed",
+            ));
+        }
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(binding.identity())?;
+        let Some(state) = view.graph_state() else {
+            return Ok(None);
+        };
+        if state.trace().session_id() != &command.preconditions.expected_session_id {
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: command.preconditions.expected_session_id.clone(),
+                actual: Some(state.trace().session_id().clone()),
+            });
+        }
+        validate_criterion_assessment_command_v2(command)?;
+        let admitted = AdmittedProcedureV2CriterionAssessmentV1 {
+            selector: request.selector().clone(),
+            workspace_id: binding.identity().workspace_uuid().clone(),
+            command: command.clone(),
+        };
+        let canonical_execution =
+            procedure_v2_criterion_assessment_execution_document_v1(&admitted)?;
+        let request_digest = procedure_v2_typed_mutation_request_digest_v1(
+            request,
+            binding.identity().workspace_uuid(),
+        )?;
+        let preconditions = RevisionAttemptItemPreconditionsV1::new(
+            Some(command.preconditions.expected_session_revision),
+            Some(command.preconditions.expected_attempt_id.clone()),
+            None,
+            None,
+        )
+        .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+        let durable = AdmitRequestV1::new_with_canonical_execution(
+            DomainCommand::GoalAssessCriterion,
+            idempotency_key,
+            self.ids.next_job_id(),
+            preconditions,
+            request_digest,
+            self.clock.now(),
+            canonical_execution,
+        )
+        .with_procedure_v2_execution()
+        .with_session_identity(AdmissionSessionIdentityV1::Exact(
+            command.preconditions.expected_session_id.clone(),
+        ));
+        let durable = match response_context {
+            Some(context) => durable.with_response_context(context),
+            None => durable,
+        };
+        self.store
+            .admit(binding.identity(), durable)
+            .map(Some)
+            .map_err(Into::into)
     }
 
     fn admit_procedure_v2_goal_mutation_for_workspace_with_response_context(
@@ -4334,6 +4658,12 @@ where
                     now,
                 )?
             }
+            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V13) => {
+                let admitted = decode_procedure_v2_criterion_assessment_execution_v1(
+                    claimed.execution().canonical_execution().as_str(),
+                )?;
+                self.execute_procedure_v2_criterion_assessment_claimed(&claimed, admitted, now)?
+            }
             _ => {
                 return Err(invalid_execution_v1(
                     "Procedure v2 execution version is unsupported",
@@ -4341,6 +4671,97 @@ where
             }
         };
         Ok(Some(receipt))
+    }
+
+    fn execute_procedure_v2_criterion_assessment_claimed(
+        &self,
+        claimed: &ClaimedJobV1,
+        admitted: AdmittedProcedureV2CriterionAssessmentV1,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        if admitted.workspace_id != *claimed.claim().identity().workspace_uuid() {
+            return Err(invalid_execution_v1(
+                "Procedure v2 criterion assessment workspace does not match the claim",
+            ));
+        }
+        let command = admitted.command;
+        let expected_preconditions = RevisionAttemptItemPreconditionsV1::new(
+            Some(command.preconditions.expected_session_revision),
+            Some(command.preconditions.expected_attempt_id.clone()),
+            None,
+            None,
+        )
+        .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+        if claimed.execution().command() != &DomainCommand::GoalAssessCriterion
+            || claimed.execution().preconditions() != &expected_preconditions
+            || claimed.execution().session_identity()
+                != &AdmissionSessionIdentityV1::Exact(
+                    command.preconditions.expected_session_id.clone(),
+                )
+        {
+            return Err(invalid_execution_v1(
+                "Procedure v2 criterion assessment document does not match durable metadata",
+            ));
+        }
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(claimed.claim().identity())?;
+        let state = view.graph_state().ok_or_else(|| {
+            invalid_execution_v1("Procedure v2 criterion assessment has no graph session")
+        })?;
+        if state.trace().session_id() != &command.preconditions.expected_session_id {
+            return self.commit_domain_failure(
+                claimed,
+                Revision::ZERO,
+                DomainError::SessionIdentityMismatch {
+                    expected: command.preconditions.expected_session_id,
+                    actual: Some(state.trace().session_id().clone()),
+                },
+                now,
+            );
+        }
+        let revision_before = state.trace().revision();
+        let result = criterion_assessment_result_from_wire_v2(&command)?;
+        let outcome = state.assess_goal_criterion_v2(
+            command.preconditions.expected_session_revision,
+            &command.preconditions.expected_attempt_id,
+            GoalRevisionNumberV2::new(command.expected_goal_revision),
+            result,
+            command
+                .actor
+                .map(ActorAttributionV2::new)
+                .transpose()
+                .map_err(ExecutionErrorV1::BoundaryDomain)?,
+            now,
+        );
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+            }
+        };
+        let operation = PersistedGraphTerminalOperationV2::goal_assess_criterion(
+            criterion_assessment_record_projection_v1(&outcome)?,
+        )
+        .map_err(|_| invalid_execution_v1("criterion assessment terminal operation is invalid"))?;
+        let next = outcome.into_state();
+        let result = DomainResult::SessionChanged {
+            session_id: state.trace().session_id().clone(),
+            revision_before,
+            revision_after: next.trace().revision(),
+            changed: true,
+        };
+        self.store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                state.workspace_revision(),
+                revision_before,
+                Some(next),
+                TerminalResultV1::Success(result),
+                operation,
+                now,
+            )
+            .map_err(Into::into)
     }
 
     fn execute_procedure_v2_goal_mutation_claimed(
@@ -5749,7 +6170,8 @@ fn domain_result_v1(
         | DomainCommand::SessionDecide
         | DomainCommand::SessionRework
         | DomainCommand::GoalDefine
-        | DomainCommand::GoalRevise => DomainResult::SessionChanged {
+        | DomainCommand::GoalRevise
+        | DomainCommand::GoalAssessCriterion => DomainResult::SessionChanged {
             session_id: session_id.ok_or(DomainError::InvalidState {
                 reason: "admitted session transition has no session aggregate",
             })?,
@@ -7011,5 +7433,59 @@ mod tests {
         let mut blank_actor: Value = serde_json::from_str(canonical.as_str()).unwrap();
         blank_actor["payload"]["actor"] = json!("   ");
         assert!(decode_procedure_v2_decision_execution_v1(&blank_actor.to_string()).is_err());
+    }
+
+    #[test]
+    fn v2gol002_criterion_assessment_execution_revalidates_closed_payload() {
+        let admitted = AdmittedProcedureV2CriterionAssessmentV1 {
+            selector: WorktreeSelectorWireV1::new(b"/tmp/worktree", "/tmp/worktree", None).unwrap(),
+            workspace_id: WorkspaceId::new("00000000-0000-4000-8000-000000000934").unwrap(),
+            command: GoalAssessCriterionV2 {
+                criterion_id: podway_core::CriterionId::new("correct").unwrap(),
+                status: "satisfied".to_owned(),
+                reason: "The durable result is attributable and uniquely cited.".to_owned(),
+                evidence: vec![podway_core::GraphNodeId::new("perform").unwrap()],
+                items: vec![podway_core::ItemId::new("proof").unwrap()],
+                actor: Some("reviewer".to_owned()),
+                preconditions: SessionMutationPreconditionsWireV1 {
+                    expected_session_id: SessionId::new("00000000-0000-4000-8000-000000000932")
+                        .unwrap(),
+                    expected_session_revision: Revision::new(7),
+                    expected_attempt_id: AttemptId::new("00000000-0000-4000-8000-000000000933")
+                        .unwrap(),
+                },
+                expected_goal_revision: 1,
+            },
+        };
+        let canonical = procedure_v2_criterion_assessment_execution_document_v1(&admitted).unwrap();
+        assert!(decode_procedure_v2_criterion_assessment_execution_v1(canonical.as_str()).is_ok());
+
+        let mut duplicate_evidence: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        duplicate_evidence["payload"]["evidence"] = json!(["perform", "perform"]);
+        assert!(
+            decode_procedure_v2_criterion_assessment_execution_v1(&duplicate_evidence.to_string())
+                .is_err()
+        );
+
+        let mut duplicate_items: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        duplicate_items["payload"]["items"] = json!(["proof", "proof"]);
+        assert!(
+            decode_procedure_v2_criterion_assessment_execution_v1(&duplicate_items.to_string())
+                .is_err()
+        );
+
+        let mut blank_actor: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        blank_actor["payload"]["actor"] = json!("   ");
+        assert!(
+            decode_procedure_v2_criterion_assessment_execution_v1(&blank_actor.to_string())
+                .is_err()
+        );
+
+        let mut zero_goal_revision: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        zero_goal_revision["preconditions"]["goal_revision"] = json!(0);
+        assert!(
+            decode_procedure_v2_criterion_assessment_execution_v1(&zero_goal_revision.to_string())
+                .is_err()
+        );
     }
 }

@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -194,6 +195,7 @@ pub enum PersistedDomainCommandV1 {
     SessionRework,
     GoalDefine,
     GoalRevise,
+    GoalAssessCriterion,
     ItemCheck { item_id: ItemId },
     ItemUncheck { item_id: ItemId },
     ItemSet { item_id: ItemId },
@@ -223,6 +225,7 @@ impl PersistedDomainCommandV1 {
             CommandV1::SessionRework => Self::SessionRework,
             CommandV1::GoalDefine => Self::GoalDefine,
             CommandV1::GoalRevise => Self::GoalRevise,
+            CommandV1::GoalAssessCriterion => Self::GoalAssessCriterion,
             CommandV1::ItemCheck { item_id } => Self::ItemCheck {
                 item_id: item_id.clone(),
             },
@@ -266,6 +269,7 @@ impl PersistedDomainCommandV1 {
             Self::SessionRework => CommandV1::SessionRework,
             Self::GoalDefine => CommandV1::GoalDefine,
             Self::GoalRevise => CommandV1::GoalRevise,
+            Self::GoalAssessCriterion => CommandV1::GoalAssessCriterion,
             Self::ItemCheck { item_id } => CommandV1::ItemCheck { item_id },
             Self::ItemUncheck { item_id } => CommandV1::ItemUncheck { item_id },
             Self::ItemSet { item_id } => CommandV1::ItemSet { item_id },
@@ -299,6 +303,7 @@ impl PersistedDomainCommandV1 {
             Self::SessionRework => "session.rework",
             Self::GoalDefine => "goal.define",
             Self::GoalRevise => "goal.revise",
+            Self::GoalAssessCriterion => "goal.assess_criterion",
             Self::ItemCheck { .. } => "item.check",
             Self::ItemUncheck { .. } => "item.uncheck",
             Self::ItemSet { .. } => "item.set",
@@ -547,6 +552,7 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
             | CommandV1::SessionRework
             | CommandV1::GoalDefine
             | CommandV1::GoalRevise
+            | CommandV1::GoalAssessCriterion
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -571,6 +577,7 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
             | CommandV1::SessionRework
             | CommandV1::GoalDefine
             | CommandV1::GoalRevise
+            | CommandV1::GoalAssessCriterion
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }
@@ -619,6 +626,12 @@ fn procedure_v2_preconditions_match(
                 && preconditions.expected_item_id().is_none()
                 && preconditions.expected_item_revision().is_none()
         }
+        CommandV1::GoalAssessCriterion => {
+            preconditions.expected_session_revision().is_some()
+                && preconditions.expected_attempt_id().is_some()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
         CommandV1::SessionReset => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_attempt_id().is_none()
@@ -662,6 +675,7 @@ pub enum PersistedDomainCommandKindV1 {
     SessionRework,
     GoalDefine,
     GoalRevise,
+    GoalAssessCriterion,
     ItemCheck,
     ItemUncheck,
     ItemSet,
@@ -691,6 +705,7 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
             DomainCommandKind::SessionRework => Self::SessionRework,
             DomainCommandKind::GoalDefine => Self::GoalDefine,
             DomainCommandKind::GoalRevise => Self::GoalRevise,
+            DomainCommandKind::GoalAssessCriterion => Self::GoalAssessCriterion,
             DomainCommandKind::ItemCheck => Self::ItemCheck,
             DomainCommandKind::ItemUncheck => Self::ItemUncheck,
             DomainCommandKind::ItemSet => Self::ItemSet,
@@ -1100,6 +1115,9 @@ pub enum PersistedGraphTerminalOperationV2 {
         record: Value,
         target_attempt_id: AttemptId,
     },
+    GoalAssessCriterion {
+        record: Value,
+    },
     Decide {
         record: Value,
         target_attempt_id: AttemptId,
@@ -1227,6 +1245,24 @@ pub enum PersistedGraphMutationFailureV2 {
     },
     GoalAssessmentDecisionRequiresAssessment {
         graph_node_id: GraphNodeId,
+    },
+    GoalAssessmentDecisionRequired {
+        graph_node_id: GraphNodeId,
+    },
+    CriterionNotFound {
+        criterion_id: podway_core::CriterionId,
+    },
+    CriterionResultAlreadyRecorded {
+        criterion_id: podway_core::CriterionId,
+    },
+    CriterionModeMixed {
+        criterion_id: podway_core::CriterionId,
+        expected_mode: String,
+        actual_status: String,
+    },
+    CriterionCitationInvalid {
+        criterion_id: podway_core::CriterionId,
+        citation: Value,
     },
     SkipNotAllowed {
         graph_node_id: GraphNodeId,
@@ -1379,6 +1415,48 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
             } => Self::GoalAssessmentDecisionRequiresAssessment {
                 graph_node_id: graph_node_id.clone(),
             },
+            crate::GraphMutationErrorV2::GoalAssessmentDecisionRequired { graph_node_id } => {
+                Self::GoalAssessmentDecisionRequired {
+                    graph_node_id: graph_node_id.clone(),
+                }
+            }
+            crate::GraphMutationErrorV2::CriterionNotFound { criterion_id } => {
+                Self::CriterionNotFound {
+                    criterion_id: criterion_id.clone(),
+                }
+            }
+            crate::GraphMutationErrorV2::CriterionResultAlreadyRecorded { criterion_id } => {
+                Self::CriterionResultAlreadyRecorded {
+                    criterion_id: criterion_id.clone(),
+                }
+            }
+            crate::GraphMutationErrorV2::CriterionModeMixed {
+                criterion_id,
+                expected_mode,
+                actual_status,
+            } => Self::CriterionModeMixed {
+                criterion_id: criterion_id.clone(),
+                expected_mode: expected_mode.as_str().to_owned(),
+                actual_status: actual_status.as_str().to_owned(),
+            },
+            crate::GraphMutationErrorV2::CriterionCitationInvalid {
+                criterion_id,
+                citation,
+            } => Self::CriterionCitationInvalid {
+                criterion_id: criterion_id.clone(),
+                citation: match citation {
+                    podway_core::CriterionCitationV2::Evidence(graph_node_id) => {
+                        serde_json::json!({
+                            "kind": "evidence",
+                            "graph_node_id": graph_node_id.as_str(),
+                        })
+                    }
+                    podway_core::CriterionCitationV2::Item(item_id) => serde_json::json!({
+                        "kind": "item",
+                        "item_id": item_id.as_str(),
+                    }),
+                },
+            },
             crate::GraphMutationErrorV2::SkipNotAllowed { graph_node_id } => Self::SkipNotAllowed {
                 graph_node_id: graph_node_id.clone(),
             },
@@ -1522,6 +1600,105 @@ fn goal_revision_record_projection_shape_v2(record: &Value, define: bool) -> boo
             && record.get("reactivated").and_then(Value::as_bool).is_some())
 }
 
+fn criterion_assessment_record_projection_shape_v2(record: &Value) -> bool {
+    let Some(record) = record.as_object() else {
+        return false;
+    };
+    let complete = record.get("complete").and_then(Value::as_bool);
+    let determined_outcome = record.get("determined_outcome");
+    if record.len()
+        != 7 + usize::from(record.contains_key("actor")) + usize::from(determined_outcome.is_some())
+        || !record
+            .get("graph_node_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| GraphNodeId::new(value.to_owned()).is_ok())
+        || !record
+            .get("attempt_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| AttemptId::new(value.to_owned()).is_ok())
+        || !record
+            .get("goal_revision")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0)
+        || !record
+            .get("recorded_at")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty() && value.len() <= 32)
+        || !record.get("actor").is_none_or(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| ActorAttributionV2::new(value.to_owned()).is_ok())
+        })
+        || complete.is_none()
+        || (complete == Some(true)) != determined_outcome.is_some()
+        || !determined_outcome.is_none_or(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| podway_core::GoalOutcome::from_str(value).is_ok())
+        })
+    {
+        return false;
+    }
+    let Some(result) = record.get("result").and_then(Value::as_object) else {
+        return false;
+    };
+    if result.len() != 4 {
+        return false;
+    }
+    let Some(criterion_id) = result
+        .get("criterion_id")
+        .and_then(Value::as_str)
+        .and_then(|value| podway_core::CriterionId::new(value.to_owned()).ok())
+    else {
+        return false;
+    };
+    let Some(status) = result
+        .get("status")
+        .and_then(Value::as_str)
+        .and_then(|value| podway_core::CriterionStatusV2::from_str(value).ok())
+    else {
+        return false;
+    };
+    if record.get("mode").and_then(Value::as_str)
+        != Some(podway_core::CriterionAssessmentModeV2::from_status(status).as_str())
+    {
+        return false;
+    }
+    let Some(reason) = result
+        .get("reason")
+        .and_then(Value::as_str)
+        .and_then(|value| podway_core::CriterionAssessmentReasonV2::new(value.to_owned()).ok())
+    else {
+        return false;
+    };
+    let Some(citations) = result.get("citations").and_then(Value::as_array) else {
+        return false;
+    };
+    let citations = citations
+        .iter()
+        .map(|citation| {
+            let citation = citation.as_object()?;
+            match citation.get("kind").and_then(Value::as_str) {
+                Some("evidence") if citation.len() == 2 => citation
+                    .get("graph_node_id")
+                    .and_then(Value::as_str)
+                    .and_then(|value| GraphNodeId::new(value.to_owned()).ok())
+                    .map(podway_core::CriterionCitationV2::Evidence),
+                Some("item") if citation.len() == 2 => citation
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .and_then(|value| ItemId::new(value.to_owned()).ok())
+                    .map(podway_core::CriterionCitationV2::Item),
+                _ => None,
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    citations.is_some_and(|citations| {
+        podway_core::CriterionAssessmentResultV2::new(criterion_id, status, reason, citations)
+            .is_ok()
+    })
+}
+
 impl PersistedGraphTerminalOperationV2 {
     pub fn goal_define(record: Value) -> Result<Self, StoreCodecErrorV1> {
         let operation = Self::GoalDefine { record };
@@ -1537,6 +1714,12 @@ impl PersistedGraphTerminalOperationV2 {
             record,
             target_attempt_id,
         };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn goal_assess_criterion(record: Value) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::GoalAssessCriterion { record };
         operation.validate()?;
         Ok(operation)
     }
@@ -1692,6 +1875,9 @@ impl PersistedGraphTerminalOperationV2 {
                 goal_revision_record_projection_shape_v2(record, false)
                     && !target_attempt_id.as_str().is_empty()
             }
+            Self::GoalAssessCriterion { record } => {
+                criterion_assessment_record_projection_shape_v2(record)
+            }
             Self::Decide {
                 record,
                 target_attempt_id,
@@ -1837,6 +2023,28 @@ impl PersistedGraphMutationFailureV2 {
                         == item_ids.len()
             }
             Self::FreshGoalAssessmentMissing { goal_revision } => *goal_revision > 0,
+            Self::CriterionModeMixed {
+                expected_mode,
+                actual_status,
+                ..
+            } => {
+                matches!(expected_mode.as_str(), "assessment" | "applicability")
+                    && matches!(
+                        actual_status.as_str(),
+                        "satisfied" | "unsatisfied" | "not_applicable"
+                    )
+            }
+            Self::CriterionCitationInvalid { citation, .. } => {
+                citation.as_object().is_some_and(|citation| {
+                    match citation.get("kind").and_then(Value::as_str) {
+                        Some("evidence") => {
+                            citation.len() == 2 && citation.contains_key("graph_node_id")
+                        }
+                        Some("item") => citation.len() == 2 && citation.contains_key("item_id"),
+                        _ => false,
+                    }
+                })
+            }
             Self::SessionNotRunning
             | Self::GoalTrackingNotEnabled
             | Self::GoalRevisionTargetNotAllowed { .. }
@@ -1853,6 +2061,9 @@ impl PersistedGraphMutationFailureV2 {
             | Self::EvidenceReferenceUnresolved { .. }
             | Self::EvidenceReferenceStale { .. }
             | Self::GoalAssessmentDecisionRequiresAssessment { .. }
+            | Self::GoalAssessmentDecisionRequired { .. }
+            | Self::CriterionNotFound { .. }
+            | Self::CriterionResultAlreadyRecorded { .. }
             | Self::SkipNotAllowed { .. }
             | Self::SkipReasonRequired { .. }
             | Self::BlockerIdAlreadyUsed { .. }
@@ -1980,6 +2191,7 @@ impl PersistedGraphTerminalSessionProjectionV2 {
                 operation,
                 PersistedGraphTerminalOperationV2::GoalDefine { .. }
                     | PersistedGraphTerminalOperationV2::GoalRevise { .. }
+                    | PersistedGraphTerminalOperationV2::GoalAssessCriterion { .. }
             ) && !self.goal_defined
             {
                 return Err(StoreCodecErrorV1::InvalidValue {
@@ -2342,6 +2554,7 @@ impl PersistedTerminalReceiptV1 {
                     None
                     | Some(PersistedGraphTerminalOperationV2::GoalDefine { .. })
                     | Some(PersistedGraphTerminalOperationV2::GoalRevise { .. })
+                    | Some(PersistedGraphTerminalOperationV2::GoalAssessCriterion { .. })
                     | Some(PersistedGraphTerminalOperationV2::Decide { .. })
                     | Some(PersistedGraphTerminalOperationV2::Rework { .. })
                     | Some(PersistedGraphTerminalOperationV2::Complete { .. })
@@ -2988,6 +3201,7 @@ pub fn decode_terminal_receipt_v1(
                 operation,
                 PersistedGraphTerminalOperationV2::GoalDefine { .. }
                     | PersistedGraphTerminalOperationV2::GoalRevise { .. }
+                    | PersistedGraphTerminalOperationV2::GoalAssessCriterion { .. }
             )
         });
     let goal_bearing_start = matches!(
@@ -3104,6 +3318,7 @@ fn validate_success_result_for_command_v1(
             | CommandV1::SessionRework
             | CommandV1::GoalDefine
             | CommandV1::GoalRevise
+            | CommandV1::GoalAssessCriterion
             | CommandV1::SessionSkip
             | CommandV1::SessionRetry
             | CommandV1::SessionReturn

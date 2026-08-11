@@ -995,6 +995,32 @@ fn authoritative_goal_revision_result() -> Value {
     })
 }
 
+fn authoritative_criterion_assessment_result() -> Value {
+    serde_json::json!({
+        "schema": "podway.criterion-assessment-result/v1",
+        "admission": {
+            "admitted": true,
+            "job_id": RECORDING_JOB_ID,
+            "workspace_sequence": 1
+        },
+        "graph_node_id": "review-decision",
+        "attempt_id": RECORDING_ATTEMPT_ID,
+        "goal_revision": 1,
+        "mode": "assessment",
+        "result": {
+            "criterion_id": "verified",
+            "status": "satisfied",
+            "reason": "The recorded evidence supports this criterion.",
+            "citations": [
+                {"reference_graph_node_id": "test"},
+                {"local_item_id": "assessment-note"}
+            ]
+        },
+        "complete": false,
+        "revision": 8
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 enum PayloadValue {
     Bool(bool),
@@ -2834,10 +2860,9 @@ fn pac_048_recording_daemon_contract_table_validates_successful_versioned_json_o
             (availability == "reserved_contract").then_some(route.as_str())
         })
         .collect::<BTreeSet<_>>();
-    assert_eq!(
-        reserved_v2_routes,
-        BTreeSet::from(["goal.assess_criterion"]),
-        "reserved v2 grammar must remain unavailable until its runtime owner lands",
+    assert!(
+        reserved_v2_routes.is_empty(),
+        "all adopted v2 mutation routes must now be executable",
     );
     assert_eq!(DAEMON_CONTRACTS.len(), 30);
     for contract in DAEMON_CONTRACTS {
@@ -3463,6 +3488,66 @@ rework:
     assert_eq!(goal_revise_requests[0]["command"], "goal.revise");
     assert_eq!(goal_revise_requests[0]["preconditions"]["goal_revision"], 1);
 
+    let criterion_daemon = RecordingDaemon::start(
+        &fixture,
+        vec![RecordingReply::V2Output(
+            authoritative_criterion_assessment_result(),
+        )],
+    );
+    let criterion_output = fixture.run(&[
+        "--json",
+        "--worktree",
+        fixture.root.to_string_lossy().as_ref(),
+        "goal",
+        "assess-criterion",
+        "verified",
+        "--status",
+        "satisfied",
+        "--reason",
+        "The recorded evidence supports this criterion.",
+        "--evidence",
+        "test",
+        "--item",
+        "assessment-note",
+        "--actor",
+        "reviewer",
+        "--if-workspace-uuid",
+        RECORDING_WORKSPACE_ID,
+        "--if-session-id",
+        RECORDING_SESSION_ID,
+        "--if-session-revision",
+        "7",
+        "--if-attempt",
+        RECORDING_ATTEMPT_ID,
+        "--if-goal-revision",
+        "1",
+    ]);
+    assert!(
+        criterion_output.status.success(),
+        "goal.assess_criterion must accept its executable v2 success contract: {criterion_output:?}"
+    );
+    let criterion_response = one_json(&criterion_output);
+    assert_eq!(criterion_response["command"], "goal.assess_criterion");
+    assert_eq!(criterion_response["result"]["mode"], "assessment");
+    assert_eq!(
+        criterion_response["result"]["result"]["criterion_id"],
+        "verified"
+    );
+    let criterion_requests = criterion_daemon.finish();
+    assert_eq!(criterion_requests.len(), 1);
+    assert_eq!(criterion_requests[0]["command"], "goal.assess_criterion");
+    assert_eq!(criterion_requests[0]["payload"]["criterion_id"], "verified");
+    assert_eq!(
+        criterion_requests[0]["payload"]["evidence"],
+        serde_json::json!(["test"])
+    );
+    assert_eq!(
+        criterion_requests[0]["payload"]["items"],
+        serde_json::json!(["assessment-note"])
+    );
+    assert_eq!(criterion_requests[0]["payload"]["actor"], "reviewer");
+    assert_eq!(criterion_requests[0]["preconditions"]["goal_revision"], 1);
+
     let executed_routes = DAEMON_CONTRACTS
         .iter()
         .map(|contract| contract.route)
@@ -3472,6 +3557,7 @@ rework:
         .chain(std::iter::once("session.rework"))
         .chain(std::iter::once("goal.define"))
         .chain(std::iter::once("goal.revise"))
+        .chain(std::iter::once("goal.assess_criterion"))
         .collect::<BTreeSet<_>>();
     assert_eq!(
         executed_routes,

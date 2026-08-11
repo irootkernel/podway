@@ -1409,6 +1409,9 @@ fn assert_command_fields(actual: &DomainCommand, expected: &DomainCommand) {
         DomainCommand::GoalRevise => {
             assert!(matches!(expected, DomainCommand::GoalRevise));
         }
+        DomainCommand::GoalAssessCriterion => {
+            assert!(matches!(expected, DomainCommand::GoalAssessCriterion));
+        }
         DomainCommand::ItemCheck { item_id } => match expected {
             DomainCommand::ItemCheck {
                 item_id: expected_item_id,
@@ -1542,6 +1545,9 @@ fn command_golden_v1(command: &DomainCommand) -> &'static str {
         }
         DomainCommand::GoalRevise => {
             r#"{"command":{"kind":"goal_revise"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
+        }
+        DomainCommand::GoalAssessCriterion => {
+            r#"{"command":{"kind":"goal_assess_criterion"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
         }
         DomainCommand::ItemCheck { .. } => {
             r#"{"command":{"item_id":"selected-item","kind":"item_check"},"preconditions":{"expected_attempt_id":"00000000-0000-4000-8000-000000000005","expected_item_id":"selected-item","expected_item_revision":7,"expected_session_revision":11},"schema":"podway.store-command/v1"}"#
@@ -1704,6 +1710,7 @@ fn expected_persisted_command_kind(kind: DomainCommandKind) -> PersistedDomainCo
         DomainCommandKind::SessionRework => PersistedDomainCommandKindV1::SessionRework,
         DomainCommandKind::GoalDefine => PersistedDomainCommandKindV1::GoalDefine,
         DomainCommandKind::GoalRevise => PersistedDomainCommandKindV1::GoalRevise,
+        DomainCommandKind::GoalAssessCriterion => PersistedDomainCommandKindV1::GoalAssessCriterion,
         DomainCommandKind::ItemCheck => PersistedDomainCommandKindV1::ItemCheck,
         DomainCommandKind::ItemUncheck => PersistedDomainCommandKindV1::ItemUncheck,
         DomainCommandKind::ItemSet => PersistedDomainCommandKindV1::ItemSet,
@@ -1990,6 +1997,7 @@ fn command_codec_matches_independent_literal_goldens_for_every_variant_and_preco
         DomainCommand::SessionReopen,
         DomainCommand::SessionReset,
         DomainCommand::SessionDecide,
+        DomainCommand::GoalAssessCriterion,
         DomainCommand::ItemCheck {
             item_id: item.clone(),
         },

@@ -6,9 +6,10 @@ use std::str::FromStr;
 
 use podway_core::{
     ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
-    AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, DecisionRecordInputV2,
-    DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2,
-    ItemId, ItemSpecV2, ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2,
+    AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CriterionAssessmentModeV2,
+    CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
+    EvidenceReferenceSnapshotV2, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2, ItemId,
+    ItemSpecV2, ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2,
     RecordedItemSetV2, RecordedItemV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
     ResolvedEvidenceSetV2, Revision, ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2,
     SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
@@ -116,6 +117,24 @@ pub enum GraphMutationErrorV2 {
     GoalAssessmentDecisionRequiresAssessment {
         graph_node_id: GraphNodeId,
     },
+    GoalAssessmentDecisionRequired {
+        graph_node_id: GraphNodeId,
+    },
+    CriterionNotFound {
+        criterion_id: CriterionId,
+    },
+    CriterionResultAlreadyRecorded {
+        criterion_id: CriterionId,
+    },
+    CriterionModeMixed {
+        criterion_id: CriterionId,
+        expected_mode: CriterionAssessmentModeV2,
+        actual_status: CriterionStatusV2,
+    },
+    CriterionCitationInvalid {
+        criterion_id: CriterionId,
+        citation: CriterionCitationV2,
+    },
     SessionCancelled,
     ManualReworkTargetNotAllowed {
         target_graph_node_id: GraphNodeId,
@@ -216,6 +235,20 @@ impl fmt::Display for GraphMutationErrorV2 {
             }
             Self::GoalAssessmentDecisionRequiresAssessment { .. } => formatter
                 .write_str("Procedure v2 goal-assessment decision requires assessment state"),
+            Self::GoalAssessmentDecisionRequired { .. } => {
+                formatter.write_str("the active Procedure v2 decision is not a goal assessment")
+            }
+            Self::CriterionNotFound { .. } => {
+                formatter.write_str("the goal criterion does not exist")
+            }
+            Self::CriterionResultAlreadyRecorded { .. } => {
+                formatter.write_str("the goal criterion was already assessed")
+            }
+            Self::CriterionModeMixed { .. } => {
+                formatter.write_str("criterion assessment modes cannot be mixed in one attempt")
+            }
+            Self::CriterionCitationInvalid { .. } => formatter
+                .write_str("the criterion citation does not name fresh recorded attempt state"),
             Self::SessionCancelled => {
                 formatter.write_str("cancelled Procedure v2 session cannot be reworked")
             }

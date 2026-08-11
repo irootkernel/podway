@@ -1843,6 +1843,139 @@ fn reverse_recording_order_reopens_in_goal_definition_order() {
 }
 
 #[test]
+fn criterion_mutation_is_cursor_stable_and_normalizes_reverse_call_order() {
+    let initial = assessment_state(5, true, Vec::new());
+    let first_result =
+        criterion_result_at("a-safety", CriterionStatusV2::Satisfied, Vec::new(), 40);
+    let first = initial
+        .assess_goal_criterion_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            first_result.result().clone(),
+            first_result.actor().cloned(),
+            first_result.recorded_at(),
+        )
+        .unwrap();
+    assert!(!first.complete());
+    assert_eq!(first.determined_outcome(), None);
+    assert_eq!(first.state().trace().attempts(), initial.trace().attempts());
+    assert_eq!(first.state().trace().revision(), Revision::new(6));
+
+    let mixed = CriterionAssessmentResultV2::new(
+        criterion("z-proof"),
+        CriterionStatusV2::NotApplicable,
+        CriterionAssessmentReasonV2::new("The goal is being superseded.").unwrap(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(matches!(
+        first.state().assess_goal_criterion_v2(
+            Revision::new(6),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            mixed,
+            None,
+            UnixMillis::new(41),
+        ),
+        Err(GraphMutationErrorV2::CriterionModeMixed { .. })
+    ));
+
+    let second_result = criterion_result_at(
+        "z-proof",
+        CriterionStatusV2::Satisfied,
+        vec![
+            CriterionCitationV2::Evidence(node("clarify")),
+            CriterionCitationV2::Item(item("assessment-note")),
+        ],
+        41,
+    );
+    let second = first
+        .state()
+        .assess_goal_criterion_v2(
+            Revision::new(6),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            second_result.result().clone(),
+            second_result.actor().cloned(),
+            second_result.recorded_at(),
+        )
+        .unwrap();
+    assert!(second.complete());
+    assert_eq!(second.determined_outcome(), Some(GoalOutcome::Achieved));
+    assert_eq!(
+        second.state().trace().attempts(),
+        initial.trace().attempts()
+    );
+    let ids = second.state().goal_state().attempt_assessments()[0]
+        .results()
+        .iter()
+        .map(|state| state.result().criterion_id().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["z-proof", "a-safety"]);
+    assert!(matches!(
+        second.state().assess_goal_criterion_v2(
+            Revision::new(7),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            second_result.result().clone(),
+            None,
+            UnixMillis::new(42),
+        ),
+        Err(GraphMutationErrorV2::CriterionResultAlreadyRecorded { .. })
+    ));
+}
+
+#[test]
+fn criterion_mutation_persists_attribution_and_citations_atomically() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    let initial = assessment_state(5, true, Vec::new());
+    store
+        .create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+    let assessment = criterion_result_at(
+        "z-proof",
+        CriterionStatusV2::Satisfied,
+        vec![
+            CriterionCitationV2::Evidence(node("clarify")),
+            CriterionCitationV2::Item(item("assessment-note")),
+        ],
+        40,
+    );
+    let next = initial
+        .assess_goal_criterion_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            assessment.result().clone(),
+            assessment.actor().cloned(),
+            assessment.recorded_at(),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(5),
+            Revision::new(5),
+            next.clone(),
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    let loaded = reopened
+        .read_graph_session_v2(&identity())
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded, next);
+    let result = &loaded.goal_state().attempt_assessments()[0].results()[0];
+    assert_eq!(result.actor(), assessment.actor());
+    assert_eq!(result.result().citations(), assessment.result().citations());
+}
+
+#[test]
 fn malformed_goal_owners_opt_out_and_timestamp_bounds_are_rejected() {
     assert!(
         AttemptCriterionAssessmentStateV2::new(

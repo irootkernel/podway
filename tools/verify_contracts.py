@@ -171,6 +171,7 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "session.rework",
         "goal.define",
         "goal.revise",
+        "goal.assess_criterion",
     }
 )
 V1_ROUTE_BASELINE = {
@@ -771,7 +772,7 @@ def run_sentinels(root: Path) -> list[str]:
         copy_contracts(root, route_availability_fixture)
         route_path = route_availability_fixture / ROUTES_PATH
         route_contract = json.loads(route_path.read_text(encoding="utf-8"))
-        route_contract["routes"][-1]["availability"] = "executable"
+        route_contract["routes"][-1]["availability"] = "reserved_contract"
         route_path.write_text(json.dumps(route_contract, sort_keys=True) + "\n", encoding="utf-8")
         require_known_failure(
             "route availability mismatch", lambda: validate_routes(route_availability_fixture)
@@ -799,8 +800,8 @@ def run_sentinels(root: Path) -> list[str]:
         catalog_text = catalog_path.read_text(encoding="utf-8")
         catalog_path.write_text(
             catalog_text.replace(
-                "- name: goal.assess_criterion\n  availability: reserved_contract",
                 "- name: goal.assess_criterion\n  availability: executable",
+                "- name: goal.assess_criterion\n  availability: reserved_contract",
                 1,
             ),
             encoding="utf-8",

@@ -60,6 +60,8 @@ mod int_v2drw006_failures;
 mod int_v2drw_epic_identity;
 #[path = "int_v2gol001_goal_revision.rs"]
 mod int_v2gol001_goal_revision;
+#[path = "int_v2gol002_criterion_assessment.rs"]
+mod int_v2gol002_criterion_assessment;
 #[path = "int_v2run001_start.rs"]
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]

@@ -842,7 +842,7 @@ commands:
   - podway.goal-revision-result/v1
   - podway.detached-admission-result/v2
 - name: goal.assess_criterion
-  availability: reserved_contract
+  availability: executable
   cli:
   - goal
   - assess-criterion

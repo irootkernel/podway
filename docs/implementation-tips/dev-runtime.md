@@ -114,13 +114,12 @@ absence from the normal production registry. Deleting, changing, copying, or
 loosening the marker closes the gate immediately. Rebuilding the snapshot makes
 an old marker stale; clean and initialize the disposable runtime again.
 
-The gate authorizes only handlers that have landed. Confirmed goal-free custom
-Procedure v2 starts are currently served; shipped v2 presets remain absent until
-their owning tasks add reviewed assets. Goal-bearing starts and the reserved
-decision/rework/goal mutations still return
-`UNSUPPORTED_V2_CAPABILITY` with `admitted:false` and create no job or session.
-Ordinary debug builds, release builds, raw `podwayd --dev`, installed daemons,
-LaunchAgents, and arbitrary worktrees contain no accepting path.
+The gate authorizes only handlers that have landed. Custom Procedure v2 starts,
+including goal-bearing starts, and the decision, rework, goal-definition,
+goal-revision, and criterion-assessment mutations are currently served; shipped
+v2 presets remain absent until their owning tasks add reviewed assets. Ordinary
+debug builds, release builds, raw `podwayd --dev`, installed daemons, LaunchAgents,
+and arbitrary worktrees contain no accepting path.
 
 ## Why the helper stays sizable
 

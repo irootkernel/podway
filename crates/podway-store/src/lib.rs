@@ -45,11 +45,11 @@ pub use v2_memory::{
 };
 pub use v2_state::{
     AttemptMetadataV2, GraphActionCompletionOutcomeV2, GraphActionSkipOutcomeV2,
-    GraphBlockOutcomeV2, GraphCancelOutcomeV2, GraphGoalDefinitionOutcomeV2,
-    GraphGoalRevisionOutcomeV2, GraphItemMutationOutcomeV2, GraphNodeCounterV2,
-    GraphNodeSnapshotV2, GraphRetryOutcomeV2, GraphSessionStateV2, GraphStartCurrentTaskV2,
-    GraphUnblockOutcomeV2, GraphWorkspaceViewV2, ProcedureSnapshotV2, StoreGraphMutationContractV2,
-    StoreGraphReadContractV2, StoreGraphStateContractV2,
+    GraphBlockOutcomeV2, GraphCancelOutcomeV2, GraphCriterionAssessmentOutcomeV2,
+    GraphGoalDefinitionOutcomeV2, GraphGoalRevisionOutcomeV2, GraphItemMutationOutcomeV2,
+    GraphNodeCounterV2, GraphNodeSnapshotV2, GraphRetryOutcomeV2, GraphSessionStateV2,
+    GraphStartCurrentTaskV2, GraphUnblockOutcomeV2, GraphWorkspaceViewV2, ProcedureSnapshotV2,
+    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
@@ -111,6 +111,7 @@ pub(crate) fn command_name_v1(command: &CommandV1) -> &'static str {
         CommandV1::SessionRework => "session.rework",
         CommandV1::GoalDefine => "goal.define",
         CommandV1::GoalRevise => "goal.revise",
+        CommandV1::GoalAssessCriterion => "goal.assess_criterion",
         CommandV1::ItemCheck { .. } => "item.check",
         CommandV1::ItemUncheck { .. } => "item.uncheck",
         CommandV1::ItemSet { .. } => "item.set",
@@ -135,6 +136,7 @@ pub(crate) fn command_is_session_scoped_v1(command: &CommandV1) -> bool {
             | CommandV1::SessionRework
             | CommandV1::GoalDefine
             | CommandV1::GoalRevise
+            | CommandV1::GoalAssessCriterion
             | CommandV1::ItemCheck { .. }
             | CommandV1::ItemUncheck { .. }
             | CommandV1::ItemSet { .. }

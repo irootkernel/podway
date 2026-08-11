@@ -97,14 +97,12 @@ Procedure v2 authoring and preview commands are executable and are specified in
 their dedicated sections below. Shared item mutations, `session.complete`,
 `session.decide`, `session.rework`, `goal.define`, and `goal.revise` are executable
 for their matching session states and return their registered v2 result families.
-Goal-bearing start and replacement are executable through the typed Procedure v2
-request boundary. The remaining reserved mutation route, `goal.assess_criterion`,
-is exposed by the CLI grammar but remains a `reserved_contract` capability until
-its owning runtime task lands. For an active Procedure v2 session, the CLI uses
+Goal-bearing start and replacement and all three goal mutation routes are
+executable through the typed Procedure v2 request boundary. For an active
+Procedure v2 session, the CLI uses
 the standard status projection to supply omitted command-specific fences. An
 invocation may instead provide every required fence explicitly and skip that
-preflight. Reserved forms reach the daemon's typed
-`UNSUPPORTED_V2_CAPABILITY` boundary and are never reinterpreted as v1.
+preflight.
 
 ```text
 podway status --verbose [--history-before <trace-sequence>]
@@ -449,9 +447,10 @@ Definitions and revisions carry one to sixteen ordered, uniquely identified
 criteria. Revision and criterion assessment require `--if-goal-revision`.
 Assessment accepts at most four citations in total; `not_applicable` forbids
 citations. The same version-aware preflight rule applies to all three goal commands.
-Definition and revision are executable durable mutations. Criterion assessment
-preserves the daemon's typed pre-admission unsupported response until its owning
-runtime capability is enabled.
+Definition, revision, and criterion assessment are executable durable mutations.
+Criterion assessment atomically binds the result to the active goal-assessment
+attempt and current goal revision after validating its mode, reason, actor, and
+bounded citations.
 
 ### Return
 

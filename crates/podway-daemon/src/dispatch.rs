@@ -96,6 +96,18 @@ enum V2RuntimeErrorDetailsV1 {
         target_graph_node_id: GraphNodeId,
     },
     ReactivationFlagRequired,
+    CriterionModeMixed {
+        criterion_id: podway_core::CriterionId,
+        expected_mode: String,
+        actual_status: String,
+    },
+    CriterionCitationInvalid {
+        criterion_id: podway_core::CriterionId,
+        citation: Value,
+    },
+    CriterionNotFound {
+        criterion_id: podway_core::CriterionId,
+    },
     GraphNodeTypeMismatch {
         graph_node_id: GraphNodeId,
         actual_node_type: String,
@@ -291,6 +303,41 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_criterion_mode_mixed(
+        mut self,
+        criterion_id: podway_core::CriterionId,
+        expected_mode: impl Into<String>,
+        actual_status: impl Into<String>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::CriterionModeMixed {
+            criterion_id,
+            expected_mode: expected_mode.into(),
+            actual_status: actual_status.into(),
+        }));
+        self
+    }
+
+    pub fn with_criterion_citation_invalid(
+        mut self,
+        criterion_id: podway_core::CriterionId,
+        citation: Value,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::CriterionCitationInvalid {
+                criterion_id,
+                citation,
+            },
+        ));
+        self
+    }
+
+    pub fn with_criterion_not_found(mut self, criterion_id: podway_core::CriterionId) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::CriterionNotFound {
+            criterion_id,
+        }));
+        self
+    }
+
     pub fn with_fresh_goal_assessment_missing(mut self, goal_revision: u64) -> Self {
         self.v2_runtime = Some(Box::new(
             V2RuntimeErrorDetailsV1::FreshGoalAssessmentMissing { goal_revision },
@@ -411,6 +458,34 @@ impl DispatchErrorDetailsV1 {
                 V2RuntimeErrorDetailsV1::ReactivationFlagRequired => {
                     json!({"schema":"podway.v2-runtime-error-details/v1","kind":"REACTIVATION_FLAG_REQUIRED","admission":admission})
                 }
+                V2RuntimeErrorDetailsV1::CriterionModeMixed {
+                    criterion_id,
+                    expected_mode,
+                    actual_status,
+                } => json!({
+                    "schema":"podway.v2-runtime-error-details/v1",
+                    "kind":"CRITERION_MODE_MIXED",
+                    "criterion_id":criterion_id,
+                    "expected_mode":expected_mode,
+                    "actual_status":actual_status,
+                    "admission":admission,
+                }),
+                V2RuntimeErrorDetailsV1::CriterionCitationInvalid {
+                    criterion_id,
+                    citation,
+                } => json!({
+                    "schema":"podway.v2-runtime-error-details/v1",
+                    "kind":"CRITERION_CITATION_INVALID",
+                    "criterion_id":criterion_id,
+                    "citation":citation,
+                    "admission":admission,
+                }),
+                V2RuntimeErrorDetailsV1::CriterionNotFound { criterion_id } => json!({
+                    "schema":"podway.v2-runtime-error-details/v1",
+                    "kind":"CRITERION_NOT_FOUND",
+                    "criterion_id":criterion_id,
+                    "admission":admission,
+                }),
                 V2RuntimeErrorDetailsV1::GraphNodeTypeMismatch {
                     graph_node_id,
                     actual_node_type,
@@ -728,6 +803,9 @@ pub enum DispatchFailureKindV1 {
     GoalRevisionTargetNotAllowed,
     GoalRevisionTargetNotRevisionSafe,
     ReactivationFlagRequired,
+    CriterionModeMixed,
+    CriterionCitationInvalid,
+    CriterionNotFound,
     FreshGoalAssessmentMissing,
     BlockerLimitReached,
     ItemNotFound,
@@ -2501,6 +2579,24 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::ReactivationFlagRequired => (
             "REACTIVATION_FLAG_REQUIRED",
             "Revising a completed session requires reactivation.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::CriterionModeMixed => (
+            "CRITERION_MODE_MIXED",
+            "Criterion assessment modes cannot be mixed within one attempt.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::CriterionCitationInvalid => (
+            "CRITERION_CITATION_INVALID",
+            "The criterion citation is not valid for the active attempt.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::CriterionNotFound => (
+            "CRITERION_NOT_FOUND",
+            "The criterion does not exist in the current goal revision.",
             false,
             1,
         ),
