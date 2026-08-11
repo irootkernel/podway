@@ -137,6 +137,67 @@ fn graph_terminal_receipt_with_operation_and_goal(
     )?)?)
 }
 
+fn goal_criterion_assessment_receipt(
+    sequence: u64,
+    status: &str,
+    mode: &str,
+    determined_outcome: &str,
+) -> Result<PersistedTerminalReceiptV1, Box<dyn std::error::Error>> {
+    let session_id = session_id();
+    Ok(PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt(sequence),
+        PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: Revision::new(2),
+            revision_after: Revision::new(3),
+            changed: true,
+        }),
+        PersistedTerminalJobProjectionV1::new(
+            PersistedTerminalJobStateV1::Succeeded,
+            UnixMillis::new(20),
+            Some(UnixMillis::new(21)),
+            UnixMillis::new(22),
+        )?,
+        PersistedGraphTerminalSessionProjectionV2::new(
+            session_id,
+            "Goal assessment codec session".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::new(2),
+            Revision::new(3),
+            digest('e'),
+            GraphNodeId::new("assess")?,
+            true,
+            true,
+        )?
+        .with_operation(PersistedGraphTerminalOperationV2::goal_assess_criterion(
+            serde_json::json!({
+                "graph_node_id": "assess",
+                "attempt_id": "00000000-0000-4000-8000-000000000211",
+                "goal_revision": 1,
+                "mode": mode,
+                "result": {
+                    "criterion_id": "verified",
+                    "status": status,
+                    "reason": "The recorded result determines the goal outcome.",
+                    "citations": []
+                },
+                "complete": true,
+                "determined_outcome": determined_outcome,
+                "actor": "reviewer",
+                "recorded_at": "2026-07-16T12:34:56.789Z"
+            }),
+        )?)?,
+    )?
+    .with_lookup_command(PersistedDomainCommandV1::GoalAssessCriterion)?
+    .with_response_context(PersistedResponseContextV1::new(
+        format!("00000000-0000-4000-8000-{sequence:012}"),
+        "goal.assess_criterion",
+        workspace_id(),
+        "/safe/worktree",
+        sequence,
+    )?)?)
+}
+
 fn graph_failure_receipt(
     sequence: u64,
     error: PersistedGraphMutationFailureV2,
@@ -2815,6 +2876,25 @@ fn graph_goal_codec_rejects_missing_goal_defined_projection()
         191,
     )?)?;
     let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+    let invalid_timestamp =
+        encoded.replacen("2026-07-16T12:34:56.789Z", "not-a-canonical-timestamp", 1);
+    assert_ne!(invalid_timestamp, encoded);
+    assert!(decode_terminal_receipt_v1(&invalid_timestamp).is_err());
+    assert!(
+        PersistedGraphTerminalOperationV2::goal_revise(
+            serde_json::json!({
+                "goal_revision": 2,
+                "statement": "Ship the revised verified goal.",
+                "criteria": [{"criterion_id": "verified", "statement": "The goal is verified."}],
+                "reason": "The goal requirements changed.",
+                "recorded_at": "not-a-canonical-timestamp",
+                "rework_to": "implement",
+                "reactivated": false
+            }),
+            AttemptId::new("00000000-0000-4000-8000-000000000213")?,
+        )
+        .is_err()
+    );
     let missing_goal_defined = encoded.replacen(r#""goal_defined":true,"#, "", 1);
     assert_ne!(missing_goal_defined, encoded);
     assert!(decode_terminal_receipt_v1(&missing_goal_defined).is_err());
@@ -2862,6 +2942,39 @@ fn graph_goal_codec_rejects_missing_goal_defined_projection()
     let missing_start_goal_defined = encoded_start.replacen(r#""goal_defined":true,"#, "", 1);
     assert_ne!(missing_start_goal_defined, encoded_start);
     assert!(decode_terminal_receipt_v1(&missing_start_goal_defined).is_err());
+    Ok(())
+}
+
+#[test]
+fn graph_goal_assessment_codec_rejects_noncanonical_timestamp_and_outcome()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (sequence, status, mode, outcome, invalid_outcome) in [
+        (211, "unsatisfied", "assessment", "not_achieved", "achieved"),
+        (
+            212,
+            "not_applicable",
+            "applicability",
+            "superseded",
+            "not_achieved",
+        ),
+    ] {
+        let exact = goal_criterion_assessment_receipt(sequence, status, mode, outcome)?;
+        let encoded = encode_persisted_terminal_receipt_v1(&exact)?;
+        assert_eq!(decode_terminal_receipt_v1(&encoded)?, exact);
+
+        let invalid_timestamp =
+            encoded.replacen("2026-07-16T12:34:56.789Z", "not-a-canonical-timestamp", 1);
+        assert_ne!(invalid_timestamp, encoded);
+        assert!(decode_terminal_receipt_v1(&invalid_timestamp).is_err());
+
+        let invalid_outcome = encoded.replacen(
+            &format!(r#""determined_outcome":"{outcome}""#),
+            &format!(r#""determined_outcome":"{invalid_outcome}""#),
+            1,
+        );
+        assert_ne!(invalid_outcome, encoded);
+        assert!(decode_terminal_receipt_v1(&invalid_outcome).is_err());
+    }
     Ok(())
 }
 

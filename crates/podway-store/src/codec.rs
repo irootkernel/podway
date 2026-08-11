@@ -1857,7 +1857,7 @@ fn goal_revision_record_projection_shape_v2(record: &Value, define: bool) -> boo
         || !record
             .get("recorded_at")
             .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty() && value.len() <= 32)
+            .is_some_and(rfc3339_millis_shape_v2)
         || !actor.is_none_or(|value| {
             value
                 .as_str()
@@ -1922,7 +1922,7 @@ fn criterion_assessment_record_projection_shape_v2(record: &Value) -> bool {
         || !record
             .get("recorded_at")
             .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty() && value.len() <= 32)
+            .is_some_and(rfc3339_millis_shape_v2)
         || !record.get("actor").is_none_or(|value| {
             value
                 .as_str()
@@ -1962,6 +1962,22 @@ fn criterion_assessment_record_projection_shape_v2(record: &Value) -> bool {
         != Some(podway_core::CriterionAssessmentModeV2::from_status(status).as_str())
     {
         return false;
+    }
+    if complete == Some(true) {
+        let outcome = determined_outcome.and_then(Value::as_str);
+        match status {
+            podway_core::CriterionStatusV2::Unsatisfied
+                if outcome != Some(podway_core::GoalOutcome::NotAchieved.as_str()) =>
+            {
+                return false;
+            }
+            podway_core::CriterionStatusV2::NotApplicable
+                if outcome != Some(podway_core::GoalOutcome::Superseded.as_str()) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
     }
     let Some(reason) = result
         .get("reason")
