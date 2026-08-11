@@ -1,0 +1,298 @@
+schema: podway.procedure/v2
+id: sw-dev-v2
+version: "2"
+name: Software Development v2
+purpose: Deliver a reviewed software change with fresh verification evidence.
+description: A bounded full-feature software development procedure with goal-directed closeout.
+goal_tracking: true
+node_definitions:
+  implementation:
+    type: action
+    title: Implement the change
+    intent: Produce an implementation that satisfies the task goal.
+    instructions:
+      - Implement only the agreed scope.
+      - Record the resulting source revision.
+    items:
+      - id: implementation-summary
+        type: text
+        prompt: Summarize the implemented change.
+        required: true
+        min_length: 0
+        max_length: 4000
+        multiline: true
+      - id: source-revision
+        type: text
+        prompt: Record the resulting source revision.
+        required: true
+        min_length: 0
+        max_length: 256
+        multiline: true
+  baseline:
+    type: action
+    title: Capture the verification baseline
+    intent: Record the environment used to interpret later test evidence.
+    instructions:
+      - Record the toolchain and environment used for verification.
+    items:
+      - id: environment-fingerprint
+        type: text
+        prompt: Record the verification environment fingerprint.
+        required: true
+        min_length: 0
+        max_length: 1000
+        multiline: true
+  test-gate:
+    type: action
+    title: Run the test gate
+    intent: Produce fresh verification evidence for the current change.
+    instructions:
+      - Run the required test command outside Podway.
+      - Record the command, its exit status, and the log digest.
+    items:
+      - id: test-command
+        type: text
+        prompt: Record the exact test command that was run.
+        required: true
+        min_length: 0
+        max_length: 1000
+        multiline: true
+      - id: test-exit-status
+        type: integer
+        prompt: Record the exit status of the test command.
+        required: true
+      - id: log-digest
+        type: text
+        prompt: Record the digest of the captured test log.
+        required: true
+        min_length: 0
+        max_length: 128
+        multiline: true
+  evaluate-test:
+    type: decision
+    title: Evaluate the test result
+    objective: Only a change supported by acceptable test evidence may proceed.
+    prompt: Is the recorded test result acceptable for the task goal?
+    evidence_guidance:
+      - Read the recorded test command, exit status, and log digest.
+      - Compare against the captured verification baseline when one exists.
+    options:
+      - id: passed
+        label: Tests passed
+        criteria: The recorded test run completed successfully.
+      - id: failed
+        label: Tests failed
+        criteria: The recorded test run did not complete successfully.
+    reason:
+      required: true
+      prompt: Explain the selection using the referenced evidence.
+  review-work:
+    type: action
+    title: Review the change
+    intent: Review the verified candidate against the task goal.
+    instructions:
+      - Review the implementation and its verification evidence.
+      - Record the review summary and any findings.
+    items:
+      - id: review-summary
+        type: text
+        prompt: Summarize the review result.
+        required: true
+        min_length: 0
+        max_length: 4000
+        multiline: true
+      - id: review-findings
+        type: list
+        prompt: List unresolved review findings, if any.
+        required: false
+        min_items: 0
+        max_items: 50
+        max_item_length: 500
+        unique: true
+  assess-goal:
+    type: decision
+    title: Assess the session goal
+    objective: Record whether the current goal revision is supported by fresh evidence.
+    prompt: What is the outcome of the current session goal?
+    evidence_guidance:
+      - Read the latest recorded test command, exit status, and log digest.
+      - Read the recorded review summary and findings.
+    items:
+      - id: assessment-note
+        type: text
+        prompt: Record observations supporting the criterion assessments.
+        required: false
+        min_length: 0
+        max_length: 2000
+        multiline: true
+    options:
+      - id: achieved
+        label: Goal achieved
+        criteria: Fresh criterion assessments support the current goal revision.
+      - id: not-achieved
+        label: Goal not achieved
+        criteria: Fresh criterion assessments do not support the current goal revision.
+      - id: superseded
+        label: Goal superseded
+        criteria: The current goal revision is no longer the desired outcome.
+    reason:
+      required: true
+      prompt: Explain the outcome using the criterion results and evidence.
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  finalize-outcome:
+    type: action
+    title: Finalize the assessed outcome
+    intent: Record the outcome note and follow-up for the assessed goal.
+    items:
+      - id: outcome-note
+        type: text
+        prompt: Record the outcome note and any follow-up commitments.
+        required: true
+        min_length: 0
+        max_length: 2000
+        multiline: true
+  confirm-outcome:
+    type: decision
+    title: Confirm the assessed outcome
+    objective: Only a task whose recorded outcome is consistent may close.
+    prompt: Is the recorded outcome ready for final closeout?
+    evidence_guidance:
+      - Compare the outcome note with the recorded goal assessment.
+      - Confirm follow-up commitments exist when the goal was not achieved.
+    options:
+      - id: ready
+        label: Ready to close
+        criteria: The outcome record is consistent with the assessment.
+      - id: incomplete
+        label: Outcome record incomplete
+        criteria: The outcome record is missing or contradicts the assessment.
+    reason:
+      required: true
+      prompt: Explain the selection using the referenced evidence.
+  closeout:
+    type: action
+    title: Record the closeout
+    intent: Produce the final task closeout.
+    items:
+      - id: closeout-note
+        type: text
+        prompt: Record the final closeout.
+        required: true
+        min_length: 0
+        max_length: 2000
+        multiline: true
+graph:
+  entry: implement
+  nodes:
+    - id: implement
+      use: implementation
+      next: capture-baseline
+    - id: capture-baseline
+      use: baseline
+      skip:
+        allowed: true
+        reason_required: true
+      next: test-after-impl
+    - id: test-after-impl
+      use: test-gate
+      next: decide-after-impl-test
+    - id: decide-after-impl-test
+      use: evaluate-test
+      evidence_from:
+        - node: test-after-impl
+          required: true
+        - node: capture-baseline
+          required: false
+      routes:
+        passed:
+          to: review-change
+          effect: advance
+        failed:
+          to: implement
+          effect: rework
+    - id: review-change
+      use: review-work
+      evidence_from:
+        - node: implement
+          required: true
+        - node: test-after-impl
+          required: true
+      next: test-after-review
+    - id: test-after-review
+      use: test-gate
+      next: decide-after-review-test
+    - id: decide-after-review-test
+      use: evaluate-test
+      evidence_from:
+        - node: test-after-review
+          required: true
+      routes:
+        passed:
+          to: assess-session-goal
+          effect: advance
+        failed:
+          to: implement
+          effect: rework
+    - id: assess-session-goal
+      use: assess-goal
+      evidence_from:
+        - node: test-after-review
+          required: true
+        - node: review-change
+          required: true
+          items:
+            - review-summary
+      routes:
+        achieved:
+          to: finish-achieved
+          effect: advance
+        not-achieved:
+          to: finish-not-achieved
+          effect: advance
+        superseded:
+          to: finish-superseded
+          effect: advance
+    - id: finish-achieved
+      use: finalize-outcome
+      next: confirm-closeout
+    - id: finish-not-achieved
+      use: finalize-outcome
+      next: confirm-closeout
+    - id: finish-superseded
+      use: finalize-outcome
+      next: confirm-closeout
+    - id: confirm-closeout
+      use: confirm-outcome
+      evidence_from:
+        - node: assess-session-goal
+          required: true
+        - node: review-change
+          required: true
+          items:
+            - review-summary
+        - node: finish-achieved
+          required: false
+        - node: finish-not-achieved
+          required: false
+        - node: finish-superseded
+          required: false
+      routes:
+        ready:
+          to: record-closeout
+          effect: advance
+        incomplete:
+          to: assess-session-goal
+          effect: rework
+    - id: record-closeout
+      use: closeout
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - implement
+    - test-after-impl
+    - review-change

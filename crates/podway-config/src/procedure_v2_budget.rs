@@ -475,6 +475,9 @@ fn actual_chars(value: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document, validate_procedure_v2,
+    };
     use podway_core::{ItemCommonV2, ItemId};
 
     fn common(id: &str) -> ItemCommonV2 {
@@ -502,6 +505,40 @@ mod tests {
         assert!(exceeds_budget(NEXT_STATIC_BUDGET + 1, NEXT_STATIC_BUDGET));
         assert!(!exceeds_budget(READBACK_BUDGET, READBACK_BUDGET));
         assert!(exceeds_budget(READBACK_BUDGET + 1, READBACK_BUDGET));
+    }
+
+    #[test]
+    fn v2dog001_sw_dev_preset_records_budget_headroom() {
+        let source = include_bytes!("../../../assets/presets/sw-dev-v2.yaml");
+        let parsed = match parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
+            .expect("sw-dev-v2 must parse")
+        {
+            ParsedProcedure::V2(parsed) => parsed,
+            ParsedProcedure::V1(_) => panic!("sw-dev-v2 must dispatch as Procedure v2"),
+        };
+        let validated = validate_procedure_v2(parsed).expect("sw-dev-v2 must validate");
+        let usages: Vec<PlacementBudget> = validated
+            .parsed()
+            .graph()
+            .placements()
+            .iter()
+            .map(|placement| placement_budget(validated.parsed(), placement))
+            .collect();
+        let maximum_static = usages
+            .iter()
+            .map(|usage| usage.next_static)
+            .max()
+            .expect("sw-dev-v2 has graph placements");
+        let maximum_readback = usages
+            .iter()
+            .map(|usage| usage.readback)
+            .max()
+            .expect("sw-dev-v2 has graph placements");
+
+        assert_eq!(maximum_static, 8_875);
+        assert_eq!(maximum_readback, 359_734);
+        assert_eq!(NEXT_STATIC_BUDGET - maximum_static, 253_269);
+        assert_eq!(READBACK_BUDGET - maximum_readback, 164_554);
     }
 
     #[test]

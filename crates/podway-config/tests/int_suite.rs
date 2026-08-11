@@ -40,3 +40,5 @@ mod int_v2_procedure_scaffold;
 mod int_v2_procedure_validate;
 #[path = "int_v2_procedure_vet.rs"]
 mod int_v2_procedure_vet;
+#[path = "int_v2dog001_sw_dev_preset.rs"]
+mod int_v2dog001_sw_dev_preset;

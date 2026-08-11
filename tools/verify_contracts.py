@@ -417,12 +417,12 @@ def validate_contract_identifiers(root: Path) -> int:
         if path.endswith(".yaml")
     )
     if not preset_files:
-        fail("no v1 preset files were found")
+        fail("no preset files were found")
     for relative_name in preset_files:
         path = repository_assets.checked_path(root, Path(relative_name), "preset")
         text = path.read_text(encoding="utf-8")
-        if not re.search(r"^schema: podway\.procedure/v1$", text, flags=re.MULTILINE):
-            fail(f"preset does not declare podway.procedure/v1: {relative_name}")
+        if not re.search(r"^schema: podway\.procedure/v[12]$", text, flags=re.MULTILINE):
+            fail(f"preset does not declare a supported procedure schema: {relative_name}")
     return len(schema_files) + len(preset_files) + 5
 
 
