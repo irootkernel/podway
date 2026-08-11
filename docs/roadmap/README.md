@@ -179,7 +179,7 @@ Dependencies: `V2AUT`, `V2GRF`, `V2RUN`, `V2DRW`, and `V2GOL`.
 | `V2DOG-002` | Add the bug-fix preset | Completed | Ship a bounded full-feature `bug-fix-v2` Procedure. | [V2DOG plan](../todo/TODO-podway-v2-full-feature-ga.md#199-epic-v2dog-presets-and-dogfood) |
 | `V2DOG-003` | Bind and package v2 presets | Completed | Align source, embedded bytes, digest, manifest, and archive identity. | [V2DOG plan](../todo/TODO-podway-v2-full-feature-ga.md#199-epic-v2dog-presets-and-dogfood) |
 | `V2DOG-004` | Complete user-facing guidance | Completed | Synchronize help, completion, examples, and operator documentation. | [V2DOG plan](../todo/TODO-podway-v2-full-feature-ga.md#199-epic-v2dog-presets-and-dogfood) |
-| `V2DOG-005` | Dogfood the full v2 workflow | Planned | Exercise complete paths only in isolated disposable development workspaces. | [V2DOG plan](../todo/TODO-podway-v2-full-feature-ga.md#199-epic-v2dog-presets-and-dogfood) |
+| `V2DOG-005` | Dogfood the full v2 workflow | Completed | Exercise complete paths only in isolated disposable development workspaces. | [V2DOG plan](../todo/TODO-podway-v2-full-feature-ga.md#199-epic-v2dog-presets-and-dogfood) |
 | `V2DOG-006` | Prepare the Dolgorae handoff | Planned | Specify adapter, schema-pin, manifest, migration, and reactivation integration. | [V2DOG plan](../todo/TODO-podway-v2-full-feature-ga.md#199-epic-v2dog-presets-and-dogfood) |
 
 ## V2REL — Conformance and v0.2.0 GA

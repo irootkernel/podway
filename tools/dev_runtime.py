@@ -291,7 +291,9 @@ def prepare_managed_tree(checkout: Path) -> dict[str, Path]:
     )
 
 
-def atomic_write_private_json(path: Path, value: dict[str, Any]) -> None:
+def atomic_write_private_json(
+    path: Path, value: dict[str, Any], *, trailing_newline: bool = True
+) -> None:
     if path.parent.is_symlink() or not path.parent.is_dir():
         fail(f"metadata directory must be a regular directory: {path.parent}")
     descriptor, temporary_name = tempfile.mkstemp(
@@ -300,7 +302,8 @@ def atomic_write_private_json(path: Path, value: dict[str, Any]) -> None:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as opened:
-            opened.write(release_evidence.canonical_bytes(value))
+            payload = release_evidence.canonical_bytes(value)
+            opened.write(payload if trailing_newline else payload.removesuffix(b"\n"))
             opened.flush()
             os.fsync(opened.fileno())
         os.chmod(temporary, FILE_MODE)
@@ -679,6 +682,9 @@ def publish_development_v2_marker(
             "daemon_path": metadata["snapshot"]["podwayd"],
             "daemon_sha256": metadata["snapshot"]["podwayd_sha256"],
         },
+        # The daemon verifies this trust-boundary file against podway-core's exact canonical JSON,
+        # which deliberately has no record-separating newline.
+        trailing_newline=False,
     )
 
 
@@ -893,6 +899,594 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
+
+
+def dogfood_json_command(
+    paths: dict[str, Path],
+    metadata: dict[str, Any],
+    arguments: list[str],
+    *,
+    command: str,
+    output_schema: str,
+    result_schema: str,
+) -> dict[str, Any]:
+    completed = run_snapshotted_cli(paths, metadata, ["--json", *arguments])
+    if completed.returncode != 0:
+        stdout = completed.stdout.decode("utf-8", errors="replace")[:2000]
+        stderr = completed.stderr.decode("utf-8", errors="replace")[:2000]
+        fail(
+            f"dogfood command failed with exit {completed.returncode}: "
+            f"{' '.join(arguments)}; stdout={stdout!r}; stderr={stderr!r}"
+        )
+    if completed.stderr:
+        fail(f"dogfood command emitted stderr: {' '.join(arguments)}")
+    try:
+        envelope = json.loads(completed.stdout)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        fail(f"dogfood command returned invalid JSON: {' '.join(arguments)}: {error}")
+    if not isinstance(envelope, dict):
+        fail(f"dogfood command returned a non-object envelope: {' '.join(arguments)}")
+    if envelope.get("schema") != output_schema or envelope.get("command") != command:
+        fail(
+            f"dogfood command returned the wrong envelope: expected {output_schema}/{command}, "
+            f"observed {envelope.get('schema')}/{envelope.get('command')}"
+        )
+    result = envelope.get("result")
+    if not isinstance(result, dict) or result.get("schema") != result_schema:
+        fail(
+            f"dogfood command returned the wrong result: expected {result_schema}, "
+            f"observed {result.get('schema') if isinstance(result, dict) else None}"
+        )
+    return envelope
+
+
+def dogfood_v2_status(paths: dict[str, Path], metadata: dict[str, Any]) -> dict[str, Any]:
+    return dogfood_json_command(
+        paths,
+        metadata,
+        ["status"],
+        command="session.status",
+        output_schema="podway.output/v2",
+        result_schema="podway.status-result/v2",
+    )["result"]
+
+
+def require_dogfood_node(status: dict[str, Any], expected: str) -> None:
+    current = status.get("current")
+    observed = None
+    if isinstance(current, dict):
+        node = current.get("node")
+        if isinstance(node, dict):
+            observed = node.get("graph_node_id")
+    if observed != expected:
+        fail(f"dogfood cursor mismatch: expected {expected}, observed {observed}")
+
+
+def dogfood_v2_mutation(
+    paths: dict[str, Path],
+    metadata: dict[str, Any],
+    arguments: list[str],
+    *,
+    command: str,
+    result_schema: str,
+) -> dict[str, Any]:
+    result = dogfood_json_command(
+        paths,
+        metadata,
+        arguments,
+        command=command,
+        output_schema="podway.output/v2",
+        result_schema=result_schema,
+    )["result"]
+    admission = result.get("admission")
+    if not isinstance(admission, dict) or admission.get("admitted") is not True:
+        fail(f"v2 dogfood mutation was not admitted: {' '.join(arguments)}")
+    return result
+
+
+def dogfood_set_v2(
+    paths: dict[str, Path],
+    metadata: dict[str, Any],
+    item: str,
+    value: str,
+    key: str,
+) -> None:
+    dogfood_v2_mutation(
+        paths,
+        metadata,
+        ["set", item, value, "--idempotency-key", key],
+        command="item.set",
+        result_schema="podway.item-mutation-result/v2",
+    )
+
+
+def dogfood_complete_v2(
+    paths: dict[str, Path], metadata: dict[str, Any], key: str
+) -> None:
+    dogfood_v2_mutation(
+        paths,
+        metadata,
+        ["complete", "--idempotency-key", key],
+        command="session.complete",
+        result_schema="podway.stage-transition-result/v2",
+    )
+
+
+def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
+    """Exercise the shipped v2 workflow only inside a disposable managed runtime."""
+    checkout = make_synthetic_checkout()
+    root = managed_root_for(checkout)
+    process: subprocess.Popen[bytes] | None = None
+    paths: dict[str, Path] | None = None
+    try:
+        paths = prepare_synthetic_runtime(checkout)
+        metadata = snapshot_pair(paths, cli, daemon, checkout)
+        adopt_snapshot_when_idle(paths, metadata)
+        snapshotted_daemon = require_trusted_snapshot_binary(
+            paths["root"], metadata["snapshot"]["podwayd"], label="snapshot podwayd"
+        )
+        process = start_isolated_daemon(
+            snapshotted_daemon, paths["account_root"], paths["dev_home"]
+        )
+        initialize_sandbox(paths["sandbox"])
+        dogfood_json_command(
+            paths,
+            metadata,
+            ["init"],
+            command="workspace.init",
+            output_schema="podway.output/v1",
+            result_schema="podway.workspace-init-result/v1",
+        )
+        publish_development_v2_marker(paths, metadata)
+        audit_managed_tree(
+            paths["root"], expected=paths["root"], uid=euid(), repair_modes=True
+        )
+
+        started = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "Dogfood the complete Procedure v2 workflow",
+                "--goal",
+                "Complete the disposable Procedure v2 dogfood workflow.",
+                "--criterion",
+                "verified=The complete disposable workflow is recorded.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-start",
+            ],
+            command="session.start",
+            result_schema="podway.session-start-result/v2",
+        )
+        if started.get("procedure_schema") != "podway.procedure/v2":
+            fail("v2 dogfood did not start a Procedure v2 session")
+        status = dogfood_v2_status(paths, metadata)
+        require_dogfood_node(status, "implement")
+        procedure = status.get("procedure")
+        if not isinstance(procedure, dict) or procedure.get("id") != "sw-dev-v2":
+            fail("v2 dogfood status did not retain the shipped preset identity")
+
+        revised = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "goal",
+                "revise",
+                "--goal",
+                "Complete and restart the disposable Procedure v2 dogfood workflow.",
+                "--criterion",
+                "verified=The complete workflow survives a daemon restart.",
+                "--rework-to",
+                "implement",
+                "--reason",
+                "The dogfood goal now includes restart persistence.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-revise-goal",
+            ],
+            command="goal.revise",
+            result_schema="podway.goal-revision-result/v1",
+        )
+        if revised.get("goal_revision") != 2 or revised.get("rework_to") != "implement":
+            fail("v2 dogfood did not create goal revision two at implement")
+
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "implementation-summary",
+            "Implemented the first disposable candidate.",
+            "v2dog005-set-implementation-one",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "source-revision",
+            "dogfood-revision-one",
+            "v2dog005-set-revision-one",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-implementation-one")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "capture-baseline")
+
+        skipped = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "skip",
+                "--reason",
+                "No separate baseline is required in the disposable fixture.",
+                "--idempotency-key",
+                "v2dog005-skip-baseline-one",
+            ],
+            command="session.skip",
+            result_schema="podway.stage-transition-result/v2",
+        )
+        if skipped.get("transition") != "skip":
+            fail("v2 dogfood did not record the skip path")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "test-after-impl")
+
+        retry_from_attempt = dogfood_v2_status(paths, metadata)["current"]["attempt"]["attempt_id"]
+        retried = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "retry",
+                "--reason",
+                "Repeat the disposable verification with the intended environment.",
+                "--idempotency-key",
+                "v2dog005-retry-test",
+            ],
+            command="session.retry",
+            result_schema="podway.stage-transition-result/v2",
+        )
+        if (
+            retried.get("transition") != "retry"
+            or retried.get("from_attempt_id") != retry_from_attempt
+            or retried.get("to_attempt_id") == retry_from_attempt
+        ):
+            fail("v2 dogfood did not record the retry path")
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "test-command",
+            "make test",
+            "v2dog005-set-test-command-one",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "test-exit-status",
+            "0",
+            "v2dog005-set-test-status-one",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "log-digest",
+            "sha256:dogfood-first-pass",
+            "v2dog005-set-log-one",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-test-one")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "decide-after-impl-test")
+
+        failed_decision = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "decide",
+                "--option",
+                "failed",
+                "--reason",
+                "The first recorded test evidence requires another implementation attempt.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-decide-rework",
+            ],
+            command="session.decide",
+            result_schema="podway.decision-result/v1",
+        )
+        if (
+            failed_decision.get("effect") != "rework"
+            or failed_decision.get("target_graph_node_id") != "implement"
+        ):
+            fail("v2 dogfood decision did not traverse its declared rework route")
+        before_restart = dogfood_v2_status(paths, metadata)
+        require_dogfood_node(before_restart, "implement")
+        before_restart_attempt = before_restart["current"]["attempt"]["attempt_id"]
+        before_restart_session = before_restart["session"]["id"]
+        before_restart_goal_revision = before_restart["goal_revision"]
+        before_restart_daemon_digest = release_archive.sha256_file(snapshotted_daemon)
+
+        stop_process(process)
+        process = start_isolated_daemon(
+            snapshotted_daemon, paths["account_root"], paths["dev_home"]
+        )
+        after_restart = dogfood_v2_status(paths, metadata)
+        require_dogfood_node(after_restart, "implement")
+        if (
+            after_restart["current"]["attempt"]["attempt_id"] != before_restart_attempt
+            or after_restart["session"]["id"] != before_restart_session
+            or after_restart["goal_revision"] != before_restart_goal_revision
+        ):
+            fail("v2 dogfood restart changed the active session, attempt, or goal revision")
+        if (
+            release_archive.sha256_file(snapshotted_daemon) != before_restart_daemon_digest
+            or current_snapshot(paths, checkout=checkout)["snapshot"] != metadata["snapshot"]
+        ):
+            fail("v2 dogfood restart did not retain the adopted daemon snapshot")
+
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "implementation-summary",
+            "Implemented the corrected disposable candidate.",
+            "v2dog005-set-implementation-two",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "source-revision",
+            "dogfood-revision-two",
+            "v2dog005-set-revision-two",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-implementation-two")
+        dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "skip",
+                "--reason",
+                "The restarted disposable fixture uses the same bounded environment.",
+                "--idempotency-key",
+                "v2dog005-skip-baseline-two",
+            ],
+            command="session.skip",
+            result_schema="podway.stage-transition-result/v2",
+        )
+
+        for suffix, node in (("impl", "test-after-impl"), ("review", "test-after-review")):
+            require_dogfood_node(dogfood_v2_status(paths, metadata), node)
+            dogfood_set_v2(
+                paths,
+                metadata,
+                "test-command",
+                "make test",
+                f"v2dog005-set-test-command-{suffix}",
+            )
+            dogfood_set_v2(
+                paths,
+                metadata,
+                "test-exit-status",
+                "0",
+                f"v2dog005-set-test-status-{suffix}",
+            )
+            dogfood_set_v2(
+                paths,
+                metadata,
+                "log-digest",
+                f"sha256:dogfood-{suffix}-pass",
+                f"v2dog005-set-log-{suffix}",
+            )
+            dogfood_complete_v2(paths, metadata, f"v2dog005-complete-test-{suffix}")
+            decision_node = (
+                "decide-after-impl-test" if suffix == "impl" else "decide-after-review-test"
+            )
+            require_dogfood_node(dogfood_v2_status(paths, metadata), decision_node)
+            dogfood_v2_mutation(
+                paths,
+                metadata,
+                [
+                    "decide",
+                    "--option",
+                    "passed",
+                    "--reason",
+                    "The recorded disposable verification supports advancement.",
+                    "--actor",
+                    "V2DOG-005 dogfood",
+                    "--idempotency-key",
+                    f"v2dog005-decide-{suffix}-passed",
+                ],
+                command="session.decide",
+                result_schema="podway.decision-result/v1",
+            )
+            if suffix == "impl":
+                require_dogfood_node(dogfood_v2_status(paths, metadata), "review-change")
+                dogfood_set_v2(
+                    paths,
+                    metadata,
+                    "review-summary",
+                    "The corrected disposable candidate has no unresolved finding.",
+                    "v2dog005-set-review-summary",
+                )
+                dogfood_complete_v2(paths, metadata, "v2dog005-complete-review")
+
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "assess-session-goal")
+        assessed = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "goal",
+                "assess-criterion",
+                "verified",
+                "--status",
+                "satisfied",
+                "--reason",
+                "The complete disposable workflow survived the daemon restart.",
+                "--evidence",
+                "test-after-review",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-assess-verified",
+            ],
+            command="goal.assess_criterion",
+            result_schema="podway.criterion-assessment-result/v1",
+        )
+        if assessed.get("complete") is not True or assessed.get("determined_outcome") != "achieved":
+            fail("v2 dogfood criterion assessment did not determine the achieved outcome")
+        dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "decide",
+                "--option",
+                "achieved",
+                "--reason",
+                "The recorded criterion assessment supports the achieved route.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-decide-achieved",
+            ],
+            command="session.decide",
+            result_schema="podway.decision-result/v1",
+        )
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "finish-achieved")
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "outcome-note",
+            "The disposable v2 workflow completed with restart evidence.",
+            "v2dog005-set-outcome",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-outcome")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "confirm-closeout")
+        dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "decide",
+                "--option",
+                "ready",
+                "--reason",
+                "The recorded outcome is consistent with the achieved assessment.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-decide-closeout",
+            ],
+            command="session.decide",
+            result_schema="podway.decision-result/v1",
+        )
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "record-closeout")
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "closeout-note",
+            "V2DOG-005 disposable dogfood complete.",
+            "v2dog005-set-closeout",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-closeout")
+        completed = dogfood_v2_status(paths, metadata)
+        if completed["session"].get("lifecycle") != "completed" or completed.get("current") is not None:
+            fail("v2 dogfood did not reach a completed terminal session")
+        if completed.get("latest_goal_outcome") != "achieved" or completed.get("goal_revision") != 2:
+            fail("v2 dogfood closeout lost the achieved revised goal")
+
+        dogfood_v2_mutation(
+            paths,
+            metadata,
+            ["reset", "--yes", "--idempotency-key", "v2dog005-reset-v2"],
+            command="session.reset",
+            result_schema="podway.stage-transition-result/v2",
+        )
+        dogfood_json_command(
+            paths,
+            metadata,
+            [
+                "start",
+                "--preset",
+                "sw-dev",
+                "--task",
+                "Verify the retained Procedure v1 path",
+                "--idempotency-key",
+                "v2dog005-start-v1",
+            ],
+            command="session.start",
+            output_schema="podway.output/v1",
+            result_schema="podway.session-start-result/v1",
+        )
+        dogfood_json_command(
+            paths,
+            metadata,
+            ["set", "goal", "Retain the v1 lifecycle.", "--idempotency-key", "v2dog005-v1-goal"],
+            command="item.set",
+            output_schema="podway.output/v1",
+            result_schema="podway.item-mutation-result/v1",
+        )
+        dogfood_json_command(
+            paths,
+            metadata,
+            [
+                "add",
+                "acceptance-criteria",
+                "The v1 session advances unchanged.",
+                "--idempotency-key",
+                "v2dog005-v1-criterion",
+            ],
+            command="item.add",
+            output_schema="podway.output/v1",
+            result_schema="podway.item-mutation-result/v1",
+        )
+        dogfood_json_command(
+            paths,
+            metadata,
+            ["complete", "--idempotency-key", "v2dog005-v1-complete"],
+            command="session.complete",
+            output_schema="podway.output/v1",
+            result_schema="podway.stage-transition-result/v1",
+        )
+        legacy = dogfood_json_command(
+            paths,
+            metadata,
+            ["status"],
+            command="session.status",
+            output_schema="podway.output/v1",
+            result_schema="podway.status-result/v1",
+        )["result"]
+        if (
+            legacy["session"].get("lifecycle") != "running"
+            or legacy["current"].get("stage_id") != "inspect"
+        ):
+            fail("v1 dogfood regression did not advance to the second stage")
+
+        return {
+            "preset": "sw-dev-v2",
+            "success": True,
+            "decision_rework": True,
+            "goal_revision": 2,
+            "retry": True,
+            "skip": True,
+            "restart": True,
+            "closeout": "achieved",
+            "v1_regression": "advanced",
+        }
+    finally:
+        if process is not None:
+            stop_process(process)
+        cleanup_failures: list[str] = []
+        for temporary, label, prefix in (
+            (root, "managed runtime", f"podway-dev-{euid()}-"),
+            (checkout, "synthetic checkout", "podway-dev-checkout-"),
+        ):
+            try:
+                if temporary.parent != TMP_ROOT or not temporary.name.startswith(prefix):
+                    cleanup_failures.append(f"unsafe {label} path: {temporary}")
+                    continue
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+                if temporary.exists():
+                    cleanup_failures.append(f"{label} remained after cleanup: {temporary}")
+            except OSError as error:
+                cleanup_failures.append(f"failed to remove {label} {temporary}: {error}")
+        if cleanup_failures:
+            fail("; ".join(cleanup_failures))
 
 
 def make_synthetic_checkout() -> Path:
@@ -1210,7 +1804,9 @@ def self_test() -> dict[str, Any]:
     sentinels += self_test_snapshot_and_clean()
     cli, daemon = build_debug_binaries()
     sentinels += self_test_dual_daemon(cli, daemon)
-    return {"mode": "self-test", "ok": True, "sentinels": sentinels}
+    dogfood = self_test_v2_dogfood(cli, daemon)
+    sentinels += 8
+    return {"mode": "self-test", "ok": True, "sentinels": sentinels, "dogfood": dogfood}
 
 
 def build_parser() -> argparse.ArgumentParser:

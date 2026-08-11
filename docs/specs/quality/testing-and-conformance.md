@@ -361,8 +361,11 @@ stages sequentially:
 - `preset-tool-test`: contributor preset create/import verification against the
   prepared debug CLI;
 - `dev-runtime-test`: isolated contributor development-runtime self-test, including
-  path and command-escape sentinels plus a real dual-daemon coexistence check under
-  disjoint synthetic account roots.
+  path and command-escape sentinels, a real dual-daemon coexistence check under
+  disjoint synthetic account roots, and a feature-enabled `sw-dev-v2` workflow
+  through success, decision rework, goal revision, retry, skip, same-snapshot
+  restart, achieved closeout, temporary-state deletion, and a v1 regression
+  transition.
 
 The E2E layer builds the debug product binaries once. Preset-tool verification
 runs afterward against that prepared CLI instead of initiating another build, and

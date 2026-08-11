@@ -50,8 +50,12 @@ resolution as `tools/run_g005_vertical.py`.
 - `self-test` covers toolchain/target-dir resolution, path/permission/symlink/
   traversal and command-escape failures, snapshot containment, identity metadata
   mismatches, production-lock disjointness, rename-to-trash cleanup with
-  recreated-root survival, and a real dual-daemon coexistence regression. It is
-  part of `make test` through `make dev-runtime-test`.
+  recreated-root survival, and a real dual-daemon coexistence regression. It also
+  starts the shipped `sw-dev-v2` preset in a fresh synthetic managed runtime and
+  drives success, decision rework, goal revision, retry, skip, same-snapshot
+  daemon restart, achieved closeout, and a retained v1 stage transition. The
+  synthetic checkout and runtime root must both be absent after the check. The
+  self-test is part of `make test` through `make dev-runtime-test`.
 
 ## Managed root and sandbox
 
