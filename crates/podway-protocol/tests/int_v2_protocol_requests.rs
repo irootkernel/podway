@@ -202,6 +202,150 @@ fn v2plt006_rejects_over_bounds_open_payloads_and_invalid_citations() {
 }
 
 #[test]
+fn v2gol005_goal_payload_bounds_are_enforced_before_admission() {
+    let define = |goal: String, criteria: Value, actor: Option<String>| {
+        let mut payload = json!({"goal":goal,"criteria":criteria});
+        if let Some(actor) = actor {
+            payload["actor"] = json!(actor);
+        }
+        envelope(
+            "goal.define",
+            json!({"session_id":SESSION_ID,"session_revision":7}),
+            payload,
+        )
+    };
+    let goal_criteria = |count: usize, statement: String| {
+        Value::Array(
+            (0..count)
+                .map(|index| {
+                    json!({
+                        "criterion_id":format!("criterion-{index}"),
+                        "statement":statement,
+                    })
+                })
+                .collect(),
+        )
+    };
+    let admitted =
+        |request: &RequestEnvelopeV1| ProcedureV2MutationRequestV1::from_envelope(request).is_ok();
+
+    assert!(admitted(&define(
+        "g".repeat(1_000),
+        goal_criteria(1, "Pass.".to_owned()),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "g".repeat(1_001),
+        goal_criteria(1, "Pass.".to_owned()),
+        None,
+    )));
+
+    assert!(admitted(&define(
+        "Ship safely.".to_owned(),
+        goal_criteria(16, "Pass.".to_owned()),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        goal_criteria(17, "Pass.".to_owned()),
+        None,
+    )));
+
+    assert!(admitted(&define(
+        "Ship safely.".to_owned(),
+        goal_criteria(1, "c".repeat(300)),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        goal_criteria(1, "c".repeat(301)),
+        None,
+    )));
+
+    assert!(admitted(&define(
+        "Ship safely.".to_owned(),
+        goal_criteria(1, "Pass.".to_owned()),
+        Some("a".repeat(256)),
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        goal_criteria(1, "Pass.".to_owned()),
+        Some("a".repeat(257)),
+    )));
+
+    let revise = |reason: String| {
+        envelope(
+            "goal.revise",
+            json!({"session_id":SESSION_ID,"session_revision":7,"goal_revision":1}),
+            json!({
+                "goal":"Ship safely.",
+                "criteria":criteria(),
+                "target_graph_node_id":"implement",
+                "reason":reason,
+            }),
+        )
+    };
+    assert!(admitted(&revise("r".repeat(1_000))));
+    assert!(!admitted(&revise("r".repeat(1_001))));
+
+    let assess = |status: &str, reason: String, evidence: Value, items: Value| {
+        envelope(
+            "goal.assess_criterion",
+            json!({
+                "session_id":SESSION_ID,
+                "session_revision":7,
+                "attempt_id":ATTEMPT_ID,
+                "goal_revision":1,
+            }),
+            json!({
+                "criterion_id":"tests",
+                "status":status,
+                "reason":reason,
+                "evidence":evidence,
+                "items":items,
+            }),
+        )
+    };
+    assert!(admitted(&assess(
+        "satisfied",
+        "r".repeat(2_000),
+        json!([]),
+        json!([]),
+    )));
+    assert!(!admitted(&assess(
+        "satisfied",
+        "r".repeat(2_001),
+        json!([]),
+        json!([]),
+    )));
+
+    assert!(admitted(&assess(
+        "satisfied",
+        "Bounded evidence.".to_owned(),
+        json!(["verify", "review"]),
+        json!(["summary", "transcript"]),
+    )));
+    assert!(!admitted(&assess(
+        "satisfied",
+        "Too much evidence.".to_owned(),
+        json!(["verify", "review", "audit"]),
+        json!(["summary", "transcript"]),
+    )));
+    assert!(!admitted(&assess(
+        "not_applicable",
+        "The criterion does not apply.".to_owned(),
+        json!(["verify"]),
+        json!([]),
+    )));
+    assert!(!admitted(&assess(
+        "satisfied",
+        "Duplicate item citation.".to_owned(),
+        json!([]),
+        json!(["summary", "summary"]),
+    )));
+}
+
+#[test]
 fn v2plt006_canonical_identity_excludes_transport_metadata_and_binds_semantics() {
     let first_envelope = envelope(
         "goal.revise",
