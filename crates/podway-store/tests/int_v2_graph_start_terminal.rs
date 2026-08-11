@@ -8,7 +8,7 @@ use std::process::Command;
 use podway_core::{
     ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
     CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1, DomainCommand, DomainError,
-    DomainResult, GraphNodeId, ItemId, ProcedureSnapshotId, ProcedureSnapshotV1,
+    DomainResult, GraphNodeId, ItemId, OptionId, ProcedureSnapshotId, ProcedureSnapshotV1,
     ProcedureSourceLabelV1, ReasonV2, Revision, SessionAggregateV1, SessionAttemptV2, SessionId,
     SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId,
     canonicalize_json_v1,
@@ -20,10 +20,10 @@ use podway_store::{
     GraphStartCurrentTaskV2, IdempotencyKeyV1, JobStateV1, PersistedGraphMutationFailureV2,
     PersistedGraphTerminalOperationV2, PersistedResponseContextV1, PersistedSessionMutationV1,
     ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StateTransitionV1, StoreContractV1, StoreFailpointActionV1, StoreFailpointV1,
+    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1,
     StoreGraphMutationContractV2, StoreGraphStateContractV2, StoreIdempotencyReadContractV1,
-    StoreReadContractV1, StoreUnavailableReasonV1, TerminalResultV1, ValidatedWorkspaceRootV1,
-    WorkerIdV1,
+    StoreInvariantV1, StoreReadContractV1, StoreUnavailableReasonV1, TerminalResultV1,
+    ValidatedWorkspaceRootV1, WorkerIdV1,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -152,6 +152,109 @@ fn graph_state_with_required_artifact(
         None,
     )
     .unwrap()
+}
+
+fn decision_graph_state(
+    session_number: u64,
+    snapshot_number: u64,
+    created_at: u64,
+) -> GraphSessionStateV2 {
+    let document = json!({
+        "schema": "podway.procedure/v2",
+        "id": "atomic-decision",
+        "version": "1",
+        "name": "Atomic decision",
+        "purpose": "Bind a durable decision to its admitted successor identity.",
+        "node_definitions": {
+            "choose": {
+                "type": "decision",
+                "title": "Choose",
+                "objective": "Choose the next route.",
+                "prompt": "Approve?",
+                "options": [{"id":"approve","label":"Approve"}],
+                "reason": {"required":true}
+            },
+            "work": {"type":"action","title":"Work","intent":"Work."}
+        },
+        "graph": {
+            "entry": "choose",
+            "nodes": [
+                {
+                    "id":"choose",
+                    "use":"choose",
+                    "routes":{"approve":{"to":"work","effect":"advance"}}
+                },
+                {"id":"work","use":"work","terminal":true}
+            ]
+        }
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let procedure_digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    let snapshot = ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new(uuid(snapshot_number)).unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        procedure_digest,
+        ProcedureSourceLabelV1::file("decision.yaml").unwrap(),
+        UnixMillis::new(created_at),
+    )
+    .unwrap();
+    let attempt_id = AttemptId::new(uuid(session_number + 1)).unwrap();
+    let attempt = SessionAttemptV2::new(
+        attempt_id.clone(),
+        node("choose"),
+        AttemptNumberV2::FIRST,
+        TraceSequenceV2::FIRST,
+        AttemptLifecycle::Active,
+        AttemptValidityV2::Valid,
+        None,
+    )
+    .unwrap();
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(uuid(session_number)).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(1),
+        vec![attempt],
+    )
+    .unwrap();
+    GraphSessionStateV2::new(
+        Revision::new(1),
+        "Atomic decision",
+        snapshot,
+        trace,
+        vec![
+            GraphNodeCounterV2::new(node("choose"), 1, 0),
+            GraphNodeCounterV2::new(node("work"), 0, 0),
+        ],
+        vec![AttemptMetadataV2::new(attempt_id, UnixMillis::new(created_at), None, None).unwrap()],
+        UnixMillis::new(created_at),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+fn decision_record_projection(record: &podway_core::DecisionRecordV2) -> serde_json::Value {
+    json!({
+        "trace_sequence": record.trace().get(),
+        "session_id": record.session_id(),
+        "session_revision": record.session_revision().get(),
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_snapshot_id": record.procedure_snapshot_id(),
+        "procedure_digest": record.procedure_digest(),
+        "graph_node_id": record.graph_node_id(),
+        "node_definition_id": record.node_definition_id(),
+        "attempt_id": record.attempt_id(),
+        "attempt_number": record.attempt_number().get(),
+        "goal_revision": record.goal_revision().map(|revision| revision.get()),
+        "option_id": record.selected_option(),
+        "effect": record.route_effect().as_str(),
+        "target_graph_node_id": record.route_target(),
+        "reason": record.reason().as_str(),
+        "recorded_at": "1970-01-01T00:00:00.033Z",
+        "references": []
+    })
 }
 
 fn artifact_failure_ready_state(session_number: u64, snapshot_number: u64) -> GraphSessionStateV2 {
@@ -368,6 +471,75 @@ fn admit_complete_and_claim(
         .claim_next(
             &identity(),
             WorkerIdV1::new("v2-complete-worker").unwrap(),
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .unwrap()
+}
+
+fn admit_decide_and_claim(
+    store: &SqliteStoreV1,
+    state: &GraphSessionStateV2,
+    fresh_attempt_id: &AttemptId,
+    key: &str,
+    job_number: u64,
+) -> podway_store::ClaimedJobV1 {
+    let active = state.trace().active_attempt().unwrap();
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "command": "session.decide",
+            "execution_version": 9,
+            "fresh_attempt_id": fresh_attempt_id,
+            "payload": {
+                "actor": null,
+                "option_id": "approve",
+                "reason": "Ready."
+            },
+            "preconditions": {
+                "attempt_id": active.attempt_id(),
+                "session_id": state.trace().session_id(),
+                "session_revision": state.trace().revision().get()
+            },
+            "selector": {},
+            "workspace_id": identity().workspace_uuid()
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::SessionDecide,
+        IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new(uuid(job_number)).unwrap(),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(state.trace().revision()),
+            Some(active.attempt_id().clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+        digest('7'),
+        UnixMillis::new(30),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        state.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            uuid(job_number + 100),
+            "session.decide",
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-graph-start",
+            0,
+        )
+        .unwrap(),
+    );
+    store.admit(&identity(), request).unwrap();
+    store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-decide-worker").unwrap(),
             UnixMillis::new(31),
         )
         .unwrap()
@@ -1540,6 +1712,71 @@ fn graph_complete_state_and_typed_terminal_projection_commit_and_reopen_together
             .operation(),
         Some(&operation)
     );
+}
+
+#[test]
+fn decision_terminal_rejects_successor_identity_that_differs_from_admitted_execution() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let current = decision_graph_state(640, 650, 10);
+    store
+        .create_graph_session_v2(&identity(), current.clone())
+        .unwrap();
+    let admitted_fresh_attempt_id = AttemptId::new(uuid(660)).unwrap();
+    let forged_fresh_attempt_id = AttemptId::new(uuid(661)).unwrap();
+    let claimed = admit_decide_and_claim(
+        &store,
+        &current,
+        &admitted_fresh_attempt_id,
+        "v2-decide-successor-identity",
+        670,
+    );
+    let job_id = claimed.job().job_id().clone();
+    let active = current.trace().active_attempt().unwrap();
+    let forged = current
+        .decide_active_route_v2(
+            current.trace().revision(),
+            active.attempt_id(),
+            OptionId::new("approve").unwrap(),
+            forged_fresh_attempt_id.clone(),
+            Some(ReasonV2::new("Ready.").unwrap()),
+            None,
+            UnixMillis::new(33),
+        )
+        .unwrap();
+    let operation = PersistedGraphTerminalOperationV2::decide(
+        decision_record_projection(forged.decision_record()),
+        forged_fresh_attempt_id,
+    )
+    .unwrap();
+    let next = forged.into_state();
+
+    assert!(matches!(
+        store.commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            Some(next.clone()),
+            TerminalResultV1::Success(DomainResult::SessionChanged {
+                session_id: current.trace().session_id().clone(),
+                revision_before: current.trace().revision(),
+                revision_after: next.trace().revision(),
+                changed: true,
+            }),
+            operation,
+            UnixMillis::new(33),
+        ),
+        Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::TransitionMutationShape
+        })
+    ));
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    let job = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
 }
 
 #[test]

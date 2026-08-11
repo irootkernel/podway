@@ -4675,17 +4675,59 @@ fn validate_graph_mutation_terminal_shape_v2(
                 .get("preconditions")
                 .and_then(serde_json::Value::as_object)
                 .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let fresh_attempt_id = document
+                .get("fresh_attempt_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::AttemptId::new(value.to_owned()).ok())
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let option_id = payload
+                .get("option_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::OptionId::new(value.to_owned()).ok())
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let reason = payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::ReasonV2::new(value.to_owned()).ok())
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let actor = match payload.get("actor") {
+                Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(value)) => Some(
+                    podway_core::ActorAttributionV2::new(value.clone())
+                        .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?,
+                ),
+                _ => return Err(invariant(StoreInvariantV1::TransitionMutationShape)),
+            };
+            let expected = current
+                .decide_active_route_v2(
+                    preconditions
+                        .expected_session_revision()
+                        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+                    preconditions
+                        .expected_attempt_id()
+                        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+                    option_id,
+                    fresh_attempt_id,
+                    Some(reason),
+                    actor,
+                    now,
+                )
+                .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
             *changed
                 && session_id == current.trace().session_id()
                 && *revision_before == current.trace().revision()
                 && *revision_after == next.trace().revision()
                 && current.trace().revision().checked_next().ok() == Some(next.trace().revision())
                 && next.trace().session_id() == current.trace().session_id()
+                && expected.state() == next
+                && expected.decision_record() == decision
+                && expected.to_attempt_id() == target_attempt_id
                 && preconditions.expected_session_revision() == Some(current.trace().revision())
                 && preconditions.expected_attempt_id() == Some(active.attempt_id())
                 && preconditions.expected_item_id().is_none()
                 && preconditions.expected_item_revision().is_none()
                 && target_attempt_id == next_active.attempt_id()
+                && payload.len() == 3
                 && document_preconditions
                     .get("session_id")
                     .and_then(serde_json::Value::as_str)
