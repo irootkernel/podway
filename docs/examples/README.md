@@ -4,6 +4,8 @@
 - [Custom procedure](.podway/procedures/custom-bug-fix.yaml): valid worktree-local procedure.
 - [Example session](example-session.md): complete CLI walkthrough with retry and return.
 - [Agent session](agent-session.md): the same workflow driven through the JSON automation contract.
+- [Procedure v2 workflow](v2-workflow.md): development-gated preset, decision, rework,
+  goal, and stable JSON-field walkthrough.
 - [Handoff and resume](handoff-session.md): taking over a task from recorded state alone.
 - [Integration session](integration-session.md): governing the merge of parallel worktrees as its own session.
 - [Authoring a custom procedure](authoring-procedures.md): converting a team checklist into a procedure.

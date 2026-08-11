@@ -439,13 +439,13 @@ const ROUTES: &[Route] = &[
     Route {
         words: "preset show",
         flags: DISPLAY_FLAGS,
-        values: "analysis bug-fix docs-only sw-dev",
+        values: "analysis bug-fix bug-fix-v2 docs-only sw-dev sw-dev-v2",
         dynamic: None,
     },
     Route {
         words: "preset explain",
         flags: DISPLAY_FLAGS,
-        values: "analysis bug-fix docs-only sw-dev",
+        values: "analysis bug-fix bug-fix-v2 docs-only sw-dev sw-dev-v2",
         dynamic: None,
     },
     Route {
@@ -535,7 +535,7 @@ const ROUTES: &[Route] = &[
     Route {
         words: "start",
         flags: START_FLAGS,
-        values: "analysis bug-fix docs-only sw-dev",
+        values: "analysis bug-fix bug-fix-v2 docs-only sw-dev sw-dev-v2",
         dynamic: None,
     },
     Route {

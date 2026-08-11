@@ -12,3 +12,5 @@ mod int_v2_authoring_cli;
 mod int_v2_platform_cli;
 #[path = "int_v2dog003_preset_cli.rs"]
 mod int_v2dog003_preset_cli;
+#[path = "int_v2dog004_guidance.rs"]
+mod int_v2dog004_guidance;

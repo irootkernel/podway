@@ -95,4 +95,10 @@ podway start --procedure .podway/procedures/service-bug-fix.yaml \
 
 The daemon validates the file and stores an immutable canonical snapshot at start; later edits to the file apply only to future sessions.
 
-The built-in presets under [`assets/presets/`](../../assets/presets/) are production examples of the same schema, and the [integration session](integration-session.md) walks through a second custom procedure built the same way. The adopted v0.2 program adds authoring tooling — scaffolding, formatting, linting, and v1-to-v2 conversion — tracked in the [roadmap](../roadmap/README.md).
+The v1 presets under [`assets/presets/`](../../assets/presets/) are examples of
+this schema, and the [integration session](integration-session.md) walks through
+a second custom v1 procedure built the same way. For Procedure v2, use the
+implemented scaffold, format, check, preview, graph, and conversion commands in
+the [CLI specification](../specs/interfaces/cli-specification.md#procedure-commands),
+then follow the [Procedure v2 workflow](v2-workflow.md) in a managed disposable
+runtime.

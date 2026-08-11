@@ -308,6 +308,11 @@ podway preset explain <name>
 ```
 
 `show` emits source YAML or structured JSON. `explain` provides purpose, stage outline, and common rework examples.
+The built-in names are `analysis`, `bug-fix`, `docs-only`, `sw-dev`,
+`bug-fix-v2`, and `sw-dev-v2`. The `-v2` presets use Procedure v2 and remain
+runtime-admissible only through the managed development gate until that boundary
+is deliberately promoted. Static list, show, explain, and dry-run inspection are
+available without daemon admission.
 
 ## Session commands
 
@@ -358,8 +363,10 @@ session. For Procedure v2, it adds the six bounded history windows defined by
 trace sequence, and applies that exclusive cursor to all six windows. Verbose
 status does not provide an audit export.
 
-`--compact` requires `--wait-for-idle` and returns the closed, bounded authority
-projection defined by the automation client contract.
+`--compact` requires `--wait-for-idle` and returns the closed, bounded state
+projection defined by the automation client contract. It is authoritative for
+Podway's recorded state and fences, not for the semantic truth of caller-recorded
+claims.
 
 ### Next
 

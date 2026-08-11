@@ -6826,10 +6826,10 @@ fn dynamic_candidates(result: &Map<String, Value>, kind: &str) -> Vec<String> {
 fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
     let text = match topic.unwrap_or("overview") {
         "overview" => {
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev --task 'add retry backoff'\n  podway status --json\n  podway next"
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway status --json\n  podway next --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold|convert\n  session.decide, session.rework, goal.define, goal.revise, goal.assess_criterion"
         }
         "workflow" => {
-            "Workflow:\n  podway start --preset sw-dev --task 'implement feature'\n  podway next\n  podway set goal 'Implement the requested feature.'\n  podway add acceptance-criteria 'The requested behavior is verified.'\n  podway complete\n\nProcedure v2 decisions use podway decide; manual graph re-entry uses podway rework."
+            "Procedure v2 workflow:\n  podway start --preset sw-dev-v2 --task 'implement feature' --goal 'Ship the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer\n  podway next --json\n  podway complete\n  podway decide --option approve --reason 'Recorded evidence supports approval.'\n  podway goal assess-criterion verified --status satisfied --reason 'Relevant checks passed.' --evidence verify\n\nUse status --json after every mutation and carry its session, attempt, item, and goal revision fields into explicit precondition flags. Podway records these assertions; it does not establish their semantic truth."
         }
         "rework" => {
             "Rework:\n  Procedure v1: podway return --to implement --reason 'review found a gap' --dry-run\n  Procedure v1: podway reopen --to implement --reason 'follow-up'\n  Procedure v2: podway rework --to implement --reason 'review found a gap'\n\nThe v1 return and reopen verbs are never aliases for Procedure v2 rework."
@@ -6838,7 +6838,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Automation:\n  podway complete --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 12 --if-attempt <uuid> --idempotency-key task-42 --json"
         }
         "procedures" => {
-            "Procedures:\n  podway procedure validate .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --task 'perform work'"
+            "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, graph, and convert."
         }
         "daemon" => {
             "Daemon lifecycle grammar:\n  podway daemon status\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
@@ -6885,10 +6885,10 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "preset.list" => "Usage:\n  podway preset list\n\nExample:\n  podway preset list",
         "preset.show" => {
-            "Usage:\n  podway preset show <name>\n\nExample:\n  podway preset show sw-dev"
+            "Usage:\n  podway preset show <name>\n\nExamples:\n  podway preset show sw-dev\n  podway preset show sw-dev-v2"
         }
         "preset.explain" => {
-            "Usage:\n  podway preset explain <name>\n\nExample:\n  podway preset explain sw-dev"
+            "Usage:\n  podway preset explain <name>\n\nExamples:\n  podway preset explain sw-dev\n  podway preset explain sw-dev-v2"
         }
         "daemon.install" => {
             "Usage:\n  podway daemon install [--daemon-path <path>] [--socket <absolute-path>]\n\nExample:\n  podway daemon install --daemon-path /absolute/podwayd --socket /absolute/podwayd.sock"
@@ -6917,7 +6917,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'ship safely' --goal 'Ship safely.' --criterion tested='Tests pass.'\n  podway start --preset sw-dev --task 'preview procedure' --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset bug-fix-v2 --task 'repair defect' --goal 'Repair the defect.' --criterion reproduced='The defect is reproduced.' --criterion verified='The fix is verified.' --actor developer\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'ship safely' --goal 'Ship safely.' --criterion tested='Tests pass.'\n  podway start --preset sw-dev-v2 --task 'preview procedure' --dry-run"
         }
         "session.decide" => {
             "Usage:\n  podway decide --option <id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> [--if-goal-revision <n>]\n\nThe goal revision fence is required for a session-goal assessment decision and, when supplied for a general decision, must match the current goal.\n\nExample:\n  podway decide --option approve --reason 'The evidence supports this route.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid>"
