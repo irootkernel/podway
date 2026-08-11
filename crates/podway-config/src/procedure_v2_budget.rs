@@ -542,6 +542,40 @@ mod tests {
     }
 
     #[test]
+    fn v2dog002_bug_fix_preset_records_budget_headroom() {
+        let source = include_bytes!("../../../assets/presets/bug-fix-v2.yaml");
+        let parsed = match parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
+            .expect("bug-fix-v2 must parse")
+        {
+            ParsedProcedure::V2(parsed) => parsed,
+            ParsedProcedure::V1(_) => panic!("bug-fix-v2 must dispatch as Procedure v2"),
+        };
+        let validated = validate_procedure_v2(parsed).expect("bug-fix-v2 must validate");
+        let usages: Vec<PlacementBudget> = validated
+            .parsed()
+            .graph()
+            .placements()
+            .iter()
+            .map(|placement| placement_budget(validated.parsed(), placement))
+            .collect();
+        let maximum_static = usages
+            .iter()
+            .map(|usage| usage.next_static)
+            .max()
+            .expect("bug-fix-v2 has graph placements");
+        let maximum_readback = usages
+            .iter()
+            .map(|usage| usage.readback)
+            .max()
+            .expect("bug-fix-v2 has graph placements");
+
+        assert_eq!(maximum_static, 9_115);
+        assert_eq!(maximum_readback, 359_734);
+        assert_eq!(NEXT_STATIC_BUDGET - maximum_static, 253_029);
+        assert_eq!(READBACK_BUDGET - maximum_readback, 164_554);
+    }
+
+    #[test]
     fn two_maximal_goal_assessment_sources_cannot_fit_readback() {
         let per_source = add(
             add(reference_metadata_charge(), reference_metadata_charge()),

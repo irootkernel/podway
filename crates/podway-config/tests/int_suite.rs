@@ -42,3 +42,5 @@ mod int_v2_procedure_validate;
 mod int_v2_procedure_vet;
 #[path = "int_v2dog001_sw_dev_preset.rs"]
 mod int_v2dog001_sw_dev_preset;
+#[path = "int_v2dog002_bug_fix_preset.rs"]
+mod int_v2dog002_bug_fix_preset;
