@@ -782,44 +782,6 @@ fn v2_status_preflight_supplies_omitted_attempt_fences() {
     assert_eq!(requests[1]["preconditions"]["goal_revision"], 1);
 
     let fixture = Fixture::new();
-    let daemon = SequenceRecordingDaemon::start(
-        &fixture.socket,
-        vec![Reply::StatusV2GoalDefined, Reply::Unsupported],
-    );
-    let arguments = vec![
-        "--json".to_owned(),
-        "--socket".to_owned(),
-        fixture.socket.display().to_string(),
-        "--worktree".to_owned(),
-        fixture.root.display().to_string(),
-        "--if-workspace-uuid".to_owned(),
-        WORKSPACE_ID.to_owned(),
-        "--if-session-id".to_owned(),
-        SESSION_ID.to_owned(),
-        "--if-session-revision".to_owned(),
-        "7".to_owned(),
-        "--if-attempt".to_owned(),
-        ATTEMPT_ID.to_owned(),
-        "--idempotency-key".to_owned(),
-        "v2gol-assessment-decide-partial-fence".to_owned(),
-        "decide".to_owned(),
-        "--option".to_owned(),
-        "approve".to_owned(),
-        "--reason".to_owned(),
-        "Use the observed goal revision.".to_owned(),
-    ];
-    let output = fixture.run(&arguments);
-    assert_eq!(output.status.code(), Some(3), "{output:?}");
-    let requests = daemon.finish();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0]["command"], "session.status");
-    assert_eq!(requests[1]["command"], "session.decide");
-    assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
-    assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
-    assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
-    assert_eq!(requests[1]["preconditions"]["goal_revision"], 1);
-
-    let fixture = Fixture::new();
     let daemon =
         SequenceRecordingDaemon::start(&fixture.socket, vec![Reply::StatusV2, Reply::Unsupported]);
     let arguments = vec![
@@ -852,6 +814,33 @@ fn v2_status_preflight_supplies_omitted_attempt_fences() {
     assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
     assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
     assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+}
+
+#[test]
+fn v2gol003_fully_fenced_general_decide_skips_status_preflight() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::Unsupported);
+    let mut arguments = fixture.daemon_arguments(&[]);
+    arguments.extend([
+        "--if-attempt".to_owned(),
+        ATTEMPT_ID.to_owned(),
+        "decide".to_owned(),
+        "--option".to_owned(),
+        "approve".to_owned(),
+        "--reason".to_owned(),
+        "Replay the fully fenced general decision.".to_owned(),
+    ]);
+
+    let output = fixture.run(&arguments);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert_eq!(one_json(&output)["code"], "UNSUPPORTED_V2_CAPABILITY");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "session.decide");
+    assert_eq!(request["operation"], "mutate");
+    assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(request["preconditions"]["session_revision"], 7);
+    assert_eq!(request["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert!(request["preconditions"].get("goal_revision").is_none());
 }
 
 #[test]

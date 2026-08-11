@@ -1812,7 +1812,7 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
         return false;
     }
     match command {
-        Command::Decide(_) => explicit.attempt_id.is_some() && explicit.goal_revision.is_some(),
+        Command::Decide(_) => explicit.attempt_id.is_some(),
         Command::Goal {
             command: GoalCommand::AssessCriterion(_),
         } => explicit.attempt_id.is_some() && explicit.goal_revision.is_some(),
