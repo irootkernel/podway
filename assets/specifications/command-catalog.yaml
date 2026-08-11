@@ -781,6 +781,7 @@ commands:
   - session_id
   - session_revision
   - attempt_id
+  - goal_revision_when_goal_defined
   idempotency_scope: session
   result_schemas:
   - podway.decision-result/v1

@@ -8,8 +8,8 @@ use podway_core::{
     ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
     AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CriterionAssessmentModeV2,
     CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
-    EvidenceReferenceSnapshotV2, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2, ItemId,
-    ItemSpecV2, ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2,
+    EvidenceReferenceSnapshotV2, GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2,
+    ItemId, ItemSpecV2, ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2,
     RecordedItemSetV2, RecordedItemV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
     ResolvedEvidenceSetV2, Revision, ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2,
     SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
@@ -135,6 +135,14 @@ pub enum GraphMutationErrorV2 {
         criterion_id: CriterionId,
         citation: CriterionCitationV2,
     },
+    CriterionResultMissing {
+        missing_criterion_ids: Vec<CriterionId>,
+    },
+    GoalAssessmentOutcomeNotAllowed {
+        option_id: OptionId,
+        determined_outcome: GoalOutcome,
+        allowed_option_ids: Vec<OptionId>,
+    },
     SessionCancelled,
     ManualReworkTargetNotAllowed {
         target_graph_node_id: GraphNodeId,
@@ -238,6 +246,11 @@ impl fmt::Display for GraphMutationErrorV2 {
             Self::GoalAssessmentDecisionRequired { .. } => {
                 formatter.write_str("the active Procedure v2 decision is not a goal assessment")
             }
+            Self::CriterionResultMissing { .. } => {
+                formatter.write_str("the Procedure v2 goal assessment is incomplete")
+            }
+            Self::GoalAssessmentOutcomeNotAllowed { .. } => formatter
+                .write_str("the selected option does not match the determined goal outcome"),
             Self::CriterionNotFound { .. } => {
                 formatter.write_str("the goal criterion does not exist")
             }
@@ -1150,6 +1163,7 @@ impl WorkflowMemoryStateV2 {
         goal_revision: Option<GoalRevisionNumberV2>,
         reason: Option<ReasonV2>,
         actor: Option<ActorAttributionV2>,
+        determined_goal_outcome: Option<GoalOutcome>,
         now: UnixMillis,
     ) -> Result<DecisionMemoryTransitionV2, GraphMutationErrorV2> {
         let active = previous_trace
@@ -1169,12 +1183,20 @@ impl WorkflowMemoryStateV2 {
                 actual: specification.node_kind,
             });
         }
-        if specification.goal_assessment {
-            return Err(
-                GraphMutationErrorV2::GoalAssessmentDecisionRequiresAssessment {
+        match (specification.goal_assessment, determined_goal_outcome) {
+            (true, None) => {
+                return Err(
+                    GraphMutationErrorV2::GoalAssessmentDecisionRequiresAssessment {
+                        graph_node_id: active.graph_node_id().clone(),
+                    },
+                );
+            }
+            (false, Some(_)) => {
+                return Err(GraphMutationErrorV2::GoalAssessmentDecisionRequired {
                     graph_node_id: active.graph_node_id().clone(),
-                },
-            );
+                });
+            }
+            _ => {}
         }
         if !specification.options.contains(&selected_option) {
             return Err(GraphMutationErrorV2::OptionNotAllowed {
@@ -1182,6 +1204,23 @@ impl WorkflowMemoryStateV2 {
                 option_id: selected_option,
                 allowed_option_ids: specification.options.clone(),
             });
+        }
+        if let Some(determined_outcome) = determined_goal_outcome {
+            let allowed_option_ids = specification
+                .options
+                .iter()
+                .filter(|option| {
+                    specification.assessment_outcomes.get(*option) == Some(&determined_outcome)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if !allowed_option_ids.contains(&selected_option) {
+                return Err(GraphMutationErrorV2::GoalAssessmentOutcomeNotAllowed {
+                    option_id: selected_option,
+                    determined_outcome,
+                    allowed_option_ids,
+                });
+            }
         }
         let (route_target, route_effect) = specification
             .routes
@@ -1922,6 +1961,7 @@ struct NodeMemorySpecV2 {
     options: Vec<OptionId>,
     reason_required: bool,
     goal_assessment: bool,
+    assessment_outcomes: BTreeMap<OptionId, GoalOutcome>,
     terminal: bool,
     advance_target: Option<GraphNodeId>,
     routes: BTreeMap<OptionId, (GraphNodeId, TransitionEffectV2)>,
@@ -2022,6 +2062,29 @@ impl SnapshotMemoryModelV2 {
                 .and_then(|assessment| assessment.get("target"))
                 .and_then(Value::as_str)
                 == Some("session_goal");
+            let assessment_outcomes = definition
+                .get("assessment")
+                .and_then(Value::as_object)
+                .and_then(|assessment| assessment.get("outcomes"))
+                .and_then(Value::as_object)
+                .map_or(Ok(BTreeMap::new()), |outcomes| {
+                    outcomes
+                        .iter()
+                        .map(|(option, outcome)| {
+                            Ok((
+                                OptionId::new(option.clone()).map_err(|_| {
+                                    invalid("Procedure v2 assessment option is invalid")
+                                })?,
+                                GoalOutcome::from_str(outcome.as_str().ok_or_else(|| {
+                                    invalid("Procedure v2 assessment outcome is invalid")
+                                })?)
+                                .map_err(|_| {
+                                    invalid("Procedure v2 assessment outcome is invalid")
+                                })?,
+                            ))
+                        })
+                        .collect()
+                })?;
             let routes =
                 placement.get("routes").and_then(Value::as_object).map_or(
                     Ok(BTreeMap::new()),
@@ -2072,6 +2135,7 @@ impl SnapshotMemoryModelV2 {
                     options,
                     reason_required,
                     goal_assessment,
+                    assessment_outcomes,
                     terminal,
                     advance_target,
                     routes,

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use podway_core::{
     ActorAttributionV2, ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2,
     AttemptValidityV2, BlockerId, BlockerState, CanonicalProcedureJsonV1, DecisionRecordInputV2,
-    DecisionRecordV2, EvidenceReferenceSnapshotV2, GraphNodeId, ItemId, ItemTypeV1,
-    NodeDefinitionId, OptionId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2,
+    DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalRevisionNumberV2, GraphNodeId, ItemId,
+    ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2,
     RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
     ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
     SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
@@ -1117,6 +1117,20 @@ fn v2drw002_declared_rework_keeps_the_exact_decision_after_its_attempt_becomes_s
 fn v2drw001_decide_rejects_stale_fences_option_and_missing_reason_without_mutation() {
     let state = gate_state();
     let before = state.clone();
+    assert!(matches!(
+        state.decide_active_route_with_goal_revision_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            Some(GoalRevisionNumberV2::FIRST),
+            Some(ReasonV2::new("Proceed.").unwrap()),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::SessionGoalMissing)
+    ));
+    assert_eq!(state, before);
     assert_eq!(
         state.decide_active_route_v2(
             Revision::new(3),

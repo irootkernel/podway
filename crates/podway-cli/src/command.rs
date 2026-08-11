@@ -1038,7 +1038,13 @@ impl StatusFacts {
 
         let session_revision = explicit.session_revision.unwrap_or(self.session_revision);
         if matches!(command, Command::Decide(_)) {
-            return self.v2_preconditions(session_id, session_revision, attempt_id, true, None);
+            return self.v2_preconditions(
+                session_id,
+                session_revision,
+                attempt_id,
+                true,
+                explicit.goal_revision.or(self.goal_revision),
+            );
         }
         if matches!(command, Command::Rework(_)) {
             return self.v2_preconditions(session_id, session_revision, attempt_id, false, None);
@@ -1948,7 +1954,7 @@ fn v2_session_preconditions(
         None,
     )
     .map_err(|_| LocalFailure::request_invalid("Procedure v2 preconditions are invalid"))?;
-    if require_goal_revision {
+    if require_goal_revision || explicit.goal_revision.is_some() {
         let goal_revision = explicit
             .goal_revision
             .ok_or_else(|| LocalFailure::request_invalid("--if-goal-revision is required"))?;
@@ -4910,13 +4916,14 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     if cli.if_goal_revision.is_some()
         && !matches!(
             command,
-            Command::Goal {
-                command: GoalCommand::Revise(_) | GoalCommand::AssessCriterion(_)
-            }
+            Command::Decide(_)
+                | Command::Goal {
+                    command: GoalCommand::Revise(_) | GoalCommand::AssessCriterion(_)
+                }
         )
     {
         return Err(LocalFailure::request_invalid(
-            "--if-goal-revision applies only to goal revise and goal assess-criterion",
+            "--if-goal-revision applies only to decide, goal revise, and goal assess-criterion",
         ));
     }
     if cli.if_attempt.is_some()
@@ -6826,7 +6833,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'ship safely' --goal 'Ship safely.' --criterion tested='Tests pass.'\n  podway start --preset sw-dev --task 'preview procedure' --dry-run"
         }
         "session.decide" => {
-            "Usage:\n  podway decide --option <id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid>\n\nExample:\n  podway decide --option approve --reason 'The evidence supports this route.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid>"
+            "Usage:\n  podway decide --option <id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> [--if-goal-revision <n>]\n\nThe goal revision fence is required for a session-goal assessment decision and, when supplied for a general decision, must match the current goal.\n\nExample:\n  podway decide --option approve --reason 'The evidence supports this route.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid>"
         }
         "session.rework" => {
             "Usage:\n  podway rework --to <graph-node-id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> [--if-attempt <uuid>]\n\nExample:\n  podway rework --to implement --reason 'Review found a gap.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7"

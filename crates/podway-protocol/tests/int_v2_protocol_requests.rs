@@ -132,6 +132,45 @@ fn v2plt006_goal_revision_is_positive_required_and_command_scoped() {
 }
 
 #[test]
+fn v2gol003_decide_accepts_an_optional_positive_goal_revision_and_binds_identity() {
+    let general = ProcedureV2MutationRequestV1::from_envelope(&envelope(
+        "session.decide",
+        session_preconditions(),
+        json!({"option_id":"accept","reason":"Choose the general route."}),
+    ))
+    .unwrap();
+    let assessed = ProcedureV2MutationRequestV1::from_envelope(&envelope(
+        "session.decide",
+        json!({"session_id":SESSION_ID,"session_revision":7,"attempt_id":ATTEMPT_ID,"goal_revision":1}),
+        json!({"option_id":"accept","reason":"Choose the assessed outcome."}),
+    ))
+    .unwrap();
+    let ProcedureV2MutationCommandV1::SessionDecide(general_command) = general.command() else {
+        unreachable!()
+    };
+    let ProcedureV2MutationCommandV1::SessionDecide(assessed_command) = assessed.command() else {
+        unreachable!()
+    };
+    assert_eq!(general_command.expected_goal_revision, None);
+    assert_eq!(assessed_command.expected_goal_revision, Some(1));
+
+    let workspace = WorkspaceId::new(WORKSPACE_ID).unwrap();
+    assert_ne!(
+        canonical_procedure_v2_mutation_identity_v1(&general, &workspace).unwrap(),
+        canonical_procedure_v2_mutation_identity_v1(&assessed, &workspace).unwrap()
+    );
+
+    let mut zero = serde_json::to_value(envelope(
+        "session.decide",
+        session_preconditions(),
+        json!({"option_id":"accept","reason":"Invalid fence."}),
+    ))
+    .unwrap();
+    zero["preconditions"]["goal_revision"] = json!(0);
+    assert!(serde_json::from_value::<RequestEnvelopeV1>(zero).is_err());
+}
+
+#[test]
 fn v2plt006_rejects_over_bounds_open_payloads_and_invalid_citations() {
     let over_reason = envelope(
         "session.decide",

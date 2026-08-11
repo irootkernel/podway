@@ -1264,6 +1264,14 @@ pub enum PersistedGraphMutationFailureV2 {
         criterion_id: podway_core::CriterionId,
         citation: Value,
     },
+    CriterionResultMissing {
+        missing_criterion_ids: Vec<podway_core::CriterionId>,
+    },
+    GoalAssessmentOutcomeNotAllowed {
+        option_id: podway_core::OptionId,
+        determined_outcome: String,
+        allowed_option_ids: Vec<podway_core::OptionId>,
+    },
     SkipNotAllowed {
         graph_node_id: GraphNodeId,
     },
@@ -1465,6 +1473,20 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
                     graph_node_id: graph_node_id.clone(),
                 }
             }
+            crate::GraphMutationErrorV2::CriterionResultMissing {
+                missing_criterion_ids,
+            } => Self::CriterionResultMissing {
+                missing_criterion_ids: missing_criterion_ids.clone(),
+            },
+            crate::GraphMutationErrorV2::GoalAssessmentOutcomeNotAllowed {
+                option_id,
+                determined_outcome,
+                allowed_option_ids,
+            } => Self::GoalAssessmentOutcomeNotAllowed {
+                option_id: option_id.clone(),
+                determined_outcome: determined_outcome.as_str().to_owned(),
+                allowed_option_ids: allowed_option_ids.clone(),
+            },
             crate::GraphMutationErrorV2::BlockerIdAlreadyUsed { blocker_id } => {
                 Self::BlockerIdAlreadyUsed {
                     blocker_id: blocker_id.clone(),
@@ -2044,6 +2066,32 @@ impl PersistedGraphMutationFailureV2 {
                         _ => false,
                     }
                 })
+            }
+            Self::CriterionResultMissing {
+                missing_criterion_ids,
+            } => {
+                !missing_criterion_ids.is_empty()
+                    && missing_criterion_ids.len() <= 16
+                    && missing_criterion_ids
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        == missing_criterion_ids.len()
+            }
+            Self::GoalAssessmentOutcomeNotAllowed {
+                option_id,
+                determined_outcome,
+                allowed_option_ids,
+            } => {
+                podway_core::GoalOutcome::from_str(determined_outcome).is_ok()
+                    && !allowed_option_ids.is_empty()
+                    && !allowed_option_ids.contains(option_id)
+                    && allowed_option_ids.len() <= 8
+                    && allowed_option_ids
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        == allowed_option_ids.len()
             }
             Self::SessionNotRunning
             | Self::GoalTrackingNotEnabled

@@ -108,6 +108,14 @@ enum V2RuntimeErrorDetailsV1 {
     CriterionNotFound {
         criterion_id: podway_core::CriterionId,
     },
+    CriterionResultMissing {
+        missing_criterion_ids: Vec<podway_core::CriterionId>,
+    },
+    GoalAssessmentOutcomeNotAllowed {
+        option_id: podway_core::OptionId,
+        determined_outcome: String,
+        allowed_option_ids: Vec<podway_core::OptionId>,
+    },
     GraphNodeTypeMismatch {
         graph_node_id: GraphNodeId,
         actual_node_type: String,
@@ -338,6 +346,32 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_criterion_result_missing(
+        mut self,
+        missing_criterion_ids: Vec<podway_core::CriterionId>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::CriterionResultMissing {
+            missing_criterion_ids,
+        }));
+        self
+    }
+
+    pub fn with_goal_assessment_outcome_not_allowed(
+        mut self,
+        option_id: podway_core::OptionId,
+        determined_outcome: impl Into<String>,
+        allowed_option_ids: Vec<podway_core::OptionId>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::GoalAssessmentOutcomeNotAllowed {
+                option_id,
+                determined_outcome: determined_outcome.into(),
+                allowed_option_ids,
+            },
+        ));
+        self
+    }
+
     pub fn with_fresh_goal_assessment_missing(mut self, goal_revision: u64) -> Self {
         self.v2_runtime = Some(Box::new(
             V2RuntimeErrorDetailsV1::FreshGoalAssessmentMissing { goal_revision },
@@ -484,6 +518,26 @@ impl DispatchErrorDetailsV1 {
                     "schema":"podway.v2-runtime-error-details/v1",
                     "kind":"CRITERION_NOT_FOUND",
                     "criterion_id":criterion_id,
+                    "admission":admission,
+                }),
+                V2RuntimeErrorDetailsV1::CriterionResultMissing {
+                    missing_criterion_ids,
+                } => json!({
+                    "schema":"podway.v2-runtime-error-details/v1",
+                    "kind":"CRITERION_RESULT_MISSING",
+                    "missing_criterion_ids":missing_criterion_ids,
+                    "admission":admission,
+                }),
+                V2RuntimeErrorDetailsV1::GoalAssessmentOutcomeNotAllowed {
+                    option_id,
+                    determined_outcome,
+                    allowed_option_ids,
+                } => json!({
+                    "schema":"podway.v2-runtime-error-details/v1",
+                    "kind":"GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
+                    "option_id":option_id,
+                    "determined_outcome":determined_outcome,
+                    "allowed_option_ids":allowed_option_ids,
                     "admission":admission,
                 }),
                 V2RuntimeErrorDetailsV1::GraphNodeTypeMismatch {
@@ -806,6 +860,8 @@ pub enum DispatchFailureKindV1 {
     CriterionModeMixed,
     CriterionCitationInvalid,
     CriterionNotFound,
+    CriterionResultMissing,
+    GoalAssessmentOutcomeNotAllowed,
     FreshGoalAssessmentMissing,
     BlockerLimitReached,
     ItemNotFound,
@@ -2597,6 +2653,18 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::CriterionNotFound => (
             "CRITERION_NOT_FOUND",
             "The criterion does not exist in the current goal revision.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::CriterionResultMissing => (
+            "CRITERION_RESULT_MISSING",
+            "Every current goal criterion requires a result before this decision.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::GoalAssessmentOutcomeNotAllowed => (
+            "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
+            "The selected option does not match the determined goal outcome.",
             false,
             1,
         ),

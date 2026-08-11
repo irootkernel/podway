@@ -420,8 +420,16 @@ podway decide --option <option-id> --reason <text> [--actor <text>]
 podway rework --to <graph-node-id> --reason <text> [--actor <text>]
 ```
 
-`decide` requires the exact active attempt. `rework` requires the exact session
-revision and carries the active attempt when the session is running. These
+`decide` requires the exact active attempt and conditionally requires the exact
+current goal revision when the active decision is a session-goal assessment.
+The standard status preflight copies the current `goal_revision` fence whenever
+the status exposes one and omits it when no goal is defined; the closed status
+contract does not expose the active decision's assessment definition. A fully
+fenced direct invocation may likewise provide `--if-goal-revision`. The daemon
+requires that fence for a goal-assessment decision and validates it when it is
+also supplied for a general decision, so stale values fail in either case.
+`rework` requires the exact session revision and carries the active attempt when
+the session is running. These
 Procedure v2 commands are distinct from the retained v1 `return` and `reopen`
 commands; neither retained command is an alias for `rework`.
 

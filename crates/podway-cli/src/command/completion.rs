@@ -596,6 +596,7 @@ const ROUTES: &[Route] = &[
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
             &IF_ATTEMPT,
+            &IF_GOAL_REVISION,
             &OPTION,
             &REASON,
             &ACTOR,

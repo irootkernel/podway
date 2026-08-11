@@ -4172,6 +4172,12 @@ type ProcedureV2OperationDocumentV1 = (
     serde_json::Map<String, serde_json::Value>,
     serde_json::Map<String, serde_json::Value>,
 );
+type ProcedureV2DecisionOperationDocumentV1 = (
+    serde_json::Map<String, serde_json::Value>,
+    serde_json::Map<String, serde_json::Value>,
+    Option<podway_core::GoalRevisionNumberV2>,
+    bool,
+);
 
 fn procedure_v2_operation_payload_v1(
     execution: &ClaimedExecutionV1,
@@ -4224,7 +4230,7 @@ fn procedure_v2_operation_payload_v1(
         &v8_keys[..]
     } else if version == 13 {
         &v13_keys[..]
-    } else if matches!(version, 9..=12) {
+    } else if matches!(version, 9..=12 | 14) {
         &v9_keys[..]
     } else {
         &v7_keys[..]
@@ -4236,7 +4242,7 @@ fn procedure_v2_operation_payload_v1(
             .get("execution_version")
             .and_then(serde_json::Value::as_u64)
             != Some(version)
-        || (!(9..=13).contains(&version)
+        || (!matches!(version, 9..=14)
             && !object
                 .get("attached_artifact")
                 .is_some_and(serde_json::Value::is_null))
@@ -4248,6 +4254,80 @@ fn procedure_v2_operation_payload_v1(
         .and_then(serde_json::Value::as_object)
         .ok_or_else(invalid)?;
     Ok((object.clone(), payload.clone()))
+}
+
+fn procedure_v2_decision_operation_payload_v1(
+    execution: &ClaimedExecutionV1,
+    current: &GraphSessionStateV2,
+) -> Result<ProcedureV2DecisionOperationDocumentV1, StoreErrorV1> {
+    let invalid = || invariant(StoreInvariantV1::TransitionMutationShape);
+    let document: serde_json::Value =
+        serde_json::from_str(execution.canonical_execution().as_str()).map_err(|_| invalid())?;
+    let version = document
+        .get("execution_version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(invalid)?;
+    match version {
+        9 => {
+            let (document, payload) =
+                procedure_v2_operation_payload_v1(execution, "session.decide", 9)?;
+            let preconditions = document
+                .get("preconditions")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(invalid)?;
+            if preconditions.len() != 3
+                || ["attempt_id", "session_id", "session_revision"]
+                    .iter()
+                    .any(|key| !preconditions.contains_key(*key))
+            {
+                return Err(invalid());
+            }
+            Ok((document, payload, None, true))
+        }
+        14 => {
+            let (document, payload) =
+                procedure_v2_operation_payload_v1(execution, "session.decide", 14)?;
+            let preconditions = document
+                .get("preconditions")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(invalid)?;
+            if preconditions.len() != 4
+                || [
+                    "attempt_id",
+                    "goal_revision",
+                    "session_id",
+                    "session_revision",
+                ]
+                .iter()
+                .any(|key| !preconditions.contains_key(*key))
+            {
+                return Err(invalid());
+            }
+            if preconditions
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                != Some(current.trace().session_id().as_str())
+            {
+                return Err(invalid());
+            }
+            let goal_revision = match preconditions.get("goal_revision") {
+                Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::Number(value)) => value
+                    .as_u64()
+                    .filter(|revision| *revision > 0)
+                    .map(podway_core::GoalRevisionNumberV2::new),
+                _ => return Err(invalid()),
+            };
+            if preconditions
+                .get("goal_revision")
+                .is_some_and(|value| !value.is_null() && goal_revision.is_none())
+            {
+                return Err(invalid());
+            }
+            Ok((document, payload, goal_revision, false))
+        }
+        _ => Err(invalid()),
+    }
 }
 
 fn procedure_v2_goal_definition_v1(
@@ -4541,6 +4621,7 @@ fn rfc3339_millis_graph_terminal_v2(value: podway_core::UnixMillis) -> Option<St
 fn decision_record_projection_matches_v2(
     value: &serde_json::Value,
     record: &podway_core::DecisionRecordV2,
+    assessment: Option<&podway_core::GoalAssessmentRecordV2>,
 ) -> bool {
     let Some(value) = value.as_object() else {
         return false;
@@ -4552,7 +4633,8 @@ fn decision_record_projection_matches_v2(
     else {
         return false;
     };
-    value.len() == 17 + usize::from(record.actor().is_some())
+    value.len()
+        == 17 + usize::from(record.actor().is_some()) + 4 * usize::from(assessment.is_some())
         && value
             .get("trace_sequence")
             .and_then(serde_json::Value::as_u64)
@@ -4660,6 +4742,76 @@ fn decision_record_projection_matches_v2(
                         }
                     }
             })
+        && match assessment {
+            None => {
+                !value.contains_key("assessment")
+                    && !value.contains_key("assessment_mode")
+                    && !value.contains_key("goal_outcome")
+                    && !value.contains_key("criterion_results")
+            }
+            Some(assessment) => {
+                value.get("assessment").and_then(serde_json::Value::as_str)
+                    == Some("session_goal")
+                    && value
+                        .get("assessment_mode")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(assessment.mode().as_str())
+                    && value
+                        .get("goal_outcome")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(assessment.outcome().as_str())
+                    && value
+                        .get("criterion_results")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|projected| {
+                            projected.len() == assessment.criterion_results().len()
+                                && projected.iter().zip(assessment.criterion_results()).all(
+                                    |(projected, result)| {
+                                        let Some(projected) = projected.as_object() else {
+                                            return false;
+                                        };
+                                        projected.len() == 4
+                                            && projected
+                                                .get("criterion_id")
+                                                .and_then(serde_json::Value::as_str)
+                                                == Some(result.criterion_id().as_str())
+                                            && projected
+                                                .get("status")
+                                                .and_then(serde_json::Value::as_str)
+                                                == Some(result.status().as_str())
+                                            && projected
+                                                .get("reason")
+                                                .and_then(serde_json::Value::as_str)
+                                                == Some(result.reason().as_str())
+                                            && projected
+                                                .get("citations")
+                                                .and_then(serde_json::Value::as_array)
+                                                .is_some_and(|citations| {
+                                                    citations.len() == result.citations().len()
+                                                        && citations.iter().zip(result.citations()).all(
+                                                            |(projected, citation)| {
+                                                                let Some(projected) = projected.as_object() else {
+                                                                    return false;
+                                                                };
+                                                                projected.len() == 1
+                                                                    && match citation {
+                                                                        podway_core::CriterionCitationV2::Evidence(source) => projected
+                                                                            .get("reference_graph_node_id")
+                                                                            .and_then(serde_json::Value::as_str)
+                                                                            == Some(source.as_str()),
+                                                                        podway_core::CriterionCitationV2::Item(item) => projected
+                                                                            .get("local_item_id")
+                                                                            .and_then(serde_json::Value::as_str)
+                                                                            == Some(item.as_str()),
+                                                                    }
+                                                            },
+                                                        )
+                                                })
+                                    },
+                                )
+                        })
+            }
+        }
 }
 
 fn goal_revision_record_projection_matches_v2(
@@ -5142,8 +5294,8 @@ fn validate_graph_mutation_terminal_shape_v2(
                 .decisions()
                 .last()
                 .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
-            let (document, payload) =
-                procedure_v2_operation_payload_v1(execution, "session.decide", 9)?;
+            let (document, payload, expected_goal_revision, legacy_v9) =
+                procedure_v2_decision_operation_payload_v1(execution, current)?;
             let document_preconditions = document
                 .get("preconditions")
                 .and_then(serde_json::Value::as_object)
@@ -5171,8 +5323,8 @@ fn validate_graph_mutation_terminal_shape_v2(
                 ),
                 _ => return Err(invariant(StoreInvariantV1::TransitionMutationShape)),
             };
-            let expected = current
-                .decide_active_route_v2(
+            let expected = if legacy_v9 {
+                current.decide_active_route_v2(
                     preconditions
                         .expected_session_revision()
                         .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
@@ -5185,7 +5337,23 @@ fn validate_graph_mutation_terminal_shape_v2(
                     actor,
                     now,
                 )
-                .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            } else {
+                current.decide_active_route_with_goal_revision_v2(
+                    preconditions
+                        .expected_session_revision()
+                        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+                    preconditions
+                        .expected_attempt_id()
+                        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+                    option_id,
+                    fresh_attempt_id,
+                    expected_goal_revision,
+                    Some(reason),
+                    actor,
+                    now,
+                )
+            }
+            .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
             *changed
                 && session_id == current.trace().session_id()
                 && *revision_before == current.trace().revision()
@@ -5225,7 +5393,11 @@ fn validate_graph_mutation_terminal_shape_v2(
                             .unwrap_or(serde_json::Value::Null),
                     )
                 && decision.recorded_at() == now
-                && decision_record_projection_matches_v2(record, decision)
+                && decision_record_projection_matches_v2(
+                    record,
+                    decision,
+                    expected.goal_assessment_record(),
+                )
         }
         (
             crate::CommandV1::SessionReset,
@@ -5866,8 +6038,8 @@ fn graph_mutation_failure_matches_v2(
             ) else {
                 return false;
             };
-            let Ok((document, payload)) =
-                procedure_v2_operation_payload_v1(execution, "session.decide", 9)
+            let Ok((document, payload, expected_goal_revision, legacy_v9)) =
+                procedure_v2_decision_operation_payload_v1(execution, current)
             else {
                 return false;
             };
@@ -5897,15 +6069,28 @@ fn graph_mutation_failure_matches_v2(
                 }
                 _ => return false,
             };
-            let observed = current.decide_active_route_v2(
-                expected_revision,
-                expected_attempt,
-                option_id,
-                fresh_attempt_id,
-                Some(reason),
-                actor,
-                podway_core::UnixMillis::new(u64::MAX),
-            );
+            let observed = if legacy_v9 {
+                current.decide_active_route_v2(
+                    expected_revision,
+                    expected_attempt,
+                    option_id,
+                    fresh_attempt_id,
+                    Some(reason),
+                    actor,
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+            } else {
+                current.decide_active_route_with_goal_revision_v2(
+                    expected_revision,
+                    expected_attempt,
+                    option_id,
+                    fresh_attempt_id,
+                    expected_goal_revision,
+                    Some(reason),
+                    actor,
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+            };
             if matches!(error, PersistedGraphMutationFailureV2::ArtifactChanged) {
                 return observed.is_ok() && graph_has_recorded_required_artifact_v2(current);
             }
@@ -6858,9 +7043,10 @@ mod v2drw002_tests {
     use super::decision_record_projection_matches_v2;
     use podway_core::{
         ActorAttributionV2, AttemptId, AttemptNumberV2, DecisionRecordInputV2, DecisionRecordV2,
-        EvidenceReferenceSnapshotV2, GoalRevisionNumberV2, GraphNodeId, NodeDefinitionId, OptionId,
-        ProcedureSnapshotId, ReasonV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2,
-        Revision, SessionId, Sha256Digest, TraceSequenceV2, TransitionEffectV2, UnixMillis,
+        EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2, GoalOutcome, GoalRevisionNumberV2,
+        GraphNodeId, NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2,
+        ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision, SessionId, Sha256Digest,
+        TraceSequenceV2, TransitionEffectV2, UnixMillis,
     };
     use serde_json::{Value, json};
 
@@ -6957,51 +7143,129 @@ mod v2drw002_tests {
     fn v2drw002_frozen_decision_projection_requires_exact_record_and_reference_members() {
         let record = decision_record(Some("reviewer"));
         let projection = decision_projection(Some("reviewer"));
-        assert!(decision_record_projection_matches_v2(&projection, &record));
+        assert!(decision_record_projection_matches_v2(
+            &projection,
+            &record,
+            None
+        ));
 
         let mut timestamp_drift = projection.clone();
         timestamp_drift["recorded_at"] = json!("1970-01-01T00:00:00.010Z");
         assert!(!decision_record_projection_matches_v2(
             &timestamp_drift,
-            &record
+            &record,
+            None
         ));
 
         let mut assessment_injection = projection.clone();
         assessment_injection["assessment"] = json!("session_goal");
         assert!(!decision_record_projection_matches_v2(
             &assessment_injection,
-            &record
+            &record,
+            None
         ));
 
         let mut actor_drift = projection.clone();
         actor_drift["actor"] = Value::Null;
         assert!(!decision_record_projection_matches_v2(
             &actor_drift,
-            &record
+            &record,
+            None
         ));
 
         let mut reference_injection = projection.clone();
         reference_injection["references"][1]["resolved_at"] = json!("1970-01-01T00:00:00.007Z");
         assert!(!decision_record_projection_matches_v2(
             &reference_injection,
-            &record
+            &record,
+            None
         ));
 
         let mut reordered = projection.clone();
         reordered["references"].as_array_mut().unwrap().swap(0, 1);
-        assert!(!decision_record_projection_matches_v2(&reordered, &record));
+        assert!(!decision_record_projection_matches_v2(
+            &reordered, &record, None
+        ));
 
         let actorless_record = decision_record(None);
         let actorless_projection = decision_projection(None);
         assert!(decision_record_projection_matches_v2(
             &actorless_projection,
-            &actorless_record
+            &actorless_record,
+            None
         ));
         let mut null_actor = actorless_projection;
         null_actor["actor"] = Value::Null;
         assert!(!decision_record_projection_matches_v2(
             &null_actor,
-            &actorless_record
+            &actorless_record,
+            None
+        ));
+    }
+
+    #[test]
+    fn v2gol003_goal_assessment_projection_requires_exact_outcome_results_and_citations() {
+        let record = decision_record(Some("reviewer"));
+        let result = podway_core::CriterionAssessmentResultV2::new(
+            podway_core::CriterionId::new("durable-result").unwrap(),
+            podway_core::CriterionStatusV2::Satisfied,
+            podway_core::CriterionAssessmentReasonV2::new(
+                "The durable result satisfies this criterion.",
+            )
+            .unwrap(),
+            vec![
+                podway_core::CriterionCitationV2::Evidence(GraphNodeId::new("source-a").unwrap()),
+                podway_core::CriterionCitationV2::Item(
+                    podway_core::ItemId::new("assessment-note").unwrap(),
+                ),
+            ],
+        )
+        .unwrap();
+        let assessment = GoalAssessmentRecordV2::new(
+            GoalRevisionNumberV2::new(2),
+            GoalOutcome::Achieved,
+            vec![result],
+            record.evidence().clone(),
+            record.actor().cloned(),
+            record.attempt_id().clone(),
+            record.graph_node_id().clone(),
+            record.trace(),
+            record.recorded_at(),
+        )
+        .unwrap();
+        let mut projection = decision_projection(Some("reviewer"));
+        projection["assessment"] = json!("session_goal");
+        projection["assessment_mode"] = json!("assessment");
+        projection["goal_outcome"] = json!("achieved");
+        projection["criterion_results"] = json!([{
+            "criterion_id":"durable-result",
+            "status":"satisfied",
+            "reason":"The durable result satisfies this criterion.",
+            "citations":[
+                {"reference_graph_node_id":"source-a"},
+                {"local_item_id":"assessment-note"}
+            ]
+        }]);
+        assert!(decision_record_projection_matches_v2(
+            &projection,
+            &record,
+            Some(&assessment),
+        ));
+
+        let mut reordered = projection.clone();
+        reordered["criterion_results"][0]["citations"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        assert!(!decision_record_projection_matches_v2(
+            &reordered,
+            &record,
+            Some(&assessment),
+        ));
+        assert!(!decision_record_projection_matches_v2(
+            &projection,
+            &record,
+            None,
         ));
     }
 }

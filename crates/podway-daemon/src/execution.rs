@@ -23,15 +23,15 @@ use podway_core::{
     CanonicalProcedureSnapshotInputV1, CheckItemV1, ClearItemV1, CommandContextV1,
     CompleteSessionV1, CriterionAssessmentReasonV2, CriterionAssessmentResultV2,
     CriterionCitationV2, CriterionStatusV2, DecisionRecordV2, DomainCommand, DomainError,
-    DomainResult, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2,
-    GoalStatementV2, GraphPlacementV2, ItemId, ItemMutationPreconditionsV1, ItemTypeV1,
-    ItemValueV1, JobId, LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1,
-    ProcedureSourceLabelV1, ReasonV2, RemoveItemV1, ReopenSessionV1, ResetAllWorkspaceV1,
-    ResetSessionV1, ResolvedEvidenceReferenceV2, RetrySessionV1, ReturnSessionV1, Revision,
-    SessionAggregateV1, SessionAttemptV2, SessionCommandV1, SessionId, SessionLifecycle,
-    SessionTraceV2, SetItemV1, Sha256Digest, SkipSessionV1, StageSpecV1, StartReplaceSessionV1,
-    StartSessionV1, TraceSequenceV2, UnblockSessionV1, UncheckItemV1, UnixMillis, WorkspaceId,
-    apply_transition_v1, canonicalize_json_v1, required_items_satisfied,
+    DomainResult, GoalAssessmentRecordV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
+    GoalRevisionReasonV2, GoalStatementV2, GraphPlacementV2, ItemId, ItemMutationPreconditionsV1,
+    ItemTypeV1, ItemValueV1, JobId, LocalArtifactVerificationV1, ProcedureSnapshotId,
+    ProcedureSnapshotV1, ProcedureSourceLabelV1, ReasonV2, RemoveItemV1, ReopenSessionV1,
+    ResetAllWorkspaceV1, ResetSessionV1, ResolvedEvidenceReferenceV2, RetrySessionV1,
+    ReturnSessionV1, Revision, SessionAggregateV1, SessionAttemptV2, SessionCommandV1, SessionId,
+    SessionLifecycle, SessionTraceV2, SetItemV1, Sha256Digest, SkipSessionV1, StageSpecV1,
+    StartReplaceSessionV1, StartSessionV1, TraceSequenceV2, UnblockSessionV1, UncheckItemV1,
+    UnixMillis, WorkspaceId, apply_transition_v1, canonicalize_json_v1, required_items_satisfied,
 };
 use podway_presets::lookup as lookup_embedded_preset_v1;
 use podway_protocol::{
@@ -73,6 +73,7 @@ const EXECUTION_DOCUMENT_VERSION_V10: u8 = 10;
 const EXECUTION_DOCUMENT_VERSION_V11: u8 = 11;
 const EXECUTION_DOCUMENT_VERSION_V12: u8 = 12;
 const EXECUTION_DOCUMENT_VERSION_V13: u8 = 13;
+const EXECUTION_DOCUMENT_VERSION_V14: u8 = 14;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -1053,6 +1054,7 @@ fn decode_procedure_v2_mutation_execution_v1(
 
 #[derive(Clone, Debug)]
 struct AdmittedProcedureV2DecisionV1 {
+    execution_version: u8,
     selector: WorktreeSelectorWireV1,
     workspace_id: WorkspaceId,
     command: SessionDecideV2,
@@ -1064,7 +1066,7 @@ fn procedure_v2_decision_execution_document_v1(
 ) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
     let document = json!({
         "command": "session.decide",
-        "execution_version": EXECUTION_DOCUMENT_VERSION_V9,
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V14,
         "fresh_attempt_id": admitted.fresh_attempt_id,
         "payload": {
             "actor": admitted.command.actor,
@@ -1073,6 +1075,7 @@ fn procedure_v2_decision_execution_document_v1(
         },
         "preconditions": {
             "attempt_id": admitted.command.preconditions.expected_attempt_id,
+            "goal_revision": admitted.command.expected_goal_revision,
             "session_id": admitted.command.preconditions.expected_session_id,
             "session_revision": admitted.command.preconditions.expected_session_revision,
         },
@@ -1105,7 +1108,8 @@ fn decode_procedure_v2_decision_execution_v1(
             "workspace_id",
         ],
     )?;
-    if value_u64_v1(object, "execution_version")? != u64::from(EXECUTION_DOCUMENT_VERSION_V9)
+    let version = value_u64_v1(object, "execution_version")?;
+    if !matches!(version, value if value == u64::from(EXECUTION_DOCUMENT_VERSION_V9) || value == u64::from(EXECUTION_DOCUMENT_VERSION_V14))
         || value_string_v1(object, "command")? != "session.decide"
     {
         return Err(invalid_execution_v1(
@@ -1115,10 +1119,33 @@ fn decode_procedure_v2_decision_execution_v1(
     let payload = value_object_v1(object, "payload")?;
     require_exact_keys_v1(payload, &["actor", "option_id", "reason"])?;
     let preconditions = value_object_v1(object, "preconditions")?;
-    require_exact_keys_v1(
-        preconditions,
-        &["attempt_id", "session_id", "session_revision"],
-    )?;
+    match version {
+        value if value == u64::from(EXECUTION_DOCUMENT_VERSION_V9) => require_exact_keys_v1(
+            preconditions,
+            &["attempt_id", "session_id", "session_revision"],
+        )?,
+        value if value == u64::from(EXECUTION_DOCUMENT_VERSION_V14) => require_exact_keys_v1(
+            preconditions,
+            &[
+                "attempt_id",
+                "goal_revision",
+                "session_id",
+                "session_revision",
+            ],
+        )?,
+        _ => unreachable!("decision execution version was admitted above"),
+    }
+    let expected_goal_revision = if version == u64::from(EXECUTION_DOCUMENT_VERSION_V14) {
+        let value = value_optional_typed_v1::<u64>(preconditions, "goal_revision")?;
+        if value == Some(0) {
+            return Err(invalid_execution_v1(
+                "Procedure v2 decision goal revision is invalid",
+            ));
+        }
+        value
+    } else {
+        None
+    };
     let command = SessionDecideV2 {
         option_id: value_typed_v1(payload, "option_id")?,
         reason: value_string_v1(payload, "reason")?.to_owned(),
@@ -1131,6 +1158,7 @@ fn decode_procedure_v2_decision_execution_v1(
             )?),
             expected_attempt_id: value_typed_v1(preconditions, "attempt_id")?,
         },
+        expected_goal_revision,
     };
     ReasonV2::new(command.reason.clone())
         .map_err(|_| invalid_execution_v1("Procedure v2 decision reason is invalid"))?;
@@ -1141,6 +1169,9 @@ fn decode_procedure_v2_decision_execution_v1(
         .transpose()
         .map_err(|_| invalid_execution_v1("Procedure v2 decision actor is invalid"))?;
     Ok(AdmittedProcedureV2DecisionV1 {
+        execution_version: u8::try_from(version).map_err(|_| {
+            invalid_execution_v1("Procedure v2 decision execution version is invalid")
+        })?,
         selector: serde_json::from_value(value_v1(object, "selector")?.clone())
             .map_err(|_| invalid_execution_v1("Procedure v2 decision selector is invalid"))?,
         workspace_id: value_typed_v1(object, "workspace_id")?,
@@ -1722,7 +1753,10 @@ fn criterion_assessment_record_projection_v1(
     Ok(value)
 }
 
-fn decision_record_projection_v1(record: &DecisionRecordV2) -> Result<Value, ExecutionErrorV1> {
+fn decision_record_projection_v1(
+    record: &DecisionRecordV2,
+    assessment: Option<&GoalAssessmentRecordV2>,
+) -> Result<Value, ExecutionErrorV1> {
     let references = record
         .evidence()
         .references()
@@ -1788,6 +1822,48 @@ fn decision_record_projection_v1(record: &DecisionRecordV2) -> Result<Value, Exe
             .as_object_mut()
             .expect("decision record projection is an object")
             .insert("actor".to_owned(), json!(actor.as_str()));
+    }
+    if let Some(assessment) = assessment {
+        let criterion_results = assessment
+            .criterion_results()
+            .iter()
+            .map(|result| {
+                let citations = result
+                    .citations()
+                    .iter()
+                    .map(|citation| match citation {
+                        CriterionCitationV2::Evidence(graph_node_id) => json!({
+                            "reference_graph_node_id": graph_node_id,
+                        }),
+                        CriterionCitationV2::Item(item_id) => json!({
+                            "local_item_id": item_id,
+                        }),
+                    })
+                    .collect::<Vec<_>>();
+                json!({
+                    "criterion_id": result.criterion_id(),
+                    "status": result.status().as_str(),
+                    "reason": result.reason().as_str(),
+                    "citations": citations,
+                })
+            })
+            .collect::<Vec<_>>();
+        let object = value
+            .as_object_mut()
+            .expect("decision record projection is an object");
+        object.insert("assessment".to_owned(), json!("session_goal"));
+        object.insert(
+            "assessment_mode".to_owned(),
+            json!(assessment.mode().as_str()),
+        );
+        object.insert(
+            "goal_outcome".to_owned(),
+            json!(assessment.outcome().as_str()),
+        );
+        object.insert(
+            "criterion_results".to_owned(),
+            Value::Array(criterion_results),
+        );
     }
     Ok(value)
 }
@@ -4328,7 +4404,12 @@ where
             let version = serde_json::from_str::<Value>(canonical_execution.as_str())
                 .ok()
                 .and_then(|value| value.get("execution_version").and_then(Value::as_u64));
-            if version != Some(u64::from(EXECUTION_DOCUMENT_VERSION_V9)) {
+            if !matches!(
+                version,
+                Some(value)
+                    if value == u64::from(EXECUTION_DOCUMENT_VERSION_V9)
+                        || value == u64::from(EXECUTION_DOCUMENT_VERSION_V14)
+            ) {
                 return Ok(None);
             }
             let admitted = decode_procedure_v2_decision_execution_v1(canonical_execution.as_str())?;
@@ -4373,6 +4454,27 @@ where
                 actual: Some(state.trace().session_id().clone()),
             });
         }
+        let active = state
+            .trace()
+            .active_attempt()
+            .ok_or_else(|| invalid_execution_v1("Procedure v2 decision has no active attempt"))?;
+        let goal_assessment = state
+            .snapshot()
+            .graph_nodes()
+            .iter()
+            .find(|node| node.graph_node_id() == active.graph_node_id())
+            .ok_or_else(|| invalid_execution_v1("Procedure v2 decision node is absent"))?
+            .goal_assessment();
+        let exact_active_fences = state.trace().revision()
+            == command.preconditions.expected_session_revision
+            && active.attempt_id() == &command.preconditions.expected_attempt_id;
+        if exact_active_fences && goal_assessment && command.expected_goal_revision.is_none() {
+            return Err(ExecutionErrorV1::BoundaryDomain(
+                DomainError::InvalidState {
+                    reason: "goal-assessment decisions require a goal revision precondition",
+                },
+            ));
+        }
         ReasonV2::new(command.reason.clone()).map_err(ExecutionErrorV1::BoundaryDomain)?;
         command
             .actor
@@ -4381,6 +4483,7 @@ where
             .transpose()
             .map_err(ExecutionErrorV1::BoundaryDomain)?;
         let admitted = AdmittedProcedureV2DecisionV1 {
+            execution_version: EXECUTION_DOCUMENT_VERSION_V14,
             selector: request.selector().clone(),
             workspace_id: binding.identity().workspace_uuid().clone(),
             command: command.clone(),
@@ -4623,7 +4726,10 @@ where
                 )?;
                 self.execute_procedure_v2_mutation_claimed(&workspace, &claimed, admitted, now)?
             }
-            version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V9) => {
+            version
+                if version == u64::from(EXECUTION_DOCUMENT_VERSION_V9)
+                    || version == u64::from(EXECUTION_DOCUMENT_VERSION_V14) =>
+            {
                 let admitted = decode_procedure_v2_decision_execution_v1(
                     claimed.execution().canonical_execution().as_str(),
                 )?;
@@ -5063,15 +5169,36 @@ where
             .map(ActorAttributionV2::new)
             .transpose()
             .map_err(|_| invalid_execution_v1("Procedure v2 decision actor is invalid"))?;
-        let outcome = match state.decide_active_route_v2(
-            admitted.command.preconditions.expected_session_revision,
-            &admitted.command.preconditions.expected_attempt_id,
-            admitted.command.option_id,
-            admitted.fresh_attempt_id,
-            Some(reason),
-            actor,
-            now,
-        ) {
+        let outcome = match admitted.execution_version {
+            EXECUTION_DOCUMENT_VERSION_V9 => state.decide_active_route_v2(
+                admitted.command.preconditions.expected_session_revision,
+                &admitted.command.preconditions.expected_attempt_id,
+                admitted.command.option_id,
+                admitted.fresh_attempt_id,
+                Some(reason),
+                actor,
+                now,
+            ),
+            EXECUTION_DOCUMENT_VERSION_V14 => state.decide_active_route_with_goal_revision_v2(
+                admitted.command.preconditions.expected_session_revision,
+                &admitted.command.preconditions.expected_attempt_id,
+                admitted.command.option_id,
+                admitted.fresh_attempt_id,
+                admitted
+                    .command
+                    .expected_goal_revision
+                    .map(GoalRevisionNumberV2::new),
+                Some(reason),
+                actor,
+                now,
+            ),
+            _ => {
+                return Err(invalid_execution_v1(
+                    "Procedure v2 decision execution version is invalid",
+                ));
+            }
+        };
+        let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
                 return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
@@ -5091,7 +5218,10 @@ where
             }
         }
         let operation = PersistedGraphTerminalOperationV2::decide(
-            decision_record_projection_v1(outcome.decision_record())?,
+            decision_record_projection_v1(
+                outcome.decision_record(),
+                outcome.goal_assessment_record(),
+            )?,
             outcome.to_attempt_id().clone(),
         )
         .map_err(|_| invalid_execution_v1("Procedure v2 decision operation cannot be persisted"))?;
@@ -7405,12 +7535,14 @@ mod tests {
     #[test]
     fn v2drw001_decision_execution_freezes_every_semantic_field_and_fresh_identity() {
         let admitted = AdmittedProcedureV2DecisionV1 {
+            execution_version: EXECUTION_DOCUMENT_VERSION_V14,
             selector: WorktreeSelectorWireV1::new(b"/tmp/worktree", "/tmp/worktree", None).unwrap(),
             workspace_id: WorkspaceId::new("00000000-0000-4000-8000-000000000924").unwrap(),
             command: SessionDecideV2 {
                 option_id: podway_core::OptionId::new("accept").unwrap(),
                 reason: "The resolved evidence supports this route.".to_owned(),
                 actor: Some("reviewer".to_owned()),
+                expected_goal_revision: None,
                 preconditions: SessionMutationPreconditionsWireV1 {
                     expected_session_id: SessionId::new("00000000-0000-4000-8000-000000000922")
                         .unwrap(),
@@ -7423,8 +7555,29 @@ mod tests {
         };
         let canonical = procedure_v2_decision_execution_document_v1(&admitted).unwrap();
         let decoded = decode_procedure_v2_decision_execution_v1(canonical.as_str()).unwrap();
+        assert_eq!(decoded.execution_version, EXECUTION_DOCUMENT_VERSION_V14);
         assert_eq!(decoded.command, admitted.command);
         assert_eq!(decoded.fresh_attempt_id, admitted.fresh_attempt_id);
+
+        let document: Value = serde_json::from_str(canonical.as_str()).unwrap();
+        assert_eq!(document["execution_version"], json!(14));
+        assert_eq!(document["preconditions"]["goal_revision"], Value::Null);
+
+        let mut legacy = document.clone();
+        legacy["execution_version"] = json!(9);
+        legacy["preconditions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("goal_revision");
+        let legacy = decode_procedure_v2_decision_execution_v1(&legacy.to_string()).unwrap();
+        assert_eq!(legacy.execution_version, EXECUTION_DOCUMENT_VERSION_V9);
+        assert_eq!(legacy.command.expected_goal_revision, None);
+
+        let mut zero_goal_revision = document.clone();
+        zero_goal_revision["preconditions"]["goal_revision"] = json!(0);
+        assert!(
+            decode_procedure_v2_decision_execution_v1(&zero_goal_revision.to_string()).is_err()
+        );
 
         let mut missing_fresh: Value = serde_json::from_str(canonical.as_str()).unwrap();
         missing_fresh["fresh_attempt_id"] = Value::Null;

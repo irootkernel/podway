@@ -757,6 +757,7 @@ pub struct SessionDecideV2 {
     pub reason: String,
     pub actor: Option<String>,
     pub preconditions: SessionMutationPreconditionsWireV1,
+    pub expected_goal_revision: Option<u64>,
 }
 
 /// A closed, bounded `session.rework` request payload.
@@ -1538,7 +1539,11 @@ impl ProcedureV2MutationRequestV1 {
         let (selector, command) = match envelope.command().as_str() {
             "session.decide" => {
                 require_envelope(envelope, "session.decide", OperationV1::Mutate, true)?;
-                let preconditions = require_session_preconditions(envelope.preconditions())?;
+                let preconditions = require_session_preconditions_v2(envelope.preconditions())?;
+                let expected_goal_revision = envelope
+                    .preconditions()
+                    .goal_revision()
+                    .map(GoalRevisionNumberV2::get);
                 let payload: SessionDecidePayloadV2 = parse_payload(envelope)?;
                 validate_reason_v2(&payload.reason)?;
                 validate_actor_v2(payload.actor.as_deref())?;
@@ -1549,6 +1554,7 @@ impl ProcedureV2MutationRequestV1 {
                         reason: payload.reason,
                         actor: payload.actor,
                         preconditions,
+                        expected_goal_revision,
                     }),
                 )
             }
@@ -2889,7 +2895,17 @@ pub fn canonical_procedure_v2_mutation_identity_v1(
 ) -> Result<String, SliceErrorV1> {
     let (preconditions, payload) = match request.command() {
         ProcedureV2MutationCommandV1::SessionDecide(command) => (
-            session_preconditions_json(&command.preconditions),
+            {
+                let mut preconditions = session_preconditions_json(&command.preconditions);
+                if let Some(goal_revision) = command.expected_goal_revision {
+                    insert_canonical_field_v1(
+                        &mut preconditions,
+                        "goal_revision",
+                        json!(goal_revision),
+                    )?;
+                }
+                preconditions
+            },
             json!({
                 "option_id": &command.option_id,
                 "reason": &command.reason,

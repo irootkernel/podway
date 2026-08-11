@@ -5,12 +5,13 @@ use std::sync::Arc;
 
 use podway_core::{
     ActorAttributionV2, AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
-    CanonicalProcedureJsonV1, CriterionAssessmentResultV2, CriterionCitationV2, GoalDefinitionV2,
-    GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalRevisionRecordV2, GoalStatementV2,
-    GraphNodeId, ItemId, NodeDefinitionId, NodeKindV2, OptionId, ProcedureSnapshotId,
-    ProcedureSourceKindV1, ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2, SessionId,
-    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
-    canonicalize_json_v1, verify_canonical_json_v1,
+    CanonicalProcedureJsonV1, CriterionAssessmentResultV2, CriterionCitationV2,
+    GoalAssessmentRecordV2, GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2,
+    GoalRevisionReasonV2, GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId,
+    NodeDefinitionId, NodeKindV2, OptionId, ProcedureSnapshotId, ProcedureSourceKindV1,
+    ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle,
+    SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, canonicalize_json_v1,
+    verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
@@ -710,6 +711,7 @@ pub struct GraphActionSkipOutcomeV2 {
 pub struct GraphDecisionOutcomeV2 {
     state: GraphSessionStateV2,
     decision: podway_core::DecisionRecordV2,
+    goal_assessment: Option<GoalAssessmentRecordV2>,
     declared_rework: Option<podway_core::ReworkRecordV2>,
     from_graph_node_id: GraphNodeId,
     from_attempt_id: AttemptId,
@@ -834,6 +836,9 @@ impl GraphDecisionOutcomeV2 {
     }
     pub fn decision_record(&self) -> &podway_core::DecisionRecordV2 {
         &self.decision
+    }
+    pub fn goal_assessment_record(&self) -> Option<&GoalAssessmentRecordV2> {
+        self.goal_assessment.as_ref()
     }
     pub fn declared_rework_record(&self) -> Option<&podway_core::ReworkRecordV2> {
         self.declared_rework.as_ref()
@@ -1739,8 +1744,141 @@ impl GraphSessionStateV2 {
         if now < active_metadata.started_at() {
             return Err(invalid("Procedure v2 decision timestamp regressed").into());
         }
+        if self
+            .snapshot
+            .graph_node(active.graph_node_id())
+            .is_some_and(|node| node.goal_assessment())
+        {
+            return Err(
+                GraphMutationErrorV2::GoalAssessmentDecisionRequiresAssessment {
+                    graph_node_id: active.graph_node_id().clone(),
+                },
+            );
+        }
+        self.decide_active_route_with_goal_revision_v2(
+            expected_session_revision,
+            expected_attempt_id,
+            selected_option,
+            fresh_attempt_id,
+            None,
+            reason,
+            actor,
+            now,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn decide_active_route_with_goal_revision_v2(
+        &self,
+        expected_session_revision: Revision,
+        expected_attempt_id: &AttemptId,
+        selected_option: OptionId,
+        fresh_attempt_id: AttemptId,
+        expected_goal_revision: Option<GoalRevisionNumberV2>,
+        reason: Option<ReasonV2>,
+        actor: Option<ActorAttributionV2>,
+        now: UnixMillis,
+    ) -> Result<GraphDecisionOutcomeV2, GraphMutationErrorV2> {
+        let active =
+            self.require_running_active_v2(expected_session_revision, expected_attempt_id)?;
+        let active_metadata = self
+            .attempt_metadata
+            .iter()
+            .find(|metadata| metadata.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 attempt metadata is absent"))?;
+        if now < active_metadata.started_at() {
+            return Err(invalid("Procedure v2 decision timestamp regressed").into());
+        }
         let from_graph_node_id = active.graph_node_id().clone();
         let from_attempt_id = active.attempt_id().clone();
+        let is_goal_assessment = self
+            .snapshot
+            .graph_node(active.graph_node_id())
+            .is_some_and(|node| node.goal_assessment());
+        if is_goal_assessment && expected_goal_revision.is_none() {
+            return Err(invalid(
+                "Procedure v2 goal-assessment decision requires a goal revision fence",
+            )
+            .into());
+        }
+        if let Some(expected_goal_revision) = expected_goal_revision {
+            let current_goal_revision = self
+                .goal_state
+                .current_revision()
+                .ok_or(GraphMutationErrorV2::SessionGoalMissing)?;
+            if expected_goal_revision != current_goal_revision {
+                return Err(GraphMutationErrorV2::GoalRevisionStale {
+                    expected: expected_goal_revision,
+                    actual: current_goal_revision,
+                });
+            }
+            let Some(actual_goal_revision) = active.goal_revision() else {
+                return Err(invalid(
+                    "fenced Procedure v2 decision attempt lacks its goal revision binding",
+                )
+                .into());
+            };
+            if actual_goal_revision != expected_goal_revision {
+                return Err(GraphMutationErrorV2::GoalRevisionStale {
+                    expected: expected_goal_revision,
+                    actual: actual_goal_revision,
+                });
+            }
+        }
+        let goal_assessment_state = if is_goal_assessment {
+            let goal_revision = self
+                .goal_state
+                .current_revision()
+                .ok_or(GraphMutationErrorV2::SessionGoalMissing)?;
+            debug_assert_eq!(active.goal_revision(), Some(goal_revision));
+            let revision = self
+                .goal_state
+                .revisions()
+                .iter()
+                .find(|revision| revision.revision() == goal_revision)
+                .ok_or(GraphMutationErrorV2::SessionGoalMissing)?;
+            let attempt_state = self
+                .goal_state
+                .attempt_assessments()
+                .iter()
+                .find(|assessment| assessment.attempt_id() == active.attempt_id());
+            let missing_criterion_ids = revision
+                .criteria()
+                .criteria()
+                .iter()
+                .filter(|criterion| {
+                    !attempt_state.is_some_and(|assessment| {
+                        assessment
+                            .results()
+                            .iter()
+                            .any(|state| state.result().criterion_id() == criterion.id())
+                    })
+                })
+                .map(|criterion| criterion.id().clone())
+                .collect::<Vec<_>>();
+            if !missing_criterion_ids.is_empty() {
+                return Err(GraphMutationErrorV2::CriterionResultMissing {
+                    missing_criterion_ids,
+                });
+            }
+            let attempt_state = attempt_state
+                .ok_or_else(|| invalid("complete Procedure v2 goal assessment is absent"))?;
+            let outcome =
+                if attempt_state.results()[0].result().mode()
+                    == podway_core::CriterionAssessmentModeV2::Applicability
+                {
+                    GoalOutcome::Superseded
+                } else if attempt_state.results().iter().all(|state| {
+                    state.result().status() == podway_core::CriterionStatusV2::Satisfied
+                }) {
+                    GoalOutcome::Achieved
+                } else {
+                    GoalOutcome::NotAchieved
+                };
+            Some((goal_revision, attempt_state, outcome))
+        } else {
+            None
+        };
         let transition = self.workflow_memory.decide_active_route_v2(
             &self.snapshot,
             &self.trace,
@@ -1750,6 +1888,7 @@ impl GraphSessionStateV2 {
             self.goal_state.current_revision(),
             reason,
             actor,
+            goal_assessment_state.map(|(_, _, outcome)| outcome),
             now,
         )?;
         let to_graph_node_id = transition.decision.route_target().clone();
@@ -1800,6 +1939,38 @@ impl GraphSessionStateV2 {
             })
             .collect::<Result<Vec<_>, GraphMutationErrorV2>>()?;
         let decision = transition.decision.clone();
+        let goal_assessment = goal_assessment_state
+            .map(|(goal_revision, attempt_state, outcome)| {
+                GoalAssessmentRecordV2::new(
+                    goal_revision,
+                    outcome,
+                    attempt_state
+                        .results()
+                        .iter()
+                        .map(|state| state.result().clone())
+                        .collect(),
+                    decision.evidence().clone(),
+                    decision.actor().cloned(),
+                    decision.attempt_id().clone(),
+                    decision.graph_node_id().clone(),
+                    decision.trace(),
+                    decision.recorded_at(),
+                )
+                .map_err(GraphMutationErrorV2::Domain)
+            })
+            .transpose()?;
+        let goal_state = if let Some(assessment) = &goal_assessment {
+            let mut assessments = self.goal_state.assessments().to_vec();
+            assessments.push(assessment.clone());
+            GoalStateV2::new(
+                self.goal_state.current_revision(),
+                self.goal_state.revisions().to_vec(),
+                self.goal_state.attempt_assessments().to_vec(),
+                assessments,
+            )?
+        } else {
+            self.goal_state.clone()
+        };
         let state = Self::new_with_goal_state(
             self.workspace_revision
                 .checked_next()
@@ -1810,7 +1981,7 @@ impl GraphSessionStateV2 {
             counters,
             metadata,
             transition.memory,
-            self.goal_state.clone(),
+            goal_state,
             self.created_at,
             None,
             None,
@@ -1819,6 +1990,7 @@ impl GraphSessionStateV2 {
         Ok(GraphDecisionOutcomeV2 {
             state,
             decision,
+            goal_assessment,
             declared_rework,
             from_graph_node_id,
             from_attempt_id,

@@ -90,6 +90,7 @@ enum Reply {
     WorkspaceError,
     GoalDefinition,
     StatusV2,
+    StatusV2GoalDefined,
     StatusV2Verbose,
     SharedMutationV2,
     SharedMutationV1,
@@ -234,7 +235,7 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             },
             "warnings": []
         }),
-        Reply::StatusV2 => {
+        Reply::StatusV2 | Reply::StatusV2GoalDefined => {
             let mut fixture: Value = serde_json::from_str(include_str!(
                 "../../../tests/fixtures/v2/protocol/result-families.json"
             ))
@@ -243,6 +244,32 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             result["session"]["id"] = json!(SESSION_ID);
             result["session"]["revision"] = json!(7);
             result["current"]["attempt"]["attempt_id"] = json!(ATTEMPT_ID);
+            if matches!(reply, Reply::StatusV2GoalDefined) {
+                result["current"]["node"] = json!({
+                    "node_definition_id": "review",
+                    "graph_node_id": "review",
+                    "node_type": "decision"
+                });
+                result["goal_tracking"] = json!(true);
+                result["goal_defined"] = json!(true);
+                result["goal_revision"] = json!(1);
+                result["goal"] = json!({
+                    "revision": 1,
+                    "statement": "Ship the v2 platform CLI.",
+                    "criteria": [{
+                        "criterion_id": "stable-json",
+                        "statement": "JSON is stable.",
+                        "status": "satisfied"
+                    }],
+                    "assessment_mode": "assessment",
+                    "determined_outcome": "achieved"
+                });
+                result["allowed_option_ids"] = json!(["approve"]);
+                result
+                    .as_object_mut()
+                    .expect("status result is an object")
+                    .remove("terminal");
+            }
             result["items"] = json!([{
                 "item_id": "note",
                 "type": "text",
@@ -583,6 +610,22 @@ fn reserved_v2_commands_shape_exact_requests_and_preserve_unsupported_errors() {
             json!({ "session_id": SESSION_ID, "session_revision": 7, "attempt_id": ATTEMPT_ID }),
         ),
         (
+            "session.decide",
+            vec![
+                "--if-attempt",
+                ATTEMPT_ID,
+                "--if-goal-revision",
+                "1",
+                "decide",
+                "--option",
+                "approve",
+                "--reason",
+                "the goal assessment determines this option",
+            ],
+            json!({ "option_id": "approve", "reason": "the goal assessment determines this option" }),
+            json!({ "session_id": SESSION_ID, "session_revision": 7, "attempt_id": ATTEMPT_ID, "goal_revision": 1 }),
+        ),
+        (
             "session.rework",
             vec![
                 "--if-attempt",
@@ -726,6 +769,33 @@ fn v2_status_preflight_supplies_omitted_attempt_fences() {
     assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
     assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
     assert_eq!(requests[1]["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert!(requests[1]["preconditions"].get("goal_revision").is_none());
+
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![Reply::StatusV2GoalDefined, Reply::Unsupported],
+    );
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--idempotency-key".to_owned(),
+        "v2gol003-assessment-decide-key".to_owned(),
+        "decide".to_owned(),
+        "--option".to_owned(),
+        "approve".to_owned(),
+        "--reason".to_owned(),
+        "The recorded criteria determine this outcome.".to_owned(),
+    ];
+    let output = fixture.run(&arguments);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1]["command"], "session.decide");
+    assert_eq!(requests[1]["preconditions"]["goal_revision"], 1);
 
     let fixture = Fixture::new();
     let daemon =

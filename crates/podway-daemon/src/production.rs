@@ -4710,6 +4710,24 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
                 DispatchErrorDetailsV1::default().with_criterion_not_found(criterion_id.clone()),
             )
         }
+        PersistedGraphMutationFailureV2::CriterionResultMissing {
+            missing_criterion_ids,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::CriterionResultMissing).with_details(
+            DispatchErrorDetailsV1::default()
+                .with_criterion_result_missing(missing_criterion_ids.clone()),
+        ),
+        PersistedGraphMutationFailureV2::GoalAssessmentOutcomeNotAllowed {
+            option_id,
+            determined_outcome,
+            allowed_option_ids,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::GoalAssessmentOutcomeNotAllowed)
+            .with_details(
+                DispatchErrorDetailsV1::default().with_goal_assessment_outcome_not_allowed(
+                    option_id.clone(),
+                    determined_outcome.clone(),
+                    allowed_option_ids.clone(),
+                ),
+            ),
         PersistedGraphMutationFailureV2::CriterionModeMixed {
             criterion_id,
             expected_mode,

@@ -18,15 +18,18 @@ use podway_core::{
     SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
     TransitionEffectV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
+use podway_store::CanonicalExecutionJsonV1;
 use podway_store::{
-    AdmitOutcomeV1, AdmitRequestV1, AttemptCriterionAssessmentStateV2, AttemptMetadataV2,
-    AttemptWorkflowMemoryV2, CriterionAssessmentStateV2, DurableWorktreeIdentityV1,
-    EvidenceResolutionStateV2, GoalStateV2, GraphMutationErrorV2, GraphNodeCounterV2,
-    GraphSessionStateV2, IdempotencyKeyV1, ItemSlotStateV2, ProcedureSnapshotV2,
-    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
-    StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1, StoreGraphStateContractV2,
-    StoreIntegrityCheckV1, StoreUnavailableReasonV1, ValidatedWorkspaceRootV1, WorkerIdV1,
-    WorkflowMemoryStateV2,
+    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, AttemptCriterionAssessmentStateV2,
+    AttemptMetadataV2, AttemptWorkflowMemoryV2, CriterionAssessmentStateV2,
+    DurableWorktreeIdentityV1, EvidenceResolutionStateV2, GoalStateV2, GraphMutationErrorV2,
+    GraphNodeCounterV2, GraphSessionStateV2, IdempotencyKeyV1, ItemSlotStateV2, JobStateV1,
+    PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2, PersistedResponseContextV1,
+    ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
+    StoreContractV1, StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1,
+    StoreGraphMutationContractV2, StoreGraphStateContractV2, StoreIntegrityCheckV1,
+    StoreReadContractV1, StoreUnavailableReasonV1, TerminalResultV1, ValidatedWorkspaceRootV1,
+    WorkerIdV1, WorkflowMemoryStateV2,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -1973,6 +1976,338 @@ fn criterion_mutation_persists_attribution_and_citations_atomically() {
     let result = &loaded.goal_state().attempt_assessments()[0].results()[0];
     assert_eq!(result.actor(), assessment.actor());
     assert_eq!(result.result().citations(), assessment.result().citations());
+}
+
+#[test]
+fn goal_assessment_decision_requires_complete_results_and_the_derived_outcome() {
+    let incomplete = assessment_state(6, true, vec![partial_criterion_state()]);
+    assert_eq!(
+        incomplete.decide_active_route_with_goal_revision_v2(
+            Revision::new(6),
+            &attempt_id(2),
+            OptionId::new("achieved").unwrap(),
+            attempt_id(3),
+            Some(GoalRevisionNumberV2::FIRST),
+            Some(ReasonV2::new("Every criterion is satisfied.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(60),
+        ),
+        Err(GraphMutationErrorV2::CriterionResultMissing {
+            missing_criterion_ids: vec![criterion("a-safety")],
+        })
+    );
+
+    let complete = assessment_state(7, true, vec![complete_criterion_state()]);
+    assert!(matches!(
+        complete.decide_active_route_v2(
+            Revision::new(7),
+            &attempt_id(2),
+            OptionId::new("achieved").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Every criterion is satisfied.").unwrap()),
+            None,
+            UnixMillis::new(60),
+        ),
+        Err(GraphMutationErrorV2::GoalAssessmentDecisionRequiresAssessment {
+            graph_node_id
+        }) if graph_node_id == node("assess")
+    ));
+    assert!(matches!(
+        complete.decide_active_route_with_goal_revision_v2(
+            Revision::new(7),
+            &attempt_id(2),
+            OptionId::new("achieved").unwrap(),
+            attempt_id(3),
+            None,
+            Some(ReasonV2::new("Every criterion is satisfied.").unwrap()),
+            None,
+            UnixMillis::new(60),
+        ),
+        Err(GraphMutationErrorV2::InvalidState(_))
+    ));
+    assert_eq!(
+        complete.decide_active_route_with_goal_revision_v2(
+            Revision::new(7),
+            &attempt_id(2),
+            OptionId::new("achieved").unwrap(),
+            attempt_id(3),
+            Some(GoalRevisionNumberV2::new(2)),
+            Some(ReasonV2::new("Every criterion is satisfied.").unwrap()),
+            None,
+            UnixMillis::new(60),
+        ),
+        Err(GraphMutationErrorV2::GoalRevisionStale {
+            expected: GoalRevisionNumberV2::new(2),
+            actual: GoalRevisionNumberV2::FIRST,
+        })
+    );
+    assert_eq!(
+        complete.decide_active_route_with_goal_revision_v2(
+            Revision::new(7),
+            &attempt_id(2),
+            OptionId::new("not-achieved").unwrap(),
+            attempt_id(3),
+            Some(GoalRevisionNumberV2::FIRST),
+            Some(ReasonV2::new("Every criterion is satisfied.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(60),
+        ),
+        Err(GraphMutationErrorV2::GoalAssessmentOutcomeNotAllowed {
+            option_id: OptionId::new("not-achieved").unwrap(),
+            determined_outcome: GoalOutcome::Achieved,
+            allowed_option_ids: vec![OptionId::new("achieved").unwrap()],
+        })
+    );
+}
+
+#[test]
+fn legacy_v9_goal_assessment_failure_receipt_recomputes_and_survives_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    let current = assessment_state(7, true, vec![complete_criterion_state()]);
+    store
+        .create_graph_session_v2(&identity(), current.clone())
+        .unwrap();
+    let active = current.trace().active_attempt().unwrap();
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "command":"session.decide",
+            "execution_version":9,
+            "fresh_attempt_id":attempt_id(3),
+            "payload":{
+                "actor":null,
+                "option_id":"achieved",
+                "reason":"Every criterion is satisfied."
+            },
+            "preconditions":{
+                "attempt_id":active.attempt_id(),
+                "session_id":current.trace().session_id(),
+                "session_revision":current.trace().revision().get()
+            },
+            "selector":{},
+            "workspace_id":identity().workspace_uuid()
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let job_id = JobId::new("00000000-0000-4000-8000-000000000990").unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::SessionDecide,
+        IdempotencyKeyV1::new("v2gol003-legacy-v9-assessment").unwrap(),
+        job_id.clone(),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(current.trace().revision()),
+            Some(active.attempt_id().clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+        digest('9'),
+        UnixMillis::new(55),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        current.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            "00000000-0000-4000-8000-000000000991",
+            "session.decide",
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-goal",
+            0,
+        )
+        .unwrap(),
+    );
+    assert!(matches!(
+        store.admit(&identity(), request),
+        Ok(AdmitOutcomeV1::New(_))
+    ));
+    let claimed = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2gol003-legacy-v9-worker").unwrap(),
+            UnixMillis::new(56),
+        )
+        .unwrap()
+        .unwrap();
+    let failure = PersistedGraphMutationFailureV2::GoalAssessmentDecisionRequiresAssessment {
+        graph_node_id: node("assess"),
+    };
+    let operation = PersistedGraphTerminalOperationV2::failure(failure.clone()).unwrap();
+    store
+        .commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            None,
+            TerminalResultV1::Failure(podway_core::DomainError::InvalidState {
+                reason: "Procedure v2 graph mutation failed",
+            }),
+            operation.clone(),
+            UnixMillis::new(57),
+        )
+        .unwrap();
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    let job = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(job.state(), JobStateV1::Failed);
+    assert_eq!(
+        job.terminal_receipt()
+            .unwrap()
+            .graph_session_projection()
+            .unwrap()
+            .operation(),
+        Some(&operation)
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    let reopened_job = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(reopened_job.state(), JobStateV1::Failed);
+    assert!(matches!(
+        reopened_job
+            .terminal_receipt()
+            .unwrap()
+            .graph_session_projection()
+            .unwrap()
+            .operation(),
+        Some(PersistedGraphTerminalOperationV2::Failure { error }) if *error == failure
+    ));
+}
+
+#[test]
+fn goal_assessment_decision_atomically_persists_the_decision_and_immutable_assessment() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    let initial = assessment_state(7, true, vec![complete_criterion_state()]);
+    store
+        .create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+
+    let outcome = initial
+        .decide_active_route_with_goal_revision_v2(
+            Revision::new(7),
+            &attempt_id(2),
+            OptionId::new("achieved").unwrap(),
+            attempt_id(3),
+            Some(GoalRevisionNumberV2::FIRST),
+            Some(ReasonV2::new("Every criterion is satisfied.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(60),
+        )
+        .unwrap();
+    assert_eq!(outcome.state(), &decided_state(8, false));
+    let assessment = outcome.goal_assessment_record().unwrap();
+    assert_eq!(assessment.outcome(), GoalOutcome::Achieved);
+    assert_eq!(assessment.decision_attempt_id(), &attempt_id(2));
+    assert_eq!(assessment.evidence(), outcome.decision_record().evidence());
+    assert_eq!(assessment.actor(), outcome.decision_record().actor());
+    assert_eq!(
+        assessment.recorded_at(),
+        outcome.decision_record().recorded_at()
+    );
+
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            Revision::new(7),
+            Revision::new(7),
+            outcome.state().clone(),
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    let loaded = reopened
+        .read_graph_session_v2(&identity())
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded, *outcome.state());
+    assert_eq!(loaded.goal_state().assessments(), &[assessment.clone()]);
+}
+
+#[test]
+fn goal_assessment_decision_derives_all_three_outcomes_from_homogeneous_results() {
+    let cases = [
+        (
+            CriterionStatusV2::Satisfied,
+            CriterionStatusV2::Unsatisfied,
+            "not-achieved",
+            GoalOutcome::NotAchieved,
+        ),
+        (
+            CriterionStatusV2::NotApplicable,
+            CriterionStatusV2::NotApplicable,
+            "superseded",
+            GoalOutcome::Superseded,
+        ),
+    ];
+    for (first_status, second_status, option, expected_outcome) in cases {
+        let criterion_state = AttemptCriterionAssessmentStateV2::new(
+            attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                criterion_result_at("z-proof", first_status, Vec::new(), 40),
+                criterion_result_at("a-safety", second_status, Vec::new(), 50),
+            ],
+        )
+        .unwrap();
+        let state = assessment_state(7, true, vec![criterion_state]);
+        let outcome = state
+            .decide_active_route_with_goal_revision_v2(
+                Revision::new(7),
+                &attempt_id(2),
+                OptionId::new(option).unwrap(),
+                attempt_id(3),
+                Some(GoalRevisionNumberV2::FIRST),
+                Some(ReasonV2::new("The complete assessment determines this outcome.").unwrap()),
+                Some(ActorAttributionV2::new("reviewer").unwrap()),
+                UnixMillis::new(60),
+            )
+            .unwrap();
+        assert_eq!(
+            outcome.goal_assessment_record().unwrap().outcome(),
+            expected_outcome
+        );
+    }
+}
+
+#[test]
+fn goal_assessment_outcome_failure_respects_the_public_option_set_bound() {
+    let options = (0..8)
+        .map(|index| OptionId::new(format!("allowed-{index}")).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        PersistedGraphTerminalOperationV2::failure(
+            PersistedGraphMutationFailureV2::GoalAssessmentOutcomeNotAllowed {
+                option_id: OptionId::new("selected").unwrap(),
+                determined_outcome: "achieved".to_owned(),
+                allowed_option_ids: options.clone(),
+            },
+        )
+        .is_ok()
+    );
+
+    let mut oversized = options;
+    oversized.push(OptionId::new("allowed-8").unwrap());
+    assert!(
+        PersistedGraphTerminalOperationV2::failure(
+            PersistedGraphMutationFailureV2::GoalAssessmentOutcomeNotAllowed {
+                option_id: OptionId::new("selected").unwrap(),
+                determined_outcome: "achieved".to_owned(),
+                allowed_option_ids: oversized,
+            },
+        )
+        .is_err()
+    );
 }
 
 #[test]
