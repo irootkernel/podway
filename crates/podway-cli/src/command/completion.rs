@@ -279,9 +279,10 @@ const ITEM: Flag = Flag {
 };
 
 const DISPLAY_FLAGS: &[&Flag] = &[&JSON, &NO_COLOR, &QUIET];
-const DAEMON_READ_FLAGS: &[&Flag] = &[&JSON, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET];
+const DAEMON_READ_FLAGS: &[&Flag] = &[&JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET];
 const SESSION_MUTATION_FLAGS: &[&Flag] = &[
     &JSON,
+    &DEV,
     &WORKTREE,
     &TIMEOUT,
     &SOCKET,
@@ -296,6 +297,7 @@ const SESSION_MUTATION_FLAGS: &[&Flag] = &[
 ];
 const ITEM_MUTATION_FLAGS: &[&Flag] = &[
     &JSON,
+    &DEV,
     &WORKTREE,
     &TIMEOUT,
     &SOCKET,
@@ -310,6 +312,7 @@ const ITEM_MUTATION_FLAGS: &[&Flag] = &[
 ];
 const START_FLAGS: &[&Flag] = &[
     &JSON,
+    &DEV,
     &WORKTREE,
     &TIMEOUT,
     &SOCKET,
@@ -333,6 +336,7 @@ const START_FLAGS: &[&Flag] = &[
 ];
 const RESET_FLAGS: &[&Flag] = &[
     &JSON,
+    &DEV,
     &WORKTREE,
     &TIMEOUT,
     &SOCKET,
@@ -500,6 +504,7 @@ const ROUTES: &[Route] = &[
         words: "init",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -515,7 +520,7 @@ const ROUTES: &[Route] = &[
     Route {
         words: "doctor",
         flags: &[
-            &JSON, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &DEEP,
+            &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &DEEP,
         ],
         values: "",
         dynamic: None,
@@ -542,6 +547,7 @@ const ROUTES: &[Route] = &[
         words: "status",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -562,6 +568,7 @@ const ROUTES: &[Route] = &[
         words: "next",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -585,6 +592,7 @@ const ROUTES: &[Route] = &[
         words: "decide",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -602,12 +610,13 @@ const ROUTES: &[Route] = &[
             &ACTOR,
         ],
         values: "",
-        dynamic: None,
+        dynamic: Some("decision-options"),
     },
     Route {
         words: "rework",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -624,12 +633,13 @@ const ROUTES: &[Route] = &[
             &ACTOR,
         ],
         values: "",
-        dynamic: None,
+        dynamic: Some("rework-targets"),
     },
     Route {
         words: "goal define",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -651,6 +661,7 @@ const ROUTES: &[Route] = &[
         words: "goal revise",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -677,6 +688,7 @@ const ROUTES: &[Route] = &[
         words: "goal assess-criterion",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -696,12 +708,13 @@ const ROUTES: &[Route] = &[
             &ACTOR,
         ],
         values: "satisfied unsatisfied not_applicable",
-        dynamic: None,
+        dynamic: Some("goal-assessment"),
     },
     Route {
         words: "skip",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -722,6 +735,7 @@ const ROUTES: &[Route] = &[
         words: "retry",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -742,6 +756,7 @@ const ROUTES: &[Route] = &[
         words: "return",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -764,6 +779,7 @@ const ROUTES: &[Route] = &[
         words: "block",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -784,6 +800,7 @@ const ROUTES: &[Route] = &[
         words: "unblock",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -804,6 +821,7 @@ const ROUTES: &[Route] = &[
         words: "cancel",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -824,6 +842,7 @@ const ROUTES: &[Route] = &[
         words: "reopen",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -863,6 +882,7 @@ const ROUTES: &[Route] = &[
         words: "set",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -889,6 +909,7 @@ const ROUTES: &[Route] = &[
         words: "remove",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -909,6 +930,7 @@ const ROUTES: &[Route] = &[
         words: "attach",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -937,7 +959,7 @@ const ROUTES: &[Route] = &[
     Route {
         words: "job list",
         flags: &[
-            &JSON, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &STATE,
+            &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &STATE,
         ],
         values: "queued running succeeded failed cancelled",
         dynamic: None,
@@ -946,6 +968,7 @@ const ROUTES: &[Route] = &[
         words: "job lookup",
         flags: &[
             &JSON,
+            &DEV,
             &WORKTREE,
             &TIMEOUT,
             &SOCKET,
@@ -1034,7 +1057,7 @@ fn static_candidates(route: &Route) -> Vec<String> {
 
 fn bash_script() -> String {
     let mut script = String::from("# podway bash completion (generated from ROUTES)\n");
-    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=${COMP_WORDS[index]} ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=()\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
+    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" dev=0 index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --dev) dev=1 ;;\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=${COMP_WORDS[index]} ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=() mode=()\n  [[ $dev -eq 1 ]] && mode=(--dev)\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${mode[@]}\" \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
     script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 1; index < COMP_CWORD; ++index)); do\n");
     script.push_str("    word=${COMP_WORDS[index]}\n");
@@ -1099,15 +1122,31 @@ fn write_bash_candidates(
     if !candidates.is_empty() {
         let _ = writeln!(script, "      printf '%s\\n' {}", candidates.join(" "));
     }
-    if let Some(kind) = dynamic {
-        let _ = writeln!(script, "      _podway_dynamic {kind}");
-    }
+    write_bash_dynamic(script, dynamic);
     script.push_str("      ;;\n");
+}
+
+fn write_bash_dynamic(script: &mut String, dynamic: Option<&str>) {
+    match dynamic {
+        Some("decision-options") => script.push_str(
+            "      [[ ${COMP_WORDS[COMP_CWORD-1]} == --option ]] && _podway_dynamic options\n",
+        ),
+        Some("rework-targets") => script.push_str(
+            "      [[ ${COMP_WORDS[COMP_CWORD-1]} == --to ]] && _podway_dynamic rework-targets\n",
+        ),
+        Some("goal-assessment") => script.push_str(
+            "      case ${COMP_WORDS[COMP_CWORD-1]} in\n        --evidence) _podway_dynamic evidence-sources ;;\n        --item) _podway_dynamic item-values ;;\n        *) _podway_dynamic goal-criteria ;;\n      esac\n",
+        ),
+        Some(kind) => {
+            let _ = writeln!(script, "      _podway_dynamic {kind}");
+        }
+        None => {}
+    }
 }
 
 fn zsh_script() -> String {
     let mut script = String::from("#compdef podway\n# Generated from ROUTES.\n");
-    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=$words[index] ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=()\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
+    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" dev=0 index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --dev) dev=1 ;;\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=$words[index] ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=() mode=()\n  [[ $dev -eq 1 ]] && mode=(--dev)\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${mode[@]}\" \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
     script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 2; index < CURRENT; ++index)); do\n");
     script.push_str("    word=$words[index]\n");
@@ -1170,15 +1209,31 @@ fn write_zsh_candidates(
     if !candidates.is_empty() {
         let _ = writeln!(script, "      print -rl -- {}", candidates.join(" "));
     }
-    if let Some(kind) = dynamic {
-        let _ = writeln!(script, "      _podway_dynamic {kind}");
-    }
+    write_zsh_dynamic(script, dynamic);
     script.push_str("      ;;\n");
+}
+
+fn write_zsh_dynamic(script: &mut String, dynamic: Option<&str>) {
+    match dynamic {
+        Some("decision-options") => script.push_str(
+            "      [[ $words[CURRENT-1] == --option ]] && _podway_dynamic options\n",
+        ),
+        Some("rework-targets") => script.push_str(
+            "      [[ $words[CURRENT-1] == --to ]] && _podway_dynamic rework-targets\n",
+        ),
+        Some("goal-assessment") => script.push_str(
+            "      case $words[CURRENT-1] in\n        --evidence) _podway_dynamic evidence-sources ;;\n        --item) _podway_dynamic item-values ;;\n        *) _podway_dynamic goal-criteria ;;\n      esac\n",
+        ),
+        Some(kind) => {
+            let _ = writeln!(script, "      _podway_dynamic {kind}");
+        }
+        None => {}
+    }
 }
 
 fn fish_script() -> String {
     let mut script = String::from("# podway fish completion (generated from ROUTES)\n");
-    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l socket\n  set -l expecting_worktree 0\n  set -l expecting_socket 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    if test $expecting_socket -eq 1\n      set socket \"$word\"\n      set expecting_socket 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n      case --socket\n        set expecting_socket 1\n      case '--socket=*'\n        set socket (string replace -- '--socket=' '' \"$word\")\n    end\n  end\n  set -l endpoint\n  set -l workspace\n  if test -n \"$socket\"; set endpoint --socket \"$socket\"; end\n  if test -n \"$worktree\"; set workspace --worktree \"$worktree\"; end\n  command podway $endpoint $workspace __complete $argv 2>/dev/null\nend\n");
+    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l socket\n  set -l mode\n  set -l expecting_worktree 0\n  set -l expecting_socket 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    if test $expecting_socket -eq 1\n      set socket \"$word\"\n      set expecting_socket 0\n      continue\n    end\n    switch \"$word\"\n      case --dev\n        set mode --dev\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n      case --socket\n        set expecting_socket 1\n      case '--socket=*'\n        set socket (string replace -- '--socket=' '' \"$word\")\n    end\n  end\n  set -l endpoint\n  set -l workspace\n  if test -n \"$socket\"; set endpoint --socket \"$socket\"; end\n  if test -n \"$worktree\"; set workspace --worktree \"$worktree\"; end\n  command podway $mode $endpoint $workspace __complete $argv 2>/dev/null\nend\n");
     script.push_str("function __podway_route\n  set -l root\n  set -l expecting_worktree 0\n");
     script.push_str("  for word in (commandline -opc)\n    if test \"$word\" = podway\n      continue\n    end\n    if test $expecting_worktree -eq 1\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n        continue\n      case '--worktree=*'\n        continue\n    end\n");
     script.push_str("    if test -z \"$root\"\n      switch \"$word\"\n");
@@ -1203,7 +1258,7 @@ fn fish_script() -> String {
         "complete -c podway -n '__podway_route_is root' -a '{roots}'"
     );
     for flag in shared_flags() {
-        write_fish_flag(&mut script, "root", flag);
+        write_fish_flag(&mut script, "root", flag, None);
     }
     for parent in parents() {
         let children = children(parent).join(" ");
@@ -1214,7 +1269,12 @@ fn fish_script() -> String {
     }
     for route in ROUTES {
         for flag in route.flags {
-            write_fish_flag(&mut script, route.words, flag);
+            write_fish_flag(
+                &mut script,
+                route.words,
+                flag,
+                contextual_flag_dynamic(route.words, flag.long),
+            );
         }
         if !route.values.is_empty() {
             let _ = writeln!(
@@ -1224,17 +1284,35 @@ fn fish_script() -> String {
             );
         }
         if let Some(kind) = route.dynamic {
-            let _ = writeln!(
-                script,
-                "complete -c podway -n '__podway_route_is \"{}\"' -a '(__podway_dynamic {kind})'",
-                route.words
-            );
+            if kind == "goal-assessment" {
+                let _ = writeln!(
+                    script,
+                    "complete -c podway -n '__podway_route_is \"{}\"' -a '(__podway_dynamic goal-criteria)'",
+                    route.words
+                );
+            } else if !matches!(kind, "decision-options" | "rework-targets") {
+                let _ = writeln!(
+                    script,
+                    "complete -c podway -n '__podway_route_is \"{}\"' -a '(__podway_dynamic {kind})'",
+                    route.words
+                );
+            }
         }
     }
     script
 }
 
-fn write_fish_flag(script: &mut String, route: &str, flag: &Flag) {
+fn contextual_flag_dynamic(route: &str, flag: &str) -> Option<&'static str> {
+    match (route, flag) {
+        ("decide", "option") => Some("options"),
+        ("rework", "to") => Some("rework-targets"),
+        ("goal assess-criterion", "evidence") => Some("evidence-sources"),
+        ("goal assess-criterion", "item") => Some("item-values"),
+        _ => None,
+    }
+}
+
+fn write_fish_flag(script: &mut String, route: &str, flag: &Flag, dynamic: Option<&str>) {
     let _ = write!(
         script,
         "complete -c podway -n '__podway_route_is \"{route}\"' -l {}",
@@ -1242,6 +1320,9 @@ fn write_fish_flag(script: &mut String, route: &str, flag: &Flag) {
     );
     if flag.takes_value {
         script.push_str(" -r");
+    }
+    if let Some(kind) = dynamic {
+        let _ = write!(script, " -a '(__podway_dynamic {kind})'");
     }
     script.push('\n');
 }

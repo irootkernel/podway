@@ -4,8 +4,11 @@
 
 The public command is `podway`. The daemon binary is `podwayd` and is normally managed through `podway daemon ...`.
 
-This document describes the implemented v0.1.2 grammar, including its automation
-options and result surfaces.
+This document describes the grammar implemented in the current source checkout,
+including its automation options and result surfaces. The released v0.1.2 identity
+and surface remain the compatibility baseline; the Procedure v2 additions described
+here are development-gated and unreleased until the V2REL roadmap deliberately
+promotes them.
 
 ## Global options
 
@@ -41,7 +44,8 @@ Durations accept `ms`, `s`, and `m`, for example `500ms`, `30s`, and `2m`.
 - Human-readable text is the default.
 - `--json` emits exactly one success or error JSON object to stdout. The compact
   `version --json` success form is the deliberate exception to the common output
-  envelope and is exactly `{"name":"podway","version":"v0.1.2"}` for this release.
+  envelope and is exactly `{"name":"podway","version":"v0.1.2"}` for the current
+  development identity.
 - Diagnostics not represented in the JSON object go to stderr only for process-level failures before JSON can be produced.
 - Color is used only on a TTY and never in JSON.
 - Text wording is not a stable API. JSON fields, schemas, error codes, and exit codes are the stable integration contract.
@@ -307,7 +311,9 @@ podway preset show <name>
 podway preset explain <name>
 ```
 
-`show` emits source YAML or structured JSON. `explain` provides purpose, stage outline, and common rework examples.
+`show` emits source YAML or structured JSON. `explain` emits preset metadata plus an
+ordered v1 stage or v2 graph-node outline. Procedure v2 source detail and rework
+topology remain owned by `show`, `procedure graph`, and `procedure preview`.
 The built-in names are `analysis`, `bug-fix`, `docs-only`, `sw-dev`,
 `bug-fix-v2`, and `sw-dev-v2`. The `-v2` presets use Procedure v2 and remain
 runtime-admissible only through the managed development gate until that boundary
@@ -651,7 +657,7 @@ On an interactive TTY, Podway prompts unless `--yes` is present. With `--json` o
 
 ## Shell completion
 
-The release ships completion for:
+The current CLI source ships completion for:
 
 - zsh;
 - bash;

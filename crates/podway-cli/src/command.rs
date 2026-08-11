@@ -1279,6 +1279,8 @@ impl LocalFailure {
             | "PROCEDURE_NOT_FOUND"
             | "PROCEDURE_INVALID"
             | "PROCEDURE_SCHEMA_UNSUPPORTED" => (1, false),
+            "GOAL_TRACKING_NOT_ENABLED" => (1, false),
+            "DIGEST_CONFIRMATION_REQUIRED" => (LOCAL_USAGE_EXIT, false),
             "PROCEDURE_DIGEST_MISMATCH" => (4, false),
             "PATH_OUTSIDE_WORKTREE" => (5, false),
             "INTERNAL_ERROR" => (LOCAL_CLIENT_EXIT, false),
@@ -1372,6 +1374,50 @@ impl LocalFailure {
             (
                 "actual_procedure_digest".to_owned(),
                 Value::String(actual.as_str().to_owned()),
+            ),
+            ("admission".to_owned(), json!({"admitted": false})),
+        ]);
+        failure
+    }
+
+    fn digest_confirmation_required(actual: &Sha256Digest, command: &str) -> Self {
+        let mut failure = Self::catalog(
+            "DIGEST_CONFIRMATION_REQUIRED",
+            "A custom Procedure v2 start requires explicit digest confirmation.",
+            command,
+        );
+        failure.details = Map::from_iter([
+            (
+                "schema".to_owned(),
+                Value::String("podway.v2-runtime-error-details/v1".to_owned()),
+            ),
+            (
+                "kind".to_owned(),
+                Value::String("DIGEST_CONFIRMATION_REQUIRED".to_owned()),
+            ),
+            (
+                "procedure_digest".to_owned(),
+                Value::String(actual.as_str().to_owned()),
+            ),
+            ("admission".to_owned(), json!({"admitted": false})),
+        ]);
+        failure
+    }
+
+    fn goal_tracking_not_enabled(command: &str) -> Self {
+        let mut failure = Self::catalog(
+            "GOAL_TRACKING_NOT_ENABLED",
+            "The Procedure does not enable session-goal tracking.",
+            command,
+        );
+        failure.details = Map::from_iter([
+            (
+                "schema".to_owned(),
+                Value::String("podway.v2-runtime-error-details/v1".to_owned()),
+            ),
+            (
+                "kind".to_owned(),
+                Value::String("GOAL_TRACKING_NOT_ENABLED".to_owned()),
             ),
             ("admission".to_owned(), json!({"admitted": false})),
         ]);
@@ -1646,7 +1692,6 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             Command::Start(StartArgs {
                 dry_run: true,
                 replace: false,
-                goal: None,
                 ..
             })
         )
@@ -1974,6 +2019,9 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
         let admitted = preset
             .validate()
             .map_err(|error| preset_failure(error).with_command("session.start"))?;
+        if args.goal.is_some() && admitted.parsed().goal_tracking().is_none() {
+            return Err(LocalFailure::goal_tracking_not_enabled("session.start"));
+        }
         let command = cli
             .command
             .daemon_wire_name()
@@ -1996,10 +2044,29 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
         return Ok(local_result_v2(command, result, text, 0));
     }
 
+    let custom_procedure = if let Some(procedure) = args.procedure.as_deref() {
+        let root = workspace_target(cli.worktree.clone())?;
+        let bytes = read_worktree_procedure(&root, Path::new(procedure))
+            .map_err(|failure| failure.with_command("session.start"))?;
+        let format = procedure_format(Path::new(procedure));
+        if sniff_procedure_schema(&bytes, format) == Some(PROCEDURE_SCHEMA_V2) {
+            return execute_start_dry_run_v2(cli, args, procedure, &bytes, format);
+        }
+        Some((bytes, format))
+    } else {
+        None
+    };
+
     let (definition, source, digest) = if let Some(preset) = &args.preset {
         let preset = catalog_v1().lookup(preset).ok_or_else(|| {
             LocalFailure::preset_not_found("unknown preset").with_command("session.start")
         })?;
+        if args.goal.is_some() {
+            return Err(LocalFailure::request_invalid(
+                "goal tracking requires a Procedure v2 preset",
+            )
+            .with_command("session.start"));
+        }
         let admitted = preset
             .validate()
             .map_err(|error| preset_failure(error).with_command("session.start"))?;
@@ -2013,16 +2080,17 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
             .procedure
             .as_deref()
             .ok_or_else(|| LocalFailure::request_invalid("start requires a preset or procedure"))?;
-        let root = workspace_target(cli.worktree.clone())?;
-        let bytes = read_worktree_procedure(&root, Path::new(procedure))
-            .map_err(|failure| failure.with_command("session.start"))?;
-        let format = if Path::new(procedure).extension().and_then(OsStr::to_str) == Some("json") {
-            ProcedureFormatV1::Json
-        } else {
-            ProcedureFormatV1::Yaml
-        };
-        let admitted = parse_procedure_v1(bytes, format)
+        let (bytes, format) = custom_procedure
+            .as_ref()
+            .expect("custom Procedure bytes are read once before version dispatch");
+        let admitted = parse_procedure_v1(bytes, *format)
             .map_err(|error| procedure_config_failure(error).with_command("session.start"))?;
+        if args.goal.is_some() {
+            return Err(LocalFailure::request_invalid(
+                "goal tracking requires a Procedure v2 document",
+            )
+            .with_command("session.start"));
+        }
         if let Some(expected) = args.expect_procedure_digest.as_deref() {
             let expected = Sha256Digest::new(expected.to_owned()).map_err(|_| {
                 LocalFailure::request_invalid(
@@ -2064,6 +2132,84 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
         first_stage.id, first_stage.title
     );
     Ok(local_result(command, result, text))
+}
+
+fn procedure_format(path: &Path) -> ProcedureFormatV1 {
+    if path.extension().and_then(OsStr::to_str) == Some("json") {
+        ProcedureFormatV1::Json
+    } else {
+        ProcedureFormatV1::Yaml
+    }
+}
+
+fn execute_start_dry_run_v2(
+    cli: &Cli,
+    args: &StartArgs,
+    procedure: &str,
+    bytes: &[u8],
+    format: ProcedureFormatV1,
+) -> Result<RunResult, LocalFailure> {
+    let source = std::str::from_utf8(bytes).map_err(|_| {
+        LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command("session.start")
+    })?;
+    let parsed = match parse_procedure_document(bytes, format)
+        .map_err(|error| procedure_config_failure(error).with_command("session.start"))?
+    {
+        ParsedProcedure::V2(parsed) => parsed,
+        ParsedProcedure::V1(_) => {
+            return Err(LocalFailure::catalog(
+                "PROCEDURE_SCHEMA_UNSUPPORTED",
+                "Procedure v2 dry-run received a Procedure v1 document.",
+                "session.start",
+            ));
+        }
+    };
+    let validated = validate_procedure_v2(parsed)
+        .map_err(|error| procedure_config_failure(error).with_command("session.start"))?;
+    let context = AuthoringContext::new(procedure, source, format);
+    if !vet_procedure_v2(&validated, &context).is_empty() {
+        return Err(
+            LocalFailure::procedure_invalid("Procedure v2 graph vetting failed")
+                .with_command("session.start"),
+        );
+    }
+    let expected = args.expect_procedure_digest.as_deref().ok_or_else(|| {
+        LocalFailure::digest_confirmation_required(validated.digest(), "session.start")
+    })?;
+    let expected = Sha256Digest::new(expected.to_owned()).map_err(|_| {
+        LocalFailure::request_invalid("expected procedure digest must be sha256:<lowercase-hex>")
+            .with_command("session.start")
+    })?;
+    if validated.digest() != &expected {
+        return Err(LocalFailure::procedure_digest_mismatch(
+            &expected,
+            validated.digest(),
+            "session.start",
+        ));
+    }
+    if args.goal.is_some() && validated.parsed().goal_tracking().is_none() {
+        return Err(LocalFailure::goal_tracking_not_enabled("session.start"));
+    }
+    let command = cli
+        .command
+        .daemon_wire_name()
+        .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
+    let result = json!({
+        "schema": "podway.session-start-result/v2",
+        "procedure_schema": PROCEDURE_SCHEMA_V2,
+        "procedure_digest": validated.digest().as_str(),
+        "dry_run": true,
+        "goal_tracking": validated.parsed().goal_tracking().is_some(),
+        "goal_defined": args.goal.is_some(),
+    })
+    .as_object()
+    .cloned()
+    .expect("custom v2 dry-run result is an object");
+    let text = format!(
+        "dry run: entry graph node {}",
+        validated.parsed().graph().entry()
+    );
+    Ok(local_result_v2(command, result, text, 0))
 }
 fn procedure_config_failure(error: ConfigError) -> LocalFailure {
     let code = match error {
@@ -6748,7 +6894,8 @@ fn dynamic_completion(
         }
     };
     let command = match kind {
-        "items" | "blockers" => "session.status",
+        "items" | "blockers" | "options" | "rework-targets" | "goal-criteria"
+        | "evidence-sources" | "item-values" => "session.status",
         "returns" => "session.next",
         "jobs" => "job.list",
         _ => return Ok(empty_dynamic_completion()),
@@ -6761,9 +6908,8 @@ fn dynamic_completion(
     };
     let candidates = match request_daemon(&client, &request) {
         Ok(ResponseEnvelopeV2::OutputV1(output)) => dynamic_candidates(output.result(), kind),
-        Ok(ResponseEnvelopeV2::OutputV2(_)) | Ok(ResponseEnvelopeV2::Error(_)) | Err(_) => {
-            Vec::new()
-        }
+        Ok(ResponseEnvelopeV2::OutputV2(output)) => dynamic_candidates_v2(output.result(), kind),
+        Ok(ResponseEnvelopeV2::Error(_)) | Err(_) => Vec::new(),
     };
     Ok(local_result(
         "__complete",
@@ -6823,13 +6969,90 @@ fn dynamic_candidates(result: &Map<String, Value>, kind: &str) -> Vec<String> {
     }
 }
 
+fn dynamic_candidates_v2(result: &Map<String, Value>, kind: &str) -> Vec<String> {
+    if result.get("schema").and_then(Value::as_str) != Some("podway.status-result/v2") {
+        return Vec::new();
+    }
+    match kind {
+        "items" => candidate_ids(result, "items", "item_id"),
+        "blockers" => candidate_ids(result, "blocker_window", "blocker_id"),
+        "options" => candidate_strings(result, "allowed_option_ids"),
+        "rework-targets" => candidate_strings(result, "allowed_manual_rework_targets"),
+        "goal-criteria" => result
+            .get("goal")
+            .and_then(Value::as_object)
+            .and_then(|goal| goal.get("criteria"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|criterion| {
+                let criterion = criterion.as_object()?;
+                (criterion.get("status").and_then(Value::as_str) == Some("unassessed"))
+                    .then(|| criterion.get("criterion_id").and_then(Value::as_str))
+                    .flatten()
+                    .map(str::to_owned)
+            })
+            .take(128)
+            .collect(),
+        "evidence-sources" => result
+            .get("references")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|reference| {
+                let reference = reference.as_object()?;
+                (reference.get("state").and_then(Value::as_str) == Some("resolved"))
+                    .then(|| {
+                        reference
+                            .get("source_graph_node_id")
+                            .and_then(Value::as_str)
+                    })
+                    .flatten()
+                    .map(str::to_owned)
+            })
+            .take(128)
+            .collect(),
+        "item-values" => candidate_ids(result, "item_values", "item_id"),
+        _ => Vec::new(),
+    }
+}
+
+fn candidate_ids(result: &Map<String, Value>, collection: &str, field: &str) -> Vec<String> {
+    result
+        .get(collection)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|candidate| {
+            candidate
+                .as_object()
+                .and_then(|candidate| candidate.get(field))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .take(128)
+        .collect()
+}
+
+fn candidate_strings(result: &Map<String, Value>, collection: &str) -> Vec<String> {
+    result
+        .get(collection)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .take(128)
+        .collect()
+}
+
 fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
     let text = match topic.unwrap_or("overview") {
         "overview" => {
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway status --json\n  podway next --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold|convert\n  session.decide, session.rework, goal.define, goal.revise, goal.assess_criterion"
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev --task 'add retry backoff'\n  podway status --json\n  podway next --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold|convert\n  session.decide, session.rework, goal.define, goal.revise, goal.assess_criterion\n\nDevelopment-only Procedure v2 presets: bug-fix-v2, sw-dev-v2. Non-dry-run Procedure v2 sessions require the managed disposable runtime documented by help workflow."
         }
         "workflow" => {
-            "Procedure v2 workflow:\n  podway start --preset sw-dev-v2 --task 'implement feature' --goal 'Ship the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer\n  podway next --json\n  podway complete\n  podway decide --option approve --reason 'Recorded evidence supports approval.'\n  podway goal assess-criterion verified --status satisfied --reason 'Relevant checks passed.' --evidence verify\n\nUse status --json after every mutation and carry its session, attempt, item, and goal revision fields into explicit precondition flags. Podway records these assertions; it does not establish their semantic truth."
+            "Procedure v2 workflow (managed disposable development runtime only):\n  Terminal 1: python3 tools/dev_runtime.py daemon\n  Terminal 2: python3 tools/dev_runtime.py init\n  Terminal 2: python3 tools/dev_runtime.py run -- --json start --preset bug-fix-v2 --task 'inspect the workflow' --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer\n  Terminal 2: python3 tools/dev_runtime.py run -- --json status\n  Terminal 2: python3 tools/dev_runtime.py run -- --json next\n\nAdd --dry-run to start for read-only inspection without creating a session. For an admitted session, follow the allowed item, option, evidence, and rework identifiers returned by status and next. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
         }
         "rework" => {
             "Rework:\n  Procedure v1: podway return --to implement --reason 'review found a gap' --dry-run\n  Procedure v1: podway reopen --to implement --reason 'follow-up'\n  Procedure v2: podway rework --to implement --reason 'review found a gap'\n\nThe v1 return and reopen verbs are never aliases for Procedure v2 rework."
@@ -6917,7 +7140,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset bug-fix-v2 --task 'repair defect' --goal 'Repair the defect.' --criterion reproduced='The defect is reproduced.' --criterion verified='The fix is verified.' --actor developer\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'ship safely' --goal 'Ship safely.' --criterion tested='Tests pass.'\n  podway start --preset sw-dev-v2 --task 'preview procedure' --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --preset bug-fix-v2 --task 'preview procedure' --goal 'Repair the defect.' --criterion verified='The fix is verified.' --actor developer --dry-run\n  python3 tools/dev_runtime.py run -- --json start --preset bug-fix-v2 --task 'repair defect' --goal 'Repair the defect.' --criterion verified='The fix is verified.' --actor developer\n\nNon-dry-run Procedure v2 starts remain development-only and require that managed disposable runtime."
         }
         "session.decide" => {
             "Usage:\n  podway decide --option <id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> [--if-goal-revision <n>]\n\nThe goal revision fence is required for a session-goal assessment decision and, when supplied for a general decision, must match the current goal.\n\nExample:\n  podway decide --option approve --reason 'The evidence supports this route.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid>"

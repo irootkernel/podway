@@ -892,6 +892,71 @@ fn dynamic_completion_result(kind: &str) -> Value {
         _ => panic!("unknown dynamic completion kind {kind}"),
     }
 }
+
+fn authoritative_v2_status_result() -> Value {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/result-families.json"
+    ))
+    .expect("the v2 result family fixture must be valid JSON");
+    let mut status = fixtures["fixtures"]["podway.status-result/v2"].clone();
+    status["current"]["node"]["node_type"] = serde_json::json!("decision");
+    status
+        .as_object_mut()
+        .expect("v2 status fixture must be an object")
+        .remove("terminal");
+    status["current"]["readiness"] = serde_json::json!({
+        "items_satisfied": true,
+        "unblocked": false,
+        "goal_ready": false,
+        "can_advance": false
+    });
+    status["current"]["blockers_total"] = serde_json::json!(1);
+    status["items"] = serde_json::json!([{
+        "item_id": "local-item",
+        "type": "text",
+        "required": true,
+        "satisfied": true,
+        "revision": 1
+    }]);
+    status["blocker_window"] = serde_json::json!([{
+        "blocker_id": RECORDING_BLOCKER_ID,
+        "reason": "recorded blocker",
+        "created_at": "2026-07-16T12:34:56.789Z"
+    }]);
+    status["item_values"] = serde_json::json!([{
+        "item_id": "local-item",
+        "value": "recorded value",
+        "value_truncated": false
+    }]);
+    status["items_total"] = serde_json::json!(1);
+    status["references"] = serde_json::json!([
+        {
+            "source_graph_node_id": "build",
+            "source_attempt_id": RECORDING_ATTEMPT_ID,
+            "source_attempt_number": 1,
+            "items_digest": format!("sha256:{}", "b".repeat(64)),
+            "state": "resolved"
+        },
+        {
+            "source_graph_node_id": "unresolved-source",
+            "state": "unresolved"
+        }
+    ]);
+    status["allowed_option_ids"] = serde_json::json!(["approve", "revise"]);
+    status["allowed_manual_rework_targets"] = serde_json::json!(["implement", "plan"]);
+    status["goal_tracking"] = serde_json::json!(true);
+    status["goal_defined"] = serde_json::json!(true);
+    status["goal_revision"] = serde_json::json!(1);
+    status["goal"] = serde_json::json!({
+        "revision": 1,
+        "statement": "Ship safely.",
+        "criteria": [
+            {"criterion_id": "reviewed", "statement": "Review passes.", "status": "unassessed"},
+            {"criterion_id": "tested", "statement": "Tests pass.", "status": "satisfied"}
+        ]
+    });
+    status
+}
 const RECORDING_SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174004";
 const RECORDING_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174002";
 const RECORDING_JOB_ID: &str = "123e4567-e89b-42d3-a456-426614174003";
@@ -1405,6 +1470,7 @@ struct RouteSurface {
 const DISPLAY_FLAGS: &[&str] = &["--json", "--no-color", "--quiet"];
 const DAEMON_READ_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1413,6 +1479,7 @@ const DAEMON_READ_FLAGS: &[&str] = &[
 ];
 const SESSION_MUTATION_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1427,6 +1494,7 @@ const SESSION_MUTATION_SURFACE_FLAGS: &[&str] = &[
 ];
 const ITEM_MUTATION_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1441,6 +1509,7 @@ const ITEM_MUTATION_SURFACE_FLAGS: &[&str] = &[
 ];
 const START_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1464,6 +1533,7 @@ const START_SURFACE_FLAGS: &[&str] = &[
 ];
 const RESET_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1481,6 +1551,7 @@ const RESET_SURFACE_FLAGS: &[&str] = &[
 ];
 const STATUS_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1496,6 +1567,7 @@ const STATUS_SURFACE_FLAGS: &[&str] = &[
 ];
 const NEXT_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1508,6 +1580,7 @@ const NEXT_SURFACE_FLAGS: &[&str] = &[
 ];
 const SKIP_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1523,6 +1596,7 @@ const SKIP_SURFACE_FLAGS: &[&str] = &[
 ];
 const RETURN_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1540,6 +1614,7 @@ const RETURN_SURFACE_FLAGS: &[&str] = &[
 ];
 const UNBLOCK_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1555,6 +1630,7 @@ const UNBLOCK_SURFACE_FLAGS: &[&str] = &[
 ];
 const REOPEN_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1571,6 +1647,7 @@ const REOPEN_SURFACE_FLAGS: &[&str] = &[
 ];
 const SET_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1586,6 +1663,7 @@ const SET_SURFACE_FLAGS: &[&str] = &[
 ];
 const REMOVE_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1601,6 +1679,7 @@ const REMOVE_SURFACE_FLAGS: &[&str] = &[
 ];
 const ATTACH_SURFACE_FLAGS: &[&str] = &[
     "--json",
+    "--dev",
     "--worktree",
     "--timeout",
     "--socket",
@@ -1836,6 +1915,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["init"],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -1854,6 +1934,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["doctor", "--deep"],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -2012,6 +2093,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["decide", "--option", "approve", "--reason", "reason"],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -2036,13 +2118,14 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
             "--if-attempt",
             "--if-goal-revision",
         ],
-        dynamic: None,
+        dynamic: Some("contextual"),
     },
     RouteSurface {
         route: "session.rework",
         parser: &["rework", "--to", "implement", "--reason", "reason"],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -2060,7 +2143,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         ],
         values: &[],
         help_tokens: &["--to", "--reason", "--actor"],
-        dynamic: None,
+        dynamic: Some("contextual"),
     },
     RouteSurface {
         route: "goal.define",
@@ -2074,6 +2157,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         ],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -2108,6 +2192,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         ],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -2144,6 +2229,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         ],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -2164,7 +2250,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         ],
         values: &["satisfied", "unsatisfied", "not_applicable"],
         help_tokens: &["--if-goal-revision", "--status", "--evidence", "--item"],
-        dynamic: None,
+        dynamic: Some("contextual"),
     },
     RouteSurface {
         route: "session.return",
@@ -2377,6 +2463,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["job", "list", "--state", "queued"],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -2393,6 +2480,7 @@ const ROUTE_SURFACES: &[RouteSurface] = &[
         parser: &["job", "lookup", "--idempotency-key", "recording-key"],
         flags: &[
             "--json",
+            "--dev",
             "--worktree",
             "--timeout",
             "--socket",
@@ -4163,11 +4251,10 @@ fn public_route_surface_table_keeps_parser_help_and_completion_in_lockstep() {
             "{} fish completion values drifted from the public table",
             surface.route
         );
-        let dynamic = format!("_podway_dynamic {}", surface.dynamic.unwrap_or_default());
         assert_eq!(
             bash.split_once(&format!("    \"{completion_route}\")\n"))
                 .and_then(|(_, remainder)| remainder.split_once("      ;;\n"))
-                .is_some_and(|(block, _)| block.contains(&dynamic)),
+                .is_some_and(|(block, _)| block.contains("_podway_dynamic")),
             surface.dynamic.is_some(),
             "{} bash dynamic completion drifted from the public table",
             surface.route
@@ -4574,6 +4661,156 @@ fn generated_dynamic_completion_forwards_the_selected_worktree_in_every_shell() 
         assert_eq!(malformed.finish().len(), 1);
     }
 }
+
+#[test]
+fn generated_v2_dynamic_completion_selects_candidates_by_argument_context_in_every_shell() {
+    let fixture = DynamicCompletionFixture::new();
+    let worktree = fixture.root.join("v2-worktree");
+    fs::create_dir(&worktree).expect("v2 completion worktree must be created");
+    let bin = fixture.install_cli_on_path();
+    let cases: &[(&[&str], &str, &[&str])] = &[
+        (
+            &["decide", "--option"],
+            "approve",
+            &["implement", "reviewed"],
+        ),
+        (&["rework", "--to"], "implement", &["approve", "reviewed"]),
+        (
+            &["goal", "assess-criterion"],
+            "reviewed",
+            &["tested", "approve", "implement"],
+        ),
+        (
+            &["goal", "assess-criterion", "reviewed", "--evidence"],
+            "build",
+            &["unresolved-source", "local-item", "approve"],
+        ),
+        (
+            &["goal", "assess-criterion", "reviewed", "--item"],
+            "local-item",
+            &["build", "approve", "implement"],
+        ),
+    ];
+
+    for shell in ["bash", "zsh", "fish"] {
+        assert!(
+            shell_available(shell),
+            "{shell} is a required completion-test prerequisite"
+        );
+        let script = CompletionScript::generated(shell);
+        for (route_words, expected, excluded) in cases {
+            let mut words = vec!["podway".to_owned()];
+            words.extend(route_words.iter().map(|word| (*word).to_owned()));
+            words.push(String::new());
+            let server = RecordingDaemon::start(
+                &fixture,
+                vec![RecordingReply::V2Output(authoritative_v2_status_result())],
+            );
+            let (candidates, stderr) =
+                generated_dynamic_candidates(shell, &script, &fixture, &bin, &worktree, &words);
+            assert!(
+                stderr.is_empty(),
+                "{shell} contextual completion wrote stderr"
+            );
+            assert!(
+                candidates.contains(&(*expected).to_owned()),
+                "{shell} completion for {route_words:?} omitted {expected}: {candidates:?}"
+            );
+            for candidate in *excluded {
+                assert!(
+                    !candidates.contains(&(*candidate).to_owned()),
+                    "{shell} completion for {route_words:?} mixed in {candidate}: {candidates:?}"
+                );
+            }
+            let requests = server.finish();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0]["command"], "session.status");
+        }
+        let goal_revise_words = vec![
+            "podway".to_owned(),
+            "goal".to_owned(),
+            "revise".to_owned(),
+            "--rework-to".to_owned(),
+            String::new(),
+        ];
+        let (candidates, stderr) = generated_dynamic_candidates(
+            shell,
+            &script,
+            &fixture,
+            &bin,
+            &worktree,
+            &goal_revise_words,
+        );
+        assert!(
+            stderr.is_empty(),
+            "{shell} goal-revise completion wrote stderr"
+        );
+        assert!(
+            !candidates.contains(&"implement".to_owned()),
+            "{shell} must not offer manual rework targets as goal-revision-safe targets"
+        );
+    }
+}
+
+#[test]
+fn generated_dynamic_completion_forwards_dev_mode_in_every_shell() {
+    let fixture = DynamicCompletionFixture::new();
+    let worktree = fixture.root.join("dev-worktree");
+    fs::create_dir(&worktree).expect("dev completion worktree must be created");
+    let dev_paths =
+        ServiceRuntimePathsV1::for_dev_home(&fixture.home, &fixture.dev_home, geteuid().as_raw())
+            .expect("fixture dev paths must be valid");
+    fs::create_dir_all(dev_paths.runtime_directory().as_path())
+        .expect("fixture dev runtime directory must be created");
+    fs::set_permissions(
+        dev_paths.runtime_directory().as_path(),
+        fs::Permissions::from_mode(0o700),
+    )
+    .expect("fixture dev runtime directory must be private");
+    let bin = fixture.install_cli_on_path();
+
+    let direct_server = RecordingDaemon::start_at(
+        dev_paths.socket_path().as_path().to_path_buf(),
+        vec![RecordingReply::V2Output(authoritative_v2_status_result())],
+    );
+    let direct = fixture.run_in(
+        &worktree,
+        &[
+            "--dev".to_owned(),
+            "__complete".to_owned(),
+            "items".to_owned(),
+        ],
+    );
+    assert!(
+        direct.status.success(),
+        "direct dev completion failed: {direct:?}"
+    );
+    let direct_requests = direct_server.finish();
+    assert_eq!(direct_requests.len(), 1);
+    assert_eq!(direct.stdout, b"local-item\n", "{direct_requests:?}");
+
+    for shell in ["bash", "zsh", "fish"] {
+        let script = CompletionScript::generated(shell);
+        let server = RecordingDaemon::start_at(
+            dev_paths.socket_path().as_path().to_path_buf(),
+            vec![RecordingReply::V2Output(authoritative_v2_status_result())],
+        );
+        let words = vec![
+            "podway".to_owned(),
+            "--dev".to_owned(),
+            "check".to_owned(),
+            String::new(),
+        ];
+        let (candidates, stderr) =
+            generated_dynamic_candidates(shell, &script, &fixture, &bin, &worktree, &words);
+        assert!(stderr.is_empty(), "{shell} dev completion wrote stderr");
+        assert!(
+            candidates.contains(&"local-item".to_owned()),
+            "{shell} dev completion did not query the isolated endpoint"
+        );
+        assert_eq!(server.finish().len(), 1);
+    }
+}
 #[test]
 fn generated_route_scanners_skip_worktree_values_in_every_shell() {
     let fixture = DynamicCompletionFixture::new();
@@ -4668,6 +4905,70 @@ fn dynamic_completion_extracts_ids_from_the_authoritative_typed_status_result() 
         server.finish(),
         ("session.status".to_owned(), OperationV1::Query)
     );
+}
+
+#[test]
+fn dynamic_completion_extracts_only_contextual_ids_from_standard_v2_status() {
+    let cases: &[(&str, &[&str])] = &[
+        ("items", &["local-item"]),
+        ("blockers", &[RECORDING_BLOCKER_ID]),
+        ("options", &["approve", "revise"]),
+        ("rework-targets", &["implement", "plan"]),
+        ("goal-criteria", &["reviewed"]),
+        ("evidence-sources", &["build"]),
+        ("item-values", &["local-item"]),
+    ];
+    for (kind, expected) in cases {
+        let fixture = DynamicCompletionFixture::new();
+        let server = RecordingDaemon::start(
+            &fixture,
+            vec![RecordingReply::V2Output(authoritative_v2_status_result())],
+        );
+        let worktree = fixture
+            .root
+            .to_str()
+            .expect("fixture worktree must be UTF-8");
+        let output = fixture.run(&["--worktree", worktree, "__complete", kind]);
+        assert!(
+            output.status.success(),
+            "{kind} completion failed: {output:?}"
+        );
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(output.stdout)
+                .expect("completion output must be UTF-8")
+                .lines()
+                .collect::<Vec<_>>(),
+            *expected
+        );
+        let requests = server.finish();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["command"], "session.status");
+    }
+}
+
+#[test]
+fn dynamic_completion_requires_the_exact_standard_v2_status_schema() {
+    let fixture = DynamicCompletionFixture::new();
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/result-families.json"
+    ))
+    .expect("the v2 result family fixture must be valid JSON");
+    let server = RecordingDaemon::start(
+        &fixture,
+        vec![RecordingReply::V2Output(
+            fixtures["fixtures"]["podway.compact-status-result/v2"].clone(),
+        )],
+    );
+    let worktree = fixture
+        .root
+        .to_str()
+        .expect("fixture worktree must be UTF-8");
+    let output = fixture.run(&["--worktree", worktree, "__complete", "items"]);
+    assert!(output.status.success(), "completion failed: {output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert_eq!(server.finish().len(), 1);
 }
 
 #[test]

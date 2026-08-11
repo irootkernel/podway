@@ -394,7 +394,7 @@ impl ItemSpecV2 {
         match self {
             Self::Confirm(_) => value.item_type() == ItemTypeV1::Confirm,
             Self::Text(specification) => value.as_text().is_some_and(|value| {
-                let length = value.chars().count();
+                let length = value.trim().chars().count();
                 length >= specification.min_length() as usize
                     && length <= specification.max_length() as usize
             }),

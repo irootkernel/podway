@@ -127,7 +127,10 @@ fn artifact_item_spec_enforces_count_format_and_uniqueness() {
 fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
     let text = ItemSpecV2::text(common("text"), 2, 4, true).unwrap();
     assert!(text.admits_recorded_value(&RecordedItemValueV2::text("okay").unwrap()));
+    assert!(text.admits_recorded_value(&RecordedItemValueV2::text(" okay ").unwrap()));
     assert!(!text.admits_recorded_value(&RecordedItemValueV2::text("x").unwrap()));
+    assert!(!text.admits_recorded_value(&RecordedItemValueV2::text(" x ").unwrap()));
+    assert!(!text.admits_recorded_value(&RecordedItemValueV2::text(" \u{2003} ").unwrap()));
 
     let choice = ItemSpecV2::choice(common("choice"), vec!["green".to_owned()]).unwrap();
     assert!(choice.admits_recorded_value(&RecordedItemValueV2::choice("green").unwrap()));

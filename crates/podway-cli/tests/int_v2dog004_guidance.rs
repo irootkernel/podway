@@ -115,6 +115,39 @@ fn completion_and_overview_expose_the_shipped_v2_presets() {
     ] {
         assert!(overview.contains(token), "overview omits {token}");
     }
+    assert!(overview.contains("podway start --preset sw-dev --task"));
+    assert!(overview.contains("managed disposable runtime"));
+
+    let start = help("session.start");
+    assert!(start.contains("podway start --preset sw-dev --task"));
+    assert!(start.contains("python3 tools/dev_runtime.py run -- --json start"));
+    assert!(start.contains("managed disposable runtime"));
+
+    let workflow = help("workflow");
+    for token in [
+        "managed disposable development runtime only",
+        "python3 tools/dev_runtime.py daemon",
+        "python3 tools/dev_runtime.py init",
+        "python3 tools/dev_runtime.py run -- --json start",
+        "bug-fix-v2",
+        "--dry-run",
+        "docs/examples/v2-workflow.md",
+        "does not establish their semantic truth",
+    ] {
+        assert!(
+            workflow.contains(token),
+            "workflow omits {token}: {workflow}"
+        );
+    }
+    let admitted_start = workflow
+        .lines()
+        .find(|line| line.contains("dev_runtime.py run -- --json start"))
+        .expect("workflow must contain a managed start");
+    assert!(
+        !admitted_start.contains("--dry-run"),
+        "the status and next examples require the managed start to create a session"
+    );
+    assert!(!workflow.contains("--option approve"));
 }
 
 #[test]

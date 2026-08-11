@@ -109,13 +109,17 @@ The complete `v0.1.2` public release is a macOS product with:
 
 - both binaries;
 - LaunchAgent installation and lifecycle management;
-- all commands defined in the CLI specification;
+- all commands in the published v0.1.2 contract;
 - stable versioned JSON and IPC v1;
 - SQLite schema v1 and migrations;
 - the four built-in presets;
 - shell completion for zsh, bash, and fish;
 - complete crash, concurrency, Git, service, and preset conformance tests;
 - MIT licensing and release packaging.
+
+The current source checkout also contains development-only Procedure v2 surfaces.
+They are not part of the released boundary until the V2REL roadmap deliberately
+promotes them.
 
 Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts
 are not Podway releases. Conditional non-macOS implementation code is internal and
