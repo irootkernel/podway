@@ -29,6 +29,7 @@ STATIC_ASSETS = {
     "quality/v2-acceptance-matrix-v1.json": "catalog",
     "quality/v2-compatibility-matrix-v1.json": "catalog",
     "quality/v2-payload-matrix-v1.json": "catalog",
+    "release/dolgorae-v2-adapter-contract-v1.json": "catalog",
     "release/v2-release-gate-matrix-v1.json": "catalog",
     "spec/authoring-diagnostics.json": "catalog",
     "spec/command-catalog.yaml": "catalog",

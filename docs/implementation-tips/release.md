@@ -4,6 +4,22 @@ The repository-root `make test` command is the development gate. `make dist` is
 the complete release gate and must run from the exact clean revision being
 packaged.
 
+When the v2 contract surface changes, regenerate the reviewable downstream
+adapter catalog from repository authorities. Refresh the manifest once so the
+generator can validate changed schema bytes, then refresh it again to bind the
+new adapter-catalog bytes:
+
+```bash
+python3 tools/contract_manifest.py --write
+python3 tools/create_dolgorae_handoff.py prepare-v2-adapter
+python3 tools/contract_manifest.py --write
+```
+
+This only updates Podway's manifest-bound prepared contract. It does not modify
+the Dolgorae repository, qualify a distribution, or establish downstream
+acceptance. `python3 tools/create_dolgorae_handoff.py self-test` rejects catalog,
+schema-pin, route, error, migration, reactivation, and handoff drift.
+
 After version and release-note preparation:
 
 1. run `make dist` on native Apple Silicon macOS;

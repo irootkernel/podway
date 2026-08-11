@@ -262,6 +262,40 @@ job lookup requires its nested command to equal the immutable job command.
 Preview and other authoring reads remain side-effect free.
 Existing v1 commands and sessions retain their v1 meanings and wire families.
 
+### Dolgorae v2 adapter handoff
+
+The manifest-bound
+[`podway.dolgorae-v2-adapter-contract/v1`](../../../release/dolgorae-v2-adapter-contract-v1.json)
+is the prepared downstream migration contract. It freezes the released v1
+baseline and enumerates the exact v2 route delta, version-aware routes, result
+families, schema pins, runtime errors, and authoring diagnostics. Runtime errors
+and authoring diagnostics remain separate inventories. The contract is marked
+`prepared-not-released`; its acceptance checks are requirements for a downstream
+adapter, not evidence that any Dolgorae repository has adopted them.
+
+The release handoff uses the new closed
+`podway.dolgorae-compatibility-handoff/v2` discriminator. It embeds the exact
+adapter contract and its packaged member digest next to the release's final
+contract-manifest digest. Consumers MUST verify that identity before dispatch,
+vendor every listed logical `schemas/...` member by its exact digest, select
+success decoding by the versioned result schema, and retain
+`podway.error/v1` for failures. Capability discovery uses the manifest and route
+inventory; it MUST NOT use error probing or version text.
+
+Completed-session reactivation has two machine notices. Every successful
+`session.rework` emits `/result/reactivated` in
+`podway.rework-result/v1`, and every successful `goal.revise` emits the same
+field in `podway.goal-revision-result/v1`; revising a completed session requires
+`--reactivate`. The boolean `true` is the reactivation notice. On `true`, an
+adapter invalidates terminal cache state and refreshes status and cursor. It does
+not infer reactivation from human text. Cancelled sessions cannot reactivate, and
+v1 `reopen` remains a v1 operation rather than an alias for either notice.
+
+Workspace migration remains Podway-owned and transactional. The adapter never
+reads or writes `.podway/runtime` databases, never converts v1 history into v2
+graph history, and preserves retained v1 session semantics and `reopen` behavior.
+Development-unlock state is disposable and carries no migration promise.
+
 ## 25. Requirements-to-roadmap traceability
 
 | Requirements | Implemented by | Planned evidence |

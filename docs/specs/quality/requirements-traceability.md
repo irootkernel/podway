@@ -124,6 +124,14 @@ Every raw file under `tests/fixtures/v2/` is also directly manifest-bound; the
 catalog's one-to-one inventory and digest check is an additional closed mapping,
 not an indirect substitute for manifest coverage.
 
+The separate manifest-bound
+[`dolgorae-v2-adapter-contract-v1.json`](../../../release/dolgorae-v2-adapter-contract-v1.json)
+projects those repository authorities into the exact downstream route, result,
+schema-pin, error, diagnostic, migration, reactivation, and acceptance boundary.
+Its `prepared-not-released` status records an integration obligation only; it is
+not Dolgorae-side evidence and does not alter the historical v1 DOLGI acceptance
+matrix.
+
 Rows and fixture recipes marked `planned` are traceability obligations only. The
 YAML/JSON pair is a current schema known answer, but the graph, compatibility,
 payload, and admission recipes are not evidence that their future production

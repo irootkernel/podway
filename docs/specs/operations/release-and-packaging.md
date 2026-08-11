@@ -135,13 +135,24 @@ After packaged conformance passes, the deterministic
 archive and binary digests, build and contract identities, provenance digest,
 source commit and Git tree, Rust toolchain, and Cargo.lock digest. Dolgorae pins
 this closed identity set rather than inferring compatibility from a version string.
+For the v2 contract surface, the handoff discriminator is
+`podway.dolgorae-compatibility-handoff/v2`. It additionally embeds the exact
+manifest-bound
+[`podway.dolgorae-v2-adapter-contract/v1`](../../../release/dolgorae-v2-adapter-contract-v1.json)
+and its packaged member digest. That catalog records the v1 baseline, exact v2
+route/schema/error/diagnostic delta, reactivation notices, storage migration
+boundary, and adapter acceptance requirements without claiming downstream
+adoption. The catalog deliberately omits the final manifest digest to avoid a
+self-reference; the enclosing handoff supplies that release-specific pin through
+its existing `contract.digest` field.
 Handoff creation rejects pending, incomplete, unknown, or malformed evidence and
 repeats the exact release-gate, signing/notarization, and packaged-conformance
-results. A final offline verifier then independently re-extracts the archive and
-compares checksum, archive layout, binaries, manifest-bound identities, provenance,
-handoff, source commit/tree, and Cargo.lock in both directions. `make dist` succeeds
-only after that final verification and after proving no qualification socket or
-daemon process remains.
+results. It also rejects source/package adapter-catalog drift. A final offline
+verifier then independently re-extracts the archive and compares checksum, archive
+layout, binaries, manifest-bound identities, adapter contract, provenance, handoff,
+source commit/tree, and Cargo.lock in both directions. `make dist` succeeds only
+after that final verification and after proving no qualification socket or daemon
+process remains.
 
 ## Installation
 

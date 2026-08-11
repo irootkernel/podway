@@ -15,7 +15,7 @@ from typing import Any
 
 PRODUCT = "podway"
 PROVENANCE_SCHEMA = "podway.release-provenance/v1"
-HANDOFF_SCHEMA = "podway.dolgorae-compatibility-handoff/v1"
+HANDOFF_SCHEMA = "podway.dolgorae-compatibility-handoff/v2"
 RELEASE_GATE = "make test + fuzzing: passed"
 PASSED = "passed"
 PENDING = "pending"
@@ -51,6 +51,8 @@ PROVENANCE_KEYS = {
     "version",
 }
 HANDOFF_KEYS = {
+    "adapter",
+    "adapter_catalog",
     "artifact",
     "binaries",
     "build_identity",
@@ -223,9 +225,18 @@ def validate_provenance(
 
 
 def handoff_from_provenance(
-    provenance: dict[str, Any], provenance_name: str, provenance_sha256: str
+    provenance: dict[str, Any],
+    provenance_name: str,
+    provenance_sha256: str,
+    adapter: dict[str, Any],
+    adapter_catalog_sha256: str,
 ) -> dict[str, Any]:
     return {
+        "adapter": adapter,
+        "adapter_catalog": {
+            "path": "release/dolgorae-v2-adapter-contract-v1.json",
+            "sha256": adapter_catalog_sha256,
+        },
         "artifact": provenance["archive"],
         "binaries": provenance["binaries"],
         "build_identity": provenance["build_identity"],
@@ -259,9 +270,17 @@ def validate_handoff(
     provenance: dict[str, Any],
     provenance_name: str,
     provenance_sha256: str,
+    adapter: dict[str, Any],
+    adapter_catalog_sha256: str,
 ) -> None:
     _exact_keys(value, HANDOFF_KEYS, "handoff")
-    expected = handoff_from_provenance(provenance, provenance_name, provenance_sha256)
+    expected = handoff_from_provenance(
+        provenance,
+        provenance_name,
+        provenance_sha256,
+        adapter,
+        adapter_catalog_sha256,
+    )
     if canonical_bytes(value) != canonical_bytes(expected):
         fail("handoff does not exactly and bidirectionally repeat provenance identities")
 

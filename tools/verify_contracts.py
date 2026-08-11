@@ -56,6 +56,7 @@ REQUIRED_PREPARE_COMMANDS = (
     "cargo deny check",
     "python3 tools/verify_test_layout.py --check",
     "python3 tools/verify_quality_contracts.py",
+    "python3 tools/create_dolgorae_handoff.py self-test",
     "python3 tools/verify_contracts.py --check",
     "python3 tools/verify_preset_tooling.py --podway",
     "python3 tools/contract_manifest.py --check",

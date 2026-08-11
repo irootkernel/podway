@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
+ADAPTER_CONTRACT_RELATIVE = Path("release/dolgorae-v2-adapter-contract-v1.json")
 
 
 class VerificationError(RuntimeError):
@@ -100,6 +101,10 @@ def verify(output_directory: Path) -> dict[str, Any]:
         fail("provenance Cargo.lock digest does not match the qualified source")
     if provenance["release_status"] != release_archive.release_status():
         fail("provenance release status does not match release policy")
+    adapter_path = ROOT / ADAPTER_CONTRACT_RELATIVE
+    require_regular(adapter_path, "Dolgorae v2 adapter contract")
+    adapter = release_evidence.read_object(adapter_path, "Dolgorae v2 adapter contract")
+    adapter_catalog_sha256 = f"sha256:{release_archive.sha256_file(adapter_path)}"
     try:
         handoff = release_evidence.read_object(handoff_path, "Dolgorae handoff")
         release_evidence.validate_handoff(
@@ -107,6 +112,8 @@ def verify(output_directory: Path) -> dict[str, Any]:
             provenance,
             provenance_path.name,
             release_archive.sha256_file(provenance_path),
+            adapter,
+            adapter_catalog_sha256,
         )
     except release_evidence.EvidenceError as error:
         fail(str(error))
@@ -119,6 +126,10 @@ def verify(output_directory: Path) -> dict[str, Any]:
         receipt = release_archive.verify_release_contract(
             extracted / "share/podway", cli, daemon, commit
         )
+        packaged_adapter = extracted / "share/podway" / ADAPTER_CONTRACT_RELATIVE
+        require_regular(packaged_adapter, "packaged Dolgorae v2 adapter contract")
+        if packaged_adapter.read_bytes() != adapter_path.read_bytes():
+            fail("packaged Dolgorae v2 adapter contract differs from the qualified source")
         for field in (
             "build_identity",
             "contract_manifest_digest",
@@ -213,8 +224,23 @@ def self_test() -> dict[str, Any]:
         tree="2" * 40,
         conformance_result=release_evidence.PASSED,
     )
-    handoff = release_evidence.handoff_from_provenance(provenance, "provenance.json", "3" * 64)
-    release_evidence.validate_handoff(handoff, provenance, "provenance.json", "3" * 64)
+    adapter = {"schema": "podway.dolgorae-v2-adapter-contract/v1", "sentinel": True}
+    adapter_catalog_sha256 = f"sha256:{'4' * 64}"
+    handoff = release_evidence.handoff_from_provenance(
+        provenance,
+        "provenance.json",
+        "3" * 64,
+        adapter,
+        adapter_catalog_sha256,
+    )
+    release_evidence.validate_handoff(
+        handoff,
+        provenance,
+        "provenance.json",
+        "3" * 64,
+        adapter,
+        adapter_catalog_sha256,
+    )
     sentinels = 0
     for field, bad in (
         ("product", "another-product"),
@@ -268,12 +294,22 @@ def self_test() -> dict[str, Any]:
         (lambda value: value["artifact"].update({"sha256": "9" * 64}), "archive drift"),
         (lambda value: value["provenance"].update({"sha256": "8" * 64}), "provenance drift"),
         (lambda value: value["packaged_conformance"].update({"result": "pending"}), "pending handoff"),
+        (lambda value: value["adapter"].update({"sentinel": False}), "adapter drift"),
+        (
+            lambda value: value["adapter_catalog"].update({"sha256": f"sha256:{'5' * 64}"}),
+            "adapter catalog drift",
+        ),
     ):
         changed = json.loads(json.dumps(handoff))
         mutation(changed)
         expect_rejection(
             lambda changed=changed: release_evidence.validate_handoff(
-                changed, provenance, "provenance.json", "3" * 64
+                changed,
+                provenance,
+                "provenance.json",
+                "3" * 64,
+                adapter,
+                adapter_catalog_sha256,
             ),
             label,
         )

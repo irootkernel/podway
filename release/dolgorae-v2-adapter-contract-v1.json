@@ -1,0 +1,740 @@
+{
+  "adapter_acceptance": [
+    {
+      "expected": "manifest-and-adapter-catalog-pins-exact-match-before-dispatch",
+      "id": "DOLV2-001",
+      "check": "manifest-identity"
+    },
+    {
+      "expected": "all-pinned-bytes-validate-closed",
+      "id": "DOLV2-002",
+      "check": "schema-pins"
+    },
+    {
+      "expected": "added-and-version-aware-routes-dispatch",
+      "id": "DOLV2-003",
+      "check": "route-surface"
+    },
+    {
+      "expected": "all-listed-result-error-and-diagnostic-families-decode-with-output-v2-success-error-v1-failure",
+      "id": "DOLV2-004",
+      "check": "envelope-dispatch"
+    },
+    {
+      "expected": "no-adapter-db-write-v1-state-unchanged",
+      "id": "DOLV2-005",
+      "check": "migration-boundary"
+    },
+    {
+      "expected": "completed-to-running-notice-refreshes-status",
+      "id": "DOLV2-006",
+      "check": "reactivation"
+    },
+    {
+      "expected": "identity-revision-attempt-idempotency-detached-replay-and-job-invariants-retained",
+      "id": "DOLV2-007",
+      "check": "automation-invariants"
+    },
+    {
+      "expected": "unsupported-peer-fails-explicitly-without-version-text-inference",
+      "id": "DOLV2-008",
+      "check": "unsupported-peer"
+    },
+    {
+      "expected": "packaged-catalog-bytes-match-the-manifest-bound-source",
+      "id": "DOLV2-009",
+      "check": "packaged-byte-verification"
+    }
+  ],
+  "baseline": {
+    "authoring_diagnostics": 0,
+    "contract_manifest_digest": "sha256:4588ba06328c9fc0dd28e0a5879a842f6b68065195192d61f3b2a652a82e4937",
+    "routes": 46,
+    "runtime_errors": 65,
+    "schemas": 29
+  },
+  "contract_delta": {
+    "authoring_diagnostics": [
+      {
+        "code": "AUTHORING_SCHEMA_INVALID",
+        "severity": "error",
+        "summary": "The Procedure source violates the closed v2 authoring schema."
+      },
+      {
+        "code": "SOURCE_CONSTRUCT_UNSUPPORTED",
+        "severity": "error",
+        "summary": "The source uses an unsupported YAML or JSON construct."
+      },
+      {
+        "code": "SOURCE_PROJECTION_BUDGET_EXCEEDED",
+        "severity": "error",
+        "summary": "The complete canonical source projection exceeds 131,072 characters."
+      },
+      {
+        "code": "GRAPH_PROJECTION_BUDGET_EXCEEDED",
+        "severity": "error",
+        "summary": "The complete generated graph text projection exceeds 131,072 characters."
+      },
+      {
+        "code": "FORMAT_NOT_CANONICAL",
+        "severity": "error",
+        "summary": "The source is not in canonical authoring form."
+      },
+      {
+        "code": "ENTRY_NODE_INVALID",
+        "severity": "error",
+        "summary": "The graph entry is missing or does not name a graph node."
+      },
+      {
+        "code": "GRAPH_DEFINITION_UNKNOWN",
+        "severity": "error",
+        "summary": "A graph placement names an unknown node definition."
+      },
+      {
+        "code": "ROUTE_TARGET_NOT_FOUND",
+        "severity": "error",
+        "summary": "A transition names an unknown graph node."
+      },
+      {
+        "code": "UNREACHABLE_GRAPH_NODE",
+        "severity": "error",
+        "summary": "A graph node is unreachable from the entry."
+      },
+      {
+        "code": "NO_TERMINAL_PATH",
+        "severity": "error",
+        "summary": "A reachable graph region has no finite path to a terminal action."
+      },
+      {
+        "code": "ACTION_DISPOSITION_INVALID",
+        "severity": "error",
+        "summary": "An action placement does not declare exactly one of next or terminal."
+      },
+      {
+        "code": "DECISION_OPTION_ROUTE_MISSING",
+        "severity": "error",
+        "summary": "A decision option has no route."
+      },
+      {
+        "code": "DECISION_ROUTE_OPTION_UNDEFINED",
+        "severity": "error",
+        "summary": "A route names an undefined decision option."
+      },
+      {
+        "code": "GOAL_ASSESSMENT_OPTION_UNMAPPED",
+        "severity": "error",
+        "summary": "A goal-assessment option has no outcome mapping."
+      },
+      {
+        "code": "GOAL_ASSESSMENT_OUTCOME_UNKNOWN",
+        "severity": "error",
+        "summary": "A goal-assessment option maps to an unknown outcome."
+      },
+      {
+        "code": "GOAL_ASSESSMENT_OUTCOME_UNREACHABLE",
+        "severity": "error",
+        "summary": "A required goal-assessment outcome has no mapped option."
+      },
+      {
+        "code": "GOAL_ASSESSMENT_REQUIRES_GOAL_TRACKING",
+        "severity": "error",
+        "summary": "A session-goal assessment is declared without goal tracking."
+      },
+      {
+        "code": "GOAL_ASSESSMENT_NOT_DOMINATING_TERMINAL",
+        "severity": "error",
+        "summary": "A terminal action is not dominated by a session-goal assessment."
+      },
+      {
+        "code": "EVIDENCE_SOURCE_UNKNOWN",
+        "severity": "error",
+        "summary": "An evidence reference names an unknown graph node."
+      },
+      {
+        "code": "EVIDENCE_SOURCE_SELF_REFERENCE",
+        "severity": "error",
+        "summary": "An evidence reference names its consuming placement."
+      },
+      {
+        "code": "EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER",
+        "severity": "error",
+        "summary": "Required evidence is not produced on every path to its consumer."
+      },
+      {
+        "code": "SKIPPABLE_EVIDENCE_SOURCE",
+        "severity": "error",
+        "summary": "A required evidence source may be skipped."
+      },
+      {
+        "code": "EVIDENCE_SELECTOR_UNKNOWN_ITEM",
+        "severity": "error",
+        "summary": "An evidence selector names an item absent from its source definition."
+      },
+      {
+        "code": "READBACK_BUDGET_EXCEEDED",
+        "severity": "error",
+        "summary": "Worst-case evidence read-back exceeds the bounded next budget."
+      },
+      {
+        "code": "NEXT_STATIC_BUDGET_EXCEEDED",
+        "severity": "error",
+        "summary": "Procedure-static next content exceeds its bounded budget."
+      },
+      {
+        "code": "DECISION_SKIP_NOT_ALLOWED",
+        "severity": "error",
+        "summary": "A decision placement declares a skip policy."
+      },
+      {
+        "code": "GRAPH_CYCLE_INVALID",
+        "severity": "error",
+        "summary": "A graph cycle violates the single v2 cycle rule."
+      },
+      {
+        "code": "REWORK_TARGET_NOT_DOMINATING",
+        "severity": "error",
+        "summary": "A declared rework target does not dominate its decision placement."
+      },
+      {
+        "code": "MANUAL_REWORK_TARGET_UNKNOWN",
+        "severity": "error",
+        "summary": "A manual rework target names an unknown graph node."
+      },
+      {
+        "code": "AMBIGUOUS_GRAPH_REFERENCE",
+        "severity": "error",
+        "summary": "A node-definition or graph-placement reference is ambiguous."
+      },
+      {
+        "code": "UNUSED_NODE_DEFINITION",
+        "severity": "warning",
+        "summary": "A node definition has no graph placement."
+      },
+      {
+        "code": "SINGLE_OPTION_DECISION",
+        "severity": "warning",
+        "summary": "A decision exposes only one option."
+      },
+      {
+        "code": "INDISTINGUISHABLE_OPTION_LABELS",
+        "severity": "warning",
+        "summary": "Decision options have indistinguishable labels."
+      },
+      {
+        "code": "IDENTICAL_EFFECTIVE_ROUTES",
+        "severity": "warning",
+        "summary": "Decision options have identical effective routes."
+      },
+      {
+        "code": "WEAK_PURPOSE_GUIDANCE",
+        "severity": "warning",
+        "summary": "Procedure purpose guidance is missing or weak."
+      },
+      {
+        "code": "WEAK_INTENT_GUIDANCE",
+        "severity": "warning",
+        "summary": "Node intent guidance is missing or weak."
+      },
+      {
+        "code": "WEAK_OBJECTIVE_GUIDANCE",
+        "severity": "warning",
+        "summary": "Decision objective guidance is missing or weak."
+      },
+      {
+        "code": "WEAK_PROMPT_GUIDANCE",
+        "severity": "warning",
+        "summary": "Decision prompt guidance is missing or weak."
+      },
+      {
+        "code": "WEAK_CRITERIA_GUIDANCE",
+        "severity": "warning",
+        "summary": "Option criteria guidance is missing or weak."
+      },
+      {
+        "code": "WEAK_REASON_GUIDANCE",
+        "severity": "warning",
+        "summary": "Decision reason guidance is missing or weak."
+      },
+      {
+        "code": "EVIDENCE_GUIDANCE_MISSING",
+        "severity": "warning",
+        "summary": "A decision supplies neither evidence references nor evidence guidance."
+      },
+      {
+        "code": "OPTIONAL_EVIDENCE_UNRESOLVABLE",
+        "severity": "warning",
+        "summary": "No path to a consumer can resolve an optional evidence reference."
+      },
+      {
+        "code": "GOAL_CLARIFICATION_PATH_MISSING",
+        "severity": "warning",
+        "summary": "Goal tracking has no early goal-clarification path."
+      },
+      {
+        "code": "GOAL_ASSESSMENT_TOO_EARLY",
+        "severity": "warning",
+        "summary": "A goal assessment occurs long before every terminal action."
+      },
+      {
+        "code": "MANUAL_REWORK_TARGETS_BROAD",
+        "severity": "warning",
+        "summary": "The manual rework target set is unusually broad."
+      },
+      {
+        "code": "LARGE_OPTION_SET",
+        "severity": "warning",
+        "summary": "A decision option set is unusually large."
+      },
+      {
+        "code": "LARGE_CYCLE",
+        "severity": "warning",
+        "summary": "A graph cycle is unusually large."
+      },
+      {
+        "code": "DUPLICATED_NODE_DEFINITION",
+        "severity": "warning",
+        "summary": "Equivalent node definitions should be reused."
+      },
+      {
+        "code": "GRAPH_NODE_ID_CONFUSING",
+        "severity": "warning",
+        "summary": "Graph node identifiers are difficult to distinguish."
+      },
+      {
+        "code": "REWORK_TOPOLOGY_CONFUSING",
+        "severity": "warning",
+        "summary": "The legal rework topology is difficult to review."
+      },
+      {
+        "code": "NO_REACTIVATION_PATH",
+        "severity": "warning",
+        "summary": "The procedure is terminal by design and has no reactivation path."
+      },
+      {
+        "code": "GOAL_REVISION_TARGET_UNSAFE",
+        "severity": "warning",
+        "summary": "A manual rework target cannot safely support goal revision."
+      },
+      {
+        "code": "MULTIPLE_GOAL_ASSESSMENT_SOURCES",
+        "severity": "warning",
+        "summary": "A placement references more than one goal-assessment source."
+      }
+    ],
+    "result_families": {
+      "existing_route_v2": [
+        "schemas/procedure-validation-result-v2.schema.json",
+        "schemas/detached-admission-result-v2.schema.json",
+        "schemas/session-start-result-v2.schema.json",
+        "schemas/status-result-v2.schema.json",
+        "schemas/compact-status-result-v2.schema.json",
+        "schemas/next-result-v2.schema.json",
+        "schemas/stage-transition-result-v2.schema.json",
+        "schemas/item-mutation-result-v2.schema.json",
+        "schemas/job-lookup-result-v2.schema.json",
+        "schemas/job-result-v2.schema.json"
+      ],
+      "new_route_v1": [
+        "schemas/procedure-source-result-v1.schema.json",
+        "schemas/procedure-diagnostics-result-v1.schema.json",
+        "schemas/procedure-graph-result-v1.schema.json",
+        "schemas/procedure-preview-result-v1.schema.json",
+        "schemas/decision-result-v1.schema.json",
+        "schemas/rework-result-v1.schema.json",
+        "schemas/goal-definition-result-v1.schema.json",
+        "schemas/goal-revision-result-v1.schema.json",
+        "schemas/criterion-assessment-result-v1.schema.json"
+      ]
+    },
+    "routes": {
+      "added": [
+        "procedure.format",
+        "procedure.vet",
+        "procedure.lint",
+        "procedure.check",
+        "procedure.graph",
+        "procedure.preview",
+        "procedure.scaffold",
+        "procedure.convert",
+        "session.decide",
+        "session.rework",
+        "goal.define",
+        "goal.revise",
+        "goal.assess_criterion"
+      ],
+      "version_aware": [
+        "procedure.validate",
+        "session.start",
+        "session.start_replace",
+        "session.status",
+        "session.next",
+        "session.complete",
+        "session.skip",
+        "session.retry",
+        "session.block",
+        "session.unblock",
+        "session.cancel",
+        "session.reset",
+        "item.check",
+        "item.uncheck",
+        "item.set",
+        "item.add",
+        "item.remove",
+        "item.attach",
+        "item.clear",
+        "job.lookup",
+        "job.status",
+        "job.wait"
+      ]
+    },
+    "runtime_errors": [
+      {
+        "code": "PROCEDURE_V2_SCHEMA_INVALID",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The Procedure v2 document violates its closed schema."
+      },
+      {
+        "code": "GRAPH_NODE_NOT_FOUND",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The requested graph node does not exist."
+      },
+      {
+        "code": "NODE_DEFINITION_NOT_FOUND",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The requested node definition does not exist."
+      },
+      {
+        "code": "GRAPH_NODE_TYPE_MISMATCH",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The active graph node has the wrong type for the command."
+      },
+      {
+        "code": "OPTION_NOT_ALLOWED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The selected decision option is not allowed."
+      },
+      {
+        "code": "ROUTE_NOT_ALLOWED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The selected transition route is not allowed."
+      },
+      {
+        "code": "DECISION_REASON_MISSING",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The decision requires a reason."
+      },
+      {
+        "code": "EVIDENCE_REFERENCE_UNRESOLVED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "A required evidence reference is unresolved."
+      },
+      {
+        "code": "EVIDENCE_REFERENCE_STALE",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "A resolved evidence reference is stale."
+      },
+      {
+        "code": "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The graph node is not an allowed manual rework target."
+      },
+      {
+        "code": "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The manual rework target has no valid attempt on the current trace."
+      },
+      {
+        "code": "GOAL_TRACKING_NOT_ENABLED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The Procedure does not enable session-goal tracking."
+      },
+      {
+        "code": "SESSION_GOAL_MISSING",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The session goal has not been defined."
+      },
+      {
+        "code": "SESSION_GOAL_ALREADY_DEFINED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The session goal is already defined."
+      },
+      {
+        "code": "GOAL_REVISION_STALE",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The expected goal revision is no longer current."
+      },
+      {
+        "code": "GOAL_REVISION_TARGET_NOT_ALLOWED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The goal revision rework target is not allowed by policy."
+      },
+      {
+        "code": "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The goal revision rework target is not revision-safe."
+      },
+      {
+        "code": "REACTIVATION_FLAG_REQUIRED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Reactivating a completed session requires the explicit flag."
+      },
+      {
+        "code": "CRITERION_MODE_MIXED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Criterion applicability and assessment modes cannot be mixed in one attempt."
+      },
+      {
+        "code": "CRITERION_CITATION_INVALID",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "A criterion citation does not name resolved attempt state."
+      },
+      {
+        "code": "CRITERION_RESULT_MISSING",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "A required criterion result is missing."
+      },
+      {
+        "code": "CRITERION_NOT_FOUND",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The requested goal criterion does not exist."
+      },
+      {
+        "code": "FRESH_GOAL_ASSESSMENT_MISSING",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "A fresh final goal assessment is required."
+      },
+      {
+        "code": "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The selected option does not match the determined goal outcome."
+      },
+      {
+        "code": "DIGEST_CONFIRMATION_REQUIRED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 2,
+        "retryable": false,
+        "summary": "A custom Procedure start requires explicit digest confirmation."
+      },
+      {
+        "code": "UNSUPPORTED_V2_CAPABILITY",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 3,
+        "retryable": false,
+        "summary": "The registered v2 command or result family is not supported by this build."
+      }
+    ],
+    "schema_pins": [
+      {
+        "id": "urn:podway:schema:authoring-diagnostic:v1",
+        "path": "schemas/authoring-diagnostic-v1.schema.json",
+        "sha256": "sha256:660d2d1e1e7a1decc8f0bc4fbdf713edb01bcc0f6599a659f80385ffebb723e4"
+      },
+      {
+        "id": "urn:podway:schema:compact-status-result:v2",
+        "path": "schemas/compact-status-result-v2.schema.json",
+        "sha256": "sha256:de8b30d82a597940838981ebc344f4c7aea08aea70f37b745ad3f0b4cc73ed20"
+      },
+      {
+        "id": "urn:podway:schema:criterion-assessment-result:v1",
+        "path": "schemas/criterion-assessment-result-v1.schema.json",
+        "sha256": "sha256:25edea7b9a3047f0a2baa9ee75005524ed91740e200ca97f477b976795c9f59d"
+      },
+      {
+        "id": "urn:podway:schema:decision-result:v1",
+        "path": "schemas/decision-result-v1.schema.json",
+        "sha256": "sha256:ced9d63a2e9cf3d69c925d363822acccfcdd4d78a12423c93b4b248408814ad4"
+      },
+      {
+        "id": "urn:podway:schema:detached-admission-result:v2",
+        "path": "schemas/detached-admission-result-v2.schema.json",
+        "sha256": "sha256:6385e8070cb663f36a9e0787666ae3df12ecf83e814506629bdaf12c77243974"
+      },
+      {
+        "id": "urn:podway:schema:goal-definition-result:v1",
+        "path": "schemas/goal-definition-result-v1.schema.json",
+        "sha256": "sha256:7b26c7ccb1d3302a2876a9d3851e94b82feadcfe1d6b06cdefa2c30d26d91279"
+      },
+      {
+        "id": "urn:podway:schema:goal-revision-result:v1",
+        "path": "schemas/goal-revision-result-v1.schema.json",
+        "sha256": "sha256:0252e7044d956a1e4bbd9cd8d384db3de6084e03389e9b56116f11315ee620e7"
+      },
+      {
+        "id": "urn:podway:schema:item-mutation-result:v2",
+        "path": "schemas/item-mutation-result-v2.schema.json",
+        "sha256": "sha256:f7d945086b4a5ccaa1d1256621379f336befa0de163a2642437fc81b4485e214"
+      },
+      {
+        "id": "urn:podway:schema:job-lookup-result:v2",
+        "path": "schemas/job-lookup-result-v2.schema.json",
+        "sha256": "sha256:a799081d957d70a78f26a05b378d9259f7cb6155aa1c12fe02254a460d87b278"
+      },
+      {
+        "id": "urn:podway:schema:job-result:v2",
+        "path": "schemas/job-result-v2.schema.json",
+        "sha256": "sha256:e9098ed3c110d64877c5edbde1771271ece0a305098df2f23f48d62c0a751f0c"
+      },
+      {
+        "id": "urn:podway:schema:next-result:v2",
+        "path": "schemas/next-result-v2.schema.json",
+        "sha256": "sha256:ef64559c7ede43ea11c64de1dcd60dea46539da92113fc20734aa2c006d4aa26"
+      },
+      {
+        "id": "urn:podway:schema:output:v2",
+        "path": "schemas/output-v2.schema.json",
+        "sha256": "sha256:19f5cb6c5615a404620325ce4b9ed8c3f52bda56d1007890094bb010b2ebea63"
+      },
+      {
+        "id": "urn:podway:schema:procedure-diagnostics-result:v1",
+        "path": "schemas/procedure-diagnostics-result-v1.schema.json",
+        "sha256": "sha256:b7a6708ea99ae12bc9d4be686314cdec3fab2e5580abdefd2cec905f1c5e9f67"
+      },
+      {
+        "id": "urn:podway:schema:procedure-graph-result:v1",
+        "path": "schemas/procedure-graph-result-v1.schema.json",
+        "sha256": "sha256:42551e9592bbfd0171eb1736347da05ba7306cdb5a6517cea6571af9cb41ef72"
+      },
+      {
+        "id": "urn:podway:schema:procedure-preview-result:v1",
+        "path": "schemas/procedure-preview-result-v1.schema.json",
+        "sha256": "sha256:6c622a6521c91fda0445caa8696071cc5cab7651c0d540fce0da94a5f1340b6d"
+      },
+      {
+        "id": "urn:podway:schema:procedure-source-result:v1",
+        "path": "schemas/procedure-source-result-v1.schema.json",
+        "sha256": "sha256:8cbecbcf8ac5280b92f68893c9f5225ad1ec9d4664169867e2e614701e387bbe"
+      },
+      {
+        "id": "urn:podway:schema:procedure:v2",
+        "path": "schemas/procedure-v2.schema.json",
+        "sha256": "sha256:f83b217827be587238b20cf553e41bcf71ebdae116310566151ce8bcda7f4344"
+      },
+      {
+        "id": "urn:podway:schema:procedure-validation-result:v2",
+        "path": "schemas/procedure-validation-result-v2.schema.json",
+        "sha256": "sha256:d2c5462dd720ef24ead7b2c10ea4a7ca21cc638ac18c2d300f52f835eb720230"
+      },
+      {
+        "id": "urn:podway:schema:rework-result:v1",
+        "path": "schemas/rework-result-v1.schema.json",
+        "sha256": "sha256:ac46b49fa31932a27a46034e479e7e86dcbb30e1cd5367f10de4344ea8849b15"
+      },
+      {
+        "id": "urn:podway:schema:session-start-result:v2",
+        "path": "schemas/session-start-result-v2.schema.json",
+        "sha256": "sha256:5f139d4490ced94204f47b32591c0ab319dd2566e690d6d3b82a6b2391df20f7"
+      },
+      {
+        "id": "urn:podway:schema:stage-transition-result:v2",
+        "path": "schemas/stage-transition-result-v2.schema.json",
+        "sha256": "sha256:cdda58aab9fc323ceb6f6cce49017364de75ec89fd4ad0be027c3a67195cb266"
+      },
+      {
+        "id": "urn:podway:schema:status-result:v2",
+        "path": "schemas/status-result-v2.schema.json",
+        "sha256": "sha256:40daafcf5426c5367e4462dc2e42f4481bf169942ee8545076e6ae56edd828b3"
+      },
+      {
+        "id": "urn:podway:schema:v2-result-components:v1",
+        "path": "schemas/v2-result-components-v1.schema.json",
+        "sha256": "sha256:6ff1565a8d3b0f51b569fdd2f9002dcdd5699f517db78df30b20a62c04cf69f7"
+      },
+      {
+        "id": "urn:podway:schema:v2-runtime-error-details:v1",
+        "path": "schemas/v2-runtime-error-details-v1.schema.json",
+        "sha256": "sha256:7d6f76444e8219a43dda97b53d2562f83c2374870720d28d529c813f6158c366"
+      }
+    ]
+  },
+  "current_surface_counts": {
+    "authoring_diagnostics": 53,
+    "routes": 59,
+    "runtime_errors": 91,
+    "schemas": 53
+  },
+  "migration_boundary": {
+    "adapter_database_access": "forbidden",
+    "development_state_migration_promise": false,
+    "released_workspace_upgrade": "transactional-schema-v1-or-v2-to-v3",
+    "released_workspace_upgrade_owner": "podway-daemon",
+    "retained_v1_sessions": "preserved-with-immutable-v1-procedure-semantics",
+    "v1_history_conversion": "forbidden",
+    "v1_reopen": "not-reinterpreted-as-v2-reactivation",
+    "v2_downgrade": "forbidden"
+  },
+  "product": "podway",
+  "reactivation_notice": {
+    "adapter_action": "invalidate-terminal-cache-and-refresh-session-status",
+    "cancelled_session_reactivation": "forbidden",
+    "lifecycle_transition": "completed-to-running",
+    "notices": [
+      {
+        "command": "session.rework",
+        "input_flag": null,
+        "result_pointer": "/result/reactivated",
+        "result_schema": "podway.rework-result/v1",
+        "trigger_value": true
+      },
+      {
+        "command": "goal.revise",
+        "input_flag": "--reactivate",
+        "result_pointer": "/result/reactivated",
+        "result_schema": "podway.goal-revision-result/v1",
+        "trigger_value": true
+      }
+    ],
+    "v1_reopen_notification": false
+  },
+  "release_activation_owner": "V2REL-006",
+  "schema": "podway.dolgorae-v2-adapter-contract/v1",
+  "status": "prepared-not-released",
+  "version": 1
+}
