@@ -332,6 +332,18 @@ where
             created_at,
         )
     }
+
+    fn load_preset_snapshot_v2(
+        &self,
+        preset: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<
+        Option<(podway_store::ProcedureSnapshotV2, podway_core::Sha256Digest)>,
+        crate::execution::ProcedureV2SourceAdmissionErrorV1,
+    > {
+        EmbeddedPresetProcedureProviderV1.load_preset_snapshot_v2(preset, snapshot_id, created_at)
+    }
 }
 
 impl<I> NativeArtifactVerifierV1<I>

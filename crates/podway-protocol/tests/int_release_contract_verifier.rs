@@ -209,6 +209,23 @@ fn source_and_packaged_roots_share_one_authoritative_verifier() {
 }
 
 #[test]
+fn source_and_packaged_contract_roots_reject_v2_preset_byte_drift() {
+    for layout in [Layout::Source, Layout::Packaged] {
+        for logical in ["presets/bug-fix-v2.yaml", "presets/sw-dev-v2.yaml"] {
+            let fixture = ContractFixture::new(layout);
+            let path = physical_path(&fixture.root, fixture.layout, logical);
+            let mut bytes = fs::read(&path).expect("preset fixture bytes");
+            bytes.extend_from_slice(b"# drift\n");
+            fs::write(path, bytes).expect("mutate preset fixture");
+            assert!(
+                fixture.verify_valid().is_err(),
+                "{logical} drift must fail in source and packaged layouts"
+            );
+        }
+    }
+}
+
+#[test]
 fn complete_identity_validation_rejects_v011_and_generated_drift() {
     let fixture = ContractFixture::new(Layout::Source);
     let valid = fixture.valid_envelope();

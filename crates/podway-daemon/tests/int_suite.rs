@@ -48,6 +48,8 @@ mod int_phase5_reset_marker;
 mod int_phase5_reset_runtime;
 #[path = "int_phase8_observability.rs"]
 mod int_phase8_observability;
+#[path = "int_v2dog003_embedded_presets.rs"]
+mod int_v2dog003_embedded_presets;
 #[path = "int_v2drw001_decide.rs"]
 mod int_v2drw001_decide;
 #[path = "int_v2drw003_rework.rs"]

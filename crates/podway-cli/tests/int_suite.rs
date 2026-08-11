@@ -10,3 +10,5 @@ mod int_phase5_cli_contract;
 mod int_v2_authoring_cli;
 #[path = "int_v2_platform_cli.rs"]
 mod int_v2_platform_cli;
+#[path = "int_v2dog003_preset_cli.rs"]
+mod int_v2dog003_preset_cli;

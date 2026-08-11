@@ -431,7 +431,35 @@ def self_test() -> dict[str, Any]:
                 os.environ.pop("HOME", None)
             else:
                 os.environ["HOME"] = original_home
-    return {"mode": "self-test", "ok": True, "sentinels": 22}
+    with tempfile.TemporaryDirectory(prefix="podway-preset-archive-self-test-") as temporary_name:
+        temporary = Path(temporary_name)
+        staging = temporary / "staging"
+        manifest_target = staging / "share/podway/contracts/contract-manifest-v1.json"
+        manifest_target.parent.mkdir(parents=True)
+        shutil.copyfile(ROOT / "contracts/contract-manifest-v1.json", manifest_target)
+        for relative in packaged_preset_manifest_paths():
+            source = ROOT / repository_assets.logical_source(relative)
+            target = staging / "share/podway" / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+        archive_path = temporary / "presets.tar.gz"
+        write_archive(staging, archive_path)
+        with tarfile.open(archive_path, mode="r:gz") as archive:
+            verify_packaged_preset_identity(archive)
+
+        tampered = staging / "share/podway/presets/bug-fix-v2.yaml"
+        tampered.write_bytes(tampered.read_bytes() + b"# tampered\n")
+        tampered_archive = temporary / "tampered-presets.tar.gz"
+        write_archive(staging, tampered_archive)
+        try:
+            with tarfile.open(tampered_archive, mode="r:gz") as archive:
+                verify_packaged_preset_identity(archive)
+        except ReleaseError as error:
+            if "preset bytes differ" not in str(error):
+                fail("packaged preset tamper sentinel returned the wrong error")
+        else:
+            fail("packaged preset tamper sentinel was accepted")
+    return {"mode": "self-test", "ok": True, "sentinels": 24}
 
 
 def require_native_host() -> None:
@@ -676,6 +704,67 @@ def contract_manifest_asset_paths() -> list[Path]:
     return [Path(asset["path"]) for asset in manifest["assets"]]
 
 
+def packaged_preset_manifest_paths() -> list[Path]:
+    manifest = contract_manifest_document()
+    paths = [Path(asset["path"]) for asset in manifest["assets"] if asset.get("kind") == "preset"]
+    expected = [Path("presets/bug-fix-v2.yaml"), Path("presets/sw-dev-v2.yaml")]
+    if paths != expected:
+        fail(f"contract manifest preset identities drift: {paths}")
+    return paths
+
+
+def archive_member_bytes(archive: tarfile.TarFile, name: str, label: str) -> bytes:
+    try:
+        member = archive.getmember(name)
+    except KeyError:
+        fail(f"archive omits {label}: {name}")
+    if not member.isfile():
+        fail(f"archive {label} is not a regular file: {name}")
+    extracted = archive.extractfile(member)
+    if extracted is None:
+        fail(f"archive {label} cannot be read: {name}")
+    content = extracted.read(member.size + 1)
+    if len(content) != member.size:
+        fail(f"archive {label} length differs from its member metadata: {name}")
+    return content
+
+
+def verify_packaged_preset_identity(archive: tarfile.TarFile) -> list[str]:
+    manifest_name = f"{ARCHIVE_ROOT}/share/podway/contracts/contract-manifest-v1.json"
+    packaged_manifest = archive_member_bytes(archive, manifest_name, "contract manifest")
+    source_manifest = (ROOT / "contracts/contract-manifest-v1.json").read_bytes()
+    if packaged_manifest != source_manifest:
+        fail("archive contract manifest bytes differ from the canonical source")
+    try:
+        manifest = json.loads(packaged_manifest)
+    except json.JSONDecodeError as error:
+        fail(f"archive contract manifest is invalid JSON: {error}")
+
+    verified = []
+    for relative in packaged_preset_manifest_paths():
+        logical = relative.as_posix()
+        asset = next(
+            (
+                candidate
+                for candidate in manifest["assets"]
+                if candidate.get("kind") == "preset" and candidate.get("path") == logical
+            ),
+            None,
+        )
+        if asset is None:
+            fail(f"archive contract manifest omits preset identity: {logical}")
+        member_name = f"{ARCHIVE_ROOT}/share/podway/{logical}"
+        packaged = archive_member_bytes(archive, member_name, f"preset {logical}")
+        source = (ROOT / repository_assets.logical_source(relative)).read_bytes()
+        if packaged != source:
+            fail(f"archive preset bytes differ from the canonical source: {logical}")
+        observed_digest = f"sha256:{hashlib.sha256(packaged).hexdigest()}"
+        if observed_digest != asset.get("sha256"):
+            fail(f"archive preset digest differs from the contract manifest: {logical}")
+        verified.append(logical)
+    return verified
+
+
 def add_directory(archive: tarfile.TarFile, name: str) -> None:
     info = tarfile.TarInfo(name=name.rstrip("/") + "/")
     info.type = tarfile.DIRTYPE
@@ -738,6 +827,7 @@ def inspect_archive(path: Path) -> list[str]:
             if member.mode != expected_mode:
                 fail(f"archive file has an invalid mode: {member.name}")
             observed.add(member.name)
+        verify_packaged_preset_identity(archive)
     if observed != expected:
         fail(f"archive layout drift: missing={sorted(expected - observed)}, extra={sorted(observed - expected)}")
     return sorted(observed)

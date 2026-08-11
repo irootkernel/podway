@@ -568,6 +568,7 @@ fn validate_asset_shape(asset: &ManifestAssetV1) -> Result<(), ReleaseContractEr
             | "transition_matrix"
             | "canonicalization_rules"
             | "known_answer_fixture"
+            | "preset"
     ) || !is_sha256_identity(&asset.sha256)
     {
         return Err(ReleaseContractErrorV1::new(format!(

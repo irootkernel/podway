@@ -46,7 +46,7 @@ use podway_core::{
     ItemId, OptionId, PROCEDURE_SCHEMA_V2, ReasonV2, Revision, SessionId, Sha256Digest, UnixMillis,
     WorkspaceId,
 };
-use podway_presets::{PresetError, catalog_v1};
+use podway_presets::{PresetError, catalog_v1, catalog_v2};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1, JobOutputV1, JobStateV1,
     MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
@@ -1968,6 +1968,34 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
             "dry-run requires session start",
         ));
     };
+    if let Some(preset_name) = &args.preset
+        && let Some(preset) = catalog_v2().lookup(preset_name)
+    {
+        let admitted = preset
+            .validate()
+            .map_err(|error| preset_failure(error).with_command("session.start"))?;
+        let command = cli
+            .command
+            .daemon_wire_name()
+            .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
+        let result = json!({
+            "schema": "podway.session-start-result/v2",
+            "procedure_schema": PROCEDURE_SCHEMA_V2,
+            "procedure_digest": admitted.digest().as_str(),
+            "dry_run": true,
+            "goal_tracking": admitted.parsed().goal_tracking().is_some(),
+            "goal_defined": args.goal.is_some(),
+        })
+        .as_object()
+        .cloned()
+        .expect("v2 preset dry-run result is an object");
+        let text = format!(
+            "dry run: entry graph node {}",
+            admitted.parsed().graph().entry()
+        );
+        return Ok(local_result_v2(command, result, text, 0));
+    }
+
     let (definition, source, digest) = if let Some(preset) = &args.preset {
         let preset = catalog_v1().lookup(preset).ok_or_else(|| {
             LocalFailure::preset_not_found("unknown preset").with_command("session.start")
@@ -3351,10 +3379,16 @@ fn procedure_warning_output(warnings: &[ProcedureWarningV1]) -> Vec<Value> {
 fn execute_preset(command: &PresetCommand) -> Result<RunResult, LocalFailure> {
     match command {
         PresetCommand::List => {
-            let presets: Vec<Value> = catalog_v1().list().iter().map(|preset| {
-                let metadata = preset.metadata;
-                json!({ "id": metadata.id, "name": metadata.name, "version": metadata.version, "description": metadata.description })
-            }).collect();
+            let mut presets: Vec<Value> = catalog_v1()
+                .list()
+                .iter()
+                .map(|preset| preset.metadata)
+                .chain(catalog_v2().list().iter().map(|preset| preset.metadata))
+                .map(|metadata| {
+                    json!({ "id": metadata.id, "name": metadata.name, "version": metadata.version, "description": metadata.description })
+                })
+                .collect();
+            presets.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
             let text = presets
                 .iter()
                 .filter_map(|preset| preset.get("id").and_then(Value::as_str))
@@ -3367,6 +3401,29 @@ fn execute_preset(command: &PresetCommand) -> Result<RunResult, LocalFailure> {
             ))
         }
         PresetCommand::Show { name } => {
+            if let Some(preset) = catalog_v2().lookup(name) {
+                let admitted = preset
+                    .validate()
+                    .map_err(|error| preset_failure(error).with_command("preset.show"))?;
+                let procedure: Value = serde_json::from_str(admitted.canonical_json().as_str())
+                    .map_err(|_| {
+                        LocalFailure::procedure_invalid(
+                            "embedded Procedure v2 canonical JSON is invalid",
+                        )
+                        .with_command("preset.show")
+                    })?;
+                return Ok(local_result(
+                    "preset.show",
+                    json!({
+                        "preset": preset.metadata.id,
+                        "metadata": preset.metadata,
+                        "digest": admitted.digest().as_str(),
+                        "procedure": procedure,
+                        "warnings": [],
+                    }),
+                    preset.yaml.to_owned(),
+                ));
+            }
             let preset = catalog_v1().lookup(name).ok_or_else(|| {
                 LocalFailure::preset_not_found("unknown preset").with_command("preset.show")
             })?;
@@ -3387,6 +3444,52 @@ fn execute_preset(command: &PresetCommand) -> Result<RunResult, LocalFailure> {
             ))
         }
         PresetCommand::Explain { name } => {
+            if let Some(preset) = catalog_v2().lookup(name) {
+                let admitted = preset
+                    .validate()
+                    .map_err(|error| preset_failure(error).with_command("preset.explain"))?;
+                let document: Value = serde_json::from_str(admitted.canonical_json().as_str())
+                    .map_err(|_| {
+                        LocalFailure::procedure_invalid(
+                            "embedded Procedure v2 canonical JSON is invalid",
+                        )
+                        .with_command("preset.explain")
+                    })?;
+                let definitions = document["node_definitions"]
+                    .as_object()
+                    .expect("validated Procedure v2 has node definitions");
+                let nodes: Vec<Value> = document["graph"]["nodes"]
+                    .as_array()
+                    .expect("validated Procedure v2 has graph nodes")
+                    .iter()
+                    .map(|node| {
+                        let definition = node["use"]
+                            .as_str()
+                            .and_then(|id| definitions.get(id))
+                            .expect("validated graph node resolves its definition");
+                        json!({
+                            "id": node["id"],
+                            "title": definition["title"],
+                            "type": definition["type"],
+                        })
+                    })
+                    .collect();
+                let text = format!(
+                    "{}\n{}\nGraph nodes: {}",
+                    preset.metadata.name,
+                    preset.metadata.description,
+                    nodes
+                        .iter()
+                        .filter_map(|node| node.get("id").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                return Ok(local_result(
+                    "preset.explain",
+                    json!({ "preset": preset.metadata, "nodes": nodes }),
+                    text,
+                ));
+            }
             let preset = catalog_v1().lookup(name).ok_or_else(|| {
                 LocalFailure::preset_not_found("unknown preset").with_command("preset.explain")
             })?;

@@ -33,7 +33,7 @@ use podway_core::{
     StartReplaceSessionV1, StartSessionV1, TraceSequenceV2, UnblockSessionV1, UncheckItemV1,
     UnixMillis, WorkspaceId, apply_transition_v1, canonicalize_json_v1, required_items_satisfied,
 };
-use podway_presets::lookup as lookup_embedded_preset_v1;
+use podway_presets::{EmbeddedPresetV2, catalog_v2, lookup as lookup_embedded_preset_v1};
 use podway_protocol::{
     GoalAssessCriterionV2, GoalCriterionWireV2, GoalDefineV2, GoalReviseV2, ItemAddV1,
     ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1, ItemRemoveV1, ItemSetV1,
@@ -259,6 +259,52 @@ fn verify_pinned_procedure_v2_snapshot(
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EmbeddedPresetProcedureProviderV1;
 
+fn embedded_preset_snapshot_v2(
+    preset: EmbeddedPresetV2,
+    snapshot_id: ProcedureSnapshotId,
+    created_at: UnixMillis,
+) -> Result<(ProcedureSnapshotV2, Sha256Digest), ProcedureV2SourceAdmissionErrorV1> {
+    let admitted = preset.validate_source().map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "embedded Procedure v2 preset admission failed",
+            },
+        ))
+    })?;
+    let canonical_json = CanonicalProcedureJsonV1::new(
+        admitted.canonical_json().as_str().to_owned(),
+    )
+    .map_err(|error| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
+    })?;
+    let source_label = preset.metadata.source_label().map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "embedded Procedure v2 preset source label is invalid",
+            },
+        ))
+    })?;
+    let source = ProcedureSourceLabelV1::new(source_label.display_label()).map_err(|error| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
+    })?;
+    let pinned_digest = admitted.pinned_digest().clone();
+    let snapshot = ProcedureSnapshotV2::new(
+        snapshot_id,
+        canonical_json,
+        admitted.digest().clone(),
+        source,
+        created_at,
+    )
+    .map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "embedded Procedure v2 preset snapshot admission failed",
+            },
+        ))
+    })?;
+    Ok((snapshot, pinned_digest))
+}
+
 impl ProcedureProviderV1 for EmbeddedPresetProcedureProviderV1 {
     fn load_preset_snapshot(
         &self,
@@ -295,6 +341,19 @@ impl ProcedureProviderV1 for EmbeddedPresetProcedureProviderV1 {
                 reason: "workspace procedure sources require native workspace authority",
             },
         ))
+    }
+
+    fn load_preset_snapshot_v2(
+        &self,
+        preset: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<Option<(ProcedureSnapshotV2, Sha256Digest)>, ProcedureV2SourceAdmissionErrorV1>
+    {
+        let Some(preset) = catalog_v2().lookup(preset) else {
+            return Ok(None);
+        };
+        embedded_preset_snapshot_v2(preset, snapshot_id, created_at).map(Some)
     }
 }
 
@@ -7426,6 +7485,28 @@ mod tests {
             sha256_hex_v1(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn v2dog003_embedded_snapshot_preserves_pin_mismatch_for_the_final_fence() {
+        let preset = EmbeddedPresetV2 {
+            shipped_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ..catalog_v2().lookup("bug-fix-v2").unwrap()
+        };
+        let (snapshot, pinned) = embedded_preset_snapshot_v2(
+            preset,
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000999").unwrap(),
+            UnixMillis::new(1),
+        )
+        .expect("source-valid preset must reach the independent runtime digest fence");
+        assert_ne!(snapshot.digest(), &pinned);
+        assert!(matches!(
+            verify_pinned_procedure_v2_snapshot(&snapshot, &pinned),
+            Err(ProcedureV2StartPreparationErrorV1::PinnedPresetDigestMismatch {
+                expected,
+                actual,
+            }) if expected == pinned && actual == *snapshot.digest()
+        ));
     }
 
     #[test]
