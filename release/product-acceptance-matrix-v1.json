@@ -610,13 +610,13 @@
       "id": "PAC-039",
       "line": 60,
       "proof": {
-        "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum --locked -- --exact",
-        "function": "schema0_initializes_and_reopens_with_exact_pragmas_and_migration_checksum",
+        "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation --locked -- --exact",
+        "function": "pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation",
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_phase2_schema_codec.rs"
       },
       "status": "automated",
-      "text": "Migration diagnostics identify predecessor `schema-0-uninitialized` and result `schema-v1` for the non-file `uninitialized-database` initialization fixture."
+      "text": "The non-file `uninitialized-database` fixture starts from exact schema-0 state and commits canonical schema-v3."
     },
     {
       "id": "PAC-040",
@@ -630,7 +630,7 @@
             "criterion_id": "PAC-040",
             "function": "pac_040_schema0_pragmas_transactional_initialization_preserves_task_state_without_duplicate_mutation",
             "obligation_ids": [
-              "exact-schema0-predecessor-and-v1-pragmas",
+              "exact-schema0-predecessor-and-v3-pragmas",
               "transactional-initialization-no-partial-installation",
               "retained-predecessor-state-not-lost",
               "reopen-does-not-duplicate-migration-or-mutation"
@@ -640,7 +640,7 @@
         ]
       },
       "status": "automated",
-      "text": "Deterministic schema-0 to v1 conformance proves required pragmas, transactional initialization, no user task-state loss, no duplicated mutation, and no partial installation."
+      "text": "Deterministic schema-0 to v3 conformance proves required pragmas, transactional initialization, no user task-state loss, no duplicated mutation, and no partial installation."
     },
     {
       "id": "PAC-041",
@@ -1076,49 +1076,157 @@
       "id": "PAC-068",
       "line": 101,
       "proof": {
-        "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
-        "function": "pac_068_071_built_in_preset_table_conformance",
-        "kind": "cargo-test",
-        "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+        "criterion_id": "PAC-068",
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
+            "criterion_id": "PAC-068",
+            "function": "pac_068_071_built_in_preset_table_conformance",
+            "obligation_ids": [
+              "retained-v1-presets-validate-and-run"
+            ],
+            "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+          },
+          {
+            "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::shipped_preset_digests_are_pinned_as_released_canonical_results --locked -- --exact",
+            "criterion_id": "PAC-068",
+            "function": "shipped_preset_digests_are_pinned_as_released_canonical_results",
+            "obligation_ids": [
+              "retained-v1-preset-released-digests-remain-pinned"
+            ],
+            "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+          },
+          {
+            "command": "cargo test -p podway-presets --test int_suite int_v2dog003_preset_identity::v2_presets_embed_the_exact_canonical_sources_and_pinned_digests --locked -- --exact",
+            "criterion_id": "PAC-068",
+            "function": "v2_presets_embed_the_exact_canonical_sources_and_pinned_digests",
+            "obligation_ids": [
+              "shipped-v2-presets-validate-vet-and-pin-identity"
+            ],
+            "path": "crates/podway-presets/tests/int_v2dog003_preset_identity.rs"
+          }
+        ]
       },
       "status": "automated",
-      "text": "`sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate against the shipped schema."
+      "text": "The retained v1 presets `sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate without semantic drift, while the shipped pre-GA v2 presets `sw-dev-v2` and `bug-fix-v2` validate and vet with their embedded bytes and pinned digests intact."
     },
     {
       "id": "PAC-069",
       "line": 102,
       "proof": {
-        "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
-        "function": "pac_068_071_built_in_preset_table_conformance",
-        "kind": "cargo-test",
-        "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+        "criterion_id": "PAC-069",
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
+            "criterion_id": "PAC-069",
+            "function": "pac_068_071_built_in_preset_table_conformance",
+            "obligation_ids": [
+              "retained-v1-preset-help-and-stage-descriptions"
+            ],
+            "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+          },
+          {
+            "command": "cargo test -p podway-cli --test int_suite int_v2dog004_guidance::completion_and_overview_expose_the_shipped_v2_presets --locked -- --exact",
+            "criterion_id": "PAC-069",
+            "function": "completion_and_overview_expose_the_shipped_v2_presets",
+            "obligation_ids": [
+              "shipped-v2-preset-help-and-graph-guidance"
+            ],
+            "path": "crates/podway-cli/tests/int_v2dog004_guidance.rs"
+          }
+        ]
       },
       "status": "automated",
-      "text": "Each preset has clear help and stage descriptions."
+      "text": "Each retained v1 preset has clear help and stage descriptions, while CLI help exposes the shipped v2 preset identities and graph-workflow guidance."
     },
     {
       "id": "PAC-070",
       "line": 103,
       "proof": {
-        "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
-        "function": "pac_068_071_built_in_preset_table_conformance",
-        "kind": "cargo-test",
-        "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+        "criterion_id": "PAC-070",
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
+            "criterion_id": "PAC-070",
+            "function": "pac_068_071_built_in_preset_table_conformance",
+            "obligation_ids": [
+              "retained-v1-presets-complete-end-to-end"
+            ],
+            "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+          },
+          {
+            "command": "cargo test -p podway-config --test int_suite int_v2dog001_sw_dev_preset::sw_dev_v2_is_canonical_clean_and_exercises_the_full_graph_contract --locked -- --exact",
+            "criterion_id": "PAC-070",
+            "function": "sw_dev_v2_is_canonical_clean_and_exercises_the_full_graph_contract",
+            "obligation_ids": [
+              "sw-dev-v2-full-graph-conformance"
+            ],
+            "path": "crates/podway-config/tests/int_v2dog001_sw_dev_preset.rs"
+          },
+          {
+            "command": "cargo test -p podway-config --test int_suite int_v2dog002_bug_fix_preset::bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow --locked -- --exact",
+            "criterion_id": "PAC-070",
+            "function": "bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow",
+            "obligation_ids": [
+              "bug-fix-v2-full-graph-conformance"
+            ],
+            "path": "crates/podway-config/tests/int_v2dog002_bug_fix_preset.rs"
+          },
+          {
+            "command": "cargo test -p podway-presets --test int_suite int_v2dog003_preset_identity::v2_presets_embed_the_exact_canonical_sources_and_pinned_digests --locked -- --exact",
+            "criterion_id": "PAC-070",
+            "function": "v2_presets_embed_the_exact_canonical_sources_and_pinned_digests",
+            "obligation_ids": [
+              "shipped-v2-preset-embedded-identity"
+            ],
+            "path": "crates/podway-presets/tests/int_v2dog003_preset_identity.rs"
+          }
+        ]
       },
       "status": "automated",
-      "text": "Each preset passes a complete end-to-end scenario."
+      "text": "Each retained v1 preset passes a complete end-to-end scenario, while both v2 presets pass full-graph conformance and embedded-identity checks."
     },
     {
       "id": "PAC-071",
       "line": 104,
       "proof": {
-        "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
-        "function": "pac_068_071_built_in_preset_table_conformance",
-        "kind": "cargo-test",
-        "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+        "criterion_id": "PAC-071",
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "command": "cargo test -p podway-presets --test int_suite int_phase1_presets::pac_068_071_built_in_preset_table_conformance --locked -- --exact",
+            "criterion_id": "PAC-071",
+            "function": "pac_068_071_built_in_preset_table_conformance",
+            "obligation_ids": [
+              "retained-v1-preset-retry-and-return"
+            ],
+            "path": "crates/podway-presets/tests/int_phase1_presets.rs"
+          },
+          {
+            "command": "cargo test -p podway-config --test int_suite int_v2dog001_sw_dev_preset::sw_dev_v2_is_canonical_clean_and_exercises_the_full_graph_contract --locked -- --exact",
+            "criterion_id": "PAC-071",
+            "function": "sw_dev_v2_is_canonical_clean_and_exercises_the_full_graph_contract",
+            "obligation_ids": [
+              "sw-dev-v2-decision-and-rework-contract"
+            ],
+            "path": "crates/podway-config/tests/int_v2dog001_sw_dev_preset.rs"
+          },
+          {
+            "command": "cargo test -p podway-config --test int_suite int_v2dog002_bug_fix_preset::bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow --locked -- --exact",
+            "criterion_id": "PAC-071",
+            "function": "bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow",
+            "obligation_ids": [
+              "bug-fix-v2-decision-and-rework-contract"
+            ],
+            "path": "crates/podway-config/tests/int_v2dog002_bug_fix_preset.rs"
+          }
+        ]
       },
       "status": "automated",
-      "text": "Each preset passes at least one retry and one return scenario across the conformance suite."
+      "text": "Each retained v1 preset executes retry and return, while both v2 presets declare their bounded decision and rework scenarios."
     },
     {
       "id": "PAC-072",
@@ -1561,16 +1669,16 @@
       "criterion_id": "PAC-040",
       "obligations": [
         {
-          "id": "exact-schema0-predecessor-and-v1-pragmas",
-          "statement": "Conformance starts from the exact schema-0-uninitialized predecessor and verifies the required schema-v1 pragmas and objects."
+          "id": "exact-schema0-predecessor-and-v3-pragmas",
+          "statement": "Conformance starts from the exact schema-0-uninitialized predecessor and verifies the required schema-v3 pragmas and objects."
         },
         {
           "id": "transactional-initialization-no-partial-installation",
-          "statement": "An injected initialization failure rolls back to schema 0 with no partial v1 installation."
+          "statement": "An injected initialization failure rolls back to schema 0 with no partial schema-v3 installation."
         },
         {
           "id": "retained-predecessor-state-not-lost",
-          "statement": "All state admitted in the schema-0 fixture is preserved except the explicitly declared v1 installation changes."
+          "statement": "All state admitted in the schema-0 fixture is preserved except the explicitly declared schema-v3 installation changes."
         },
         {
           "id": "reopen-does-not-duplicate-migration-or-mutation",
@@ -1756,6 +1864,74 @@
         {
           "id": "absence-survives-sqlite-reopen",
           "statement": "The sentinel remains absent after closing and reopening the real SQLite store."
+        }
+      ]
+    },
+    {
+      "criterion_id": "PAC-068",
+      "obligations": [
+        {
+          "id": "retained-v1-presets-validate-and-run",
+          "statement": "All four retained v1 presets validate through the v1 catalog and complete the original transition scenarios."
+        },
+        {
+          "id": "retained-v1-preset-released-digests-remain-pinned",
+          "statement": "All four retained v1 preset canonical digests remain fixed at their released identities."
+        },
+        {
+          "id": "shipped-v2-presets-validate-vet-and-pin-identity",
+          "statement": "Both shipped v2 presets parse, validate, vet, and retain their exact embedded source bytes and pinned canonical digests."
+        }
+      ]
+    },
+    {
+      "criterion_id": "PAC-069",
+      "obligations": [
+        {
+          "id": "retained-v1-preset-help-and-stage-descriptions",
+          "statement": "Every retained v1 preset has non-empty preset help, stage descriptions, instructions, prompts, and optional item help."
+        },
+        {
+          "id": "shipped-v2-preset-help-and-graph-guidance",
+          "statement": "CLI overview, workflow help, and completion expose the shipped v2 presets and their graph-specific operating guidance."
+        }
+      ]
+    },
+    {
+      "criterion_id": "PAC-070",
+      "obligations": [
+        {
+          "id": "retained-v1-presets-complete-end-to-end",
+          "statement": "Each retained v1 preset starts, retries, returns, advances, and completes through the real transition engine."
+        },
+        {
+          "id": "sw-dev-v2-full-graph-conformance",
+          "statement": "The shipped sw-dev-v2 preset is canonical and exercises its complete goal, decision, skip, evidence, and rework graph contract."
+        },
+        {
+          "id": "bug-fix-v2-full-graph-conformance",
+          "statement": "The shipped bug-fix-v2 preset is canonical and exercises its complete defect, goal, decision, evidence, and rework graph contract."
+        },
+        {
+          "id": "shipped-v2-preset-embedded-identity",
+          "statement": "Both shipped v2 presets retain their exact embedded bytes and independent canonical digest pins."
+        }
+      ]
+    },
+    {
+      "criterion_id": "PAC-071",
+      "obligations": [
+        {
+          "id": "retained-v1-preset-retry-and-return",
+          "statement": "Every retained v1 preset exercises retry and return before successful completion."
+        },
+        {
+          "id": "sw-dev-v2-decision-and-rework-contract",
+          "statement": "The shipped sw-dev-v2 graph contains the declared decision and bounded rework scenarios."
+        },
+        {
+          "id": "bug-fix-v2-decision-and-rework-contract",
+          "statement": "The shipped bug-fix-v2 graph contains the declared decision and bounded rework scenarios."
         }
       ]
     },

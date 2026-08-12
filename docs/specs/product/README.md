@@ -56,7 +56,7 @@ Deleting the worktree deletes the task session and all task-local operational da
 | Cross-worktree behavior | Different worktrees may process mutations concurrently |
 | Workspace requirement | Git worktree required; workspace commands fail closed otherwise |
 | State location | Inside `.podway/runtime/` in the worktree |
-| Initial database state | schema-0/uninitialized; initialize or migrate transactionally to canonical schema-v1 |
+| Initial database state | schema-0/uninitialized; initialize or migrate transactionally to canonical schema-v3 |
 | Implementation | Rust |
 | Release and support platform | Native Apple Silicon macOS only (`aarch64-apple-darwin`, thin arm64 Mach-O) |
 | Service lifecycle | User LaunchAgent, started at login |
@@ -66,7 +66,7 @@ Deleting the worktree deletes the task session and all task-local operational da
 | Artifact handling | Path/reference, SHA-256 digest, byte size, and media type only |
 | Authentication | Same-user local trust; no worktree access key |
 | External integrations | Generic CLI and JSON only |
-| Built-in presets | `sw-dev`, `bug-fix`, `docs-only`, `analysis` |
+| Built-in presets | Retained v1: `sw-dev`, `bug-fix`, `docs-only`, `analysis`; implemented pre-GA v2: `sw-dev-v2`, `bug-fix-v2` |
 | License | MIT |
 
 ## Success model
@@ -105,21 +105,23 @@ metadata rather than artifact bytes, and exposes no Git mutation API.
 
 ## Supported boundary
 
-The complete `v0.1.2` public release is a macOS product with:
+The `v0.2.0` candidate is a native Apple Silicon macOS product with:
 
-- both binaries;
+- matching `podway` and `podwayd` binaries;
 - LaunchAgent installation and lifecycle management;
-- all commands in the published v0.1.2 contract;
-- stable versioned JSON and IPC v1;
-- SQLite schema v1 and migrations;
-- the four built-in presets;
+- byte-compatible released v1 commands, JSON families, IPC, and Procedure behavior;
+- additive Procedure v2 authoring and runtime contracts;
+- transactional schema-0, schema-v1, and schema-v2 migration to canonical SQLite schema-v3;
+- four retained v1 presets and two shipped pre-GA v2 presets;
 - shell completion for zsh, bash, and fish;
-- complete crash, concurrency, Git, service, and preset conformance tests;
+- complete crash, concurrency, Git, service, compatibility, and preset conformance tests;
 - MIT licensing and release packaging.
 
-The current source checkout also contains development-only Procedure v2 surfaces.
-They are not part of the released boundary until the V2REL roadmap deliberately
-promotes them.
+Normal v2 session admission remains closed in the candidate source: development
+execution requires the isolated disposable unlock, and no public v2 support boundary
+exists yet. V2REL-006 qualifies unlock-free artifacts; V2REL-007 may enable public
+admission only after explicit release authorization. The released `v0.1.2` surface
+remains the compatibility baseline.
 
 Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts
 are not Podway releases. Conditional non-macOS implementation code is internal and

@@ -11,7 +11,7 @@ Podway ships two matching binaries:
 
 ## When to use Podway
 
-Use Podway when a task has steps that should not be skipped, especially when work may be retried, handed between people or agents, or sent back to an earlier stage. Four built-in procedures cover common work:
+Use Podway when a task has steps that should not be skipped, especially when work may be retried, handed between people or agents, or sent back to an earlier stage. Six built-in procedures cover common work:
 
 | Preset | Best for |
 |---|---|
@@ -19,6 +19,14 @@ Use Podway when a task has steps that should not be skipped, especially when wor
 | `bug-fix` | Reproduction, diagnosis, repair, and regression coverage |
 | `docs-only` | Documentation changes with source and link validation |
 | `analysis` | Investigations that end in supported conclusions |
+| `sw-dev-v2` | Graph-based implementation work with decisions, evidence read-back, rework, and goal assessment |
+| `bug-fix-v2` | Graph-based defect repair with decision rework and goal closeout |
+
+The four unversioned presets retain the v1 lifecycle. The two `-v2` presets are
+shipped and inspectable in the v0.2.0 candidate, while non-dry-run Procedure v2
+admission remains limited to the documented disposable development runtime.
+V2REL-006 qualifies unlock-free artifacts; V2REL-007 may enable public admission
+only after explicit release authorization.
 
 Podway is not a project manager, CI system, command runner, Git automation layer, artifact store, or multi-user access-control service.
 
@@ -175,7 +183,14 @@ podway next --json
 
 Automation must use JSON fields and stable error codes, never parse human output. Mutations support idempotency keys, revision preconditions, detached admission, job lookup, and durable outcome reconciliation.
 
-The adopted v0.2 design extends this contract into an evidence-gated, goal-directed workflow memory: procedures become declarative graphs whose decisions and rework are recorded, still with exactly one active attempt. The [roadmap](docs/roadmap/README.md) tracks its delivery.
+The v0.2.0 candidate implements an evidence-gated, goal-directed workflow memory:
+Procedure v2 documents are declarative graphs with recorded decisions, selected
+evidence read-back, explicit rework, goal revision, and goal assessment, still with
+exactly one active attempt. Static authoring and inspection are available in the
+normal CLI. Runtime admission is pre-GA and remains restricted to the managed
+disposable development boundary. V2REL-006 qualifies the unlock-free distribution,
+and V2REL-007 owns explicitly authorized public activation. See the [Procedure v2 walkthrough](docs/examples/v2-workflow.md)
+and the [roadmap](docs/roadmap/README.md).
 
 ## Local data and trust
 

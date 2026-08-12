@@ -57,8 +57,8 @@ The criteria below describe the implemented baseline checked by `make test` and 
 ## Persistence
 
 - SQLite schema, foreign keys, WAL, and synchronous durability are configured as specified.
-- Migration diagnostics identify predecessor `schema-0-uninitialized` and result `schema-v1` for the non-file `uninitialized-database` initialization fixture.
-- Deterministic schema-0 to v1 conformance proves required pragmas, transactional initialization, no user task-state loss, no duplicated mutation, and no partial installation.
+- The non-file `uninitialized-database` fixture starts from exact schema-0 state and commits canonical schema-v3.
+- Deterministic schema-0 to v3 conformance proves required pragmas, transactional initialization, no user task-state loss, no duplicated mutation, and no partial installation.
 - Migrations are transactional and checksummed.
 - Unsupported newer state fails closed.
 - Corrupt state fails closed and is diagnosable.
@@ -98,10 +98,10 @@ The criteria below describe the implemented baseline checked by `make test` and 
 
 ## Built-in presets
 
-- `sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate against the shipped schema.
-- Each preset has clear help and stage descriptions.
-- Each preset passes a complete end-to-end scenario.
-- Each preset passes at least one retry and one return scenario across the conformance suite.
+- The retained v1 presets `sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate without semantic drift, while the shipped pre-GA v2 presets `sw-dev-v2` and `bug-fix-v2` validate and vet with their embedded bytes and pinned digests intact.
+- Each retained v1 preset has clear help and stage descriptions, while CLI help exposes the shipped v2 preset identities and graph-workflow guidance.
+- Each retained v1 preset passes a complete end-to-end scenario, while both v2 presets pass full-graph conformance and embedded-identity checks.
+- Each retained v1 preset executes retry and return, while both v2 presets declare their bounded decision and rework scenarios.
 
 ## Distribution
 

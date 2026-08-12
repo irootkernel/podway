@@ -57,7 +57,7 @@ This matrix gives the implementation and QA teams stable requirement identifiers
 | `STO-008` | Corrupt state fails closed | Recovery | Corruption injection |
 | `STO-009` | Retention is bounded | Recovery | Pruning tests |
 | `STO-010` | Global registry contains no task data | Recovery | Registry schema test |
-| `STO-011` | Initial `schema-0`/uninitialized (`uninitialized-database`) state migrates transactionally to `schema-v1` | SQLite model | Initial-migration atomicity test |
+| `STO-011` | Initial `schema-0`/uninitialized (`uninitialized-database`) state initializes transactionally to canonical `schema-v3` | SQLite model | Initial-migration atomicity test |
 
 ## Interface requirements
 

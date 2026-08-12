@@ -51,7 +51,10 @@ A reference model independent of the production transition implementation SHOULD
 
 ## Procedure and canonicalization tests
 
-- all built-in presets validate;
+- all four retained v1 presets and both shipped v2 presets validate through their
+  schema-specific production paths;
+- both v2 presets are vet-clean and their canonical digests match the independent
+  embedded pins;
 - YAML and equivalent JSON produce the same canonical digest;
 - map key order and insignificant whitespace do not affect digest;
 - defaults do affect canonical output consistently;
@@ -72,10 +75,10 @@ A reference model independent of the production transition implementation SHOULD
 ## SQLite tests
 
 - reference DDL creates an empty valid database;
-- the deterministic non-file `uninitialized-database` fixture migrates from `schema-0-uninitialized` to `schema-v1`;
+- the deterministic non-file `uninitialized-database` fixture migrates from `schema-0-uninitialized` to canonical `schema-v3`;
 - every migration applies from each supported prior schema;
 - migration checksums are verified;
-- deterministic schema-0 to v1 conformance evidence verifies required pragmas, transactional initialization, no user task-state loss, no duplicated mutation, and no partial installation;
+- deterministic schema-0 to v3 conformance evidence verifies required pragmas, transactional initialization, no user task-state loss, no duplicated mutation, and no partial installation;
 - foreign keys and checks are active;
 - session reset cascades only session-scoped rows;
 - idempotency responses survive terminal-job pruning;
@@ -136,8 +139,8 @@ For each point, restart and assert one valid outcome: no admission, one queued r
 ## Migration conformance
 
 The local integration suite MUST exercise the deterministic
-`uninitialized-database` schema-0 to v1 fixture. It verifies predecessor
-`schema-0-uninitialized`, result `schema-v1`, required pragmas, transactional
+`uninitialized-database` schema-0 to v3 fixture. It verifies predecessor
+`schema-0-uninitialized`, result `schema-v3`, required pragmas, transactional
 initialization, retained user task state, non-duplicated mutation, and atomic
 installation. A separate release-evidence file is not required.
 
@@ -357,7 +360,8 @@ stages sequentially:
 - `contract-verifier-test`: offline feature-gated verifier lint and source/package
   parity plus negative controls;
 - `test-e2e`: serial user journeys through real debug product binaries and shells,
-  including a start/status/next smoke for all four presets;
+  including a start/status/next smoke for all four retained v1 presets and native
+  qualification of shipped-preset v2 behavior under the isolated disposable unlock;
 - `preset-tool-test`: contributor preset create/import verification against the
   prepared debug CLI;
 - `dev-runtime-test`: isolated contributor development-runtime self-test, including
@@ -366,6 +370,11 @@ stages sequentially:
   through success, decision rework, goal revision, retry, skip, same-snapshot
   restart, achieved closeout, temporary-state deletion, and a v1 regression
   transition.
+
+The v2 preset and runtime checks prove implemented pre-GA behavior only. They must
+also prove that an ordinary endpoint and a release-profile build keep v2 session
+admission closed; no focused or development-runtime check promotes the public
+support boundary.
 
 The E2E layer builds the debug product binaries once. Preset-tool verification
 runs afterward against that prepared CLI instead of initiating another build, and

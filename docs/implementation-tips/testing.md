@@ -38,7 +38,11 @@ from or duplicated across aggregate suites.
 ## Optional diagnostics
 
 - `python3 tools/run_g005_vertical.py` exercises the production command path.
-- `python3 tools/run_g008_dogfood.py` exercises all four built-in presets.
+- `python3 tools/run_g008_dogfood.py` exercises the four retained v1 presets.
+- `python3 tools/dev_runtime.py self-test` exercises the implemented `sw-dev-v2`
+  workflow in isolated disposable state; the broader development gate also
+  verifies both shipped v2 preset identities while normal v2 admission remains
+  closed.
 - The pinned fuzz targets cover canonical JSON, selectors, response compatibility,
   and procedure parsing.
 

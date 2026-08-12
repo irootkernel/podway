@@ -2,12 +2,12 @@
 
 ## Release scope
 
-The complete `v0.1.2` public release is a macOS product. It includes:
+The `v0.2.0` release candidate is a macOS product. It includes:
 
 - `podway`;
 - `podwayd`;
 - LaunchAgent support;
-- four embedded presets;
+- six embedded presets: four retained v1 procedures and two Procedure v2 procedures;
 - JSON schemas and user documentation;
 - zsh, bash, and fish completion;
 - MIT License;
@@ -23,13 +23,13 @@ Podway uses semantic versioning for product releases.
 Independent versioned contracts:
 
 ```text
-product binary version: 0.1.2
+product binary version: 0.2.0
 IPC: podway.ipc/v1
-output: podway.output/v1
+output: podway.output/v1 and podway.output/v2
 error: podway.error/v1
 workspace config: podway.workspace/v1
-procedure: podway.procedure/v1
-SQLite schema: integer migration version
+procedure: podway.procedure/v1 and podway.procedure/v2
+SQLite schema: integer migration version, currently schema-v3
 ```
 
 A product minor release may add backward-compatible fields or commands. Breaking public contract changes require a new contract version and migration plan.
@@ -131,7 +131,7 @@ verifies Podway's executable and IPC interfaces; it does not retest macOS launch
 itself.
 
 After packaged conformance passes, the deterministic
-`podway-0.1.2-aarch64-apple-darwin.dolgorae-handoff.json` document publishes the
+`podway-0.2.0-aarch64-apple-darwin.dolgorae-handoff.json` document publishes the
 archive and binary digests, build and contract identities, provenance digest,
 source commit and Git tree, Rust toolchain, and Cargo.lock digest. Dolgorae pins
 this closed identity set rather than inferring compatibility from a version string.
@@ -264,9 +264,10 @@ unlock is absent before public v2 admission can be enabled.
 ## Support policy
 
 Podway releases only for currently supported macOS major versions on native Apple
-Silicon. The exact minimum deployment target is recorded in release engineering
-configuration and release notes. Supporting another architecture or operating
-system requires a superseding architecture decision and native release gate.
+Silicon. The native release gate verifies the emitted deployment load command but
+does not promise a separately pinned minimum macOS version. Supporting another
+architecture or operating system requires a superseding architecture decision and
+native release gate.
 
 ## License
 

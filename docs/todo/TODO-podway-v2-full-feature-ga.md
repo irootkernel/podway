@@ -9,7 +9,7 @@
   `V2DRW`, `V2GOL`, `V2DOG`, and `V2REL`
 - Target product release: `v0.2.0`
 - Contract target: `podway.procedure/v2`
-- Implementation status: Not implemented
+- Implementation status: Implemented pre-GA; V2REL-005 through V2REL-007 and public activation remain pending
 - Compatibility: `podway.procedure/v1` remains supported with unchanged semantics
 - Repository scope: Podway only; Dolgorae changes require separate authorization
 - Last accepted planning baseline: August 4, 2026

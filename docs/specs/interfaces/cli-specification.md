@@ -4,11 +4,12 @@
 
 The public command is `podway`. The daemon binary is `podwayd` and is normally managed through `podway daemon ...`.
 
-This document describes the grammar implemented in the current source checkout,
-including its automation options and result surfaces. The released v0.1.2 identity
-and surface remain the compatibility baseline; the Procedure v2 additions described
-here are development-gated and unreleased until the V2REL roadmap deliberately
-promotes them.
+This document describes the grammar implemented in the current v0.2.0 source
+candidate, including its automation options and result surfaces. The released
+v0.1.2 identity and surface remain the compatibility baseline. Procedure v2
+authoring and runtime contracts are implemented, but normal runtime admission
+remains closed. V2REL-006 qualifies unlock-free artifacts; V2REL-007 may enable
+public admission only after explicit release authorization.
 
 ## Global options
 
@@ -44,7 +45,7 @@ Durations accept `ms`, `s`, and `m`, for example `500ms`, `30s`, and `2m`.
 - Human-readable text is the default.
 - `--json` emits exactly one success or error JSON object to stdout. The compact
   `version --json` success form is the deliberate exception to the common output
-  envelope and is exactly `{"name":"podway","version":"v0.1.2"}` for the current
+  envelope and is exactly `{"name":"podway","version":"v0.2.0"}` for the current
   development identity.
 - Diagnostics not represented in the JSON object go to stderr only for process-level failures before JSON can be produced.
 - Color is used only on a TTY and never in JSON.
@@ -88,7 +89,7 @@ podwayd version --json
 podwayd version --json --identity
 ```
 
-Its compact form is `{"name":"podwayd","version":"v0.1.2"}`. The identity
+Its compact form is `{"name":"podwayd","version":"v0.2.0"}`. The identity
 form retains the versioned output envelope and is the interface used by service
 installation and release qualification to verify the embedded contract. Those
 runtime probes validate the complete typed envelope and reject bare or malformed

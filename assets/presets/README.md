@@ -1,20 +1,33 @@
 # Built-in Presets
 
-This directory contains the canonical built-in procedure sources. The catalog
-contains these four YAML files:
+This directory contains the canonical built-in Procedure sources. The retained
+v1 catalog contains four YAML files:
 
 - `sw-dev.yaml`
 - `bug-fix.yaml`
 - `docs-only.yaml`
 - `analysis.yaml`
 
-The implementation embeds these exact files and validates them through the same schema and semantic validator as custom procedures. A preset update applies only to new sessions and requires a procedure-version change when behavior changes.
+The implemented pre-GA v2 catalog contains two additional YAML files:
 
-The v0.1 release catalog remains exactly these four presets. Repository contributors
-may prepare a future candidate with `make preset-create` or admit an existing YAML
-procedure with `make preset-import`. Both commands validate through the real Podway
-binary, write only to this canonical `assets/presets/` directory by default, and
-refuse to replace an existing file. Creating or importing a file does not add it to
-the shipped catalog: the contributor must still complete the canonical documentation,
-embedded catalog, and test changes listed in the
+- `sw-dev-v2.yaml`
+- `bug-fix-v2.yaml`
+
+The implementation embeds these exact files. Each v1 or v2 preset is admitted
+through the same parser, schema, canonicalizer, and semantic validator as a
+custom Procedure of the same schema. The v2 sources are additionally vet-clean
+and bound to independently pinned shipped digests. A preset update applies only
+to new sessions and requires a procedure-version change when behavior changes.
+
+The released v0.1 catalog remains exactly the four v1 presets. The two v2 presets
+are implemented and included in the pre-GA v0.2 package inputs, but normal v2
+session admission remains closed. V2REL-006 qualifies unlock-free artifacts;
+V2REL-007 may enable public admission only after explicit release authorization.
+
+Repository contributors may prepare a candidate with `make preset-create` or
+admit an existing YAML Procedure with `make preset-import`. Both commands validate
+through the real Podway binary, write only to this canonical directory by default,
+and refuse to replace an existing file. Creating or importing a file does not add
+it to either embedded catalog: the contributor must still complete the canonical
+documentation, embedded catalog, and test changes listed in the
 [built-in preset specification](../../docs/specs/domain/built-in-presets.md).

@@ -10,5 +10,5 @@ canonical home for human-readable product and contributor documentation.
   mirrors.
 
 Raw logs, fuzz corpora, and machine-specific output belong under ignored
-`artifacts/`. The repository-root `make test` command is the sole release-readiness
-gate.
+`artifacts/`. The repository-root `make test` command is the required development
+gate. The repository-root `make dist` command is the sole release-readiness gate.
