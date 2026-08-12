@@ -776,6 +776,104 @@ def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[
     }
     if not required_admission_paths.issubset(indexed["V2ACC-076"]["contract_paths"]):
         fail("V2ACC-076 must bind the inherited admission and terminal-receipt contracts")
+    v2rel003_lower_layer_ids = {
+        *(f"V2ACC-{number:03d}" for number in range(21, 37)),
+        *(f"V2ACC-{number:03d}" for number in range(57, 66)),
+    }
+    native_qualification_path = "crates/podway-cli/tests/e2e_v2_native_qualification.rs"
+    native_qualification_ids = {
+        "V2ACC-021", "V2ACC-027", "V2ACC-033", "V2ACC-034",
+        *(f"V2ACC-{number:03d}" for number in range(57, 65)),
+    }
+    v2rel003_exact_lower_proofs = {
+        "V2ACC-021": {
+            (
+                "crates/podway-store/tests/int_phase2_schema_codec.rs",
+                "sqlite_v3_exposes_the_complete_parallel_state_inventory_and_cursor_constraints",
+            ),
+        },
+        "V2ACC-023": {
+            (
+                "crates/podway-store/tests/int_v2_goal_state.rs",
+                "terminal_action_completion_requires_goal_and_fresh_assessment_without_changing_state",
+            ),
+        },
+        "V2ACC-029": {
+            (
+                "crates/podway-store/tests/int_v2_workflow_memory.rs",
+                "failpoint_history_rewrite_and_digest_corruption_fail_closed_atomically",
+            ),
+        },
+        "V2ACC-036": {
+            (
+                "crates/podway-store/tests/int_v2_graph_start_terminal.rs",
+                "sqlite_full_rolls_back_rich_v2_terminal_mutation_and_retry_commits_once",
+            ),
+        },
+    }
+    for identifier in v2rel003_lower_layer_ids:
+        criterion = indexed[identifier]
+        if criterion["implementation_status"] != "automated":
+            fail(f"{identifier} must retain its V2REL-003 automated proof")
+        proof = criterion["proof"]
+        members = proof["members"] if proof["kind"] == "cargo-test-set" else [proof]
+        if not any(member["path"] != native_qualification_path for member in members):
+            fail(f"{identifier} must retain a criterion-specific lower-layer proof")
+        if identifier in native_qualification_ids and not any(
+            member["path"] == native_qualification_path for member in members
+        ):
+            fail(f"{identifier} must retain its native V2REL-003 qualification complement")
+        observed = {(member["path"], member["function"]) for member in members}
+        if not v2rel003_exact_lower_proofs.get(identifier, set()).issubset(observed):
+            fail(f"{identifier} must retain its exact V2REL-003 lower-layer proof")
+    v2rel003_automation_proofs = {
+        "V2ACC-073": {
+            ("crates/podway-daemon/tests/int_v2run002_views.rs", "v2run002_exhaustive_reachable_applicability_classes_close_actions_and_suggestions"),
+            ("crates/podway-daemon/tests/int_v2run002_views.rs", "v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views"),
+            ("crates/podway-daemon/tests/int_v2run002_views.rs", "v2run002_goal_assessment_guidance_tracks_completion_and_determined_outcome"),
+            ("crates/podway-daemon/tests/int_v2run002_views.rs", "v2run002_skip_guidance_reflects_the_placement_reason_policy"),
+            ("crates/podway-daemon/tests/int_v2run006_states.rs", "v2run006_blocked_state_unblocks_restarts_completes_and_resets"),
+        },
+        "V2ACC-074": {
+            ("crates/podway-cli/tests/int_v2_platform_cli.rs", "v2run002_production_suggestion_argv_requires_only_documented_placeholder_substitution"),
+            ("crates/podway-daemon/tests/int_v2run003_runtime.rs", "v2run003_production_actions_mutate_complete_read_back_restart_and_replay"),
+            ("crates/podway-daemon/tests/int_v2run004_retry.rs", "v2run004_production_retry_is_clean_durable_replayable_and_re_resolves_evidence"),
+            ("crates/podway-daemon/tests/int_v2run005_skip.rs", "v2run005_production_skip_discards_values_advances_terminates_restarts_and_replays"),
+            ("crates/podway-daemon/tests/int_v2drw001_decide.rs", "v2drw001_decide_validates_fences_and_rules_then_persists_exact_replay"),
+            ("crates/podway-daemon/tests/int_v2gol001_goal_revision.rs", "v2gol001_define_and_running_revise_are_fenced_replayable_and_restart_safe"),
+            ("crates/podway-daemon/tests/int_v2gol002_criterion_assessment.rs", "v2gol002_assessment_mode_records_citations_attribution_replay_and_restart"),
+        },
+        "V2ACC-075": {
+            ("crates/podway-daemon/tests/int_v2drw001_decide.rs", "v2drw001_decide_validates_fences_and_rules_then_persists_exact_replay"),
+            ("crates/podway-daemon/tests/int_v2run005_skip.rs", "v2run005_production_rejects_decision_skip_and_retains_v1_output"),
+            ("crates/podway-daemon/tests/int_v2gol003_goal_outcomes.rs", "v2gol003_goal_assessment_wrong_verb_on_general_decision_is_not_admitted_and_changes_no_state"),
+        },
+        "V2ACC-076": {
+            ("crates/podway-daemon/src/production.rs", "v2rel003_every_registered_v2_mutation_reaches_one_automation_pipeline"),
+            ("crates/podway-daemon/tests/int_v2run003_runtime.rs", "v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipeline"),
+            ("crates/podway-daemon/tests/int_v2run003_runtime.rs", "v2run003_detached_job_wait_reads_terminal_v2_job_without_v1_session"),
+            ("crates/podway-protocol/tests/int_v2_protocol_requests.rs", "v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences"),
+            ("crates/podway-cli/tests/int_phase5_cli_contract.rs", "pac_048_recording_daemon_contract_table_validates_successful_versioned_json_output_for_every_route"),
+            ("crates/podway-cli/tests/int_v2_platform_cli.rs", "typed_v2_commands_shape_exact_requests_and_preserve_capability_errors"),
+            ("crates/podway-cli/tests/int_v2_platform_cli.rs", "shared_item_complete_retry_and_skip_use_v2_status_fences_and_render_output_v2"),
+            ("crates/podway-cli/tests/int_v2_platform_cli.rs", "fully_fenced_state_mutations_skip_status_preflight_and_render_output_v2"),
+            ("crates/podway-cli/tests/int_v2_platform_cli.rs", "goal_bearing_start_is_typed_and_a_plain_v1_start_remains_unchanged"),
+            ("crates/podway-protocol/tests/int_phase5_slice_contract.rs", "recon001_exhaustively_admits_only_the_30_canonical_daemon_routes"),
+            ("crates/podway-protocol/tests/int_v2_result_contract.rs", "v2plt006_production_codec_round_trips_every_registered_command_result_pair"),
+            ("crates/podway-daemon/tests/int_v2run007_preconditions.rs", "v2run007_preadmission_fences_reject_without_jobs_and_exact_replay_wins"),
+            ("crates/podway-daemon/tests/int_v2gol005_failures.rs", "v2gol005_queued_assessment_executes_after_cold_reopen_and_replays_exactly"),
+            ("crates/podway-daemon/tests/int_phase4_dispatch.rs", "v2_terminal_receipts_use_v2_job_read_wrappers"),
+        },
+    }
+    for identifier, required_proofs in v2rel003_automation_proofs.items():
+        criterion = indexed[identifier]
+        if criterion["implementation_status"] != "automated":
+            fail(f"{identifier} must retain its V2REL-003 automation closure")
+        proof = criterion["proof"]
+        members = proof["members"] if proof["kind"] == "cargo-test-set" else [proof]
+        observed = {(member["path"], member["function"]) for member in members}
+        if not required_proofs.issubset(observed):
+            fail(f"{identifier} must retain its exact V2REL-003 automation proofs")
     return indexed
 
 
@@ -1483,6 +1581,22 @@ def self_test_v2_matrices() -> int:
     duplicate_anchor = copy.deepcopy(baseline)
     duplicate_anchor["criteria"][0]["contract_refs"].append(copy.deepcopy(duplicate_anchor["criteria"][0]["contract_refs"][0]))
     expect_failure(lambda: validate_v2_acceptance_matrix(duplicate_anchor), "contract references must be unique", "v2 acceptance duplicate-anchor")
+    missing_v2rel003_lower_proof = copy.deepcopy(baseline)
+    target_v2rel003 = missing_v2rel003_lower_proof["criteria"][20]
+    target_v2rel003["proof"]["members"] = [target_v2rel003["proof"]["members"][-1]]
+    expect_failure(
+        lambda: validate_v2_acceptance_matrix(missing_v2rel003_lower_proof),
+        "criterion-specific lower-layer proof",
+        "v2 V2REL-003 lower-layer proof drift",
+    )
+    missing_v2rel003_automation_proof = copy.deepcopy(baseline)
+    target_v2rel003_automation = missing_v2rel003_automation_proof["criteria"][75]
+    target_v2rel003_automation["proof"]["members"].pop()
+    expect_failure(
+        lambda: validate_v2_acceptance_matrix(missing_v2rel003_automation_proof),
+        "exact V2REL-003 automation proofs",
+        "v2 V2REL-003 automation proof drift",
+    )
 
     compatibility = load_object(V2_COMPATIBILITY_PATH)
     missing_surface = copy.deepcopy(compatibility)
@@ -1661,6 +1775,13 @@ def self_test_v2_matrices() -> int:
     wrong_category = copy.deepcopy(release)
     wrong_category["categories"][0]["acceptance_ids"].pop()
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category), "exactly cover", "v2 release category")
+    overstated_category = copy.deepcopy(release)
+    overstated_category["categories"][1]["implementation_status"] = "automated"
+    expect_failure(
+        lambda: validate_v2_release_matrix(acceptance, overstated_category),
+        "does not exactly cover",
+        "v2 release category status overstatement",
+    )
     wrong_closeout = copy.deepcopy(release)
     wrong_closeout["final_gates"][2]["conditions"].pop()
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_closeout), "final release gates", "v2 release closeout")
@@ -1673,7 +1794,7 @@ def self_test_v2_matrices() -> int:
     overstated_category = copy.deepcopy(release)
     overstated_category["categories"][6]["implementation_status"] = "automated"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, overstated_category), "exactly cover", "v2 release category-status")
-    return 41
+    return 42
 
 
 def main() -> int:

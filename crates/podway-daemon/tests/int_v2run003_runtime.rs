@@ -175,9 +175,29 @@ pub(super) fn request(
     request_number: u64,
     command: &str,
     selector: &WorktreeSelectorWireV1,
+    payload: Map<String, Value>,
+    idempotency_key: &str,
+    preconditions: PreconditionsV1,
+) -> (RequestEnvelopeV1, DaemonRequestV1) {
+    request_with_options(
+        request_number,
+        command,
+        selector,
+        payload,
+        idempotency_key,
+        preconditions,
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+    )
+}
+
+fn request_with_options(
+    request_number: u64,
+    command: &str,
+    selector: &WorktreeSelectorWireV1,
     mut payload: Map<String, Value>,
     idempotency_key: &str,
     preconditions: PreconditionsV1,
+    options: RequestOptionsV1,
 ) -> (RequestEnvelopeV1, DaemonRequestV1) {
     payload.insert(
         "selector".to_owned(),
@@ -200,7 +220,7 @@ pub(super) fn request(
         idempotency_key: matches!(operation, OperationV1::Bootstrap | OperationV1::Mutate)
             .then(|| IdempotencyKeyV1::new(idempotency_key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options,
         payload,
     })
     .unwrap();
@@ -350,6 +370,254 @@ fn v2run003_action_readback_fixture_is_valid_and_vetted() {
         diagnostics.is_empty(),
         "the V2RUN-003 runtime fixture must pass structural vetting: {diagnostics:?}"
     );
+}
+
+#[test]
+fn v2run003_detached_job_wait_reads_terminal_v2_job_without_v1_session() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("detached-job-wait.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    fs::write(fixture.main().join("report.txt"), b"durable report\n").unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let procedure_digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "v2run003-detached-job-wait");
+
+    let initialize = request(
+        29_001,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2run003-detached-initialize",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV1(_)
+    ));
+
+    let start = request(
+        29_002,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "procedure": "detached-job-wait.yaml",
+            "expected_procedure_digest": procedure_digest,
+            "task_title": "Detached Procedure v2 job wait"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2run003-detached-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap();
+    let before_retry = status(&production, &workspace_selector, 29_003, session_id);
+    let retry = request_with_options(
+        29_004,
+        "session.retry",
+        &workspace_selector,
+        json!({"reason": "prove detached Procedure v2 job wait"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2run003-detached-retry",
+        session_preconditions(&before_retry),
+        RequestOptionsV1::new(true, 5_000).unwrap(),
+    );
+    let retry_response = dispatch(&production, &retry);
+    let ResponseEnvelopeV2::OutputV2(detached) = retry_response else {
+        panic!("detached Procedure v2 retry must return podway.output/v2: {retry_response:?}")
+    };
+    let job_id = detached
+        .job()
+        .expect("detached mutation returns its durable job")
+        .id()
+        .clone();
+
+    let status_request = request(
+        29_005,
+        "job.status",
+        &workspace_selector,
+        json!({"job_id": job_id}).as_object().unwrap().clone(),
+        "unused-detached-status",
+        PreconditionsV1::default(),
+    );
+    assert!(
+        !matches!(
+            dispatch(&production, &status_request),
+            ResponseEnvelopeV2::Error(_)
+        ),
+        "job.status must read a detached Procedure v2 job before or after completion"
+    );
+    let lookup_request = request(
+        29_007,
+        "job.lookup",
+        &workspace_selector,
+        json!({"idempotency_key": "v2run003-detached-retry"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-detached-lookup",
+        PreconditionsV1::default(),
+    );
+    let lookup = v2_result(dispatch(&production, &lookup_request), "job.lookup");
+    assert_eq!(lookup["found"], true);
+    assert_eq!(lookup["job"]["id"], job_id.as_str());
+    assert_eq!(lookup["job"]["command"], "session.retry");
+
+    let wait_request = request(
+        29_006,
+        "job.wait",
+        &workspace_selector,
+        json!({"job_id": job_id}).as_object().unwrap().clone(),
+        "unused-detached-wait",
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV2::OutputV2(waited) = dispatch(&production, &wait_request) else {
+        panic!("terminal Procedure v2 job.wait must return podway.output/v2")
+    };
+    assert_eq!(waited.command().as_str(), "job.wait");
+    assert_eq!(waited.job().unwrap().id(), &job_id);
+    assert_eq!(waited.result()["schema"], "podway.job-result/v2");
+    assert_eq!(
+        serde_json::to_value(waited.job().unwrap()).unwrap()["state"],
+        "succeeded"
+    );
+    assert_ne!(waited.result()["job"], Value::Null);
+    let terminal_lookup = v2_result(dispatch(&production, &lookup_request), "job.lookup");
+    assert_eq!(terminal_lookup["job"]["state"], "succeeded");
+    assert_ne!(terminal_lookup["job"]["terminal_response"], Value::Null);
+}
+
+#[test]
+fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipeline() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("detached-start.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    fs::write(fixture.main().join("report.txt"), b"durable report\n").unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let procedure_digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "v2rel003-detached-start");
+    let initialize = request(
+        29_101,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "v2rel003-detached-start-initialize",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV1(_)
+    ));
+
+    let payload = json!({
+        "procedure": "detached-start.yaml",
+        "expected_procedure_digest": procedure_digest,
+        "task_title": "Detached Procedure v2 start"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let detached_start = request_with_options(
+        29_102,
+        "session.start",
+        &selector,
+        payload.clone(),
+        "v2rel003-detached-start",
+        PreconditionsV1::default(),
+        RequestOptionsV1::new(true, 5_000).unwrap(),
+    );
+    let detached_response = dispatch(&production, &detached_start);
+    let ResponseEnvelopeV2::OutputV2(detached) = detached_response else {
+        panic!("detached Procedure v2 start must return podway.output/v2: {detached_response:?}")
+    };
+    assert_eq!(
+        detached.result()["schema"],
+        "podway.detached-admission-result/v2"
+    );
+    let job_id = detached.job().unwrap().id().clone();
+
+    let lookup = request(
+        29_103,
+        "job.lookup",
+        &selector,
+        json!({"idempotency_key": "v2rel003-detached-start"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-v2rel003-detached-start-lookup",
+        PreconditionsV1::default(),
+    );
+    let queued_lookup = v2_result(dispatch(&production, &lookup), "job.lookup");
+    assert_eq!(queued_lookup["found"], true);
+    assert_eq!(queued_lookup["job"]["id"], job_id.as_str());
+    assert_eq!(queued_lookup["job"]["command"], "session.start");
+    assert!(matches!(
+        queued_lookup["job"]["state"].as_str(),
+        Some("queued" | "running" | "succeeded")
+    ));
+
+    let synchronous = request_with_options(
+        29_104,
+        "session.start",
+        &selector,
+        payload.clone(),
+        "v2rel003-detached-start",
+        PreconditionsV1::default(),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+    );
+    let terminal = dispatch(&production, &synchronous);
+    let terminal_result = v2_result(terminal.clone(), "session.start");
+    assert_eq!(terminal_result["schema"], "podway.session-start-result/v2");
+    assert_eq!(terminal_result["admission"]["job_id"], job_id.as_str());
+
+    fs::remove_file(fixture.main().join("detached-start.yaml")).unwrap();
+    let replay = request_with_options(
+        29_105,
+        "session.start",
+        &selector,
+        payload,
+        "v2rel003-detached-start",
+        PreconditionsV1::default(),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+    );
+    let replayed = dispatch(&production, &replay);
+    assert_eq!(
+        without_request_id(&replayed),
+        without_request_id(&terminal),
+        "start replay must preserve the frozen terminal receipt after source deletion"
+    );
+
+    let terminal_lookup = v2_result(dispatch(&production, &lookup), "job.lookup");
+    assert_eq!(terminal_lookup["job"]["state"], "succeeded");
+    assert_eq!(terminal_lookup["job"]["id"], job_id.as_str());
+    assert_ne!(terminal_lookup["job"]["terminal_response"], Value::Null);
 }
 
 #[test]

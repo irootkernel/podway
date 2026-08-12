@@ -58,7 +58,7 @@
     {
       "kind": "catalog",
       "path": "quality/v2-acceptance-matrix-v1.json",
-      "sha256": "sha256:01dd87700a95aad08fc1e66e4e51f6b4327e8c5ecb8c952774b7a7abc9873f5f"
+      "sha256": "sha256:9fbbadcd227060b29eeb1f24147d9404ac840b6bb712dfe1de42143e5f415142"
     },
     {
       "kind": "catalog",
@@ -78,7 +78,7 @@
     {
       "kind": "catalog",
       "path": "release/v2-release-gate-matrix-v1.json",
-      "sha256": "sha256:b1dc5fd71ebb3e4fd0fb063bb4268d245ed36739e9feadf9570298b341c46611"
+      "sha256": "sha256:302e03c2be0afd3797dbd6194a4fbcf7f8e871489ce7606349b92da7e377706a"
     },
     {
       "kind": "schema",
@@ -461,7 +461,7 @@
       "sha256": "sha256:326ac9e1e41126e83390fa390b875edc4e584cfb280f009b6dce25e8484c641b"
     }
   ],
-  "digest": "sha256:2bcee8aaa8da919e3ce90b67deac494bd04cf3ba540888de54d575d631cef532",
+  "digest": "sha256:1e7824e789ab63287eb998cd760bb947992fcd7287e87c5e9ec9525454f2d8a3",
   "product": "podway",
   "product_version": "0.1.2",
   "schema_version": "podway.contract-manifest/v1",

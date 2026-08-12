@@ -83,9 +83,14 @@ fn graph_state_with_required_artifact(
     created_at: u64,
     required_artifact: bool,
 ) -> GraphSessionStateV2 {
-    let mut items = vec![json!({
-        "id":"done","type":"confirm","prompt":"Done","required":required_artifact
-    })];
+    let mut items = vec![
+        json!({
+            "id":"done","type":"confirm","prompt":"Done","required":required_artifact
+        }),
+        json!({
+            "id":"note","type":"text","prompt":"Note","required":false,"max_length":16384
+        }),
+    ];
     if required_artifact {
         items.push(json!({
             "id":"proof","type":"artifact","prompt":"Proof","required":true
@@ -605,6 +610,59 @@ fn admit_skip_and_claim(
         )
         .unwrap()
         .unwrap()
+}
+
+fn admit_set_with_value(
+    store: &SqliteStoreV1,
+    state: &GraphSessionStateV2,
+    key: &str,
+    job_number: u64,
+    value: &str,
+) {
+    let active = state.trace().active_attempt().unwrap();
+    let item_id = ItemId::new("note").unwrap();
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "command": "item.set",
+            "execution_version": 6,
+            "item_id": item_id,
+            "value": value,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::ItemSet {
+            item_id: item_id.clone(),
+        },
+        IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new(uuid(job_number)).unwrap(),
+        RevisionAttemptItemPreconditionsV1::new(
+            None,
+            Some(active.attempt_id().clone()),
+            Some(item_id),
+            Some(Revision::ZERO),
+        )
+        .unwrap(),
+        digest('f'),
+        UnixMillis::new(30),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        state.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            uuid(job_number + 100),
+            "item.set",
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-graph-start",
+            0,
+        )
+        .unwrap(),
+    );
+    store.admit(&identity(), request).unwrap();
 }
 
 fn admit_reset_and_claim(
@@ -2523,6 +2581,172 @@ fn graph_skip_state_and_typed_terminal_projection_commit_and_reopen_together() {
             .unwrap()
             .operation(),
         Some(&operation)
+    );
+}
+
+#[test]
+fn sqlite_full_rolls_back_rich_v2_terminal_mutation_and_retry_commits_once() {
+    let temporary = TempDir::new().unwrap();
+    let path = database_path(&temporary);
+    let current = graph_state(612, 622, 10);
+    let key = IdempotencyKeyV1::new("v2-set-sqlite-full").unwrap();
+    let value = "x".repeat(16_384);
+    let job_id = podway_core::JobId::new(uuid(632)).unwrap();
+    {
+        let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+        store
+            .create_graph_session_v2(&identity(), current.clone())
+            .unwrap();
+        admit_set_with_value(&store, &current, key.as_str(), 632, &value);
+    }
+
+    let constrained_page_count = {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA wal_checkpoint(TRUNCATE); \
+                 VACUUM;",
+            )
+            .unwrap();
+        let page_count = connection
+            .query_row("PRAGMA page_count", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        let freelist_count = connection
+            .query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        assert_eq!(freelist_count, 0, "VACUUM must remove reusable pages");
+        page_count
+    };
+
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 20);
+    store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-sqlite-full-worker").unwrap(),
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .unwrap();
+    drop(store);
+
+    let store = open(
+        &temporary,
+        SqliteStoreOptionsV1::new(8)
+            .unwrap()
+            .with_max_page_count_for_test(u32::try_from(constrained_page_count).unwrap())
+            .unwrap(),
+        32,
+    );
+    assert_eq!(store.startup_recovery_report().requeued_job_count(), 1);
+    let claimed = store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-sqlite-full-worker").unwrap(),
+            UnixMillis::new(32),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.job().job_id(), &job_id);
+    let active = current.trace().active_attempt().unwrap();
+    let item_id = ItemId::new("note").unwrap();
+    let mutated = current
+        .mutate_active_item_v2(
+            active.attempt_id(),
+            &item_id,
+            Revision::ZERO,
+            ActiveItemMutationV2::Set { value },
+            UnixMillis::new(32),
+        )
+        .unwrap();
+    let operation = PersistedGraphTerminalOperationV2::item_mutation(
+        active.graph_node_id().clone(),
+        active.attempt_id().clone(),
+        active.number(),
+        item_id.clone(),
+        None,
+    )
+    .unwrap();
+    let next = mutated.into_state();
+    let success = TerminalResultV1::Success(DomainResult::ItemChanged {
+        session_id: current.trace().session_id().clone(),
+        item_id,
+        revision_before: current.trace().revision(),
+        revision_after: next.trace().revision(),
+        changed: true,
+    });
+
+    assert_eq!(
+        store.commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            Some(next.clone()),
+            success.clone(),
+            operation.clone(),
+            UnixMillis::new(33),
+        ),
+        Err(StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::StorageIo,
+        })
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone()),
+        "SQLITE_FULL must not advance the graph cursor or session revision"
+    );
+    let running = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(running.state(), JobStateV1::Running);
+    assert!(running.terminal_receipt().is_none());
+    assert!(
+        store
+            .read_idempotency_lookup(&identity(), &key)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt()
+            .is_none()
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 34);
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 1);
+    let reclaimed = reopened
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-sqlite-full-retry-worker").unwrap(),
+            UnixMillis::new(35),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(reclaimed.job().job_id(), &job_id);
+    reopened
+        .commit_graph_mutation_terminal_v2(
+            reclaimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            Some(next.clone()),
+            success,
+            operation.clone(),
+            UnixMillis::new(36),
+        )
+        .unwrap();
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(next)
+    );
+    let succeeded = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(succeeded.state(), JobStateV1::Succeeded);
+    let frozen = succeeded.terminal_receipt().unwrap();
+    assert_eq!(
+        frozen.graph_session_projection().unwrap().operation(),
+        Some(&operation)
+    );
+    assert_eq!(
+        reopened
+            .read_idempotency_lookup(&identity(), &key)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(frozen)
     );
 }
 

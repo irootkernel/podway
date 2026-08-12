@@ -46,6 +46,11 @@ It would add issuance, storage, rotation, recovery, and redaction complexity wit
 
 The workspace UUID is identification, not authentication.
 
+Procedure digests provide content integrity and correlation, not caller
+authentication, authorization, or cryptographic authority. Actor attribution is
+a caller-supplied correlation label; it is not an authenticated identity,
+authorization grant, or cryptographic authority.
+
 ## Threats and controls
 
 | Threat | Control | Residual limitation |

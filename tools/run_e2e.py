@@ -70,8 +70,54 @@ def main() -> int:
     # any test pays it inside a bounded window.
     run([str(podway), "version"])
     run([str(podwayd), "version"])
+
+    v2rel003_debug_target = target / "e2e-v2rel003-development"
+    run(
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "podway-daemon",
+            "--bin",
+            "podwayd",
+            "--features",
+            "development-v2-admission",
+            "--target-dir",
+            str(v2rel003_debug_target),
+        ]
+    )
+    v2rel003_debug_daemon = (v2rel003_debug_target / "debug" / "podwayd").resolve()
+
+    v2rel003_release_target = target / "e2e-v2rel003-release"
+    run(
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "podway-daemon",
+            "--bin",
+            "podwayd",
+            "--features",
+            "development-v2-admission",
+            "--target-dir",
+            str(v2rel003_release_target),
+        ]
+    )
+    v2rel003_release_daemon = (v2rel003_release_target / "release" / "podwayd").resolve()
+    for binary in (v2rel003_debug_daemon, v2rel003_release_daemon):
+        if not binary.is_file():
+            raise SystemExit(f"cargo build did not produce expected Podway daemon: {binary}")
+        run([str(binary), "version"])
+
     environment = os.environ.copy()
     environment["PODWAYD_TEST_BINARY"] = str(podwayd)
+    environment["PODWAY_V2REL003_CLI"] = str(podway)
+    environment["PODWAY_V2REL003_DAEMON_DEBUG"] = str(v2rel003_debug_daemon)
+    environment["PODWAY_V2REL003_DAEMON_RELEASE"] = str(v2rel003_release_daemon)
+    environment["PODWAY_V2REL003_QUALIFIER"] = str((ROOT / "tools" / "dev_runtime.py").resolve())
     if arguments.exact_test is None:
         test_command = [
             "cargo",
@@ -104,7 +150,12 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "binaries": {"podway": str(podway), "podwayd": str(podwayd)},
+                "binaries": {
+                    "podway": str(podway),
+                    "podwayd": str(podwayd),
+                    "podwayd_v2rel003_debug": str(v2rel003_debug_daemon),
+                    "podwayd_v2rel003_release": str(v2rel003_release_daemon),
+                },
                 "mode": "e2e",
                 "ok": True,
             },

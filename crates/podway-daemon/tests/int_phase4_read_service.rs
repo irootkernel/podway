@@ -781,3 +781,54 @@ fn after_job_wait_rechecks_terminal_state_after_spurious_notification() {
     assert!(store.job_reads.load(Ordering::SeqCst) >= 3);
     assert!(store.workspace_reads.load(Ordering::SeqCst) >= 1);
 }
+
+#[test]
+fn named_job_wait_does_not_require_a_session_projection() {
+    let target_job = job(34);
+    let store = FakeStore::new(
+        workspace_view(aggregate(), 0, None, 45),
+        Some(job_view(target_job.clone(), JobStateV1::Running)),
+    );
+    let notifications =
+        ScriptedNotifications::new(store.clone(), [NotificationAction::MakeTerminalThenNotify]);
+    let service = AuthoritativeReadServiceV1::new(store.clone(), notifications, FixedClock(0));
+
+    let terminal = service
+        .job(
+            &identity(),
+            &target_job,
+            ReadWaitV1::AfterJobUntil {
+                job_id: target_job.clone(),
+                deadline: MonotonicDeadlineV1::new(10),
+            },
+        )
+        .expect("named job wait returns the terminal Store record");
+
+    assert_eq!(terminal.state(), JobStateV1::Succeeded);
+    assert_eq!(store.workspace_reads.load(Ordering::SeqCst), 0);
+    assert!(store.job_reads.load(Ordering::SeqCst) >= 2);
+}
+
+#[test]
+fn named_job_wait_preserves_timeout_after_authoritative_recheck() {
+    let target_job = job(35);
+    let store = FakeStore::new(
+        workspace_view(aggregate(), 0, None, 46),
+        Some(job_view(target_job.clone(), JobStateV1::Running)),
+    );
+    let notifications = ScriptedNotifications::new(store.clone(), [NotificationAction::TimeOut]);
+    let service = AuthoritativeReadServiceV1::new(store.clone(), notifications, FixedClock(0));
+
+    let result = service.job(
+        &identity(),
+        &target_job,
+        ReadWaitV1::AfterJobUntil {
+            job_id: target_job.clone(),
+            deadline: MonotonicDeadlineV1::new(10),
+        },
+    );
+
+    assert_eq!(result, Err(ReadServiceErrorV1::WaitTimedOut));
+    assert_eq!(store.workspace_reads.load(Ordering::SeqCst), 0);
+    assert!(store.job_reads.load(Ordering::SeqCst) >= 2);
+}

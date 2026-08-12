@@ -344,6 +344,10 @@ the exact source attempt and complete recorded-item digest. A reference becomes
 stale when rework invalidates its source. Stale references and records remain
 reportable but cannot satisfy readiness or decision preconditions.
 
+Procedure digests and caller-supplied actor attribution are integrity and
+correlation metadata only. Neither authenticates nor authorizes a caller or
+confers cryptographic authority.
+
 Declared rework and manual rework target graph placements, create a fresh target
 attempt, and causally invalidate the affected trace suffix. A manual target must
 be allowed by the immutable Procedure and occur on the current trace. Historical

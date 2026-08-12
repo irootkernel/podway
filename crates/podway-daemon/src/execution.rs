@@ -4292,6 +4292,32 @@ where
                 actual: Some(state.trace().session_id().clone()),
             });
         }
+        if let Some(active) = state.trace().active_attempt() {
+            let exact_active_fences = state.trace().revision()
+                == command.preconditions.expected_session_revision
+                && active.attempt_id() == &command.preconditions.expected_attempt_id;
+            let expected_goal_revision = GoalRevisionNumberV2::new(command.expected_goal_revision);
+            let exact_goal_fence = state.goal_state().current_revision()
+                == Some(expected_goal_revision)
+                && active.goal_revision() == Some(expected_goal_revision);
+            let active_is_goal_assessment = state
+                .snapshot()
+                .graph_nodes()
+                .iter()
+                .find(|node| node.graph_node_id() == active.graph_node_id())
+                .is_some_and(|node| node.goal_assessment());
+            if state.snapshot().goal_tracking()
+                && exact_active_fences
+                && exact_goal_fence
+                && !active_is_goal_assessment
+            {
+                return Err(ExecutionErrorV1::BoundaryDomain(
+                    DomainError::InvalidState {
+                        reason: "criterion assessment requires an active goal-assessment decision",
+                    },
+                ));
+            }
+        }
         validate_criterion_assessment_command_v2(command)?;
         let admitted = AdmittedProcedureV2CriterionAssessmentV1 {
             selector: request.selector().clone(),

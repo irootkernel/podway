@@ -911,7 +911,7 @@ A caller may define revision 1 during admission:
 ```bash
 podway start \
   --procedure workflow.yaml \
-  --confirm-procedure-digest sha256:... \
+  --expect-procedure-digest sha256:... \
   --task "implement cancellation support" \
   --goal "Cancellation is deterministic and safely recoverable." \
   --criterion deterministic="Repeated requests have one outcome." \
@@ -2620,7 +2620,7 @@ A `--procedure <file>` start always requires the exact reviewed digest:
 podway start \
   --procedure workflow.yaml \
   --task "implement cancellation support" \
-  --confirm-procedure-digest sha256:...
+  --expect-procedure-digest sha256:...
 ```
 
 Immediately before admission, Podway:
@@ -2628,7 +2628,7 @@ Immediately before admission, Podway:
 1. reads and parses the procedure under normal path and size protections;
 2. validates and vets those exact bytes (§11.3);
 3. computes Canonical JSON/IR and its digest;
-4. compares the computed digest with `--confirm-procedure-digest`;
+4. compares the computed digest with `--expect-procedure-digest`;
 5. rejects a mismatch, and rejects a custom start without the flag, in
    either case without creating session state;
 6. stores the immutable confirmed snapshot when the compared digests are

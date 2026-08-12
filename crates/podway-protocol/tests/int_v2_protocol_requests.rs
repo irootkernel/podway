@@ -1,7 +1,7 @@
 use podway_core::{Sha256Digest, WorkspaceId};
 use podway_protocol::{
     ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1,
-    RequestEnvelopeV1, SliceRequestV1, canonical_mutation_identity_v1,
+    RequestEnvelopeV1, SliceRequestV1, V2_MUTATION_COMMANDS, canonical_mutation_identity_v1,
     canonical_procedure_v2_mutation_identity_v1, canonical_procedure_v2_start_identity_v1,
     canonical_start_mutation_identity_v1, decode_initial_goal_v2,
 };
@@ -55,6 +55,142 @@ fn session_preconditions() -> Value {
 
 fn criteria() -> Value {
     json!([{"criterion_id":"tests","statement":"The focused tests pass."}])
+}
+
+fn detached_envelope(command: &str, preconditions: Value, payload: Value) -> RequestEnvelopeV1 {
+    let mut value = serde_json::to_value(envelope(command, preconditions, payload)).unwrap();
+    value["options"]["detach"] = json!(true);
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let item = json!({
+        "session_id":SESSION_ID,
+        "attempt_id":ATTEMPT_ID,
+        "item_revision":11,
+    });
+    let session = session_preconditions();
+    let session_identity = json!({"session_id":SESSION_ID,"session_revision":7});
+    let shared = [
+        (
+            "session.start",
+            json!({}),
+            json!({"procedure":"workflow.yaml","expected_procedure_digest":digest,"task_title":"Start safely."}),
+        ),
+        (
+            "session.start_replace",
+            session_identity.clone(),
+            json!({"procedure":"workflow.yaml","expected_procedure_digest":digest,"task_title":"Replace safely.","confirmed":true}),
+        ),
+        ("session.complete", session.clone(), json!({})),
+        (
+            "session.skip",
+            session.clone(),
+            json!({"reason":"Not applicable."}),
+        ),
+        (
+            "session.retry",
+            session.clone(),
+            json!({"reason":"Retry safely."}),
+        ),
+        (
+            "session.block",
+            session.clone(),
+            json!({"reason":"Waiting for review."}),
+        ),
+        ("session.unblock", session.clone(), json!({"all":true})),
+        (
+            "session.cancel",
+            session.clone(),
+            json!({"reason":"Cancelled safely."}),
+        ),
+        (
+            "session.reset",
+            session_identity.clone(),
+            json!({"confirmed":true}),
+        ),
+        ("item.check", item.clone(), json!({"item_id":"proof"})),
+        ("item.uncheck", item.clone(), json!({"item_id":"proof"})),
+        (
+            "item.set",
+            item.clone(),
+            json!({"item_id":"proof","value":"verified"}),
+        ),
+        (
+            "item.add",
+            item.clone(),
+            json!({"item_id":"proof","value":"first"}),
+        ),
+        (
+            "item.remove",
+            item.clone(),
+            json!({"item_id":"proof","value":"first","ignore_missing":false}),
+        ),
+        (
+            "item.attach",
+            item.clone(),
+            json!({"item_id":"proof","path":"proof.txt","media_type":"text/plain"}),
+        ),
+        ("item.clear", item, json!({"item_id":"proof"})),
+    ];
+    let mut observed = std::collections::BTreeSet::new();
+    for (command, preconditions, payload) in shared {
+        let envelope = detached_envelope(command, preconditions, payload);
+        assert_eq!(
+            envelope.idempotency_key().unwrap().as_str(),
+            "v2-request-key"
+        );
+        assert!(envelope.options().detach());
+        let decoded = SliceRequestV1::from_envelope(&envelope).unwrap();
+        assert_eq!(decoded.command().command_name(), command);
+        observed.insert(command);
+    }
+
+    let typed = [
+        (
+            "session.decide",
+            session.clone(),
+            json!({"option_id":"accept","reason":"Evidence supports this route."}),
+        ),
+        (
+            "session.rework",
+            session,
+            json!({"target_graph_node_id":"implement","reason":"Repair the implementation."}),
+        ),
+        (
+            "goal.define",
+            session_identity.clone(),
+            json!({"goal":"Ship safely.","criteria":criteria()}),
+        ),
+        (
+            "goal.revise",
+            json!({"session_id":SESSION_ID,"session_revision":7,"goal_revision":1}),
+            json!({"goal":"Ship more safely.","criteria":criteria(),"target_graph_node_id":"implement","reason":"Clarified."}),
+        ),
+        (
+            "goal.assess_criterion",
+            json!({"session_id":SESSION_ID,"session_revision":7,"attempt_id":ATTEMPT_ID,"goal_revision":1}),
+            json!({"criterion_id":"tests","status":"satisfied","reason":"Tests passed.","evidence":[],"items":[]}),
+        ),
+    ];
+    for (command, preconditions, payload) in typed {
+        let envelope = detached_envelope(command, preconditions, payload);
+        assert_eq!(
+            envelope.idempotency_key().unwrap().as_str(),
+            "v2-request-key"
+        );
+        assert!(envelope.options().detach());
+        let decoded = ProcedureV2MutationRequestV1::from_envelope(&envelope).unwrap();
+        assert_eq!(decoded.command().command_name(), command);
+        observed.insert(command);
+    }
+    assert_eq!(
+        observed,
+        V2_MUTATION_COMMANDS.iter().copied().collect(),
+        "every v2 mutation must inherit idempotency, detach, and its command-specific revision fences"
+    );
 }
 
 #[test]

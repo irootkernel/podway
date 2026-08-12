@@ -206,6 +206,11 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
         now,
     )?;
     update_validated_root_v1(&mut connection, root, identity, now)?;
+    if let Some(max_page_count) = options.max_page_count_for_test() {
+        connection
+            .execute_batch(&format!("PRAGMA max_page_count = {max_page_count};"))
+            .map_err(storage_error)?;
+    }
     validate_existing_database_path_v1(&path)?;
     Ok(connection)
 }

@@ -156,6 +156,11 @@ Built-in v2 presets use their shipped digest and do not require interactive
 confirmation, but a shipped-digest mismatch fails closed. Preview remains
 read-only regardless of confirmation or admissibility.
 
+Procedure digests provide content integrity and correlation only. They neither
+authenticate nor authorize a caller and confer no cryptographic authority. Actor
+attribution is a caller-supplied correlation label; it neither authenticates nor
+authorizes a caller and confers no cryptographic authority.
+
 ## PATH invocation and runtime environment
 
 Automation may invoke `podway` by command name through a controlled `PATH`,

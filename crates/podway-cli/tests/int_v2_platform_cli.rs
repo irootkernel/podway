@@ -1558,6 +1558,190 @@ fn v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon() {
 }
 
 #[test]
+fn v2run002_production_suggestion_argv_requires_only_documented_placeholder_substitution() {
+    struct Case {
+        command: &'static str,
+        suggestion: &'static [&'static str],
+        substitutions: &'static [(&'static str, &'static str)],
+        fences: &'static [&'static str],
+    }
+
+    let cases = [
+        Case {
+            command: "item.check",
+            suggestion: &["podway", "check", "note"],
+            substitutions: &[],
+            fences: &["--if-attempt", ATTEMPT_ID, "--if-item-revision", "11"],
+        },
+        Case {
+            command: "item.set",
+            suggestion: &["podway", "set", "note", "<text>"],
+            substitutions: &[("<text>", "focused tests passed")],
+            fences: &["--if-attempt", ATTEMPT_ID, "--if-item-revision", "11"],
+        },
+        Case {
+            command: "item.set",
+            suggestion: &["podway", "set", "note", "<choice>"],
+            substitutions: &[("<choice>", "approve")],
+            fences: &["--if-attempt", ATTEMPT_ID, "--if-item-revision", "11"],
+        },
+        Case {
+            command: "item.set",
+            suggestion: &["podway", "set", "note", "<integer>"],
+            substitutions: &[("<integer>", "7")],
+            fences: &["--if-attempt", ATTEMPT_ID, "--if-item-revision", "11"],
+        },
+        Case {
+            command: "item.add",
+            suggestion: &["podway", "add", "note", "<value>"],
+            substitutions: &[("<value>", "daemon")],
+            fences: &["--if-attempt", ATTEMPT_ID, "--if-item-revision", "11"],
+        },
+        Case {
+            command: "item.attach",
+            suggestion: &["podway", "attach", "note", "<path>"],
+            substitutions: &[("<path>", "evidence.md")],
+            fences: &["--if-attempt", ATTEMPT_ID, "--if-item-revision", "11"],
+        },
+        Case {
+            command: "session.complete",
+            suggestion: &["podway", "complete"],
+            substitutions: &[],
+            fences: &["--if-attempt", ATTEMPT_ID],
+        },
+        Case {
+            command: "session.decide",
+            suggestion: &[
+                "podway", "decide", "--option", "approve", "--reason", "<reason>",
+            ],
+            substitutions: &[("<reason>", "evidence supports approval")],
+            fences: &["--if-attempt", ATTEMPT_ID],
+        },
+        Case {
+            command: "session.retry",
+            suggestion: &["podway", "retry", "--reason", "<reason>"],
+            substitutions: &[("<reason>", "retry after correction")],
+            fences: &["--if-attempt", ATTEMPT_ID],
+        },
+        Case {
+            command: "session.skip",
+            suggestion: &["podway", "skip"],
+            substitutions: &[],
+            fences: &["--if-attempt", ATTEMPT_ID],
+        },
+        Case {
+            command: "session.skip",
+            suggestion: &["podway", "skip", "--reason", "<text>"],
+            substitutions: &[("<text>", "not applicable")],
+            fences: &["--if-attempt", ATTEMPT_ID],
+        },
+        Case {
+            command: "goal.define",
+            suggestion: &[
+                "podway",
+                "goal",
+                "define",
+                "--goal",
+                "<goal>",
+                "--criterion",
+                "<criterion>",
+            ],
+            substitutions: &[
+                ("<goal>", "Ship safely."),
+                ("<criterion>", "tested=Tests pass."),
+            ],
+            fences: &[],
+        },
+        Case {
+            command: "goal.assess_criterion",
+            suggestion: &[
+                "podway",
+                "goal",
+                "assess-criterion",
+                "tested",
+                "--status",
+                "<status>",
+                "--reason",
+                "<reason>",
+            ],
+            substitutions: &[("<status>", "satisfied"), ("<reason>", "the test passed")],
+            fences: &["--if-attempt", ATTEMPT_ID, "--if-goal-revision", "1"],
+        },
+    ];
+
+    for (index, case) in cases.iter().enumerate() {
+        let fixture = Fixture::new();
+        if case.command == "item.attach" {
+            fs::write(fixture.root.join("evidence.md"), "review evidence")
+                .expect("attachment fixture must be writable");
+        }
+        let status_reply = if matches!(case.command, "goal.define") {
+            Reply::StatusV2
+        } else {
+            Reply::StatusV2GoalDefined
+        };
+        let daemon = SequenceRecordingDaemon::start(
+            &fixture.socket,
+            vec![status_reply, Reply::WorkspaceError],
+        );
+        let mut arguments = vec![
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+            "--idempotency-key".to_owned(),
+            "v2plt008-recording-key".to_owned(),
+        ];
+        arguments.extend(case.suggestion[1..].iter().map(|literal| {
+            case.substitutions
+                .iter()
+                .find_map(|(placeholder, value)| (*placeholder == *literal).then_some(*value))
+                .unwrap_or(literal)
+                .to_string()
+        }));
+
+        let output = fixture.run(&arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(5),
+            "{}: {output:?}",
+            case.command
+        );
+        let requests = daemon.finish();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["command"], "session.status");
+        let request = &requests[1];
+        assert_eq!(request["command"], case.command);
+        assert_eq!(request["operation"], "mutate");
+        assert_eq!(request["idempotency_key"], "v2plt008-recording-key");
+        assert_eq!(request["workspace"]["expected_uuid"], WORKSPACE_ID);
+        assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+        if case.command.starts_with("item.") {
+            assert!(request["preconditions"].get("session_revision").is_none());
+        } else {
+            assert_eq!(request["preconditions"]["session_revision"], 7);
+        }
+        for fence in case.fences.chunks_exact(2) {
+            let field = match fence[0] {
+                "--if-attempt" => "attempt_id",
+                "--if-item-revision" => "item_revision",
+                "--if-goal-revision" => "goal_revision",
+                flag => panic!("unexpected fence {flag}"),
+            };
+            let expected = fence[1]
+                .parse::<u64>()
+                .map_or_else(|_| json!(fence[1]), |number| json!(number));
+            assert_eq!(request["preconditions"][field], expected);
+        }
+        assert!(
+            arguments.iter().all(|argument| !argument.starts_with('<')),
+            "case {index} left a documented placeholder unsubstituted"
+        );
+    }
+}
+
+#[test]
 fn verbose_status_sends_one_positive_exclusive_history_cursor() {
     let fixture = Fixture::new();
     let daemon = RecordingDaemon::start(&fixture.socket, Reply::WorkspaceError);

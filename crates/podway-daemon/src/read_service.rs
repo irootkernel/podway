@@ -272,9 +272,9 @@ where
     }
     /// Reads a named job from committed Store state.
     ///
-    /// A terminal wait first establishes the terminal predicate through
-    /// [`Self::read_with_wait`], then re-reads the job record. The terminal observation and
-    /// returned job therefore both come from Store, never from a scheduler notification.
+    /// A terminal wait observes the named job directly. This keeps the route valid for both v1
+    /// session aggregates and Procedure v2 graph state without requiring either session
+    /// projection. Notifications remain hints only; the returned job always comes from Store.
     pub fn job(
         &self,
         identity: &DurableWorktreeIdentityV1,
@@ -283,13 +283,58 @@ where
     ) -> Result<JobViewV1, ReadServiceErrorV1> {
         match wait {
             ReadWaitV1::Immediate => self.read_job(identity, job_id),
-            ReadWaitV1::AfterJobUntil { .. } => {
-                self.read_with_wait(identity, &wait, None, |_| Ok(()))?;
-                self.read_job(identity, job_id)
+            ReadWaitV1::AfterJobUntil {
+                job_id: waited_job_id,
+                deadline,
+            } => {
+                if &waited_job_id != job_id {
+                    return Err(ReadServiceErrorV1::InconsistentState {
+                        reason: "named job wait target does not match the requested job",
+                    });
+                }
+                self.wait_for_terminal_job(identity, job_id, deadline)
             }
             ReadWaitV1::IdleUntil(_) => Err(ReadServiceErrorV1::InconsistentState {
                 reason: "named job reads cannot wait for workspace idleness",
             }),
+        }
+    }
+
+    fn wait_for_terminal_job(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        job_id: &JobIdV1,
+        deadline: MonotonicDeadlineV1,
+    ) -> Result<JobViewV1, ReadServiceErrorV1> {
+        loop {
+            // Observe first so a terminal commit between the Store read and notification wait
+            // cannot be lost. A wake-up is never proof of terminal state.
+            let observed = self
+                .notifications
+                .observe(identity)
+                .map_err(ReadServiceErrorV1::Notification)?;
+            let job = self.read_job(identity, job_id)?;
+            if is_terminal_job(job.state()) {
+                return Ok(job);
+            }
+            if self.clock.now_millis() >= deadline.millis() {
+                return Err(ReadServiceErrorV1::WaitTimedOut);
+            }
+
+            match self
+                .notifications
+                .wait_for_change(identity, observed, deadline)
+                .map_err(ReadServiceErrorV1::Notification)?
+            {
+                ReadWaitOutcomeV1::Notified => {}
+                ReadWaitOutcomeV1::TimedOut => {
+                    let job = self.read_job(identity, job_id)?;
+                    if is_terminal_job(job.state()) {
+                        return Ok(job);
+                    }
+                    return Err(ReadServiceErrorV1::WaitTimedOut);
+                }
+            }
         }
     }
 

@@ -5144,6 +5144,28 @@ fn pac_003_help_states_the_same_user_local_socket_trust_boundary() {
     assert!(release_notes.contains("does not provide a multi-user access-control boundary"));
 }
 #[test]
+fn v2acc_065_start_help_rejects_cryptographic_authority_claims() {
+    let output = run(&["--json", "help", "session.start"]);
+    assert!(
+        output.status.success(),
+        "session.start help failed: {output:?}"
+    );
+    let response = one_json(&output);
+    let text = response["result"]["text"]
+        .as_str()
+        .expect("session.start help must include text");
+    for required_text in [
+        "Procedure digests provide content integrity and correlation only",
+        "actor attribution is a caller-supplied correlation label",
+        "Neither authenticates nor authorizes a caller or confers cryptographic authority",
+    ] {
+        assert!(
+            text.contains(required_text),
+            "session.start help must state the V2ACC-065 trust boundary: {required_text}"
+        );
+    }
+}
+#[test]
 fn pac_067_public_surface_has_no_authentication_or_workspace_access_key() {
     const FORBIDDEN_FIELDS: &[&str] = &[
         "authentication",

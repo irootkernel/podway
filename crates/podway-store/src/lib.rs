@@ -308,6 +308,7 @@ impl ValidatedWorkspaceRootV1 {
 pub struct SqliteStoreOptionsV1 {
     max_pending_jobs: u32,
     busy_timeout_ms: u32,
+    max_page_count_for_test: Option<u32>,
     failpoint: Option<StoreFailpointV1>,
     failpoint_action: StoreFailpointActionV1,
 }
@@ -322,6 +323,7 @@ impl SqliteStoreOptionsV1 {
         Ok(Self {
             max_pending_jobs,
             busy_timeout_ms: DEFAULT_SQLITE_BUSY_TIMEOUT_MS_V1,
+            max_page_count_for_test: None,
             failpoint: None,
             failpoint_action: StoreFailpointActionV1::ReturnError,
         })
@@ -342,6 +344,24 @@ impl SqliteStoreOptionsV1 {
         self
     }
 
+    /// Applies SQLite's real `max_page_count` limit to this connection after open-time recovery.
+    ///
+    /// This is an explicit test control for deterministic `SQLITE_FULL` coverage. Unlike a store
+    /// failpoint, writes still pass through SQLite and fail at its pager boundary.
+    #[doc(hidden)]
+    pub fn with_max_page_count_for_test(
+        mut self,
+        max_page_count: u32,
+    ) -> Result<Self, StoreValueErrorV1> {
+        if max_page_count == 0 {
+            return Err(StoreValueErrorV1::ZeroValue {
+                field: "SQLite max page count",
+            });
+        }
+        self.max_page_count_for_test = Some(max_page_count);
+        Ok(self)
+    }
+
     /// Selects the explicit action taken when the configured failpoint is reached.
     ///
     /// `AbortProcess` is intended solely for isolated child-process crash fixtures. `Barrier`
@@ -357,6 +377,10 @@ impl SqliteStoreOptionsV1 {
 
     pub fn busy_timeout_ms(&self) -> u32 {
         self.busy_timeout_ms
+    }
+
+    pub(crate) fn max_page_count_for_test(&self) -> Option<u32> {
+        self.max_page_count_for_test
     }
 
     pub fn failpoint(&self) -> Option<StoreFailpointV1> {

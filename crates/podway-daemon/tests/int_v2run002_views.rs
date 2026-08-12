@@ -138,6 +138,58 @@ const REASSESSMENT_PROCEDURE: &[u8] = br#"{
     ]
   }
 }"#;
+const APPLICABILITY_PROCEDURE: &[u8] = br#"{
+  "schema":"podway.procedure/v2",
+  "id":"applicability-classes",
+  "version":"2",
+  "name":"Applicability classes",
+  "purpose":"Enumerate every item and placement applicability class.",
+  "goal_tracking":true,
+  "node_definitions":{
+    "work":{
+      "type":"action",
+      "title":"Work",
+      "intent":"Record every item kind.",
+      "items":[
+        {"id":"confirm","type":"confirm","prompt":"Confirm.","required":true},
+        {"id":"text","type":"text","prompt":"Text.","required":true},
+        {"id":"choice","type":"choice","prompt":"Choice.","required":true,"choices":["yes","no"]},
+        {"id":"integer","type":"integer","prompt":"Integer.","required":true,"minimum":0,"maximum":9},
+        {"id":"list","type":"list","prompt":"List.","required":true,"min_items":1,"max_items":2,"max_item_length":8,"unique":true},
+        {"id":"artifact","type":"artifact","prompt":"Artifact.","required":true,"allowed_media_types":["text/plain"]}
+      ]
+    },
+    "choose":{
+      "type":"decision",
+      "title":"Choose",
+      "objective":"Choose a route.",
+      "prompt":"Which route?",
+      "items":[{"id":"basis","type":"text","prompt":"Basis.","required":true}],
+      "options":[{"id":"left","label":"Left"},{"id":"right","label":"Right"}],
+      "reason":{"required":true}
+    },
+    "assess":{
+      "type":"decision",
+      "title":"Assess",
+      "objective":"Assess the goal.",
+      "prompt":"Which outcome?",
+      "options":[{"id":"achieved","label":"Achieved"},{"id":"not-achieved","label":"Not achieved"},{"id":"superseded","label":"Superseded"}],
+      "reason":{"required":true},
+      "assessment":{"target":"session_goal","outcomes":{"achieved":"achieved","not-achieved":"not_achieved","superseded":"superseded"}}
+    },
+    "finish":{"type":"action","title":"Finish","intent":"Finish."}
+  },
+  "graph":{
+    "entry":"work",
+    "nodes":[
+      {"id":"work","use":"work","skip":{"allowed":true,"reason_required":false},"next":"choose"},
+      {"id":"choose","use":"choose","routes":{"left":{"to":"assess","effect":"advance"},"right":{"to":"assess","effect":"advance"}}},
+      {"id":"assess","use":"assess","routes":{"achieved":{"to":"finish","effect":"advance"},"not-achieved":{"to":"finish","effect":"advance"},"superseded":{"to":"finish","effect":"advance"}}},
+      {"id":"finish","use":"finish","terminal":true}
+    ]
+  },
+  "manual_rework":{"allowed_targets":["work"]}
+}"#;
 
 #[derive(Clone, Copy)]
 struct ByteProcedureV2<'a> {
@@ -377,6 +429,39 @@ fn v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views
     assert_eq!(next["missing_required_items"][0]["item_id"], "result");
     assert_eq!(next["goal_tracking"], true);
     assert_eq!(next["goal_defined"], false);
+    assert_eq!(
+        next["allowed_actions"],
+        json!([
+            "item.set",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.define"
+        ])
+    );
+    assert_eq!(
+        next["suggestions"],
+        json!([
+            {
+                "command": "item.set",
+                "argv": ["podway", "set", "result", "<text>"],
+                "item_id": "result"
+            },
+            {
+                "command": "session.retry",
+                "argv": ["podway", "retry", "--reason", "<reason>"]
+            },
+            {
+                "command": "goal.define",
+                "argv": [
+                    "podway", "goal", "define", "--goal", "<goal>", "--criterion",
+                    "<criterion>"
+                ]
+            }
+        ])
+    );
     let suggestion_commands = next["suggestions"]
         .as_array()
         .unwrap()
@@ -3304,6 +3389,17 @@ fn v2run002_goal_assessment_guidance_tracks_completion_and_determined_outcome() 
             .unwrap()
             .contains(&json!("session.decide"))
     );
+    assert_eq!(
+        next["allowed_actions"],
+        json!([
+            "item.set",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+            "goal.assess_criterion"
+        ])
+    );
     assert!(
         !next["allowed_actions"]
             .as_array()
@@ -3338,6 +3434,17 @@ fn v2run002_goal_assessment_guidance_tracks_completion_and_determined_outcome() 
     assert_eq!(status["allowed_option_ids"], json!(["achieved"]));
     assert_eq!(next["options"].as_array().unwrap().len(), 1);
     assert_eq!(next["options"][0]["option_id"], "achieved");
+    assert_eq!(
+        next["allowed_actions"],
+        json!([
+            "item.set",
+            "session.decide",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset"
+        ])
+    );
     assert!(
         !next["allowed_actions"]
             .as_array()
@@ -3412,6 +3519,19 @@ fn v2run002_skip_guidance_reflects_the_placement_reason_policy() {
     let view = view(fresh_state("skippable.yaml", source.as_bytes()));
     let next = project_graph_next_v2(&view).unwrap();
 
+    assert_eq!(
+        next["allowed_actions"],
+        json!([
+            "item.set",
+            "session.skip",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.define"
+        ])
+    );
     assert!(
         next["allowed_actions"]
             .as_array()
@@ -3433,4 +3553,462 @@ fn v2run002_skip_guidance_reflects_the_placement_reason_policy() {
         json!(["podway", "skip", "--reason", "<text>"])
     );
     assert_output_v2("session.next", next);
+}
+
+fn populate_active_items_for_applicability(state: &GraphSessionStateV2) -> GraphSessionStateV2 {
+    let active = state.trace().active_attempt().unwrap();
+    let replacement = state
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .find(|memory| memory.attempt_id() == active.attempt_id())
+        .unwrap();
+    let slots = replacement
+        .item_slots()
+        .iter()
+        .map(|slot| {
+            let value = match slot.item_id().as_str() {
+                "confirm" => RecordedItemValueV2::confirm(),
+                "text" | "basis" => RecordedItemValueV2::text("recorded").unwrap(),
+                "choice" => RecordedItemValueV2::choice("yes").unwrap(),
+                "integer" => RecordedItemValueV2::integer(1),
+                "list" => RecordedItemValueV2::list(vec!["one".to_owned()]).unwrap(),
+                "artifact" => RecordedItemValueV2::artifact(
+                    ArtifactValueV1::external_reference(
+                        "artifact.txt",
+                        Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+                        8,
+                        "text/plain",
+                    )
+                    .unwrap(),
+                ),
+                other => panic!("unexpected applicability item {other}"),
+            };
+            ItemSlotStateV2::new(
+                slot.attempt_id().clone(),
+                slot.item_id().clone(),
+                slot.item_type(),
+                Revision::new(1),
+                Some(value),
+                slot.created_at(),
+                UnixMillis::new(slot.created_at().get() + 1),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let replacement = AttemptWorkflowMemoryV2::new(
+        replacement.attempt_id().clone(),
+        slots,
+        replacement.blockers().to_vec(),
+        replacement.evidence().to_vec(),
+    )
+    .unwrap();
+    let attempts = state
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .map(|memory| {
+            if memory.attempt_id() == active.attempt_id() {
+                replacement.clone()
+            } else {
+                memory.clone()
+            }
+        })
+        .collect();
+    let workflow_memory = WorkflowMemoryStateV2::new(
+        attempts,
+        state.workflow_memory().decisions().to_vec(),
+        state.workflow_memory().reworks().to_vec(),
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        state.workspace_revision(),
+        state.task_title(),
+        state.snapshot().clone(),
+        state.trace().clone(),
+        state.counters().to_vec(),
+        state.attempt_metadata().to_vec(),
+        workflow_memory,
+        state.goal_state().clone(),
+        state.created_at(),
+        state.completed_at(),
+        state.cancelled_at(),
+        state.cancel_reason().map(str::to_owned),
+    )
+    .unwrap()
+}
+
+fn suggestion_commands(next: &Map<String, Value>) -> Vec<&str> {
+    next["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|suggestion| suggestion["command"].as_str().unwrap())
+        .collect()
+}
+
+fn assert_next_applicability(
+    state: GraphSessionStateV2,
+    expected_actions: &[&str],
+    expected_suggestions: &[&str],
+) -> Map<String, Value> {
+    let next = project_graph_next_v2(&view(state)).unwrap();
+    assert_eq!(
+        next["allowed_actions"],
+        json!(expected_actions),
+        "allowed action applicability drifted"
+    );
+    assert_eq!(
+        suggestion_commands(&next),
+        expected_suggestions,
+        "forward-progress suggestion applicability drifted"
+    );
+    next
+}
+
+#[test]
+fn v2run002_exhaustive_reachable_applicability_classes_close_actions_and_suggestions() {
+    let missing = fresh_state("applicability.json", APPLICABILITY_PROCEDURE);
+    let missing_next = assert_next_applicability(
+        missing.clone(),
+        &[
+            "item.check",
+            "item.set",
+            "item.add",
+            "item.attach",
+            "session.skip",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.define",
+        ],
+        &[
+            "item.check",
+            "item.set",
+            "item.set",
+            "item.set",
+            "item.add",
+            "item.attach",
+            "session.retry",
+            "session.skip",
+            "goal.define",
+        ],
+    );
+    let missing_item_commands = missing_next["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|suggestion| suggestion.get("item_id").is_some())
+        .map(|suggestion| {
+            (
+                suggestion["item_id"].as_str().unwrap(),
+                suggestion["command"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        missing_item_commands,
+        vec![
+            ("confirm", "item.check"),
+            ("text", "item.set"),
+            ("choice", "item.set"),
+            ("integer", "item.set"),
+            ("list", "item.add"),
+            ("artifact", "item.attach"),
+        ]
+    );
+
+    let defined = missing
+        .bind_initial_goal_at_start_v2(
+            GoalStatementV2::new("Prove projector closure.").unwrap(),
+            assessment_goal_definition(),
+            None,
+            UnixMillis::new(1_700_000_000_001),
+        )
+        .unwrap()
+        .into_state();
+    let ready = populate_active_items_for_applicability(&defined);
+    let ready_next = assert_next_applicability(
+        ready.clone(),
+        &[
+            "item.check",
+            "item.uncheck",
+            "item.clear",
+            "item.set",
+            "item.add",
+            "item.remove",
+            "item.attach",
+            "session.complete",
+            "session.skip",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.revise",
+        ],
+        &["session.complete", "session.retry", "session.skip"],
+    );
+
+    let active_id = ready.trace().active_attempt().unwrap().attempt_id().clone();
+    let blocked = ready
+        .block_active_attempt_v2(
+            ready.trace().revision(),
+            &active_id,
+            BlockerId::new("00000000-0000-4000-8000-000000002099").unwrap(),
+            "Blocked for the applicability class.",
+            UnixMillis::new(1_700_000_000_002),
+        )
+        .unwrap()
+        .into_state();
+    let blocked_next = assert_next_applicability(
+        blocked,
+        &[
+            "item.check",
+            "item.uncheck",
+            "item.clear",
+            "item.set",
+            "item.add",
+            "item.remove",
+            "item.attach",
+            "session.skip",
+            "session.retry",
+            "session.block",
+            "session.unblock",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.revise",
+        ],
+        &["session.retry", "session.skip"],
+    );
+
+    let decision = ready
+        .complete_active_action_v2(
+            ready.trace().revision(),
+            &active_id,
+            Some(second_attempt_id()),
+            UnixMillis::new(1_700_000_000_003),
+        )
+        .unwrap()
+        .into_state();
+    let decision_missing_next = assert_next_applicability(
+        decision.clone(),
+        &[
+            "item.set",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.revise",
+        ],
+        &["item.set", "session.retry"],
+    );
+    let decision_ready = populate_active_items_for_applicability(&decision);
+    let decision_next = assert_next_applicability(
+        decision_ready.clone(),
+        &[
+            "item.set",
+            "item.clear",
+            "session.decide",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.revise",
+        ],
+        &["session.decide", "session.decide", "session.retry"],
+    );
+    let decide_options = decision_next["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|suggestion| suggestion["command"] == "session.decide")
+        .map(|suggestion| suggestion["argv"][3].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(decide_options, vec!["left", "right"]);
+
+    let decision_attempt_id = decision_ready
+        .trace()
+        .active_attempt()
+        .unwrap()
+        .attempt_id()
+        .clone();
+    let blocked_decision = decision_ready
+        .block_active_attempt_v2(
+            decision_ready.trace().revision(),
+            &decision_attempt_id,
+            BlockerId::new("00000000-0000-4000-8000-000000002097").unwrap(),
+            "Block the decision applicability class.",
+            UnixMillis::new(1_700_000_000_004),
+        )
+        .unwrap()
+        .into_state();
+    let blocked_decision_next = assert_next_applicability(
+        blocked_decision,
+        &[
+            "item.set",
+            "item.clear",
+            "session.retry",
+            "session.block",
+            "session.unblock",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.revise",
+        ],
+        &["session.retry"],
+    );
+
+    let partial = project_graph_next_v2(&view(goal_assessment_state(vec![assessment_result(
+        "correct",
+    )])))
+    .unwrap();
+    let unassessed = partial["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|suggestion| suggestion["command"] == "goal.assess_criterion")
+        .map(|suggestion| suggestion["argv"][3].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(unassessed, vec!["tested"]);
+    assert!(
+        !partial["allowed_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("session.decide"))
+    );
+
+    let complete = project_graph_next_v2(&view(goal_assessment_state(vec![
+        assessment_result("correct"),
+        assessment_result("tested"),
+    ])))
+    .unwrap();
+    let complete_decisions = complete["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|suggestion| suggestion["command"] == "session.decide")
+        .collect::<Vec<_>>();
+    assert_eq!(complete_decisions.len(), 1);
+    assert_eq!(complete_decisions[0]["argv"][3], "achieved");
+    assert!(
+        !complete["allowed_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("goal.assess_criterion"))
+    );
+
+    let terminal_ready = assert_next_applicability(
+        decided_assessment_state(DecidedFixtureLifecycle::Running, false),
+        &[
+            "session.complete",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+        ],
+        &["session.complete", "session.retry"],
+    );
+
+    let mut reactivation_source: Value = serde_json::from_slice(ASSESSMENT_PROCEDURE).unwrap();
+    reactivation_source.as_object_mut().unwrap().insert(
+        "manual_rework".to_owned(),
+        json!({"allowed_targets":["assess-goal"]}),
+    );
+    let reactivation_source = serde_json::to_vec(&reactivation_source).unwrap();
+    let completed_for_reactivation = decided_assessment_state_from_source(
+        DecidedFixtureLifecycle::Completed,
+        &reactivation_source,
+    );
+    let reactivated = completed_for_reactivation
+        .manual_rework_v2(
+            completed_for_reactivation.trace().revision(),
+            None,
+            GraphNodeId::new("assess-goal").unwrap(),
+            AttemptId::new("00000000-0000-4000-8000-000000002098").unwrap(),
+            ReasonV2::new("Reassess the completed session.").unwrap(),
+            None,
+            UnixMillis::new(1_700_000_000_030),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(reactivated.trace().lifecycle(), SessionLifecycle::Running);
+    let reactivated_next = project_graph_next_v2(&view(reactivated)).unwrap();
+    assert_eq!(
+        reactivated_next["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|suggestion| suggestion["command"] == "goal.assess_criterion")
+            .count(),
+        2
+    );
+
+    for lifecycle in [
+        DecidedFixtureLifecycle::Completed,
+        DecidedFixtureLifecycle::Cancelled,
+    ] {
+        assert!(project_graph_next_v2(&view(decided_assessment_state(lifecycle, false))).is_err());
+    }
+
+    let observed_actions = [
+        &missing_next,
+        &ready_next,
+        &blocked_next,
+        &decision_missing_next,
+        &decision_next,
+        &blocked_decision_next,
+        &partial,
+        &complete,
+        &terminal_ready,
+        &reactivated_next,
+    ]
+    .into_iter()
+    .flat_map(|next| next["allowed_actions"].as_array().unwrap())
+    .filter_map(Value::as_str)
+    .collect::<std::collections::BTreeSet<_>>();
+    let expected_projector_actions = [
+        "goal.assess_criterion",
+        "goal.define",
+        "goal.revise",
+        "item.add",
+        "item.attach",
+        "item.check",
+        "item.clear",
+        "item.remove",
+        "item.set",
+        "item.uncheck",
+        "session.block",
+        "session.cancel",
+        "session.complete",
+        "session.decide",
+        "session.reset",
+        "session.retry",
+        "session.rework",
+        "session.skip",
+        "session.unblock",
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(observed_actions, expected_projector_actions);
+    let routes: Value =
+        serde_json::from_slice(include_bytes!("../../../contracts/command-routes.json")).unwrap();
+    let registered = routes["routes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|route| route["command"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(observed_actions.is_subset(&registered));
+    for command in expected_projector_actions {
+        assert!(
+            registered.contains(command),
+            "projector action route {command} is unregistered"
+        );
+    }
 }

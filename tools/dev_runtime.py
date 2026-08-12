@@ -19,6 +19,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Callable
 
@@ -30,6 +31,8 @@ from run_g005_vertical import cargo_target_directory
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_RUST_TOOLCHAIN = "1.97.1"
 SCHEMA = "podway.dev-runtime/v1"
+V2REL003_QUALIFICATION_SCHEMA = "podway.v2rel003-native-qualification/v1"
+IPC_MAX_PAYLOAD_BYTES = 1_048_576
 METADATA_NAME = "runtime.json"
 DEVELOPMENT_V2_MARKER_NAME = "development-v2.marker"
 DEVELOPMENT_V2_MARKER_SCHEMA = "podway.disposable-development-workspace/v1"
@@ -662,6 +665,162 @@ def run_snapshotted_cli(
         check=False,
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
+
+
+def require_qualification_binary(raw: str, *, label: str) -> Path:
+    path = Path(raw)
+    if not path.is_absolute():
+        fail(f"{label} must be an absolute path: {path}")
+    reject_dot_components(path, label=label)
+    resolved = path.resolve()
+    if resolved != path or path.is_symlink():
+        fail(f"{label} must be a canonical non-symlink path: {path}")
+    metadata = lstat_path(path)
+    if not stat.S_ISREG(metadata.st_mode) or not metadata.st_mode & stat.S_IXUSR:
+        fail(f"{label} must be an executable regular file: {path}")
+    return path
+
+
+def run_cli_binary(
+    cli: Path,
+    *,
+    worktree: Path,
+    account_root: Path,
+    dev_home: Path,
+    arguments: list[str],
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [cli.as_posix(), "--dev", "--json", *arguments],
+        cwd=worktree,
+        env=isolation_environment(account_root, dev_home),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    )
+
+
+def decode_cli_json(
+    completed: subprocess.CompletedProcess[bytes],
+    *,
+    label: str,
+    expected_code: int | None = 0,
+) -> dict[str, Any]:
+    if expected_code is not None and completed.returncode != expected_code:
+        fail(
+            f"{label} exited {completed.returncode}: "
+            f"stdout={completed.stdout.decode('utf-8', errors='replace')[:2000]!r}; "
+            f"stderr={completed.stderr.decode('utf-8', errors='replace')[:2000]!r}"
+        )
+    try:
+        value = json.loads(completed.stdout)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        fail(f"{label} returned invalid JSON: {error}")
+    if not isinstance(value, dict):
+        fail(f"{label} returned a non-object JSON value")
+    return value
+
+
+def qualification_command(
+    cli: Path,
+    paths: dict[str, Path],
+    arguments: list[str],
+    *,
+    label: str,
+    expected_code: int | None = 0,
+) -> dict[str, Any]:
+    return decode_cli_json(
+        run_cli_binary(
+            cli,
+            worktree=paths["sandbox"],
+            account_root=paths["account_root"],
+            dev_home=paths["dev_home"],
+            arguments=arguments,
+        ),
+        label=label,
+        expected_code=expected_code,
+    )
+
+
+def require_output_result(
+    envelope: dict[str, Any], *, command: str, result_schema: str
+) -> dict[str, Any]:
+    if envelope.get("command") != command or envelope.get("schema") not in {
+        "podway.output/v1",
+        "podway.output/v2",
+    }:
+        fail(f"{command} returned the wrong output envelope")
+    result = envelope.get("result")
+    if not isinstance(result, dict) or result.get("schema") != result_schema:
+        fail(
+            f"{command} returned the wrong result schema: "
+            f"{result.get('schema') if isinstance(result, dict) else None}"
+        )
+    return result
+
+
+def require_error_code(envelope: dict[str, Any], expected: str, *, label: str) -> None:
+    if envelope.get("schema") not in {"podway.error/v1", "podway.error/v2"}:
+        fail(f"{label} did not return an error envelope")
+    observed = envelope.get("code")
+    if observed != expected:
+        fail(f"{label} returned {observed!r}, expected {expected!r}")
+
+
+def response_loss_relay(
+    proxy_socket: Path, daemon_socket: Path
+) -> tuple[threading.Thread, dict[str, bytes | BaseException]]:
+    """Forward one request, consume one response, and deliberately discard it."""
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(proxy_socket.as_posix())
+    os.chmod(proxy_socket, FILE_MODE)
+    listener.listen(1)
+    outcome: dict[str, bytes | BaseException] = {}
+
+    def read_single_frame(stream: socket.socket, *, label: str) -> bytes:
+        wire = bytearray()
+        while len(wire) < 4:
+            chunk = stream.recv(4 - len(wire))
+            if not chunk:
+                fail(f"{label} ended before its frame prefix")
+            wire.extend(chunk)
+        payload_length = int.from_bytes(wire, "big")
+        if payload_length > IPC_MAX_PAYLOAD_BYTES:
+            fail(f"{label} exceeds the IPC payload limit: {payload_length}")
+        while len(wire) < payload_length + 4:
+            chunk = stream.recv(min(64 * 1024, payload_length + 4 - len(wire)))
+            if not chunk:
+                fail(f"{label} ended before its declared payload")
+            wire.extend(chunk)
+        if stream.recv(1):
+            fail(f"{label} contains trailing bytes after one frame")
+        return bytes(wire)
+
+    def relay() -> None:
+        try:
+            listener.settimeout(10)
+            downstream, _ = listener.accept()
+            with downstream:
+                downstream.settimeout(10)
+                request = read_single_frame(downstream, label="response-loss request")
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as upstream:
+                    upstream.settimeout(10)
+                    upstream.connect(daemon_socket.as_posix())
+                    upstream.sendall(request)
+                    upstream.shutdown(socket.SHUT_WR)
+                    response = read_single_frame(upstream, label="response-loss response")
+                outcome["request"] = request
+                outcome["response"] = response
+                # Closing downstream without forwarding response creates the exact response-loss
+                # boundary observed by the CLI.
+        except BaseException as error:
+            outcome["error"] = error
+        finally:
+            listener.close()
+
+    thread = threading.Thread(target=relay, name="v2rel003-response-loss", daemon=True)
+    thread.start()
+    return thread, outcome
 
 
 def publish_development_v2_marker(
@@ -1389,6 +1548,27 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
         if completed.get("latest_goal_outcome") != "achieved" or completed.get("goal_revision") != 2:
             fail("v2 dogfood closeout lost the achieved revised goal")
 
+        manually_reactivated = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "rework",
+                "--to",
+                "implement",
+                "--reason",
+                "Exercise the declared completed-session manual reactivation route.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-manual-reactivation",
+            ],
+            command="session.rework",
+            result_schema="podway.rework-result/v1",
+        )
+        if manually_reactivated.get("reactivated") is not True:
+            fail("v2 dogfood completed-session manual rework did not reactivate")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "implement")
+
         dogfood_v2_mutation(
             paths,
             metadata,
@@ -1465,6 +1645,7 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             "skip": True,
             "restart": True,
             "closeout": "achieved",
+            "manual_reactivation": True,
             "v1_regression": "advanced",
         }
     finally:
@@ -1508,6 +1689,730 @@ def prepare_synthetic_runtime(checkout: Path) -> dict[str, Path]:
         ensure_private_directory(paths[key], uid=euid())
     ensure_private_directory(paths["account_root"] / ".podway", uid=euid())
     return paths
+
+
+V2REL003_PROCEDURE = """\
+# Formatting noise is intentional: qualification proves canonical digest stability.
+
+schema: podway.procedure/v2
+id: v2rel003-native
+version: "1"
+name: V2REL-003 native qualification
+purpose: Qualify native recovery and admission behavior with a minimal real graph.
+goal_tracking: true
+node_definitions:
+  work:
+    type: action
+    title: Record work
+    intent: Record the native qualification evidence.
+    items:
+      - id: result
+        type: text
+        prompt: Record the result.
+        required: true
+        min_length: 1
+        max_length: 200
+  assess:
+    type: decision
+    title: Assess goal
+    objective: Determine whether the qualification goal is achieved.
+    prompt: Is the qualification goal achieved?
+    options:
+      - id: achieved
+        label: Achieved
+        criteria: The native evidence supports the criterion.
+      - id: not-achieved
+        label: Not achieved
+        criteria: The native evidence does not support the criterion.
+      - id: superseded
+        label: Superseded
+        criteria: The qualification goal no longer describes the desired outcome.
+    reason:
+      required: true
+      prompt: Explain the decision.
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  close:
+    type: action
+    title: Close qualification
+    intent: Record closeout after the assessed goal.
+    items:
+      - id: closeout
+        type: text
+        prompt: Record closeout.
+        required: true
+        min_length: 1
+        max_length: 200
+graph:
+  entry: work
+  nodes:
+    - id: work
+      use: work
+      next: assess
+    - id: assess
+      use: assess
+      evidence_from:
+        - node: work
+          required: true
+      routes:
+        achieved:
+          to: close
+          effect: advance
+        not-achieved:
+          to: work
+          effect: rework
+        superseded:
+          to: close
+          effect: advance
+    - id: close
+      use: close
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - work
+"""
+
+
+def command_qualify_v2rel003(
+    *, podway: str, podwayd_debug: str, podwayd_release: str
+) -> int:
+    """Qualify v2 native behavior against three already-built binaries."""
+    release_archive.require_native_host()
+    cli = require_qualification_binary(podway, label="podway")
+    debug_daemon = require_qualification_binary(podwayd_debug, label="podwayd-debug")
+    release_daemon = require_qualification_binary(podwayd_release, label="podwayd-release")
+    if release_archive.test_isolation_capability(cli) is not release_archive.TestIsolationCapability.ENABLED:
+        fail("podway lacks test-isolation capability")
+    if release_archive.development_v2_admission_capability(debug_daemon) is not release_archive.TestIsolationCapability.ENABLED:
+        fail("podwayd-debug lacks development v2 admission capability")
+    if release_archive.development_v2_admission_capability(release_daemon) is not release_archive.TestIsolationCapability.DISABLED:
+        fail("podwayd-release unexpectedly exposes development v2 admission")
+
+    checks = {
+        "custom_preview_confirmation": False,
+        "format_equivalence_restart": False,
+        "preset_without_digest": False,
+        "next_suggestions": False,
+        "detached_replay": False,
+        "concurrent_stale_fence": False,
+        "sigkill_recovery": False,
+        "response_loss_reconciliation": False,
+        "completed_manual_reactivation": False,
+        "completed_goal_reactivation": False,
+        "cancelled_rejection": False,
+        "endpoint_isolation": False,
+        "release_admission_fence": False,
+    }
+    checkout = make_synthetic_checkout()
+    root = managed_root_for(checkout)
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        paths = prepare_synthetic_runtime(checkout)
+        metadata = snapshot_pair(paths, cli, debug_daemon, checkout)
+        adopt_snapshot_when_idle(paths, metadata)
+        snap_cli = Path(metadata["snapshot"]["podway"])
+        snap_daemon = Path(metadata["snapshot"]["podwayd"])
+        process = start_isolated_daemon(snap_daemon, paths["account_root"], paths["dev_home"])
+        initialize_sandbox(paths["sandbox"])
+        require_output_result(
+            qualification_command(snap_cli, paths, ["init"], label="workspace init"),
+            command="workspace.init",
+            result_schema="podway.workspace-init-result/v1",
+        )
+        publish_development_v2_marker(paths, metadata)
+        audit_managed_tree(
+            paths["root"], expected=paths["root"], uid=euid(), repair_modes=True
+        )
+
+        preset = require_output_result(
+            dogfood_json_command(
+                paths,
+                metadata,
+                [
+                    "start", "--preset", "sw-dev-v2", "--task", "Preset admission",
+                    "--goal", "Prove preset admission.",
+                    "--criterion", "preset=Preset admission succeeds without a digest.",
+                    "--actor", "V2REL-003 qualifier", "--idempotency-key", "v2rel003-preset",
+                ],
+                command="session.start",
+                output_schema="podway.output/v2",
+                result_schema="podway.session-start-result/v2",
+            ),
+            command="session.start",
+            result_schema="podway.session-start-result/v2",
+        )
+        checks["preset_without_digest"] = preset.get("procedure_schema") == "podway.procedure/v2"
+        qualification_command(
+            snap_cli,
+            paths,
+            ["--yes", "--idempotency-key", "v2rel003-reset-preset", "reset"],
+            label="preset reset",
+        )
+
+        procedure_path = paths["sandbox"] / "native-v2.yaml"
+        procedure_path.write_text(V2REL003_PROCEDURE, encoding="utf-8")
+        os.chmod(procedure_path, FILE_MODE)
+        preview = require_output_result(
+            qualification_command(
+                snap_cli, paths, ["procedure", "preview", procedure_path.name], label="procedure preview"
+            ),
+            command="procedure.preview",
+            result_schema="podway.procedure-preview-result/v1",
+        )
+        if preview.get("admissible") is not True:
+            fail("qualification Procedure v2 preview is not admissible")
+        digest = preview.get("procedure_digest")
+        suggestion = preview.get("start_suggestion")
+        argv = suggestion.get("argv") if isinstance(suggestion, dict) else None
+        if not isinstance(digest, str) or not isinstance(argv, list) or argv[:2] != ["podway", "start"]:
+            fail("procedure preview omitted its exact start suggestion")
+
+        missing = qualification_command(
+            snap_cli,
+            paths,
+            ["start", "--procedure", procedure_path.name, "--task", "Missing confirmation"],
+            label="missing confirmation",
+            expected_code=None,
+        )
+        require_error_code(missing, "DIGEST_CONFIRMATION_REQUIRED", label="missing confirmation")
+        mismatch = qualification_command(
+            snap_cli,
+            paths,
+            ["start", "--procedure", procedure_path.name, "--expect-procedure-digest", "sha256:" + "a" * 64, "--task", "Wrong confirmation"],
+            label="digest mismatch",
+            expected_code=None,
+        )
+        require_error_code(mismatch, "PROCEDURE_DIGEST_MISMATCH", label="digest mismatch")
+        procedure_path.write_text(
+            V2REL003_PROCEDURE.replace(
+                "Qualify native recovery and admission behavior with a minimal real graph.",
+                "Qualify meaningfully edited native behavior with a minimal real graph.",
+            ),
+            encoding="utf-8",
+        )
+        semantic_mismatch = qualification_command(
+            snap_cli,
+            paths,
+            [
+                "start",
+                "--procedure",
+                procedure_path.name,
+                "--expect-procedure-digest",
+                digest,
+                "--task",
+                "Stale semantic confirmation",
+                "--goal",
+                "Prove semantic edits invalidate confirmation.",
+                "--criterion",
+                "semantic=The stale digest is rejected.",
+                "--actor",
+                "V2REL-003 qualifier",
+            ],
+            label="semantic edit digest mismatch",
+            expected_code=None,
+        )
+        require_error_code(
+            semantic_mismatch,
+            "PROCEDURE_DIGEST_MISMATCH",
+            label="semantic edit digest mismatch",
+        )
+        empty_status = qualification_command(
+            snap_cli, paths, ["status"], label="status after rejected starts", expected_code=None
+        )
+        require_error_code(empty_status, "SESSION_NOT_FOUND", label="status after rejected starts")
+
+        procedure_path.write_text(V2REL003_PROCEDURE, encoding="utf-8")
+        qualification_command(
+            snap_cli,
+            paths,
+            ["procedure", "format", procedure_path.name, "--write"],
+            label="procedure format",
+        )
+        formatted_preview = require_output_result(
+            qualification_command(
+                snap_cli, paths, ["procedure", "preview", procedure_path.name], label="formatted preview"
+            ),
+            command="procedure.preview",
+            result_schema="podway.procedure-preview-result/v1",
+        )
+        if formatted_preview.get("procedure_digest") != digest:
+            fail("formatting-equivalent Procedure v2 changed its canonical digest")
+        checks["custom_preview_confirmation"] = True
+
+        start_argv = [str(value) for value in argv[1:]]
+        start_argv = ["Native qualification" if value == "<task>" else value for value in start_argv]
+        start_argv.extend(
+            ["--goal", "Prove native recovery.", "--criterion", "native=Native recovery passes.", "--actor", "V2REL-003 qualifier"]
+        )
+        started = require_output_result(
+            qualification_command(snap_cli, paths, start_argv, label="suggested custom start"),
+            command="session.start",
+            result_schema="podway.session-start-result/v2",
+        )
+        if started.get("procedure_digest") != digest:
+            fail("custom start lost the preview-confirmed digest")
+
+        before_kill = require_output_result(
+            qualification_command(snap_cli, paths, ["status"], label="status before SIGKILL"),
+            command="session.status",
+            result_schema="podway.status-result/v2",
+        )
+        session_id = before_kill["session"]["id"]
+        process.kill()
+        process.wait(timeout=5)
+        process = start_isolated_daemon(snap_daemon, paths["account_root"], paths["dev_home"])
+        after_kill = require_output_result(
+            qualification_command(snap_cli, paths, ["status"], label="status after SIGKILL"),
+            command="session.status",
+            result_schema="podway.status-result/v2",
+        )
+        if after_kill["session"]["id"] != session_id or after_kill["procedure"]["digest"] != digest:
+            fail("SIGKILL recovery changed session or Procedure identity")
+        if current_snapshot(paths, checkout=checkout)["snapshot"] != metadata["snapshot"]:
+            fail("SIGKILL recovery changed the adopted CLI/daemon snapshot identity")
+        checks["sigkill_recovery"] = True
+        checks["format_equivalence_restart"] = True
+
+        next_result = require_output_result(
+            qualification_command(snap_cli, paths, ["next"], label="next action suggestion"),
+            command="session.next",
+            result_schema="podway.next-result/v2",
+        )
+        set_suggestion = next(
+            (entry for entry in next_result.get("suggestions", []) if entry.get("command") == "item.set"),
+            None,
+        )
+        if not isinstance(set_suggestion, dict):
+            fail("next omitted the required action item suggestion")
+        if next_result.get("allowed_actions") != [
+            "item.set",
+            "session.retry",
+            "session.block",
+            "session.cancel",
+            "session.reset",
+            "session.rework",
+            "goal.revise",
+        ]:
+            fail(f"action next returned unexpected legal actions: {next_result.get('allowed_actions')}")
+        set_argv = [str(value) for value in set_suggestion["argv"][1:]]
+        set_argv = ["native evidence" if value == "<text>" else value for value in set_argv]
+        qualification_command(
+            snap_cli, paths, ["--idempotency-key", "v2rel003-next-set", *set_argv], label="execute next suggestion"
+        )
+
+        status_envelope = qualification_command(
+            snap_cli, paths, ["status"], label="status before stale race"
+        )
+        status = require_output_result(
+            status_envelope,
+            command="session.status",
+            result_schema="podway.status-result/v2",
+        )
+        fence = [
+            "--if-workspace-uuid", status_envelope["workspace"]["uuid"],
+            "--if-session-id", status["session"]["id"],
+            "--if-session-revision", str(status["session"]["revision"]),
+            "--if-attempt", status["current"]["attempt"]["attempt_id"],
+        ]
+        racers = []
+        for suffix in ("a", "b"):
+            racers.append(
+                subprocess.Popen(
+                    [
+                        snap_cli.as_posix(), "--dev", "--json", *fence,
+                        "--idempotency-key", f"v2rel003-race-{suffix}",
+                        "retry", "--reason", f"Concurrent stale-fence contender {suffix}.",
+                    ],
+                    cwd=paths["sandbox"],
+                    env=isolation_environment(paths["account_root"], paths["dev_home"]),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            )
+        race_results = [process.communicate(timeout=COMMAND_TIMEOUT_SECONDS) + (process.returncode,) for process in racers]
+        race_json = [json.loads(stdout) for stdout, _stderr, _code in race_results]
+        race_codes = sorted(value.get("code", "OK") for value in race_json)
+        if race_codes != ["OK", "SESSION_REVISION_CONFLICT"]:
+            fail(f"stale-fenced concurrent mutations did not produce one winner: {race_codes}")
+        checks["concurrent_stale_fence"] = True
+
+        detached = require_output_result(
+            qualification_command(
+                snap_cli,
+                paths,
+                [
+                    "--detach", "--idempotency-key", "v2rel003-detached", "retry",
+                    "--reason", "Exercise detached admission and immutable replay.",
+                ],
+                label="detached mutation",
+            ),
+            command="session.retry",
+            result_schema="podway.detached-admission-result/v2",
+        )
+        job_id = detached["admission"]["job_id"]
+        waited = require_output_result(
+            qualification_command(snap_cli, paths, ["job", "wait", job_id], label="detached wait"),
+            command="job.wait",
+            result_schema="podway.job-result/v2",
+        )
+        detached_status = require_output_result(
+            qualification_command(snap_cli, paths, ["job", "status", job_id], label="detached status"),
+            command="job.status",
+            result_schema="podway.job-result/v2",
+        )
+        if detached_status.get("job") != waited.get("job"):
+            fail("terminal detached job.status changed the waited durable job receipt")
+        lookup = require_output_result(
+            qualification_command(
+                snap_cli, paths, ["--idempotency-key", "v2rel003-detached", "job", "lookup"], label="detached lookup"
+            ),
+            command="job.lookup",
+            result_schema="podway.job-lookup-result/v2",
+        )
+        if (
+            lookup.get("job", {}).get("terminal_response") != waited.get("job")
+            or waited.get("job", {}).get("job", {}).get("id") != job_id
+        ):
+            fail("detached terminal lookup was not an exact replay")
+        checks["detached_replay"] = True
+
+        loss_key = "v2rel003-response-loss"
+        loss_status_envelope = qualification_command(
+            snap_cli, paths, ["status"], label="response-loss precondition status"
+        )
+        loss_status = require_output_result(
+            loss_status_envelope,
+            command="session.status",
+            result_schema="podway.status-result/v2",
+        )
+        proxy = paths["dev_home"] / "run" / "response-loss.sock"
+        relay, relay_outcome = response_loss_relay(proxy, paths["socket"])
+        loss_arguments = [
+            "--if-workspace-uuid", loss_status_envelope["workspace"]["uuid"],
+            "--if-session-id", loss_status["session"]["id"],
+            "--if-session-revision", str(loss_status["session"]["revision"]),
+            "--if-attempt", loss_status["current"]["attempt"]["attempt_id"],
+            "--idempotency-key", loss_key, "retry", "--reason",
+            "Exercise a daemon response that is consumed but not delivered.",
+        ]
+        lost = subprocess.run(
+            [
+                snap_cli.as_posix(), "--json", "--socket", proxy.as_posix(),
+                "--worktree", paths["sandbox"].as_posix(), "--timeout", "10s",
+                *loss_arguments,
+            ],
+            cwd=paths["sandbox"],
+            env=isolation_environment(paths["account_root"], paths["dev_home"]),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+        relay.join(timeout=15)
+        if relay.is_alive():
+            fail("response-loss relay did not finish")
+        if "error" in relay_outcome:
+            fail(f"response-loss relay failed: {relay_outcome['error']}")
+        lost_json = decode_cli_json(lost, label="discarded response mutation", expected_code=None)
+        if lost_json.get("code") != "MUTATION_OUTCOME_UNKNOWN":
+            captured = relay_outcome.get("response")
+            decoded = None
+            if isinstance(captured, bytes) and len(captured) >= 4:
+                try:
+                    decoded = json.loads(captured[4:])
+                except (UnicodeError, json.JSONDecodeError):
+                    decoded = captured[:500].hex()
+            fail(
+                f"discarded response mutation returned unexpected envelope: {lost_json}; "
+                f"daemon_response={decoded}"
+            )
+        require_error_code(lost_json, "MUTATION_OUTCOME_UNKNOWN", label="discarded response mutation")
+        if lost.returncode != 4 or lost_json.get("retryable") is not True:
+            fail("discarded response did not produce retryable unknown outcome")
+        response_wire = relay_outcome.get("response")
+        if not isinstance(response_wire, bytes) or len(response_wire) < 5:
+            fail("response-loss relay did not capture a complete daemon response")
+        length = int.from_bytes(response_wire[:4], "big")
+        if len(response_wire) != length + 4:
+            fail("response-loss relay captured a malformed response frame")
+        try:
+            discarded_envelope = json.loads(response_wire[4:])
+        except (UnicodeError, json.JSONDecodeError) as error:
+            fail(f"discarded daemon response was not JSON: {error}")
+        loss_lookup = require_output_result(
+            qualification_command(
+                snap_cli, paths, ["--idempotency-key", loss_key, "job", "lookup"], label="response-loss lookup"
+            ),
+            command="job.lookup",
+            result_schema="podway.job-lookup-result/v2",
+        )
+        terminal_response = loss_lookup.get("job", {}).get("terminal_response")
+        if terminal_response != discarded_envelope:
+            fail("response-loss lookup did not preserve the discarded daemon response exactly")
+        replayed = qualification_command(
+            snap_cli,
+            paths,
+            loss_arguments,
+            label="response-loss exact replay",
+        )
+        replay_request_id = replayed.pop("request_id", None)
+        discarded_request_id = discarded_envelope.pop("request_id", None)
+        if (
+            not isinstance(replay_request_id, str)
+            or not isinstance(discarded_request_id, str)
+            or replay_request_id == discarded_request_id
+            or replayed != discarded_envelope
+        ):
+            fail(
+                "response-loss replay did not preserve the frozen response apart from its "
+                f"current request correlation: replay={replayed}; discarded={discarded_envelope}"
+            )
+        checks["response_loss_reconciliation"] = True
+
+        qualification_command(
+            snap_cli,
+            paths,
+            ["--idempotency-key", "v2rel003-post-detached-set", "set", "result", "detached evidence"],
+            label="restore required item after detached retry",
+        )
+
+        complete_next = require_output_result(
+            qualification_command(snap_cli, paths, ["next"], label="next complete suggestion"),
+            command="session.next",
+            result_schema="podway.next-result/v2",
+        )
+        complete_suggestions = [
+            entry for entry in complete_next.get("suggestions", []) if entry.get("command") == "session.complete"
+        ]
+        if len(complete_suggestions) != 1 or complete_suggestions[0].get("argv") != ["podway", "complete"]:
+            fail("next did not return the exact placeholder-free complete suggestion")
+        qualification_command(
+            snap_cli,
+            paths,
+            ["--idempotency-key", "v2rel003-complete-work", *complete_suggestions[0]["argv"][1:]],
+            label="execute complete suggestion",
+        )
+        decision_next = require_output_result(
+            qualification_command(snap_cli, paths, ["next"], label="next decision suggestion"),
+            command="session.next",
+            result_schema="podway.next-result/v2",
+        )
+        assessment_suggestions = [
+            entry for entry in decision_next.get("suggestions", []) if entry.get("command") == "goal.assess_criterion"
+        ]
+        if len(assessment_suggestions) != 1 or any(
+            entry.get("command") == "session.decide" for entry in decision_next.get("suggestions", [])
+        ):
+            fail("assessment next did not expose exactly one unassessed criterion")
+        assessment_argv = [str(value) for value in assessment_suggestions[0]["argv"][1:]]
+        assessment_argv = [
+            "satisfied" if value == "<status>" else "Native evidence passed." if value == "<reason>" else value
+            for value in assessment_argv
+        ]
+        qualification_command(
+            snap_cli,
+            paths,
+            ["--idempotency-key", "v2rel003-assess", *assessment_argv, "--evidence", "work", "--actor", "V2REL-003 qualifier"],
+            label="execute assessment suggestion",
+        )
+        assessed_next = require_output_result(
+            qualification_command(snap_cli, paths, ["next"], label="next assessed decision"),
+            command="session.next",
+            result_schema="podway.next-result/v2",
+        )
+        decision_suggestions = [
+            entry for entry in assessed_next.get("suggestions", []) if entry.get("command") == "session.decide"
+        ]
+        allowed_options = [
+            option.get("option_id")
+            for option in assessed_next.get("options", [])
+            if isinstance(option, dict)
+        ]
+        suggested_options = [
+            entry.get("argv", [None] * 4)[3]
+            for entry in decision_suggestions
+            if len(entry.get("argv", [])) >= 4
+        ]
+        if (
+            not isinstance(allowed_options, list)
+            or allowed_options != ["achieved"]
+            or suggested_options != allowed_options
+        ):
+            fail(
+                "assessed decision next did not expose exactly one suggestion per option: "
+                f"allowed={allowed_options}; "
+                f"suggestions={assessed_next.get('suggestions')}"
+            )
+        achieved_suggestion = next(
+            entry for entry in decision_suggestions if "achieved" in entry.get("argv", [])
+        )
+        achieved_argv = [
+            "Native evidence supports achievement." if value == "<reason>" else str(value)
+            for value in achieved_suggestion["argv"][1:]
+        ]
+        qualification_command(
+            snap_cli,
+            paths,
+            ["--idempotency-key", "v2rel003-decide", *achieved_argv, "--actor", "V2REL-003 qualifier"],
+            label="execute decision suggestion",
+        )
+        close_next = require_output_result(
+            qualification_command(snap_cli, paths, ["next"], label="next close suggestions"),
+            command="session.next",
+            result_schema="podway.next-result/v2",
+        )
+        close_set = next(entry for entry in close_next["suggestions"] if entry.get("command") == "item.set")
+        close_argv = [
+            "Native closeout recorded." if value == "<text>" else str(value)
+            for value in close_set["argv"][1:]
+        ]
+        qualification_command(
+            snap_cli, paths, ["--idempotency-key", "v2rel003-closeout", *close_argv], label="execute close suggestion"
+        )
+        close_ready = require_output_result(
+            qualification_command(snap_cli, paths, ["next"], label="next close complete"),
+            command="session.next",
+            result_schema="podway.next-result/v2",
+        )
+        close_complete = next(
+            entry for entry in close_ready["suggestions"] if entry.get("command") == "session.complete"
+        )
+        qualification_command(
+            snap_cli,
+            paths,
+            ["--idempotency-key", "v2rel003-complete-close", *close_complete["argv"][1:]],
+            label="execute close complete suggestion",
+        )
+        checks["next_suggestions"] = True
+        completed_status = require_output_result(
+            qualification_command(snap_cli, paths, ["status"], label="completed status"),
+            command="session.status",
+            result_schema="podway.status-result/v2",
+        )
+        if completed_status["session"]["lifecycle"] != "completed":
+            fail("qualification session did not complete")
+
+        revised = require_output_result(
+            qualification_command(
+                snap_cli,
+                paths,
+                ["--idempotency-key", "v2rel003-goal-reactivate", "goal", "revise", "--goal", "Prove native recovery after reactivation.", "--criterion", "native=Native reactivation passes.", "--rework-to", "work", "--reason", "Exercise completed goal reactivation.", "--actor", "V2REL-003 qualifier", "--reactivate"],
+                label="goal reactivation",
+            ),
+            command="goal.revise",
+            result_schema="podway.goal-revision-result/v1",
+        )
+        checks["completed_goal_reactivation"] = revised.get("reactivated") is True
+        qualification_command(
+            snap_cli, paths, ["--idempotency-key", "v2rel003-cancel", "cancel", "--reason", "Exercise cancelled terminal rejection."], label="cancel session"
+        )
+        cancelled_rework = qualification_command(
+            snap_cli,
+            paths,
+            ["--idempotency-key", "v2rel003-cancelled-rework", "rework", "--to", "work", "--reason", "Must be rejected."],
+            label="cancelled rework",
+            expected_code=None,
+        )
+        require_error_code(cancelled_rework, "SESSION_CANCELLED", label="cancelled rework")
+        checks["cancelled_rejection"] = True
+
+        # The same completed fixture's declared manual target was exercised by the production
+        # reactivation path above; verify the independent native manual route with the established
+        # end-to-end dogfood fixture rather than synthesizing store state.
+        manual = self_test_v2_dogfood(cli, debug_daemon)
+        checks["completed_manual_reactivation"] = manual.get("manual_reactivation") is True
+
+        checks["endpoint_isolation"] = self_test_dual_daemon(cli, debug_daemon) == 1
+    finally:
+        if process is not None:
+            stop_process(process)
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(checkout, ignore_errors=True)
+
+    release_checkout = make_synthetic_checkout()
+    release_root = managed_root_for(release_checkout)
+    release_process: subprocess.Popen[bytes] | None = None
+    try:
+        release_paths = prepare_synthetic_runtime(release_checkout)
+        release_process = start_isolated_daemon(
+            release_daemon, release_paths["account_root"], release_paths["dev_home"]
+        )
+        initialize_sandbox(release_paths["sandbox"])
+        qualification_command(cli, release_paths, ["init"], label="release-profile init")
+        marker_metadata = {
+            "snapshot": {
+                "podwayd": release_daemon.as_posix(),
+                "podwayd_sha256": release_archive.sha256_file(release_daemon),
+            }
+        }
+        publish_development_v2_marker(release_paths, marker_metadata)
+        rejected = qualification_command(
+            cli,
+            release_paths,
+            [
+                "--idempotency-key", "v2rel003-release-fence",
+                "start", "--preset", "sw-dev-v2", "--task", "Release fence",
+                "--goal", "Prove the release admission fence.",
+                "--criterion", "fence=Release profile rejects Procedure v2.",
+                "--actor", "V2REL-003 qualifier",
+            ],
+            label="release-profile v2 rejection",
+            expected_code=None,
+        )
+        require_error_code(rejected, "UNSUPPORTED_V2_CAPABILITY", label="release-profile v2 rejection")
+        if rejected.get("details", {}).get("admission") != {"admitted": False}:
+            fail("release-profile v2 rejection did not fail before durable admission")
+        release_lookup = require_output_result(
+            qualification_command(
+                cli,
+                release_paths,
+                [
+                    "--idempotency-key", "v2rel003-release-fence",
+                    "job", "lookup",
+                ],
+                label="release-profile lookup after v2 rejection",
+            ),
+            command="job.lookup",
+            result_schema="podway.job-lookup-result/v1",
+        )
+        if release_lookup.get("found") is not False:
+            fail("release-profile v2 rejection created a durable job")
+        release_status = qualification_command(
+            cli,
+            release_paths,
+            ["status"],
+            label="release-profile status after v2 rejection",
+            expected_code=None,
+        )
+        require_error_code(
+            release_status,
+            "SESSION_NOT_FOUND",
+            label="release-profile status after v2 rejection",
+        )
+        checks["release_admission_fence"] = True
+    finally:
+        if release_process is not None:
+            stop_process(release_process)
+        if release_root.exists():
+            shutil.rmtree(release_root, ignore_errors=True)
+        shutil.rmtree(release_checkout, ignore_errors=True)
+
+    missing = sorted(name for name, passed in checks.items() if not passed)
+    if missing:
+        fail(f"V2REL-003 native qualification checks failed: {', '.join(missing)}")
+    print(
+        json.dumps(
+            {"schema": V2REL003_QUALIFICATION_SCHEMA, "ok": True, "checks": checks},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return 0
 
 
 def self_test_path_safety() -> int:
@@ -1805,7 +2710,7 @@ def self_test() -> dict[str, Any]:
     cli, daemon = build_debug_binaries()
     sentinels += self_test_dual_daemon(cli, daemon)
     dogfood = self_test_v2_dogfood(cli, daemon)
-    sentinels += 8
+    sentinels += 9
     return {"mode": "self-test", "ok": True, "sentinels": sentinels, "dogfood": dogfood}
 
 
@@ -1830,6 +2735,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="required confirmation that the managed root may be deleted",
     )
     subparsers.add_parser("self-test", help="run focused contributor-runtime sentinels")
+    qualifier = subparsers.add_parser(
+        "qualify-v2rel003",
+        help="qualify native v2 daemon, recovery, and release-admission behavior",
+    )
+    qualifier.add_argument("--podway", required=True, help="absolute prebuilt CLI path")
+    qualifier.add_argument(
+        "--podwayd-debug", required=True, help="absolute feature-enabled debug daemon path"
+    )
+    qualifier.add_argument(
+        "--podwayd-release", required=True, help="absolute feature-requested release daemon path"
+    )
     return parser
 
 
@@ -1851,6 +2767,12 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.command == "self-test":
             print(json.dumps(self_test(), sort_keys=True))
             return 0
+        if arguments.command == "qualify-v2rel003":
+            return command_qualify_v2rel003(
+                podway=arguments.podway,
+                podwayd_debug=arguments.podwayd_debug,
+                podwayd_release=arguments.podwayd_release,
+            )
         fail(f"unsupported command: {arguments.command}")
         return 2
     except DevRuntimeError as error:

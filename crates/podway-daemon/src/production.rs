@@ -89,6 +89,37 @@ use crate::{
     workspace::{SqliteWorkspaceBindingInspectorV1, WorkspaceResolutionErrorV1},
 };
 
+fn is_shared_v2_automation_mutation(command: &str) -> bool {
+    matches!(
+        command,
+        "session.complete"
+            | "session.skip"
+            | "session.retry"
+            | "session.block"
+            | "session.unblock"
+            | "session.cancel"
+            | "session.reset"
+            | "item.check"
+            | "item.uncheck"
+            | "item.set"
+            | "item.add"
+            | "item.remove"
+            | "item.attach"
+            | "item.clear"
+    )
+}
+
+fn is_typed_v2_automation_mutation(command: &str) -> bool {
+    matches!(
+        command,
+        "session.decide"
+            | "session.rework"
+            | "goal.define"
+            | "goal.revise"
+            | "goal.assess_criterion"
+    )
+}
+
 /// Native wall/monotonic time and protocol response metadata for the production composition.
 #[derive(Debug)]
 pub struct NativeProductionClockV1 {
@@ -1432,14 +1463,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         daemon_request: &DaemonRequestV1,
     ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
         if let DaemonRequestV1::ProcedureV2Mutation(typed_request) = daemon_request {
-            if !matches!(
-                typed_request.command().command_name(),
-                "session.decide"
-                    | "session.rework"
-                    | "goal.define"
-                    | "goal.revise"
-                    | "goal.assess_criterion"
-            ) {
+            if !is_typed_v2_automation_mutation(typed_request.command().command_name()) {
                 return Ok(None);
             }
             let terminal_kind = match typed_request.command().command_name() {
@@ -1928,23 +1952,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             .map(Some)
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
         }
-        if matches!(
-            slice_request.command(),
-            SliceCommandV1::SessionComplete(_)
-                | SliceCommandV1::SessionSkip(_)
-                | SliceCommandV1::SessionRetry(_)
-                | SliceCommandV1::SessionBlock(_)
-                | SliceCommandV1::SessionUnblock(_)
-                | SliceCommandV1::SessionCancel(_)
-                | SliceCommandV1::SessionReset(_)
-                | SliceCommandV1::ItemCheck(_)
-                | SliceCommandV1::ItemUncheck(_)
-                | SliceCommandV1::ItemSet(_)
-                | SliceCommandV1::ItemAdd(_)
-                | SliceCommandV1::ItemRemove(_)
-                | SliceCommandV1::ItemAttach(_)
-                | SliceCommandV1::ItemClear(_)
-        ) {
+        if is_shared_v2_automation_mutation(slice_request.command().command_name()) {
             let runtime = ProductionWorkspaceRuntimeV1::new(
                 Arc::clone(&self.manager),
                 Arc::clone(&self.clock),
@@ -2198,7 +2206,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job),
             );
         }
-        let (job, _) = job_output_from_context(&workspace.scheduler, submission.admission())?;
+        let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
         let view = workspace
             .scheduler
             .context_snapshot()
@@ -5362,6 +5370,77 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn v2rel003_every_registered_v2_mutation_reaches_one_automation_pipeline() {
+        let registered: std::collections::BTreeSet<_> = podway_protocol::V2_MUTATION_COMMANDS
+            .iter()
+            .copied()
+            .collect();
+        let detached = podway_protocol::EXISTING_ROUTE_RESULT_SCHEMAS_V2
+            .iter()
+            .find(|contract| contract.schema == "podway.detached-admission-result/v2")
+            .expect("the v2 detached-admission family is registered");
+        assert_eq!(
+            registered,
+            detached.commands.iter().copied().collect(),
+            "every registered v2 mutation must support detached admission"
+        );
+        let route_contract: Value = serde_json::from_slice(
+            &std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join("contracts/command-routes.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let daemon_routes: std::collections::BTreeSet<_> = route_contract["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|route| route["execution"] == "daemon")
+            .map(|route| route["command"].as_str().unwrap())
+            .collect();
+        assert!(
+            registered.is_subset(&daemon_routes),
+            "every v2 mutation must remain registered as a daemon command route"
+        );
+
+        let start = std::collections::BTreeSet::from(["session.start", "session.start_replace"]);
+        let typed: std::collections::BTreeSet<_> = registered
+            .iter()
+            .copied()
+            .filter(|command| is_typed_v2_automation_mutation(command))
+            .collect();
+        let shared: std::collections::BTreeSet<_> = registered
+            .iter()
+            .copied()
+            .filter(|command| is_shared_v2_automation_mutation(command))
+            .collect();
+        assert_eq!(
+            typed,
+            podway_protocol::RESERVED_V2_MUTATION_COMMAND_NAMES_V1
+                .iter()
+                .copied()
+                .collect()
+        );
+        assert_eq!(shared.len(), 14);
+        assert!(start.is_disjoint(&typed));
+        assert!(start.is_disjoint(&shared));
+        assert!(typed.is_disjoint(&shared));
+        assert_eq!(
+            start
+                .union(&typed)
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .union(&shared)
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            registered,
+            "every registered v2 mutation must reach exactly one production automation pipeline"
+        );
     }
 
     #[test]
