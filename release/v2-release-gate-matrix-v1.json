@@ -205,7 +205,7 @@
       "required_tasks": ["V2REL-002", "V2RUN-002", "V2DRW-005", "V2GOL-004", "V2RUN-003", "V2DOG-001", "V2DOG-002", "V2DRW-006"],
       "gate_owner_task": "V2REL-002",
       "gate": "make test-fuzzing",
-      "implementation_status": "planned"
+      "implementation_status": "automated"
     }
   ],
   "final_gates": [

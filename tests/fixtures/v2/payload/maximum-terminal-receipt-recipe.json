@@ -1,9 +1,9 @@
 {
   "schema": "podway.v2-fixture-recipe/v1",
   "fixture_class": "maximum-size",
-  "evidence_level": "contract-recipe",
-  "implementation_status": "planned",
-  "production_proof_required": true,
+  "evidence_level": "production-serialization",
+  "implementation_status": "automated",
+  "production_proof_required": false,
   "frame_bytes": 1048576,
   "outer_schema": "assets/schemas/output-v2.schema.json",
   "terminal_result_schema": "assets/schemas/job-result-v2.schema.json",
@@ -11,6 +11,7 @@
   "terminal_error_ref": "urn:podway:schema:error:v1",
   "terminal_error_details_ref": "urn:podway:schema:v2-runtime-error-details:v1",
   "v2_error_message_max_characters": 512,
+  "terminal_error_max_bytes": 524288,
   "maximum_wrapper_depth": 1,
   "candidate_error_codes": [
     "PROCEDURE_V2_SCHEMA_INVALID",
@@ -50,6 +51,33 @@
     "assets/schemas/goal-revision-result-v1.schema.json",
     "assets/schemas/criterion-assessment-result-v1.schema.json"
   ],
+  "proof_acceptance_id": "V2ACC-078",
+  "proof_requirement_id": "V2PAY-002",
+  "production_proofs": {
+    "success": {
+      "kind": "cargo-test",
+      "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+      "function": "v2rel002_largest_terminal_success_receipt_round_trips_once_in_job_reads",
+      "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2rel002_largest_terminal_success_receipt_round_trips_once_in_job_reads --locked -- --exact"
+    },
+    "error": {
+      "kind": "cargo-test-set",
+      "members": [
+        {
+          "kind": "cargo-test",
+          "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+          "function": "v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads",
+          "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads --locked -- --exact"
+        },
+        {
+          "kind": "cargo-test",
+          "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+          "function": "v2rel002_terminal_error_is_contextually_closed_and_bounded",
+          "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2rel002_terminal_error_is_contextually_closed_and_bounded --locked -- --exact"
+        }
+      ]
+    }
+  },
   "construction": [
     "construct the maximum bounded instance of every candidate terminal mutation result schema",
     "construct the maximum bounded details variant for every v2 runtime error code with a 512-character message",
@@ -58,7 +86,7 @@
     "select the success and error candidates with the largest encoded byte lengths",
     "wrap each selected terminal mutation response exactly once in podway.job-result/v2",
     "serialize the job result through a complete job.status and job.wait podway.output/v2 envelope",
-    "use maximal workspace, job, session, admission, and warning fields permitted by the schemas"
+    "use an escape-heavy 4096-character workspace root in both the terminal error and outer envelope, maximal job, admission, and warning fields, and the production job-read session null shape"
   ],
   "forbidden_nested_results": [
     "query",
@@ -66,11 +94,13 @@
     "detached-admission",
     "job-result"
   ],
-  "future_assertions": [
+  "verified_assertions": [
     "every candidate result and its direct mutation envelope validate against the production schemas",
     "every candidate error is catalog-bound, code-kind equal, and valid against the closed v2 details schema",
+    "every nested terminal error message is at most 512 characters and the encoded error is at most terminal_error_max_bytes",
     "the selected success and error candidates have encoded bytes greater than or equal to every candidate in their class",
     "job.status and job.wait success and error receipt envelopes validate with maximum_wrapper_depth",
+    "the exact terminal_error_max_bytes boundary remains within a complete production-shaped job.status and job.wait frame with session null",
     "each complete terminal receipt serialization is at most frame_bytes",
     "lookup job command equals the nested success or error command",
     "admission job_id and workspace_sequence match the nested terminal envelope job identity"

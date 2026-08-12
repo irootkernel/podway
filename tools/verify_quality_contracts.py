@@ -19,7 +19,6 @@ V2_ACCEPTANCE_PATH = ROOT / "quality/v2-acceptance-matrix-v1.json"
 V2_COMPATIBILITY_PATH = ROOT / "quality/v2-compatibility-matrix-v1.json"
 V2_PAYLOAD_PATH = ROOT / "quality/v2-payload-matrix-v1.json"
 V2_COMPATIBILITY_FIXTURE_PATH = ROOT / "tests/fixtures/v2/compatibility/v1-boundaries.json"
-V2_MAXIMUM_STATUS_FIXTURE_PATH = ROOT / "tests/fixtures/v2/payload/maximum-status-recipe.json"
 V2_RELEASE_PATH = ROOT / "release/v2-release-gate-matrix-v1.json"
 V2_SECTION_COUNTS = {
     "17.1": 6,
@@ -637,6 +636,29 @@ def validate_v2_proof(proof: Any, criterion_id: str, proof_paths: set[str]) -> N
             seen.add(identity)
             validate_v2_proof(member, criterion_id, proof_paths)
         return
+    if kind == "cargo-unit-test":
+        require_exact_keys(proof, {"kind", "path", "function", "command"}, f"{criterion_id} proof")
+        relative = proof["path"]
+        function = proof["function"]
+        command = proof["command"]
+        if not all(isinstance(value, str) and value for value in (relative, function, command)):
+            fail(f"{criterion_id} proof fields must be non-empty strings")
+        path = repository_file(relative, f"{criterion_id} proof path")
+        if not rust_test_function_exists(path.read_text(encoding="utf-8"), function):
+            fail(f"{criterion_id} proof is not a #[test] function in {relative}: {function}")
+        parts = Path(relative).parts
+        if len(parts) != 4 or parts[0] != "crates" or parts[2] != "src" or path.suffix != ".rs":
+            fail(f"{criterion_id} cargo unit proof is outside a crate source directory")
+        package = parts[1]
+        module = path.stem
+        expected = (
+            f"cargo test -p {package} --lib {module}::tests::{function} "
+            "--locked -- --exact"
+        )
+        if command != expected:
+            fail(f"{criterion_id} proof command is not exact: expected={expected}, actual={command}")
+        proof_paths.add(relative)
+        return
     if kind != "cargo-test":
         validate_dolgi_proof(proof, criterion_id, proof_paths)
         return
@@ -958,11 +980,66 @@ def schema_leaf_paths(schema: dict[str, Any], path: str, current: dict[str, Any]
         active.remove(marker)
 
 
-def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: dict[str, Any] | None = None) -> int:
+def validate_v2_payload_matrix(
+    acceptance: dict[str, dict[str, Any]],
+    matrix: dict[str, Any] | None = None,
+    fixture_overrides: dict[str, dict[str, Any]] | None = None,
+) -> int:
     matrix = load_object(V2_PAYLOAD_PATH) if matrix is None else matrix
+    fixture_overrides = {} if fixture_overrides is None else fixture_overrides
+
+    def payload_fixture(relative: str) -> dict[str, Any]:
+        return fixture_overrides.get(
+            relative,
+            load_object(repository_file(relative, "v2 payload fixture recipe")),
+        )
+
+    def proof_members(proof: Any) -> list[dict[str, Any]]:
+        if not isinstance(proof, dict):
+            return []
+        if proof.get("kind") == "cargo-test-set":
+            members = proof.get("members")
+            return members if isinstance(members, list) else []
+        return [proof]
+
+    def require_recipe_proof_binding(
+        proof: Any,
+        acceptance_id: Any,
+        requirement_id: Any,
+        label: str,
+        proof_paths: set[str],
+    ) -> None:
+        validate_v2_proof(proof, label, proof_paths)
+        criterion = acceptance.get(acceptance_id)
+        requirement = next(
+            (
+                item
+                for item in matrix["requirements"]
+                if isinstance(item, dict) and item.get("id") == requirement_id
+            ),
+            None,
+        )
+        if (
+            not isinstance(criterion, dict)
+            or criterion.get("implementation_status") != "automated"
+            or not isinstance(criterion.get("proof"), dict)
+            or not isinstance(requirement, dict)
+            or requirement.get("acceptance_id") != acceptance_id
+            or requirement.get("implementation_status") != "automated"
+            or not isinstance(requirement.get("proof"), dict)
+        ):
+            fail(f"{label} must map to automated V2ACC and V2PAY proof")
+        for member in proof_members(proof):
+            if member not in proof_members(criterion["proof"]):
+                fail(f"{label} is not an exact member of its mapped V2ACC proof")
+            if member not in proof_members(requirement["proof"]):
+                fail(f"{label} is not an exact member of its mapped V2PAY proof")
+    proof_paths: set[str] = set()
     require_exact_keys(matrix, {"schema", "version", "source_acceptance_matrix", "evidence_policy", "frame_bytes", "next_budget_bytes", "headroom_bytes", "output_envelope", "terminal_receipt_contract", "next_schema", "resolved_next_shape", "components", "suggestion_partition", "status_contract", "projection_bounds", "requirements"}, "v2 payload matrix")
     if matrix["schema"] != "podway.v2-payload-matrix/v1" or matrix["version"] != 1:
         fail("v2 payload matrix schema or version is unsupported")
+    if matrix["evidence_policy"] != "Planned entries are obligations without proof; automated projection bounds and requirements bind exact executable proof commands.":
+        fail("v2 payload evidence policy drift")
     if (matrix["frame_bytes"], matrix["next_budget_bytes"], matrix["headroom_bytes"]) != (1048576, 1015808, 32768):
         fail("v2 payload whole-frame arithmetic drift")
     schema = load_object(repository_file(matrix["next_schema"], "v2 next schema"))
@@ -1014,6 +1091,7 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
         "terminal_error_ref": "urn:podway:schema:error:v1",
         "terminal_error_details_ref": "urn:podway:schema:v2-runtime-error-details:v1",
         "v2_error_message_max_characters": 512,
+        "terminal_error_max_bytes": 524288,
         "maximum_wrapper_depth": 1,
         "fixture": "tests/fixtures/v2/payload/maximum-terminal-receipt-recipe.json",
         "candidate_error_codes": candidate_error_codes,
@@ -1038,6 +1116,7 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
         if isinstance(error_constraints[1], dict)
         else None
     )
+    error_bytes = terminal_error.get("x-podway-max-json-bytes")
     mutation_commands = (
         output_schema.get("$defs", {})
         .get("detachedAdmission", {})
@@ -1045,22 +1124,32 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
         .get("command", {})
         .get("enum")
     )
-    if error_ref != terminal_receipt["terminal_error_ref"] or error_commands != mutation_commands:
+    if (
+        error_ref != terminal_receipt["terminal_error_ref"]
+        or error_commands != mutation_commands
+        or error_bytes != terminal_receipt["terminal_error_max_bytes"]
+    ):
         fail("v2 terminal errors must use error/v1 and exactly the v2 mutation command set")
     for candidate in candidate_result_schemas:
         repository_file(candidate, "v2 terminal receipt candidate schema")
-    receipt_recipe = load_object(repository_file(terminal_receipt["fixture"], "v2 terminal receipt recipe"))
+    receipt_recipe = payload_fixture(terminal_receipt["fixture"])
     require_exact_keys(
         receipt_recipe,
-        {"schema", "fixture_class", "evidence_level", "implementation_status", "production_proof_required", "frame_bytes", "outer_schema", "terminal_result_schema", "terminal_success_ref", "terminal_error_ref", "terminal_error_details_ref", "v2_error_message_max_characters", "maximum_wrapper_depth", "candidate_error_codes", "candidate_result_schemas", "construction", "forbidden_nested_results", "future_assertions"},
+        {"schema", "fixture_class", "evidence_level", "implementation_status", "production_proof_required", "frame_bytes", "outer_schema", "terminal_result_schema", "terminal_success_ref", "terminal_error_ref", "terminal_error_details_ref", "v2_error_message_max_characters", "terminal_error_max_bytes", "maximum_wrapper_depth", "candidate_error_codes", "candidate_result_schemas", "proof_acceptance_id", "proof_requirement_id", "production_proofs", "construction", "forbidden_nested_results", "verified_assertions"},
         "v2 terminal receipt recipe",
     )
+    receipt_status = receipt_recipe.get("implementation_status")
+    if receipt_status == "planned":
+        expected_receipt_evidence = ("contract-recipe", True)
+    elif receipt_status == "automated":
+        expected_receipt_evidence = ("production-serialization", False)
+    else:
+        fail("v2 terminal receipt recipe implementation status must be planned or automated")
     if (
         receipt_recipe["schema"] != "podway.v2-fixture-recipe/v1"
         or receipt_recipe["fixture_class"] != "maximum-size"
-        or receipt_recipe["evidence_level"] != "contract-recipe"
-        or receipt_recipe["implementation_status"] != "planned"
-        or receipt_recipe["production_proof_required"] is not True
+        or (receipt_recipe["evidence_level"], receipt_recipe["production_proof_required"])
+        != expected_receipt_evidence
         or receipt_recipe["frame_bytes"] != matrix["frame_bytes"]
         or receipt_recipe["outer_schema"] != "assets/schemas/output-v2.schema.json"
         or receipt_recipe["terminal_result_schema"] != terminal_receipt["schema"]
@@ -1068,12 +1157,23 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
         or receipt_recipe["terminal_error_ref"] != terminal_receipt["terminal_error_ref"]
         or receipt_recipe["terminal_error_details_ref"] != terminal_receipt["terminal_error_details_ref"]
         or receipt_recipe["v2_error_message_max_characters"] != terminal_receipt["v2_error_message_max_characters"]
+        or receipt_recipe["terminal_error_max_bytes"] != terminal_receipt["terminal_error_max_bytes"]
         or receipt_recipe["maximum_wrapper_depth"] != terminal_receipt["maximum_wrapper_depth"]
         or receipt_recipe["candidate_error_codes"] != candidate_error_codes
         or receipt_recipe["candidate_result_schemas"] != candidate_result_schemas
         or receipt_recipe["forbidden_nested_results"] != ["query", "authoring", "detached-admission", "job-result"]
     ):
         fail("v2 terminal receipt recipe overstates evidence or drifts from ADR-0018")
+    receipt_proofs = receipt_recipe["production_proofs"]
+    require_exact_keys(receipt_proofs, {"success", "error"}, "v2 terminal receipt production proofs")
+    for result_kind, proof in receipt_proofs.items():
+        require_recipe_proof_binding(
+            proof,
+            receipt_recipe["proof_acceptance_id"],
+            receipt_recipe["proof_requirement_id"],
+            f"v2 terminal receipt {result_kind} proof",
+            proof_paths,
+        )
     resolved_shape = matrix["resolved_next_shape"]
     if resolved_shape != {"unique_instance_leaf_paths": 112, "non_suggestion_leaf_paths": 109, "suggestion_leaf_paths": 3, "conditional_assignments": 115, "v2_command_values": 19}:
         fail("v2 resolved next shape counts drift")
@@ -1152,27 +1252,130 @@ def validate_v2_payload_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     }
     if history_fields.difference(status_schema.get("properties", {})) or len(history_fields) != status_contract["trace_window_count"]:
         fail("v2 verbose history family count drifts from the status payload contract")
-    maximum_status_fixture = load_object(V2_MAXIMUM_STATUS_FIXTURE_PATH)
+    maximum_status_relative = "tests/fixtures/v2/payload/maximum-status-recipe.json"
+    maximum_status_fixture = payload_fixture(maximum_status_relative)
+    require_exact_keys(
+        maximum_status_fixture,
+        {
+            "schema", "fixture_class", "evidence_level", "implementation_status",
+            "production_proof_required", "blocker_window_max_bytes", "blocker_window_order",
+            "blocker_window_markers", "verbose_history_shape", "projections",
+            "proof_acceptance_id", "proof_requirement_id", "production_proofs",
+            "verified_assertions",
+        },
+        "v2 maximum-status recipe",
+    )
+    maximum_status = maximum_status_fixture.get("implementation_status")
+    if maximum_status == "planned":
+        expected_status_evidence = ("contract-recipe", True)
+    elif maximum_status == "automated":
+        expected_status_evidence = ("production-serialization", False)
+    else:
+        fail("v2 maximum-status recipe implementation status must be planned or automated")
+    if (
+        maximum_status_fixture.get("evidence_level"),
+        maximum_status_fixture.get("production_proof_required"),
+    ) != expected_status_evidence:
+        fail("v2 maximum-status recipe evidence status drift")
+    production_proofs = maximum_status_fixture["production_proofs"]
+    require_exact_keys(production_proofs, {"compact", "verbose"}, "v2 maximum-status production proofs")
+    for tier, proof in production_proofs.items():
+        require_recipe_proof_binding(
+            proof,
+            maximum_status_fixture["proof_acceptance_id"],
+            maximum_status_fixture["proof_requirement_id"],
+            f"v2 maximum-status {tier} proof",
+            proof_paths,
+        )
+
+    maximum_next_relative = "tests/fixtures/v2/payload/maximum-next-recipe.json"
+    maximum_next_fixture = payload_fixture(maximum_next_relative)
+    require_exact_keys(
+        maximum_next_fixture,
+        {
+            "schema", "fixture_class", "evidence_level", "implementation_status",
+            "production_proof_required", "frame_bytes", "charged_bytes", "headroom_bytes",
+            "components", "proof_acceptance_id", "proof_requirement_id", "production_proof",
+            "construction", "verified_assertions",
+        },
+        "v2 maximum-next recipe",
+    )
+    next_status = maximum_next_fixture["implementation_status"]
+    if next_status == "planned":
+        expected_next_evidence = ("contract-recipe", True)
+    elif next_status == "automated":
+        expected_next_evidence = ("production-serialization", False)
+    else:
+        fail("v2 maximum-next recipe implementation status must be planned or automated")
+    if (
+        maximum_next_fixture["evidence_level"],
+        maximum_next_fixture["production_proof_required"],
+    ) != expected_next_evidence:
+        fail("v2 maximum-next recipe evidence status drift")
+    require_recipe_proof_binding(
+        maximum_next_fixture["production_proof"],
+        maximum_next_fixture["proof_acceptance_id"],
+        maximum_next_fixture["proof_requirement_id"],
+        "v2 maximum-next production proof",
+        proof_paths,
+    )
+
+    for relative in ("tests/fixtures/v2/payload/truncation-and-overflow-recipe.json",):
+        fixture = payload_fixture(relative)
+        fixture_status = fixture.get("implementation_status")
+        if fixture_status == "planned":
+            expected_fixture_evidence = ("contract-recipe", True)
+        elif fixture_status == "automated":
+            expected_fixture_evidence = ("production-serialization", False)
+        else:
+            fail(f"{relative} implementation status must be planned or automated")
+        if (
+            fixture.get("evidence_level"),
+            fixture.get("production_proof_required"),
+        ) != expected_fixture_evidence:
+            fail(f"{relative} evidence status drift")
     stale_reference_assertion = "stale-attempt history carries at most eight stale or unresolved reference metadata entries without read-back values"
-    if stale_reference_assertion not in maximum_status_fixture.get("future_assertions", []):
+    if stale_reference_assertion not in maximum_status_fixture.get("verified_assertions", []):
         fail("v2 maximum-status recipe omits the bounded stale-reference projection")
     expected_projections = [
-        {"projection": "compact-status", "schema": "assets/schemas/compact-status-result-v2.schema.json", "maximum_bytes": 262144, "test_class": "payload-boundary", "implementation_status": "planned"},
-        {"projection": "standard-status", "schema": "assets/schemas/status-result-v2.schema.json", "maximum_bytes": 1048576, "test_class": "payload-boundary", "implementation_status": "planned"},
-        {"projection": "verbose-status", "schema": "assets/schemas/status-result-v2.schema.json", "maximum_bytes": 1048576, "window_bytes": status_contract["trace_window_max_bytes"], "window_count": status_contract["trace_window_count"], "test_class": "payload-boundary", "implementation_status": "planned"},
+        {"projection": "compact-status", "schema": "assets/schemas/compact-status-result-v2.schema.json", "maximum_bytes": 262144, "test_class": "payload-boundary"},
+        {"projection": "standard-status", "schema": "assets/schemas/status-result-v2.schema.json", "maximum_bytes": 1048576, "test_class": "payload-boundary"},
+        {"projection": "verbose-status", "schema": "assets/schemas/status-result-v2.schema.json", "maximum_bytes": 1048576, "window_bytes": status_contract["trace_window_max_bytes"], "window_count": status_contract["trace_window_count"], "test_class": "payload-boundary"},
     ]
-    if matrix["projection_bounds"] != expected_projections:
-        fail("v2 payload projection bounds or planned evidence status drift")
-    for projection in matrix["projection_bounds"]:
+    projections = matrix["projection_bounds"]
+    if not isinstance(projections, list) or len(projections) != len(expected_projections):
+        fail("v2 payload projection bounds drift")
+    for number, (projection, expected_projection) in enumerate(zip(projections, expected_projections), start=1):
+        status = projection.get("implementation_status") if isinstance(projection, dict) else None
+        expected_keys = set(expected_projection) | {"implementation_status"}
+        if status == "automated":
+            expected_keys.add("proof")
+        require_exact_keys(projection, expected_keys, f"v2 payload projection {number}")
+        if any(projection[key] != value for key, value in expected_projection.items()):
+            fail("v2 payload projection bounds drift")
+        if status == "automated":
+            validate_v2_proof(projection["proof"], f"v2 payload projection {number}", proof_paths)
+        elif status != "planned":
+            fail(f"v2 payload projection {number} implementation status must be planned or automated")
         repository_file(projection["schema"], f"{projection['projection']} schema")
     requirements = matrix["requirements"]
     expected_ids = [identifier for identifier, item in acceptance.items() if item["section"] == "17.9"]
     if not isinstance(requirements, list) or [item.get("acceptance_id") for item in requirements if isinstance(item, dict)] != expected_ids:
         fail("v2 payload matrix must cover §17.9 exactly once and in order")
     for number, item in enumerate(requirements, start=1):
-        require_exact_keys(item, {"id", "acceptance_id", "test_class", "owning_tasks", "implementation_status"}, f"V2PAY-{number:03d}")
-        if item["id"] != f"V2PAY-{number:03d}" or item["test_class"] != "payload-boundary" or item["implementation_status"] != "planned" or item["owning_tasks"] != acceptance[item["acceptance_id"]]["owning_tasks"]:
-            fail(f"V2PAY-{number:03d} overstates evidence or drifts from its acceptance criterion")
+        identifier = f"V2PAY-{number:03d}"
+        status = item.get("implementation_status") if isinstance(item, dict) else None
+        expected_keys = {"id", "acceptance_id", "test_class", "owning_tasks", "implementation_status"}
+        if status == "automated":
+            expected_keys.add("proof")
+        require_exact_keys(item, expected_keys, identifier)
+        criterion = acceptance[item["acceptance_id"]]
+        if item["id"] != identifier or item["test_class"] != "payload-boundary" or item["owning_tasks"] != criterion["owning_tasks"] or status != criterion["implementation_status"]:
+            fail(f"{identifier} overstates evidence or drifts from its acceptance criterion")
+        if status == "automated":
+            validate_v2_proof(item["proof"], identifier, proof_paths)
+        elif status != "planned":
+            fail(f"{identifier} implementation status must be planned or automated")
     return len(requirements)
 
 
@@ -1311,6 +1514,9 @@ def self_test_v2_matrices() -> int:
     expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, wrong_compatibility_policy), "evidence policy drift", "v2 compatibility policy")
 
     payload = load_object(V2_PAYLOAD_PATH)
+    wrong_payload_policy = copy.deepcopy(payload)
+    wrong_payload_policy["evidence_policy"] = "Automated means reviewed."
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_payload_policy), "evidence policy drift", "v2 payload policy")
     missing_leaf = copy.deepcopy(payload)
     missing_leaf["components"][1]["selectors"].remove("title")
     expect_failure(lambda: validate_v2_payload_matrix(acceptance, missing_leaf), "field coverage drift", "v2 payload missing-leaf")
@@ -1344,6 +1550,106 @@ def self_test_v2_matrices() -> int:
     wrong_payload_class = copy.deepcopy(payload)
     wrong_payload_class["requirements"][0]["test_class"] = "unit"
     expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_payload_class), "V2PAY-001", "v2 payload test-class")
+    maximum_next_relative = "tests/fixtures/v2/payload/maximum-next-recipe.json"
+    missing_next_proof = load_object(repository_file(maximum_next_relative, "v2 maximum-next self-test fixture"))
+    del missing_next_proof["production_proof"]
+    expect_failure(
+        lambda: validate_v2_payload_matrix(
+            acceptance,
+            payload,
+            {maximum_next_relative: missing_next_proof},
+        ),
+        "unexpected or missing fields",
+        "v2 maximum-next missing-production-proof",
+    )
+    terminal_receipt_relative = "tests/fixtures/v2/payload/maximum-terminal-receipt-recipe.json"
+    missing_receipt_proof = load_object(repository_file(terminal_receipt_relative, "v2 terminal receipt self-test fixture"))
+    del missing_receipt_proof["production_proofs"]["error"]
+    expect_failure(
+        lambda: validate_v2_payload_matrix(
+            acceptance,
+            payload,
+            {terminal_receipt_relative: missing_receipt_proof},
+        ),
+        "unexpected or missing fields",
+        "v2 terminal receipt missing-error-proof",
+    )
+    stale_receipt_proof = load_object(repository_file(terminal_receipt_relative, "v2 terminal receipt self-test fixture"))
+    stale_receipt_proof["production_proofs"]["success"] = copy.deepcopy(
+        acceptance["V2ACC-081"]["proof"]["members"][0]
+    )
+    expect_failure(
+        lambda: validate_v2_payload_matrix(
+            acceptance,
+            payload,
+            {terminal_receipt_relative: stale_receipt_proof},
+        ),
+        "not an exact member of its mapped V2ACC proof",
+        "v2 terminal receipt stale-success-proof",
+    )
+    maximum_status_relative = "tests/fixtures/v2/payload/maximum-status-recipe.json"
+    stale_status_proof = load_object(repository_file(maximum_status_relative, "v2 maximum-status self-test fixture"))
+    stale_status_proof["production_proofs"]["compact"] = copy.deepcopy(
+        acceptance["V2ACC-081"]["proof"]["members"][0]
+    )
+    expect_failure(
+        lambda: validate_v2_payload_matrix(
+            acceptance,
+            payload,
+            {maximum_status_relative: stale_status_proof},
+        ),
+        "not an exact member of its mapped V2ACC proof",
+        "v2 maximum-status stale-production-proof",
+    )
+    sample_proof = copy.deepcopy(
+        next(
+            item["proof"] for item in baseline["criteria"]
+            if item["implementation_status"] == "automated"
+        )
+    )
+    automated_projection = copy.deepcopy(payload)
+    automated_projection["projection_bounds"][0]["implementation_status"] = "automated"
+    automated_projection["projection_bounds"][0]["proof"] = sample_proof
+    validate_v2_payload_matrix(acceptance, automated_projection)
+    missing_projection_proof = copy.deepcopy(automated_projection)
+    target_projection = missing_projection_proof["projection_bounds"][0]
+    del target_projection["proof"]
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, missing_projection_proof), "unexpected or missing fields", "v2 payload missing-projection-proof")
+    planned_projection_with_proof = copy.deepcopy(automated_projection)
+    target_projection = planned_projection_with_proof["projection_bounds"][0]
+    target_projection["implementation_status"] = "planned"
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, planned_projection_with_proof), "unexpected or missing fields", "v2 payload planned-projection-proof")
+    wrong_payload_proof_command = copy.deepcopy(automated_projection)
+    target_projection = wrong_payload_proof_command["projection_bounds"][0]
+    if target_projection["proof"]["kind"] == "cargo-test-set":
+        target_projection["proof"]["members"][0]["command"] += " --ignored"
+    else:
+        target_projection["proof"]["command"] += " --ignored"
+    expect_failure(lambda: validate_v2_payload_matrix(acceptance, wrong_payload_proof_command), "proof command is not exact", "v2 payload proof-command")
+    automated_requirement_acceptance = copy.deepcopy(acceptance)
+    automated_requirement = copy.deepcopy(payload)
+    target_requirement = automated_requirement["requirements"][0]
+    target_requirement["implementation_status"] = "automated"
+    target_requirement["proof"] = sample_proof
+    target_criterion = automated_requirement_acceptance[target_requirement["acceptance_id"]]
+    target_criterion["implementation_status"] = "automated"
+    target_criterion["proof"] = sample_proof
+    validate_v2_payload_matrix(automated_requirement_acceptance, automated_requirement)
+    missing_requirement_proof = copy.deepcopy(automated_requirement)
+    target_requirement = missing_requirement_proof["requirements"][0]
+    del target_requirement["proof"]
+    expect_failure(lambda: validate_v2_payload_matrix(automated_requirement_acceptance, missing_requirement_proof), "unexpected or missing fields", "v2 payload missing-requirement-proof")
+
+    cargo_unit_proof = {
+        "kind": "cargo-unit-test",
+        "path": "crates/podway-config/src/procedure_v2_budget.rs",
+        "function": "v2dog001_sw_dev_preset_records_budget_headroom",
+        "command": "cargo test -p podway-config --lib procedure_v2_budget::tests::v2dog001_sw_dev_preset_records_budget_headroom --locked -- --exact",
+    }
+    validate_v2_proof(cargo_unit_proof, "v2 cargo unit proof sentinel", set())
+    wrong_cargo_unit_command = copy.deepcopy(cargo_unit_proof)
+    wrong_cargo_unit_command["command"] += " --ignored"
+    expect_failure(lambda: validate_v2_proof(wrong_cargo_unit_command, "v2 cargo unit proof sentinel", set()), "proof command is not exact", "v2 cargo-unit proof-command")
 
     release = load_object(V2_RELEASE_PATH)
     wrong_admission = copy.deepcopy(release)
@@ -1367,7 +1673,7 @@ def self_test_v2_matrices() -> int:
     overstated_category = copy.deepcopy(release)
     overstated_category["categories"][6]["implementation_status"] = "automated"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, overstated_category), "exactly cover", "v2 release category-status")
-    return 35
+    return 41
 
 
 def main() -> int:

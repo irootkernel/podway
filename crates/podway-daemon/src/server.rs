@@ -803,6 +803,20 @@ where
 
         let response = self.dispatcher.dispatch_daemon(&request, &daemon_request);
         if response_matches_request(&response, &request) && response.validate().is_ok() {
+            let payload = match encode_response_payload_v2(&response) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    emit_observation(
+                        &self.observability,
+                        EventOperationV1::ServiceDispatch,
+                        EventOutcomeV1::Failed,
+                    );
+                    let response =
+                        self.invalid_dispatcher_response(RequestContextV1::from_request(&request))?;
+                    self.write_response(&mut connection, &response)?;
+                    return Err(ServerConnectionErrorV1::InvalidDispatcherResponse);
+                }
+            };
             emit_observation(
                 &self.observability,
                 EventOperationV1::ServiceDispatch,
@@ -813,7 +827,7 @@ where
                     ResponseEnvelopeV2::Error(_) => EventOutcomeV1::Rejected,
                 },
             );
-            return self.write_response_v2(&mut connection, &response);
+            return self.write_encoded_response(&mut connection, &payload);
         }
 
         emit_observation(
@@ -1096,10 +1110,24 @@ where
         connection: &mut UnixStream,
         response: &ResponseEnvelopeV2,
     ) -> Result<(), ServerConnectionErrorV1> {
+        let payload = encode_response_payload_v2(response).map_err(|error| {
+            emit_observation(
+                &self.observability,
+                EventOperationV1::ResponseWrite,
+                EventOutcomeV1::Failed,
+            );
+            ServerConnectionErrorV1::ResponseEncode(error)
+        })?;
+        self.write_encoded_response(connection, &payload)
+    }
+
+    fn write_encoded_response(
+        &self,
+        connection: &mut UnixStream,
+        payload: &[u8],
+    ) -> Result<(), ServerConnectionErrorV1> {
         let result = (|| {
-            let payload = encode_response_payload_v2(response)
-                .map_err(ServerConnectionErrorV1::ResponseEncode)?;
-            write_frame_v1(connection, &payload).map_err(ServerConnectionErrorV1::ResponseWrite)?;
+            write_frame_v1(connection, payload).map_err(ServerConnectionErrorV1::ResponseWrite)?;
             connection
                 .flush()
                 .map_err(ServerConnectionErrorV1::ResponseFlush)

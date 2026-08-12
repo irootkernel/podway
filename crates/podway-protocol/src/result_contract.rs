@@ -423,10 +423,58 @@ fn validate_terminal_response_typed_v2(response: &Value) -> bool {
         }
         Some(crate::ERROR_SCHEMA_V1) => {
             serde_json::from_value::<ErrorEnvelopeV1>(Value::Object(response.clone())).is_ok()
+                && validate_terminal_error_v2(response)
         }
         None => response.get("kind").and_then(Value::as_str) == Some("cancelled"),
         Some(_) => false,
     }
+}
+
+fn validate_terminal_error_v2(response: &Map<String, Value>) -> bool {
+    const ALLOWED_FIELDS: &[&str] = &[
+        "schema",
+        "request_id",
+        "command",
+        "generated_at",
+        "code",
+        "message",
+        "retryable",
+        "exit_code",
+        "workspace",
+        "details",
+    ];
+    if !response
+        .keys()
+        .all(|field| ALLOWED_FIELDS.contains(&field.as_str()))
+    {
+        return false;
+    }
+    if serde_json::to_vec(response)
+        .map_or(true, |encoded| encoded.len() > MAX_V2_TERMINAL_ERROR_BYTES)
+    {
+        return false;
+    }
+    if !response
+        .get("message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| {
+            let characters = message.chars().count();
+            (1..=crate::MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1).contains(&characters)
+        })
+    {
+        return false;
+    }
+    let Some(workspace) = response.get("workspace") else {
+        return false;
+    };
+    let Some(workspace) = workspace.as_object() else {
+        return false;
+    };
+    workspace.len() == 3
+        && ["uuid", "root", "latest_workspace_sequence"]
+            .iter()
+            .all(|field| workspace.contains_key(*field))
+        && serde_json::from_value::<WorkspaceOutputV1>(Value::Object(workspace.clone())).is_ok()
 }
 
 fn terminal_response_identity_matches_job_v2(job: &Map<String, Value>) -> bool {
@@ -957,6 +1005,8 @@ pub const MAX_V2_OUTPUT_WARNINGS: usize = 4;
 pub const MAX_V2_WARNING_CODE_CHARS: usize = 64;
 pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
 pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
+/// Maximum encoded bytes for an error retained inside one v2 job-result wrapper.
+pub const MAX_V2_TERMINAL_ERROR_BYTES: usize = 524_288;
 pub const OUTPUT_SCHEMA_V2: &str = "podway.output/v2";
 pub const SUPPORTED_OUTPUT_SCHEMAS_V2: &[&str] = &[OUTPUT_SCHEMA_V2];
 

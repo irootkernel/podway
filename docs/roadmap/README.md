@@ -190,7 +190,7 @@ Dependencies: `V2CTR`, `V2MOD`, `V2AUT`, `V2GRF`, `V2PLT`, `V2RUN`, `V2DRW`,
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `V2REL-001` | Close v1/v2 compatibility | Completed | Prove v1 stability, v2 family separation, and unsupported-peer behavior. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
-| `V2REL-002` | Prove all resource bounds | Planned | Close parser, collection, payload, whole-frame, escaping, truncation, and fuzz evidence. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
+| `V2REL-002` | Prove all resource bounds | Completed | Close parser, collection, payload, whole-frame, escaping, truncation, and fuzz evidence. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
 | `V2REL-003` | Qualify native runtime behavior | Planned | Prove real daemon, persistence, queue, concurrency, crash, endpoint, and admission behavior. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
 | `V2REL-004` | Synchronize final authority and release docs | Planned | Make specifications, assets, contracts, examples, versioning, and release copy exact. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
 | `V2REL-005` | Pass the development gate | Planned | Pass `make test` from the final integrated candidate. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |

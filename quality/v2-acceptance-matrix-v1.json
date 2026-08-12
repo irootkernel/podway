@@ -1787,7 +1787,13 @@
       "owning_tasks": [
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-protocol/tests/int_machine_contract_fixtures.rs",
+        "function": "v2ctr006_fixture_catalog_is_exact_bounded_and_evidence_typed",
+        "command": "cargo test -p podway-protocol --test int_suite int_machine_contract_fixtures::v2ctr006_fixture_catalog_is_exact_bounded_and_evidence_typed --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1810,7 +1816,42 @@
       "owning_tasks": [
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2rel002_maximum_next.rs",
+            "function": "v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2rel002_maximum_next::v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+            "function": "v2rel002_largest_terminal_success_receipt_round_trips_once_in_job_reads",
+            "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2rel002_largest_terminal_success_receipt_round_trips_once_in_job_reads --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+            "function": "v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads",
+            "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+            "function": "v2rel002_terminal_error_is_contextually_closed_and_bounded",
+            "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2rel002_terminal_error_is_contextually_closed_and_bounded --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_phase4_server.rs",
+            "function": "oversized_dispatcher_response_is_an_integrity_failure_not_an_overflow_response",
+            "command": "cargo test -p podway-daemon --test int_suite int_phase4_server::oversized_dispatcher_response_is_an_integrity_failure_not_an_overflow_response --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1829,7 +1870,24 @@
       "owning_tasks": [
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2rel002_maximum_next.rs",
+            "function": "v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2rel002_maximum_next::v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+            "function": "v2rel002_escape_heavy_next_charge_dominates_every_encoded_component",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_escape_heavy_next_charge_dominates_every_encoded_component --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1839,7 +1897,7 @@
       "section": "17.9",
       "ordinal": 4,
       "line": 3057,
-      "text": "a corresponding fixture proves a maximum-size compact status projection serialized through the production path is at most 262,144 bytes, and a verbose fixture with the values window at `STATUS_VALUES_MAX` and every history window at `TRACE_WINDOW_MAX` proves a verbose response stays within one frame;",
+      "text": "a corresponding fixture proves a maximum-size compact status projection serialized through the production path is at most 262,144 bytes, and a verbose fixture with the values window governed by `STATUS_VALUES_MAX` and every history window governed by `TRACE_WINDOW_MAX` plus its family count cap proves a verbose response stays within one frame;",
       "contract_paths": [
         "assets/schemas/compact-status-result-v2.schema.json",
         "assets/schemas/status-result-v2.schema.json",
@@ -1852,7 +1910,30 @@
         "V2GOL-004",
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+            "function": "v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+            "function": "v2rel002_standard_item_values_stop_before_the_first_whole_value_over_budget",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_standard_item_values_stop_before_the_first_whole_value_over_budget --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+            "function": "v2rel002_one_maximum_verbose_projection_combines_every_bounded_family",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_one_maximum_verbose_projection_combines_every_bounded_family --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1872,7 +1953,24 @@
         "V2RUN-002",
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+            "function": "v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+            "function": "v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1894,7 +1992,13 @@
         "V2GOL-004",
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+        "function": "v2rel002_one_maximum_verbose_projection_combines_every_bounded_family",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_one_maximum_verbose_projection_combines_every_bounded_family --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1914,7 +2018,13 @@
         "V2RUN-002",
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+        "function": "v2run002_blocker_and_item_windows_are_newest_first_complete_and_display_bounded",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2run002_blocker_and_item_windows_are_newest_first_complete_and_display_bounded --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1934,7 +2044,13 @@
         "V2RUN-002",
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+        "function": "v2rel002_one_maximum_verbose_projection_combines_every_bounded_family",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_one_maximum_verbose_projection_combines_every_bounded_family --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1954,7 +2070,13 @@
         "V2RUN-003",
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+        "function": "v2rel002_selected_readback_respects_value_and_wire_bounds",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_selected_readback_respects_value_and_wire_bounds --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1974,7 +2096,24 @@
         "V2DOG-001",
         "V2DOG-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-unit-test",
+            "path": "crates/podway-config/src/procedure_v2_budget.rs",
+            "function": "v2dog001_sw_dev_preset_records_budget_headroom",
+            "command": "cargo test -p podway-config --lib procedure_v2_budget::tests::v2dog001_sw_dev_preset_records_budget_headroom --locked -- --exact"
+          },
+          {
+            "kind": "cargo-unit-test",
+            "path": "crates/podway-config/src/procedure_v2_budget.rs",
+            "function": "v2dog002_bug_fix_preset_records_budget_headroom",
+            "command": "cargo test -p podway-config --lib procedure_v2_budget::tests::v2dog002_bug_fix_preset_records_budget_headroom --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]
@@ -1994,7 +2133,24 @@
         "V2DRW-006",
         "V2REL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2drw006_failures.rs",
+            "function": "v2drw006_generated_cycle_counts_have_no_runtime_traversal_limit_and_stay_bounded",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2drw006_failures::v2drw006_generated_cycle_counts_have_no_runtime_traversal_limit_and_stay_bounded --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf002_valid_declared_rework_does_not_create_a_cumulative_budget",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf002_valid_declared_rework_does_not_create_a_cumulative_budget --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/json-contract.md", "anchor": "## Procedure v2 payload and admission bounds"}
       ]

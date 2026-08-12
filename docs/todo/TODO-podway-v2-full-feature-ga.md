@@ -2095,7 +2095,7 @@ form — there is no verbose `next`.
 Verbose status adds the history windows: the current valid execution trace,
 stale attempts, immutable decision records, declared and manual rework records,
 stale goal revisions, and stale goal assessments. Each is a newest-first window
-of at most `TRACE_WINDOW_MAX` = 65,536 bytes, with explicit `trace_truncated`
+of at most `TRACE_WINDOW_MAX` = 65,536 bytes and its family count cap (32 current trace, 1 stale attempt, 1 decision, 6 rework, 1 stale goal revision, 1 stale goal assessment), with explicit `trace_truncated`
 and `trace_window` fields whenever entries are omitted. Every history entry
 carries its correlated execution trace sequence so the same exclusive
 `--history-before <trace-sequence>` cursor pages all six families. Six windows
@@ -3056,9 +3056,9 @@ acceptance requires evidence across the following areas.
   equal to the encoded size of the constructed content;
 - a corresponding fixture proves a maximum-size compact status projection
   serialized through the production path is at most 262,144 bytes, and a
-  verbose fixture with the values window at `STATUS_VALUES_MAX` and every
-  history window at `TRACE_WINDOW_MAX` proves a verbose response stays
-  within one frame;
+  verbose fixture with the values window governed by `STATUS_VALUES_MAX` and
+  every history window governed by `TRACE_WINDOW_MAX` plus its family count cap
+  proves a verbose response stays within one frame;
 - compact status carries the per-graph-node attempt counts, rework-traversal
   counters, and `trace_length` of §9.9, and never the full execution trace,
   stale history, or evidence read-back values;

@@ -1,9 +1,9 @@
 {
   "schema": "podway.v2-fixture-recipe/v1",
   "fixture_class": "maximum-size",
-  "evidence_level": "contract-recipe",
-  "implementation_status": "planned",
-  "production_proof_required": true,
+  "evidence_level": "production-serialization",
+  "implementation_status": "automated",
+  "production_proof_required": false,
   "blocker_window_max_bytes": 49152,
   "blocker_window_order": "newest-first-complete-entries",
   "blocker_window_markers": ["blockers_total", "blockers_truncated"],
@@ -13,10 +13,28 @@
     {"tier": "standard", "maximum_bytes": 1048576, "status_values_max_bytes": 262144, "item_value_max_characters": 2048, "value_marker": "value_truncated", "window_markers": ["items_total", "items_truncated"]},
     {"tier": "verbose", "maximum_bytes": 1048576, "trace_window_max_bytes": 65536, "trace_window_count": 6, "window_markers": ["trace_truncated", "trace_window"]}
   ],
-  "future_assertions": [
-    "each projection serializes through the production result and framing path",
+  "proof_acceptance_id": "V2ACC-080",
+  "proof_requirement_id": "V2PAY-004",
+  "production_proofs": {
+    "compact": {
+      "kind": "cargo-test",
+      "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+      "function": "v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap",
+      "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap --locked -- --exact"
+    },
+    "verbose": {
+      "kind": "cargo-test",
+      "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+      "function": "v2rel002_one_maximum_verbose_projection_combines_every_bounded_family",
+      "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_one_maximum_verbose_projection_combines_every_bounded_family --locked -- --exact"
+    }
+  },
+  "verified_assertions": [
+    "the compact production projection maximizes reachable identities, counters, item revisions, and integer fields and stays within its automation cap",
+    "one admitted GraphSessionStateV2 places the near-cap values window and actual omissions in all six history families in the same verbose production projection",
+    "the complete combined verbose projection serializes through the production result and framing path within one frame",
     "status contains reference metadata but no read-back values",
     "stale-attempt history carries at most eight stale or unresolved reference metadata entries without read-back values",
-    "complete entries are retained until the next entry exceeds its window"
+    "each verbose history retains complete newest-first entries until adding the first omitted entry would exceed TRACE_WINDOW_MAX or the family count cap is reached, with the first omitted entry proven by the exclusive cursor"
   ]
 }

@@ -18,7 +18,9 @@ use podway_daemon::server::{DaemonRequestV1, RequestDispatcherV1};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV2, WorkspaceContextV1, WorktreeSelectorWireV1, encode_response_payload_v2,
+    ResponseEnvelopeV2, WorkspaceContextV1, WorktreeSelectorWireV1, decode_response_payload_v2,
+    decode_single_frame_v1, encode_frame_v1, encode_response_payload_v2,
+    validate_frame_payload_length,
 };
 use serde_json::{Map, Value, json};
 
@@ -311,6 +313,64 @@ fn counter<'a>(value: &'a Map<String, Value>, graph_node_id: &str) -> &'a Value 
         .iter()
         .find(|counter| counter["graph_node_id"] == graph_node_id)
         .unwrap()
+}
+
+fn bounded_query(
+    dispatcher: &impl RequestDispatcherV1,
+    fixture: &ReadyFixture,
+    number: &mut u64,
+    command: &str,
+    payload: Map<String, Value>,
+) -> Map<String, Value> {
+    let request = runtime::request(
+        *number,
+        command,
+        &fixture.selector,
+        payload,
+        "unused-v2drw006-bounded-query-key",
+        PreconditionsV1::new(
+            Some(SessionId::new(&fixture.session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    *number += 1;
+    let response = runtime::dispatch(dispatcher, &request);
+    let encoded = encode_response_payload_v2(&response).unwrap();
+    validate_frame_payload_length(encoded.len()).unwrap();
+    assert!(encoded.len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
+    let frame = encode_frame_v1(&encoded).unwrap();
+    let framed_payload = decode_single_frame_v1(&frame).unwrap();
+    assert_eq!(framed_payload, encoded);
+    let decoded = decode_response_payload_v2(framed_payload).unwrap();
+    assert_eq!(decoded, response);
+    runtime::v2_result(decoded, command)
+}
+
+fn assert_history_window(value: &Value, total: u64, maximum: usize) {
+    let entries = value["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), usize::try_from(total).unwrap().min(maximum));
+    assert_eq!(value["trace_truncated"], total > maximum as u64);
+    if entries.is_empty() {
+        assert!(value["trace_window"].is_null());
+    } else {
+        let sequences = entries
+            .iter()
+            .map(|entry| entry["trace_sequence"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            value["trace_window"]["first_sequence"],
+            sequences.iter().min().copied().unwrap()
+        );
+        assert_eq!(
+            value["trace_window"]["last_sequence"],
+            sequences.iter().max().copied().unwrap()
+        );
+    }
 }
 
 fn set_text_item(
@@ -939,6 +999,100 @@ fn v2drw006_repeated_declared_and_manual_cycles_survive_midrun_cold_reopen() {
         older_stale["stale_attempt_history"]["entries"][0]["attempt_id"],
         accepted_attempt_id
     );
+}
+
+#[test]
+fn v2drw006_generated_cycle_counts_have_no_runtime_traversal_limit_and_stay_bounded() {
+    const MAX_GENERATED_CYCLES: u64 = 12;
+
+    let workspace = support_phase4_workspace::git_worktrees();
+    let manager = Arc::new(runtime::manager(workspace.temporary_path()));
+    let production = runtime::dispatcher(manager, "v2drw006-generated-cycle-counts");
+    let fixture = start_ready(&production, workspace.main(), 99_000);
+    let mut number = 99_100;
+
+    // Exercise every count in the bounded family rather than treating any sampled count as a
+    // product limit. Procedure/domain validation remains the only authority over valid routes.
+    for completed_cycles in 0..=MAX_GENERATED_CYCLES {
+        let compact = bounded_query(
+            &production,
+            &fixture,
+            &mut number,
+            "session.status",
+            json!({"compact": true, "wait_for_idle": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let standard = bounded_query(
+            &production,
+            &fixture,
+            &mut number,
+            "session.status",
+            Map::new(),
+        );
+        let verbose = bounded_query(
+            &production,
+            &fixture,
+            &mut number,
+            "session.status",
+            json!({"verbose": true}).as_object().unwrap().clone(),
+        );
+        let next = bounded_query(
+            &production,
+            &fixture,
+            &mut number,
+            "session.next",
+            Map::new(),
+        );
+
+        let expected_trace_length = 2 + completed_cycles * 2;
+        for projection in [&compact, &standard, &verbose, &next] {
+            assert_eq!(projection["trace_length"], expected_trace_length);
+            assert_eq!(
+                counter(projection, "work")["attempt_count"],
+                completed_cycles + 1
+            );
+            assert_eq!(
+                counter(projection, "work")["rework_traversal_count"],
+                completed_cycles
+            );
+            assert_eq!(
+                counter(projection, "review")["attempt_count"],
+                completed_cycles + 1
+            );
+            assert_eq!(counter(projection, "review")["rework_traversal_count"], 0);
+            assert_eq!(counter(projection, "finish")["attempt_count"], 0);
+        }
+        assert_eq!(compact["schema"], "podway.compact-status-result/v2");
+        assert_eq!(standard["tier"], "standard");
+        assert_eq!(verbose["tier"], "verbose");
+        assert_eq!(next["schema"], "podway.next-result/v2");
+        assert_history_window(&verbose["decision_history"], completed_cycles, 1);
+        assert_history_window(&verbose["rework_history"], completed_cycles, 6);
+
+        if completed_cycles == MAX_GENERATED_CYCLES {
+            break;
+        }
+        let rejected = decide_current(&production, &fixture, &mut number, "reject");
+        assert_eq!(rejected["target_graph_node_id"], "work");
+        set_text_item(
+            &production,
+            &fixture,
+            &mut number,
+            "result",
+            &format!("generated correction {completed_cycles}"),
+        );
+        let completed = complete_current(&production, &fixture, &mut number);
+        assert_eq!(completed["to_graph_node_id"], "review");
+        set_text_item(
+            &production,
+            &fixture,
+            &mut number,
+            "note",
+            &format!("generated review note {completed_cycles}"),
+        );
+    }
 }
 
 #[test]

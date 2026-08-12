@@ -10,12 +10,14 @@ use jsonschema::{Retrieve, Uri};
 use podway_core::{AuthoringDiagnostic, AuthoringDiagnosticCode, SourceLocation};
 use podway_protocol::{
     CommandNameV1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, ErrorEnvelopeV1, MAX_V2_OUTPUT_WARNINGS,
-    MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1, NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V2,
-    OutputEnvelopeInputV2, OutputEnvelopeV2, PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ProtocolError,
-    RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, V2_RUNTIME_ERROR_CODES_V1,
-    decode_response_payload_v2, decode_result_schema_contract_v2, encode_response_payload_v2,
-    ensure_command_result_schema_v1, result_schema_top_level_fields_v2, validate_command_result_v1,
-    validate_command_result_v2, validate_frame_payload_length, validate_v2_output_warnings,
+    MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1, MAX_V2_TERMINAL_ERROR_BYTES,
+    NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V2, OutputEnvelopeInputV2, OutputEnvelopeV2,
+    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ProtocolError, RequestIdV1, ResponseEnvelopeV2,
+    Rfc3339MillisV1, V2_RUNTIME_ERROR_CODES_V1, decode_response_payload_v2,
+    decode_result_schema_contract_v2, decode_single_frame_v1, encode_frame_v1,
+    encode_response_payload_v2, ensure_command_result_schema_v1, result_schema_top_level_fields_v2,
+    validate_command_result_v1, validate_command_result_v2, validate_frame_payload_length,
+    validate_v2_output_warnings,
 };
 use serde_json::{Map, Value, json};
 
@@ -634,6 +636,9 @@ fn v2ctr003_job_reconciliation_is_non_recursive_and_state_consistent() {
         "schema":"podway.error/v1","request_id":UUID,"command":"session.complete",
         "generated_at":"2026-08-04T00:00:00.000Z","code":"GRAPH_NODE_NOT_FOUND",
         "message":"Graph node not found.","retryable":false,"exit_code":1,
+        "workspace":{
+            "uuid":UUID,"root":"/tmp/podway-v2ctr","latest_workspace_sequence":1
+        },
         "details":{
             "schema":"podway.v2-runtime-error-details/v1","kind":"GRAPH_NODE_NOT_FOUND",
             "graph_node_id":"work","admission":{"admitted":true,"job_id":UUID,"workspace_sequence":1}
@@ -987,6 +992,11 @@ fn v2plt006_production_output_decoder_validates_nested_terminal_receipts() {
         "message":"Graph node not found.",
         "retryable":false,
         "exit_code":1,
+        "workspace":{
+            "uuid":UUID,
+            "root":"/tmp/podway-v2ctr",
+            "latest_workspace_sequence":1
+        },
         "details":{
             "schema":"podway.v2-runtime-error-details/v1",
             "kind":"OPTION_NOT_FOUND",
@@ -1043,6 +1053,718 @@ fn v2plt006_production_output_decoder_validates_nested_terminal_receipts() {
     let nested = recursive_lookup.clone();
     recursive_lookup["result"]["job"]["terminal_response"] = nested;
     assert!(serde_json::from_value::<OutputEnvelopeV2>(recursive_lookup).is_err());
+}
+
+fn maximum_warnings() -> Vec<Value> {
+    (0..MAX_V2_OUTPUT_WARNINGS)
+        .map(|_| {
+            json!({
+                "code": "C".repeat(64),
+                "path": "\0".repeat(256),
+                "message": "\0".repeat(512)
+            })
+        })
+        .collect()
+}
+
+fn maximum_identifier(index: usize) -> String {
+    let suffix = format!("-{index}");
+    format!("a{}{}", "a".repeat(63 - suffix.len()), suffix)
+}
+
+fn escape_heavy(characters: usize) -> String {
+    "\0".repeat(characters)
+}
+
+fn maximum_admission() -> Value {
+    json!({"admitted":true,"job_id":UUID,"workspace_sequence":u64::MAX})
+}
+
+fn maximum_criteria() -> Value {
+    Value::Array(
+        (0..16)
+            .map(|index| {
+                json!({
+                    "criterion_id":maximum_identifier(index),
+                    "statement":escape_heavy(300)
+                })
+            })
+            .collect(),
+    )
+}
+
+fn maximum_citations() -> Value {
+    Value::Array(
+        (0..4)
+            .map(|index| json!({"reference_graph_node_id":maximum_identifier(index)}))
+            .collect(),
+    )
+}
+
+fn maximum_criterion_results() -> Value {
+    Value::Array(
+        (0..16)
+            .map(|index| {
+                json!({
+                    "criterion_id":maximum_identifier(index),
+                    "status":"unsatisfied",
+                    "reason":escape_heavy(2_000),
+                    "citations":maximum_citations()
+                })
+            })
+            .collect(),
+    )
+}
+
+fn maximum_reference_snapshots() -> Value {
+    Value::Array(
+        (0..8)
+            .map(|index| {
+                json!({
+                    "source_graph_node_id":maximum_identifier(index),
+                    "source_attempt_id":"ffffffff-ffff-4fff-8fff-ffffffffffff",
+                    "source_attempt_number":u64::MAX,
+                    "items_digest":DIGEST,
+                    "state":"resolved"
+                })
+            })
+            .collect(),
+    )
+}
+
+fn maximum_terminal_success_candidate(schema: &str) -> (&'static str, Value) {
+    let identifier = maximum_identifier(63);
+    let uuid = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    let timestamp = "9999-12-31T23:59:59.999Z";
+    let result = match schema {
+        "podway.session-start-result/v2" => json!({
+            "schema":schema,
+            "procedure_schema":"podway.procedure/v2",
+            "procedure_digest":DIGEST,
+            "dry_run":false,
+            "goal_tracking":false,
+            "goal_defined":false,
+            "admission":maximum_admission(),
+            "session_id":uuid,
+            "revision":u64::MAX,
+            "entry_graph_node_id":identifier
+        }),
+        "podway.stage-transition-result/v2" => json!({
+            "schema":schema,
+            "admission":maximum_admission(),
+            "transition":"retry",
+            "from_graph_node_id":identifier,
+            "from_attempt_id":uuid,
+            "to_graph_node_id":maximum_identifier(62),
+            "to_attempt_id":UUID,
+            "reason":escape_heavy(2_000),
+            "revision":u64::MAX,
+            "session_state":"running"
+        }),
+        "podway.item-mutation-result/v2" => json!({
+            "schema":schema,
+            "admission":maximum_admission(),
+            "changed":false,
+            "graph_node_id":identifier,
+            "attempt_id":uuid,
+            "attempt_number":u64::MAX,
+            "item_id":maximum_identifier(62),
+            "revision":u64::MAX,
+            "value_digest":DIGEST
+        }),
+        "podway.decision-result/v1" => {
+            let record = json!({
+                "trace_sequence":u64::MAX,
+                "session_id":uuid,
+                "session_revision":u64::MAX,
+                "procedure_schema":"podway.procedure/v2",
+                "procedure_snapshot_id":UUID,
+                "procedure_digest":DIGEST,
+                "graph_node_id":identifier,
+                "node_definition_id":maximum_identifier(61),
+                "attempt_id":uuid,
+                "attempt_number":u64::MAX,
+                "goal_revision":u64::MAX,
+                "option_id":maximum_identifier(60),
+                "effect":"advance",
+                "target_graph_node_id":maximum_identifier(59),
+                "reason":escape_heavy(2_000),
+                "actor":escape_heavy(256),
+                "recorded_at":timestamp,
+                "references":maximum_reference_snapshots(),
+                "assessment":"session_goal",
+                "assessment_mode":"assessment",
+                "goal_outcome":"not_achieved",
+                "criterion_results":maximum_criterion_results()
+            });
+            json!({
+                "schema":schema,
+                "admission":maximum_admission(),
+                "graph_node_id":record["graph_node_id"].clone(),
+                "attempt_id":record["attempt_id"].clone(),
+                "attempt_number":record["attempt_number"].clone(),
+                "option_id":record["option_id"].clone(),
+                "effect":record["effect"].clone(),
+                "target_graph_node_id":record["target_graph_node_id"].clone(),
+                "target_attempt_id":UUID,
+                "revision":u64::MAX,
+                "session_state":"running",
+                "record":record
+            })
+        }
+        "podway.rework-result/v1" => json!({
+            "schema":schema,
+            "admission":maximum_admission(),
+            "from_graph_node_id":identifier,
+            "to_graph_node_id":maximum_identifier(62),
+            "target_attempt_id":uuid,
+            "reason":escape_heavy(2_000),
+            "reactivated":false,
+            "revision":u64::MAX
+        }),
+        "podway.goal-definition-result/v1" => json!({
+            "schema":schema,
+            "admission":maximum_admission(),
+            "goal_revision":1,
+            "statement":escape_heavy(1_000),
+            "criteria":maximum_criteria(),
+            "actor":escape_heavy(256),
+            "recorded_at":timestamp,
+            "revision":u64::MAX
+        }),
+        "podway.goal-revision-result/v1" => json!({
+            "schema":schema,
+            "admission":maximum_admission(),
+            "goal_revision":u64::MAX,
+            "statement":escape_heavy(1_000),
+            "criteria":maximum_criteria(),
+            "reason":escape_heavy(1_000),
+            "actor":escape_heavy(256),
+            "recorded_at":timestamp,
+            "rework_to":identifier,
+            "reactivated":false,
+            "revision":u64::MAX
+        }),
+        "podway.criterion-assessment-result/v1" => json!({
+            "schema":schema,
+            "admission":maximum_admission(),
+            "graph_node_id":identifier,
+            "attempt_id":uuid,
+            "goal_revision":u64::MAX,
+            "mode":"assessment",
+            "result":{
+                "criterion_id":maximum_identifier(62),
+                "status":"unsatisfied",
+                "reason":escape_heavy(2_000),
+                "citations":maximum_citations()
+            },
+            "complete":true,
+            "determined_outcome":"not_achieved",
+            "revision":u64::MAX
+        }),
+        unexpected => panic!("unhandled terminal success schema {unexpected}"),
+    };
+    let command = match schema {
+        "podway.session-start-result/v2" => "session.start",
+        "podway.stage-transition-result/v2" => "session.retry",
+        "podway.item-mutation-result/v2" => "item.attach",
+        "podway.decision-result/v1" => "session.decide",
+        "podway.rework-result/v1" => "session.rework",
+        "podway.goal-definition-result/v1" => "goal.define",
+        "podway.goal-revision-result/v1" => "goal.revise",
+        "podway.criterion-assessment-result/v1" => "goal.assess_criterion",
+        _ => unreachable!(),
+    };
+    (command, result)
+}
+
+fn maximum_runtime_error_details(code: &str) -> Value {
+    let identifier = maximum_identifier(0);
+    let identifiers_8 = (0..8).map(maximum_identifier).collect::<Vec<_>>();
+    let identifiers_16 = (0..16).map(maximum_identifier).collect::<Vec<_>>();
+    let attempt = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    let mut details = json!({
+        "schema":"podway.v2-runtime-error-details/v1",
+        "kind":code,
+        "admission":{"admitted":true,"job_id":UUID,"workspace_sequence":u64::MAX}
+    });
+    match code {
+        "PROCEDURE_V2_SCHEMA_INVALID" => {
+            details["diagnostic_codes"] = Value::Array(
+                (0..256)
+                    .map(|index| json!(format!("E{index:03}_{}", "A".repeat(59))))
+                    .collect(),
+            );
+        }
+        "GRAPH_NODE_NOT_FOUND" | "DECISION_REASON_MISSING" => {
+            details["graph_node_id"] = json!(identifier);
+        }
+        "NODE_DEFINITION_NOT_FOUND" => details["node_definition_id"] = json!(identifier),
+        "GRAPH_NODE_TYPE_MISMATCH" => {
+            details["graph_node_id"] = json!(identifier);
+            details["expected_node_type"] = json!("decision");
+            details["actual_node_type"] = json!("action");
+        }
+        "OPTION_NOT_ALLOWED" => {
+            details["graph_node_id"] = json!(identifier);
+            details["option_id"] = json!(maximum_identifier(9));
+            details["allowed_option_ids"] = json!(identifiers_8);
+        }
+        "ROUTE_NOT_ALLOWED" => {
+            details["graph_node_id"] = json!(identifier);
+            details["option_id"] = json!(maximum_identifier(9));
+        }
+        "EVIDENCE_REFERENCE_UNRESOLVED" => {
+            details["graph_node_id"] = json!(identifier);
+            details["source_graph_node_ids"] = json!(identifiers_8);
+        }
+        "EVIDENCE_REFERENCE_STALE" => {
+            details["graph_node_id"] = json!(identifier);
+            details["source_graph_node_id"] = json!(maximum_identifier(9));
+            details["expected_source_attempt_id"] = json!(attempt);
+            details["current_source_attempt_id"] = json!(UUID);
+        }
+        "MANUAL_REWORK_TARGET_NOT_ALLOWED"
+        | "MANUAL_REWORK_TARGET_NOT_ON_TRACE"
+        | "GOAL_REVISION_TARGET_NOT_ALLOWED"
+        | "GOAL_REVISION_TARGET_NOT_REVISION_SAFE" => {
+            details["target_graph_node_id"] = json!(identifier);
+        }
+        "SESSION_GOAL_ALREADY_DEFINED" | "FRESH_GOAL_ASSESSMENT_MISSING" => {
+            details["goal_revision"] = json!(u64::MAX);
+        }
+        "GOAL_REVISION_STALE" => {
+            details["expected_goal_revision"] = json!(u64::MAX);
+            details["actual_goal_revision"] = json!(u64::MAX - 1);
+        }
+        "CRITERION_MODE_MIXED" => {
+            details["criterion_id"] = json!(identifier);
+            details["expected_mode"] = json!("applicability");
+            details["actual_status"] = json!("not_applicable");
+        }
+        "CRITERION_CITATION_INVALID" => {
+            details["criterion_id"] = json!(identifier);
+            details["citation"] = json!({"reference_graph_node_id":maximum_identifier(9)});
+        }
+        "CRITERION_RESULT_MISSING" => {
+            details["missing_criterion_ids"] = json!(identifiers_16);
+        }
+        "CRITERION_NOT_FOUND" => details["criterion_id"] = json!(identifier),
+        "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED" => {
+            details["option_id"] = json!(identifier);
+            details["determined_outcome"] = json!("not_achieved");
+            details["allowed_option_ids"] = json!(identifiers_8);
+        }
+        "DIGEST_CONFIRMATION_REQUIRED" => details["procedure_digest"] = json!(DIGEST),
+        "UNSUPPORTED_V2_CAPABILITY" => {
+            details["capability"] = json!(escape_heavy(128));
+            details["required_result_schema"] = json!(escape_heavy(128));
+            details["contract_manifest_digest"] = json!(DIGEST);
+        }
+        "GOAL_TRACKING_NOT_ENABLED" | "SESSION_GOAL_MISSING" | "REACTIVATION_FLAG_REQUIRED" => {}
+        unexpected => panic!("unhandled v2 runtime error code {unexpected}"),
+    }
+    details
+}
+
+fn shared_terminal_error_details(code: &str) -> Value {
+    match code {
+        "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => json!({
+            "schema":"podway.revision-conflict-details/v1",
+            "expected_revision":u64::MAX,
+            "current_revision":u64::MAX - 1
+        }),
+        "SESSION_ID_MISMATCH" => json!({
+            "schema":"podway.session-id-mismatch-details/v1",
+            "expected_session_id":UUID,
+            "actual_session_id":null,
+            "admission":{"admitted":false}
+        }),
+        "ATTEMPT_NOT_CURRENT" => json!({
+            "schema":"podway.attempt-conflict-details/v1",
+            "expected_attempt_id":UUID
+        }),
+        "BLOCKER_LIMIT_REACHED" => json!({
+            "schema":"podway.blocker-limit-details/v1",
+            "maximum_open_blockers":1_024
+        }),
+        _ => json!({}),
+    }
+}
+
+#[test]
+fn v2rel002_largest_terminal_success_receipt_round_trips_once_in_job_reads() {
+    let candidates = [
+        "podway.session-start-result/v2",
+        "podway.stage-transition-result/v2",
+        "podway.item-mutation-result/v2",
+        "podway.decision-result/v1",
+        "podway.rework-result/v1",
+        "podway.goal-definition-result/v1",
+        "podway.goal-revision-result/v1",
+        "podway.criterion-assessment-result/v1",
+    ];
+    let mut direct = Vec::new();
+    for schema in candidates {
+        let (command, result) = maximum_terminal_success_candidate(schema);
+        let terminal = json!({
+            "schema": OUTPUT_SCHEMA_V2,
+            "request_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            "command": command,
+            "generated_at": "9999-12-31T23:59:59.999Z",
+            "workspace": {
+                "uuid":"ffffffff-ffff-4fff-8fff-ffffffffffff",
+                "root":escape_heavy(4_096),
+                "latest_workspace_sequence":u64::MAX
+            },
+            "job": {
+                "id":UUID,
+                "sequence":u64::MAX,
+                "state":"succeeded",
+                "submitted_at":"9999-12-31T23:59:59.997Z",
+                "claimed_at":"9999-12-31T23:59:59.998Z",
+                "finished_at":"9999-12-31T23:59:59.999Z"
+            },
+            "session": {
+                "id":"ffffffff-ffff-4fff-8fff-ffffffffffff",
+                "title":escape_heavy(500),
+                "lifecycle":"completed",
+                "revision_before":u64::MAX,
+                "revision_after":u64::MAX
+            },
+            "result": result,
+            "warnings": maximum_warnings()
+        });
+        assert_valid("schemas/output-v2.schema.json", &terminal);
+        let decoded = decode_response_payload_v2(&serde_json::to_vec(&terminal).unwrap())
+            .unwrap_or_else(|error| panic!("maximum {schema} terminal did not decode: {error}"));
+        let encoded = encode_response_payload_v2(&decoded).unwrap();
+        let frame = encode_frame_v1(&encoded).unwrap();
+        assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+        assert_eq!(frame.len(), encoded.len() + 4);
+        direct.push((encoded.len(), terminal));
+    }
+
+    let largest_direct_length = direct.iter().map(|(length, _)| *length).max().unwrap();
+    let (_, largest) = direct
+        .into_iter()
+        .max_by_key(|(length, _)| *length)
+        .unwrap();
+    assert_eq!(largest["result"]["schema"], "podway.decision-result/v1");
+    assert_eq!(
+        serde_json::to_vec(&largest).unwrap().len(),
+        largest_direct_length
+    );
+
+    for command in ["job.status", "job.wait"] {
+        let receipt = json!({
+            "schema": OUTPUT_SCHEMA_V2,
+            "request_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            "command": command,
+            "generated_at": "9999-12-31T23:59:59.999Z",
+            "workspace": largest["workspace"].clone(),
+            "job": largest["job"].clone(),
+            "session":largest["session"].clone(),
+            "result": {"schema":"podway.job-result/v2", "job":largest.clone()},
+            "warnings": maximum_warnings()
+        });
+        assert_valid("schemas/output-v2.schema.json", &receipt);
+        let decoded = decode_response_payload_v2(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+        let payload = encode_response_payload_v2(&decoded).unwrap();
+        assert!(payload.len() <= 1_048_576);
+        let frame = encode_frame_v1(&payload).unwrap();
+        assert_eq!(frame.len(), payload.len() + 4);
+        assert!(frame.len() <= 1_048_580);
+        assert_eq!(decode_single_frame_v1(&frame).unwrap(), payload);
+        assert_eq!(decode_response_payload_v2(&payload).unwrap(), decoded);
+    }
+}
+
+#[test]
+fn v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads() {
+    let mut direct = Vec::new();
+    for code in V2_RUNTIME_ERROR_CODES_V1 {
+        let (exit_code, retryable) = match *code {
+            "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" => (4, true),
+            "DIGEST_CONFIRMATION_REQUIRED" => (2, false),
+            "UNSUPPORTED_V2_CAPABILITY" => (3, false),
+            _ => (1, false),
+        };
+        let details = maximum_runtime_error_details(code);
+        assert_valid("schemas/v2-runtime-error-details-v1.schema.json", &details);
+        let error = json!({
+            "schema":"podway.error/v1",
+            "request_id":"ffffffff-ffff-4fff-8fff-ffffffffffff",
+            "command":"goal.assess_criterion",
+            "generated_at":"9999-12-31T23:59:59.999Z",
+            "code":code,
+            "message":escape_heavy(MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1),
+            "retryable":retryable,
+            "exit_code":exit_code,
+            "workspace":{
+                "uuid":"ffffffff-ffff-4fff-8fff-ffffffffffff",
+                "root":escape_heavy(4_096),
+                "latest_workspace_sequence":u64::MAX
+            },
+            "details":details
+        });
+        assert_valid("schemas/error-v1.schema.json", &error);
+        let nested = json!({"schema":"podway.job-result/v2","job":error.clone()});
+        assert_valid("schemas/job-result-v2.schema.json", &nested);
+        assert!(decode_result_schema_contract_v2(nested.as_object().unwrap()).is_some());
+        let decoded = decode_response_payload_v2(&serde_json::to_vec(&error).unwrap())
+            .unwrap_or_else(|failure| panic!("maximum {code} error did not decode: {failure}"));
+        assert!(matches!(decoded, ResponseEnvelopeV2::Error(_)));
+        let payload = encode_response_payload_v2(&decoded).unwrap();
+        assert_eq!(payload.len(), serde_json::to_vec(&error).unwrap().len());
+        let frame = encode_frame_v1(&payload).unwrap();
+        assert_eq!(decode_single_frame_v1(&frame).unwrap(), payload);
+        direct.push((payload.len(), error));
+    }
+    assert_eq!(direct.len(), 26);
+    let largest_direct_length = direct.iter().map(|(length, _)| *length).max().unwrap();
+    let (_, largest) = direct
+        .into_iter()
+        .max_by_key(|(length, _)| *length)
+        .unwrap();
+    assert_eq!(largest["code"], "PROCEDURE_V2_SCHEMA_INVALID");
+    assert_eq!(
+        serde_json::to_vec(&largest).unwrap().len(),
+        largest_direct_length
+    );
+
+    for command in ["job.status", "job.wait"] {
+        let receipt = json!({
+            "schema":OUTPUT_SCHEMA_V2,
+            "request_id":"ffffffff-ffff-4fff-8fff-ffffffffffff",
+            "command":command,
+            "generated_at":"9999-12-31T23:59:59.999Z",
+            "workspace":largest["workspace"].clone(),
+            "job":{
+                "id":UUID,"sequence":u64::MAX,"state":"failed",
+                "submitted_at":"9999-12-31T23:59:59.997Z",
+                "claimed_at":"9999-12-31T23:59:59.998Z",
+                "finished_at":"9999-12-31T23:59:59.999Z"
+            },
+            "result":{"schema":"podway.job-result/v2","job":largest.clone()},
+            "warnings":maximum_warnings()
+        });
+        assert_valid("schemas/output-v2.schema.json", &receipt);
+        let decoded = decode_response_payload_v2(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+        let payload = encode_response_payload_v2(&decoded).unwrap();
+        assert!(payload.len() <= 1_048_576);
+        let frame = encode_frame_v1(&payload).unwrap();
+        assert_eq!(frame.len(), payload.len() + 4);
+        assert!(frame.len() <= 1_048_580);
+        assert_eq!(decode_single_frame_v1(&frame).unwrap(), payload);
+        assert_eq!(decode_response_payload_v2(&payload).unwrap(), decoded);
+
+        let mut recursive = receipt;
+        recursive["result"]["job"] = recursive.clone();
+        assert_invalid("schemas/output-v2.schema.json", &recursive);
+        assert!(decode_response_payload_v2(&serde_json::to_vec(&recursive).unwrap()).is_err());
+    }
+}
+
+#[test]
+fn v2rel002_terminal_error_is_contextually_closed_and_bounded() {
+    const SHARED_PERSISTED_TERMINAL_CODES: &[&str] = &[
+        "REQUEST_INVALID",
+        "INTERNAL_ERROR",
+        "SESSION_NOT_RUNNING",
+        "SESSION_CANCELLED",
+        "SESSION_REVISION_CONFLICT",
+        "SESSION_ID_MISMATCH",
+        "ATTEMPT_NOT_CURRENT",
+        "STAGE_NOT_SKIPPABLE",
+        "RETURN_NOT_ALLOWED",
+        "REOPEN_NOT_ALLOWED",
+        "REQUIRED_ITEMS_MISSING",
+        "BLOCKERS_PRESENT",
+        "BLOCKER_LIMIT_REACHED",
+        "ITEM_NOT_FOUND",
+        "ITEM_REVISION_CONFLICT",
+        "ITEM_TYPE_MISMATCH",
+        "ITEM_CONSTRAINT_FAILED",
+        "LIST_VALUE_NOT_FOUND",
+        "LIST_VALUE_DUPLICATE",
+        "ARTIFACT_CHANGED",
+        "BLOCKER_NOT_FOUND",
+        "BLOCKER_NOT_CURRENT",
+    ];
+    let catalog = podway_protocol::error_code_catalog_v1()
+        .map(|(code, exit_code, retryable)| (code, (exit_code, retryable)))
+        .collect::<HashMap<_, _>>();
+    for code in SHARED_PERSISTED_TERMINAL_CODES {
+        let (exit_code, retryable) = catalog[code];
+        let error = json!({
+            "schema":"podway.error/v1",
+            "request_id":UUID,
+            "command":"session.complete",
+            "generated_at":"2026-08-04T00:00:00.000Z",
+            "code":code,
+            "message":"Bound persisted terminal failure.",
+            "retryable":retryable,
+            "exit_code":exit_code,
+            "workspace":{
+                "uuid":UUID,
+                "root":"/tmp/podway-v2rel002",
+                "latest_workspace_sequence":1
+            },
+            "details":shared_terminal_error_details(code)
+        });
+        assert!(
+            serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_ok(),
+            "shared persisted terminal code {code} must remain a valid direct error"
+        );
+        let nested = json!({"schema":"podway.job-result/v2","job":error});
+        assert_valid("schemas/job-result-v2.schema.json", &nested);
+        assert!(
+            decode_result_schema_contract_v2(nested.as_object().unwrap()).is_some(),
+            "shared persisted terminal code {code} must remain valid when bounded"
+        );
+    }
+
+    let terminal = json!({
+        "schema":"podway.error/v1",
+        "request_id":UUID,
+        "command":"session.complete",
+        "generated_at":"2026-08-04T00:00:00.000Z",
+        "code":"GRAPH_NODE_NOT_FOUND",
+        "message":"Graph node not found.",
+        "retryable":false,
+        "exit_code":1,
+        "workspace":{
+            "uuid":UUID,
+            "root":"/tmp/podway-v2rel002",
+            "latest_workspace_sequence":1
+        },
+        "details":{
+            "schema":"podway.v2-runtime-error-details/v1",
+            "kind":"GRAPH_NODE_NOT_FOUND",
+            "graph_node_id":"work",
+            "admission":admission()
+        }
+    });
+    let normal_result = json!({"schema":"podway.job-result/v2","job":terminal.clone()});
+    assert_valid("schemas/job-result-v2.schema.json", &normal_result);
+    assert!(decode_result_schema_contract_v2(normal_result.as_object().unwrap()).is_some());
+
+    let normal_read = json!({
+        "schema":OUTPUT_SCHEMA_V2,
+        "request_id":UUID,
+        "command":"job.status",
+        "generated_at":"2026-08-04T00:00:00.000Z",
+        "workspace":terminal["workspace"].clone(),
+        "job":{
+            "id":UUID,"sequence":1,"state":"failed",
+            "submitted_at":"2026-08-04T00:00:00.000Z",
+            "claimed_at":"2026-08-04T00:00:00.001Z",
+            "finished_at":"2026-08-04T00:00:00.002Z"
+        },
+        "result":normal_result.clone(),
+        "warnings":[]
+    });
+    let normal = serde_json::from_value::<OutputEnvelopeV2>(normal_read).unwrap();
+    let normal = ResponseEnvelopeV2::OutputV2(normal);
+    let encoded = encode_response_payload_v2(&normal).unwrap();
+    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), normal);
+
+    let mut oversized_root = terminal.clone();
+    oversized_root["workspace"]["root"] = json!("r".repeat(4097));
+    let oversized_root = json!({"schema":"podway.job-result/v2","job":oversized_root});
+    assert_invalid("schemas/job-result-v2.schema.json", &oversized_root);
+    assert!(decode_result_schema_contract_v2(oversized_root.as_object().unwrap()).is_none());
+
+    let mut generic = json!({
+        "schema":"podway.error/v1",
+        "request_id":UUID,
+        "command":"session.complete",
+        "generated_at":"2026-08-04T00:00:00.000Z",
+        "code":"INTERNAL_ERROR",
+        "message":"Internal error.",
+        "retryable":false,
+        "exit_code":6,
+        "workspace":{
+            "uuid":UUID,
+            "root":escape_heavy(4_096),
+            "latest_workspace_sequence":u64::MAX
+        },
+        "details":{
+            "context":"",
+            "admission":{"admitted":true,"job_id":UUID,"workspace_sequence":u64::MAX}
+        }
+    });
+    let baseline = serde_json::to_vec(&generic).unwrap().len();
+    generic["details"]["context"] = json!("x".repeat(MAX_V2_TERMINAL_ERROR_BYTES - baseline));
+    assert_eq!(
+        serde_json::to_vec(&generic).unwrap().len(),
+        MAX_V2_TERMINAL_ERROR_BYTES
+    );
+    let maximum_result = json!({"schema":"podway.job-result/v2","job":generic.clone()});
+    assert_valid("schemas/job-result-v2.schema.json", &maximum_result);
+    assert!(decode_result_schema_contract_v2(maximum_result.as_object().unwrap()).is_some());
+    assert_eq!(
+        generic["workspace"]["root"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        4_096
+    );
+    for command in ["job.status", "job.wait"] {
+        let maximum_read = json!({
+            "schema":OUTPUT_SCHEMA_V2,
+            "request_id":UUID,
+            "command":command,
+            "generated_at":"9999-12-31T23:59:59.999Z",
+            "workspace":generic["workspace"].clone(),
+            "job":{
+                "id":UUID,"sequence":u64::MAX,"state":"failed",
+                "submitted_at":"9999-12-31T23:59:59.997Z",
+                "claimed_at":"9999-12-31T23:59:59.998Z",
+                "finished_at":"9999-12-31T23:59:59.999Z"
+            },
+            "result":maximum_result.clone(),
+            "warnings":maximum_warnings()
+        });
+        let decoded =
+            decode_response_payload_v2(&serde_json::to_vec(&maximum_read).unwrap()).unwrap();
+        assert!(matches!(
+            &decoded,
+            ResponseEnvelopeV2::OutputV2(output) if output.session().is_none()
+        ));
+        let encoded = encode_response_payload_v2(&decoded).unwrap();
+        assert!(encoded.len() <= 1_048_576);
+        assert_eq!(
+            decode_single_frame_v1(&encode_frame_v1(&encoded).unwrap()).unwrap(),
+            encoded
+        );
+    }
+
+    generic["details"]["context"] = json!("x".repeat(MAX_V2_TERMINAL_ERROR_BYTES + 1 - baseline));
+    let direct = serde_json::to_vec(&generic).unwrap();
+    assert_eq!(direct.len(), MAX_V2_TERMINAL_ERROR_BYTES + 1);
+    assert_valid("schemas/error-v1.schema.json", &generic);
+    assert!(matches!(
+        decode_response_payload_v2(&direct).unwrap(),
+        ResponseEnvelopeV2::Error(_)
+    ));
+
+    let oversized_result = json!({"schema":"podway.job-result/v2","job":generic});
+    assert_valid("schemas/job-result-v2.schema.json", &oversized_result);
+    assert!(decode_result_schema_contract_v2(oversized_result.as_object().unwrap()).is_none());
+    assert!(serde_json::to_vec(&oversized_result).unwrap().len() > MAX_V2_TERMINAL_ERROR_BYTES);
+
+    let mut oversized_message = normal_result;
+    oversized_message["job"]["code"] = json!("INTERNAL_ERROR");
+    oversized_message["job"]["retryable"] = json!(false);
+    oversized_message["job"]["exit_code"] = json!(6);
+    oversized_message["job"]["message"] = json!("m".repeat(513));
+    oversized_message["job"]["details"] = json!({});
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(oversized_message["job"].clone()).is_ok());
+    assert_invalid("schemas/job-result-v2.schema.json", &oversized_message);
+    assert!(decode_result_schema_contract_v2(oversized_message.as_object().unwrap()).is_none());
 }
 
 #[test]

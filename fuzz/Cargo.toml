@@ -49,6 +49,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "response_v2"
+path = "fuzz_targets/response_v2.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "config_procedure"
 path = "fuzz_targets/config_procedure.rs"
 test = false

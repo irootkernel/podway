@@ -14,11 +14,27 @@
       "$ref": "urn:podway:schema:output:v2#/$defs/terminalMutationOutput"
     },
     "terminalErrorResponse": {
+      "x-podway-max-json-bytes": 524288,
       "allOf": [
         { "$ref": "urn:podway:schema:error:v1" },
         {
+          "required": ["workspace"],
+          "propertyNames": {
+            "enum": ["schema", "request_id", "command", "generated_at", "code", "message", "retryable", "exit_code", "workspace", "details"]
+          },
           "properties": {
-            "command": { "enum": ["session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] }
+            "command": { "enum": ["session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
+            "message": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "workspace": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["uuid", "root", "latest_workspace_sequence"],
+              "properties": {
+                "uuid": { "type": "string", "format": "uuid" },
+                "root": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "latest_workspace_sequence": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
+              }
+            }
           }
         }
       ]

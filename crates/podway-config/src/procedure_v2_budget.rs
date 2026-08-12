@@ -6,10 +6,10 @@
 //! another eight bytes. All arithmetic saturates so future bound increases cannot turn a resource
 //! rejection into an under-count through integer overflow.
 
-use podway_core::{GraphPlacementV2, ItemSpecV2};
+use podway_core::{GraphNodeId, GraphPlacementV2, ItemSpecV2};
 
 use crate::procedure_v2_authoring::{placement_definition_id, placement_evidence_from};
-use crate::{ParsedNodeDefinition, ParsedProcedureV2};
+use crate::{ParsedNodeDefinition, ParsedProcedureV2, ValidatedProcedureV2};
 
 /// Maximum procedure-snapshot-derived content in one `next` result.
 pub const NEXT_STATIC_BUDGET: u64 = 262_144;
@@ -58,16 +58,49 @@ const ALL_ALLOWED_ACTIONS: &[&str] = &[
     "item.clear",
 ];
 
+/// Conservative wire-size charges for one validated Procedure v2 graph placement.
+///
+/// These are the production charges used by vetting, exposed so diagnostics and contract tests can
+/// compare admitted procedure content with the corresponding serialized runtime projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlacementBudget {
+pub struct ProcedurePlacementBudgetV2 {
     pub(crate) next_static: u64,
     pub(crate) readback: u64,
+}
+
+impl ProcedurePlacementBudgetV2 {
+    /// Conservative charge for procedure-snapshot-derived `session.next` content.
+    pub const fn next_static(&self) -> u64 {
+        self.next_static
+    }
+
+    /// Conservative charge for resolved evidence references and read-back content.
+    pub const fn readback(&self) -> u64 {
+        self.readback
+    }
+}
+
+/// Returns the production wire-size charges for a placement in a validated Procedure v2 model.
+///
+/// `None` means `graph_node_id` does not identify a placement in the validated graph. Validation
+/// guarantees that every returned placement has closed definition and evidence references.
+pub fn procedure_placement_budget_v2(
+    procedure: &ValidatedProcedureV2,
+    graph_node_id: &GraphNodeId,
+) -> Option<ProcedurePlacementBudgetV2> {
+    procedure
+        .parsed()
+        .graph()
+        .placements()
+        .iter()
+        .find(|placement| placement.id() == graph_node_id)
+        .map(|placement| placement_budget(procedure.parsed(), placement))
 }
 
 pub(crate) fn placement_budget(
     procedure: &ParsedProcedureV2,
     placement: &GraphPlacementV2,
-) -> PlacementBudget {
+) -> ProcedurePlacementBudgetV2 {
     let definition = procedure
         .node_definitions()
         .iter()
@@ -75,12 +108,12 @@ pub(crate) fn placement_budget(
     let Some(definition) = definition else {
         // Closed-reference validation makes this unreachable. Saturation preserves fail-closed
         // behavior if a caller ever violates the validated-model precondition.
-        return PlacementBudget {
+        return ProcedurePlacementBudgetV2 {
             next_static: u64::MAX,
             readback: u64::MAX,
         };
     };
-    PlacementBudget {
+    ProcedurePlacementBudgetV2 {
         next_static: next_static_charge(procedure, placement, definition),
         readback: readback_charge(procedure, placement),
     }
@@ -517,7 +550,7 @@ mod tests {
             ParsedProcedure::V1(_) => panic!("sw-dev-v2 must dispatch as Procedure v2"),
         };
         let validated = validate_procedure_v2(parsed).expect("sw-dev-v2 must validate");
-        let usages: Vec<PlacementBudget> = validated
+        let usages: Vec<ProcedurePlacementBudgetV2> = validated
             .parsed()
             .graph()
             .placements()
@@ -551,7 +584,7 @@ mod tests {
             ParsedProcedure::V1(_) => panic!("bug-fix-v2 must dispatch as Procedure v2"),
         };
         let validated = validate_procedure_v2(parsed).expect("bug-fix-v2 must validate");
-        let usages: Vec<PlacementBudget> = validated
+        let usages: Vec<ProcedurePlacementBudgetV2> = validated
             .parsed()
             .graph()
             .placements()

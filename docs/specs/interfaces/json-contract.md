@@ -269,7 +269,9 @@ windows: current trace, stale attempts, decisions, rework, stale goal revisions,
 and stale goal assessments. Every entry carries the execution `trace_sequence`
 it belongs to; the shared `--history-before` cursor can therefore page all six
 windows without adding a separate public history route. Standard status forbids
-every history window.
+every history window. The byte bound is combined with the closed family count
+caps: 32 current trace entries, 1 stale attempt, 1 decision, 6 rework records,
+1 stale goal revision, and 1 stale goal assessment.
 
 The additive `podway.output/v2` envelope retains the open outer shape of v1 but
 closes its command-to-result selection to the registered Procedure v2 families.
@@ -281,10 +283,12 @@ production obligation and does not alter the released v1 envelope schema.
 Procedure v2 runtime errors retain the open `podway.error/v1` envelope but bind
 every registered v2 code to `podway.v2-runtime-error-details/v1`. A v2 runtime
 error message is limited to 512 characters. When retained as a terminal job
-response, its command is one of the registered v2 mutations; lookup additionally
-requires the stored job command and nested terminal command to be identical.
-These contextual producer and reconciliation guards do not narrow the released
-v1 error schema.
+response, every error message is limited to 512 characters, the complete encoded
+error is limited to 524,288 bytes, its command is one of the registered v2
+mutations, and its workspace projection is closed. Lookup additionally requires
+the stored job command and nested terminal command to be identical. These
+contextual producer and reconciliation guards do not narrow the released v1
+error schema.
 
 ## Procedure v2 payload and admission bounds
 

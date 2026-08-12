@@ -34,11 +34,11 @@ use podway_daemon::{
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     FrameIoPhaseV1, IdempotencyKeyV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1,
-    OutputEnvelopeInputV1, OutputEnvelopeV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, ResponseEnvelopeV2,
-    Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
-    decode_response_payload_v1, decode_response_payload_v2, encode_frame_v1,
-    encode_request_payload_v1, read_single_frame_v1,
+    OutputEnvelopeInputV1, OutputEnvelopeInputV2, OutputEnvelopeV1, OutputEnvelopeV2,
+    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
+    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1,
+    WorktreeSelectorWireV1, build_identity_v1, decode_response_payload_v1,
+    decode_response_payload_v2, encode_frame_v1, encode_request_payload_v1, read_single_frame_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -110,6 +110,7 @@ enum DispatcherOutcome {
     Success,
     Error,
     InvalidResponse,
+    OversizedResponse,
 }
 
 struct TestDispatcher {
@@ -151,6 +152,9 @@ impl RequestDispatcherV1 for TestDispatcher {
                 .expect("fixture error is valid"),
             ),
             DispatcherOutcome::InvalidResponse => invalid_response(request),
+            DispatcherOutcome::OversizedResponse => {
+                unreachable!("the version-aware dispatcher owns the oversized v2 fixture")
+            }
         }
     }
 
@@ -159,6 +163,10 @@ impl RequestDispatcherV1 for TestDispatcher {
         request: &RequestEnvelopeV1,
         daemon_request: &podway_daemon::server::DaemonRequestV1,
     ) -> podway_protocol::ResponseEnvelopeV2 {
+        if matches!(self.outcome, DispatcherOutcome::OversizedResponse) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            return oversized_v2_response(request);
+        }
         if let Some(slice) = daemon_request.legacy() {
             return match self.dispatch(request, slice) {
                 ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
@@ -304,6 +312,12 @@ fn request_with_client(client: ClientInfoV1) -> RequestEnvelopeV1 {
         payload,
     })
     .expect("fixture request is valid")
+}
+
+fn next_request() -> RequestEnvelopeV1 {
+    let mut value = serde_json::to_value(request()).expect("status request must serialize");
+    value["command"] = json!("session.next");
+    serde_json::from_value(value).expect("next request fixture must be valid")
 }
 
 fn mutation_request(command: &str, payload: Map<String, Value>) -> RequestEnvelopeV1 {
@@ -1090,6 +1104,34 @@ fn invalid_dispatcher_response_is_sanitized_and_retains_categorical_evidence() {
 }
 
 #[test]
+fn oversized_dispatcher_response_is_an_integrity_failure_not_an_overflow_response() {
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport(
+        TestDispatcher::new(DispatcherOutcome::OversizedResponse, Arc::clone(&calls)),
+        EXPECTED_UID,
+        ServerTransportTimeoutsV1::default(),
+    );
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &request_frame(&next_request()));
+    let error = assert_error_code(read_response(&mut client), "INTERNAL_ERROR");
+    assert_eq!(error.request_id().to_string(), REQUEST_ID);
+    assert_eq!(error.command().as_str(), "session.next");
+    assert_eq!(error.message(), "An unexpected internal error occurred.");
+    assert!(error.details().is_empty());
+    assert!(matches!(
+        handler.join().expect("handler must not panic"),
+        Err(ServerConnectionErrorV1::InvalidDispatcherResponse)
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn decoded_invalid_mutation_is_rejected_with_negative_admission_evidence() {
     let (mut client, server) =
         UnixStream::pair().expect("Unix stream fixture pair must be created");
@@ -1848,6 +1890,78 @@ fn invalid_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
         })
         .expect("fixture output is valid"),
     )
+}
+
+fn oversized_v2_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
+    let items = (0..64)
+        .map(|index| {
+            json!({
+                "item_id": format!("item-{index}"),
+                "type": "text",
+                "value": "\0".repeat(16_384)
+            })
+        })
+        .collect::<Vec<_>>();
+    let result = json!({
+        "schema": "podway.next-result/v2",
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "goal_tracking": false,
+        "goal_defined": false,
+        "node": {"node_definition_id":"work","graph_node_id":"work","node_type":"action"},
+        "attempt": {"attempt_id":"00000000-0000-4000-8000-000000000102","attempt_number":1},
+        "trace_length": 1,
+        "counters": [],
+        "queue": {"pending_mutations":false,"queued_count":0,"running_job_id":null,"latest_workspace_sequence":1},
+        "revision": 1,
+        "readiness": {"items_satisfied":true,"unblocked":true,"goal_ready":true,"can_advance":true},
+        "title": "Work",
+        "intent": "Exercise the whole-frame integrity classification.",
+        "instructions": [],
+        "missing_required_item_count": 0,
+        "missing_required_items": [],
+        "terminal": true,
+        "allowed_manual_rework_targets": [],
+        "allowed_actions": [],
+        "suggestions": [],
+        "references": [{
+            "source_graph_node_id":"source",
+            "source_title":"Source",
+            "source_attempt_id":"00000000-0000-4000-8000-000000000101",
+            "source_attempt_number":1,
+            "items_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "state":"resolved"
+        }],
+        "readback": [{
+            "source_graph_node_id":"source",
+            "source_title":"Source",
+            "source_attempt_id":"00000000-0000-4000-8000-000000000101",
+            "source_attempt_number":1,
+            "items_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "state":"resolved",
+            "items":items
+        }],
+        "blockers_total": 0,
+        "blockers": [],
+        "blockers_truncated": false
+    })
+    .as_object()
+    .expect("oversized v2 next result must be an object")
+    .clone();
+    let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+        request_id: request.request_id().clone(),
+        command: request.command().clone(),
+        generated_at: timestamp(),
+        workspace: None,
+        job: None,
+        session: None,
+        result,
+        warnings: Vec::new(),
+    })
+    .expect("every oversized v2 field remains within its schema bound");
+    let serialized = serde_json::to_vec(&output).expect("fixture output must serialize");
+    assert!(serialized.len() > MAX_FRAME_PAYLOAD_BYTES_V1);
+    ResponseEnvelopeV2::OutputV2(output)
 }
 
 fn fixture_result(command: &str) -> Map<String, Value> {

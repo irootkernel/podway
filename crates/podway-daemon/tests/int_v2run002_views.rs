@@ -1,15 +1,20 @@
 //! Focused V2RUN-002 coverage for deterministic Procedure v2 status and next projections.
 
+use podway_config::{
+    ParsedProcedure, ProcedureDocumentFormat, ValidatedProcedureV2, parse_procedure_document,
+    procedure_placement_budget_v2, validate_procedure_v2,
+};
 use podway_core::{
-    ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, BlockerId,
-    BlockerState, CriterionAssessmentReasonV2, CriterionAssessmentResultV2, CriterionCitationV2,
-    CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
-    EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2, GoalCriterionV2, GoalDefinitionV2,
-    GoalOutcome, GoalRevisionNumberV2, GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId,
-    NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemValueV2,
-    ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision, SessionAttemptV2, SessionId,
-    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
-    UnixMillis, WorkspaceId, canonicalize_json_v1,
+    ActorAttributionV2, ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2,
+    AttemptValidityV2, BlockerId, BlockerState, CriterionAssessmentReasonV2,
+    CriterionAssessmentResultV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
+    DecisionRecordInputV2, DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2,
+    GoalCriterionV2, GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2,
+    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, NodeDefinitionId, OptionId,
+    ProcedureSnapshotId, ReasonV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
+    ResolvedEvidenceSetV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2,
+    Sha256Digest, TraceSequenceV2, TransitionEffectV2, UnixMillis, WorkspaceId,
+    canonicalize_json_v1,
 };
 use podway_daemon::{
     execution::{
@@ -19,8 +24,10 @@ use podway_daemon::{
     v2_read_service::{GraphStatusTierV2, project_graph_next_v2, project_graph_status_v2},
 };
 use podway_protocol::{
-    CommandNameV1, OutputEnvelopeInputV2, OutputEnvelopeV2, RequestIdV1, Rfc3339MillisV1,
-    validate_frame_payload_length,
+    CommandNameV1, OutputEnvelopeInputV2, OutputEnvelopeV2, RequestIdV1, ResponseEnvelopeV2,
+    Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
+    decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
+    encode_response_payload_v2, validate_frame_payload_length,
 };
 use podway_store::{
     AttemptCriterionAssessmentStateV2, AttemptMetadataV2, AttemptWorkflowMemoryV2, BlockerStateV2,
@@ -35,6 +42,8 @@ const EQUIVALENT_YAML: &[u8] =
     include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.yaml");
 const EQUIVALENT_JSON: &[u8] =
     include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.json");
+const MAXIMUM_NEXT_RECIPE: &[u8] =
+    include_bytes!("../../../tests/fixtures/v2/payload/maximum-next-recipe.json");
 const WORKSPACE_ID: &str = "00000000-0000-4000-8000-000000002001";
 const SESSION_ID: &str = "00000000-0000-4000-8000-000000002002";
 const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000002003";
@@ -207,6 +216,15 @@ fn fresh_state(path: &str, source: &[u8]) -> GraphSessionStateV2 {
     .unwrap()
 }
 
+fn validated_json_procedure(source: &[u8]) -> ValidatedProcedureV2 {
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(source, ProcedureDocumentFormat::Json).unwrap()
+    else {
+        panic!("fixture must be a Procedure v2 document")
+    };
+    validate_procedure_v2(parsed).unwrap()
+}
+
 fn view(state: GraphSessionStateV2) -> GraphWorkspaceViewV2 {
     GraphWorkspaceViewV2::new(
         identity(),
@@ -232,12 +250,95 @@ fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV2 {
     .unwrap()
 }
 
+fn maximum_production_output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV2 {
+    let warnings = (0..4)
+        .map(|_| {
+            json!({
+                "code": "A".repeat(64),
+                "path": "\0".repeat(256),
+                "message": "\0".repeat(512),
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+        })
+        .collect();
+    OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        command: CommandNameV1::new(command).unwrap(),
+        generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
+        workspace: Some(
+            WorkspaceOutputV1::new(
+                WorkspaceId::new(WORKSPACE_ID).unwrap(),
+                "\0".repeat(4_096),
+                u64::MAX,
+            )
+            .unwrap(),
+        ),
+        job: None,
+        session: Some(
+            SessionOutputV1::new(
+                SessionId::new(SESSION_ID).unwrap(),
+                "\0".repeat(500),
+                SessionLifecycleV1::Running,
+                Revision::new(u64::MAX),
+                Revision::new(u64::MAX),
+            )
+            .unwrap(),
+        ),
+        result,
+        warnings,
+    })
+    .unwrap()
+}
+
+fn assert_maximum_production_output_v2(
+    command: &str,
+    result: Map<String, Value>,
+    maximum_bytes: usize,
+) {
+    let output = maximum_production_output(command, result);
+    let workspace = output.workspace().unwrap();
+    assert_eq!(workspace.root().chars().count(), 4_096);
+    assert_eq!(workspace.latest_workspace_sequence(), u64::MAX);
+    let session = output.session().unwrap();
+    assert_eq!(session.title().chars().count(), 500);
+    assert_eq!(session.revision_before(), Revision::new(u64::MAX));
+    assert_eq!(session.revision_after(), Revision::new(u64::MAX));
+    assert_eq!(output.warnings().len(), 4);
+    assert!(output.warnings().iter().all(|warning| {
+        warning["code"].as_str().unwrap().chars().count() == 64
+            && warning["path"].as_str().unwrap().chars().count() == 256
+            && warning["message"].as_str().unwrap().chars().count() == 512
+            && warning["code"] == "A".repeat(64)
+            && ["path", "message"].into_iter().all(|field| {
+                warning[field]
+                    .as_str()
+                    .is_some_and(|text| text.chars().all(|character| character == '\0'))
+            })
+    }));
+
+    let response = ResponseEnvelopeV2::OutputV2(output);
+    let encoded = encode_response_payload_v2(&response).unwrap();
+    assert!(
+        encoded.len() <= maximum_bytes,
+        "maximum production {command} envelope exceeded {maximum_bytes} bytes: {}",
+        encoded.len()
+    );
+    validate_frame_payload_length(encoded.len()).unwrap();
+    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
+    let frame = encode_frame_v1(&encoded).unwrap();
+    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+}
+
 fn assert_output_v2(command: &str, result: Map<String, Value>) {
     let output = output(command, result);
-    let encoded = serde_json::to_vec(&output).unwrap();
+    let response = ResponseEnvelopeV2::OutputV2(output.clone());
+    let encoded = encode_response_payload_v2(&response).unwrap();
     validate_frame_payload_length(encoded.len()).unwrap();
-    let decoded: OutputEnvelopeV2 = serde_json::from_slice(&encoded).unwrap();
-    assert_eq!(decoded, output);
+    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
+    let frame = encode_frame_v1(&encoded).unwrap();
+    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
 }
 
 #[test]
@@ -1288,6 +1389,1702 @@ fn wide_running_state() -> GraphSessionStateV2 {
         None,
     )
     .unwrap()
+}
+
+fn conservative_json_charge(value: &Value) -> usize {
+    match value {
+        Value::Null => 4,
+        Value::Bool(value) => {
+            if *value {
+                4
+            } else {
+                5
+            }
+        }
+        Value::Number(value) => value.to_string().len(),
+        Value::String(value) => value.chars().count().saturating_mul(6),
+        Value::Array(values) => values
+            .iter()
+            .map(|value| 8_usize.saturating_add(conservative_json_charge(value)))
+            .sum(),
+        Value::Object(fields) => fields
+            .values()
+            .map(|value| 64_usize.saturating_add(conservative_json_charge(value)))
+            .sum(),
+    }
+}
+
+fn escape_heavy_next_source() -> Vec<u8> {
+    let escape_heavy = "\0".repeat(1_000);
+    let items = (0..20)
+        .map(|index| {
+            json!({
+                "id": format!("item-{index}"),
+                "type": "text",
+                "prompt": "\0".repeat(300),
+                "required": true,
+                "max_length": 16_384
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "escape-heavy-next",
+        "version": "2",
+        "name": "Escape-heavy next",
+        "purpose": "Exercise production JSON escaping at the static next boundary.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "\0".repeat(120),
+                "intent": "\0".repeat(300),
+                "description": escape_heavy,
+                "instructions": vec!["\0".repeat(1_000); 12],
+                "items": items
+            }
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [{"id": "work", "use": "work", "terminal": true}]
+        }
+    }))
+    .unwrap()
+}
+
+fn escape_heavy_next_state(source: &[u8]) -> GraphSessionStateV2 {
+    fresh_state("escape-heavy.json", source)
+}
+
+fn maximum_compact_view() -> GraphWorkspaceViewV2 {
+    let state = combined_maximum_verbose_state();
+    GraphWorkspaceViewV2::new(
+        identity(),
+        Some(state),
+        0,
+        None,
+        u64::MAX,
+        UnixMillis::new(u64::MAX),
+    )
+}
+
+fn status_values_boundary_state() -> GraphSessionStateV2 {
+    let items = (0..64)
+        .map(|index| {
+            json!({
+                "id": format!("item-{index:02}"),
+                "type": "text",
+                "prompt": format!("Record value {index:02}."),
+                "required": false,
+                "max_length": 16_384
+            })
+        })
+        .collect::<Vec<_>>();
+    let source = serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "status-values-boundary",
+        "version": "2",
+        "name": "Status values boundary",
+        "purpose": "Exercise the complete-value status window boundary.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Work",
+                "intent": "Record bounded values.",
+                "items": items
+            }
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [{"id": "work", "use": "work", "terminal": true}]
+        }
+    }))
+    .unwrap();
+    let state = fresh_state("status-values-boundary.json", &source);
+    let original_attempt = state.workflow_memory().attempts().first().unwrap();
+    let value = RecordedItemValueV2::text("😀".repeat(3_000)).unwrap();
+    let item_slots = original_attempt
+        .item_slots()
+        .iter()
+        .map(|slot| {
+            ItemSlotStateV2::new(
+                slot.attempt_id().clone(),
+                slot.item_id().clone(),
+                slot.item_type(),
+                Revision::new(1),
+                Some(value.clone()),
+                slot.created_at(),
+                UnixMillis::new(slot.created_at().get() + 1),
+            )
+            .unwrap()
+        })
+        .collect();
+    let attempt = AttemptWorkflowMemoryV2::new(
+        original_attempt.attempt_id().clone(),
+        item_slots,
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        state.workspace_revision(),
+        state.task_title(),
+        state.snapshot().clone(),
+        state.trace().clone(),
+        state.counters().to_vec(),
+        state.attempt_metadata().to_vec(),
+        WorkflowMemoryStateV2::new(vec![attempt], Vec::new(), Vec::new()).unwrap(),
+        state.goal_state().clone(),
+        state.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+fn decision_rework_history_state() -> GraphSessionStateV2 {
+    let source = br#"{
+      "schema":"podway.procedure/v2",
+      "id":"history-boundary",
+      "version":"2",
+      "name":"History boundary",
+      "purpose":"Exercise decision and rework history windows.",
+      "node_definitions":{
+        "review":{
+          "type":"decision",
+          "title":"Review",
+          "objective":"Choose the route.",
+          "prompt":"Accept?",
+          "options":[{"id":"accept","label":"Accept"}],
+          "reason":{"required":true}
+        },
+        "finish":{"type":"action","title":"Finish","intent":"Finish."}
+      },
+      "graph":{
+        "entry":"review",
+        "nodes":[
+          {"id":"review","use":"review","routes":{"accept":{"to":"finish","effect":"advance"}}},
+          {"id":"finish","use":"finish","terminal":true}
+        ]
+      },
+      "manual_rework":{"allowed_targets":["review"]}
+    }"#;
+    let mut state = fresh_state("history-boundary.json", source);
+    for cycle in 0_u64..7 {
+        let review_attempt = state.trace().active_attempt().unwrap().attempt_id().clone();
+        state = state
+            .decide_active_route_v2(
+                state.trace().revision(),
+                &review_attempt,
+                OptionId::new("accept").unwrap(),
+                AttemptId::new(format!("00000000-0000-4000-8001-{cycle:012x}")).unwrap(),
+                Some(ReasonV2::new(format!("Accept cycle {cycle}.")).unwrap()),
+                None,
+                UnixMillis::new(1_700_000_001_000 + cycle * 2),
+            )
+            .unwrap()
+            .into_state();
+        let finish_attempt = state.trace().active_attempt().unwrap().attempt_id().clone();
+        state = state
+            .manual_rework_v2(
+                state.trace().revision(),
+                Some(&finish_attempt),
+                GraphNodeId::new("review").unwrap(),
+                AttemptId::new(format!("00000000-0000-4000-8002-{cycle:012x}")).unwrap(),
+                ReasonV2::new(format!("Revisit cycle {cycle}.")).unwrap(),
+                None,
+                UnixMillis::new(1_700_000_001_001 + cycle * 2),
+            )
+            .unwrap()
+            .into_state();
+    }
+    state
+}
+
+fn goal_history_state() -> GraphSessionStateV2 {
+    let mut procedure: Value = serde_json::from_slice(ASSESSMENT_PROCEDURE).unwrap();
+    procedure.as_object_mut().unwrap().insert(
+        "manual_rework".to_owned(),
+        json!({"allowed_targets":["assess-goal"]}),
+    );
+    let procedure = serde_json::to_vec(&procedure).unwrap();
+    let mut state =
+        decided_assessment_state_from_source(DecidedFixtureLifecycle::Running, &procedure);
+    for revision in 2_u64..=3 {
+        let finish_attempt = state.trace().active_attempt().unwrap().attempt_id().clone();
+        let assessment_attempt =
+            AttemptId::new(format!("00000000-0000-4000-8003-{revision:012x}")).unwrap();
+        state = state
+            .revise_goal_v2(
+                state.trace().revision(),
+                Some(&finish_attempt),
+                GoalRevisionNumberV2::new(revision - 1),
+                GoalStatementV2::new(format!("Deliver revision {revision}.")).unwrap(),
+                assessment_goal_definition(),
+                GraphNodeId::new("assess-goal").unwrap(),
+                assessment_attempt.clone(),
+                GoalRevisionReasonV2::new(format!("Revise goal to {revision}.")).unwrap(),
+                None,
+                false,
+                UnixMillis::new(1_700_000_002_000 + revision * 10),
+            )
+            .unwrap()
+            .into_state();
+        for criterion in ["correct", "tested"] {
+            state = state
+                .assess_goal_criterion_v2(
+                    state.trace().revision(),
+                    &assessment_attempt,
+                    GoalRevisionNumberV2::new(revision),
+                    assessment_result(criterion).result().clone(),
+                    None,
+                    UnixMillis::new(1_700_000_002_001 + revision * 10),
+                )
+                .unwrap()
+                .into_state();
+        }
+        state = state
+            .decide_active_route_with_goal_revision_v2(
+                state.trace().revision(),
+                &assessment_attempt,
+                OptionId::new("achieved").unwrap(),
+                AttemptId::new(format!("00000000-0000-4000-8004-{revision:012x}")).unwrap(),
+                Some(GoalRevisionNumberV2::new(revision)),
+                Some(ReasonV2::new(format!("Revision {revision} is achieved.")).unwrap()),
+                None,
+                UnixMillis::new(1_700_000_002_002 + revision * 10),
+            )
+            .unwrap()
+            .into_state();
+    }
+    state
+}
+
+fn maximum_reachable_identifier(prefix: &str, index: usize) -> String {
+    let prefix = format!("{prefix}-{index:02}-");
+    format!("{prefix}{}", "x".repeat(64 - prefix.len()))
+}
+
+fn combined_maximum_procedure() -> Vec<u8> {
+    let node_ids = (0..64)
+        .map(|index| maximum_reachable_identifier("node", index))
+        .collect::<Vec<_>>();
+    let assessment_definition = maximum_reachable_identifier("assess", 0);
+    let work_definition = maximum_reachable_identifier("work", 0);
+    let transit_definition = maximum_reachable_identifier("transit", 0);
+    let achieved = maximum_reachable_identifier("achieved", 0);
+    let not_achieved = maximum_reachable_identifier("not-achieved", 0);
+    let superseded = maximum_reachable_identifier("superseded", 0);
+    let items = (0..64)
+        .map(|index| {
+            json!({
+                "id": maximum_reachable_identifier("item", index),
+                "type": "text",
+                "prompt": "p".repeat(300),
+                "help": "h".repeat(1_000),
+                "required": false,
+                "max_length": 16_384
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut nodes = Vec::with_capacity(64);
+    nodes.push(json!({
+        "id": node_ids[0],
+        "use": assessment_definition,
+        "routes": {
+            achieved.clone(): {"to": node_ids[63], "effect": "advance"},
+            not_achieved.clone(): {"to": node_ids[1], "effect": "rework"},
+            superseded.clone(): {"to": node_ids[63], "effect": "advance"}
+        }
+    }));
+    for index in 1..63 {
+        nodes.push(json!({
+            "id": node_ids[index],
+            "use": &work_definition,
+            "next": if index == 62 { &node_ids[0] } else { &node_ids[index + 1] }
+        }));
+    }
+    nodes.push(json!({"id": node_ids[63], "use": &transit_definition, "terminal": true}));
+    serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": maximum_reachable_identifier("procedure", 0),
+        "version": "v".repeat(64),
+        "name": "n".repeat(120),
+        "purpose": "p".repeat(500),
+        "goal_tracking": true,
+        "node_definitions": {
+            assessment_definition.clone(): {
+                "type": "decision",
+                "title": "a".repeat(120),
+                "objective": "o".repeat(300),
+                "prompt": "q".repeat(300),
+                "options": [
+                    {"id": achieved, "label": "a".repeat(120)},
+                    {"id": not_achieved, "label": "n".repeat(120)},
+                    {"id": superseded, "label": "s".repeat(120)}
+                ],
+                "reason": {"required": true},
+                "assessment": {"target": "session_goal", "outcomes": {
+                    maximum_reachable_identifier("achieved", 0): "achieved",
+                    maximum_reachable_identifier("not-achieved", 0): "not_achieved",
+                    maximum_reachable_identifier("superseded", 0): "superseded"
+                }}
+            },
+            work_definition.clone(): {
+                "type": "action",
+                "title": "w".repeat(120),
+                "intent": "i".repeat(300),
+                "description": "d".repeat(1_000),
+                "instructions": vec!["j".repeat(1_000); 12],
+                "items": items
+            },
+            transit_definition.clone(): {
+                "type": "action",
+                "title": "t".repeat(120),
+                "intent": "i".repeat(300)
+            }
+        },
+        "graph": {"entry": node_ids[1], "nodes": nodes},
+        "manual_rework": {"allowed_targets": [node_ids[1]]}
+    }))
+    .unwrap()
+}
+
+fn maximum_goal_definition() -> GoalDefinitionV2 {
+    GoalDefinitionV2::new(
+        (0..16)
+            .map(|index| {
+                GoalCriterionV2::new(
+                    CriterionId::new(maximum_reachable_identifier("criterion", index)).unwrap(),
+                    "c".repeat(300),
+                )
+                .unwrap()
+            })
+            .collect(),
+    )
+    .unwrap()
+}
+
+fn assess_maximum_goal(
+    mut state: GraphSessionStateV2,
+    next_attempt_number: &mut u64,
+    now: &mut u64,
+) -> GraphSessionStateV2 {
+    let active = state.trace().active_attempt().unwrap().attempt_id().clone();
+    let revision = state.goal_state().current_revision().unwrap();
+    for criterion in maximum_goal_definition().criteria() {
+        state = state
+            .assess_goal_criterion_v2(
+                state.trace().revision(),
+                &active,
+                revision,
+                CriterionAssessmentResultV2::new(
+                    criterion.id().clone(),
+                    CriterionStatusV2::Unsatisfied,
+                    CriterionAssessmentReasonV2::new("r".repeat(2_000)).unwrap(),
+                    Vec::new(),
+                )
+                .unwrap(),
+                Some(ActorAttributionV2::new("a".repeat(256)).unwrap()),
+                UnixMillis::new(*now),
+            )
+            .unwrap()
+            .into_state();
+        *now += 1;
+    }
+    let fresh = AttemptId::new(format!(
+        "00000000-0000-4000-9000-{:012x}",
+        *next_attempt_number
+    ))
+    .unwrap();
+    *next_attempt_number += 1;
+    let not_achieved = OptionId::new(maximum_reachable_identifier("not-achieved", 0)).unwrap();
+    let outcome = state
+        .decide_active_route_with_goal_revision_v2(
+            state.trace().revision(),
+            &active,
+            not_achieved,
+            fresh,
+            Some(revision),
+            Some(ReasonV2::new("d".repeat(2_000)).unwrap()),
+            Some(ActorAttributionV2::new("a".repeat(256)).unwrap()),
+            UnixMillis::new(*now),
+        )
+        .unwrap();
+    *now += 1;
+    outcome.into_state()
+}
+
+fn advance_maximum_actions(
+    mut state: GraphSessionStateV2,
+    count: usize,
+    next_attempt_number: &mut u64,
+    now: &mut u64,
+) -> GraphSessionStateV2 {
+    for _ in 0..count {
+        let active = state.trace().active_attempt().unwrap().attempt_id().clone();
+        let fresh = AttemptId::new(format!(
+            "00000000-0000-4000-9000-{:012x}",
+            *next_attempt_number
+        ))
+        .unwrap();
+        *next_attempt_number += 1;
+        state = state
+            .complete_active_action_v2(
+                state.trace().revision(),
+                &active,
+                Some(fresh),
+                UnixMillis::new(*now),
+            )
+            .unwrap()
+            .into_state();
+        *now += 1;
+    }
+    state
+}
+
+fn combined_maximum_verbose_state() -> GraphSessionStateV2 {
+    let procedure = combined_maximum_procedure();
+    let mut state = fresh_state("combined-maximum.json", &procedure)
+        .bind_initial_goal_at_start_v2(
+            GoalStatementV2::new("g".repeat(1_000)).unwrap(),
+            maximum_goal_definition(),
+            Some(ActorAttributionV2::new("a".repeat(256)).unwrap()),
+            UnixMillis::new(1_700_000_003_000),
+        )
+        .unwrap()
+        .into_state();
+    let mut next_attempt_number = 1_u64;
+    let mut now = 1_700_000_003_001_u64;
+    for cycle in 0..7 {
+        state = advance_maximum_actions(state, 62, &mut next_attempt_number, &mut now);
+        state = assess_maximum_goal(state, &mut next_attempt_number, &mut now);
+        if cycle < 2 {
+            let active = state.trace().active_attempt().unwrap().attempt_id().clone();
+            let fresh = AttemptId::new(format!(
+                "00000000-0000-4000-9000-{:012x}",
+                next_attempt_number
+            ))
+            .unwrap();
+            next_attempt_number += 1;
+            state = state
+                .revise_goal_v2(
+                    state.trace().revision(),
+                    Some(&active),
+                    GoalRevisionNumberV2::new(cycle + 1),
+                    GoalStatementV2::new("g".repeat(1_000)).unwrap(),
+                    maximum_goal_definition(),
+                    GraphNodeId::new(maximum_reachable_identifier("node", 1)).unwrap(),
+                    fresh,
+                    GoalRevisionReasonV2::new("r".repeat(1_000)).unwrap(),
+                    Some(ActorAttributionV2::new("a".repeat(256)).unwrap()),
+                    false,
+                    UnixMillis::new(now),
+                )
+                .unwrap()
+                .into_state();
+            now += 1;
+        }
+    }
+    state = advance_maximum_actions(state, 40, &mut next_attempt_number, &mut now);
+
+    let current = state.trace().active_attempt().unwrap().attempt_id().clone();
+    let memories = state
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .map(|memory| {
+            if memory.attempt_id() != &current {
+                return memory.clone();
+            }
+            let slots = memory
+                .item_slots()
+                .iter()
+                .map(|slot| {
+                    ItemSlotStateV2::new(
+                        slot.attempt_id().clone(),
+                        slot.item_id().clone(),
+                        slot.item_type(),
+                        Revision::new(u64::MAX),
+                        Some(RecordedItemValueV2::text("😀".repeat(3_000)).unwrap()),
+                        slot.created_at(),
+                        UnixMillis::new(now),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            AttemptWorkflowMemoryV2::new(
+                memory.attempt_id().clone(),
+                slots,
+                memory.blockers().to_vec(),
+                memory.evidence().to_vec(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let trace = SessionTraceV2::from_parts(
+        state.trace().session_id().clone(),
+        state.trace().lifecycle(),
+        Revision::new(u64::MAX),
+        state.trace().attempts().to_vec(),
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        Revision::new(u64::MAX),
+        "t".repeat(500),
+        state.snapshot().clone(),
+        trace,
+        state.counters().to_vec(),
+        state.attempt_metadata().to_vec(),
+        WorkflowMemoryStateV2::new(
+            memories,
+            state.workflow_memory().decisions().to_vec(),
+            state.workflow_memory().reworks().to_vec(),
+        )
+        .unwrap(),
+        state.goal_state().clone(),
+        state.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+#[test]
+fn v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap() {
+    let compact =
+        project_graph_status_v2(&maximum_compact_view(), GraphStatusTierV2::Compact, None).unwrap();
+    let counters = compact["counters"].as_array().unwrap();
+    assert_eq!(counters.len(), 64);
+    assert!(counters.iter().all(|counter| {
+        counter["graph_node_id"]
+            .as_str()
+            .is_some_and(|id| id.len() == 64)
+    }));
+    assert_eq!(compact["procedure"]["id"].as_str().unwrap().len(), 64);
+    assert_eq!(compact["procedure"]["version"].as_str().unwrap().len(), 64);
+    assert_eq!(compact["items"].as_array().unwrap().len(), 64);
+    assert!(compact["items"].as_array().unwrap().iter().all(|item| {
+        item["item_id"].as_str().is_some_and(|id| id.len() == 64) && item["revision"] == u64::MAX
+    }));
+    assert_eq!(
+        compact["current"]["node"]["graph_node_id"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(
+        compact["current"]["node"]["node_definition_id"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(compact["session"]["revision"], u64::MAX);
+    assert_eq!(compact["queue"]["latest_workspace_sequence"], u64::MAX);
+    assert_maximum_production_output_v2("session.status", compact, 262_144);
+}
+
+#[test]
+fn v2rel002_standard_item_values_stop_before_the_first_whole_value_over_budget() {
+    const STATUS_VALUES_MAX: usize = 262_144;
+    let standard = project_graph_status_v2(
+        &view(status_values_boundary_state()),
+        GraphStatusTierV2::Standard,
+        None,
+    )
+    .unwrap();
+    let values = standard["item_values"].as_array().unwrap();
+    assert_eq!(standard["items_total"], 64);
+    assert_eq!(standard["items_truncated"], true);
+    assert!(!values.is_empty() && values.len() < 64);
+    assert!(serde_json::to_vec(values).unwrap().len() <= STATUS_VALUES_MAX);
+    for value in values {
+        assert_eq!(value["value"].as_str().unwrap().chars().count(), 2_048);
+        assert_eq!(value["value_truncated"], true);
+    }
+    let next_index = values.len();
+    let mut with_next = values.clone();
+    with_next.push(json!({
+        "item_id": format!("item-{next_index:02}"),
+        "value": "😀".repeat(2_048),
+        "value_truncated": true,
+    }));
+    assert!(
+        serde_json::to_vec(&with_next).unwrap().len() > STATUS_VALUES_MAX,
+        "the first omitted complete value did not cross STATUS_VALUES_MAX"
+    );
+    assert_output_v2("session.status", standard);
+}
+
+fn assert_truncated_history_window(history: &Value, expected_len: usize) {
+    let entries = history["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), expected_len);
+    assert_eq!(history["trace_truncated"], true);
+    let sequences = entries
+        .iter()
+        .map(|entry| entry["trace_sequence"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        sequences.windows(2).all(|pair| pair[0] > pair[1]),
+        "retained history is not strictly newest-first: {sequences:?}"
+    );
+    assert_eq!(
+        history["trace_window"]["first_sequence"],
+        *sequences.iter().min().unwrap()
+    );
+    assert_eq!(
+        history["trace_window"]["last_sequence"],
+        *sequences.iter().max().unwrap()
+    );
+    assert!(serde_json::to_vec(history).unwrap().len() <= 65_536);
+}
+
+fn assert_dual_bounded_history_window(
+    view: &GraphWorkspaceViewV2,
+    verbose: &Map<String, Value>,
+    history: &str,
+    family_count_cap: usize,
+) {
+    const TRACE_WINDOW_MAX: usize = 65_536;
+    let retained = verbose[history]["entries"].as_array().unwrap();
+    assert_eq!(retained.len(), family_count_cap);
+    let oldest_retained = retained
+        .iter()
+        .map(|entry| entry["trace_sequence"].as_u64().unwrap())
+        .min()
+        .unwrap();
+    let older = project_graph_status_v2(
+        view,
+        GraphStatusTierV2::Verbose,
+        Some(TraceSequenceV2::new(oldest_retained)),
+    )
+    .unwrap();
+    let first_omitted = older[history]["entries"]
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap_or_else(|| panic!("{history} has no first omitted entry"));
+    let omitted_sequence = first_omitted["trace_sequence"].as_u64().unwrap();
+    assert!(omitted_sequence < oldest_retained);
+
+    let mut complete_candidate = retained.clone();
+    complete_candidate.push(first_omitted.clone());
+    let candidate = json!({
+        "entries": complete_candidate,
+        "trace_truncated": false,
+        "trace_window": {
+            "first_sequence": omitted_sequence,
+            "last_sequence": retained
+                .iter()
+                .map(|entry| entry["trace_sequence"].as_u64().unwrap())
+                .max()
+                .unwrap(),
+        }
+    });
+    let candidate_bytes = serde_json::to_vec(&candidate).unwrap().len();
+    assert!(
+        candidate_bytes > TRACE_WINDOW_MAX || retained.len() == family_count_cap,
+        "{history} omitted a complete entry before either dual bound was reached"
+    );
+}
+
+#[test]
+fn v2rel002_every_verbose_history_family_marks_actual_omissions_and_exact_window() {
+    let trace = project_graph_status_v2(
+        &view(wide_running_state()),
+        GraphStatusTierV2::Verbose,
+        None,
+    )
+    .unwrap();
+    assert_truncated_history_window(&trace["current_trace_history"], 32);
+    assert_eq!(
+        trace["current_trace_history"]["trace_window"]["first_sequence"],
+        33
+    );
+    assert_eq!(
+        trace["current_trace_history"]["trace_window"]["last_sequence"],
+        64
+    );
+    assert_output_v2("session.status", trace);
+
+    let workflow = project_graph_status_v2(
+        &view(decision_rework_history_state()),
+        GraphStatusTierV2::Verbose,
+        None,
+    )
+    .unwrap();
+    assert_truncated_history_window(&workflow["stale_attempt_history"], 1);
+    assert_truncated_history_window(&workflow["decision_history"], 1);
+    assert_truncated_history_window(&workflow["rework_history"], 6);
+    assert_output_v2("session.status", workflow);
+
+    let goal = project_graph_status_v2(
+        &view(goal_history_state()),
+        GraphStatusTierV2::Verbose,
+        None,
+    )
+    .unwrap();
+    assert_truncated_history_window(&goal["stale_goal_revision_history"], 1);
+    assert_truncated_history_window(&goal["stale_goal_assessment_history"], 1);
+    assert_output_v2("session.status", goal);
+}
+
+#[test]
+fn v2rel002_one_maximum_verbose_projection_combines_every_bounded_family() {
+    const STATUS_VALUES_MAX: usize = 262_144;
+    const FRAME_MAX: usize = 1_048_576;
+    let combined_view = view(combined_maximum_verbose_state());
+    let verbose =
+        project_graph_status_v2(&combined_view, GraphStatusTierV2::Verbose, None).unwrap();
+
+    assert_eq!(verbose["counters"].as_array().unwrap().len(), 64);
+    assert!(
+        verbose["counters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|counter| {
+                counter["graph_node_id"]
+                    .as_str()
+                    .is_some_and(|id| id.len() == 64)
+            })
+    );
+    assert_eq!(verbose["procedure"]["id"].as_str().unwrap().len(), 64);
+    assert_eq!(verbose["procedure"]["version"].as_str().unwrap().len(), 64);
+    assert_eq!(
+        verbose["current"]["node"]["graph_node_id"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(verbose["session"]["revision"], u64::MAX);
+
+    assert_eq!(verbose["items_total"], 64);
+    assert_eq!(verbose["items_truncated"], true);
+    let item_values = verbose["item_values"].as_array().unwrap();
+    let item_values_bytes = serde_json::to_vec(item_values).unwrap().len();
+    assert!(
+        (250_000..=STATUS_VALUES_MAX).contains(&item_values_bytes),
+        "combined item window was not near its cap: {item_values_bytes} bytes"
+    );
+    assert!(item_values.iter().all(|item| {
+        item["item_id"].as_str().is_some_and(|id| id.len() == 64)
+            && item["value"].as_str().unwrap().chars().count() == 2_048
+            && item["value_truncated"] == true
+    }));
+
+    for (history, maximum) in [
+        ("current_trace_history", 32),
+        ("stale_attempt_history", 1),
+        ("decision_history", 1),
+        ("rework_history", 6),
+        ("stale_goal_revision_history", 1),
+        ("stale_goal_assessment_history", 1),
+    ] {
+        assert_truncated_history_window(&verbose[history], maximum);
+        assert_dual_bounded_history_window(&combined_view, &verbose, history, maximum);
+    }
+
+    assert_maximum_production_output_v2("session.status", verbose, FRAME_MAX);
+}
+
+#[test]
+fn v2rel002_escape_heavy_next_charge_dominates_every_encoded_component() {
+    let source = escape_heavy_next_source();
+    let validated = validated_json_procedure(&source);
+    let production_budget =
+        procedure_placement_budget_v2(&validated, &GraphNodeId::new("work").unwrap()).unwrap();
+    let next = Value::Object(
+        project_graph_next_v2(&view(escape_heavy_next_state(&source)))
+            .expect("project maximum next"),
+    );
+    let fields = next.as_object().unwrap();
+    let static_fields = [
+        "goal_tracking",
+        "title",
+        "intent",
+        "description",
+        "instructions",
+        "missing_required_item_count",
+        "missing_required_items",
+        "terminal",
+        "allowed_actions",
+        "suggestions",
+        "allowed_manual_rework_targets",
+    ];
+    let static_projection = Value::Object(
+        static_fields
+            .iter()
+            .map(|field| ((*field).to_owned(), fields[*field].clone()))
+            .collect(),
+    );
+    let static_encoded = serde_json::to_vec(&static_projection).unwrap();
+    assert!(
+        u64::try_from(static_encoded.len()).unwrap() <= production_budget.next_static(),
+        "production static charge under-counted escape-heavy next: encoded={}, charged={}",
+        static_encoded.len(),
+        production_budget.next_static(),
+    );
+    assert!(
+        production_budget.next_static() <= podway_config::NEXT_STATIC_BUDGET,
+        "admitted escape-heavy procedure exceeded its static next budget: {}",
+        production_budget.next_static(),
+    );
+    assert_eq!(fields["title"].as_str().unwrap().chars().count(), 120);
+    assert_eq!(fields["intent"].as_str().unwrap().chars().count(), 300);
+    assert_eq!(
+        fields["description"].as_str().unwrap().chars().count(),
+        1_000
+    );
+    assert_eq!(fields["instructions"].as_array().unwrap().len(), 12);
+    assert_eq!(
+        fields["missing_required_items"].as_array().unwrap().len(),
+        20
+    );
+    assert_output_v2("session.next", next.as_object().unwrap().clone());
+}
+
+fn component(fields: &Map<String, Value>, names: &[&str]) -> Value {
+    Value::Object(
+        names
+            .iter()
+            .map(|name| ((*name).to_owned(), fields[*name].clone()))
+            .collect(),
+    )
+}
+
+fn maximum_payload_identifier(prefix: char, index: usize) -> String {
+    format!("{prefix}{}{:02}", "0".repeat(61), index)
+}
+
+fn item_identifier(index: usize) -> String {
+    format!("i{}{:02}", "0".repeat(23), index)
+}
+
+fn maximum_next_readback() -> (Vec<Value>, Vec<Value>) {
+    let references = (0..8)
+        .map(|index| {
+            json!({
+                "source_graph_node_id": maximum_payload_identifier('s', index),
+                "source_title": "\0".repeat(120),
+                "source_attempt_id": format!("00000000-0000-4000-8000-{:012x}", 0x5000 + index),
+                "source_attempt_number": u64::MAX,
+                "items_digest": IDENTITY_DIGEST,
+                "state": "resolved"
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut readback = references
+        .iter()
+        .map(|reference| {
+            let mut value = reference.clone();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert("items".into(), json!([]));
+            value
+        })
+        .collect::<Vec<_>>();
+
+    const READBACK_BUDGET: usize = 524_288;
+    for item_index in 0..64 {
+        let source_index = item_index % readback.len();
+        let candidate = json!({
+            "item_id": item_identifier(item_index),
+            "type": "text",
+            "value": "\0".repeat(16_384)
+        });
+        readback[source_index]["items"]
+            .as_array_mut()
+            .unwrap()
+            .push(candidate);
+        let charged = conservative_json_charge(&json!({
+            "references": references,
+            "readback": readback
+        }));
+        if charged <= READBACK_BUDGET {
+            continue;
+        }
+        readback[source_index]["items"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+
+        let mut low = 0;
+        let mut high = 16_384;
+        while low < high {
+            let middle = (low + high + 1) / 2;
+            readback[source_index]["items"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "item_id": item_identifier(item_index),
+                    "type": "text",
+                    "value": "\0".repeat(middle)
+                }));
+            let fits = conservative_json_charge(&json!({
+                "references": references,
+                "readback": readback
+            })) <= READBACK_BUDGET;
+            readback[source_index]["items"]
+                .as_array_mut()
+                .unwrap()
+                .pop();
+            if fits {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        if low > 0 {
+            readback[source_index]["items"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "item_id": item_identifier(item_index),
+                    "type": "text",
+                    "value": "\0".repeat(low)
+                }));
+        }
+        break;
+    }
+    (references, readback)
+}
+
+fn complete_maximum_next_result() -> Map<String, Value> {
+    let allowed_actions = [
+        "item.set",
+        "session.retry",
+        "session.unblock",
+        "session.cancel",
+        "session.reset",
+        "session.rework",
+        "goal.revise",
+        "goal.assess_criterion",
+    ];
+    let mut suggestions = (0..64)
+        .map(|index| {
+            let item_id = item_identifier(index);
+            json!({
+                "command": "item.set",
+                "argv": ["podway", "set", item_id, "<text>"],
+                "item_id": item_id
+            })
+        })
+        .collect::<Vec<_>>();
+    suggestions.push(json!({
+        "command": "session.retry",
+        "argv": ["podway", "retry", "--reason", "<reason>"]
+    }));
+    suggestions.extend((0..16).map(|index| {
+        let criterion_id = maximum_payload_identifier('c', index);
+        json!({
+            "command": "goal.assess_criterion",
+            "argv": [
+                "podway",
+                "goal",
+                "assess-criterion",
+                criterion_id,
+                "--status",
+                "<status>",
+                "--reason",
+                "<reason>"
+            ]
+        })
+    }));
+
+    let (references, readback) = maximum_next_readback();
+    let blockers = (0..64)
+        .map(|index| {
+            json!({
+                "blocker_id": format!("00000000-0000-4000-8000-{:012x}", 0x6000 + index),
+                "reason": "\0".repeat(1_000),
+                "created_at": "2026-08-09T00:00:00.000Z"
+            })
+        })
+        .scan(Vec::<Value>::new(), |window, blocker| {
+            let mut candidate = window.clone();
+            candidate.push(blocker);
+            if conservative_json_charge(&json!({
+                "blockers": candidate,
+                "blockers_total": 64,
+                "blockers_truncated": true
+            })) <= 49_152
+            {
+                *window = candidate;
+                Some(Some(window.last().unwrap().clone()))
+            } else {
+                Some(None)
+            }
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+
+    json!({
+        "schema": "podway.next-result/v2",
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_digest": IDENTITY_DIGEST,
+        "goal_tracking": true,
+        "goal_defined": true,
+        "goal_revision": u64::MAX,
+        "latest_goal_outcome": "achieved",
+        "goal": {
+            "revision": u64::MAX,
+            "statement": "\0".repeat(1_000),
+            "criteria": (0..16).map(|index| json!({
+                "criterion_id": maximum_payload_identifier('c', index),
+                "statement": "\0".repeat(300),
+                "status": "unassessed"
+            })).collect::<Vec<_>>(),
+        },
+        "node": {
+            "node_definition_id": "work-definition",
+            "graph_node_id": "work-placement",
+            "node_type": "decision"
+        },
+        "attempt": {
+            "attempt_id": ATTEMPT_ID,
+            "attempt_number": u64::MAX
+        },
+        "trace_length": u64::MAX,
+        "counters": (0..64).map(|index| json!({
+            "graph_node_id": maximum_payload_identifier('n', index),
+            "attempt_count": u64::MAX,
+            "rework_traversal_count": u64::MAX
+        })).collect::<Vec<_>>(),
+        "queue": {
+            "pending_mutations": true,
+            "queued_count": u32::MAX,
+            "running_job_id": "00000000-0000-4000-8000-000000006100",
+            "latest_workspace_sequence": u64::MAX
+        },
+        "revision": u64::MAX,
+        "readiness": {
+            "items_satisfied": false,
+            "unblocked": false,
+            "goal_ready": true,
+            "can_advance": false
+        },
+        "title": "\0".repeat(120),
+        "description": "\0".repeat(1_000),
+        "objective": "\0".repeat(300),
+        "prompt": "\0".repeat(500),
+        "reason_policy": {"required": true, "prompt": "\0".repeat(300)},
+        "missing_required_item_count": 64,
+        "missing_required_items": (0..64).map(|index| json!({
+            "item_id": item_identifier(index),
+            "prompt": "\0".repeat(300)
+        })).collect::<Vec<_>>(),
+        "options": (0..8).map(|index| json!({
+            "option_id": maximum_payload_identifier('o', index),
+            "label": "\0".repeat(120),
+            "criteria": "\0".repeat(500)
+        })).collect::<Vec<_>>(),
+        "evidence_guidance": vec!["\0".repeat(200); 8],
+        "allowed_manual_rework_targets": (0..64)
+            .map(|index| maximum_payload_identifier('n', index))
+            .collect::<Vec<_>>(),
+        "allowed_actions": allowed_actions,
+        "suggestions": suggestions,
+        "references": references,
+        "readback": readback,
+        "blockers_total": 64,
+        "blockers": blockers,
+        "blockers_truncated": true
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+#[test]
+fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing() {
+    const FRAME_BYTES: usize = 1_048_576;
+    const BUDGETS: [usize; 6] = [65_536, 262_144, 524_288, 73_728, 49_152, 40_960];
+    let recipe: Value = serde_json::from_slice(MAXIMUM_NEXT_RECIPE).unwrap();
+    assert_eq!(recipe["frame_bytes"], FRAME_BYTES);
+    assert_eq!(recipe["charged_bytes"], 1_015_808);
+    assert_eq!(recipe["headroom_bytes"], 32_768);
+    for (name, budget) in [
+        ("ENVELOPE_RESERVE", BUDGETS[0]),
+        ("NEXT_STATIC_BUDGET", BUDGETS[1]),
+        ("READBACK_BUDGET", BUDGETS[2]),
+        ("GOAL_DISPLAY_MAX", BUDGETS[3]),
+        ("BLOCKER_WINDOW_MAX", BUDGETS[4]),
+        ("COUNTERS_MAX", BUDGETS[5]),
+    ] {
+        assert_eq!(recipe["components"][name], budget);
+    }
+    assert_eq!(BUDGETS.iter().sum::<usize>(), 1_015_808);
+    assert_eq!(FRAME_BYTES - BUDGETS.iter().sum::<usize>(), 32_768);
+
+    let result = complete_maximum_next_result();
+    let static_suggestions = result["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|suggestion| {
+            !matches!(
+                suggestion["command"].as_str().unwrap(),
+                "goal.assess_criterion" | "goal.define"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let goal_suggestions = result["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|suggestion| {
+            matches!(
+                suggestion["command"].as_str().unwrap(),
+                "goal.assess_criterion" | "goal.define"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(goal_suggestions.len(), 16);
+    assert_eq!(result["blockers_total"], 64);
+    assert!(result["blockers"].as_array().unwrap().len() >= 7);
+    assert_eq!(result["counters"].as_array().unwrap().len(), 64);
+    assert_eq!(result["references"].as_array().unwrap().len(), 8);
+    assert_eq!(result["readback"].as_array().unwrap().len(), 8);
+    let assigned_result_fields = [
+        "schema",
+        "procedure_schema",
+        "procedure_digest",
+        "goal_tracking",
+        "goal_defined",
+        "goal_revision",
+        "latest_goal_outcome",
+        "goal",
+        "node",
+        "attempt",
+        "trace_length",
+        "counters",
+        "queue",
+        "revision",
+        "readiness",
+        "title",
+        "description",
+        "objective",
+        "prompt",
+        "reason_policy",
+        "missing_required_item_count",
+        "missing_required_items",
+        "options",
+        "evidence_guidance",
+        "allowed_manual_rework_targets",
+        "allowed_actions",
+        "suggestions",
+        "references",
+        "readback",
+        "blockers_total",
+        "blockers",
+        "blockers_truncated",
+    ];
+    assert_eq!(
+        assigned_result_fields
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        result
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        "every field applicable to the schema-valid action shape must be assigned once"
+    );
+
+    let mut envelope_fields = component(
+        &result,
+        &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "node",
+            "attempt",
+            "queue",
+            "revision",
+            "missing_required_item_count",
+            "readiness",
+        ],
+    );
+    let mut static_fields = component(
+        &result,
+        &[
+            "allowed_actions",
+            "allowed_manual_rework_targets",
+            "description",
+            "evidence_guidance",
+            "missing_required_items",
+            "objective",
+            "options",
+            "prompt",
+            "reason_policy",
+            "title",
+        ],
+    );
+    static_fields
+        .as_object_mut()
+        .unwrap()
+        .insert("suggestions".into(), json!(static_suggestions));
+    let readback_fields = component(&result, &["readback", "references"]);
+    let mut goal_fields = component(
+        &result,
+        &[
+            "goal",
+            "goal_defined",
+            "goal_revision",
+            "goal_tracking",
+            "latest_goal_outcome",
+        ],
+    );
+    goal_fields
+        .as_object_mut()
+        .unwrap()
+        .insert("suggestions".into(), json!(goal_suggestions));
+    let blocker_fields = component(
+        &result,
+        &["blockers", "blockers_total", "blockers_truncated"],
+    );
+    let counter_fields = component(&result, &["counters", "trace_length"]);
+
+    let warnings = (0..4)
+        .map(|_| {
+            json!({
+                "code": "A".repeat(64),
+                "path": "\0".repeat(256),
+                "message": "\0".repeat(512)
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+        })
+        .collect::<Vec<_>>();
+    let workspace = WorkspaceOutputV1::new(
+        WorkspaceId::new(WORKSPACE_ID).unwrap(),
+        "\0".repeat(4_096),
+        u64::MAX,
+    )
+    .unwrap();
+    let session = SessionOutputV1::new(
+        SessionId::new(SESSION_ID).unwrap(),
+        "\0".repeat(500),
+        SessionLifecycleV1::Running,
+        Revision::new(u64::MAX),
+        Revision::new(u64::MAX),
+    )
+    .unwrap();
+    let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        command: CommandNameV1::new("session.next").unwrap(),
+        generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
+        workspace: Some(workspace),
+        job: None,
+        session: Some(session),
+        result: result.clone(),
+        warnings,
+    })
+    .unwrap();
+    let output_value = serde_json::to_value(&output).unwrap();
+    assert_eq!(output_value["warnings"].as_array().unwrap().len(), 4);
+    let envelope_object = output_value.as_object().unwrap();
+    envelope_fields.as_object_mut().unwrap().extend(
+        [
+            "request_id",
+            "command",
+            "generated_at",
+            "workspace",
+            "job",
+            "session",
+            "warnings",
+        ]
+        .into_iter()
+        .filter_map(|field| {
+            envelope_object
+                .get(field)
+                .map(|value| (field.to_owned(), value.clone()))
+        }),
+    );
+    envelope_fields
+        .as_object_mut()
+        .unwrap()
+        .insert("output_schema".into(), envelope_object["schema"].clone());
+    envelope_fields
+        .as_object_mut()
+        .unwrap()
+        .insert("frame_length_prefix_bytes".into(), json!(4));
+
+    let components = [
+        ("ENVELOPE_RESERVE", envelope_fields, BUDGETS[0]),
+        ("NEXT_STATIC_BUDGET", static_fields, BUDGETS[1]),
+        ("READBACK_BUDGET", readback_fields, BUDGETS[2]),
+        ("GOAL_DISPLAY_MAX", goal_fields, BUDGETS[3]),
+        ("BLOCKER_WINDOW_MAX", blocker_fields, BUDGETS[4]),
+        ("COUNTERS_MAX", counter_fields, BUDGETS[5]),
+    ];
+    for (name, value, budget) in &components {
+        let encoded = serde_json::to_vec(value).unwrap().len();
+        let charged = conservative_json_charge(value);
+        assert!(
+            encoded <= charged,
+            "{name}: encoded={encoded}, charged={charged}"
+        );
+        assert!(
+            charged <= *budget,
+            "{name}: charged={charged}, budget={budget}"
+        );
+    }
+    assert!(BUDGETS[1] - conservative_json_charge(&components[1].1) < 16_384);
+    assert!(BUDGETS[2] - conservative_json_charge(&components[2].1) < 128);
+
+    let response = ResponseEnvelopeV2::OutputV2(output);
+    let encoded = encode_response_payload_v2(&response).unwrap();
+    assert!(
+        encoded.len() <= FRAME_BYTES,
+        "encoded next used {} bytes",
+        encoded.len()
+    );
+    validate_frame_payload_length(encoded.len()).unwrap();
+    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
+    let frame = encode_frame_v1(&encoded).unwrap();
+    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+}
+
+const SELECTED_READBACK_ITEM_IDS: [&str; 16] = [
+    "confirm",
+    "text",
+    "choice",
+    "integer",
+    "list",
+    "artifact",
+    "selected-00",
+    "selected-01",
+    "selected-02",
+    "selected-03",
+    "selected-04",
+    "selected-05",
+    "selected-06",
+    "selected-07",
+    "selected-08",
+    "selected-09",
+];
+
+fn maximum_selected_readback_source() -> Vec<u8> {
+    let choice_value = "\0".repeat(120);
+    let media_type = format!("{}/{}", "a".repeat(127), "b".repeat(127));
+    let mut items = vec![
+        json!({"id": "confirm", "type": "confirm", "prompt": "Confirm.", "required": true}),
+        json!({"id": "text", "type": "text", "prompt": "Text.", "required": true, "max_length": 16_384}),
+        json!({"id": "choice", "type": "choice", "prompt": "Choose.", "required": true, "choices": [choice_value]}),
+        json!({"id": "integer", "type": "integer", "prompt": "Count.", "required": true}),
+        json!({"id": "list", "type": "list", "prompt": "List.", "required": true, "max_items": 200, "max_item_length": 308, "unique": false}),
+        json!({"id": "artifact", "type": "artifact", "prompt": "Artifact.", "required": true, "allowed_media_types": [media_type]}),
+    ];
+    items.extend((0..10).map(|index| {
+        json!({
+            "id": format!("selected-{index:02}"),
+            "type": "confirm",
+            "prompt": "Confirm selected evidence.",
+            "required": true
+        })
+    }));
+    items.push(json!({
+        "id": "unselected",
+        "type": "text",
+        "prompt": "This value must remain outside read-back.",
+        "required": true,
+        "max_length": 16_384
+    }));
+    serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "maximum-selected-readback",
+        "version": "2",
+        "name": "Maximum selected read-back",
+        "purpose": "Exercise selectors and admitted read-back value bounds.",
+        "node_definitions": {
+            "source": {
+                "type": "action",
+                "title": "Record source",
+                "intent": "Record bounded values.",
+                "items": items
+            },
+            "consume": {
+                "type": "action",
+                "title": "Consume source",
+                "intent": "Read selected bounded values."
+            }
+        },
+        "graph": {
+            "entry": "source",
+            "nodes": [
+                {"id": "source", "use": "source", "next": "consume"},
+                {
+                    "id": "consume",
+                    "use": "consume",
+                    "evidence_from": [{
+                        "node": "source",
+                        "required": true,
+                        "items": SELECTED_READBACK_ITEM_IDS
+                    }],
+                    "terminal": true
+                }
+            ]
+        }
+    }))
+    .unwrap()
+}
+
+fn maximum_selected_readback_state(source: &[u8]) -> GraphSessionStateV2 {
+    let base = fresh_state("maximum-selected-readback.json", source);
+    let source_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
+    let consumer_attempt_id = second_attempt_id();
+    let source_memory = base.workflow_memory().attempts().first().unwrap();
+    let values = source_memory
+        .item_slots()
+        .iter()
+        .map(|slot| {
+            let value = match slot.item_id().as_str() {
+                "confirm" | "selected-00" | "selected-01" | "selected-02" | "selected-03"
+                | "selected-04" | "selected-05" | "selected-06" | "selected-07" | "selected-08"
+                | "selected-09" => RecordedItemValueV2::confirm(),
+                "text" => RecordedItemValueV2::text("\0".repeat(16_384)).unwrap(),
+                "choice" => RecordedItemValueV2::choice("\0".repeat(120)).unwrap(),
+                "integer" => RecordedItemValueV2::integer(i64::MAX),
+                "list" => RecordedItemValueV2::list(vec!["\0".repeat(308); 200]).unwrap(),
+                "artifact" => RecordedItemValueV2::artifact(
+                    ArtifactValueV1::external_reference(
+                        "\\".repeat(4_000),
+                        Sha256Digest::new(format!("sha256:{}", "f".repeat(64))).unwrap(),
+                        u64::MAX,
+                        format!("{}/{}", "a".repeat(127), "b".repeat(127)),
+                    )
+                    .unwrap(),
+                ),
+                "unselected" => RecordedItemValueV2::text("unselected-secret").unwrap(),
+                other => panic!("unexpected read-back fixture item {other}"),
+            };
+            ItemSlotStateV2::new(
+                source_attempt_id.clone(),
+                slot.item_id().clone(),
+                slot.item_type(),
+                Revision::new(1),
+                Some(value),
+                slot.created_at(),
+                UnixMillis::new(slot.created_at().get() + 1),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let source_memory =
+        AttemptWorkflowMemoryV2::new(source_attempt_id.clone(), values, Vec::new(), Vec::new())
+            .unwrap();
+    let source_digest = source_memory.recorded_items_digest().unwrap();
+    let consumer_memory = AttemptWorkflowMemoryV2::new(
+        consumer_attempt_id.clone(),
+        Vec::new(),
+        Vec::new(),
+        vec![
+            EvidenceResolutionStateV2::new(
+                0,
+                true,
+                SELECTED_READBACK_ITEM_IDS
+                    .iter()
+                    .map(|id| ItemId::new(*id).unwrap())
+                    .collect(),
+                ResolvedEvidenceReferenceV2::resolved(
+                    EvidenceReferenceSnapshotV2::new(
+                        GraphNodeId::new("source").unwrap(),
+                        source_attempt_id.clone(),
+                        AttemptNumberV2::FIRST,
+                        source_digest,
+                        UnixMillis::new(1_700_000_000_010),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(SESSION_ID).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(2),
+        vec![
+            SessionAttemptV2::new(
+                source_attempt_id.clone(),
+                GraphNodeId::new("source").unwrap(),
+                AttemptNumberV2::FIRST,
+                TraceSequenceV2::FIRST,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+                None,
+            )
+            .unwrap(),
+            SessionAttemptV2::new(
+                consumer_attempt_id.clone(),
+                GraphNodeId::new("consume").unwrap(),
+                AttemptNumberV2::FIRST,
+                TraceSequenceV2::new(2),
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+                None,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        Revision::new(2),
+        base.task_title(),
+        base.snapshot().clone(),
+        trace,
+        vec![
+            GraphNodeCounterV2::new(GraphNodeId::new("source").unwrap(), 1, 0),
+            GraphNodeCounterV2::new(GraphNodeId::new("consume").unwrap(), 1, 0),
+        ],
+        vec![
+            AttemptMetadataV2::new(
+                source_attempt_id,
+                UnixMillis::new(1_700_000_000_000),
+                Some(UnixMillis::new(1_700_000_000_010)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(
+                consumer_attempt_id,
+                UnixMillis::new(1_700_000_000_010),
+                None,
+                None,
+            )
+            .unwrap(),
+        ],
+        WorkflowMemoryStateV2::new(vec![source_memory, consumer_memory], Vec::new(), Vec::new())
+            .unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+#[test]
+fn v2rel002_selected_readback_respects_value_and_wire_bounds() {
+    const FRAME_MAX: usize = 1_048_576;
+    let source = maximum_selected_readback_source();
+    let validated = validated_json_procedure(&source);
+    let production_budget =
+        procedure_placement_budget_v2(&validated, &GraphNodeId::new("consume").unwrap()).unwrap();
+    let next = project_graph_next_v2(&view(maximum_selected_readback_state(&source))).unwrap();
+    let readback = next["readback"].as_array().unwrap();
+    assert_eq!(readback.len(), 1);
+    let items = readback[0]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 16);
+    let ids = items
+        .iter()
+        .map(|item| item["item_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            "confirm",
+            "text",
+            "choice",
+            "integer",
+            "list",
+            "artifact",
+            "selected-00",
+            "selected-01",
+            "selected-02",
+            "selected-03",
+            "selected-04",
+            "selected-05",
+            "selected-06",
+            "selected-07",
+            "selected-08",
+            "selected-09",
+        ]
+    );
+    assert!(
+        !serde_json::to_string(readback)
+            .unwrap()
+            .contains("unselected-secret")
+    );
+
+    let item = |id: &str| {
+        items
+            .iter()
+            .find(|item| item["item_id"] == id)
+            .unwrap_or_else(|| panic!("selected item {id} is absent"))
+    };
+    assert_eq!(item("confirm")["value"], true);
+    assert_eq!(
+        item("text")["value"].as_str().unwrap().chars().count(),
+        16_384
+    );
+    assert_eq!(
+        item("choice")["value"].as_str().unwrap().chars().count(),
+        120
+    );
+    assert_eq!(item("integer")["value"], i64::MAX);
+    let list = item("list")["value"].as_array().unwrap();
+    assert_eq!(list.len(), 200);
+    assert!(
+        list.iter()
+            .all(|entry| entry.as_str().unwrap().chars().count() == 308)
+    );
+    let artifact = &item("artifact")["value"];
+    assert_eq!(artifact["location_type"], "reference");
+    assert_eq!(
+        artifact["location"].as_str().unwrap().chars().count(),
+        4_000
+    );
+    assert_eq!(
+        artifact["sha256_digest"].as_str().unwrap().chars().count(),
+        71
+    );
+    assert_eq!(artifact["size_bytes"], u64::MAX);
+    assert_eq!(
+        artifact["media_type"].as_str().unwrap().chars().count(),
+        255
+    );
+
+    let readback_component = json!({
+        "references": next["references"].clone(),
+        "readback": readback,
+    });
+    let encoded_readback = serde_json::to_vec(&readback_component).unwrap();
+    assert!(
+        production_budget.readback() > 490_000,
+        "selected read-back did not exercise the production charge boundary: {}",
+        production_budget.readback(),
+    );
+    assert!(
+        u64::try_from(encoded_readback.len()).unwrap() <= production_budget.readback(),
+        "production read-back charge under-counted serialized projection: encoded={}, charged={}",
+        encoded_readback.len(),
+        production_budget.readback(),
+    );
+    assert!(
+        production_budget.readback() <= podway_config::READBACK_BUDGET,
+        "admitted read-back charge {} exceeded {}",
+        production_budget.readback(),
+        podway_config::READBACK_BUDGET,
+    );
+
+    let response = ResponseEnvelopeV2::OutputV2(output("session.next", next.clone()));
+    let encoded = encode_response_payload_v2(&response).unwrap();
+    assert!(encoded.len() <= FRAME_MAX);
+    validate_frame_payload_length(encoded.len()).unwrap();
+    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
+    let frame = encode_frame_v1(&encoded).unwrap();
+    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
 }
 
 #[test]

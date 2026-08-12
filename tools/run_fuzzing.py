@@ -15,8 +15,13 @@ FUZZ_TOOLCHAIN = "nightly-2026-07-17"
 FUZZ_CARGO_VERSION = "cargo-fuzz 0.13.2"
 FUZZ_RUNS = 100_000
 FUZZ_SEED = 0x50D0A7
-FUZZ_TARGETS = ("frame_decoder", "request_envelope")
+FUZZ_TARGETS = ("frame_decoder", "request_envelope", "response_v2", "config_procedure")
 VALID_REQUEST_PATH = ROOT / "docs/examples/json/ipc-complete-request.json"
+VALID_V2_PROCEDURE_PATHS = (
+    ROOT / "assets/presets/sw-dev-v2.yaml",
+    ROOT / "tests/fixtures/v2/procedures/equivalent-procedure.json",
+)
+VALID_V2_RESPONSE = b"""{"schema":"podway.output/v2","request_id":"00000000-0000-4000-8000-000000000001","command":"procedure.validate","generated_at":"2026-08-09T00:00:00.000Z","result":{"schema":"podway.procedure-diagnostics-result/v1","operation":"validate","procedure_schema":"podway.procedure/v2","file":"procedure.yaml","valid":true,"diagnostics":[],"diagnostics_truncated":false,"diagnostics_total":0},"warnings":[]}"""
 
 
 class FuzzGateError(RuntimeError):
@@ -64,8 +69,15 @@ def seed_corpus(directory: Path, target: str) -> None:
     if target == "frame_decoder":
         framed = len(valid_request).to_bytes(4, byteorder="big") + valid_request
         (directory / "valid-request-frame").write_bytes(framed)
-    else:
+    elif target == "request_envelope":
         (directory / "valid-request-envelope").write_bytes(valid_request)
+    elif target == "response_v2":
+        (directory / "valid-v2-response").write_bytes(VALID_V2_RESPONSE)
+    elif target == "config_procedure":
+        for path in VALID_V2_PROCEDURE_PATHS:
+            (directory / path.name).write_bytes(path.read_bytes())
+    else:
+        raise FuzzGateError(f"no corpus seeds configured for target {target}")
 
 
 def main() -> int:

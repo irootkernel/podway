@@ -620,7 +620,7 @@
       {
         "id": "urn:podway:schema:job-result:v2",
         "path": "schemas/job-result-v2.schema.json",
-        "sha256": "sha256:e9098ed3c110d64877c5edbde1771271ece0a305098df2f23f48d62c0a751f0c"
+        "sha256": "sha256:a146a565f3be1a91571be8b83fd2c455748125176ec0650dc18bf92830780557"
       },
       {
         "id": "urn:podway:schema:next-result:v2",
