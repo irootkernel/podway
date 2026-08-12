@@ -16,7 +16,7 @@
       "17.9": 11
     }
   },
-  "evidence_policy": "Entries declare future executable test classes and owners; planned entries are not runtime proof.",
+  "evidence_policy": "Planned entries are obligations without proof; automated entries bind exact executable proof commands.",
   "criteria": [
     {
       "id": "V2ACC-001",
@@ -32,7 +32,13 @@
       "owning_tasks": [
         "V2MOD-005"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
+        "function": "the_fixture_pair_has_one_canonical_form_and_the_contract_digest",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::the_fixture_pair_has_one_canonical_form_and_the_contract_digest --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/domain/procedure-and-item-specification.md", "anchor": "## Procedure v2 contract baseline"}
       ]
@@ -53,7 +59,30 @@
       "owning_tasks": [
         "V2MOD-004"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_validate.rs",
+            "function": "every_malformed_input_fixture_case_is_rejected_and_classified",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_validate::every_malformed_input_fixture_case_is_rejected_and_classified --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_equivalence.rs",
+            "function": "json_hazards_are_rejected_by_the_shared_decoder_before_v2_dispatch",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_equivalence::json_hazards_are_rejected_by_the_shared_decoder_before_v2_dispatch --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
+            "function": "the_canonical_projection_budget_accepts_the_limit_and_rejects_one_filler_item_over",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::the_canonical_projection_budget_accepts_the_limit_and_rejects_one_filler_item_over --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/domain/procedure-and-item-specification.md", "anchor": "## Procedure v2 contract baseline"}
       ]
@@ -72,7 +101,36 @@
       "owning_tasks": [
         "V2MOD-007"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
+            "function": "yaml_mapping_key_order_never_changes_the_digest",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::yaml_mapping_key_order_never_changes_the_digest --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
+            "function": "json_mapping_key_order_never_changes_the_digest",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::json_mapping_key_order_never_changes_the_digest --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
+            "function": "yaml_block_and_flow_style_produce_the_same_digest",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::yaml_block_and_flow_style_produce_the_same_digest --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
+            "function": "yaml_comments_and_blank_lines_never_change_the_digest",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::yaml_comments_and_blank_lines_never_change_the_digest --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/domain/procedure-and-item-specification.md", "anchor": "## Procedure v2 contract baseline"}
       ]
@@ -91,7 +149,13 @@
       "owning_tasks": [
         "V2MOD-004"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure.rs",
+        "function": "dispatch_routes_v1_unchanged_and_v2_only_by_exact_schema",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure::dispatch_routes_v1_unchanged_and_v2_only_by_exact_schema --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/domain/procedure-and-item-specification.md", "anchor": "## Procedure v2 contract baseline"}
       ]
@@ -110,7 +174,24 @@
       "owning_tasks": [
         "V2MOD-006"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_equivalence.rs",
+            "function": "identical_diagnostics_for_goal_tracking_false",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_equivalence::identical_diagnostics_for_goal_tracking_false --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_equivalence.rs",
+            "function": "malformed_inputs_fixture_json_and_binary_cases_are_rejected_through_json_dispatch",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_equivalence::malformed_inputs_fixture_json_and_binary_cases_are_rejected_through_json_dispatch --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/domain/procedure-and-item-specification.md", "anchor": "## Procedure v2 contract baseline"}
       ]
@@ -129,7 +210,13 @@
       "owning_tasks": [
         "V2MOD-007"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
+        "function": "canonical_output_is_canonical_json_v1_and_re_canonicalizing_it_reaches_a_fixpoint",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::canonical_output_is_canonical_json_v1_and_re_canonicalizing_it_reaches_a_fixpoint --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/domain/procedure-and-item-specification.md", "anchor": "## Procedure v2 contract baseline"}
       ]
@@ -1326,7 +1413,72 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
+            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
+            "function": "public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conflict"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "v1_boundaries_fixture_released_v1_fixtures_case_is_byte_for_byte_stable",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::v1_boundaries_fixture_released_v1_fixtures_case_is_byte_for_byte_stable --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "golden_v1_canonical_digest_matches_procedure_v1_suite_pin",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::golden_v1_canonical_digest_matches_procedure_v1_suite_pin --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "golden_v1_normalized_skip_canonical_json_matches_validation_suite_pin",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::golden_v1_normalized_skip_canonical_json_matches_validation_suite_pin --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "golden_default_workspace_config_yaml_v1_bytes_are_pinned",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::golden_default_workspace_config_yaml_v1_bytes_are_pinned --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "golden_v1_resource_bounds_are_unchanged",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::golden_v1_resource_bounds_are_unchanged --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "dispatch_v1_yaml_and_json_equal_direct_parse_v1",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::dispatch_v1_yaml_and_json_equal_direct_parse_v1 --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "parse_procedure_v1_rejects_v2_schema_with_invalid_schema_and_nothing_else",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::parse_procedure_v1_rejects_v2_schema_with_invalid_schema_and_nothing_else --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "golden_v1_any_previous_warning_is_pinned",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::golden_v1_any_previous_warning_is_pinned --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/ipc-protocol.md", "anchor": "### V2 compatibility boundary"}
       ]
@@ -1345,7 +1497,13 @@
       "owning_tasks": [
         "V2PLT-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-store/tests/int_phase2_schema_codec.rs",
+        "function": "canonical_v1_database_migrates_once_through_v3_with_response_context_and_v2_state",
+        "command": "cargo test -p podway-store --test int_suite int_phase2_schema_codec::canonical_v1_database_migrates_once_through_v3_with_response_context_and_v2_state --locked -- --exact"
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/ipc-protocol.md", "anchor": "### V2 compatibility boundary"}
       ]
@@ -1364,7 +1522,13 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
+        "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
+        "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/ipc-protocol.md", "anchor": "### V2 compatibility boundary"}
       ]
@@ -1383,7 +1547,30 @@
       "owning_tasks": [
         "V2MOD-008"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure.rs",
+            "function": "dispatch_routes_v1_unchanged_and_v2_only_by_exact_schema",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure::dispatch_routes_v1_unchanged_and_v2_only_by_exact_schema --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
+            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run003_runtime.rs",
+            "function": "v2run003_production_actions_mutate_complete_read_back_restart_and_replay",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run003_runtime::v2run003_production_actions_mutate_complete_read_back_restart_and_replay --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/ipc-protocol.md", "anchor": "### V2 compatibility boundary"}
       ]
@@ -1402,7 +1589,36 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
+            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run003_runtime.rs",
+            "function": "v2run003_production_actions_mutate_complete_read_back_restart_and_replay",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run003_runtime::v2run003_production_actions_mutate_complete_read_back_restart_and_replay --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2drw003_rework.rs",
+            "function": "v2drw003_completed_reactivation_cold_replays_and_rejects_attempt_or_payload_drift",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2drw003_rework::v2drw003_completed_reactivation_cold_replays_and_rejects_attempt_or_payload_drift --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol001_goal_revision.rs",
+            "function": "v2gol001_completed_revision_requires_explicit_reactivation_and_creates_fresh_cursor",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol001_goal_revision::v2gol001_completed_revision_requires_explicit_reactivation_and_creates_fresh_cursor --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/ipc-protocol.md", "anchor": "### V2 compatibility boundary"}
       ]
@@ -1442,7 +1658,24 @@
       "owning_tasks": [
         "V2PLT-005"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-store/tests/int_v2_goal_state.rs",
+            "function": "startup_recovery_preserves_rich_v2_state_across_recovery_commit_boundaries",
+            "command": "cargo test -p podway-store --test int_suite int_v2_goal_state::startup_recovery_preserves_rich_v2_state_across_recovery_commit_boundaries --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-store/tests/int_v2_goal_state.rs",
+            "function": "v2_session_reset_is_revision_checked_atomic_and_complete",
+            "command": "cargo test -p podway-store --test int_suite int_v2_goal_state::v2_session_reset_is_revision_checked_atomic_and_complete --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {"path": "docs/specs/interfaces/ipc-protocol.md", "anchor": "### V2 compatibility boundary"}
       ]

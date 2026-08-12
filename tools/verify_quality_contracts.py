@@ -617,6 +617,54 @@ def validate_v2_contract_ref(reference: Any, contract_paths: list[str], label: s
         fail(f"{label} text anchor does not resolve: {anchor}")
 
 
+def validate_v2_proof(proof: Any, criterion_id: str, proof_paths: set[str]) -> None:
+    if not isinstance(proof, dict):
+        fail(f"{criterion_id} proof must be an object")
+    kind = proof.get("kind")
+    if kind == "cargo-test-set":
+        require_exact_keys(proof, {"kind", "members"}, f"{criterion_id} proof")
+        members = proof["members"]
+        if not isinstance(members, list) or not members:
+            fail(f"{criterion_id} cargo-test-set proof must contain members")
+        seen: set[tuple[Any, Any]] = set()
+        for member in members:
+            identity = (
+                member.get("path"),
+                member.get("function"),
+            ) if isinstance(member, dict) else (None, None)
+            if identity in seen:
+                fail(f"{criterion_id} repeats proof {identity}")
+            seen.add(identity)
+            validate_v2_proof(member, criterion_id, proof_paths)
+        return
+    if kind != "cargo-test":
+        validate_dolgi_proof(proof, criterion_id, proof_paths)
+        return
+    require_exact_keys(proof, {"kind", "path", "function", "command"}, f"{criterion_id} proof")
+    relative = proof["path"]
+    function = proof["function"]
+    command = proof["command"]
+    if not all(isinstance(value, str) and value for value in (relative, function, command)):
+        fail(f"{criterion_id} proof fields must be non-empty strings")
+    path = repository_file(relative, f"{criterion_id} proof path")
+    if not rust_test_function_exists(path.read_text(encoding="utf-8"), function):
+        fail(f"{criterion_id} proof is not a #[test] function in {relative}: {function}")
+    parts = Path(relative).parts
+    if len(parts) < 4 or parts[0] != "crates" or parts[2] != "tests":
+        fail(f"{criterion_id} cargo proof is outside a crate test directory")
+    package = parts[1]
+    source_target = path.stem
+    if source_target.startswith("e2e_"):
+        expected = f"python3 tools/run_e2e.py --exact-test {package}::e2e_suite::{source_target}::{function}"
+    elif source_target.startswith("int_"):
+        expected = f"cargo test -p {package} --test int_suite {source_target}::{function} --locked -- --exact"
+    else:
+        expected = f"cargo test -p {package} --test {source_target} {function} --locked -- --exact"
+    if command != expected:
+        fail(f"{criterion_id} proof command is not exact: expected={expected}, actual={command}")
+    proof_paths.add(relative)
+
+
 def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
     matrix = load_object(V2_ACCEPTANCE_PATH) if matrix is None else matrix
     require_exact_keys(
@@ -626,6 +674,8 @@ def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[
     )
     if matrix["schema"] != "podway.v2-acceptance-matrix/v1" or matrix["version"] != 1:
         fail("v2 acceptance matrix schema or version is unsupported")
+    if matrix["evidence_policy"] != "Planned entries are obligations without proof; automated entries bind exact executable proof commands.":
+        fail("v2 acceptance evidence policy drift")
     source = matrix["source"]
     require_exact_keys(source, {"path", "heading", "section_counts"}, "v2 acceptance source")
     if source != {
@@ -650,17 +700,17 @@ def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[
         for ordinal, (line, text) in enumerate(bullets, start=1)
     ]
     indexed: dict[str, dict[str, Any]] = {}
+    proof_paths: set[str] = set()
     for number, (criterion, source_item) in enumerate(zip(criteria, expected), start=1):
         identifier = f"V2ACC-{number:03d}"
         expected_keys = {
             "id", "section", "ordinal", "line", "text", "contract_paths",
             "contract_refs", "test_class", "owning_tasks", "implementation_status",
         }
-        require_exact_keys(
-            criterion,
-            expected_keys,
-            identifier,
-        )
+        status = criterion.get("implementation_status") if isinstance(criterion, dict) else None
+        if status == "automated":
+            expected_keys.add("proof")
+        require_exact_keys(criterion, expected_keys, identifier)
         section, ordinal, line, text = source_item
         if (criterion["id"], criterion["section"], criterion["ordinal"], criterion["line"], criterion["text"]) != (
             identifier, section, ordinal, line, text
@@ -690,8 +740,10 @@ def validate_v2_acceptance_matrix(matrix: dict[str, Any] | None = None) -> dict[
         owning_tasks = criterion["owning_tasks"]
         if not isinstance(owning_tasks, list) or not owning_tasks or len(owning_tasks) != len(set(owning_tasks)) or any(task not in tasks for task in owning_tasks):
             fail(f"{identifier} owning tasks must be non-empty, unique, and registered in the roadmap")
-        if criterion["implementation_status"] != "planned":
-            fail(f"{identifier} must remain planned until executable evidence lands")
+        if status == "automated":
+            validate_v2_proof(criterion["proof"], identifier, proof_paths)
+        elif status != "planned":
+            fail(f"{identifier} implementation status must be planned or automated")
         indexed[identifier] = criterion
     required_admission_paths = {
         "assets/schemas/output-v2.schema.json",
@@ -710,6 +762,8 @@ def validate_v2_compatibility_matrix(acceptance: dict[str, dict[str, Any]], matr
     require_exact_keys(matrix, {"schema", "version", "source_acceptance_matrix", "evidence_policy", "result_family_inventories", "requirements", "surface_cases", "v1_frozen_assets"}, "v2 compatibility matrix")
     if matrix["schema"] != "podway.v2-compatibility-matrix/v1" or matrix["version"] != 1:
         fail("v2 compatibility matrix schema or version is unsupported")
+    if matrix["evidence_policy"] != "Requirement evidence references the canonical acceptance proof; automated surface cases bind exact executable proof commands.":
+        fail("v2 compatibility evidence policy drift")
     expected_inventories = {
         "existing_route_v2": [
             "assets/schemas/procedure-validation-result-v2.schema.json", "assets/schemas/detached-admission-result-v2.schema.json",
@@ -755,11 +809,17 @@ def validate_v2_compatibility_matrix(acceptance: dict[str, dict[str, Any]], matr
         "v1-command-semantics", "reactivation-semantics", "release-admission-fence",
         "current-task-retention",
     ]
+    proof_paths: set[str] = set()
     for number, item in enumerate(requirements, start=1):
-        require_exact_keys(item, {"id", "acceptance_id", "text", "boundary", "contract_paths", "test_class", "owning_tasks", "implementation_status"}, f"V2COMP-{number:03d}")
+        expected_keys = {"id", "acceptance_id", "text", "boundary", "contract_paths", "test_class", "owning_tasks", "implementation_status"}
+        if isinstance(item, dict) and item.get("implementation_status") == "automated":
+            expected_keys.add("proof_acceptance_id")
+        require_exact_keys(item, expected_keys, f"V2COMP-{number:03d}")
         criterion = acceptance[item["acceptance_id"]]
-        if item["id"] != f"V2COMP-{number:03d}" or item["text"] != criterion["text"] or item["boundary"] != expected_requirement_boundaries[number - 1] or item["contract_paths"] != criterion["contract_paths"] or item["test_class"] != "compatibility-e2e" or item["owning_tasks"] != criterion["owning_tasks"] or item["implementation_status"] != "planned":
+        if item["id"] != f"V2COMP-{number:03d}" or item["text"] != criterion["text"] or item["boundary"] != expected_requirement_boundaries[number - 1] or item["contract_paths"] != criterion["contract_paths"] or item["test_class"] != "compatibility-e2e" or item["owning_tasks"] != criterion["owning_tasks"] or item["implementation_status"] != criterion["implementation_status"]:
             fail(f"V2COMP-{number:03d} drifts from its acceptance criterion")
+        if item["implementation_status"] == "automated" and item["proof_acceptance_id"] != item["acceptance_id"]:
+            fail(f"V2COMP-{number:03d} proof reference must match its acceptance criterion")
         for relative in item["contract_paths"]:
             repository_file(relative, f"V2COMP-{number:03d} contract path")
     expected_boundaries = [
@@ -776,10 +836,15 @@ def validate_v2_compatibility_matrix(acceptance: dict[str, dict[str, Any]], matr
     if not isinstance(surface_cases, list) or [item.get("boundary") for item in surface_cases if isinstance(item, dict)] != expected_boundaries:
         fail("v2 compatibility specialized surface cases are incomplete or unordered")
     for number, item in enumerate(surface_cases, start=1):
-        require_exact_keys(item, {"id", "boundary", "contract_paths", "owning_tasks", "implementation_status"}, f"V2COMP-SURFACE-{number:03d}")
+        expected_keys = {"id", "boundary", "contract_paths", "owning_tasks", "implementation_status"}
+        if isinstance(item, dict) and item.get("implementation_status") == "automated":
+            expected_keys.add("proof")
+        require_exact_keys(item, expected_keys, f"V2COMP-SURFACE-{number:03d}")
         owning_tasks = item["owning_tasks"]
-        if item["id"] != f"V2COMP-SURFACE-{number:03d}" or item["implementation_status"] != "planned" or not isinstance(owning_tasks, list) or not owning_tasks or len(owning_tasks) != len(set(owning_tasks)) or any(task not in roadmap_v2_tasks() for task in owning_tasks):
-            fail(f"V2COMP-SURFACE-{number:03d} is malformed or overstates evidence")
+        if item["id"] != f"V2COMP-SURFACE-{number:03d}" or item["implementation_status"] not in {"planned", "automated"} or not isinstance(owning_tasks, list) or not owning_tasks or len(owning_tasks) != len(set(owning_tasks)) or any(task not in roadmap_v2_tasks() for task in owning_tasks):
+            fail(f"V2COMP-SURFACE-{number:03d} is malformed")
+        if item["implementation_status"] == "automated":
+            validate_v2_proof(item["proof"], item["id"], proof_paths)
         for relative in item["contract_paths"]:
             repository_file(relative, f"V2COMP-SURFACE-{number:03d} contract path")
     frozen = matrix["v1_frozen_assets"]
@@ -1151,7 +1216,8 @@ def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
             for task in acceptance[identifier]["owning_tasks"]:
                 if task not in expected_tasks:
                     expected_tasks.append(task)
-        if category["id"] != f"V2GATE-{number:02d}" or category["section"] != section or category["acceptance_ids"] != expected or category["required_tasks"] != expected_tasks or category["gate_owner_task"] != gate_owners[number - 1] or category["gate"] != gates[number - 1] or category["implementation_status"] != "planned":
+        expected_status = "automated" if all(acceptance[identifier]["implementation_status"] == "automated" for identifier in expected) else "planned"
+        if category["id"] != f"V2GATE-{number:02d}" or category["section"] != section or category["acceptance_ids"] != expected or category["required_tasks"] != expected_tasks or category["gate_owner_task"] != gate_owners[number - 1] or category["gate"] != gates[number - 1] or category["implementation_status"] != expected_status:
             fail(f"V2GATE-{number:02d} does not exactly cover its §17 category")
         if any(task not in roadmap_tasks for task in category["required_tasks"] + [category["gate_owner_task"]]):
             fail(f"V2GATE-{number:02d} references an unregistered roadmap task")
@@ -1188,9 +1254,20 @@ def self_test_v2_matrices() -> int:
     wrong_line = copy.deepcopy(baseline)
     wrong_line["criteria"][0]["line"] += 1
     expect_failure(lambda: validate_v2_acceptance_matrix(wrong_line), "source bullet", "v2 acceptance source-drift")
-    overstated = copy.deepcopy(baseline)
-    overstated["criteria"][0]["implementation_status"] = "automated"
-    expect_failure(lambda: validate_v2_acceptance_matrix(overstated), "remain planned", "v2 acceptance evidence")
+    missing_proof = copy.deepcopy(baseline)
+    del missing_proof["criteria"][0]["proof"]
+    expect_failure(lambda: validate_v2_acceptance_matrix(missing_proof), "unexpected or missing fields", "v2 acceptance missing-proof")
+    planned_with_proof = copy.deepcopy(baseline)
+    automated = next(item for item in planned_with_proof["criteria"] if item["implementation_status"] == "automated")
+    planned = next(item for item in planned_with_proof["criteria"] if item["implementation_status"] == "planned")
+    planned["proof"] = copy.deepcopy(automated["proof"])
+    expect_failure(lambda: validate_v2_acceptance_matrix(planned_with_proof), "unexpected or missing fields", "v2 acceptance planned-proof")
+    wrong_proof_command = copy.deepcopy(baseline)
+    wrong_proof_command["criteria"][0]["proof"]["command"] += " --ignored"
+    expect_failure(lambda: validate_v2_acceptance_matrix(wrong_proof_command), "proof command is not exact", "v2 acceptance proof-command")
+    wrong_acceptance_policy = copy.deepcopy(baseline)
+    wrong_acceptance_policy["evidence_policy"] = "Automated means reviewed."
+    expect_failure(lambda: validate_v2_acceptance_matrix(wrong_acceptance_policy), "evidence policy drift", "v2 acceptance policy")
     missing_anchor = copy.deepcopy(baseline)
     del missing_anchor["criteria"][0]["contract_refs"]
     expect_failure(lambda: validate_v2_acceptance_matrix(missing_anchor), "unexpected or missing fields", "v2 acceptance missing-anchor")
@@ -1229,6 +1306,9 @@ def self_test_v2_matrices() -> int:
     wrong_compatibility_path = copy.deepcopy(compatibility)
     wrong_compatibility_path["requirements"][0]["contract_paths"] = ["missing-contract"]
     expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, wrong_compatibility_path), "drifts from its acceptance criterion", "v2 compatibility contract-path")
+    wrong_compatibility_policy = copy.deepcopy(compatibility)
+    wrong_compatibility_policy["evidence_policy"] = "All entries are planned."
+    expect_failure(lambda: validate_v2_compatibility_matrix(acceptance, wrong_compatibility_policy), "evidence policy drift", "v2 compatibility policy")
 
     payload = load_object(V2_PAYLOAD_PATH)
     missing_leaf = copy.deepcopy(payload)
@@ -1284,7 +1364,10 @@ def self_test_v2_matrices() -> int:
     wrong_category_gate = copy.deepcopy(release)
     wrong_category_gate["categories"][0]["gate"] = "make dist"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category_gate), "exactly cover", "v2 release category-gate")
-    return 31
+    overstated_category = copy.deepcopy(release)
+    overstated_category["categories"][6]["implementation_status"] = "automated"
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, overstated_category), "exactly cover", "v2 release category-status")
+    return 35
 
 
 def main() -> int:

@@ -405,6 +405,59 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
     let started = v2_result(dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
 
+    let compatibility_status = status(&production, &workspace_selector, 30_003, &session_id);
+    for (request_number, command, key) in [
+        (30_004, "session.return", "retained-return-v2-session"),
+        (30_006, "session.reopen", "retained-reopen-v2-session"),
+    ] {
+        let preconditions = if command == "session.return" {
+            session_preconditions(&compatibility_status)
+        } else {
+            PreconditionsV1::new(
+                Some(SessionId::new(session_id.clone()).unwrap()),
+                Some(Revision::new(
+                    compatibility_status["session"]["revision"]
+                        .as_u64()
+                        .unwrap(),
+                )),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let retained_v1_command = request(
+            request_number,
+            command,
+            &workspace_selector,
+            json!({
+                "destination_stage_id": "capture",
+                "reason": "retained v1 command must not become v2 rework",
+                "dry_run": false,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            key,
+            preconditions,
+        );
+        let ResponseEnvelopeV2::Error(error) = dispatch(&production, &retained_v1_command) else {
+            panic!("{command} against a v2 session must fail without reinterpretation")
+        };
+        assert_eq!(error.code().as_str(), "SESSION_ID_MISMATCH");
+        assert_eq!(
+            status(
+                &production,
+                &workspace_selector,
+                request_number + 1,
+                &session_id,
+            ),
+            compatibility_status,
+            "{command} rejection must preserve the v2 session exactly"
+        );
+    }
+
     mutate_item(
         &production,
         &workspace_selector,

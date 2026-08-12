@@ -58,12 +58,12 @@
     {
       "kind": "catalog",
       "path": "quality/v2-acceptance-matrix-v1.json",
-      "sha256": "sha256:219e4b9012cd17fde0672209c2d18566bcbde588b62b4e36f5175af49f3ea8cb"
+      "sha256": "sha256:1080bb67276896f5c2602a5b2505d1e6684662dbd9d36cd823ed2fd66518b8a1"
     },
     {
       "kind": "catalog",
       "path": "quality/v2-compatibility-matrix-v1.json",
-      "sha256": "sha256:6809eeffc46f565bb56657700503aaf27134ebf02e82bd31fd5af2dcaa68819b"
+      "sha256": "sha256:60ab4b25fb3b960a5bdd74c870a0d73449734f26d7e3fdefd5680065789064b8"
     },
     {
       "kind": "catalog",
@@ -78,7 +78,7 @@
     {
       "kind": "catalog",
       "path": "release/v2-release-gate-matrix-v1.json",
-      "sha256": "sha256:4dd9d0f85859064dba56b23a0ac2140ff0c63413121bc4390a3119836c536781"
+      "sha256": "sha256:36a6b69af3d9b7dfb4db8d7ac0f8489137707b7b9eacb977ae8dadee60d202b7"
     },
     {
       "kind": "schema",
@@ -461,7 +461,7 @@
       "sha256": "sha256:326ac9e1e41126e83390fa390b875edc4e584cfb280f009b6dce25e8484c641b"
     }
   ],
-  "digest": "sha256:10c4ef0035a4acc1d9fb5bd3830266b14222dcab4d6ac8486df6a869e964ad5a",
+  "digest": "sha256:b6e6d9f7ae769475c9033dbe8c1a0f4e09afd01fd2351ff1c23ff5c0eaadd485",
   "product": "podway",
   "product_version": "0.1.2",
   "schema_version": "podway.contract-manifest/v1",

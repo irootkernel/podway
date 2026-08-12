@@ -543,6 +543,7 @@ fn wire_command(command: &str) -> &'static str {
         "retry" => "session.retry",
         "return" => "session.return",
         "complete" => "session.complete",
+        "reopen" => "session.reopen",
         _ => panic!("test must invoke a bounded G005 CLI command"),
     }
 }
@@ -1512,6 +1513,107 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
     );
     assert!(restarted_status.current.is_none());
     restarted.stop();
+}
+
+#[test]
+#[ignore = "run with tools/run_e2e.py so Cargo supplies a freshly built podwayd artifact"]
+fn v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission() {
+    let fixture = FixtureV1::new();
+    let daemon = RunningDaemonV1::start(&fixture);
+    let workspace = fixture.worktree.clone();
+
+    cli_output(&fixture, &workspace, "init", &[]);
+
+    let unsupported = fixture.run(
+        &workspace,
+        "start",
+        &[
+            "--preset",
+            "bug-fix-v2",
+            "--task",
+            "compatibility boundary",
+            "--goal",
+            "Preserve the compatibility boundary.",
+            "--criterion",
+            "verified=The compatibility check passes.",
+        ],
+    );
+    assert_eq!(unsupported.status.code(), Some(3));
+    assert!(unsupported.stderr.is_empty());
+    let unsupported: Value = serde_json::from_slice(&unsupported.stdout)
+        .expect("unsupported v2 start must emit one JSON error");
+    assert_error_shape(&unsupported, "session.start");
+    assert_eq!(unsupported["code"], "UNSUPPORTED_V2_CAPABILITY");
+    assert_eq!(unsupported["details"]["kind"], "UNSUPPORTED_V2_CAPABILITY");
+    assert_eq!(
+        unsupported["details"]["contract_manifest_digest"],
+        podway_protocol::build_identity_v1().contract_manifest_digest()
+    );
+
+    let procedure = workspace.join(".podway/procedures/compatibility-v1.yaml");
+    fs::create_dir_all(
+        procedure
+            .parent()
+            .expect("compatibility procedure must have a parent"),
+    )
+    .expect("workspace procedure directory must exist");
+    fs::write(
+        &procedure,
+        "schema: podway.procedure/v1\nid: compatibility-v1\nversion: '1'\nname: Compatibility v1\nstages:\n  - id: work\n    title: Work\nrework:\n  allow_return_to:\n    - work\n",
+    )
+    .expect("v1 compatibility procedure must be written");
+
+    let started = cli_output(
+        &fixture,
+        &workspace,
+        "start",
+        &[
+            "--procedure",
+            ".podway/procedures/compatibility-v1.yaml",
+            "--task",
+            "v1 compatibility lifecycle",
+        ],
+    );
+    assert_eq!(started.result()["schema"], "podway.session-start-result/v1");
+
+    let (running_output, running) = public_status(&fixture, &workspace);
+    assert_eq!(running_output.result()["schema"], "podway.status-result/v1");
+    assert_eq!(current(&running).stage_id.as_str(), "work");
+    let session_id = running.session.id.clone();
+
+    let completed = cli_output(&fixture, &workspace, "complete", &[]);
+    assert_eq!(
+        completed.result()["schema"],
+        "podway.stage-transition-result/v1"
+    );
+    let (_, terminal) = public_status(&fixture, &workspace);
+    assert_eq!(terminal.session.lifecycle, SessionLifecycleV1::Completed);
+    assert!(terminal.current.is_none());
+
+    let reopened = cli_output(
+        &fixture,
+        &workspace,
+        "reopen",
+        &["--to", "work", "--reason", "verify retained v1 semantics"],
+    );
+    assert_eq!(
+        reopened.result()["schema"],
+        "podway.stage-transition-result/v1"
+    );
+    let (reopened_output, reopened_status) = public_status(&fixture, &workspace);
+    assert_eq!(
+        reopened_output.result()["schema"],
+        "podway.status-result/v1"
+    );
+    assert_eq!(reopened_status.session.id, session_id);
+    assert_eq!(
+        reopened_status.session.lifecycle,
+        SessionLifecycleV1::Running
+    );
+    assert_eq!(current(&reopened_status).stage_id.as_str(), "work");
+    assert_eq!(current(&reopened_status).attempt_number, 2);
+
+    daemon.stop();
 }
 
 #[derive(Default)]

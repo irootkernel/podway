@@ -2,7 +2,7 @@
   "schema": "podway.v2-compatibility-matrix/v1",
   "version": 1,
   "source_acceptance_matrix": "quality/v2-acceptance-matrix-v1.json",
-  "evidence_policy": "All entries are planned compatibility obligations, not current runtime proof.",
+  "evidence_policy": "Requirement evidence references the canonical acceptance proof; automated surface cases bind exact executable proof commands.",
   "result_family_inventories": {
     "existing_route_v2": [
       "assets/schemas/procedure-validation-result-v2.schema.json",
@@ -44,7 +44,8 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof_acceptance_id": "V2ACC-066"
     },
     {
       "id": "V2COMP-002",
@@ -59,7 +60,8 @@
       "owning_tasks": [
         "V2PLT-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof_acceptance_id": "V2ACC-067"
     },
     {
       "id": "V2COMP-003",
@@ -74,7 +76,8 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof_acceptance_id": "V2ACC-068"
     },
     {
       "id": "V2COMP-004",
@@ -89,7 +92,8 @@
       "owning_tasks": [
         "V2MOD-008"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof_acceptance_id": "V2ACC-069"
     },
     {
       "id": "V2COMP-005",
@@ -104,7 +108,8 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof_acceptance_id": "V2ACC-070"
     },
     {
       "id": "V2COMP-006",
@@ -136,7 +141,8 @@
       "owning_tasks": [
         "V2PLT-005"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof_acceptance_id": "V2ACC-072"
     }
   ],
   "surface_cases": [
@@ -151,7 +157,13 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+        "function": "v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes",
+        "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes --locked -- --exact"
+      }
     },
     {
       "id": "V2COMP-SURFACE-002",
@@ -164,7 +176,13 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+        "function": "v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes",
+        "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes --locked -- --exact"
+      }
     },
     {
       "id": "V2COMP-SURFACE-003",
@@ -177,7 +195,30 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+            "function": "v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes",
+            "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-protocol/tests/int_v2_result_contract.rs",
+            "function": "v2aut008_the_v1_selector_still_owns_the_procedure_validate_v1_family",
+            "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2aut008_the_v1_selector_still_owns_the_procedure_validate_v1_family --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run003_runtime.rs",
+            "function": "v2run003_production_actions_mutate_complete_read_back_restart_and_replay",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run003_runtime::v2run003_production_actions_mutate_complete_read_back_restart_and_replay --locked -- --exact"
+          }
+        ]
+      }
     },
     {
       "id": "V2COMP-SURFACE-004",
@@ -189,7 +230,13 @@
       "owning_tasks": [
         "V2PLT-010"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_phase4_server.rs",
+        "function": "all_registered_unserved_v2_mutations_cross_the_socket_as_closed_errors",
+        "command": "cargo test -p podway-daemon --test int_suite int_phase4_server::all_registered_unserved_v2_mutations_cross_the_socket_as_closed_errors --locked -- --exact"
+      }
     },
     {
       "id": "V2COMP-SURFACE-005",
@@ -201,7 +248,13 @@
       "owning_tasks": [
         "V2PLT-008"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/int_v2_platform_cli.rs",
+        "function": "v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon",
+        "command": "cargo test -p podway-cli --test int_suite int_v2_platform_cli::v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon --locked -- --exact"
+      }
     },
     {
       "id": "V2COMP-SURFACE-006",
@@ -213,7 +266,13 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/int_contract_identity.rs",
+        "function": "version_identity_is_static_complete_and_manifest_bound",
+        "command": "cargo test -p podway-cli --test int_suite int_contract_identity::version_identity_is_static_complete_and_manifest_bound --locked -- --exact"
+      }
     },
     {
       "id": "V2COMP-SURFACE-007",
@@ -225,7 +284,24 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
+            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2run003_runtime.rs",
+            "function": "v2run003_production_actions_mutate_complete_read_back_restart_and_replay",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2run003_runtime::v2run003_production_actions_mutate_complete_read_back_restart_and_replay --locked -- --exact"
+          }
+        ]
+      }
     },
     {
       "id": "V2COMP-SURFACE-008",
@@ -237,7 +313,24 @@
       "owning_tasks": [
         "V2REL-001"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v1_compatibility_lock.rs",
+            "function": "v1_boundaries_fixture_released_v1_fixtures_case_is_byte_for_byte_stable",
+            "command": "cargo test -p podway-config --test int_suite int_v1_compatibility_lock::v1_boundaries_fixture_released_v1_fixtures_case_is_byte_for_byte_stable --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
+            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+          }
+        ]
+      }
     }
   ],
   "v1_frozen_assets": [
