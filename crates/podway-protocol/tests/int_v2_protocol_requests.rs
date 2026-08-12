@@ -365,6 +365,47 @@ fn v2gol005_goal_payload_bounds_are_enforced_before_admission() {
     let admitted =
         |request: &RequestEnvelopeV1| ProcedureV2MutationRequestV1::from_envelope(request).is_ok();
 
+    assert!(!admitted(&define(
+        String::new(),
+        goal_criteria(1, "Pass.".to_owned()),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        json!([]),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        goal_criteria(1, String::new()),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        json!([{"criterion_id":"","statement":"Pass."}]),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        json!([{"criterion_id":"Bad-Case","statement":"Pass."}]),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        json!([{"criterion_id":"trailing-","statement":"Pass."}]),
+        None,
+    )));
+    assert!(admitted(&define(
+        "Ship safely.".to_owned(),
+        json!([{"criterion_id":"a".repeat(64),"statement":"Pass."}]),
+        None,
+    )));
+    assert!(!admitted(&define(
+        "Ship safely.".to_owned(),
+        json!([{"criterion_id":"a".repeat(65),"statement":"Pass."}]),
+        None,
+    )));
+
     assert!(admitted(&define(
         "g".repeat(1_000),
         goal_criteria(1, "Pass.".to_owned()),

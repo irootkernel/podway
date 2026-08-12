@@ -2685,6 +2685,44 @@ fn v2aut008_negative_recipes_reach_the_process_boundary_with_their_codes() {
 }
 
 #[test]
+fn v2aut008_validate_json_is_deterministic_across_processes() {
+    let fixtures = FixtureDirectory::new("v2-validate-deterministic");
+    let path = fixtures.write(
+        "rejected.yaml",
+        &MINIMAL_V2_YAML.replace("      use: work\n", "      use: absent\n"),
+    );
+
+    // Correlation and clock fields intentionally vary per invocation. Replace only those values
+    // so the comparison still pins every other stdout byte, including object and diagnostic order.
+    let stable_stdout = |output: &Output| {
+        let envelope = one_json(output);
+        let request_id = envelope["request_id"]
+            .as_str()
+            .expect("the envelope must carry a request id");
+        let generated_at = envelope["generated_at"]
+            .as_str()
+            .expect("the envelope must carry a generation time");
+        String::from_utf8(output.stdout.clone())
+            .expect("JSON stdout must be UTF-8")
+            .replace(request_id, "<request-id>")
+            .replace(generated_at, "<generated-at>")
+            .into_bytes()
+    };
+
+    let baseline = validate_json(&path);
+    assert_eq!(baseline.status.code(), Some(1), "{baseline:?}");
+    assert!(baseline.stderr.is_empty(), "{baseline:?}");
+    let baseline = stable_stdout(&baseline);
+
+    for _ in 0..5 {
+        let output = validate_json(&path);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(stable_stdout(&output), baseline);
+    }
+}
+
+#[test]
 fn v2aut008_warnings_as_errors_is_a_no_op_for_a_v2_document() {
     let fixtures = FixtureDirectory::new("v2-validate-wae");
     // Validate emits only error-severity findings, so the policy has nothing to promote: the

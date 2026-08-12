@@ -68,7 +68,7 @@
       "required_tasks": ["V2GRF-001", "V2GRF-002", "V2AUT-008"],
       "gate_owner_task": "V2REL-005",
       "gate": "make test",
-      "implementation_status": "planned"
+      "implementation_status": "automated"
     },
     {
       "id": "V2GATE-03",
@@ -117,7 +117,7 @@
       "required_tasks": ["V2GOL-001", "V2GOL-005", "V2GOL-003", "V2GOL-002", "V2GOL-004"],
       "gate_owner_task": "V2REL-005",
       "gate": "make test",
-      "implementation_status": "planned"
+      "implementation_status": "automated"
     },
     {
       "id": "V2GATE-05",
@@ -134,7 +134,7 @@
       "required_tasks": ["V2AUT-001", "V2AUT-002", "V2AUT-003", "V2AUT-008", "V2GRF-008"],
       "gate_owner_task": "V2REL-005",
       "gate": "make test",
-      "implementation_status": "planned"
+      "implementation_status": "automated"
     },
     {
       "id": "V2GATE-06",
@@ -212,7 +212,7 @@
     {
       "task": "V2REL-005",
       "command": "make test",
-      "implementation_status": "planned"
+      "implementation_status": "automated"
     },
     {
       "task": "V2REL-006",

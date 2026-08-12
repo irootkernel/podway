@@ -1526,8 +1526,15 @@ def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     if observed != list(acceptance):
         fail("v2 release categories must partition all 87 acceptance criteria")
     gates = matrix["final_gates"]
+    v2rel005_category_ids = ("V2GATE-02", "V2GATE-04", "V2GATE-05")
+    category_by_id = {category["id"]: category for category in categories}
+    v2rel005_status = (
+        "automated"
+        if all(category_by_id[identifier]["implementation_status"] == "automated" for identifier in v2rel005_category_ids)
+        else "planned"
+    )
     expected_gates = [
-        {"task": "V2REL-005", "command": "make test", "implementation_status": "planned"},
+        {"task": "V2REL-005", "command": "make test", "implementation_status": v2rel005_status},
         {"task": "V2REL-006", "command": "make dist", "implementation_status": "planned"},
         {"task": "V2REL-007", "command": "explicit release authorization", "implementation_status": "planned", "conditions": ["all-prior-pv2ga-tasks-completed", "public-v2-admission-enabled-only-in-qualified-artifacts", "immutable-release-evidence-recorded", "explicit-release-authorization", "dossier-and-roadmap-archived"]},
     ]
@@ -1775,16 +1782,37 @@ def self_test_v2_matrices() -> int:
     wrong_category = copy.deepcopy(release)
     wrong_category["categories"][0]["acceptance_ids"].pop()
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category), "exactly cover", "v2 release category")
+    demoted_category_acceptance = copy.deepcopy(acceptance)
+    demoted_category_criterion = demoted_category_acceptance["V2ACC-007"]
+    demoted_category_criterion["implementation_status"] = "planned"
+    demoted_category_criterion.pop("proof", None)
     overstated_category = copy.deepcopy(release)
-    overstated_category["categories"][1]["implementation_status"] = "automated"
     expect_failure(
-        lambda: validate_v2_release_matrix(acceptance, overstated_category),
+        lambda: validate_v2_release_matrix(demoted_category_acceptance, overstated_category),
         "does not exactly cover",
         "v2 release category status overstatement",
     )
     wrong_closeout = copy.deepcopy(release)
     wrong_closeout["final_gates"][2]["conditions"].pop()
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_closeout), "final release gates", "v2 release closeout")
+    misstated_integrated_gate = copy.deepcopy(release)
+    current_integrated_status = misstated_integrated_gate["final_gates"][0]["implementation_status"]
+    misstated_integrated_gate["final_gates"][0]["implementation_status"] = (
+        "planned" if current_integrated_status == "automated" else "automated"
+    )
+    expect_failure(
+        lambda: validate_v2_release_matrix(acceptance, misstated_integrated_gate),
+        "final release gates",
+        "v2 integrated gate status",
+    )
+    overstated_integrated_gate = copy.deepcopy(release)
+    overstated_integrated_gate["categories"][1]["implementation_status"] = "planned"
+    overstated_integrated_gate["final_gates"][0]["implementation_status"] = "automated"
+    expect_failure(
+        lambda: validate_v2_release_matrix(demoted_category_acceptance, overstated_integrated_gate),
+        "final release gates",
+        "v2 integrated gate evidence demotion",
+    )
     wrong_category_task = copy.deepcopy(release)
     wrong_category_task["categories"][0]["required_tasks"].pop()
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category_task), "exactly cover", "v2 release category-task")
@@ -1794,7 +1822,7 @@ def self_test_v2_matrices() -> int:
     overstated_category = copy.deepcopy(release)
     overstated_category["categories"][6]["implementation_status"] = "automated"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, overstated_category), "exactly cover", "v2 release category-status")
-    return 42
+    return 44
 
 
 def main() -> int:

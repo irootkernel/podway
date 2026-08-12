@@ -253,7 +253,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_authoring_diagnostics.rs",
+        "function": "v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline",
+        "command": "cargo test -p podway-config --test int_suite int_v2_authoring_diagnostics::v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -275,7 +281,24 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_authoring_diagnostics.rs",
+            "function": "v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline",
+            "command": "cargo test -p podway-config --test int_suite int_v2_authoring_diagnostics::v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf001_reports_every_reachable_node_without_a_finite_terminal_path",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_reports_every_reachable_node_without_a_finite_terminal_path --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -297,7 +320,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+        "function": "v2grf001_reports_unreachable_nodes_without_using_them_as_terminal_paths",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_reports_unreachable_nodes_without_using_them_as_terminal_paths --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -319,7 +348,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_authoring_diagnostics.rs",
+        "function": "v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline",
+        "command": "cargo test -p podway-config --test int_suite int_v2_authoring_diagnostics::v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -341,7 +376,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+        "function": "v2grf001_rejects_an_advance_only_subcycle_inside_the_complete_graph",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_rejects_an_advance_only_subcycle_inside_the_complete_graph --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -363,7 +404,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+        "function": "v2grf001_accepts_a_dominating_assessment_and_an_unbounded_declared_rework_cycle",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_accepts_a_dominating_assessment_and_an_unbounded_declared_rework_cycle --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -385,7 +432,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-unit-test",
+        "path": "crates/podway-config/src/procedure_v2_graph.rs",
+        "function": "v2grf001_graph_analyses_match_independent_exhaustive_three_node_models",
+        "command": "cargo test -p podway-config --lib procedure_v2_graph::tests::v2grf001_graph_analyses_match_independent_exhaustive_three_node_models --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -407,7 +460,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+        "function": "v2grf001_uses_all_edges_for_declared_rework_dominance",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_uses_all_edges_for_declared_rework_dominance --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -429,7 +488,24 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_authoring_diagnostics.rs",
+            "function": "v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline",
+            "command": "cargo test -p podway-config --test int_suite int_v2_authoring_diagnostics::v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf001_required_evidence_must_strictly_dominate_and_must_not_be_skippable",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_required_evidence_must_strictly_dominate_and_must_not_be_skippable --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -452,7 +528,24 @@
         "V2GRF-001",
         "V2GRF-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_validate.rs",
+            "function": "closed_cross_reference_checks_reject_yaml_and_json_with_identical_diagnostics",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_validate::closed_cross_reference_checks_reject_yaml_and_json_with_identical_diagnostics --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf002_accepts_an_exact_readback_budget_and_rejects_the_next_authored_scalar",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf002_accepts_an_exact_readback_budget_and_rejects_the_next_authored_scalar --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -474,7 +567,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+        "function": "v2grf001_goal_assessment_must_dominate_each_reachable_terminal",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_goal_assessment_must_dominate_each_reachable_terminal --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -496,7 +595,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+        "function": "v2grf001_assessment_coverage_reports_each_unmapped_option_and_missing_outcome",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_assessment_coverage_reports_each_unmapped_option_and_missing_outcome --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -518,7 +623,13 @@
       "owning_tasks": [
         "V2GRF-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_authoring_diagnostics.rs",
+        "function": "v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline",
+        "command": "cargo test -p podway-config --test int_suite int_v2_authoring_diagnostics::v2aut008_the_provable_recipes_report_their_expected_code_through_the_whole_pipeline --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -540,7 +651,24 @@
       "owning_tasks": [
         "V2AUT-008"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf001_findings_are_byte_stable_and_sorted_by_source_position",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_findings_are_byte_stable_and_sorted_by_source_position --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_authoring_diagnostics.rs",
+            "function": "v2aut008_classification_is_deterministic_and_independent_of_repetition",
+            "command": "cargo test -p podway-config --test int_suite int_v2_authoring_diagnostics::v2aut008_classification_is_deterministic_and_independent_of_repetition --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/procedure-and-item-specification.md",
@@ -1223,7 +1351,13 @@
       "owning_tasks": [
         "V2GOL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2gol_epic_acceptance.rs",
+        "function": "v2gol_epic_goal_mutations_without_opt_in_fail_atomically_and_replay_after_restart",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2gol_epic_acceptance::v2gol_epic_goal_mutations_without_opt_in_fail_atomically_and_replay_after_restart --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1245,7 +1379,24 @@
       "owning_tasks": [
         "V2GOL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol001_goal_revision.rs",
+            "function": "v2gol001_initial_goal_is_durable_for_start_and_replace",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol001_goal_revision::v2gol001_initial_goal_is_durable_for_start_and_replace --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol001_goal_revision.rs",
+            "function": "v2gol001_define_and_running_revise_are_fenced_replayable_and_restart_safe",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol001_goal_revision::v2gol001_define_and_running_revise_are_fenced_replayable_and_restart_safe --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1267,7 +1418,24 @@
       "owning_tasks": [
         "V2GOL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-protocol/tests/int_v2_protocol_requests.rs",
+            "function": "v2gol005_goal_payload_bounds_are_enforced_before_admission",
+            "command": "cargo test -p podway-protocol --test int_suite int_v2_protocol_requests::v2gol005_goal_payload_bounds_are_enforced_before_admission --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-protocol/tests/int_v2_protocol_requests.rs",
+            "function": "v2plt006_rejects_over_bounds_open_payloads_and_invalid_citations",
+            "command": "cargo test -p podway-protocol --test int_suite int_v2_protocol_requests::v2plt006_rejects_over_bounds_open_payloads_and_invalid_citations --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1289,7 +1457,24 @@
       "owning_tasks": [
         "V2GOL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol001_goal_revision.rs",
+            "function": "v2gol001_define_and_running_revise_are_fenced_replayable_and_restart_safe",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol001_goal_revision::v2gol001_define_and_running_revise_are_fenced_replayable_and_restart_safe --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol005_failures.rs",
+            "function": "v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol005_failures::v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1311,7 +1496,13 @@
       "owning_tasks": [
         "V2GOL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2gol005_failures.rs",
+        "function": "v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2gol005_failures::v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1333,7 +1524,30 @@
       "owning_tasks": [
         "V2GOL-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol001_goal_revision.rs",
+            "function": "v2gol001_completed_revision_requires_explicit_reactivation_and_creates_fresh_cursor",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol001_goal_revision::v2gol001_completed_revision_requires_explicit_reactivation_and_creates_fresh_cursor --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol_epic_acceptance.rs",
+            "function": "v2gol_epic_running_reactivate_true_is_inert_and_cold_replayable",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol_epic_acceptance::v2gol_epic_running_reactivate_true_is_inert_and_cold_replayable --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol005_failures.rs",
+            "function": "v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol005_failures::v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1355,7 +1569,13 @@
       "owning_tasks": [
         "V2GOL-005"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2gol005_failures.rs",
+        "function": "v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2gol005_failures::v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1377,7 +1597,13 @@
       "owning_tasks": [
         "V2GOL-003"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2gol003_goal_outcomes.rs",
+        "function": "v2gol003_general_decision_never_creates_goal_assessment_state",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2gol003_goal_outcomes::v2gol003_general_decision_never_creates_goal_assessment_state --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1399,7 +1625,13 @@
       "owning_tasks": [
         "V2GOL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2gol005_failures.rs",
+        "function": "v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2gol005_failures::v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1421,7 +1653,24 @@
       "owning_tasks": [
         "V2GOL-003"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol003_goal_outcomes.rs",
+            "function": "v2gol003_outcome_state_table_is_actor_claimed_and_replayable",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol003_goal_outcomes::v2gol003_outcome_state_table_is_actor_claimed_and_replayable --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol003_goal_outcomes.rs",
+            "function": "v2gol003_incomplete_and_mismatched_outcomes_fail_atomically",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol003_goal_outcomes::v2gol003_incomplete_and_mismatched_outcomes_fail_atomically --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1443,7 +1692,24 @@
       "owning_tasks": [
         "V2GOL-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol002_criterion_assessment.rs",
+            "function": "v2gol002_assessment_mode_records_citations_attribution_replay_and_restart",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol002_criterion_assessment::v2gol002_assessment_mode_records_citations_attribution_replay_and_restart --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2gol002_criterion_assessment.rs",
+            "function": "v2gol002_invalid_runtime_assessments_are_atomic",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2gol002_criterion_assessment::v2gol002_invalid_runtime_assessments_are_atomic --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1465,7 +1731,13 @@
       "owning_tasks": [
         "V2GOL-003"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-store/tests/int_v2_goal_state.rs",
+        "function": "stale_goal_assessment_cannot_satisfy_terminal_completion",
+        "command": "cargo test -p podway-store --test int_suite int_v2_goal_state::stale_goal_assessment_cannot_satisfy_terminal_completion --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1489,7 +1761,13 @@
       "owning_tasks": [
         "V2GOL-004"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-daemon/tests/int_v2gol004_goal_readback.rs",
+        "function": "v2gol004_command_generated_goal_history_is_complete_pageable_and_cold_stable",
+        "command": "cargo test -p podway-daemon --test int_suite int_v2gol004_goal_readback::v2gol004_command_generated_goal_history_is_complete_pageable_and_cold_stable --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/domain/domain-model.md",
@@ -1527,7 +1805,30 @@
       "owning_tasks": [
         "V2AUT-001"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_format.rs",
+            "function": "v2aut001_formatting_is_idempotent_and_its_output_is_a_fixpoint",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_format::v2aut001_formatting_is_idempotent_and_its_output_is_a_fixpoint --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_format.rs",
+            "function": "v2aut001_formatting_is_deterministic_across_one_hundred_runs",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_format::v2aut001_formatting_is_deterministic_across_one_hundred_runs --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut001_format_writes_the_canonical_document_to_stdout_byte_for_byte",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut001_format_writes_the_canonical_document_to_stdout_byte_for_byte --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/interfaces/cli-specification.md",
@@ -1549,7 +1850,30 @@
       "owning_tasks": [
         "V2AUT-002"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut002_check_reports_a_canonical_file_as_a_source_result_with_no_drift",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut002_check_reports_a_canonical_file_as_a_source_result_with_no_drift --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut002_check_reports_a_drifted_file_as_one_format_not_canonical_finding",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut002_check_reports_a_drifted_file_as_one_format_not_canonical_finding --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut002_check_never_touches_the_file_it_reads",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut002_check_never_touches_the_file_it_reads --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/interfaces/cli-specification.md",
@@ -1571,7 +1895,42 @@
       "owning_tasks": [
         "V2AUT-003"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut001_format_writes_the_canonical_document_to_stdout_byte_for_byte",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut001_format_writes_the_canonical_document_to_stdout_byte_for_byte --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut002_check_reports_a_canonical_file_as_a_source_result_with_no_drift",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut002_check_reports_a_canonical_file_as_a_source_result_with_no_drift --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut003_write_replaces_a_drifted_file_with_the_bytes_format_would_have_printed",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut003_write_replaces_a_drifted_file_with_the_bytes_format_would_have_printed --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut003_write_preserves_full_line_comments_and_lands_in_canonical_form",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut003_write_preserves_full_line_comments_and_lands_in_canonical_form --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut003_an_unsupported_source_construct_is_refused_before_any_write",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut003_an_unsupported_source_construct_is_refused_before_any_write --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/interfaces/cli-specification.md",
@@ -1593,7 +1952,24 @@
       "owning_tasks": [
         "V2AUT-003"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut003_write_preserves_full_line_comments_and_lands_in_canonical_form",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut003_write_preserves_full_line_comments_and_lands_in_canonical_form --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut003_an_unsupported_source_construct_is_refused_before_any_write",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut003_an_unsupported_source_construct_is_refused_before_any_write --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/interfaces/cli-specification.md",
@@ -1615,7 +1991,42 @@
       "owning_tasks": [
         "V2AUT-008"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut008_negative_recipes_reach_the_process_boundary_with_their_codes",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut008_negative_recipes_reach_the_process_boundary_with_their_codes --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2grf002_a_validated_graph_rejection_keeps_its_digest_and_vet_identity",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2grf002_a_validated_graph_rejection_keeps_its_digest_and_vet_identity --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut004_lint_is_deterministic_across_processes",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut004_lint_is_deterministic_across_processes --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut005_check_is_deterministic_across_processes",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut005_check_is_deterministic_across_processes --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2aut008_validate_json_is_deterministic_across_processes",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut008_validate_json_is_deterministic_across_processes --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/interfaces/cli-specification.md",
@@ -1637,7 +2048,24 @@
       "owning_tasks": [
         "V2GRF-008"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_cross_format_projection.rs",
+            "function": "v2grf008_equivalent_source_forms_produce_identical_bytes_and_digests",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_cross_format_projection::v2grf008_equivalent_source_forms_produce_identical_bytes_and_digests --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_cross_format_projection.rs",
+            "function": "v2grf008_all_formats_preserve_ordered_identities_transitions_and_rework_metadata",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_cross_format_projection::v2grf008_all_formats_preserve_ordered_identities_transitions_and_rework_metadata --locked -- --exact"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/interfaces/cli-specification.md",
@@ -1659,7 +2087,13 @@
       "owning_tasks": [
         "V2GRF-008"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test",
+        "path": "crates/podway-config/tests/int_v2_procedure_cross_format_projection.rs",
+        "function": "v2grf008_all_formats_exclude_evidence_runtime_and_sensitive_sentinels",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_cross_format_projection::v2grf008_all_formats_exclude_evidence_runtime_and_sensitive_sentinels --locked -- --exact"
+      },
       "contract_refs": [
         {
           "path": "docs/specs/interfaces/cli-specification.md",
