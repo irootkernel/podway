@@ -1482,11 +1482,11 @@ def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     require_exact_keys(matrix, {"schema", "version", "source_acceptance_matrix", "admission_rule", "admission_policy", "task_test_policy", "publication_policy", "categories", "final_gates"}, "v2 release gate matrix")
     if matrix["schema"] != "podway.v2-release-gate-matrix/v1" or matrix["version"] != 1:
         fail("v2 release gate matrix schema or version is unsupported")
-    if matrix["admission_rule"] != "Public podway.procedure/v2 admission remains disabled until V2REL-006 implements production admission after every preceding task is complete, closes the remaining admission criterion and every category, and qualifies those exact bytes.":
+    if matrix["admission_rule"] != "Public podway.procedure/v2 admission is enabled only in the V2REL-006 qualified bytes after every preceding task, acceptance criterion, and category passed.":
         fail("v2 admission ownership rule drift")
     expected_admission = {
         "read_only_authoring_during_development": True,
-        "normal_v2_session_admission": "closed",
+        "normal_v2_session_admission": "open",
         "development_unlock_requires_all": ["explicit-development-only-build-feature", "development-mode", "disposable-workspace-marker", "separate-socket", "separate-state-directory"],
         "development_unlock_refuses": ["installed-daemon", "launch-agent", "normally-registered-workspace"],
         "development_state_migration_promise": False,
@@ -1558,8 +1558,8 @@ def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     if not isinstance(categories, list) or len(categories) != 9:
         fail("v2 release gate matrix must contain nine acceptance categories")
     observed: list[str] = []
-    gate_owners = ["V2REL-001", "V2REL-005", "V2REL-003", "V2REL-005", "V2REL-005", "V2REL-003", "V2REL-001", "V2REL-003", "V2REL-002"]
-    gates = ["make test", "make test", "make test-e2e", "make test", "make test", "make test-e2e", "make test", "make test-e2e", "make test-fuzzing"]
+    gate_owners = ["V2REL-001", "V2REL-005", "V2REL-003", "V2REL-005", "V2REL-005", "V2REL-003", "V2REL-006", "V2REL-003", "V2REL-002"]
+    gates = ["make test", "make test", "make test-e2e", "make test", "make test", "make test-e2e", "make dist", "make test-e2e", "make test-fuzzing"]
     roadmap_tasks = roadmap_v2_tasks()
     for number, (category, section) in enumerate(zip(categories, V2_SECTION_COUNTS), start=1):
         require_exact_keys(category, {"id", "section", "acceptance_ids", "required_tasks", "gate_owner_task", "gate", "implementation_status"}, f"V2GATE-{number:02d}")
@@ -1587,7 +1587,7 @@ def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     )
     expected_gates = [
         {"task": "V2REL-005", "command": "make test", "implementation_status": v2rel005_status},
-        {"task": "V2REL-006", "command": "implement production public v2 admission, then make dist", "implementation_status": "planned", "conditions": ["all-prior-pv2ga-tasks-completed", "production-public-v2-admission-enabled", "development-admission-unlock-absent", "exact-clean-unpublished-commit-qualified", "dolgorae-handoff-verifies-packaged-bytes"]},
+        {"task": "V2REL-006", "command": "implement production public v2 admission, then make dist", "implementation_status": "automated", "conditions": ["all-prior-pv2ga-tasks-completed", "production-public-v2-admission-enabled", "development-admission-unlock-absent", "exact-clean-unpublished-commit-qualified", "dolgorae-handoff-verifies-packaged-bytes"]},
         {"task": "V2REL-007", "command": "explicit release authorization", "implementation_status": "planned", "conditions": ["all-prior-pv2ga-tasks-completed", "explicit-release-authorization", "exact-v2rel-006-qualified-bytes-published-unchanged", "draft-and-published-downloads-verified-by-asset-id", "immutable-release-evidence-recorded", "v0.1.2-identities-preserved", "documentation-only-report-and-roadmap-archive-recorded"]},
     ]
     if gates != expected_gates:
@@ -1618,9 +1618,8 @@ def self_test_v2_matrices() -> int:
     del missing_proof["criteria"][0]["proof"]
     expect_failure(lambda: validate_v2_acceptance_matrix(missing_proof), "unexpected or missing fields", "v2 acceptance missing-proof")
     planned_with_proof = copy.deepcopy(baseline)
-    automated = next(item for item in planned_with_proof["criteria"] if item["implementation_status"] == "automated")
-    planned = next(item for item in planned_with_proof["criteria"] if item["implementation_status"] == "planned")
-    planned["proof"] = copy.deepcopy(automated["proof"])
+    planned = planned_with_proof["criteria"][0]
+    planned["implementation_status"] = "planned"
     expect_failure(lambda: validate_v2_acceptance_matrix(planned_with_proof), "unexpected or missing fields", "v2 acceptance planned-proof")
     wrong_proof_command = copy.deepcopy(baseline)
     wrong_proof_command["criteria"][0]["proof"]["command"] += " --ignored"
@@ -1825,8 +1824,15 @@ def self_test_v2_matrices() -> int:
     expect_failure(lambda: validate_v2_proof(wrong_cargo_unit_command, "v2 cargo unit proof sentinel", set()), "proof command is not exact", "v2 cargo-unit proof-command")
 
     release = load_object(V2_RELEASE_PATH)
+    wrong_admission_rule = copy.deepcopy(release)
+    wrong_admission_rule["admission_rule"] = "Public v2 admission is pending."
+    expect_failure(
+        lambda: validate_v2_release_matrix(acceptance, wrong_admission_rule),
+        "admission ownership rule",
+        "v2 release qualified-admission rule",
+    )
     wrong_admission = copy.deepcopy(release)
-    wrong_admission["admission_policy"]["normal_v2_session_admission"] = "open"
+    wrong_admission["admission_policy"]["normal_v2_session_admission"] = "closed"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_admission), "admission and development-unlock", "v2 release admission")
     wrong_task_policy = copy.deepcopy(release)
     wrong_task_policy["task_test_policy"]["make_test_before_executable_task_completion"] = False
@@ -1856,6 +1862,13 @@ def self_test_v2_matrices() -> int:
     wrong_closeout = copy.deepcopy(release)
     wrong_closeout["final_gates"][2]["conditions"].pop()
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_closeout), "final release gates", "v2 release closeout")
+    demoted_qualification = copy.deepcopy(release)
+    demoted_qualification["final_gates"][1]["implementation_status"] = "planned"
+    expect_failure(
+        lambda: validate_v2_release_matrix(acceptance, demoted_qualification),
+        "final release gates",
+        "v2 release qualification status",
+    )
     misstated_integrated_gate = copy.deepcopy(release)
     current_integrated_status = misstated_integrated_gate["final_gates"][0]["implementation_status"]
     misstated_integrated_gate["final_gates"][0]["implementation_status"] = (
@@ -1881,9 +1894,9 @@ def self_test_v2_matrices() -> int:
     wrong_category_gate["categories"][0]["gate"] = "make dist"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category_gate), "exactly cover", "v2 release category-gate")
     overstated_category = copy.deepcopy(release)
-    overstated_category["categories"][6]["implementation_status"] = "automated"
+    overstated_category["categories"][6]["implementation_status"] = "planned"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, overstated_category), "exactly cover", "v2 release category-status")
-    return 47
+    return 49
 
 
 def main() -> int:

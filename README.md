@@ -23,11 +23,10 @@ Use Podway when a task has steps that should not be skipped, especially when wor
 | `bug-fix-v2` | Graph-based defect repair with decision rework and goal closeout |
 
 The four unversioned presets retain the v1 lifecycle. The two `-v2` presets are
-shipped and inspectable in the v0.2.0 candidate, while non-dry-run Procedure v2
-admission remains limited to the documented disposable development runtime.
-V2REL-006 implements production public admission and qualifies those unlock-free
-bytes; V2REL-007 may publish only those unchanged bytes after explicit release
-authorization.
+shipped and inspectable in the qualified, unpublished v0.2.0 candidate. That
+candidate admits Procedure v2 through the normal runtime and excludes the
+development-only admission unlock. V2REL-007 may publish only those unchanged
+bytes after explicit release authorization.
 
 Podway is not a project manager, CI system, command runner, Git automation layer, artifact store, or multi-user access-control service.
 
@@ -188,10 +187,10 @@ The v0.2.0 candidate implements an evidence-gated, goal-directed workflow memory
 Procedure v2 documents are declarative graphs with recorded decisions, selected
 evidence read-back, explicit rework, goal revision, and goal assessment, still with
 exactly one active attempt. Static authoring and inspection are available in the
-normal CLI. Runtime admission is pre-GA and remains restricted to the managed
-disposable development boundary. V2REL-006 implements production public admission
-and qualifies the unlock-free distribution. V2REL-007 owns explicitly authorized
-publication of those unchanged bytes. See the [Procedure v2 walkthrough](docs/examples/v2-workflow.md)
+normal CLI. The qualified, unpublished candidate admits Procedure v2 through the
+normal runtime while preserving the managed disposable boundary for development
+builds. V2REL-007 owns explicitly authorized publication of those unchanged bytes.
+See the [Procedure v2 walkthrough](docs/examples/v2-workflow.md)
 and the [roadmap](docs/roadmap/README.md).
 
 ## Local data and trust

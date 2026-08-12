@@ -143,6 +143,19 @@ impl ControlledPathFixtureV1 {
             .expect("controlled PATH must invoke podway")
     }
 
+    fn run_from(&self, path: &str, directory: &Path, arguments: &[&str]) -> Output {
+        let mut command = Command::new("podway");
+        command
+            .args(arguments)
+            .current_dir(directory)
+            .env_clear()
+            .env("PATH", path);
+        self.configure_test_isolation(&mut command);
+        command
+            .output()
+            .expect("controlled PATH must invoke podway from the selected directory")
+    }
+
     fn configure_test_isolation(&self, command: &mut Command) {
         if self.production_service {
             command.env("PODWAY_DEV_HOME", self.dev_home());
@@ -621,6 +634,112 @@ rework:
   allow_return_to: any_previous
 "#;
 
+const PUBLIC_V2_PROCEDURE: &str = r#"schema: podway.procedure/v2
+id: packaged-public-v2
+version: "1"
+name: Packaged Public v2
+purpose: Prove public admission, durable rework, and goal closeout in release bytes.
+goal_tracking: true
+node_definitions:
+  work:
+    type: action
+    title: Record work
+    intent: Record evidence for the packaged qualification.
+    items:
+      - id: result
+        type: text
+        prompt: Record the qualification result.
+        required: true
+        min_length: 1
+        max_length: 200
+  review:
+    type: decision
+    title: Review work
+    objective: Decide whether the recorded work needs another attempt.
+    prompt: Is the work ready for goal assessment?
+    options:
+      - id: accept
+        label: Accept
+        criteria: The recorded work supports goal assessment.
+      - id: revise
+        label: Revise
+        criteria: The recorded work needs another attempt.
+    reason:
+      required: true
+      prompt: Explain the review decision.
+  assess:
+    type: decision
+    title: Assess goal
+    objective: Record the outcome supported by the current criterion assessment.
+    prompt: What is the current goal outcome?
+    options:
+      - id: achieved
+        label: Achieved
+        criteria: The criterion assessment supports the goal.
+      - id: not-achieved
+        label: Not achieved
+        criteria: The criterion assessment does not support the goal.
+      - id: superseded
+        label: Superseded
+        criteria: The goal no longer describes the desired outcome.
+    reason:
+      required: true
+      prompt: Explain the goal outcome.
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  finish:
+    type: action
+    title: Record closeout
+    intent: Record the packaged qualification closeout.
+    items:
+      - id: closeout
+        type: text
+        prompt: Record the closeout.
+        required: true
+        min_length: 1
+        max_length: 200
+graph:
+  entry: work
+  nodes:
+    - id: work
+      use: work
+      next: review
+    - id: review
+      use: review
+      evidence_from:
+        - node: work
+          required: true
+      routes:
+        accept:
+          to: assess
+          effect: advance
+        revise:
+          to: work
+          effect: rework
+    - id: assess
+      use: assess
+      evidence_from:
+        - node: work
+          required: true
+      routes:
+        achieved:
+          to: finish
+          effect: advance
+        not-achieved:
+          to: finish
+          effect: advance
+        superseded:
+          to: finish
+          effect: advance
+    - id: finish
+      use: finish
+      terminal: true
+"#;
+
 #[derive(Clone, Debug)]
 struct FencedStatusV1 {
     raw: Value,
@@ -779,6 +898,49 @@ fn terminal_lookup(
         );
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn public_v2_command(
+    fixture: &ControlledPathFixtureV1,
+    path: &str,
+    socket: &str,
+    worktree: &str,
+    arguments: &[&str],
+) -> Value {
+    let mut owned = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        socket.to_owned(),
+        "--worktree".to_owned(),
+        worktree.to_owned(),
+        "--timeout".to_owned(),
+        "25s".to_owned(),
+    ];
+    owned.extend(arguments.iter().map(|argument| (*argument).to_owned()));
+    fixture.run_json_success_owned(path, &owned)
+}
+
+fn public_v2_status(
+    fixture: &ControlledPathFixtureV1,
+    path: &str,
+    socket: &str,
+    worktree: &str,
+    verbose: bool,
+) -> Value {
+    let arguments = if verbose {
+        ["status", "--wait-for-idle", "--verbose"].as_slice()
+    } else {
+        ["status", "--wait-for-idle"].as_slice()
+    };
+    let output = public_v2_command(fixture, path, socket, worktree, arguments);
+    assert_eq!(output["schema"], "podway.output/v2");
+    assert_eq!(output["command"], "session.status");
+    assert_eq!(output["result"]["schema"], "podway.status-result/v2");
+    output["result"].clone()
+}
+
+fn assert_public_v2_node(status: &Value, expected: &str) {
+    assert_eq!(status["current"]["node"]["graph_node_id"], expected);
 }
 
 #[test]
@@ -1810,6 +1972,346 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
         2,
     );
     assert_eq!(reused["retryable"], false);
+
+    fixture.uninstall(&controlled_path);
+}
+
+#[test]
+fn aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_closeout() {
+    let fixture = ControlledPathFixtureV1::new();
+    let (controlled_path, _) = install_sibling_release(&fixture, "public-v2");
+    let socket = fixture.socket_path();
+    let worktree = fixture.root.join("public-v2/worktree");
+    create_non_bare_worktree(&worktree);
+    let procedure_path = worktree.join("packaged-public-v2.yaml");
+    fs::write(&procedure_path, PUBLIC_V2_PROCEDURE)
+        .expect("public v2 qualification Procedure must be written");
+
+    let socket_text = socket.to_str().expect("fixture socket path must be UTF-8");
+    let worktree_text = worktree
+        .to_str()
+        .expect("fixture worktree path must be UTF-8");
+    let initialized = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &["init"],
+    );
+    assert_eq!(initialized["schema"], "podway.output/v1");
+    assert_eq!(initialized["command"], "workspace.init");
+    let development_marker = worktree.join(".podway/runtime/development-v2.marker");
+    assert!(
+        !development_marker.exists(),
+        "public admission qualification must not create a development marker"
+    );
+
+    let preview = assert_json_success(
+        fixture.run_from(
+            &controlled_path,
+            &worktree,
+            &["--json", "procedure", "preview", "packaged-public-v2.yaml"],
+        ),
+        ["--json", "procedure", "preview", "packaged-public-v2.yaml"],
+    );
+    assert_eq!(preview["schema"], "podway.output/v2");
+    assert_eq!(preview["command"], "procedure.preview");
+    assert_eq!(preview["result"]["admissible"], true);
+    let procedure_digest = required_text(
+        &preview["result"]["procedure_digest"],
+        "public v2 Procedure digest",
+    );
+
+    let started = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "start",
+            "--procedure",
+            "packaged-public-v2.yaml",
+            "--expect-procedure-digest",
+            &procedure_digest,
+            "--task",
+            "Qualify public Procedure v2 admission",
+            "--goal",
+            "Prove the packaged public v2 lifecycle.",
+            "--criterion",
+            "verified=The packaged lifecycle survives restart and closes out.",
+            "--actor",
+            "V2REL-006 qualifier",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000001",
+        ],
+    );
+    assert_eq!(started["schema"], "podway.output/v2");
+    assert_eq!(started["command"], "session.start");
+    assert_eq!(
+        started["result"]["schema"],
+        "podway.session-start-result/v2"
+    );
+    assert_eq!(started["result"]["procedure_digest"], procedure_digest);
+    assert_eq!(started["result"]["procedure_schema"], "podway.procedure/v2");
+    assert!(
+        !development_marker.exists(),
+        "normal public v2 start must not depend on a development marker"
+    );
+
+    let first_work = public_v2_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        false,
+    );
+    assert_public_v2_node(&first_work, "work");
+    let session_id = required_text(&first_work["session"]["id"], "public v2 session ID");
+    let goal_revision = required_u64(&first_work["goal_revision"], "public v2 goal revision");
+    let first_attempt = required_text(
+        &first_work["current"]["attempt"]["attempt_id"],
+        "first work attempt ID",
+    );
+
+    let first_set = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "set",
+            "result",
+            "first packaged attempt",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000002",
+        ],
+    );
+    assert_eq!(
+        first_set["result"]["schema"],
+        "podway.item-mutation-result/v2"
+    );
+    let first_complete = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "complete",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000003",
+        ],
+    );
+    assert_eq!(
+        first_complete["result"]["schema"],
+        "podway.stage-transition-result/v2"
+    );
+    assert_public_v2_node(
+        &public_v2_status(
+            &fixture,
+            &controlled_path,
+            socket_text,
+            worktree_text,
+            false,
+        ),
+        "review",
+    );
+
+    let revised = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "decide",
+            "--option",
+            "revise",
+            "--reason",
+            "Repeat the work after recording one declared rework.",
+            "--actor",
+            "V2REL-006 qualifier",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000004",
+        ],
+    );
+    assert_eq!(revised["result"]["schema"], "podway.decision-result/v1");
+    assert_eq!(revised["result"]["effect"], "rework");
+    assert_eq!(revised["result"]["target_graph_node_id"], "work");
+    let before_restart =
+        public_v2_status(&fixture, &controlled_path, socket_text, worktree_text, true);
+    assert_public_v2_node(&before_restart, "work");
+    let second_attempt = required_text(
+        &before_restart["current"]["attempt"]["attempt_id"],
+        "second work attempt ID",
+    );
+    assert_ne!(second_attempt, first_attempt);
+
+    let restarted = fixture.run_json_success(&controlled_path, &["--json", "daemon", "restart"]);
+    assert_eq!(restarted["command"], "daemon.restart");
+    let cold = public_v2_status(&fixture, &controlled_path, socket_text, worktree_text, true);
+    assert_public_v2_node(&cold, "work");
+    assert_eq!(cold["session"]["id"], session_id);
+    assert_eq!(cold["goal_revision"], goal_revision);
+    assert_eq!(cold["current"]["attempt"]["attempt_id"], second_attempt);
+    assert_eq!(cold["procedure"]["digest"], procedure_digest);
+    assert!(
+        cold["decision_history"]["entries"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().any(|entry| entry["option_id"] == "revise")),
+        "cold readback must retain the declared rework decision"
+    );
+    assert!(
+        cold["rework_history"]["entries"]
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty()),
+        "cold readback must retain the rework transition"
+    );
+    assert!(
+        cold["stale_attempt_history"]["entries"]
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty()),
+        "cold readback must retain invalidated attempt history"
+    );
+    assert!(
+        !development_marker.exists(),
+        "restart must not synthesize development admission provenance"
+    );
+
+    public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "set",
+            "result",
+            "restarted packaged attempt",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000005",
+        ],
+    );
+    public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "complete",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000006",
+        ],
+    );
+    let accepted = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "decide",
+            "--option",
+            "accept",
+            "--reason",
+            "The restarted work record supports goal assessment.",
+            "--actor",
+            "V2REL-006 qualifier",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000007",
+        ],
+    );
+    assert_eq!(accepted["result"]["effect"], "advance");
+    assert_eq!(accepted["result"]["target_graph_node_id"], "assess");
+    assert_public_v2_node(
+        &public_v2_status(
+            &fixture,
+            &controlled_path,
+            socket_text,
+            worktree_text,
+            false,
+        ),
+        "assess",
+    );
+
+    let assessed = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "goal",
+            "assess-criterion",
+            "verified",
+            "--status",
+            "satisfied",
+            "--reason",
+            "The extracted binaries retained the reworked attempt across restart.",
+            "--evidence",
+            "work",
+            "--actor",
+            "V2REL-006 qualifier",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000008",
+        ],
+    );
+    assert_eq!(
+        assessed["result"]["schema"],
+        "podway.criterion-assessment-result/v1"
+    );
+    assert_eq!(assessed["result"]["complete"], true);
+    assert_eq!(assessed["result"]["determined_outcome"], "achieved");
+
+    let achieved = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "decide",
+            "--option",
+            "achieved",
+            "--reason",
+            "The fresh criterion assessment supports the packaged goal.",
+            "--actor",
+            "V2REL-006 qualifier",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000009",
+        ],
+    );
+    assert_eq!(achieved["result"]["target_graph_node_id"], "finish");
+    public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "set",
+            "closeout",
+            "packaged public v2 qualification complete",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000010",
+        ],
+    );
+    public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "complete",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000011",
+        ],
+    );
+    let terminal = public_v2_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        false,
+    );
+    assert_eq!(terminal["session"]["id"], session_id);
+    assert_eq!(terminal["session"]["lifecycle"], "completed");
+    assert!(terminal["current"].is_null());
+    assert_eq!(terminal["latest_goal_outcome"], "achieved");
+    assert_eq!(terminal["goal_revision"], goal_revision);
 
     fixture.uninstall(&controlled_path);
 }

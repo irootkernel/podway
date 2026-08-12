@@ -132,11 +132,10 @@ Its `prepared-not-released` status records an integration obligation only; it is
 not Dolgorae-side evidence and does not alter the historical v1 DOLGI acceptance
 matrix.
 
-Rows and fixture recipes marked `planned` are traceability obligations only. The
-YAML/JSON pair is a current schema known answer, but the graph, compatibility,
-payload, and admission recipes are not evidence that their future production
-paths, the complete §17 acceptance gate, public v2 admission, or GA release have
-passed.
+Fixture recipes marked `planned` are traceability obligations only. They do not
+replace the automated evidence bound by the acceptance matrices. In particular,
+an admission recipe does not prove the qualified public v2 path, and no local
+recipe or qualification result proves that V2REL-007 publication has occurred.
 
 ## Change-control rule
 

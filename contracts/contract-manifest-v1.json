@@ -58,12 +58,12 @@
     {
       "kind": "catalog",
       "path": "quality/v2-acceptance-matrix-v1.json",
-      "sha256": "sha256:bf48821a11ac917710b061bfcaee8a5645c07be020efec7821a5632ea372cc52"
+      "sha256": "sha256:fdf8257848bd18281038f5c82e2a521160d4f527b2792b0d2ab8983f70593ea1"
     },
     {
       "kind": "catalog",
       "path": "quality/v2-compatibility-matrix-v1.json",
-      "sha256": "sha256:60ab4b25fb3b960a5bdd74c870a0d73449734f26d7e3fdefd5680065789064b8"
+      "sha256": "sha256:b265e621ca86831350c5e78ff4f0c082d07cd2c6e58d1ae3a85ee42355b635e9"
     },
     {
       "kind": "catalog",
@@ -78,7 +78,7 @@
     {
       "kind": "catalog",
       "path": "release/v2-release-gate-matrix-v1.json",
-      "sha256": "sha256:1b87641c0995700492a001dc89f3122d6fae60daf3cb05f1742c9cef5c81c88d"
+      "sha256": "sha256:523fcec6a85b7ff247f27db509068279c9aece60aff04b1bbf810ce5f5d13c12"
     },
     {
       "kind": "schema",
@@ -388,22 +388,22 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/contract/v2-fixture-catalog-v1.json",
-      "sha256": "sha256:02e718031198a7e4a21091d05fc8404bdfdfd238813498cd0e50fe1c83c0c021"
+      "sha256": "sha256:623a0b16f8125716da06209b0e229c5d13c2ac68472d2985b0e6940bff7af8c4"
     },
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/compatibility/admission-fence.json",
-      "sha256": "sha256:feb08140fd8f6cc62131151048209686fd53ebe2a0bb3d100313e8d06c13ce8f"
+      "sha256": "sha256:2c475b4253865f1b206a864e98772c9420e56ebd9b792afab1dd93c0fca741b6"
     },
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/compatibility/unsupported-peer.json",
-      "sha256": "sha256:839325fe7cdb8fe4bfda6a4914be301a7e28610a9a009d8977be379f46b9d254"
+      "sha256": "sha256:686280369562b9584af5b2ddb578ea73ce86b105b7b4ef86f62ba49da1dc1537"
     },
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/compatibility/v1-boundaries.json",
-      "sha256": "sha256:754173cbdd96377efccad8842afebf4ae4dd350314153186c2e42890fed350a4"
+      "sha256": "sha256:08c1c12234d4ed5927740206fa09754f6f9c150aec65e1d8e1b7d7e872086b30"
     },
     {
       "kind": "known_answer_fixture",
@@ -461,7 +461,7 @@
       "sha256": "sha256:326ac9e1e41126e83390fa390b875edc4e584cfb280f009b6dce25e8484c641b"
     }
   ],
-  "digest": "sha256:4efe4147a06683abfdbbab7d79e07e07226d10d790907e5f10095db5fa54996b",
+  "digest": "sha256:df13bb9d952cce172118dc1e8319b8d6cd3fc524893d1b207282d3c3a9b95a78",
   "product": "podway",
   "product_version": "0.2.0",
   "schema_version": "podway.contract-manifest/v1",

@@ -853,8 +853,8 @@ def release_status() -> dict[str, str]:
         "podway-0.2.0-aarch64-apple-darwin.dolgorae-handoff.json",
         "native Apple Silicon macOS",
         "same-user local tool",
-        "normal public Procedure v2 admission closed",
-        "V2REL-006 must implement production public v2 admission and then build and qualify those exact bytes without the development-only admission unlock",
+        "qualified release candidate admits Procedure v2 sessions normally",
+        "does not contain the development-only admission unlock",
         "V2REL-007 may publish only the unchanged qualified artifacts after explicit release authorization",
         "unsigned and not notarized",
     )

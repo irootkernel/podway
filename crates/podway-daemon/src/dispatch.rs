@@ -1058,13 +1058,13 @@ pub trait WorkspaceRuntimeV1: Send + Sync {
         selector: &WorktreeSelectorWireV1,
     ) -> Result<Self::Workspace, DispatchFailureV1>;
 
-    /// Produces a read-only, non-persisted proof that this exact selector satisfies every
-    /// development-v2 admission conjunct. The default keeps existing runtimes closed.
-    fn development_v2_admission(
+    /// Produces a read-only, non-persisted proof that this exact selector is admitted for
+    /// Procedure v2. The default keeps existing runtimes closed.
+    fn procedure_v2_admission(
         &self,
         _selector: &WorktreeSelectorWireV1,
-    ) -> Option<DevelopmentV2AdmissionProofV1> {
-        None
+    ) -> Result<Option<ProcedureV2AdmissionProofV1>, DispatchFailureV1> {
+        Ok(None)
     }
 
     fn workspace_output(&self, workspace: &Self::Workspace) -> WorkspaceOutputV1;
@@ -1088,12 +1088,12 @@ pub trait WorkspaceRuntimeV1: Send + Sync {
     ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1>;
 }
 
-/// Opaque evidence that the runtime completed the read-only development admission check.
+/// Opaque evidence that the runtime completed its read-only Procedure v2 admission check.
 /// It deliberately carries no scheduler or Store mutation authority.
 #[derive(Clone, Copy, Debug)]
-pub struct DevelopmentV2AdmissionProofV1(());
+pub struct ProcedureV2AdmissionProofV1(());
 
-impl DevelopmentV2AdmissionProofV1 {
+impl ProcedureV2AdmissionProofV1 {
     #[doc(hidden)]
     pub const fn granted_for_runtime() -> Self {
         Self(())
@@ -1441,11 +1441,10 @@ pub trait MutationAdmissionWorkerV1<Workspace>: Send + Sync {
         response_request_id: &podway_protocol::RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1>;
 
-    /// Future Procedure v2 runtimes plug into this seam only after the conjunctive development
-    /// admission gate succeeds. V2PLT-009 deliberately leaves the production worker closed.
-    fn dispatch_development_v2(
+    /// Procedure v2 runtimes plug into this seam only after the active admission policy succeeds.
+    fn dispatch_procedure_v2(
         &self,
-        _proof: DevelopmentV2AdmissionProofV1,
+        _proof: ProcedureV2AdmissionProofV1,
         _request: &RequestEnvelopeV1,
         _daemon_request: &DaemonRequestV1,
     ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
@@ -2239,14 +2238,32 @@ where
                     | SliceCommandV1::ItemAttach(_)
                     | SliceCommandV1::ItemClear(_)
             );
-            if development_v2_candidate
-                && let Some(proof) = self
+            let procedure_v2_admission = if development_v2_candidate {
+                match self
                     .runtime
-                    .development_v2_admission(slice_request.selector())
-            {
+                    .procedure_v2_admission(slice_request.selector())
+                {
+                    Ok(admission) => admission,
+                    Err(failure) => {
+                        return match self.error_response(
+                            request,
+                            failure,
+                            development_v2_requires_admission,
+                        ) {
+                            ResponseEnvelopeV1::Output(output) => {
+                                ResponseEnvelopeV2::OutputV1(output)
+                            }
+                            ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+                        };
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some(proof) = procedure_v2_admission {
                 match self
                     .mutations
-                    .dispatch_development_v2(proof, request, daemon_request)
+                    .dispatch_procedure_v2(proof, request, daemon_request)
                 {
                     Ok(Some(response)) => return response,
                     Ok(None) => {}
@@ -2295,15 +2312,35 @@ where
                                 "SESSION_NOT_FOUND" | "SESSION_ID_MISMATCH"
                             )
                     );
-                    if development_v2_candidate
-                        && version_may_have_changed
-                        && let Some(proof) = self
-                            .runtime
-                            .development_v2_admission(slice_request.selector())
-                    {
+                    let procedure_v2_admission =
+                        if development_v2_candidate && version_may_have_changed {
+                            match self
+                                .runtime
+                                .procedure_v2_admission(slice_request.selector())
+                            {
+                                Ok(admission) => admission,
+                                Err(failure) => {
+                                    return match self.error_response(
+                                        request,
+                                        failure,
+                                        development_v2_requires_admission,
+                                    ) {
+                                        ResponseEnvelopeV1::Output(output) => {
+                                            ResponseEnvelopeV2::OutputV1(output)
+                                        }
+                                        ResponseEnvelopeV1::Error(error) => {
+                                            ResponseEnvelopeV2::Error(error)
+                                        }
+                                    };
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                    if let Some(proof) = procedure_v2_admission {
                         match self
                             .mutations
-                            .dispatch_development_v2(proof, request, daemon_request)
+                            .dispatch_procedure_v2(proof, request, daemon_request)
                         {
                             Ok(Some(response)) => return response,
                             Ok(None) => {}
@@ -2341,10 +2378,19 @@ where
             DaemonRequestV1::ProcedureV2Mutation(request) => request.selector(),
             DaemonRequestV1::Legacy(_) => unreachable!("legacy requests returned above"),
         };
-        if let Some(proof) = self.runtime.development_v2_admission(selector) {
+        let proof = match self.runtime.procedure_v2_admission(selector) {
+            Ok(proof) => proof,
+            Err(failure) => {
+                return match self.error_response(request, failure, true) {
+                    ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
+                    ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+                };
+            }
+        };
+        if let Some(proof) = proof {
             match self
                 .mutations
-                .dispatch_development_v2(proof, request, daemon_request)
+                .dispatch_procedure_v2(proof, request, daemon_request)
             {
                 Ok(Some(response)) => return response,
                 Ok(None) => {}

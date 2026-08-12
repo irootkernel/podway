@@ -110,7 +110,9 @@ singleton/preflight behavior used by packaging qualification.
 
 ## Procedure v2 admission
 
-This helper is the only supported source of development-v2 admission provenance.
+This helper is the only supported source of contributor development-v2 admission
+provenance. It provides an isolated alternative to the public Procedure v2
+admission path used by release runtimes.
 The daemon revalidates every conjunct for every candidate request: the explicit
 debug-only feature, `--dev` launch mode, managed runtime metadata, snapshotted
 daemon digest, separate socket and state directory, exact sandbox marker, and
@@ -118,16 +120,17 @@ absence from the normal production registry. Deleting, changing, copying, or
 loosening the marker closes the gate immediately. Rebuilding the snapshot makes
 an old marker stale; clean and initialize the disposable runtime again.
 
-The gate authorizes only handlers that have landed. Custom Procedure v2 starts,
-including goal-bearing starts, and the decision, rework, goal-definition,
+The development gate authorizes only handlers that have landed. Custom Procedure
+v2 starts, including goal-bearing starts, and the decision, rework, goal-definition,
 goal-revision, and criterion-assessment mutations are currently served; shipped
 `bug-fix-v2` and `sw-dev-v2` presets are embedded, digest-pinned, and served
-through the same gate. Use `python3 tools/dev_runtime.py run -- --json preset list`
+through the same runtime surface. Use `python3 tools/dev_runtime.py run -- --json preset list`
 to inspect the available identities and the
 [Procedure v2 workflow](../examples/v2-workflow.md) for the complete operator
-sequence. Ordinary
-debug builds, release builds, raw `podwayd --dev`, installed daemons, LaunchAgents,
-and arbitrary worktrees contain no accepting path.
+sequence. A debug build with the development feature uses this conjunctive gate in
+place of public admission and therefore refuses raw `podwayd --dev`, installed
+state, LaunchAgents, and arbitrary worktrees. Release builds omit the development
+unlock and use public admission instead.
 
 ## Why the helper stays sizable
 

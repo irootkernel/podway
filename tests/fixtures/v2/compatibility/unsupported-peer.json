@@ -1,11 +1,12 @@
 {
   "schema": "podway.v2-fixture-recipe/v1",
   "fixture_class": "compatibility",
-  "evidence_level": "contract-recipe",
-  "implementation_status": "planned",
+  "evidence_level": "production-serialization",
+  "implementation_status": "automated",
+  "production_proof_required": false,
   "cases": [
-    {"id": "v2-command-to-v1-peer", "operation": "send each v2-only command to a peer that registers the command but lacks its required result family", "expected_code": "UNSUPPORTED_V2_CAPABILITY", "expected_details_schema": "podway.v2-runtime-error-details/v1"},
-    {"id": "registered-but-unserved", "operation": "send a registered v2 command before its daemon implementation exists", "expected_code": "UNSUPPORTED_V2_CAPABILITY", "expected_details_schema": "podway.v2-runtime-error-details/v1"},
-    {"id": "absent-route", "operation": "send a command absent from the route registry", "expected": "usage-or-unknown-command-before-v2-dispatch"}
+    {"id": "typed-v2-capability-response", "operation": "shape each typed new-route v2 CLI mutation and preserve a stable unsupported-capability response from a capability-limited recording peer", "expected_code": "UNSUPPORTED_V2_CAPABILITY", "expected_details_schema": "podway.v2-runtime-error-details/v1", "proof_acceptance_id": "V2ACC-068", "proof_specialized_id": "V2COMP-003", "proof": {"kind": "cargo-test", "path": "crates/podway-cli/tests/int_v2_platform_cli.rs", "function": "typed_v2_commands_shape_exact_requests_and_preserve_capability_errors", "command": "cargo test -p podway-cli --test int_suite int_v2_platform_cli::typed_v2_commands_shape_exact_requests_and_preserve_capability_errors --locked -- --exact"}},
+    {"id": "registered-but-unserved", "operation": "send a registered v2 command before its daemon implementation exists", "expected_code": "UNSUPPORTED_V2_CAPABILITY", "expected_details_schema": "podway.v2-runtime-error-details/v1", "proof_specialized_id": "V2COMP-SURFACE-004", "proof": {"kind": "cargo-test", "path": "crates/podway-daemon/tests/int_phase4_server.rs", "function": "all_registered_unserved_v2_mutations_cross_the_socket_as_closed_errors", "command": "cargo test -p podway-daemon --test int_suite int_phase4_server::all_registered_unserved_v2_mutations_cross_the_socket_as_closed_errors --locked -- --exact"}},
+    {"id": "absent-route", "operation": "send a command absent from the route registry", "expected": "usage-or-unknown-command-before-v2-dispatch", "proof_specialized_id": "V2COMP-SURFACE-005", "proof": {"kind": "cargo-test", "path": "crates/podway-cli/tests/int_v2_platform_cli.rs", "function": "v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon", "command": "cargo test -p podway-cli --test int_suite int_v2_platform_cli::v2_grammar_rejects_invalid_shapes_before_contacting_a_daemon --locked -- --exact"}}
   ]
 }

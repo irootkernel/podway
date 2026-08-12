@@ -146,10 +146,15 @@ fn run_service(
         ServerTransportTimeoutsV1::default(),
     )
     .with_process_identity(process_identity);
+    #[cfg(all(feature = "development-v2-admission", debug_assertions))]
     if dev_mode {
         configuration = configuration
             .with_dev_mode()
             .with_development_v2_admission(&paths, &env::current_exe()?.canonicalize()?);
+    }
+    #[cfg(not(all(feature = "development-v2-admission", debug_assertions)))]
+    if dev_mode {
+        configuration = configuration.with_dev_mode();
     }
     let inspection_options = SqliteStoreOptionsV1::new(1)?;
     let mut signals = Signals::new([SIGINT, SIGTERM])?;

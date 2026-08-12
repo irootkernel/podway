@@ -23,9 +23,10 @@ use nix::{
     unistd::{Pid, geteuid},
 };
 use podway_protocol::{
-    ItemTypeResultV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeV1, ResponseEnvelopeV1,
-    SessionLifecycleV1, StageStatusResultV1, StatusArtifactLocationTypeV1, StatusItemValueV1,
-    StatusResultV1, decode_request_payload_v1, decode_response_payload_v1, decode_single_frame_v1,
+    ItemTypeResultV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeV1, OutputEnvelopeV2,
+    ResponseEnvelopeV1, SessionLifecycleV1, StageStatusResultV1, StatusArtifactLocationTypeV1,
+    StatusItemValueV1, StatusResultV1, decode_request_payload_v1, decode_response_payload_v1,
+    decode_single_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
@@ -1517,15 +1518,16 @@ fn public_cli_production_vertical_covers_g005_lifecycle_recovery_replay_and_conf
 
 #[test]
 #[ignore = "run with tools/run_e2e.py so Cargo supplies a freshly built podwayd artifact"]
-fn v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission() {
+fn v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly() {
     let fixture = FixtureV1::new();
     let daemon = RunningDaemonV1::start(&fixture);
     let workspace = fixture.worktree.clone();
 
     cli_output(&fixture, &workspace, "init", &[]);
 
-    let unsupported = fixture.run(
+    let admitted = fixture.run_with_global_arguments(
         &workspace,
+        &["--idempotency-key", "v2rel001-public-v2-start"],
         "start",
         &[
             "--preset",
@@ -1538,17 +1540,54 @@ fn v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission() {
             "verified=The compatibility check passes.",
         ],
     );
-    assert_eq!(unsupported.status.code(), Some(3));
-    assert!(unsupported.stderr.is_empty());
-    let unsupported: Value = serde_json::from_slice(&unsupported.stdout)
-        .expect("unsupported v2 start must emit one JSON error");
-    assert_error_shape(&unsupported, "session.start");
-    assert_eq!(unsupported["code"], "UNSUPPORTED_V2_CAPABILITY");
-    assert_eq!(unsupported["details"]["kind"], "UNSUPPORTED_V2_CAPABILITY");
+    assert_eq!(admitted.status.code(), Some(0));
+    assert!(admitted.stderr.is_empty());
+    let admitted: Value = serde_json::from_slice(&admitted.stdout)
+        .expect("public v2 start must emit one JSON output");
     assert_eq!(
-        unsupported["details"]["contract_manifest_digest"],
-        podway_protocol::build_identity_v1().contract_manifest_digest()
+        admitted["schema"], "podway.output/v2",
+        "public v2 start must use the v2 output envelope"
     );
+    assert_eq!(admitted["command"], "session.start");
+    let admitted: OutputEnvelopeV2 = serde_json::from_value(admitted)
+        .expect("public v2 start must satisfy the exact protocol schema");
+    assert_eq!(
+        admitted.result()["schema"],
+        "podway.session-start-result/v2"
+    );
+    assert_eq!(admitted.result()["procedure_schema"], "podway.procedure/v2");
+
+    let v2_status = fixture.run(&workspace, "status", &[]);
+    assert_eq!(v2_status.status.code(), Some(0));
+    assert!(v2_status.stderr.is_empty());
+    let v2_status: Value = serde_json::from_slice(&v2_status.stdout)
+        .expect("public v2 status must emit one JSON output");
+    assert_eq!(v2_status["schema"], "podway.output/v2");
+    assert_eq!(v2_status["command"], "session.status");
+    assert_eq!(v2_status["result"]["schema"], "podway.status-result/v2");
+    assert_eq!(
+        v2_status["result"]["procedure"]["schema"],
+        "podway.procedure/v2"
+    );
+
+    let reset = fixture.run_with_global_arguments(
+        &workspace,
+        &["--yes", "--idempotency-key", "v2rel001-reset-public-v2"],
+        "reset",
+        &[],
+    );
+    assert_eq!(reset.status.code(), Some(0));
+    assert!(reset.stderr.is_empty());
+    let reset: Value =
+        serde_json::from_slice(&reset.stdout).expect("public v2 reset must emit one JSON output");
+    assert_eq!(reset["schema"], "podway.output/v2");
+    assert_eq!(reset["command"], "session.reset");
+    assert_eq!(
+        reset["result"]["schema"],
+        "podway.stage-transition-result/v2"
+    );
+    assert_eq!(reset["result"]["transition"], "reset");
+    assert_eq!(reset["result"]["reset"], true);
 
     let procedure = workspace.join(".podway/procedures/compatibility-v1.yaml");
     fs::create_dir_all(

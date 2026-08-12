@@ -59,7 +59,9 @@ The development runtime helper has one narrow, development-only exception to the
 write authority: after the isolated `podway --dev init` succeeds, it atomically publishes
 `development-v2.marker` through the private runtime directory. The marker contains no task state
 and grants no transition authority; the daemon treats it only as disposable-runtime provenance and
-revalidates it before admitting requests to the implemented development-only v2 handlers. Normal session reset and workspace
+revalidates it before admitting requests through the contributor-only development
+admission path. Release runtimes use the public Procedure v2 admission path and do
+not consult this marker. Normal session reset and workspace
 reset-all retain it so the helper-managed sandbox remains disposable after state replacement. The
 helper's `clean` operation removes the complete managed root, including the marker.
 

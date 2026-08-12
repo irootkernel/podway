@@ -9,7 +9,7 @@
   `V2DRW`, `V2GOL`, `V2DOG`, and `V2REL`
 - Target product release: `v0.2.0`
 - Contract target: `podway.procedure/v2`
-- Implementation status: Implemented pre-GA; V2REL-006 production admission and qualification plus V2REL-007 publication remain pending
+- Implementation status: Qualified and unpublished; V2REL-006 production admission and distribution qualification are complete, while V2REL-007 publication remains pending
 - Compatibility: `podway.procedure/v1` remains supported with unchanged semantics
 - Repository scope: Podway only; Dolgorae changes require separate authorization
 - Last accepted planning baseline: August 4, 2026
@@ -3164,17 +3164,18 @@ releasable product slice: `v0.2.0` reaches GA only when all ten epics and every
 - `version --json --identity` exposes the build's contract manifest digest,
   which pins exactly which surfaces the build carries.
 
-Normal v2 session admission remains closed during development. Read-only
-authoring surfaces may exist in development builds, and dogfooding may use a
+Before V2REL-006, normal v2 session admission remained closed during development.
+Read-only authoring surfaces could exist in development builds, and dogfooding
+could use a
 development-only unlock, but no release artifact may expose a partial v2
 contract. The unlock is compiled only with an explicit build feature and also
 requires the existing development mode, a disposable-workspace marker, a
 separate socket, and a separate state directory. It refuses an installed
 daemon, LaunchAgent, or normally registered workspace. Development v2 state is
 discardable and receives no migration-preservation promise. Release
-qualification proves both that production public v2 admission works in normal
-release binaries and that the development unlock is absent. V2REL-006 owns that
-production admission implementation before it runs the final clean `make dist`.
+qualification proved both that production public v2 admission works in normal
+release binaries and that the development unlock is absent. V2REL-006 owned that
+production admission implementation and the final clean `make dist` run.
 
 Every executable task includes focused success and failure tests, updates each
 affected specification and machine contract in the same change, and preserves

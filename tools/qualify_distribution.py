@@ -154,6 +154,11 @@ def verify_distribution(
             fail(f"packaged {role} digest does not match provenance")
         if release_archive.test_isolation_capability(binary) is not release_archive.TestIsolationCapability.DISABLED:
             fail(f"packaged {role} exposes or ambiguously handles debug isolation")
+    if (
+        release_archive.development_v2_admission_capability(daemon)
+        is not release_archive.TestIsolationCapability.DISABLED
+    ):
+        fail("packaged podwayd exposes or ambiguously handles the development-v2 admission unlock")
     return cli, daemon, provenance
 
 

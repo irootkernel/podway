@@ -2,10 +2,10 @@
   "schema": "podway.v2-release-gate-matrix/v1",
   "version": 1,
   "source_acceptance_matrix": "quality/v2-acceptance-matrix-v1.json",
-  "admission_rule": "Public podway.procedure/v2 admission remains disabled until V2REL-006 implements production admission after every preceding task is complete, closes the remaining admission criterion and every category, and qualifies those exact bytes.",
+  "admission_rule": "Public podway.procedure/v2 admission is enabled only in the V2REL-006 qualified bytes after every preceding task, acceptance criterion, and category passed.",
   "admission_policy": {
     "read_only_authoring_during_development": true,
-    "normal_v2_session_admission": "closed",
+    "normal_v2_session_admission": "open",
     "development_unlock_requires_all": [
       "explicit-development-only-build-feature",
       "development-mode",
@@ -231,9 +231,9 @@
         "V2ACC-072"
       ],
       "required_tasks": ["V2REL-001", "V2PLT-001", "V2MOD-008", "V2PLT-009", "V2REL-003", "V2REL-006", "V2PLT-005"],
-      "gate_owner_task": "V2REL-001",
-      "gate": "make test",
-      "implementation_status": "planned"
+      "gate_owner_task": "V2REL-006",
+      "gate": "make dist",
+      "implementation_status": "automated"
     },
     {
       "id": "V2GATE-08",
@@ -280,7 +280,7 @@
     {
       "task": "V2REL-006",
       "command": "implement production public v2 admission, then make dist",
-      "implementation_status": "planned",
+      "implementation_status": "automated",
       "conditions": [
         "all-prior-pv2ga-tasks-completed",
         "production-public-v2-admission-enabled",

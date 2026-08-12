@@ -1805,7 +1805,7 @@ def command_qualify_v2rel003(
         "completed_goal_reactivation": False,
         "cancelled_rejection": False,
         "endpoint_isolation": False,
-        "release_admission_fence": False,
+        "release_public_admission": False,
     }
     checkout = make_synthetic_checkout()
     root = managed_root_for(checkout)
@@ -2344,57 +2344,43 @@ def command_qualify_v2rel003(
         )
         initialize_sandbox(release_paths["sandbox"])
         qualification_command(cli, release_paths, ["init"], label="release-profile init")
-        marker_metadata = {
-            "snapshot": {
-                "podwayd": release_daemon.as_posix(),
-                "podwayd_sha256": release_archive.sha256_file(release_daemon),
-            }
-        }
-        publish_development_v2_marker(release_paths, marker_metadata)
-        rejected = qualification_command(
+        release_started_envelope = qualification_command(
             cli,
             release_paths,
             [
-                "--idempotency-key", "v2rel003-release-fence",
-                "start", "--preset", "sw-dev-v2", "--task", "Release fence",
-                "--goal", "Prove the release admission fence.",
-                "--criterion", "fence=Release profile rejects Procedure v2.",
+                "--idempotency-key", "v2rel003-release-public-admission",
+                "start", "--preset", "sw-dev-v2", "--task", "Release admission",
+                "--goal", "Prove public Procedure v2 admission in the release profile.",
+                "--criterion", "admission=Release profile admits Procedure v2 publicly.",
                 "--actor", "V2REL-003 qualifier",
             ],
-            label="release-profile v2 rejection",
-            expected_code=None,
+            label="release-profile public v2 admission",
         )
-        require_error_code(rejected, "UNSUPPORTED_V2_CAPABILITY", label="release-profile v2 rejection")
-        if rejected.get("details", {}).get("admission") != {"admitted": False}:
-            fail("release-profile v2 rejection did not fail before durable admission")
-        release_lookup = require_output_result(
+        release_started = require_output_result(
+            release_started_envelope,
+            command="session.start",
+            result_schema="podway.session-start-result/v2",
+        )
+        if release_started_envelope.get("schema") != "podway.output/v2":
+            fail("release-profile public v2 start did not use the v2 output envelope")
+        if (
+            release_started.get("procedure_schema") != "podway.procedure/v2"
+            or release_started.get("admission", {}).get("admitted") is not True
+        ):
+            fail("release-profile public v2 start was not durably admitted")
+        release_status = require_output_result(
             qualification_command(
                 cli,
                 release_paths,
-                [
-                    "--idempotency-key", "v2rel003-release-fence",
-                    "job", "lookup",
-                ],
-                label="release-profile lookup after v2 rejection",
+                ["status"],
+                label="release-profile status after public v2 admission",
             ),
-            command="job.lookup",
-            result_schema="podway.job-lookup-result/v1",
+            command="session.status",
+            result_schema="podway.status-result/v2",
         )
-        if release_lookup.get("found") is not False:
-            fail("release-profile v2 rejection created a durable job")
-        release_status = qualification_command(
-            cli,
-            release_paths,
-            ["status"],
-            label="release-profile status after v2 rejection",
-            expected_code=None,
-        )
-        require_error_code(
-            release_status,
-            "SESSION_NOT_FOUND",
-            label="release-profile status after v2 rejection",
-        )
-        checks["release_admission_fence"] = True
+        if release_status.get("procedure", {}).get("schema") != "podway.procedure/v2":
+            fail("release-profile status did not retain the admitted Procedure v2 session")
+        checks["release_public_admission"] = True
     finally:
         if release_process is not None:
             stop_process(release_process)

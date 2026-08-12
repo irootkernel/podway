@@ -20,7 +20,7 @@ const REQUIRED_CHECKS: [&str; 13] = [
     "completed_goal_reactivation",
     "cancelled_rejection",
     "endpoint_isolation",
-    "release_admission_fence",
+    "release_public_admission",
 ];
 
 fn required_path(variable: &str, executable: bool) -> PathBuf {

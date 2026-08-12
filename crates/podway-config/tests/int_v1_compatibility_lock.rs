@@ -275,14 +275,12 @@ const V1_BOUNDARIES_FIXTURE: &str =
 /// instead of silently going stale, then executes the case's config-ownable meaning: the item-1
 /// golden v1 document still round-trips to byte-for-byte identical canonical bytes and digest.
 ///
-/// The fixture's other cases are not config's to execute; each is annotated here with its real
-/// owning task per `quality/v2-compatibility-matrix-v1.json` rather than faked:
+/// The fixture's other cases are bound to their exact executable proofs and annotated here with
+/// their real owning task per `quality/v2-compatibility-matrix-v1.json`:
 ///   - `"v1-storage-migration"` -> V2COMP-002 / V2PLT-001 (v1 session-store migration).
-///   - `"v1-command-dispatch"` -> V2COMP-004 / V2MOD-008. The fixture's full case ("dispatch
-///     every v1 command against migrated state") needs migrated storage (V2PLT-001) plus live
-///     CLI/daemon command dispatch; this file's `dispatch_v1_*` tests above are the
-///     config-crate-ownable slice of that same V2ACC-069 substance (the call-site argument), not
-///     the full end-to-end case.
+///   - `"v1-command-dispatch"` -> V2COMP-004 / V2MOD-008. The recipe records the exact
+///     config-owned schema-dispatch slice; live CLI/daemon compatibility remains separate
+///     acceptance evidence.
 ///   - `"v1-reopen"` -> V2COMP-005 / V2COMP-SURFACE-007, both filed under V2REL-001 but scoped to
 ///     session-command reopen/reactivation handling in `podway-core` / `podway-daemon` — outside
 ///     this task's config-crate file scope (`crates/podway-config/tests/**`,
@@ -291,8 +289,8 @@ const V1_BOUNDARIES_FIXTURE: &str =
 ///   - `"existing-route-v2-result-family"` -> V2COMP-SURFACE-001 / V2REL-001 (result schemas).
 ///   - `"new-route-v1-result-family"` -> V2COMP-SURFACE-002 / V2REL-001.
 ///   - `"v2-never-extends-v1-result-family"` -> V2COMP-SURFACE-003 / V2REL-001.
-///   - `"manifest-digest-capability-discovery"` -> V2COMP-SURFACE-006 / V2REL-001 (peer manifest
-///     capability discovery).
+///   - `"manifest-digest-capability-discovery"` -> V2COMP-SURFACE-006 / V2REL-001 (static version
+///     identity binding to the canonical manifest digest).
 #[test]
 fn v1_boundaries_fixture_released_v1_fixtures_case_is_byte_for_byte_stable() {
     let fixture: Value =

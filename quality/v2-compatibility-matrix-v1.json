@@ -126,7 +126,8 @@
         "V2REL-003",
         "V2REL-006"
       ],
-      "implementation_status": "planned"
+      "implementation_status": "automated",
+      "proof_acceptance_id": "V2ACC-071"
     },
     {
       "id": "V2COMP-007",
@@ -291,8 +292,8 @@
           {
             "kind": "cargo-test",
             "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
-            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
-            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+            "function": "v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly"
           },
           {
             "kind": "cargo-test",
@@ -326,8 +327,8 @@
           {
             "kind": "cargo-test",
             "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
-            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
-            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+            "function": "v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly"
           }
         ]
       }

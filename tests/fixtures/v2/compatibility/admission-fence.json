@@ -1,12 +1,13 @@
 {
   "schema": "podway.v2-fixture-recipe/v1",
   "fixture_class": "compatibility",
-  "evidence_level": "contract-recipe",
-  "implementation_status": "planned",
+  "evidence_level": "production-serialization",
+  "implementation_status": "automated",
+  "production_proof_required": false,
   "cases": [
-    {"id": "release-build", "operation": "attempt v2 admission with a release binary", "expected": "refused-before-complete-gate"},
-    {"id": "development-unlock", "operation": "admit in a source-built daemon with explicit unlock and disposable workspace markers", "expected": "allowed-only-when-all-conjuncts-hold"},
-    {"id": "installed-daemon", "operation": "attempt development unlock through an installed daemon or LaunchAgent", "expected": "refused"},
-    {"id": "non-disposable-workspace", "operation": "attempt development unlock outside disposable state", "expected": "refused"}
+    {"id": "release-build", "operation": "admit v2 with the packaged release binary after the complete acceptance gate", "expected": "public-admission-enabled", "proof_acceptance_id": "V2ACC-071", "proof_specialized_id": "V2COMP-006", "proof": {"kind": "cargo-test-set", "members": [{"kind": "cargo-test", "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs", "function": "aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_closeout", "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_closeout"}, {"kind": "release-step", "path": "tools/qualify_distribution.py", "function": "qualify", "command": "make dist"}]}},
+    {"id": "development-unlock", "operation": "admit in a source-built daemon with explicit unlock and disposable workspace markers", "expected": "allowed-only-when-all-conjuncts-hold", "proof_acceptance_id": "V2ACC-071", "proof_specialized_id": "V2COMP-006", "proof": {"kind": "cargo-unit-test", "path": "crates/podway-daemon/src/development_v2.rs", "function": "v2plt009_gate_requires_dev_process_and_exact_disposable_marker", "command": "cargo test -p podway-daemon --lib development_v2::tests::v2plt009_gate_requires_dev_process_and_exact_disposable_marker --locked -- --exact"}},
+    {"id": "installed-daemon", "operation": "attempt development unlock through an installed daemon or LaunchAgent", "expected": "refused", "proof_acceptance_id": "V2ACC-071", "proof_specialized_id": "V2COMP-006", "proof": {"kind": "cargo-unit-test", "path": "crates/podway-daemon/src/development_v2.rs", "function": "v2plt009_gate_rejects_installed_or_nonisolated_endpoint_topology", "command": "cargo test -p podway-daemon --lib development_v2::tests::v2plt009_gate_rejects_installed_or_nonisolated_endpoint_topology --locked -- --exact"}},
+    {"id": "non-disposable-workspace", "operation": "attempt development unlock outside disposable state", "expected": "refused", "proof_acceptance_id": "V2ACC-071", "proof_specialized_id": "V2COMP-006", "proof": {"kind": "cargo-unit-test", "path": "crates/podway-daemon/src/development_v2.rs", "function": "v2plt009_gate_rejects_marker_tamper_and_normal_registry_membership", "command": "cargo test -p podway-daemon --lib development_v2::tests::v2plt009_gate_rejects_marker_tamper_and_normal_registry_membership --locked -- --exact"}}
   ]
 }

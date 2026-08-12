@@ -1109,7 +1109,7 @@
         ]
       },
       "status": "automated",
-      "text": "The retained v1 presets `sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate without semantic drift, while the shipped pre-GA v2 presets `sw-dev-v2` and `bug-fix-v2` validate and vet with their embedded bytes and pinned digests intact."
+      "text": "The retained v1 presets `sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate without semantic drift, while the shipped v0.2 candidate presets `sw-dev-v2` and `bug-fix-v2` validate and vet with their embedded bytes and pinned digests intact."
     },
     {
       "id": "PAC-069",

@@ -43,15 +43,15 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    development_v2::DevelopmentV2AdmissionGateV1,
+    development_v2::ProcedureV2AdmissionGateV1,
     dispatch::{
-        CatalogDispatchErrorMapperV1, DevelopmentV2AdmissionProofV1, DispatchErrorDetailsV1,
-        DispatchFailureKindV1, DispatchFailureV1, DispatchResponseMetadataV1,
-        DispatcherControlServiceV1, DispatcherJobOutputV1, DispatcherNextRequestV1,
-        DispatcherPreviewServiceV1, DispatcherReadOutputV1, DispatcherReadServiceV1,
-        DispatcherReconciliationOutputV1, DispatcherStatusRequestV1, DispatcherTerminalOutputV1,
-        DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1,
-        MutationDispatchOutcomeV1, MutationResponseContextV1, MutationWaitV1,
+        CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
+        DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
+        DispatcherJobOutputV1, DispatcherNextRequestV1, DispatcherPreviewServiceV1,
+        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherReconciliationOutputV1,
+        DispatcherStatusRequestV1, DispatcherTerminalOutputV1, DispatcherTerminalResultV1,
+        DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, MutationDispatchOutcomeV1,
+        MutationResponseContextV1, MutationWaitV1, ProcedureV2AdmissionProofV1,
         RequestDispatcherV1Adapter, RequestReadWaitV1, TerminalResponseContextV1,
         WorkspaceRuntimeV1, terminal_response_envelope_v1,
     },
@@ -182,7 +182,7 @@ impl ProductionWorkspaceV1 {
 pub struct ProductionWorkspaceRuntimeV1 {
     manager: Arc<WorkspaceRuntimeManagerV1>,
     clock: Arc<NativeProductionClockV1>,
-    development_v2_admission: DevelopmentV2AdmissionGateV1,
+    procedure_v2_admission: ProcedureV2AdmissionGateV1,
 }
 
 impl ProductionWorkspaceRuntimeV1 {
@@ -193,15 +193,15 @@ impl ProductionWorkspaceRuntimeV1 {
         Self {
             manager,
             clock,
-            development_v2_admission: DevelopmentV2AdmissionGateV1::closed(),
+            procedure_v2_admission: ProcedureV2AdmissionGateV1::public(),
         }
     }
 
-    pub(crate) fn with_development_v2_admission(
+    pub(crate) fn with_procedure_v2_admission(
         mut self,
-        admission: DevelopmentV2AdmissionGateV1,
+        admission: ProcedureV2AdmissionGateV1,
     ) -> Self {
-        self.development_v2_admission = admission;
+        self.procedure_v2_admission = admission;
         self
     }
 
@@ -287,26 +287,38 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
         self.workspace_from_scheduler(scheduler)
     }
 
-    fn development_v2_admission(
+    fn procedure_v2_admission(
         &self,
         selector: &WorktreeSelectorWireV1,
-    ) -> Option<DevelopmentV2AdmissionProofV1> {
-        if !self.development_v2_admission.process_is_eligible() {
-            return None;
+    ) -> Result<Option<ProcedureV2AdmissionProofV1>, DispatchFailureV1> {
+        match &self.procedure_v2_admission {
+            ProcedureV2AdmissionGateV1::Public => {
+                let expected_workspace_id = selector.expected_uuid();
+                let selector = selector_from_wire(selector)?;
+                self.manager
+                    .resolve_existing_readonly(selector, expected_workspace_id)
+                    .map_err(map_runtime_error)?;
+                Ok(Some(ProcedureV2AdmissionProofV1::granted_for_runtime()))
+            }
+            ProcedureV2AdmissionGateV1::Development(admission) => {
+                if !admission.process_is_eligible() {
+                    return Ok(None);
+                }
+                let expected_workspace_id = selector.expected_uuid();
+                let Ok(selector) = selector_from_wire(selector) else {
+                    return Ok(None);
+                };
+                let Ok(resolution) = self
+                    .manager
+                    .resolve_existing_readonly(selector, expected_workspace_id)
+                else {
+                    return Ok(None);
+                };
+                Ok(admission
+                    .permits_workspace(resolution.binding(), resolution.worktree())
+                    .then(ProcedureV2AdmissionProofV1::granted_for_runtime))
+            }
         }
-        let expected_workspace_id = selector.expected_uuid();
-        let Ok(selector) = selector_from_wire(selector) else {
-            return None;
-        };
-        let Ok(resolution) = self
-            .manager
-            .resolve_existing_readonly(selector, expected_workspace_id)
-        else {
-            return None;
-        };
-        self.development_v2_admission
-            .permits_workspace(resolution.binding(), resolution.worktree())
-            .then(DevelopmentV2AdmissionProofV1::granted_for_runtime)
     }
 
     fn workspace_output(&self, workspace: &Self::Workspace) -> WorkspaceOutputV1 {
@@ -1456,9 +1468,9 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         })
     }
 
-    fn dispatch_development_v2(
+    fn dispatch_procedure_v2(
         &self,
-        _proof: DevelopmentV2AdmissionProofV1,
+        _proof: ProcedureV2AdmissionProofV1,
         request: &RequestEnvelopeV1,
         daemon_request: &DaemonRequestV1,
     ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
@@ -2345,19 +2357,19 @@ pub fn compose_dispatcher_with_worker_and_observability_v1(
     worker_id: WorkerIdV1,
     observability: Option<ObservabilityEmitterV1>,
 ) -> ProductionDispatcherCompositionV1 {
-    compose_dispatcher_with_worker_observability_and_development_v2_v1(
+    compose_dispatcher_with_worker_observability_and_procedure_v2_v1(
         manager,
         worker_id,
         observability,
-        DevelopmentV2AdmissionGateV1::closed(),
+        ProcedureV2AdmissionGateV1::public(),
     )
 }
 
-pub(crate) fn compose_dispatcher_with_worker_observability_and_development_v2_v1(
+pub(crate) fn compose_dispatcher_with_worker_observability_and_procedure_v2_v1(
     manager: Arc<WorkspaceRuntimeManagerV1>,
     worker_id: WorkerIdV1,
     observability: Option<ObservabilityEmitterV1>,
-    development_v2_admission: DevelopmentV2AdmissionGateV1,
+    procedure_v2_admission: ProcedureV2AdmissionGateV1,
 ) -> ProductionDispatcherCompositionV1 {
     let clock = Arc::new(NativeProductionClockV1::default());
     let worker = ProductionMutationWorkerV1::new_with_observability(
@@ -2368,7 +2380,7 @@ pub(crate) fn compose_dispatcher_with_worker_observability_and_development_v2_v1
     );
     let dispatcher = RequestDispatcherV1Adapter::new(
         ProductionWorkspaceRuntimeV1::new(Arc::clone(&manager), Arc::clone(&clock))
-            .with_development_v2_admission(development_v2_admission),
+            .with_procedure_v2_admission(procedure_v2_admission),
         ProductionReadServiceV1::new(manager, Arc::clone(&clock)),
         ProductionControlServiceV1::new(Arc::clone(&clock)),
         ProductionPreviewServiceV1::new(Arc::clone(&clock)),

@@ -1,27 +1,20 @@
 # Procedure v2 Workflow
 
-This walkthrough exercises the shipped `bug-fix-v2` preset through the managed
-development runtime. Procedure v2 runtime admission is still development-gated;
-do not use an installed daemon, an active worktree, or production state for this
-workflow. The canonical preset records a caller's evidence and decisions. Podway
-enforces the declared progression rules, but it does not run checks or decide
-whether recorded claims are true.
+This walkthrough exercises the shipped `bug-fix-v2` preset through the normal
+daemon endpoint. Run it in the Git worktree whose task Podway should guard. The
+canonical preset records a caller's evidence and decisions. Podway enforces the
+declared progression rules, but it does not run checks or decide whether recorded
+claims are true. The local socket trusts same-user processes; actor labels provide
+correlation, not authentication or authorization.
 
-## Prepare the disposable runtime
+## Prepare the workspace
 
-Start the isolated daemon in one terminal:
-
-```bash
-python3 tools/dev_runtime.py daemon
-```
-
-Initialize its disposable Git sandbox in another terminal, then inspect the
-shipped preset and its pinned digest:
+Initialize Podway state, then inspect the shipped preset and its pinned digest:
 
 ```bash
-python3 tools/dev_runtime.py init
-python3 tools/dev_runtime.py run -- --json preset show bug-fix-v2
-python3 tools/dev_runtime.py run -- --json start \
+podway init
+podway --json preset show bug-fix-v2
+podway --json start \
   --preset bug-fix-v2 \
   --task "fix duplicate session creation" \
   --goal "Prevent duplicate sessions without regressing login." \
@@ -34,13 +27,13 @@ python3 tools/dev_runtime.py run -- --json start \
 The dry run returns `podway.output/v2` with
 `result.schema: podway.session-start-result/v2`, `result.dry_run: true`, and the
 shipped `result.procedure_digest`; it creates no session. Remove `--dry-run` to
-start the disposable session.
+start the session.
 
 ## Read stable state before each mutation
 
 ```bash
-python3 tools/dev_runtime.py run -- --json status
-python3 tools/dev_runtime.py run -- --json next
+podway --json status
+podway --json next
 ```
 
 Automation uses the JSON contract, never human-readable text. From the status
@@ -67,14 +60,14 @@ Pass all applicable fences for a direct mutation. The examples below abbreviate
 UUIDs and revisions only for readability:
 
 ```bash
-python3 tools/dev_runtime.py run -- --json set reproduction-status reproduced \
+podway --json set reproduction-status reproduced \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
   --if-attempt <attempt-id> \
   --if-item-revision 0 \
   --idempotency-key bug-42-reproduction-status
 
-python3 tools/dev_runtime.py run -- --json set observed-behavior \
+podway --json set observed-behavior \
   "Concurrent callbacks create two sessions." \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
@@ -92,7 +85,7 @@ After recording all required items for an action node, complete it with the
 current fences:
 
 ```bash
-python3 tools/dev_runtime.py run -- --json complete \
+podway --json complete \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
   --if-session-revision <session-revision> \
@@ -105,7 +98,7 @@ successful retry creates a fresh attempt; re-read status before recording any
 new item:
 
 ```bash
-python3 tools/dev_runtime.py run -- --json retry \
+podway --json retry \
   --reason "verification used the wrong feature flags" \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
@@ -119,7 +112,7 @@ At `decide-verification`, select only an ID from
 a truth determination made by Podway:
 
 ```bash
-python3 tools/dev_runtime.py run -- --json decide \
+podway --json decide \
   --option passed \
   --reason "The recorded regression and surrounding checks exited successfully." \
   --actor verifier \
@@ -140,7 +133,7 @@ Manual graph rework is a Procedure v2 command. It is not the v1 `return` or
 `reopen` command:
 
 ```bash
-python3 tools/dev_runtime.py run -- --json rework \
+podway --json rework \
   --to implement \
   --reason "Independent review found an unresolved cancellation path." \
   --actor reviewer \
@@ -155,7 +148,7 @@ If the desired outcome itself changes, create a new immutable goal revision and
 declare its rework target:
 
 ```bash
-python3 tools/dev_runtime.py run -- --json goal revise \
+podway --json goal revise \
   --goal "Prevent duplicate and leaked login sessions." \
   --criterion reproduced="The original defect is recorded." \
   --criterion verified="Fresh verification covers duplication and cleanup." \
@@ -176,7 +169,7 @@ At `assess-session-goal`, record one assessment per criterion. Evidence and item
 citations identify recorded Podway state; they do not validate an external test:
 
 ```bash
-python3 tools/dev_runtime.py run -- --json goal assess-criterion verified \
+podway --json goal assess-criterion verified \
   --status satisfied \
   --reason "The fresh regression and cleanup checks passed." \
   --evidence verify \
@@ -195,7 +188,14 @@ The criterion result reports `result.goal_revision`, `result.result.status`,
 record the outcome and closeout items, and continue using `status --json` and
 `next --json` until the terminal action completes.
 
-When finished, stop the foreground daemon and remove only the managed runtime:
+## Optional contributor isolation
+
+Contributors who need a disposable daemon and sandbox can run the same commands
+through the development helper. Start `python3 tools/dev_runtime.py daemon` in one
+terminal, run `python3 tools/dev_runtime.py init` in another, and replace each
+`podway --json` invocation above with
+`python3 tools/dev_runtime.py run -- --json`. When finished, stop the foreground
+daemon and remove only that managed runtime:
 
 ```bash
 python3 tools/dev_runtime.py clean --yes

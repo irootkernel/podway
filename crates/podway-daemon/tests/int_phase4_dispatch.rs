@@ -104,15 +104,17 @@ impl WorkspaceRuntimeV1 for FakeRuntime {
         Ok(self.workspace.clone())
     }
 
-    fn development_v2_admission(
+    fn procedure_v2_admission(
         &self,
         _selector: &WorktreeSelectorWireV1,
-    ) -> Option<podway_daemon::dispatch::DevelopmentV2AdmissionProofV1> {
-        self.state
+    ) -> Result<Option<podway_daemon::dispatch::ProcedureV2AdmissionProofV1>, DispatchFailureV1>
+    {
+        Ok(self
+            .state
             .lock()
             .unwrap()
             .development_v2_eligible
-            .then(podway_daemon::dispatch::DevelopmentV2AdmissionProofV1::granted_for_runtime)
+            .then(podway_daemon::dispatch::ProcedureV2AdmissionProofV1::granted_for_runtime))
     }
 
     fn workspace_output(&self, workspace: &Self::Workspace) -> WorkspaceOutputV1 {
@@ -440,9 +442,9 @@ impl MutationAdmissionWorkerV1<FakeWorkspace> for FakeWorker {
         ))
     }
 
-    fn dispatch_development_v2(
+    fn dispatch_procedure_v2(
         &self,
-        _proof: podway_daemon::dispatch::DevelopmentV2AdmissionProofV1,
+        _proof: podway_daemon::dispatch::ProcedureV2AdmissionProofV1,
         request: &RequestEnvelopeV1,
         daemon_request: &DaemonRequestV1,
     ) -> Result<Option<ResponseEnvelopeV2>, DispatchFailureV1> {
@@ -1403,7 +1405,7 @@ fn goal_bearing_start_uses_the_protocol_only_v2_fallback() {
     let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
     let ResponseEnvelopeV2::Error(error) = dispatcher.dispatch_daemon(&request, &daemon_request)
     else {
-        panic!("the empty future handler remains unsupported after the gate");
+        panic!("an admitted request remains unsupported when the handler declines it");
     };
     assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
     assert!(runtime.state.lock().unwrap().existing_selectors.is_empty());
@@ -1443,7 +1445,7 @@ fn goal_bearing_start_uses_the_protocol_only_v2_fallback() {
     let daemon_request = DaemonRequestV1::from_envelope(&request).unwrap();
     let ResponseEnvelopeV2::Error(error) = dispatcher.dispatch_daemon(&request, &daemon_request)
     else {
-        panic!("a future handler failure must remain a typed failure");
+        panic!("a Procedure v2 handler failure must remain a typed failure");
     };
     assert_eq!(error.code().as_str(), "DAEMON_UNAVAILABLE");
     assert_ne!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");

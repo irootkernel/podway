@@ -15,12 +15,14 @@ use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
 use podway_config::{
     ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document, validate_procedure_v2,
 };
-use podway_core::{DomainError, JobId, Revision, Sha256Digest, UnixMillis, canonicalize_json_v1};
+use podway_core::{
+    DomainError, JobId, Revision, Sha256Digest, UnixMillis, WorkspaceId, canonicalize_json_v1,
+};
 use podway_daemon::{
     dispatch::{
-        CatalogDispatchErrorMapperV1, DevelopmentV2AdmissionProofV1, DispatchFailureKindV1,
-        DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, RequestDispatcherV1Adapter,
-        WorkspaceRuntimeV1,
+        CatalogDispatchErrorMapperV1, DispatchFailureKindV1, DispatchFailureV1,
+        DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, ProcedureV2AdmissionProofV1,
+        RequestDispatcherV1Adapter, WorkspaceRuntimeV1,
     },
     production::{
         NativeProductionClockV1, ProductionControlServiceV1, ProductionMutationWorkerV1,
@@ -133,11 +135,11 @@ impl WorkspaceRuntimeV1 for DevelopmentV2RoutingRuntime {
         self.inner.resolve_bootstrap(selector)
     }
 
-    fn development_v2_admission(
+    fn procedure_v2_admission(
         &self,
         _selector: &WorktreeSelectorWireV1,
-    ) -> Option<DevelopmentV2AdmissionProofV1> {
-        Some(DevelopmentV2AdmissionProofV1::granted_for_runtime())
+    ) -> Result<Option<ProcedureV2AdmissionProofV1>, DispatchFailureV1> {
+        Ok(Some(ProcedureV2AdmissionProofV1::granted_for_runtime()))
     }
 
     fn workspace_output(&self, workspace: &Self::Workspace) -> podway_protocol::WorkspaceOutputV1 {
@@ -217,7 +219,9 @@ fn request(
         client: ClientInfoV1::new("production-test", "1", 1).unwrap(),
         operation,
         command: CommandNameV1::new(command).unwrap(),
-        workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
+        workspace: Some(
+            WorkspaceContextV1::new(selector.display(), selector.expected_uuid().cloned()).unwrap(),
+        ),
         idempotency_key: matches!(operation, OperationV1::Bootstrap | OperationV1::Mutate)
             .then(|| IdempotencyKeyV1::new(idempotency_key).unwrap()),
         preconditions,
@@ -383,8 +387,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     assert!(
         composition
             .worker()
-            .dispatch_development_v2(
-                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            .dispatch_procedure_v2(
+                ProcedureV2AdmissionProofV1::granted_for_runtime(),
                 &legacy.0,
                 &legacy_daemon,
             )
@@ -413,14 +417,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     );
     let dry_run_daemon = DaemonRequestV1::from_envelope(&dry_run.0).unwrap();
     let dry_run_response = composition
-        .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
-            &dry_run.0,
-            &dry_run_daemon,
-        )
-        .unwrap()
-        .expect("a confirmed custom Procedure v2 dry-run must be handled");
+        .dispatcher()
+        .dispatch_daemon(&dry_run.0, &dry_run_daemon);
     let ResponseEnvelopeV2::OutputV2(dry_run_output) = dry_run_response else {
         panic!("Procedure v2 dry-run must return podway.output/v2")
     };
@@ -507,8 +505,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
         let rejected_daemon = DaemonRequestV1::from_envelope(&rejected.0).unwrap();
         let failure = composition
             .worker()
-            .dispatch_development_v2(
-                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            .dispatch_procedure_v2(
+                ProcedureV2AdmissionProofV1::granted_for_runtime(),
                 &rejected.0,
                 &rejected_daemon,
             )
@@ -540,14 +538,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     );
     let live_daemon = DaemonRequestV1::from_envelope(&live.0).unwrap();
     let live_response = composition
-        .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
-            &live.0,
-            &live_daemon,
-        )
-        .unwrap()
-        .expect("a confirmed custom Procedure v2 start must be handled");
+        .dispatcher()
+        .dispatch_daemon(&live.0, &live_daemon);
     let ResponseEnvelopeV2::OutputV2(live_output) = &live_response else {
         panic!("Procedure v2 live start must return podway.output/v2")
     };
@@ -696,8 +688,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     assert_eq!(
         composition
             .worker()
-            .dispatch_development_v2(
-                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            .dispatch_procedure_v2(
+                ProcedureV2AdmissionProofV1::granted_for_runtime(),
                 &wrong_session_status.0,
                 &wrong_session_daemon,
             )
@@ -753,8 +745,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     let replace_dry_run_daemon = DaemonRequestV1::from_envelope(&replace_dry_run.0).unwrap();
     let replace_dry_run_response = composition
         .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+        .dispatch_procedure_v2(
+            ProcedureV2AdmissionProofV1::granted_for_runtime(),
             &replace_dry_run.0,
             &replace_dry_run_daemon,
         )
@@ -786,8 +778,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
         DaemonRequestV1::from_envelope(&stale_replace_dry_run.0).unwrap();
     let stale_dry_run_failure = composition
         .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+        .dispatch_procedure_v2(
+            ProcedureV2AdmissionProofV1::granted_for_runtime(),
             &stale_replace_dry_run.0,
             &stale_replace_dry_run_daemon,
         )
@@ -843,8 +835,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
         DaemonRequestV1::from_envelope(&wrong_identity_replace.0).unwrap();
     let wrong_identity_failure = composition
         .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+        .dispatch_procedure_v2(
+            ProcedureV2AdmissionProofV1::granted_for_runtime(),
             &wrong_identity_replace.0,
             &wrong_identity_replace_daemon,
         )
@@ -873,8 +865,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     let stale_replace_daemon = DaemonRequestV1::from_envelope(&stale_replace.0).unwrap();
     let stale_failure = composition
         .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+        .dispatch_procedure_v2(
+            ProcedureV2AdmissionProofV1::granted_for_runtime(),
             &stale_replace.0,
             &stale_replace_daemon,
         )
@@ -921,8 +913,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     let replace_daemon = DaemonRequestV1::from_envelope(&replace.0).unwrap();
     let replace_response = composition
         .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+        .dispatch_procedure_v2(
+            ProcedureV2AdmissionProofV1::granted_for_runtime(),
             &replace.0,
             &replace_daemon,
         )
@@ -937,8 +929,8 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
     fs::remove_file(fixture.main().join("workflow.yaml")).unwrap();
     let replay = composition
         .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+        .dispatch_procedure_v2(
+            ProcedureV2AdmissionProofV1::granted_for_runtime(),
             &live.0,
             &live_daemon,
         )
@@ -948,6 +940,116 @@ fn v2run001_production_custom_start_dry_run_live_and_source_independent_replay()
         serde_json::to_value(replay).unwrap(),
         serde_json::to_value(live_response).unwrap(),
         "exact replay must preserve the frozen v2 response"
+    );
+}
+
+#[test]
+fn v2rel006_public_v2_admission_preserves_stale_workspace_identity_error() {
+    let fixture = git_worktrees();
+    make_runtime_private(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let composition = compose_dispatcher_with_worker_v1(
+        Arc::clone(&runtime_manager),
+        WorkerIdV1::new("v2rel006-stale-workspace").unwrap(),
+    );
+    let workspace_selector = selector(fixture.main());
+    let initialize = request(
+        60_001,
+        "workspace.init",
+        &workspace_selector,
+        json!({"selector": serde_json::to_value(&workspace_selector).unwrap()}),
+        RequestOptionsV1::new(false, 5_000).unwrap(),
+        "v2rel006-initialize",
+        PreconditionsV1::default(),
+    );
+    dispatch_command(composition.dispatcher(), &initialize, "workspace.init");
+
+    let runtime = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap();
+    let context = runtime.context_snapshot();
+    let store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        context.binding().identity().clone(),
+        context.store_options().clone(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let jobs_before = store
+        .list_jobs(
+            context.binding().identity(),
+            JobListQueryV1::new(100).unwrap(),
+        )
+        .unwrap()
+        .len();
+
+    let canonical = fs::canonicalize(fixture.main()).unwrap();
+    #[cfg(unix)]
+    let path_bytes = canonical.as_os_str().as_bytes();
+    #[cfg(not(unix))]
+    let path_bytes = canonical.to_string_lossy().as_bytes();
+    let stale_workspace = WorkspaceId::new("00000000-0000-4000-8000-000000060006").unwrap();
+    assert_ne!(
+        context.binding().identity().workspace_uuid(),
+        &stale_workspace
+    );
+    let stale_selector = WorktreeSelectorWireV1::new(
+        path_bytes,
+        canonical.display().to_string(),
+        Some(stale_workspace.clone()),
+    )
+    .unwrap();
+    let payload = json!({
+        "selector": stale_selector,
+        "preset": "sw-dev-v2",
+        "task_title": "Reject stale workspace identity",
+        "goal": "Preserve the public workspace identity fence.",
+        "criteria": [{
+            "criterion_id": "verified",
+            "statement": "A stale workspace UUID is rejected before admission."
+        }],
+        "actor": "V2REL-006 regression"
+    });
+    let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new("00000000-0000-4000-8000-000000060001").unwrap(),
+        client: ClientInfoV1::new("v2rel006-regression", "1", 1).unwrap(),
+        operation: OperationV1::Mutate,
+        command: CommandNameV1::new("session.start").unwrap(),
+        workspace: Some(
+            WorkspaceContextV1::new(canonical.display().to_string(), Some(stale_workspace))
+                .unwrap(),
+        ),
+        idempotency_key: Some(IdempotencyKeyV1::new("v2rel006-stale-workspace").unwrap()),
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        payload: payload.as_object().unwrap().clone(),
+    })
+    .unwrap();
+    let daemon_request = DaemonRequestV1::from_envelope(&envelope).unwrap();
+    assert!(matches!(
+        daemon_request,
+        DaemonRequestV1::ProcedureV2Start(_)
+    ));
+
+    let ResponseEnvelopeV2::Error(error) = composition
+        .dispatcher()
+        .dispatch_daemon(&envelope, &daemon_request)
+    else {
+        panic!("a stale public Procedure v2 workspace identity must be rejected")
+    };
+    assert_eq!(error.code().as_str(), "WORKSPACE_UUID_MISMATCH");
+    assert_eq!(error.details()["admission"], json!({"admitted": false}));
+    assert_eq!(
+        store
+            .list_jobs(
+                context.binding().identity(),
+                JobListQueryV1::new(100).unwrap(),
+            )
+            .unwrap()
+            .len(),
+        jobs_before,
+        "workspace identity rejection must happen before durable admission"
     );
 }
 
@@ -999,8 +1101,8 @@ fn inactive_v2_after_job_reads_terminal_state_without_activating_scheduler() {
         let daemon_request = DaemonRequestV1::from_envelope(&start.0).unwrap();
         let response = composition
             .worker()
-            .dispatch_development_v2(
-                DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+            .dispatch_procedure_v2(
+                ProcedureV2AdmissionProofV1::granted_for_runtime(),
                 &start.0,
                 &daemon_request,
             )
@@ -1070,8 +1172,8 @@ fn inactive_v2_after_job_reads_terminal_state_without_activating_scheduler() {
     let daemon_request = DaemonRequestV1::from_envelope(&unknown.0).unwrap();
     let failure = composition
         .worker()
-        .dispatch_development_v2(
-            DevelopmentV2AdmissionProofV1::granted_for_runtime(),
+        .dispatch_procedure_v2(
+            ProcedureV2AdmissionProofV1::granted_for_runtime(),
             &unknown.0,
             &daemon_request,
         )

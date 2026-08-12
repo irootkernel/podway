@@ -2605,8 +2605,8 @@
           {
             "kind": "cargo-test",
             "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
-            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
-            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+            "function": "v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly"
           },
           {
             "kind": "cargo-test",
@@ -2715,10 +2715,21 @@
       ],
       "implementation_status": "automated",
       "proof": {
-        "kind": "cargo-test",
-        "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
-        "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
-        "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
+            "function": "v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_platform_cli.rs",
+            "function": "typed_v2_commands_shape_exact_requests_and_preserve_capability_errors",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_platform_cli::typed_v2_commands_shape_exact_requests_and_preserve_capability_errors --locked -- --exact"
+          }
+        ]
       },
       "contract_refs": [
         {
@@ -2754,8 +2765,8 @@
           {
             "kind": "cargo-test",
             "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
-            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
-            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+            "function": "v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly"
           },
           {
             "kind": "cargo-test",
@@ -2793,8 +2804,8 @@
           {
             "kind": "cargo-test",
             "path": "crates/podway-cli/tests/e2e_phase4_production_vertical.rs",
-            "function": "v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission",
-            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_reject_v2_without_admission"
+            "function": "v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_phase4_production_vertical::v2rel001_real_binaries_preserve_v1_and_admit_v2_publicly"
           },
           {
             "kind": "cargo-test",
@@ -2839,7 +2850,48 @@
         "V2REL-003",
         "V2REL-006"
       ],
-      "implementation_status": "planned",
+      "implementation_status": "automated",
+      "proof": {
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-unit-test",
+            "path": "crates/podway-daemon/src/development_v2.rs",
+            "function": "v2plt009_gate_requires_dev_process_and_exact_disposable_marker",
+            "command": "cargo test -p podway-daemon --lib development_v2::tests::v2plt009_gate_requires_dev_process_and_exact_disposable_marker --locked -- --exact"
+          },
+          {
+            "kind": "cargo-unit-test",
+            "path": "crates/podway-daemon/src/development_v2.rs",
+            "function": "v2plt009_gate_rejects_marker_tamper_and_normal_registry_membership",
+            "command": "cargo test -p podway-daemon --lib development_v2::tests::v2plt009_gate_rejects_marker_tamper_and_normal_registry_membership --locked -- --exact"
+          },
+          {
+            "kind": "cargo-unit-test",
+            "path": "crates/podway-daemon/src/development_v2.rs",
+            "function": "v2plt009_gate_rejects_installed_or_nonisolated_endpoint_topology",
+            "command": "cargo test -p podway-daemon --lib development_v2::tests::v2plt009_gate_rejects_installed_or_nonisolated_endpoint_topology --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_v2_native_qualification.rs",
+            "function": "v2rel003_native_runtime_qualification_emits_complete_compact_evidence",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_v2_native_qualification::v2rel003_native_runtime_qualification_emits_complete_compact_evidence"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/e2e_dolgorae_conformance.rs",
+            "function": "aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_closeout",
+            "command": "python3 tools/run_e2e.py --exact-test podway-cli::e2e_suite::e2e_dolgorae_conformance::aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_closeout"
+          },
+          {
+            "kind": "release-step",
+            "path": "tools/qualify_distribution.py",
+            "function": "qualify",
+            "command": "make dist"
+          }
+        ]
+      },
       "contract_refs": [
         {
           "path": "docs/specs/interfaces/ipc-protocol.md",

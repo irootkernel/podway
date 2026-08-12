@@ -800,7 +800,7 @@ fn pac017_daemon_is_the_sole_normal_store_writer() {
         ("ts=42 operation=daemon_stop outcome=succeeded\n", 1),
         ("ts=42 operation=integrity_check outcome=succeeded\n", 1),
         ("ts=42 operation=job_admission outcome=succeeded\n", 2),
-        ("ts=42 operation=artifact_move outcome=succeeded\n", 3),
+        ("ts=42 operation=artifact_move outcome=succeeded\n", 4),
         ("ts=42 operation=job_claim outcome=succeeded\n", 2),
         ("ts=42 operation=job_claim outcome=rejected\n", 2),
         ("ts=42 operation=job_wait outcome=succeeded\n", 2),
@@ -818,7 +818,7 @@ fn pac017_daemon_is_the_sole_normal_store_writer() {
             expected_inventory
                 .get(event)
                 .is_some_and(|expected_count| actual_count <= expected_count),
-            "the production trace contains an unexpected operation, outcome, or excess event: {event}"
+            "the production trace contains an unexpected operation, outcome, or excess event: {event}; actual={actual_inventory:?}"
         );
     }
     let expected_total = expected_inventory.values().sum::<usize>();

@@ -23,6 +23,7 @@ PACKAGED_CONFORMANCE_SCENARIOS = [
     "aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle",
     "aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout",
     "aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay",
+    "aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_closeout",
 ]
 RELEASE_STATUS = {"notarization": "not-attempted", "signing": "unsigned"}
 SHA256 = re.compile(r"[0-9a-f]{64}")

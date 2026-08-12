@@ -371,12 +371,12 @@ stages sequentially:
   restart, achieved closeout, temporary-state deletion, and a v1 regression
   transition.
 
-Before V2REL-006, the v2 preset and runtime checks prove implemented pre-GA
-behavior only. They must also prove that an ordinary endpoint and a release-profile
-build keep v2 session admission closed; no focused or development-runtime check
-promotes the public support boundary. V2REL-006 owns the deliberate production
-admission change and replaces that release-profile rejection assertion with direct
-normal public-admission coverage before the exact clean candidate runs `make dist`.
+Before V2REL-006, the v2 preset and runtime checks proved implemented pre-GA
+behavior only, including rejection by an ordinary endpoint and a release-profile
+build. V2REL-006 deliberately enabled production admission and replaced that
+release-profile rejection assertion with direct normal public-admission coverage.
+The exact clean candidate then passed `make dist`, proving the normal admission
+path and development-unlock exclusion in the same packaged bytes.
 
 The E2E layer builds the debug product binaries once. Preset-tool verification
 runs afterward against that prepared CLI instead of initiating another build, and

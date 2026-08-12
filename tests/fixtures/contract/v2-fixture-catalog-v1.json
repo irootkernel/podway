@@ -5,11 +5,11 @@
   "source_acceptance_matrix": "quality/v2-acceptance-matrix-v1.json",
   "source_compatibility_matrix": "quality/v2-compatibility-matrix-v1.json",
   "source_payload_matrix": "quality/v2-payload-matrix-v1.json",
-  "evidence_policy": "Every entry is manifest-bound. The three V2REL-002 payload cases are automated production-serialization evidence; every other case remains a planned contract recipe and does not prove future parser, graph, runtime, compatibility, admission, or release behavior.",
+  "evidence_policy": "Every entry is manifest-bound. The V2REL-006 compatibility case and the three V2REL-002 payload cases are automated production-serialization evidence; every other case remains a planned contract recipe and does not prove future parser or graph behavior.",
   "fixtures": [
-    {"id": "compatibility-admission-fence", "path": "tests/fixtures/v2/compatibility/admission-fence.json", "media_type": "application/json", "sha256": "sha256:feb08140fd8f6cc62131151048209686fd53ebe2a0bb3d100313e8d06c13ce8f"},
-    {"id": "compatibility-unsupported-peer", "path": "tests/fixtures/v2/compatibility/unsupported-peer.json", "media_type": "application/json", "sha256": "sha256:839325fe7cdb8fe4bfda6a4914be301a7e28610a9a009d8977be379f46b9d254"},
-    {"id": "compatibility-v1-boundaries", "path": "tests/fixtures/v2/compatibility/v1-boundaries.json", "media_type": "application/json", "sha256": "sha256:754173cbdd96377efccad8842afebf4ae4dd350314153186c2e42890fed350a4"},
+    {"id": "compatibility-admission-fence", "path": "tests/fixtures/v2/compatibility/admission-fence.json", "media_type": "application/json", "sha256": "sha256:2c475b4253865f1b206a864e98772c9420e56ebd9b792afab1dd93c0fca741b6"},
+    {"id": "compatibility-unsupported-peer", "path": "tests/fixtures/v2/compatibility/unsupported-peer.json", "media_type": "application/json", "sha256": "sha256:686280369562b9584af5b2ddb578ea73ce86b105b7b4ef86f62ba49da1dc1537"},
+    {"id": "compatibility-v1-boundaries", "path": "tests/fixtures/v2/compatibility/v1-boundaries.json", "media_type": "application/json", "sha256": "sha256:08c1c12234d4ed5927740206fa09754f6f9c150aec65e1d8e1b7d7e872086b30"},
     {"id": "graph-negative-cases", "path": "tests/fixtures/v2/graphs/negative-cases.json", "media_type": "application/json", "sha256": "sha256:53b0e82fde161c76293ef8f7693390722e145a2bd88a2275c2e0a27ba73c6178"},
     {"id": "graph-valid-cases", "path": "tests/fixtures/v2/graphs/valid-cases.json", "media_type": "application/json", "sha256": "sha256:5e314b62bb6b45e44e5f6dcb8d481343ed25a48fbdb4b9ca6d5cbb87abf030a2"},
     {"id": "payload-maximum-next", "path": "tests/fixtures/v2/payload/maximum-next-recipe.json", "media_type": "application/json", "sha256": "sha256:7f6be1f2e7cfc855211e0682883bb68119ce6108ecead251966f36ef6643d3ac"},
@@ -60,8 +60,8 @@
       "acceptance_ids": ["V2ACC-066", "V2ACC-067", "V2ACC-068", "V2ACC-069", "V2ACC-070", "V2ACC-071", "V2ACC-072"],
       "specialized_ids": ["V2COMP-001", "V2COMP-002", "V2COMP-003", "V2COMP-004", "V2COMP-005", "V2COMP-006", "V2COMP-007", "V2COMP-SURFACE-001", "V2COMP-SURFACE-002", "V2COMP-SURFACE-003", "V2COMP-SURFACE-004", "V2COMP-SURFACE-005", "V2COMP-SURFACE-006", "V2COMP-SURFACE-007", "V2COMP-SURFACE-008"],
       "owning_tasks": ["V2MOD-008", "V2PLT-001", "V2PLT-005", "V2PLT-008", "V2PLT-009", "V2PLT-010", "V2REL-001", "V2REL-003", "V2REL-006"],
-      "evidence_level": "contract-recipe",
-      "implementation_status": "planned"
+      "evidence_level": "production-serialization",
+      "implementation_status": "automated"
     },
     {
       "id": "V2FIX-PAYLOAD-NEXT",

@@ -1322,17 +1322,19 @@ fn has_executable_proof(entry: &Value) -> bool {
             .is_some_and(|proof| !proof.is_empty())
 }
 
-type CargoProofSignature = (String, String, String, String);
+type ExecutableProofSignature = (String, String, String, String);
 
-fn cargo_proof_signatures(proof: &Value) -> Result<BTreeSet<CargoProofSignature>, String> {
+fn executable_proof_signatures(
+    proof: &Value,
+) -> Result<BTreeSet<ExecutableProofSignature>, String> {
     let members = match proof["kind"].as_str() {
         Some("cargo-test-set") => proof["members"]
             .as_array()
             .ok_or("cargo-test-set proof members missing")?
             .iter()
             .collect::<Vec<_>>(),
-        Some("cargo-test" | "cargo-unit-test") => vec![proof],
-        _ => return Err("fixture proof kind must be an exact Cargo test".to_owned()),
+        Some("cargo-test" | "cargo-unit-test" | "release-step") => vec![proof],
+        _ => return Err("fixture proof kind must be an exact executable step".to_owned()),
     };
     if members.is_empty() {
         return Err("fixture proof set must not be empty".to_owned());
@@ -1343,7 +1345,7 @@ fn cargo_proof_signatures(proof: &Value) -> Result<BTreeSet<CargoProofSignature>
             let kind = member["kind"]
                 .as_str()
                 .ok_or("fixture proof kind missing")?;
-            if !matches!(kind, "cargo-test" | "cargo-unit-test") {
+            if !matches!(kind, "cargo-test" | "cargo-unit-test" | "release-step") {
                 return Err("fixture proof member kind is not executable".to_owned());
             }
             let path = member["path"]
@@ -1356,9 +1358,7 @@ fn cargo_proof_signatures(proof: &Value) -> Result<BTreeSet<CargoProofSignature>
                 .as_str()
                 .ok_or("fixture proof command missing")?;
             let components = Path::new(path).components().collect::<Vec<_>>();
-            if components.len() < 4
-                || components[0].as_os_str() != "crates"
-                || Path::new(path).is_absolute()
+            if Path::new(path).is_absolute()
                 || components.iter().any(|component| {
                     matches!(
                         component,
@@ -1369,36 +1369,60 @@ fn cargo_proof_signatures(proof: &Value) -> Result<BTreeSet<CargoProofSignature>
                     )
                 })
             {
-                return Err("fixture proof path is not a normalized crate path".to_owned());
-            }
-            let package = components[1]
-                .as_os_str()
-                .to_str()
-                .ok_or("fixture proof package is not UTF-8")?;
-            let module = Path::new(path)
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .ok_or("fixture proof module missing")?;
-            let expected_command = match kind {
-                "cargo-test" => format!(
-                    "cargo test -p {package} --test int_suite {module}::{function} --locked -- --exact"
-                ),
-                "cargo-unit-test" => format!(
-                    "cargo test -p {package} --lib {module}::tests::{function} --locked -- --exact"
-                ),
-                _ => unreachable!(),
-            };
-            if command != expected_command {
-                return Err(format!("fixture proof command is not exact: {function}"));
+                return Err("fixture proof path is not normalized".to_owned());
             }
             let source = fs::read_to_string(root().join(path)).map_err(|error| error.to_string())?;
-            let function_marker = format!("fn {function}(");
-            let function_offset = source
-                .find(&function_marker)
-                .ok_or_else(|| format!("fixture proof function does not exist: {function}"))?;
-            let attribute_start = function_offset.saturating_sub(256);
-            if !source[attribute_start..function_offset].contains("#[test]") {
-                return Err(format!("fixture proof function is not a test: {function}"));
+            match kind {
+                "cargo-test" | "cargo-unit-test" => {
+                    if components.len() < 4 || components[0].as_os_str() != "crates" {
+                        return Err("fixture test proof path is not a normalized crate path".to_owned());
+                    }
+                    let package = components[1]
+                        .as_os_str()
+                        .to_str()
+                        .ok_or("fixture proof package is not UTF-8")?;
+                    let module = Path::new(path)
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .ok_or("fixture proof module missing")?;
+                    let expected_command = match kind {
+                        "cargo-unit-test" => format!(
+                            "cargo test -p {package} --lib {module}::tests::{function} --locked -- --exact"
+                        ),
+                        "cargo-test" if module.starts_with("e2e_") => format!(
+                            "python3 tools/run_e2e.py --exact-test {package}::e2e_suite::{module}::{function}"
+                        ),
+                        "cargo-test" => format!(
+                            "cargo test -p {package} --test int_suite {module}::{function} --locked -- --exact"
+                        ),
+                        _ => unreachable!(),
+                    };
+                    if command != expected_command {
+                        return Err(format!("fixture proof command is not exact: {function}"));
+                    }
+                    let function_marker = format!("fn {function}(");
+                    let function_offset = source.find(&function_marker).ok_or_else(|| {
+                        format!("fixture proof function does not exist: {function}")
+                    })?;
+                    let attribute_start = function_offset.saturating_sub(256);
+                    if !source[attribute_start..function_offset].contains("#[test]") {
+                        return Err(format!("fixture proof function is not a test: {function}"));
+                    }
+                }
+                "release-step" => {
+                    if path != "tools/qualify_distribution.py" || command != "make dist" {
+                        return Err("fixture release proof is not the exact distribution gate".to_owned());
+                    }
+                    let function_marker = format!("def {function}(");
+                    if !source.contains(&function_marker)
+                        || !fs::read_to_string(root().join("Makefile"))
+                            .map_err(|error| error.to_string())?
+                            .contains(path)
+                    {
+                        return Err("fixture release proof is not reachable from make dist".to_owned());
+                    }
+                }
+                _ => unreachable!(),
             }
             Ok((
                 kind.to_owned(),
@@ -1411,7 +1435,7 @@ fn cargo_proof_signatures(proof: &Value) -> Result<BTreeSet<CargoProofSignature>
 }
 
 fn proof_is_included_by(child: &Value, parent: &Value) -> Result<bool, String> {
-    Ok(cargo_proof_signatures(child)?.is_subset(&cargo_proof_signatures(parent)?))
+    Ok(executable_proof_signatures(child)?.is_subset(&executable_proof_signatures(parent)?))
 }
 
 fn validate_recipe_proof_binding(
@@ -1422,7 +1446,7 @@ fn validate_recipe_proof_binding(
     payload: &Value,
     label: &str,
 ) -> Result<(), String> {
-    cargo_proof_signatures(proof)?;
+    executable_proof_signatures(proof)?;
     let criterion = acceptance["criteria"]
         .as_array()
         .into_iter()
@@ -1464,7 +1488,7 @@ fn validate_v2_fixture_catalog_with_sources(
         || catalog.source_compatibility_matrix != "quality/v2-compatibility-matrix-v1.json"
         || catalog.source_payload_matrix != "quality/v2-payload-matrix-v1.json"
         || catalog.evidence_policy
-            != "Every entry is manifest-bound. The three V2REL-002 payload cases are automated production-serialization evidence; every other case remains a planned contract recipe and does not prove future parser, graph, runtime, compatibility, admission, or release behavior."
+            != "Every entry is manifest-bound. The V2REL-006 compatibility case and the three V2REL-002 payload cases are automated production-serialization evidence; every other case remains a planned contract recipe and does not prove future parser or graph behavior."
     {
         return Err("v2 fixture catalog identity or evidence policy drift".to_owned());
     }
@@ -1473,6 +1497,8 @@ fn validate_v2_fixture_catalog_with_sources(
     let mut fixture_ids = BTreeSet::new();
     let mut fixture_paths = BTreeSet::new();
     let mut fixture_media = BTreeMap::new();
+    let mut observed_compatibility_acceptance_proofs = BTreeSet::new();
+    let mut observed_compatibility_specialized_proofs = BTreeSet::new();
     for fixture in &catalog.fixtures {
         if fixture.id.is_empty() || !fixture_ids.insert(fixture.id.clone()) {
             return Err("v2 fixture IDs must be unique and non-empty".to_owned());
@@ -1628,6 +1654,8 @@ fn validate_v2_fixture_catalog_with_sources(
     let mut observed_specialized = BTreeSet::new();
     let mut classes = BTreeSet::new();
     let mut fixture_evidence = BTreeMap::<String, (&str, &str)>::new();
+    let mut fixture_acceptance_ids = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut fixture_specialized_ids = BTreeMap::<String, BTreeSet<String>>::new();
     for case in &catalog.cases {
         if case.id.is_empty() || !case_ids.insert(case.id.clone()) {
             return Err("v2 fixture case IDs must be unique and non-empty".to_owned());
@@ -1668,6 +1696,14 @@ fn validate_v2_fixture_catalog_with_sources(
                 return Err("v2 fixture must be referenced by exactly one case".to_owned());
             }
             fixture_evidence.insert(fixture_id.clone(), expected_evidence);
+            fixture_acceptance_ids.insert(
+                fixture_id.clone(),
+                case.acceptance_ids.iter().cloned().collect(),
+            );
+            fixture_specialized_ids.insert(
+                fixture_id.clone(),
+                case.specialized_ids.iter().cloned().collect(),
+            );
         }
         let mut expected_owners = BTreeSet::new();
         for acceptance_id in &case.acceptance_ids {
@@ -1891,30 +1927,128 @@ fn validate_v2_fixture_catalog_with_sources(
                     let proof = case
                         .get("proof")
                         .ok_or_else(|| format!("automated recipe case proof missing: {case_id}"))?;
-                    cargo_proof_signatures(proof)?;
+                    executable_proof_signatures(proof)?;
 
-                    let acceptance_id = case["proof_acceptance_id"].as_str().ok_or_else(|| {
-                        format!("automated recipe acceptance proof mapping missing: {case_id}")
-                    })?;
-                    let acceptance_entry = acceptance["criteria"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .find(|entry| entry["id"] == acceptance_id)
-                        .ok_or_else(|| {
-                            format!("automated recipe acceptance proof mapping unknown: {case_id}")
-                        })?;
-                    if !has_executable_proof(acceptance_entry)
-                        || !proof_is_included_by(proof, &acceptance_entry["proof"])?
-                    {
-                        return Err(format!(
-                            "automated recipe proof is not included by its acceptance proof: {case_id}"
-                        ));
+                    let acceptance_id = case.get("proof_acceptance_id").and_then(Value::as_str);
+                    let specialized_ids = match (
+                        case.get("proof_specialized_id").and_then(Value::as_str),
+                        case.get("proof_specialized_ids").and_then(Value::as_array),
+                    ) {
+                        (Some(id), None) => vec![id],
+                        (None, Some(ids)) if !ids.is_empty() => ids
+                            .iter()
+                            .map(|id| {
+                                id.as_str().ok_or_else(|| {
+                                    format!(
+                                        "automated recipe specialized proof mapping malformed: {case_id}"
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                        (None, None) => Vec::new(),
+                        _ => {
+                            return Err(format!(
+                                "automated recipe specialized proof mapping is ambiguous: {case_id}"
+                            ));
+                        }
+                    };
+                    if acceptance_id.is_none() && specialized_ids.is_empty() {
+                        return Err(format!("automated recipe proof mapping missing: {case_id}"));
+                    }
+                    if let Some(acceptance_id) = acceptance_id {
+                        if fixture.id.starts_with("compatibility-")
+                            && !fixture_acceptance_ids[&fixture.id].contains(acceptance_id)
+                        {
+                            return Err(format!(
+                                "automated recipe acceptance proof crosses its fixture mapping: {case_id}"
+                            ));
+                        }
+                        let acceptance_entry = acceptance["criteria"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .find(|entry| entry["id"] == acceptance_id)
+                            .ok_or_else(|| {
+                                format!(
+                                    "automated recipe acceptance proof mapping unknown: {case_id}"
+                                )
+                            })?;
+                        if !has_executable_proof(acceptance_entry)
+                            || !proof_is_included_by(proof, &acceptance_entry["proof"])?
+                        {
+                            return Err(format!(
+                                "automated recipe proof is not included by its acceptance proof: {case_id}"
+                            ));
+                        }
+                        if fixture.id.starts_with("compatibility-") {
+                            observed_compatibility_acceptance_proofs
+                                .insert(acceptance_id.to_owned());
+                        }
+                    }
+
+                    for specialized_id in specialized_ids {
+                        if fixture.id.starts_with("compatibility-")
+                            && !fixture_specialized_ids[&fixture.id].contains(specialized_id)
+                        {
+                            return Err(format!(
+                                "automated recipe specialized proof crosses its fixture mapping: {case_id}"
+                            ));
+                        }
+                        let specialized_entry = compatibility["requirements"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .chain(
+                                compatibility["surface_cases"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten(),
+                            )
+                            .find(|entry| entry["id"] == specialized_id)
+                            .ok_or_else(|| {
+                                format!(
+                                    "automated recipe specialized proof mapping unknown: {case_id}"
+                                )
+                            })?;
+                        let specialized_proof = if let Some(parent) = specialized_entry.get("proof")
+                        {
+                            parent
+                        } else {
+                            let proof_acceptance_id = specialized_entry["proof_acceptance_id"]
+                                .as_str()
+                                .ok_or_else(|| {
+                                    format!(
+                                        "automated recipe specialized proof is missing: {case_id}"
+                                    )
+                                })?;
+                            &acceptance["criteria"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .find(|entry| entry["id"] == proof_acceptance_id)
+                                .ok_or_else(|| {
+                                    format!("automated recipe inherited proof mapping unknown: {case_id}")
+                                })?["proof"]
+                        };
+                        if !proof_is_included_by(proof, specialized_proof)? {
+                            return Err(format!(
+                                "automated recipe proof is not included by its specialized proof: {case_id}"
+                            ));
+                        }
+                        if fixture.id.starts_with("compatibility-") {
+                            observed_compatibility_specialized_proofs
+                                .insert(specialized_id.to_owned());
+                        }
                     }
 
                     if let Some(requirement_id) =
                         case.get("proof_requirement_id").and_then(Value::as_str)
                     {
+                        let acceptance_id = acceptance_id.ok_or_else(|| {
+                            format!(
+                                "automated recipe payload proof acceptance mapping missing: {case_id}"
+                            )
+                        })?;
                         let requirement = payload["requirements"]
                             .as_array()
                             .into_iter()
@@ -1937,6 +2071,29 @@ fn validate_v2_fixture_catalog_with_sources(
                 }
             }
         }
+    }
+    let compatibility_case = catalog
+        .cases
+        .iter()
+        .find(|case| case.id == "V2FIX-COMPATIBILITY")
+        .ok_or("v2 compatibility fixture case missing")?;
+    if observed_compatibility_acceptance_proofs
+        != compatibility_case
+            .acceptance_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+        || observed_compatibility_specialized_proofs
+            != compatibility_case
+                .specialized_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+    {
+        return Err(
+            "automated compatibility recipes do not exactly cover their acceptance and specialized proofs"
+                .to_owned(),
+        );
     }
 
     Ok((catalog.fixtures.len(), catalog.cases.len()))
@@ -2214,7 +2371,7 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_evidence_typed() {
         (
             "tests/fixtures/v2/compatibility/unsupported-peer.json",
             vec![
-                "v2-command-to-v1-peer",
+                "typed-v2-capability-response",
                 "registered-but-unserved",
                 "absent-route",
             ],
@@ -2673,6 +2830,87 @@ fn v2ctr006_fixture_catalog_is_exact_bounded_and_evidence_typed() {
         )
         .is_err(),
         "an automated fixture case must fail when a mapped acceptance proof disappears"
+    );
+
+    let mut stale_compatibility_recipe =
+        read_json("tests/fixtures/v2/compatibility/unsupported-peer.json");
+    stale_compatibility_recipe["cases"][0]["proof"] =
+        stale_compatibility_recipe["cases"][2]["proof"].clone();
+    let recipe_overrides = BTreeMap::from([(
+        "compatibility-unsupported-peer".to_owned(),
+        stale_compatibility_recipe,
+    )]);
+    assert!(
+        validate_v2_fixture_catalog_with_sources(
+            &catalog,
+            &acceptance_matrix,
+            &compatibility_matrix,
+            &payload_matrix,
+            &recipe_overrides,
+        )
+        .is_err(),
+        "an automated compatibility recipe must fail when a case proof crosses its mapped acceptance and surface"
+    );
+
+    let mut missing_compatibility_proof =
+        read_json("tests/fixtures/v2/compatibility/v1-boundaries.json");
+    missing_compatibility_proof["cases"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("proof");
+    let recipe_overrides = BTreeMap::from([(
+        "compatibility-v1-boundaries".to_owned(),
+        missing_compatibility_proof,
+    )]);
+    assert!(
+        validate_v2_fixture_catalog_with_sources(
+            &catalog,
+            &acceptance_matrix,
+            &compatibility_matrix,
+            &payload_matrix,
+            &recipe_overrides,
+        )
+        .is_err(),
+        "every automated compatibility recipe case must retain its exact proof"
+    );
+
+    let mut malformed_release_step =
+        read_json("tests/fixtures/v2/compatibility/admission-fence.json");
+    malformed_release_step["cases"][0]["proof"]["members"][1]["command"] =
+        json!("python3 tools/qualify_distribution.py qualify");
+    let recipe_overrides = BTreeMap::from([(
+        "compatibility-admission-fence".to_owned(),
+        malformed_release_step,
+    )]);
+    assert!(
+        validate_v2_fixture_catalog_with_sources(
+            &catalog,
+            &acceptance_matrix,
+            &compatibility_matrix,
+            &payload_matrix,
+            &recipe_overrides,
+        )
+        .is_err(),
+        "a compatibility release proof must remain the exact make dist step"
+    );
+
+    let mut malformed_e2e_wrapper = read_json("tests/fixtures/v2/compatibility/v1-boundaries.json");
+    malformed_e2e_wrapper["cases"][3]["proof"]["command"] =
+        json!("cargo test -p podway-cli --test e2e_suite");
+    let recipe_overrides = BTreeMap::from([(
+        "compatibility-v1-boundaries".to_owned(),
+        malformed_e2e_wrapper,
+    )]);
+    assert!(
+        validate_v2_fixture_catalog_with_sources(
+            &catalog,
+            &acceptance_matrix,
+            &compatibility_matrix,
+            &payload_matrix,
+            &recipe_overrides,
+        )
+        .is_err(),
+        "a compatibility e2e proof must retain its exact wrapper command"
     );
 
     let mut demoted_payload = payload_matrix.clone();

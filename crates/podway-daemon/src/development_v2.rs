@@ -1,9 +1,9 @@
-//! Development-only Procedure v2 admission provenance.
+//! Procedure v2 admission policy and development-only provenance.
 //!
-//! This module does not execute a Procedure v2 command. It proves that a future handler is
-//! running inside the one helper-managed disposable runtime and that the selected workspace is
-//! the exact sandbox named by that runtime. The accepting constructor is compiled only for an
-//! explicitly featured debug build; every ordinary and release build is structurally closed.
+//! This module does not execute Procedure v2 commands. Normal product runtimes use public
+//! admission, while an explicitly featured debug development runtime replaces that policy with
+//! proof that the process and selected workspace belong to one helper-managed disposable sandbox.
+//! The development accepting constructor is absent from ordinary and release artifacts.
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,22 @@ pub(crate) const DEVELOPMENT_V2_ADMISSION_FEATURE_V1: &str = "development-v2-adm
 pub(crate) const DEVELOPMENT_V2_MARKER_SCHEMA_V1: &str =
     "podway.disposable-development-workspace/v1";
 
+#[derive(Clone, Debug)]
+pub(crate) enum ProcedureV2AdmissionGateV1 {
+    Public,
+    Development(Box<DevelopmentV2AdmissionGateV1>),
+}
+
+impl ProcedureV2AdmissionGateV1 {
+    pub(crate) const fn public() -> Self {
+        Self::Public
+    }
+
+    pub(crate) fn development(admission: DevelopmentV2AdmissionGateV1) -> Self {
+        Self::Development(Box::new(admission))
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DevelopmentV2AdmissionGateV1 {
     enabled: Option<DevelopmentV2ProcessIdentityV1>,
@@ -45,10 +61,6 @@ struct DevelopmentV2ProcessIdentityV1 {
 }
 
 impl DevelopmentV2AdmissionGateV1 {
-    pub(crate) const fn closed() -> Self {
-        Self { enabled: None }
-    }
-
     /// Captures immutable process topology at daemon startup. Invalid or incomplete development
     /// provenance deliberately leaves the daemon usable for v1 while keeping v2 admission closed.
     pub(crate) fn from_process(
@@ -65,7 +77,7 @@ impl DevelopmentV2AdmissionGateV1 {
         #[cfg(not(all(feature = "development-v2-admission", debug_assertions)))]
         {
             let _ = (dev_mode, active_paths, current_executable);
-            Self::closed()
+            Self { enabled: None }
         }
     }
 
@@ -438,7 +450,7 @@ mod tests {
 
     use super::{
         DEVELOPMENT_V2_ADMISSION_FEATURE_V1, DEVELOPMENT_V2_MARKER_SCHEMA_V1,
-        DevelopmentV2AdmissionGateV1,
+        DevelopmentV2AdmissionGateV1, ProcedureV2AdmissionGateV1,
     };
     use crate::workspace::DEVELOPMENT_V2_MARKER_FILE_NAME_V1;
     use crate::{
@@ -748,6 +760,36 @@ mod tests {
     }
 
     #[test]
+    fn v2rel006_production_runtime_admits_after_readonly_identity_resolution() {
+        let fixture = Fixture::new();
+        let bootstrap_manager =
+            WorkspaceRuntimeManagerV1::new(&fixture.paths, SqliteStoreOptionsV1::new(8).unwrap());
+        bootstrap_manager
+            .bootstrap(selector(&fixture.sandbox), observation())
+            .unwrap();
+        drop(bootstrap_manager);
+        let manager = Arc::new(WorkspaceRuntimeManagerV1::new(
+            &fixture.paths,
+            SqliteStoreOptionsV1::new(8).unwrap(),
+        ));
+        let runtime = ProductionWorkspaceRuntimeV1::new(
+            manager,
+            Arc::new(NativeProductionClockV1::default()),
+        );
+        let selector = WorktreeSelectorWireV1::new(
+            fs::canonicalize(&fixture.sandbox)
+                .unwrap()
+                .as_os_str()
+                .as_bytes(),
+            "production v2 fixture",
+            None,
+        )
+        .unwrap();
+
+        assert!(runtime.procedure_v2_admission(&selector).unwrap().is_some());
+    }
+
+    #[test]
     fn v2plt009_production_runtime_grants_only_after_readonly_resolution() {
         let fixture = Fixture::new();
         let bootstrap_manager =
@@ -783,7 +825,7 @@ mod tests {
             Arc::clone(&manager),
             Arc::new(NativeProductionClockV1::default()),
         )
-        .with_development_v2_admission(gate);
+        .with_procedure_v2_admission(ProcedureV2AdmissionGateV1::development(gate));
         let selector = WorktreeSelectorWireV1::new(
             fs::canonicalize(&fixture.sandbox)
                 .unwrap()
@@ -798,7 +840,7 @@ mod tests {
         let registry_before = fs::read(registry_path).unwrap();
         let database_before = fs::read(&database_path).unwrap();
 
-        assert!(runtime.development_v2_admission(&selector).is_some());
+        assert!(runtime.procedure_v2_admission(&selector).unwrap().is_some());
         assert!(!production_state.exists());
         assert_eq!(fs::read(registry_path).unwrap(), registry_before);
         assert_eq!(fs::read(&database_path).unwrap(), database_before);
@@ -810,7 +852,7 @@ mod tests {
                 .join(DEVELOPMENT_V2_MARKER_FILE_NAME_V1),
         )
         .unwrap();
-        assert!(runtime.development_v2_admission(&selector).is_none());
+        assert!(runtime.procedure_v2_admission(&selector).unwrap().is_none());
         assert!(!production_state.exists());
         assert_eq!(fs::read(registry_path).unwrap(), registry_before);
         assert_eq!(fs::read(&database_path).unwrap(), database_before);
@@ -823,7 +865,7 @@ mod tests {
                 .join(DEVELOPMENT_V2_MARKER_FILE_NAME_V1),
         )
         .unwrap();
-        assert!(runtime.development_v2_admission(&selector).is_none());
+        assert!(runtime.procedure_v2_admission(&selector).unwrap().is_none());
         assert!(!production_state.exists());
         assert_eq!(fs::read(registry_path).unwrap(), registry_before);
         assert_eq!(fs::read(&database_path).unwrap(), database_before);

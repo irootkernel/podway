@@ -8,7 +8,7 @@ v1 catalog contains four YAML files:
 - `docs-only.yaml`
 - `analysis.yaml`
 
-The implemented pre-GA v2 catalog contains two additional YAML files:
+The v0.2 candidate catalog contains two additional YAML files:
 
 - `sw-dev-v2.yaml`
 - `bug-fix-v2.yaml`
@@ -20,10 +20,10 @@ and bound to independently pinned shipped digests. A preset update applies only
 to new sessions and requires a procedure-version change when behavior changes.
 
 The released v0.1 catalog remains exactly the four v1 presets. The two v2 presets
-are implemented and included in the pre-GA v0.2 package inputs, but normal v2
-session admission remains closed. V2REL-006 implements production public admission
-and qualifies those unlock-free artifact bytes; V2REL-007 may publish only those
-unchanged bytes after explicit release authorization.
+are implemented and included in the qualified, unpublished v0.2 artifact. Normal
+v2 session admission is enabled in those bytes, and the development-only admission
+unlock is absent. V2REL-007 may publish only those unchanged bytes after explicit
+release authorization.
 
 Repository contributors may prepare a candidate with `make preset-create` or
 admit an existing YAML Procedure with `make preset-import`. Both commands validate

@@ -9,10 +9,9 @@ The normative YAML files are in [`../../../assets/presets/`](../../../assets/pre
 Each preset is designed for one current task and favors short explicit items over historical reporting.
 
 The catalog retains four Procedure v1 presets and ships two implemented Procedure
-v2 presets as pre-GA v0.2 content. Shipping the v2 source, embedding it, and binding
-its digest do not open normal v2 session admission. V2REL-006 implements production
-public admission and qualifies those unlock-free artifact bytes; V2REL-007 may
-publish only those unchanged bytes after explicit release authorization.
+v2 presets in the qualified, unpublished v0.2 candidate. The same candidate admits
+v2 sessions normally and excludes the development-only admission unlock. V2REL-007
+may publish only those unchanged bytes after explicit release authorization.
 
 ## Procedure v1 presets
 
@@ -179,7 +178,7 @@ version only when compatibility or migration needs justify it.
 ## Adding a preset
 
 The retained v1 catalog is fixed at exactly `sw-dev`, `bug-fix`, `docs-only`, and
-`analysis`. The implemented pre-GA v2 catalog is fixed at exactly `sw-dev-v2` and
+`analysis`. The v0.2 candidate v2 catalog is fixed at exactly `sw-dev-v2` and
 `bug-fix-v2`. The contributor commands below only prepare canonical source
 candidates; they do not modify either embedded catalog or make another preset
 shippable by themselves.

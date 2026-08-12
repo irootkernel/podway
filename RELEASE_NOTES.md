@@ -22,7 +22,7 @@ Podway is a same-user local tool. Its IPC endpoint and worktree state are truste
 
 ## Distribution metadata
 
-The qualified distribution will contain these exact top-level artifacts:
+The qualified, unpublished distribution contains these exact top-level artifacts:
 
 - `podway-0.2.0-aarch64-apple-darwin.tar.gz`;
 - `podway-0.2.0-aarch64-apple-darwin.tar.gz.sha256`;
@@ -33,7 +33,7 @@ The archive contains both binaries, shell completions, the six presets, public s
 
 ## Admission and release boundary
 
-This release candidate keeps normal public Procedure v2 admission closed. V2REL-006 must implement production public v2 admission and then build and qualify those exact bytes without the development-only admission unlock. V2REL-007 may publish only the unchanged qualified artifacts after explicit release authorization and owns published-byte reverification, immutable release evidence, and documentation-only closeout.
+This qualified release candidate admits Procedure v2 sessions normally and does not contain the development-only admission unlock. V2REL-007 may publish only the unchanged qualified artifacts after explicit release authorization and owns published-byte reverification, immutable release evidence, and documentation-only closeout.
 
 Development-only v2 admission remains limited to feature-enabled binaries, disposable workspaces, development mode, and isolated socket and state directories. That state has no migration-preservation promise and is not part of a release artifact.
 

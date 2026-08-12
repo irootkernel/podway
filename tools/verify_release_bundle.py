@@ -148,6 +148,14 @@ def verify(output_directory: Path) -> dict[str, Any]:
                 is not release_archive.TestIsolationCapability.DISABLED
             ):
                 fail(f"extracted {role} exposes or ambiguously handles test isolation")
+        if (
+            release_archive.development_v2_admission_capability(daemon)
+            is not release_archive.TestIsolationCapability.DISABLED
+        ):
+            fail(
+                "extracted podwayd exposes or ambiguously handles the "
+                "development-v2 admission unlock"
+            )
         sockets = list(extraction.glob("**/podwayd.sock"))
         if sockets:
             fail(f"final verification left daemon sockets behind: {sockets}")

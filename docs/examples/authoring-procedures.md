@@ -100,5 +100,6 @@ this schema, and the [integration session](integration-session.md) walks through
 a second custom v1 procedure built the same way. For Procedure v2, use the
 implemented scaffold, format, check, preview, graph, and conversion commands in
 the [CLI specification](../specs/interfaces/cli-specification.md#procedure-commands),
-then follow the [Procedure v2 workflow](v2-workflow.md) in a managed disposable
-runtime.
+then follow the [Procedure v2 workflow](v2-workflow.md) through the normal daemon
+endpoint. Contributors can instead use the managed disposable runtime when they
+need an isolated daemon and sandbox.

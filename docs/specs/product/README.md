@@ -66,7 +66,7 @@ Deleting the worktree deletes the task session and all task-local operational da
 | Artifact handling | Path/reference, SHA-256 digest, byte size, and media type only |
 | Authentication | Same-user local trust; no worktree access key |
 | External integrations | Generic CLI and JSON only |
-| Built-in presets | Retained v1: `sw-dev`, `bug-fix`, `docs-only`, `analysis`; implemented pre-GA v2: `sw-dev-v2`, `bug-fix-v2` |
+| Built-in presets | Retained v1: `sw-dev`, `bug-fix`, `docs-only`, `analysis`; qualified v0.2 candidate: `sw-dev-v2`, `bug-fix-v2` |
 | License | MIT |
 
 ## Success model
@@ -112,16 +112,14 @@ The `v0.2.0` candidate is a native Apple Silicon macOS product with:
 - byte-compatible released v1 commands, JSON families, IPC, and Procedure behavior;
 - additive Procedure v2 authoring and runtime contracts;
 - transactional schema-0, schema-v1, and schema-v2 migration to canonical SQLite schema-v3;
-- four retained v1 presets and two shipped pre-GA v2 presets;
+- four retained v1 presets and two shipped v2 presets;
 - shell completion for zsh, bash, and fish;
 - complete crash, concurrency, Git, service, compatibility, and preset conformance tests;
 - MIT licensing and release packaging.
 
-Normal v2 session admission remains closed in the candidate source: development
-execution requires the isolated disposable unlock, and no public v2 support boundary
-exists yet. V2REL-006 implements production public admission and qualifies those
-unlock-free artifact bytes; V2REL-007 may publish only those unchanged bytes after
-explicit release authorization. The released `v0.1.2` surface
+The qualified, unpublished candidate admits v2 sessions normally and does not
+contain the development-only admission unlock. V2REL-007 may publish only those
+unchanged bytes after explicit release authorization. The released `v0.1.2` surface
 remains the compatibility baseline.
 
 Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts

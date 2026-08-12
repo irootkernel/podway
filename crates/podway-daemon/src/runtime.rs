@@ -14,7 +14,7 @@ use podway_service::ServiceRuntimePathsV1;
 use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
 
 use crate::{
-    development_v2::DevelopmentV2AdmissionGateV1,
+    development_v2::{DevelopmentV2AdmissionGateV1, ProcedureV2AdmissionGateV1},
     dispatch::DispatchResponseMetadataV1,
     endpoint::{EndpointErrorV1, SingletonEndpointGuardV1, SingletonEndpointV1},
     execution::ExecutionClockV1,
@@ -22,7 +22,7 @@ use crate::{
     peer::{NativePeerCredentialSourceV1, PeerUidVerifierV1},
     production::{
         NativeProductionClockV1, ProductionMutationWorkerV1, ProductionRequestDispatcherV1,
-        compose_dispatcher_with_worker_observability_and_development_v2_v1,
+        compose_dispatcher_with_worker_observability_and_procedure_v2_v1,
     },
     registry::{RegistryErrorV1, WorkspaceRegistryEntryV1, WorkspaceRegistryV1},
     runtime_workspace::{
@@ -44,7 +44,7 @@ pub struct ProductionDaemonRuntimeConfigV1 {
     transport_timeouts: ServerTransportTimeoutsV1,
     process_identity: Option<DaemonProcessIdentityV1>,
     dev_mode: bool,
-    development_v2_admission: DevelopmentV2AdmissionGateV1,
+    procedure_v2_admission: ProcedureV2AdmissionGateV1,
 }
 
 impl ProductionDaemonRuntimeConfigV1 {
@@ -59,7 +59,7 @@ impl ProductionDaemonRuntimeConfigV1 {
             transport_timeouts,
             process_identity: None,
             dev_mode: false,
-            development_v2_admission: DevelopmentV2AdmissionGateV1::closed(),
+            procedure_v2_admission: ProcedureV2AdmissionGateV1::public(),
         }
     }
 
@@ -80,8 +80,9 @@ impl ProductionDaemonRuntimeConfigV1 {
         paths: &ServiceRuntimePathsV1,
         current_executable: &Path,
     ) -> Self {
-        self.development_v2_admission =
-            DevelopmentV2AdmissionGateV1::from_process(self.dev_mode, paths, current_executable);
+        self.procedure_v2_admission = ProcedureV2AdmissionGateV1::development(
+            DevelopmentV2AdmissionGateV1::from_process(self.dev_mode, paths, current_executable),
+        );
         self
     }
 
@@ -404,11 +405,11 @@ impl ProductionDaemonRuntimeV1 {
             }
         };
 
-        let composition = compose_dispatcher_with_worker_observability_and_development_v2_v1(
+        let composition = compose_dispatcher_with_worker_observability_and_procedure_v2_v1(
             Arc::clone(&manager),
             configuration.worker_id().clone(),
             observability.clone(),
-            configuration.development_v2_admission.clone(),
+            configuration.procedure_v2_admission.clone(),
         );
         let (dispatcher, worker) = composition.into_parts();
         let recovery_report =

@@ -14,7 +14,7 @@ use podway_config::{
 use podway_core::{AttemptId, Revision, SessionId, UnixMillis};
 use podway_daemon::{
     dispatch::{
-        CatalogDispatchErrorMapperV1, DevelopmentV2AdmissionProofV1, DispatcherWorkspaceOutputV1,
+        CatalogDispatchErrorMapperV1, DispatcherWorkspaceOutputV1, ProcedureV2AdmissionProofV1,
         RequestDispatcherV1Adapter, WorkspaceRuntimeV1,
     },
     production::{
@@ -114,11 +114,12 @@ impl WorkspaceRuntimeV1 for DevelopmentV2RoutingRuntime {
         self.inner.resolve_bootstrap(selector)
     }
 
-    fn development_v2_admission(
+    fn procedure_v2_admission(
         &self,
         _selector: &WorktreeSelectorWireV1,
-    ) -> Option<DevelopmentV2AdmissionProofV1> {
-        Some(DevelopmentV2AdmissionProofV1::granted_for_runtime())
+    ) -> Result<Option<ProcedureV2AdmissionProofV1>, podway_daemon::dispatch::DispatchFailureV1>
+    {
+        Ok(Some(ProcedureV2AdmissionProofV1::granted_for_runtime()))
     }
 
     fn workspace_output(&self, workspace: &Self::Workspace) -> podway_protocol::WorkspaceOutputV1 {

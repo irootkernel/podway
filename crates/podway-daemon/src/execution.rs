@@ -3708,8 +3708,8 @@ where
     Artifacts: ArtifactVerifierV1,
     Workspaces: WorkspaceRevalidatorV1,
 {
-    /// Attempts the development-gated Procedure v2 start path. `None` means the source is not a
-    /// Procedure v2 document and the unchanged v1 admission path may inspect it.
+    /// Attempts the Procedure v2 start path after runtime admission. `None` means the source is not
+    /// a Procedure v2 document and the unchanged v1 admission path may inspect it.
     pub fn admit_procedure_v2_start_for_workspace_with_response_context(
         &self,
         expected_workspace: &WorkspaceBindingV1,

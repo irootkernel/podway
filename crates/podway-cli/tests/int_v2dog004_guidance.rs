@@ -116,19 +116,22 @@ fn completion_and_overview_expose_the_shipped_v2_presets() {
         assert!(overview.contains(token), "overview omits {token}");
     }
     assert!(overview.contains("podway start --preset sw-dev --task"));
+    assert!(overview.contains("Normal daemon endpoints admit complete Procedure v2 sessions"));
     assert!(overview.contains("managed disposable runtime"));
 
     let start = help("session.start");
     assert!(start.contains("podway start --preset sw-dev --task"));
-    assert!(start.contains("python3 tools/dev_runtime.py run -- --json start"));
-    assert!(start.contains("managed disposable runtime"));
+    assert!(start.contains("podway --json start --preset bug-fix-v2"));
+    assert!(start.contains("Normal daemon endpoints admit complete Procedure v2 sessions"));
+    assert!(start.contains("isolated disposable development state"));
 
     let workflow = help("workflow");
     for token in [
-        "managed disposable development runtime only",
-        "python3 tools/dev_runtime.py daemon",
-        "python3 tools/dev_runtime.py init",
-        "python3 tools/dev_runtime.py run -- --json start",
+        "Procedure v2 workflow:",
+        "podway init",
+        "podway --json preset show bug-fix-v2",
+        "podway --json start",
+        "python3 tools/dev_runtime.py",
         "bug-fix-v2",
         "--dry-run",
         "docs/examples/v2-workflow.md",
@@ -141,11 +144,11 @@ fn completion_and_overview_expose_the_shipped_v2_presets() {
     }
     let admitted_start = workflow
         .lines()
-        .find(|line| line.contains("dev_runtime.py run -- --json start"))
-        .expect("workflow must contain a managed start");
+        .find(|line| line.contains("podway --json start"))
+        .expect("workflow must contain a public start");
     assert!(
         !admitted_start.contains("--dry-run"),
-        "the status and next examples require the managed start to create a session"
+        "the status and next examples require the public start to create a session"
     );
     assert!(!workflow.contains("--option approve"));
 }
@@ -233,7 +236,7 @@ fn v2_operator_example_uses_contract_owned_json_fields_and_denies_semantic_autho
     assert!(components["$defs"]["criterionResult"]["properties"]["status"].is_object());
 
     for disclaimer in [
-        "Podway\nenforces the declared progression rules, but it does not run checks or decide",
+        "Podway enforces the\ndeclared progression rules, but it does not run checks or decide",
         "truth determination made by Podway",
         "not a second semantic authority",
     ] {
