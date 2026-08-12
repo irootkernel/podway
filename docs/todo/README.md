@@ -1,7 +1,9 @@
 # TODO and Adopted Design Dossiers
 
-This directory owns planning documents for work that is not complete. Every
-`TODO-*.md` file declares one of two states: `Candidate` or `Adopted`.
+This directory owns planning documents for work that is not complete and
+path-retained historical dossiers whose executable evidence binds their original
+location. Every `TODO-*.md` file declares one of three states: `Candidate`,
+`Adopted`, or `Historical`.
 
 ## Candidate documents
 
@@ -51,11 +53,18 @@ must not use the release-program identifier as a synthetic epic or task prefix.
   changes, and update the roadmap or specifications in the same change when their
   authority is affected.
 - When the epic is complete, move the dossier into `docs/roadmap/archive/`, update
-  its status to historical, and repair every inbound link.
+  its status to historical, and repair every inbound link. If executable evidence
+  binds the dossier's path, retain it here with `Historical` status and link its
+  immutable completion report from the historical section below.
 - Do not leave generated reports, logs, mutable qualification receipts, or
   temporary plans in this directory.
 
 Current adopted dossiers:
 
 - [Podway v0.1.2 contract recovery and native release](TODO-podway-v0.1.2-contract-recovery.md)
-- [Podway v2 full-feature GA](TODO-podway-v2-full-feature-ga.md)
+
+Historical path-retained dossiers:
+
+- [Podway v2 full-feature GA](TODO-podway-v2-full-feature-ga.md) remains at its
+  executable-evidence-bound path; its immutable completion record is the
+  [v0.2.0 release report](../roadmap/archive/v0.2.0-release-report.md).

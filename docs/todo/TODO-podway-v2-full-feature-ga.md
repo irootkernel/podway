@@ -2,14 +2,14 @@
 
 ## Status and authority
 
-- Document state: `Adopted`
+- Document state: `Historical`
 - Dossier type: release program
 - Owning release program: `PV2GA`
 - Owning roadmap epics: `V2CTR`, `V2MOD`, `V2AUT`, `V2GRF`, `V2PLT`, `V2RUN`,
   `V2DRW`, `V2GOL`, `V2DOG`, and `V2REL`
 - Target product release: `v0.2.0`
 - Contract target: `podway.procedure/v2`
-- Implementation status: Qualified and unpublished; V2REL-006 production admission and distribution qualification are complete, while V2REL-007 publication remains pending
+- Implementation status: Published as the immutable v0.2.0 GA release on August 12, 2026; all PV2GA roadmap tasks are complete
 - Compatibility: `podway.procedure/v1` remains supported with unchanged semantics
 - Repository scope: Podway only; Dolgorae changes require separate authorization
 - Last accepted planning baseline: August 4, 2026

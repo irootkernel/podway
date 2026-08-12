@@ -35,10 +35,12 @@ Progress`, `In Review`, or `Blocked`; later tasks remain `Planned`.
 
 ## Release program PV2GA — Podway v0.2.0 Full-Feature GA
 
-`PV2GA` is a release program, not an epic or task prefix. Its ten epics deliver
-one stable release; no individual epic is a supported partial v2 release. The
-[adopted release dossier](../todo/TODO-podway-v2-full-feature-ga.md#status-and-authority)
-owns the detailed design, acceptance boundary, and focused gate for every task.
+`PV2GA` is a completed release program, not an epic or task prefix. Its ten epics
+delivered one stable release; no individual epic was a supported partial v2
+release. The path-retained
+[historical release dossier](../todo/TODO-podway-v2-full-feature-ga.md#status-and-authority)
+preserves the detailed design, and the
+[v0.2.0 release report](archive/v0.2.0-release-report.md) records completion.
 
 Epic dependencies are:
 
@@ -195,4 +197,4 @@ Dependencies: `V2CTR`, `V2MOD`, `V2AUT`, `V2GRF`, `V2PLT`, `V2RUN`, `V2DRW`,
 | `V2REL-004` | Synchronize final authority and release docs | Completed | Make specifications, assets, contracts, examples, versioning, and release copy exact. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
 | `V2REL-005` | Pass the development gate | Completed | Pass `make test` from the final integrated candidate. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
 | `V2REL-006` | Enable and qualify the native distribution | Completed | Implement production public v2 admission, then pass `make dist` on the exact clean unpublished commit and prove packaged identity plus development-unlock exclusion. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
-| `V2REL-007` | Publish and close v0.2.0 GA | Planned | After explicit release authorization, publish the unchanged qualified bytes, independently reverify immutable assets, and record the release report and archive bookkeeping. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
+| `V2REL-007` | Publish and close v0.2.0 GA | Completed | Publish the unchanged qualified bytes, independently reverify immutable assets, and record the release report and archive bookkeeping. | [Final report](archive/v0.2.0-release-report.md) |
