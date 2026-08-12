@@ -316,7 +316,7 @@ fn v2gol001_define_and_running_revise_are_fenced_replayable_and_restart_safe() {
     assert_eq!(stale_error["details"]["actual_goal_revision"], 1);
 
     let missing_attempt_fence = typed_request(
-        102_022_1,
+        1_020_221,
         "goal.revise",
         &fixture.selector,
         json!({

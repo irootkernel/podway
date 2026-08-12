@@ -1081,7 +1081,7 @@ fn v2drw002_declared_rework_keeps_the_exact_decision_after_its_attempt_becomes_s
     );
     assert_eq!(
         next.workflow_memory().decisions(),
-        &[expected_record.clone()]
+        std::slice::from_ref(&expected_record)
     );
     assert_eq!(
         next.workflow_memory().decisions()[0]

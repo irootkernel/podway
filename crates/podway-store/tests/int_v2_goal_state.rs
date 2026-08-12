@@ -2300,7 +2300,10 @@ fn goal_assessment_decision_atomically_persists_the_decision_and_immutable_asses
         .unwrap()
         .unwrap();
     assert_eq!(loaded, *outcome.state());
-    assert_eq!(loaded.goal_state().assessments(), &[assessment.clone()]);
+    assert_eq!(
+        loaded.goal_state().assessments(),
+        std::slice::from_ref(assessment)
+    );
 }
 
 #[test]

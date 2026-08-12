@@ -68,9 +68,11 @@ fn status(
     session_id: &str,
     verbose: bool,
 ) -> Map<String, Value> {
-    let payload = verbose
-        .then(|| json!({"verbose": true}).as_object().unwrap().clone())
-        .unwrap_or_default();
+    let payload = if verbose {
+        json!({"verbose": true}).as_object().unwrap().clone()
+    } else {
+        Map::new()
+    };
     let request = runtime::request(
         request_number,
         "session.status",

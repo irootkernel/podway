@@ -2399,10 +2399,10 @@ fn maximum_next_readback() -> (Vec<Value>, Vec<Value>) {
             .unwrap()
             .pop();
 
-        let mut low = 0;
-        let mut high = 16_384;
+        let mut low: usize = 0;
+        let mut high: usize = 16_384;
         while low < high {
-            let middle = (low + high + 1) / 2;
+            let middle = (low + high).div_ceil(2);
             readback[source_index]["items"]
                 .as_array_mut()
                 .unwrap()
