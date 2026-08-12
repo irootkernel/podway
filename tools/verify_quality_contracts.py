@@ -1479,15 +1479,19 @@ def validate_v2_payload_matrix(
 
 def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: dict[str, Any] | None = None) -> int:
     matrix = load_object(V2_RELEASE_PATH) if matrix is None else matrix
-    require_exact_keys(matrix, {"schema", "version", "source_acceptance_matrix", "admission_rule", "admission_policy", "task_test_policy", "categories", "final_gates"}, "v2 release gate matrix")
+    require_exact_keys(matrix, {"schema", "version", "source_acceptance_matrix", "admission_rule", "admission_policy", "task_test_policy", "publication_policy", "categories", "final_gates"}, "v2 release gate matrix")
     if matrix["schema"] != "podway.v2-release-gate-matrix/v1" or matrix["version"] != 1:
         fail("v2 release gate matrix schema or version is unsupported")
+    if matrix["admission_rule"] != "Public podway.procedure/v2 admission remains disabled until V2REL-006 implements production admission after every preceding task is complete, closes the remaining admission criterion and every category, and qualifies those exact bytes.":
+        fail("v2 admission ownership rule drift")
     expected_admission = {
         "read_only_authoring_during_development": True,
         "normal_v2_session_admission": "closed",
         "development_unlock_requires_all": ["explicit-development-only-build-feature", "development-mode", "disposable-workspace-marker", "separate-socket", "separate-state-directory"],
         "development_unlock_refuses": ["installed-daemon", "launch-agent", "normally-registered-workspace"],
         "development_state_migration_promise": False,
+        "production_public_admission_owner": "V2REL-006",
+        "release_qualification_requires_public_admission_enabled": True,
         "release_qualification_requires_unlock_absent": True,
     }
     if matrix["admission_policy"] != expected_admission:
@@ -1502,6 +1506,54 @@ def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     }
     if matrix["task_test_policy"] != expected_task_policy:
         fail("v2 per-task development gate policy drift")
+    expected_publication_policy = {
+        "owner_task": "V2REL-007",
+        "requires_explicit_release_authorization": True,
+        "qualified_candidate_owner": "V2REL-006",
+        "forbids_after_qualification": ["executable-source-change", "machine-contract-change", "artifact-rebuild", "artifact-byte-change"],
+        "qualified_artifacts": [
+            "podway-0.2.0-aarch64-apple-darwin.tar.gz",
+            "podway-0.2.0-aarch64-apple-darwin.tar.gz.sha256",
+            "podway-0.2.0-aarch64-apple-darwin.provenance.json",
+            "podway-0.2.0-aarch64-apple-darwin.dolgorae-handoff.json",
+        ],
+        "immutable_sequence": [
+            "record-authorization-and-reverify-v2rel-006-identities",
+            "recheck-v0.1.2-identities",
+            "create-and-push-annotated-v0.2.0-tag-for-qualified-commit",
+            "confirm-release-immutability-before-release-creation",
+            "create-tag-bound-draft-and-upload-qualified-bytes",
+            "verify-draft-digests-and-downloads-by-asset-id",
+            "publish-and-require-immutable-true",
+            "redownload-and-reverify-published-assets-and-v0.1.2",
+            "record-report-and-documentation-only-closeout",
+        ],
+        "report_required_fields": [
+            "authorization-reference-publisher-and-utc-time",
+            "release-url-and-id",
+            "annotated-tag-object-source-commit-and-source-tree",
+            "artifact-names-asset-ids-and-sha256-digests",
+            "binary-lockfile-manifest-provenance-and-handoff-identities",
+            "qualification-and-publication-commands-and-results",
+            "packaged-conformance-scenarios",
+            "signing-and-notarization-status",
+            "immutable-true",
+            "v0.1.2-preservation-check",
+            "remaining-limitations",
+            "completion-based-on-published-downloads-by-asset-id",
+        ],
+        "report_path": "docs/roadmap/archive/v0.2.0-release-report.md",
+        "closeout_change_class": "documentation-only-after-published-byte-verification",
+        "immutability_unavailable": {
+            "default": "fail-closed-before-publication",
+            "automatic_fallback": False,
+            "requires_separate_release_time_decision": True,
+            "decision_records": ["unavailable-control", "mutable-release-identity", "pinned-consumer-trust-basis"],
+            "pinned_consumer_trust_basis": ["asset-ids", "archive-sha256", "checksum-identity", "provenance-identity", "handoff-identity"],
+        },
+    }
+    if matrix["publication_policy"] != expected_publication_policy:
+        fail("v2 immutable publication policy drift")
     categories = matrix["categories"]
     if not isinstance(categories, list) or len(categories) != 9:
         fail("v2 release gate matrix must contain nine acceptance categories")
@@ -1535,8 +1587,8 @@ def validate_v2_release_matrix(acceptance: dict[str, dict[str, Any]], matrix: di
     )
     expected_gates = [
         {"task": "V2REL-005", "command": "make test", "implementation_status": v2rel005_status},
-        {"task": "V2REL-006", "command": "make dist", "implementation_status": "planned"},
-        {"task": "V2REL-007", "command": "explicit release authorization", "implementation_status": "planned", "conditions": ["all-prior-pv2ga-tasks-completed", "public-v2-admission-enabled-only-in-qualified-artifacts", "immutable-release-evidence-recorded", "explicit-release-authorization", "dossier-and-roadmap-archived"]},
+        {"task": "V2REL-006", "command": "implement production public v2 admission, then make dist", "implementation_status": "planned", "conditions": ["all-prior-pv2ga-tasks-completed", "production-public-v2-admission-enabled", "development-admission-unlock-absent", "exact-clean-unpublished-commit-qualified", "dolgorae-handoff-verifies-packaged-bytes"]},
+        {"task": "V2REL-007", "command": "explicit release authorization", "implementation_status": "planned", "conditions": ["all-prior-pv2ga-tasks-completed", "explicit-release-authorization", "exact-v2rel-006-qualified-bytes-published-unchanged", "draft-and-published-downloads-verified-by-asset-id", "immutable-release-evidence-recorded", "v0.1.2-identities-preserved", "documentation-only-report-and-roadmap-archive-recorded"]},
     ]
     if gates != expected_gates:
         fail("v2 final release gates drift")
@@ -1779,6 +1831,15 @@ def self_test_v2_matrices() -> int:
     wrong_task_policy = copy.deepcopy(release)
     wrong_task_policy["task_test_policy"]["make_test_before_executable_task_completion"] = False
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_task_policy), "per-task development gate", "v2 release task-policy")
+    wrong_activation_owner = copy.deepcopy(release)
+    wrong_activation_owner["admission_policy"]["production_public_admission_owner"] = "V2REL-007"
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_activation_owner), "admission and development-unlock", "v2 release activation-owner")
+    wrong_publication_sequence = copy.deepcopy(release)
+    wrong_publication_sequence["publication_policy"]["immutable_sequence"].pop()
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_publication_sequence), "immutable publication policy", "v2 release publication-sequence")
+    unsafe_publication_fallback = copy.deepcopy(release)
+    unsafe_publication_fallback["publication_policy"]["immutability_unavailable"]["automatic_fallback"] = True
+    expect_failure(lambda: validate_v2_release_matrix(acceptance, unsafe_publication_fallback), "immutable publication policy", "v2 release publication-fallback")
     wrong_category = copy.deepcopy(release)
     wrong_category["categories"][0]["acceptance_ids"].pop()
     expect_failure(lambda: validate_v2_release_matrix(acceptance, wrong_category), "exactly cover", "v2 release category")
@@ -1822,7 +1883,7 @@ def self_test_v2_matrices() -> int:
     overstated_category = copy.deepcopy(release)
     overstated_category["categories"][6]["implementation_status"] = "automated"
     expect_failure(lambda: validate_v2_release_matrix(acceptance, overstated_category), "exactly cover", "v2 release category-status")
-    return 44
+    return 47
 
 
 def main() -> int:

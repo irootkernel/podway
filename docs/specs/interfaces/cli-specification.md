@@ -8,8 +8,9 @@ This document describes the grammar implemented in the current v0.2.0 source
 candidate, including its automation options and result surfaces. The released
 v0.1.2 identity and surface remain the compatibility baseline. Procedure v2
 authoring and runtime contracts are implemented, but normal runtime admission
-remains closed. V2REL-006 qualifies unlock-free artifacts; V2REL-007 may enable
-public admission only after explicit release authorization.
+remains closed. V2REL-006 implements production public admission and qualifies
+those unlock-free artifact bytes; V2REL-007 may publish only those unchanged bytes
+after explicit release authorization.
 
 ## Global options
 

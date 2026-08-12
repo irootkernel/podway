@@ -119,8 +119,9 @@ The `v0.2.0` candidate is a native Apple Silicon macOS product with:
 
 Normal v2 session admission remains closed in the candidate source: development
 execution requires the isolated disposable unlock, and no public v2 support boundary
-exists yet. V2REL-006 qualifies unlock-free artifacts; V2REL-007 may enable public
-admission only after explicit release authorization. The released `v0.1.2` surface
+exists yet. V2REL-006 implements production public admission and qualifies those
+unlock-free artifact bytes; V2REL-007 may publish only those unchanged bytes after
+explicit release authorization. The released `v0.1.2` surface
 remains the compatibility baseline.
 
 Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts

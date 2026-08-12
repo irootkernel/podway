@@ -21,8 +21,9 @@ to new sessions and requires a procedure-version change when behavior changes.
 
 The released v0.1 catalog remains exactly the four v1 presets. The two v2 presets
 are implemented and included in the pre-GA v0.2 package inputs, but normal v2
-session admission remains closed. V2REL-006 qualifies unlock-free artifacts;
-V2REL-007 may enable public admission only after explicit release authorization.
+session admission remains closed. V2REL-006 implements production public admission
+and qualifies those unlock-free artifact bytes; V2REL-007 may publish only those
+unchanged bytes after explicit release authorization.
 
 Repository contributors may prepare a candidate with `make preset-create` or
 admit an existing YAML Procedure with `make preset-import`. Both commands validate

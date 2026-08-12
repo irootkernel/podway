@@ -233,10 +233,13 @@ and serial real-binary end-to-end scenarios. The preparation target includes
 product-code lint, dependency/license review, architecture guardrails,
 product-acceptance mapping, crash-boundary mapping, and contract validation.
 
-A revision is release-ready only when `make dist` exits successfully after adding
-all-target lint, release sentinels, bounded fuzzing, release builds, archive
-qualification, and the handoff. The gate validates formatting without rewriting
-the tree.
+A revision is release-ready only when V2REL-006 has enabled production Procedure
+v2 admission in normal release builds and `make dist` then exits successfully from
+that exact clean, unpublished commit. The gate adds all-target lint, release
+sentinels, bounded fuzzing, release builds, archive qualification, and the handoff.
+It MUST prove both that public v2 admission works without a development unlock and
+that the development-only unlock is absent. The gate validates formatting without
+rewriting the tree.
 
 No hosted CI run, independent signature, approval quorum, holdout run,
 qualification archive, or attestation bundle is required. Signing, notarization,
@@ -244,10 +247,12 @@ and publication remain distribution operations after `make dist` succeeds.
 
 ### V2 admission and GA boundary
 
-Normal builds MUST refuse `podway.procedure/v2` session admission until all ten
-PV2GA epics and every v2 acceptance category are complete. Intermediate work may
-ship read-only authoring surfaces, but no release artifact may admit or persist a
-partial v2 session contract.
+Normal builds MUST refuse `podway.procedure/v2` session admission until V2REL-006.
+V2REL-006 owns the production admission change after every preceding PV2GA task is
+complete, and it may qualify only after that change closes the remaining admission
+criterion and every v2 acceptance category. Intermediate work may ship read-only
+authoring surfaces, but no release artifact may admit or persist a partial v2
+session contract.
 
 Development dogfooding may admit v2 only when all of these conditions hold: the
 binary was compiled with the explicit development-only feature, existing
@@ -259,7 +264,65 @@ discardable and receives no migration-preservation promise.
 V0.2.0 reaches full-feature GA only after the complete integrated development,
 compatibility, payload, persistence, native runtime, recovery, and distribution
 gates pass. Release qualification MUST prove that the development admission
-unlock is absent before public v2 admission can be enabled.
+unlock is absent and that normal public v2 admission is enabled in the same
+qualified artifact bytes. Enabling admission after qualification would create an
+unqualified artifact and is forbidden.
+
+### V0.2.0 qualification and publication sequence
+
+V2REL-006 performs the final executable, machine-contract, and artifact mutation.
+It enables production public v2 admission, commits that implementation and its
+direct tests and contracts, and runs `make dist` from the exact clean unpublished
+commit. The four qualified outputs are the archive, detached checksum, provenance
+document, and Dolgorae handoff named in the release notes. Any executable-source or
+machine-contract change, rebuild, or artifact-byte change after that successful
+gate invalidates qualification and requires a new clean V2REL-006 candidate and
+complete `make dist` run. The post-publication report and roadmap/archive update are
+the sole permitted later documentation-only changes.
+
+V2REL-007 requires separate explicit release authorization. Before and during
+publication it MUST NOT change executable source or machine contracts, rebuild the
+candidate, or rewrite, resign, renotarize, or otherwise mutate the qualified
+artifacts.
+Publication follows this exact order:
+
+1. record the explicit authorization and reverify the clean qualified commit, tree,
+   four artifact names, and SHA-256 identities from V2REL-006;
+2. recheck that the existing v0.1.2 tag, release, asset IDs, and digests are unchanged;
+3. create and push an annotated `v0.2.0` tag for the exact qualified commit;
+4. confirm repository release immutability is enabled before creating the release;
+5. create a draft v0.2.0 release tied to that annotated tag and upload exactly the
+   four qualified artifact bytes;
+6. while the release remains a draft, compare every host-reported asset digest,
+   download every asset by immutable asset ID, and independently verify the bundle;
+7. publish only after every draft check succeeds, then require the published release
+   to report `immutable=true`;
+8. download every published asset again by asset ID, repeat independent bundle
+   verification, and recheck the v0.1.2 identities; and
+9. record the immutable publication report described below before declaring GA.
+
+The publication report at `docs/roadmap/archive/v0.2.0-release-report.md` MUST record
+the authorization reference, publisher and UTC time; release URL and ID; annotated
+tag object, source commit, and source tree; all
+four asset names, immutable asset IDs, and SHA-256 digests; archive binary, Cargo.lock,
+contract-manifest, provenance, and handoff identities; exact qualification and
+publication commands and results; packaged-conformance scenarios; signing and
+notarization status; `immutable=true`; the v0.1.2 preservation check; every remaining
+limitation; and that completion is based on assets downloaded from the published
+release by asset ID. After successful publication and downloaded-byte verification,
+V2REL-007 records that report and updates roadmap/archive bookkeeping in its own
+documentation-only commit. The annotated tag and published artifacts continue to
+bind the exact V2REL-006 qualified commit; closeout documentation does not create a
+new release candidate.
+
+If release immutability is unavailable or any identity is missing, mutable,
+ambiguous, or mismatched, V2REL-007 fails closed before publication. A mutable
+release is not an automatic fallback. Proceeding would require a separate explicit
+release-time decision that records the unavailable control, identifies the mutable
+release, and directs consumers to trust the pinned asset IDs plus the archive,
+provenance, handoff, and checksum identities. Without that decision, leave the
+release as a draft or remove the draft without changing qualified local bytes, and
+do not claim GA.
 
 ## Support policy
 

@@ -344,6 +344,30 @@ fn identical_diagnostics_for_goal_tracking_false() {
 }
 
 #[test]
+fn goal_tracking_non_true_forms_are_rejected_identically_by_yaml_and_json_dispatch() {
+    for (case, yaml_value, json_value) in [
+        ("false", "false", "false"),
+        ("string", "\"true\"", "\"true\""),
+        ("list", "[]", "[]"),
+        ("object", "{}", "{}"),
+    ] {
+        let yaml = BASE_YAML.replacen(
+            "id: p\n",
+            &format!("id: p\ngoal_tracking: {yaml_value}\n"),
+            1,
+        );
+        let json = BASE_JSON.replacen(
+            "\"id\":\"p\",",
+            &format!("\"id\":\"p\",\"goal_tracking\":{json_value},"),
+            1,
+        );
+
+        let (yaml_error, json_error) = (err_yaml(&yaml), err_json(&json));
+        assert_eq!(yaml_error, json_error, "case {case}");
+    }
+}
+
+#[test]
 fn identical_diagnostics_for_missing_required_field() {
     let yaml = BASE_YAML.replacen("name: P\n", "", 1);
     let json = BASE_JSON.replacen("\"name\":\"P\",", "", 1);

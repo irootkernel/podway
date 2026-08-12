@@ -854,8 +854,8 @@ def release_status() -> dict[str, str]:
         "native Apple Silicon macOS",
         "same-user local tool",
         "normal public Procedure v2 admission closed",
-        "V2REL-006 must build and qualify the native distribution without the development-only admission unlock",
-        "V2REL-007 may enable public admission only after explicit release authorization",
+        "V2REL-006 must implement production public v2 admission and then build and qualify those exact bytes without the development-only admission unlock",
+        "V2REL-007 may publish only the unchanged qualified artifacts after explicit release authorization",
         "unsigned and not notarized",
     )
     missing = [text for text in required if text not in notes]

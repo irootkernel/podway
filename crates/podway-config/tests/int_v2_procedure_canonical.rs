@@ -633,7 +633,7 @@ fn the_canonical_projection_budget_accepts_the_limit_and_rejects_one_filler_item
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn canonical_output_is_canonical_json_v1_and_re_canonicalizing_it_reaches_a_fixpoint() {
+fn v2acc006_canonical_contract_fields_are_exact_and_reach_a_fixpoint() {
     // An action placement with a skip policy where `BASE_YAML` has none, pinning the skip
     // canonical shape into the same fixpoint proof the other two sources exercise.
     let skip_yaml = edited(
@@ -646,11 +646,45 @@ fn canonical_output_is_canonical_json_v1_and_re_canonicalizing_it_reaches_a_fixp
         assert_eq!(verify_canonical_json_v1(canonical.as_bytes()), Ok(()));
 
         if source == skip_yaml.as_str() {
-            // Pin the skip policy's canonical shape: a closed two-field object in byte-sorted
-            // key order, proven below to re-parse and re-canonicalize to these exact bytes.
-            assert!(
-                canonical.contains(r#""skip":{"allowed":true,"reason_required":true}"#),
-                "canonical skip shape must be `{{\"allowed\":..,\"reason_required\":..}}`: {canonical}"
+            let projection: Value =
+                serde_json::from_str(&canonical).expect("canonical projection must be JSON");
+
+            // Pin every field named by V2ACC-006. Scalars and arrays are compared exactly, while
+            // the object comparisons also prove the closed shape has no extra canonical fields.
+            assert_eq!(
+                projection["purpose"],
+                serde_json::json!("Exercise every canonical shape rule in one document.")
+            );
+            assert_eq!(
+                projection["node_definitions"]["assess"]["objective"],
+                serde_json::json!("Determine the goal outcome.")
+            );
+            assert_eq!(
+                projection["node_definitions"]["assess"]["evidence_guidance"],
+                serde_json::json!(["Read the recorded result."])
+            );
+            assert_eq!(
+                projection["node_definitions"]["assess"]["assessment"],
+                serde_json::json!({
+                    "outcomes": {
+                        "achieved": "achieved",
+                        "not-achieved": "not_achieved",
+                        "superseded": "superseded"
+                    },
+                    "target": "session_goal"
+                })
+            );
+            assert_eq!(
+                projection["graph"]["nodes"][0]["skip"],
+                serde_json::json!({"allowed": true, "reason_required": true})
+            );
+            assert_eq!(
+                projection["graph"]["nodes"][1]["evidence_from"],
+                serde_json::json!([{
+                    "items": ["result"],
+                    "node": "perform",
+                    "required": true
+                }])
             );
         }
 

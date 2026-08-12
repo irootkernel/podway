@@ -33,7 +33,7 @@ The archive contains both binaries, shell completions, the six presets, public s
 
 ## Admission and release boundary
 
-This release candidate keeps normal public Procedure v2 admission closed. V2REL-006 must build and qualify the native distribution without the development-only admission unlock. V2REL-007 may enable public admission only after explicit release authorization and owns publication and immutable release evidence.
+This release candidate keeps normal public Procedure v2 admission closed. V2REL-006 must implement production public v2 admission and then build and qualify those exact bytes without the development-only admission unlock. V2REL-007 may publish only the unchanged qualified artifacts after explicit release authorization and owns published-byte reverification, immutable release evidence, and documentation-only closeout.
 
 Development-only v2 admission remains limited to feature-enabled binaries, disposable workspaces, development mode, and isolated socket and state directories. That state has no migration-preservation promise and is not part of a release artifact.
 

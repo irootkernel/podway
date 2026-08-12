@@ -317,6 +317,75 @@ fn terminal_goal_snapshot() -> ProcedureSnapshotV2 {
     .unwrap()
 }
 
+fn stale_assessment_terminal_snapshot() -> ProcedureSnapshotV2 {
+    let document = json!({
+        "schema":"podway.procedure/v2",
+        "id":"stale-assessment-terminal-gate",
+        "version":"1",
+        "name":"Stale assessment terminal gate",
+        "purpose":"Prove stale goal assessment history cannot satisfy terminal readiness.",
+        "goal_tracking":true,
+        "node_definitions": {
+            "hub-def":{
+                "type":"decision",
+                "title":"Hub",
+                "objective":"Choose the next step.",
+                "prompt":"Where next?",
+                "options":[
+                    {"id":"assess","label":"Assess"},
+                    {"id":"finish","label":"Finish"}
+                ],
+                "reason":{"required":true}
+            },
+            "assess-def":{
+                "type":"decision",
+                "title":"Assess",
+                "objective":"Assess the current session goal.",
+                "prompt":"What is the goal outcome?",
+                "options":[
+                    {"id":"achieved","label":"Achieved"},
+                    {"id":"not-achieved","label":"Not achieved"},
+                    {"id":"superseded","label":"Superseded"}
+                ],
+                "assessment":{"target":"session_goal","outcomes":{
+                    "achieved":"achieved",
+                    "not-achieved":"not_achieved",
+                    "superseded":"superseded"
+                }},
+                "reason":{"required":true}
+            },
+            "finish-def":{"type":"action","title":"Finish","intent":"Finish."}
+        },
+        "graph":{
+            "entry":"hub",
+            "nodes":[
+                {"id":"hub","use":"hub-def","routes":{
+                    "assess":{"to":"assess","effect":"advance"},
+                    "finish":{"to":"finish","effect":"advance"}
+                }},
+                {"id":"assess","use":"assess-def","routes":{
+                    "achieved":{"to":"finish","effect":"advance"},
+                    "not-achieved":{"to":"finish","effect":"advance"},
+                    "superseded":{"to":"finish","effect":"advance"}
+                }},
+                {"id":"finish","use":"finish-def","skip":{"allowed":true,"reason_required":false},"terminal":true}
+            ]
+        },
+        "manual_rework":{"allowed_targets":["hub"]}
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000414").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        digest,
+        ProcedureSourceLabelV1::file("stale-assessment-terminal.yaml").unwrap(),
+        UnixMillis::new(5),
+    )
+    .unwrap()
+}
+
 fn unsafe_rework_route_snapshot() -> ProcedureSnapshotV2 {
     let assessment = |title: &str| {
         json!({
@@ -2732,6 +2801,180 @@ fn stale_goal_assessment_cannot_satisfy_terminal_completion() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn stale_goal_assessment_history_cannot_complete_or_skip_a_terminal_cursor() {
+    let initial = GraphSessionStateV2::new_with_goal_state(
+        Revision::new(1),
+        "Stale assessment terminal gate",
+        stale_assessment_terminal_snapshot(),
+        SessionTraceV2::from_parts(
+            session_id(),
+            SessionLifecycle::Running,
+            Revision::new(1),
+            vec![attempt(
+                1,
+                "hub",
+                1,
+                1,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+                Some(1),
+            )],
+        )
+        .unwrap(),
+        vec![
+            GraphNodeCounterV2::new(node("hub"), 1, 0),
+            GraphNodeCounterV2::new(node("assess"), 0, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
+        WorkflowMemoryStateV2::new(
+            vec![
+                AttemptWorkflowMemoryV2::new(attempt_id(1), Vec::new(), Vec::new(), Vec::new())
+                    .unwrap(),
+            ],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+        GoalStateV2::new(
+            Some(GoalRevisionNumberV2::FIRST),
+            vec![goal_revision_one()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+        UnixMillis::new(10),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let assessment = initial
+        .decide_active_route_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            OptionId::new("assess").unwrap(),
+            attempt_id(2),
+            Some(ReasonV2::new("Assess the current goal.").unwrap()),
+            None,
+            UnixMillis::new(30),
+        )
+        .unwrap()
+        .into_state();
+    let assessment = assessment
+        .assess_goal_criterion_v2(
+            Revision::new(2),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            criterion_result_at("z-proof", CriterionStatusV2::Satisfied, Vec::new(), 31)
+                .result()
+                .clone(),
+            None,
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .into_state();
+    let assessment = assessment
+        .assess_goal_criterion_v2(
+            Revision::new(3),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            criterion_result_at("a-safety", CriterionStatusV2::Satisfied, Vec::new(), 32)
+                .result()
+                .clone(),
+            None,
+            UnixMillis::new(32),
+        )
+        .unwrap()
+        .into_state();
+    let terminal = assessment
+        .decide_active_route_with_goal_revision_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("achieved").unwrap(),
+            attempt_id(3),
+            Some(GoalRevisionNumberV2::FIRST),
+            Some(ReasonV2::new("Every criterion is satisfied.").unwrap()),
+            None,
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    let reworked = terminal
+        .manual_rework_v2(
+            Revision::new(5),
+            Some(&attempt_id(3)),
+            node("hub"),
+            attempt_id(4),
+            ReasonV2::new("Reconsider the route.").unwrap(),
+            None,
+            UnixMillis::new(50),
+        )
+        .unwrap()
+        .into_state();
+    let stale_only_terminal = reworked
+        .decide_active_route_v2(
+            Revision::new(6),
+            &attempt_id(4),
+            OptionId::new("finish").unwrap(),
+            attempt_id(5),
+            Some(ReasonV2::new("Proceed to the terminal action.").unwrap()),
+            None,
+            UnixMillis::new(60),
+        )
+        .unwrap()
+        .into_state();
+
+    assert_eq!(
+        stale_only_terminal
+            .trace()
+            .active_attempt()
+            .unwrap()
+            .graph_node_id(),
+        &node("finish")
+    );
+    assert_eq!(stale_only_terminal.goal_state().assessments().len(), 1);
+    assert_eq!(
+        stale_only_terminal.trace().attempts()[1].validity(),
+        AttemptValidityV2::Stale
+    );
+    assert_eq!(stale_only_terminal.workflow_memory().reworks().len(), 1);
+    assert!(
+        stale_only_terminal
+            .goal_state()
+            .latest_fresh_assessment(stale_only_terminal.trace())
+            .is_none()
+    );
+
+    let before = stale_only_terminal.clone();
+    assert_eq!(
+        stale_only_terminal.complete_active_action_v2(
+            Revision::new(7),
+            &attempt_id(5),
+            None,
+            UnixMillis::new(70),
+        ),
+        Err(GraphMutationErrorV2::FreshGoalAssessmentMissing {
+            goal_revision: GoalRevisionNumberV2::FIRST,
+        })
+    );
+    assert_eq!(stale_only_terminal, before);
+    assert_eq!(
+        stale_only_terminal.skip_active_action_v2(
+            Revision::new(7),
+            &attempt_id(5),
+            None,
+            None,
+            UnixMillis::new(70),
+        ),
+        Err(GraphMutationErrorV2::FreshGoalAssessmentMissing {
+            goal_revision: GoalRevisionNumberV2::FIRST,
+        })
+    );
+    assert_eq!(stale_only_terminal, before);
 }
 
 #[test]

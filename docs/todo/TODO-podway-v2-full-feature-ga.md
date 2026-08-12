@@ -9,7 +9,7 @@
   `V2DRW`, `V2GOL`, `V2DOG`, and `V2REL`
 - Target product release: `v0.2.0`
 - Contract target: `podway.procedure/v2`
-- Implementation status: Implemented pre-GA; V2REL-006 through V2REL-007 and public activation remain pending
+- Implementation status: Implemented pre-GA; V2REL-006 production admission and qualification plus V2REL-007 publication remain pending
 - Compatibility: `podway.procedure/v1` remains supported with unchanged semantics
 - Repository scope: Podway only; Dolgorae changes require separate authorization
 - Last accepted planning baseline: August 4, 2026
@@ -3172,7 +3172,9 @@ requires the existing development mode, a disposable-workspace marker, a
 separate socket, and a separate state directory. It refuses an installed
 daemon, LaunchAgent, or normally registered workspace. Development v2 state is
 discardable and receives no migration-preservation promise. Release
-qualification proves the unlock is absent.
+qualification proves both that production public v2 admission works in normal
+release binaries and that the development unlock is absent. V2REL-006 owns that
+production admission implementation before it runs the final clean `make dist`.
 
 Every executable task includes focused success and failure tests, updates each
 affected specification and machine contract in the same change, and preserves
@@ -3293,6 +3295,28 @@ tree, and `V2REL-006` is the only release-readiness gate.
 
 ### 19.10 Epic V2REL: Conformance and GA
 
+Successful V2REL-006 qualification ends all executable and machine-contract
+mutation. The task enables production public v2 admission, commits and tests that
+change, and qualifies the exact clean unpublished commit with `make dist`. The
+archive, detached checksum, provenance, and Dolgorae handoff produced by that run
+are the only publishable bytes. Any later executable, machine-contract, rebuild,
+or artifact-byte change invalidates the candidate and returns ownership to
+V2REL-006 for a complete clean qualification.
+
+V2REL-007 requires separate explicit release authorization and follows the exact
+immutable publication sequence in
+[`release-and-packaging.md`](../specs/operations/release-and-packaging.md#v020-qualification-and-publication-sequence):
+reverify the V2REL-006 identities and v0.1.2, tag the exact qualified commit,
+confirm immutability, create a draft, upload the unchanged four artifacts, verify
+draft downloads by asset ID, publish, require `immutable=true`, redownload and
+reverify, recheck v0.1.2, then record the required report. No executable, machine
+contract, rebuild, or artifact-byte mutation is allowed. Its final repository
+change is documentation-only: the report and roadmap/archive bookkeeping after
+published-byte verification. If immutability or any identity is unavailable,
+ambiguous, mutable, or mismatched, publication fails closed. A mutable fallback
+requires a separate explicit release-time decision and the pinned trust basis
+specified by the release specification; it is never automatic.
+
 | Task | Deliverable | Acceptance and focused gate |
 |---|---|---|
 | `V2REL-001` | Complete the v1/v2 compatibility suite. | V1 semantics and released fixtures remain unchanged, v2 never emits v1 result families, and unsupported peers fail explicitly; run compatibility E2E. |
@@ -3300,5 +3324,5 @@ tree, and `V2REL-006` is the only release-readiness gate.
 | `V2REL-003` | Complete native daemon and recovery qualification. | Real CLI/daemon, queue, detached jobs, SQLite reopen, concurrency, crash, endpoint isolation, and release-build admission behavior pass on native Apple Silicon macOS; run `make test-e2e`. |
 | `V2REL-004` | Synchronize final specifications and release documentation. | ADRs, specs, schemas, catalogs, contracts, examples, changelog, version identity, and roadmap references describe exactly the implemented surface; run `make architecture-static`. |
 | `V2REL-005` | Pass the integrated development gate. | A clean final candidate passes `make test`; no focused test substitutes for this gate. |
-| `V2REL-006` | Build and qualify the native distribution. | A clean native Apple Silicon build passes `make dist`, the release bundle contains no development unlock, and the Dolgorae handoff verifies against packaged bytes. |
-| `V2REL-007` | Close v0.2.0 full-feature GA. | All prior tasks are completed, public v2 admission is enabled only in the qualified artifacts, immutable release evidence is recorded, and the dossier moves to roadmap archive after explicit release authorization. |
+| `V2REL-006` | Enable production v2 admission and qualify the native distribution. | After every prior task completes, production public v2 admission is implemented and directly tested; the exact clean unpublished Apple Silicon commit passes `make dist`, its release bundle admits v2 without a development unlock, contains no development unlock, and its Dolgorae handoff verifies against packaged bytes. Any later executable, machine-contract, rebuild, or artifact-byte change invalidates qualification. |
+| `V2REL-007` | Publish and close v0.2.0 full-feature GA. | After separate explicit release authorization, the exact V2REL-006 tag candidate and four unchanged qualified artifacts follow the immutable draft, download, publish, and redownload sequence in the release specification. Published-byte verification, the immutable report, and v0.1.2 preservation check pass before this task records its documentation-only report and roadmap/archive bookkeeping; no executable, machine-contract, or artifact-byte change is permitted. |

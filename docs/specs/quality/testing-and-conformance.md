@@ -371,10 +371,12 @@ stages sequentially:
   restart, achieved closeout, temporary-state deletion, and a v1 regression
   transition.
 
-The v2 preset and runtime checks prove implemented pre-GA behavior only. They must
-also prove that an ordinary endpoint and a release-profile build keep v2 session
-admission closed; no focused or development-runtime check promotes the public
-support boundary.
+Before V2REL-006, the v2 preset and runtime checks prove implemented pre-GA
+behavior only. They must also prove that an ordinary endpoint and a release-profile
+build keep v2 session admission closed; no focused or development-runtime check
+promotes the public support boundary. V2REL-006 owns the deliberate production
+admission change and replaces that release-profile rejection assertion with direct
+normal public-admission coverage before the exact clean candidate runs `make dist`.
 
 The E2E layer builds the debug product binaries once. Preset-tool verification
 runs afterward against that prepared CLI instead of initiating another build, and
@@ -413,7 +415,8 @@ acceptance source exactly once; adding an unmapped bullet fails `test-prepare`.
 `make dist` packages the release-profile binaries once, verifies CLI, daemon,
 manifest, source, target, binary digests, isolation capability, and provenance
 identities, then extracts the
-archive, selects a private absolute `PODWAY_DEV_HOME`, runs the packaged lifecycle,
+archive, proves normal public v2 admission without any development unlock, selects
+a private absolute `PODWAY_DEV_HOME`, runs the packaged lifecycle,
 conflict, timeout, response-loss, reconciliation, and identity scenarios through
 the foreground dev daemon, terminates it through IPC, and requires socket cleanup.
 Source packaging and extracted qualification both call the same manifest-bound

@@ -83,6 +83,48 @@
             "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
             "function": "the_canonical_projection_budget_accepts_the_limit_and_rejects_one_filler_item_over",
             "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::the_canonical_projection_budget_accepts_the_limit_and_rejects_one_filler_item_over --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_validate.rs",
+            "function": "document_bound_dimensions_accept_the_limit_and_reject_one_over_deterministically",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_validate::document_bound_dimensions_accept_the_limit_and_reject_one_over_deterministically --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_validate.rs",
+            "function": "source_bound_dimensions_accept_the_limit_and_reject_one_over_deterministically",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_validate::source_bound_dimensions_accept_the_limit_and_reject_one_over_deterministically --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure.rs",
+            "function": "v2_procedure_version_accepts_at_limit_and_rejects_one_over",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure::v2_procedure_version_accepts_at_limit_and_rejects_one_over --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure.rs",
+            "function": "v2_procedure_name_accepts_at_limit_and_rejects_one_over",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure::v2_procedure_name_accepts_at_limit_and_rejects_one_over --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure.rs",
+            "function": "v2_procedure_purpose_accepts_at_limit_and_rejects_one_over",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure::v2_procedure_purpose_accepts_at_limit_and_rejects_one_over --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure.rs",
+            "function": "v2_procedure_description_accepts_at_limit_and_rejects_one_over",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure::v2_procedure_description_accepts_at_limit_and_rejects_one_over --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure.rs",
+            "function": "v2_node_definitions_count_accepts_64_and_rejects_65",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure::v2_node_definitions_count_accepts_64_and_rejects_65 --locked -- --exact"
           }
         ]
       },
@@ -199,6 +241,12 @@
           {
             "kind": "cargo-test",
             "path": "crates/podway-config/tests/int_v2_procedure_equivalence.rs",
+            "function": "goal_tracking_non_true_forms_are_rejected_identically_by_yaml_and_json_dispatch",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_equivalence::goal_tracking_non_true_forms_are_rejected_identically_by_yaml_and_json_dispatch --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_equivalence.rs",
             "function": "malformed_inputs_fixture_json_and_binary_cases_are_rejected_through_json_dispatch",
             "command": "cargo test -p podway-config --test int_suite int_v2_procedure_equivalence::malformed_inputs_fixture_json_and_binary_cases_are_rejected_through_json_dispatch --locked -- --exact"
           }
@@ -229,8 +277,8 @@
       "proof": {
         "kind": "cargo-test",
         "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs",
-        "function": "canonical_output_is_canonical_json_v1_and_re_canonicalizing_it_reaches_a_fixpoint",
-        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::canonical_output_is_canonical_json_v1_and_re_canonicalizing_it_reaches_a_fixpoint --locked -- --exact"
+        "function": "v2acc006_canonical_contract_fields_are_exact_and_reach_a_fixpoint",
+        "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::v2acc006_canonical_contract_fields_are_exact_and_reach_a_fixpoint --locked -- --exact"
       },
       "contract_refs": [
         {
@@ -434,10 +482,21 @@
       ],
       "implementation_status": "automated",
       "proof": {
-        "kind": "cargo-unit-test",
-        "path": "crates/podway-config/src/procedure_v2_graph.rs",
-        "function": "v2grf001_graph_analyses_match_independent_exhaustive_three_node_models",
-        "command": "cargo test -p podway-config --lib procedure_v2_graph::tests::v2grf001_graph_analyses_match_independent_exhaustive_three_node_models --locked -- --exact"
+        "kind": "cargo-test-set",
+        "members": [
+          {
+            "kind": "cargo-unit-test",
+            "path": "crates/podway-config/src/procedure_v2_graph.rs",
+            "function": "v2grf001_graph_analyses_match_independent_exhaustive_three_node_models",
+            "command": "cargo test -p podway-config --lib procedure_v2_graph::tests::v2grf001_graph_analyses_match_independent_exhaustive_three_node_models --locked -- --exact"
+          },
+          {
+            "kind": "cargo-unit-test",
+            "path": "crates/podway-config/src/procedure_v2_graph.rs",
+            "function": "v2grf001_rework_preserves_dominance_over_generated_valid_execution_traces",
+            "command": "cargo test -p podway-config --lib procedure_v2_graph::tests::v2grf001_rework_preserves_dominance_over_generated_valid_execution_traces --locked -- --exact"
+          }
+        ]
       },
       "contract_refs": [
         {
@@ -543,6 +602,24 @@
             "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
             "function": "v2grf002_accepts_an_exact_readback_budget_and_rejects_the_next_authored_scalar",
             "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf002_accepts_an_exact_readback_budget_and_rejects_the_next_authored_scalar --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf002_rejects_a_placement_whose_complete_static_next_content_is_too_large",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf002_rejects_a_placement_whose_complete_static_next_content_is_too_large --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf002_readback_charges_all_items_without_a_selector_and_only_selected_items_with_one",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf002_readback_charges_all_items_without_a_selector_and_only_selected_items_with_one --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf002_optional_and_unreachable_readback_is_still_charged_at_its_worst_case",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf002_optional_and_unreachable_readback_is_still_charged_at_its_worst_case --locked -- --exact"
           }
         ]
       },
@@ -940,6 +1017,12 @@
             "path": "crates/podway-daemon/tests/int_v2drw001_decide.rs",
             "function": "v2drw001_decide_validates_fences_and_rules_then_persists_exact_replay",
             "command": "cargo test -p podway-daemon --test int_suite int_v2drw001_decide::v2drw001_decide_validates_fences_and_rules_then_persists_exact_replay --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-daemon/tests/int_v2drw006_failures.rs",
+            "function": "v2drw006_concurrent_decisions_keep_one_cursor_and_stale_history_non_satisfying",
+            "command": "cargo test -p podway-daemon --test int_suite int_v2drw006_failures::v2drw006_concurrent_decisions_keep_one_cursor_and_stale_history_non_satisfying --locked -- --exact"
           },
           {
             "kind": "cargo-test",
@@ -1668,6 +1751,12 @@
             "path": "crates/podway-daemon/tests/int_v2gol003_goal_outcomes.rs",
             "function": "v2gol003_incomplete_and_mismatched_outcomes_fail_atomically",
             "command": "cargo test -p podway-daemon --test int_suite int_v2gol003_goal_outcomes::v2gol003_incomplete_and_mismatched_outcomes_fail_atomically --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-config/tests/int_v2_procedure_vet.rs",
+            "function": "v2grf001_assessment_coverage_reports_each_unmapped_option_and_missing_outcome",
+            "command": "cargo test -p podway-config --test int_suite int_v2_procedure_vet::v2grf001_assessment_coverage_reports_each_unmapped_option_and_missing_outcome --locked -- --exact"
           }
         ]
       },
@@ -1735,8 +1824,8 @@
       "proof": {
         "kind": "cargo-test",
         "path": "crates/podway-store/tests/int_v2_goal_state.rs",
-        "function": "stale_goal_assessment_cannot_satisfy_terminal_completion",
-        "command": "cargo test -p podway-store --test int_suite int_v2_goal_state::stale_goal_assessment_cannot_satisfy_terminal_completion --locked -- --exact"
+        "function": "stale_goal_assessment_history_cannot_complete_or_skip_a_terminal_cursor",
+        "command": "cargo test -p podway-store --test int_suite int_v2_goal_state::stale_goal_assessment_history_cannot_complete_or_skip_a_terminal_cursor --locked -- --exact"
       },
       "contract_refs": [
         {
@@ -2001,12 +2090,18 @@
             "function": "v2aut008_negative_recipes_reach_the_process_boundary_with_their_codes",
             "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2aut008_negative_recipes_reach_the_process_boundary_with_their_codes --locked -- --exact"
           },
-          {
-            "kind": "cargo-test",
-            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
-            "function": "v2grf002_a_validated_graph_rejection_keeps_its_digest_and_vet_identity",
-            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2grf002_a_validated_graph_rejection_keeps_its_digest_and_vet_identity --locked -- --exact"
-          },
+      {
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+        "function": "v2grf002_a_validated_graph_rejection_keeps_its_digest_and_vet_identity",
+        "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2grf002_a_validated_graph_rejection_keeps_its_digest_and_vet_identity --locked -- --exact"
+      },
+      {
+        "kind": "cargo-test",
+        "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+        "function": "v2grf002_vet_json_is_byte_stable_across_processes_for_multiple_findings",
+        "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2grf002_vet_json_is_byte_stable_across_processes_for_multiple_findings --locked -- --exact"
+      },
           {
             "kind": "cargo-test",
             "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
@@ -2063,6 +2158,30 @@
             "path": "crates/podway-config/tests/int_v2_procedure_cross_format_projection.rs",
             "function": "v2grf008_all_formats_preserve_ordered_identities_transitions_and_rework_metadata",
             "command": "cargo test -p podway-config --test int_suite int_v2_procedure_cross_format_projection::v2grf008_all_formats_preserve_ordered_identities_transitions_and_rework_metadata --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2grf003_graph_json_is_deterministic_digest_bound_and_read_only",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2grf003_graph_json_is_deterministic_digest_bound_and_read_only --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2grf004_mermaid_is_digest_bound_deterministic_and_read_only",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2grf004_mermaid_is_digest_bound_deterministic_and_read_only --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2grf005_plantuml_is_digest_bound_deterministic_and_read_only",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2grf005_plantuml_is_digest_bound_deterministic_and_read_only --locked -- --exact"
+          },
+          {
+            "kind": "cargo-test",
+            "path": "crates/podway-cli/tests/int_v2_authoring_cli.rs",
+            "function": "v2grf006_dot_is_digest_bound_deterministic_and_read_only",
+            "command": "cargo test -p podway-cli --test int_suite int_v2_authoring_cli::v2grf006_dot_is_digest_bound_deterministic_and_read_only --locked -- --exact"
           }
         ]
       },

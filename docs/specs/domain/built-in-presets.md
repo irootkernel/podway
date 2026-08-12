@@ -10,9 +10,9 @@ Each preset is designed for one current task and favors short explicit items ove
 
 The catalog retains four Procedure v1 presets and ships two implemented Procedure
 v2 presets as pre-GA v0.2 content. Shipping the v2 source, embedding it, and binding
-its digest do not open normal v2 session admission. V2REL-006 qualifies unlock-free
-artifacts; V2REL-007 may enable public admission only after explicit release
-authorization.
+its digest do not open normal v2 session admission. V2REL-006 implements production
+public admission and qualifies those unlock-free artifact bytes; V2REL-007 may
+publish only those unchanged bytes after explicit release authorization.
 
 ## Procedure v1 presets
 

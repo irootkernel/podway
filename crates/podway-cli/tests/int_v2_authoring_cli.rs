@@ -1266,6 +1266,57 @@ fn v2grf002_a_validated_graph_rejection_keeps_its_digest_and_vet_identity() {
 }
 
 #[test]
+fn v2grf002_vet_json_is_byte_stable_across_processes_for_multiple_findings() {
+    let fixture = FixtureDirectory::new("vet-deterministic");
+    let path = fixture.write(
+        "cycle.yaml",
+        &MINIMAL_V2_YAML.replace("      terminal: true\n", "      next: only\n"),
+    );
+
+    // Correlation and clock fields intentionally vary per invocation. Replace only those values
+    // so the comparison still pins every other stdout byte, including diagnostic order.
+    let stable_stdout = |output: &Output| {
+        let envelope = one_json(output);
+        let request_id = envelope["request_id"]
+            .as_str()
+            .expect("the envelope must carry a request id");
+        let generated_at = envelope["generated_at"]
+            .as_str()
+            .expect("the envelope must carry a generation time");
+        String::from_utf8(output.stdout.clone())
+            .expect("JSON stdout must be UTF-8")
+            .replace(request_id, "<request-id>")
+            .replace(generated_at, "<generated-at>")
+            .into_bytes()
+    };
+
+    let baseline = vet_json(&path);
+    assert_eq!(baseline.status.code(), Some(1), "{baseline:?}");
+    assert!(baseline.stderr.is_empty(), "{baseline:?}");
+    let envelope = one_json(&baseline);
+    let diagnostics = envelope["result"]["diagnostics"]
+        .as_array()
+        .expect("vet diagnostics must be an array");
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic["code"].as_str().expect("a diagnostic code"))
+            .collect::<Vec<_>>(),
+        ["GRAPH_CYCLE_INVALID", "NO_TERMINAL_PATH"],
+        "the fixture must exercise stable ordering across multiple findings"
+    );
+    assert_eq!(envelope["result"]["diagnostics_total"], 2);
+    let baseline_stdout = stable_stdout(&baseline);
+
+    for _ in 0..5 {
+        let output = vet_json(&path);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(stable_stdout(&output), baseline_stdout);
+    }
+}
+
+#[test]
 fn v2grf002_the_standalone_vet_exposes_resource_budget_rejections() {
     let fixture = FixtureDirectory::new("vet-budget-error");
     let path = fixture.write("oversized.yaml", &oversized_static_v2_yaml());

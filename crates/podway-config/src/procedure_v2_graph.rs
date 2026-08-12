@@ -541,7 +541,7 @@ mod tests {
     /// Runs a check against a synthetic three-node index. The placements provide terminal
     /// identity; adjacency is supplied independently so all 512 directed graphs can be exhausted
     /// without constructing 512 authoring documents.
-    fn with_index(test_graph: u16, test: impl FnOnce(&GraphIndex<'_>)) {
+    fn with_index(test_graph: u16, rework_back_edges: bool, test: impl FnOnce(&GraphIndex<'_>)) {
         let ids: Vec<GraphNodeId> = (0..3)
             .map(|node| GraphNodeId::new(format!("n-{node}")).expect("test id"))
             .collect();
@@ -575,7 +575,11 @@ mod tests {
                     .filter(|target| test_graph & (1 << (source * 3 + target)) != 0)
                     .map(|target| Successor {
                         target,
-                        effect: Some(TransitionEffectV2::Advance),
+                        effect: Some(if rework_back_edges && target <= source {
+                            TransitionEffectV2::Rework
+                        } else {
+                            TransitionEffectV2::Advance
+                        }),
                     })
                     .collect()
             })
@@ -655,10 +659,211 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum ModeledReentry {
+        Retry,
+        DeclaredRework,
+        ManualRework,
+        GoalRework,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct ModeledAttempt {
+        sequence: usize,
+        node: usize,
+        valid: bool,
+    }
+
+    fn valid_attempts(trace: &[ModeledAttempt]) -> Vec<ModeledAttempt> {
+        trace
+            .iter()
+            .copied()
+            .filter(|attempt| attempt.valid)
+            .collect()
+    }
+
+    fn assert_current_trace_invariants(graph: &GraphIndex<'_>, trace: &[ModeledAttempt]) {
+        let valid = valid_attempts(trace);
+        assert_eq!(
+            valid.first().map(|attempt| attempt.node),
+            Some(graph.entry()),
+            "the current valid trace must start at entry: {trace:?}"
+        );
+        for pair in valid.windows(2) {
+            assert!(
+                graph
+                    .successors(pair[0].node)
+                    .iter()
+                    .any(|edge| edge.target() == pair[1].node),
+                "the current valid trace must remain a graph path: {trace:?}"
+            );
+        }
+
+        let active = valid.last().expect("a current trace has an active attempt");
+        for candidate in 0..graph.node_count() {
+            let dominates = candidate == active.node
+                || !reference_reachable(graph, graph.entry(), Some(candidate))
+                    .contains(active.node);
+            if dominates {
+                assert_eq!(
+                    valid
+                        .iter()
+                        .filter(|attempt| attempt.node == candidate)
+                        .count(),
+                    1,
+                    "dominator {candidate} must have exactly one valid attempt for active node {}: {trace:?}",
+                    active.node
+                );
+            }
+        }
+    }
+
+    fn model_reentry(
+        graph: &GraphIndex<'_>,
+        trace: &[ModeledAttempt],
+        target_position: usize,
+        mode: ModeledReentry,
+    ) -> Vec<ModeledAttempt> {
+        let old_valid = valid_attempts(trace);
+        let target = old_valid[target_position];
+        let mut next = trace.to_vec();
+        for attempt in &mut next {
+            if attempt.valid && attempt.sequence >= target.sequence {
+                attempt.valid = false;
+            }
+        }
+        next.push(ModeledAttempt {
+            sequence: trace.len(),
+            node: target.node,
+            valid: true,
+        });
+
+        for old in &old_valid[..target_position] {
+            assert!(
+                next.iter()
+                    .any(|attempt| attempt.sequence == old.sequence && attempt.valid),
+                "{mode:?} must preserve the valid prefix"
+            );
+        }
+        for old in &old_valid[target_position..] {
+            assert!(
+                next.iter()
+                    .any(|attempt| attempt.sequence == old.sequence && !attempt.valid),
+                "{mode:?} must stale the complete suffix"
+            );
+        }
+        let expected_nodes = old_valid[..=target_position]
+            .iter()
+            .map(|attempt| attempt.node)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            valid_attempts(&next)
+                .iter()
+                .map(|attempt| attempt.node)
+                .collect::<Vec<_>>(),
+            expected_nodes,
+            "{mode:?} must replace the target attempt without changing the surviving path"
+        );
+        assert!(
+            target_position == 0
+                || graph
+                    .successors(old_valid[target_position - 1].node)
+                    .iter()
+                    .any(|edge| edge.target() == target.node),
+            "the fresh target must re-extend the preserved path"
+        );
+        next
+    }
+
+    fn exercise_reentry_traces(
+        graph: &GraphIndex<'_>,
+        trace: Vec<ModeledAttempt>,
+        remaining_transitions: usize,
+        exercised: &mut [bool; 4],
+    ) {
+        assert_current_trace_invariants(graph, &trace);
+        if remaining_transitions == 0 {
+            return;
+        }
+
+        let valid = valid_attempts(&trace);
+        let active = valid.last().expect("generated trace has an active attempt");
+
+        let retry = model_reentry(graph, &trace, valid.len() - 1, ModeledReentry::Retry);
+        exercised[0] = true;
+        exercise_reentry_traces(graph, retry, remaining_transitions - 1, exercised);
+
+        for target_position in 0..valid.len() {
+            for (mode, coverage) in [
+                (ModeledReentry::ManualRework, 2),
+                (ModeledReentry::GoalRework, 3),
+            ] {
+                let next = model_reentry(graph, &trace, target_position, mode);
+                exercised[coverage] = true;
+                exercise_reentry_traces(graph, next, remaining_transitions - 1, exercised);
+            }
+        }
+
+        for edge in graph.successors(active.node) {
+            if edge.effect() == Some(TransitionEffectV2::Rework) {
+                if let Some(target_position) = valid
+                    .iter()
+                    .position(|attempt| attempt.node == edge.target())
+                {
+                    let target_dominates_active = edge.target() == active.node
+                        || !reference_reachable(graph, graph.entry(), Some(edge.target()))
+                            .contains(active.node);
+                    if !target_dominates_active {
+                        continue;
+                    }
+                    let next = model_reentry(
+                        graph,
+                        &trace,
+                        target_position,
+                        ModeledReentry::DeclaredRework,
+                    );
+                    exercised[1] = true;
+                    exercise_reentry_traces(graph, next, remaining_transitions - 1, exercised);
+                }
+            } else if !valid.iter().any(|attempt| attempt.node == edge.target()) {
+                let mut next = trace.clone();
+                next.push(ModeledAttempt {
+                    sequence: trace.len(),
+                    node: edge.target(),
+                    valid: true,
+                });
+                exercise_reentry_traces(graph, next, remaining_transitions - 1, exercised);
+            }
+        }
+    }
+
+    #[test]
+    fn v2grf001_rework_preserves_dominance_over_generated_valid_execution_traces() {
+        let mut exercised = [false; 4];
+        for encoded in 0..(1_u16 << 9) {
+            with_index(encoded, true, |graph| {
+                exercise_reentry_traces(
+                    graph,
+                    vec![ModeledAttempt {
+                        sequence: 0,
+                        node: graph.entry(),
+                        valid: true,
+                    }],
+                    4,
+                    &mut exercised,
+                );
+            });
+        }
+        assert_eq!(
+            exercised, [true; 4],
+            "retry, declared rework, manual rework, and goal rework must all be generated"
+        );
+    }
+
     #[test]
     fn v2grf001_graph_analyses_match_independent_exhaustive_three_node_models() {
         for encoded in 0..(1_u16 << 9) {
-            with_index(encoded, |graph| {
+            with_index(encoded, false, |graph| {
                 let reachable = reference_reachable(graph, graph.entry(), None);
                 assert_eq!(
                     graph.reachable_from(graph.entry()),
