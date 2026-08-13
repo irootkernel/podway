@@ -93,6 +93,39 @@ podway daemon logs --lines 100
 podway daemon logs --follow
 ```
 
+## Optional: configure an AI coding agent
+
+Podway does not modify a project's `AGENTS.md` or install an agent skill. Both integrations below are optional. They may be used independently or together, and omitting both does not affect the CLI.
+
+For a small project-wide policy, add this template to the project's `AGENTS.md`:
+
+```markdown
+## Podway
+
+- When `.podway/config.yaml` exists, read `podway status --json` and `podway next --json` before task work and re-read them after every mutation.
+- Treat the active Podway action or stage as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
+- Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
+- You may update items and advance an existing active session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, control the daemon, or reopen or otherwise reactivate a completed session unless the user explicitly requests it.
+- Podway records assertions; it does not run the work or prove semantic truth.
+```
+
+For fuller operational guidance, copy the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/main/skills/use-podway) directory into the skill directory recognized by the agent:
+
+```bash
+podway_skill_dir=/path/to/agent/skills/use-podway
+mkdir -p "$podway_skill_dir/references"
+
+curl -fsSLo "$podway_skill_dir/SKILL.md" \
+  https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/SKILL.md
+
+for reference in lifecycle authoring recovery; do
+  curl -fsSLo "$podway_skill_dir/references/$reference.md" \
+    "https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/references/$reference.md"
+done
+```
+
+The skill covers the active-session loop and loads separate references only for less frequent lifecycle, Procedure-authoring, or recovery work. Consult the agent's documentation for its skill discovery path and reload requirements. The commands require network access and `curl`, and overwrite existing files with the same names. Replace `main` with a release tag or commit SHA when a reproducible, pinned skill version is required.
+
 ## Build from source
 
 Source builds require native Apple Silicon macOS and the Rust version pinned in `rust-toolchain.toml`:

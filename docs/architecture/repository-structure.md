@@ -9,6 +9,7 @@ contracts/              Executable repository contracts and stable evidence
 docs/                   Human-readable contributor documentation
 quality/                Crash-boundary registry
 release/                Product-acceptance mapping
+skills/                 Optional source-distributed AI agent guidance
 tests/fixtures/          Shared contract fixtures
 tools/                  Verification, E2E, fuzz, and release tools
 artifacts/              Ignored, host-local verification output
@@ -67,3 +68,5 @@ interface inputs executed by repository verification tools.
 `artifacts/` contains mutable reports, raw logs, fuzzing output, and other
 machine-specific results. The entire directory is ignored and is not a release
 input. Release readiness is decided only by `make dist` on the current tree.
+
+`skills/` contains optional guidance that users may copy from the source repository into an AI agent's skill directory. It is not installed by Podway, does not change Podway behavior, and is not included in the release archive.
