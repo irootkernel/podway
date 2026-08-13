@@ -4,13 +4,12 @@
 
 The public command is `podway`. The daemon binary is `podwayd` and is normally managed through `podway daemon ...`.
 
-This document describes the grammar implemented in the current v0.2.0 source
-candidate, including its automation options and result surfaces. The released
-v0.1.2 identity and surface remain the compatibility baseline. Procedure v2
-authoring and runtime contracts are implemented. The qualified, unpublished
-candidate admits v2 sessions normally and excludes the development-only admission
-unlock. V2REL-007 may publish only those unchanged bytes after explicit release
-authorization.
+This document describes the grammar implemented in the current v0.2.0 source,
+including its automation options and result surfaces. The released v0.1.2
+identity and surface remain the compatibility baseline. Procedure v2 authoring
+and runtime contracts are implemented. The v0.2.0 release admits Procedure v2
+sessions through the normal runtime and excludes the development-only admission
+unlock.
 
 ## Global options
 
@@ -321,11 +320,11 @@ podway preset explain <name>
 `show` emits source YAML or structured JSON. `explain` emits preset metadata plus an
 ordered v1 stage or v2 graph-node outline. Procedure v2 source detail and rework
 topology remain owned by `show`, `procedure graph`, and `procedure preview`.
-The built-in names are `analysis`, `bug-fix`, `docs-only`, `sw-dev`,
-`bug-fix-v2`, and `sw-dev-v2`. The `-v2` presets use Procedure v2 and remain
-runtime-admissible only through the managed development gate until that boundary
-is deliberately promoted. Static list, show, explain, and dry-run inspection are
-available without daemon admission.
+The built-in names are `analysis`, `bug-fix`, `docs-only`, `sw-dev`, `bug-fix-v2`,
+and `sw-dev-v2`. The `-v2` presets use Procedure v2 and ship in v0.2.0, which
+admits them through the normal runtime and excludes the development-only admission
+unlock. Static list, show, explain, and dry-run inspection are available without
+daemon admission.
 
 ## Session commands
 

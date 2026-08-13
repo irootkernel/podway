@@ -33,7 +33,7 @@ canonical digests, and compact envelope boundary together. See the
 
 The v0.1.0, v0.1.1, and v0.1.2 releases publish byte-identical copies of the public v1
 Procedure, output, error, status-result, next-result, and version-result schemas.
-The v0.2.0 candidate retains those exact bytes while adding separate v2 families.
+The v0.2.0 release retains those exact bytes while adding separate v2 families.
 The v0.1.0 files were published below `schemas/`; the canonical v0.1.1 and v0.1.2 source
 location moved to `assets/schemas/` without changing their bytes.
 

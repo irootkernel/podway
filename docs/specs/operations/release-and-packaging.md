@@ -2,7 +2,7 @@
 
 ## Release scope
 
-The `v0.2.0` release candidate is a macOS product. It includes:
+The `v0.2.0` release is a macOS product. It includes:
 
 - `podway`;
 - `podwayd`;

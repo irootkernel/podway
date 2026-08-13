@@ -66,7 +66,7 @@ Deleting the worktree deletes the task session and all task-local operational da
 | Artifact handling | Path/reference, SHA-256 digest, byte size, and media type only |
 | Authentication | Same-user local trust; no worktree access key |
 | External integrations | Generic CLI and JSON only |
-| Built-in presets | Retained v1: `sw-dev`, `bug-fix`, `docs-only`, `analysis`; qualified v0.2 candidate: `sw-dev-v2`, `bug-fix-v2` |
+| Built-in presets | Retained v1: `sw-dev`, `bug-fix`, `docs-only`, `analysis`; shipped in v0.2.0: `sw-dev-v2`, `bug-fix-v2` |
 | License | MIT |
 
 ## Success model
@@ -105,7 +105,7 @@ metadata rather than artifact bytes, and exposes no Git mutation API.
 
 ## Supported boundary
 
-The `v0.2.0` candidate is a native Apple Silicon macOS product with:
+The `v0.2.0` release is a native Apple Silicon macOS product with:
 
 - matching `podway` and `podwayd` binaries;
 - LaunchAgent installation and lifecycle management;
@@ -117,10 +117,9 @@ The `v0.2.0` candidate is a native Apple Silicon macOS product with:
 - complete crash, concurrency, Git, service, compatibility, and preset conformance tests;
 - MIT licensing and release packaging.
 
-The qualified, unpublished candidate admits v2 sessions normally and does not
-contain the development-only admission unlock. V2REL-007 may publish only those
-unchanged bytes after explicit release authorization. The released `v0.1.2` surface
-remains the compatibility baseline.
+The release admits v2 sessions through the normal runtime and does not contain the
+development-only admission unlock. The released `v0.1.2` surface remains the
+compatibility baseline.
 
 Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts
 are not Podway releases. Conditional non-macOS implementation code is internal and

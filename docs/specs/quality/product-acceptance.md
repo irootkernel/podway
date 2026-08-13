@@ -98,7 +98,7 @@ The criteria below describe the implemented baseline checked by `make test` and 
 
 ## Built-in presets
 
-- The retained v1 presets `sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate without semantic drift, while the shipped v0.2 candidate presets `sw-dev-v2` and `bug-fix-v2` validate and vet with their embedded bytes and pinned digests intact.
+- The retained v1 presets `sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate without semantic drift, while the shipped v0.2.0 presets `sw-dev-v2` and `bug-fix-v2` validate and vet with their embedded bytes and pinned digests intact.
 - Each retained v1 preset has clear help and stage descriptions, while CLI help exposes the shipped v2 preset identities and graph-workflow guidance.
 - Each retained v1 preset passes a complete end-to-end scenario, while both v2 presets pass full-graph conformance and embedded-identity checks.
 - Each retained v1 preset executes retry and return, while both v2 presets declare their bounded decision and rework scenarios.

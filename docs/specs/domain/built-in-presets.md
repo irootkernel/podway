@@ -8,10 +8,9 @@ The normative YAML files are in [`../../../assets/presets/`](../../../assets/pre
 
 Each preset is designed for one current task and favors short explicit items over historical reporting.
 
-The catalog retains four Procedure v1 presets and ships two implemented Procedure
-v2 presets in the qualified, unpublished v0.2 candidate. The same candidate admits
-v2 sessions normally and excludes the development-only admission unlock. V2REL-007
-may publish only those unchanged bytes after explicit release authorization.
+The catalog retains four Procedure v1 presets and ships two implemented Procedure v2
+presets in v0.2.0, which admits v2 sessions through the normal runtime and excludes
+the development-only admission unlock.
 
 ## Procedure v1 presets
 
@@ -178,10 +177,9 @@ version only when compatibility or migration needs justify it.
 ## Adding a preset
 
 The retained v1 catalog is fixed at exactly `sw-dev`, `bug-fix`, `docs-only`, and
-`analysis`. The v0.2 candidate v2 catalog is fixed at exactly `sw-dev-v2` and
-`bug-fix-v2`. The contributor commands below only prepare canonical source
-candidates; they do not modify either embedded catalog or make another preset
-shippable by themselves.
+`analysis`. The v0.2.0 v2 catalog is fixed at exactly `sw-dev-v2` and `bug-fix-v2`.
+The contributor commands below only prepare canonical source candidates; they do not
+modify either embedded catalog or make another preset shippable by themselves.
 
 Create a validated scaffold directly in `assets/presets/`:
 
