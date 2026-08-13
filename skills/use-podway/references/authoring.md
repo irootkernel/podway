@@ -1,6 +1,6 @@
-# Procedure Authoring
+# Procedure v2 Authoring
 
-Read this reference when the user asks to create, convert, review, visualize, or use a custom Procedure.
+Read this reference when the user asks to create, review, visualize, or use a custom Procedure v2.
 
 ## Prefer an existing Procedure
 
@@ -11,7 +11,7 @@ Read this reference when the user asks to create, convert, review, visualize, or
 ## Author Procedure v2
 
 1. Read the exact grammar for each operation with `podway help procedure.<operation>`.
-2. Start a new document with `podway procedure scaffold --template minimal`, or convert v1 source with `podway procedure convert <file>` and review every synthesized value. Both commands write the document to stdout and never write a file, so redirect the output to a file under `.podway/procedures/` and review it there.
+2. Start a new Procedure v2 document with `podway procedure scaffold --template minimal`. The command writes the document to stdout and never writes a file, so redirect the output to a file under `.podway/procedures/` and review it there.
 3. Edit the declarative document without adding command execution, Git mutation, arbitrary expressions, plugins, unbounded collections, parallel cursors, or other behavior outside Podway's product boundary.
 4. Run the authoring stages in this order:
 

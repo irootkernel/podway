@@ -100,10 +100,11 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ```markdown
 ## Podway
 
-- When `.podway/config.yaml` exists, read `podway status --json` and `podway next --json` before task work and re-read them after every mutation.
-- Treat the active Podway action or stage as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
+- This guidance supports Procedure v2 only. Procedure v1 is a compatibility-only legacy surface: do not start, author, convert, replace, or mutate a v1 session. If Podway returns a v1 session, stop and report it without changing state.
+- When `.podway/config.yaml` exists, read `podway status --json` and `podway next --json` before task work. Require `podway.status-result/v2` and `podway.next-result/v2`, and re-read both after every mutation.
+- Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
-- You may update items and advance an existing active session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, control the daemon, or reopen or otherwise reactivate a completed session unless the user explicitly requests it.
+- You may update items and advance an existing active v2 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, control the daemon, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
