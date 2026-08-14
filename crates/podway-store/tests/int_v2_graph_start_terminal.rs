@@ -7,23 +7,22 @@ use std::process::Command;
 
 use podway_core::{
     ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
-    CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1, DomainCommand, DomainError,
-    DomainResult, GraphNodeId, ItemId, OptionId, ProcedureSnapshotId, ProcedureSnapshotV1,
-    ProcedureSourceLabelV1, ReasonV2, Revision, SessionAggregateV1, SessionAttemptV2, SessionId,
-    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId,
-    canonicalize_json_v1,
+    CanonicalProcedureJsonV1, DomainCommand, DomainError, DomainResult, GraphNodeId, ItemId,
+    OptionId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2,
+    SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
+    WorkspaceId, canonicalize_json_v1,
 };
 use podway_store::codec::encode_persisted_terminal_receipt_v1;
 use podway_store::{
     ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitRequestV1, AttemptMetadataV2,
     CanonicalExecutionJsonV1, DurableWorktreeIdentityV1, GraphNodeCounterV2, GraphSessionStateV2,
     GraphStartCurrentTaskV2, IdempotencyKeyV1, JobStateV1, PersistedGraphMutationFailureV2,
-    PersistedGraphTerminalOperationV2, PersistedResponseContextV1, PersistedSessionMutationV1,
-    ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1,
-    StoreGraphMutationContractV2, StoreGraphStateContractV2, StoreIdempotencyReadContractV1,
-    StoreInvariantV1, StoreReadContractV1, StoreUnavailableReasonV1, TerminalResultV1,
-    ValidatedWorkspaceRootV1, WorkerIdV1,
+    PersistedGraphTerminalOperationV2, PersistedResponseContextV1, ProcedureSnapshotV2,
+    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
+    StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1, StoreGraphMutationContractV2,
+    StoreGraphStateContractV2, StoreIdempotencyReadContractV1, StoreInvariantV1,
+    StoreReadContractV1, StoreUnavailableReasonV1, TerminalResultV1, ValidatedWorkspaceRootV1,
+    WorkerIdV1,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -288,89 +287,6 @@ fn artifact_failure_ready_state(session_number: u64, snapshot_number: u64) -> Gr
         )
         .unwrap()
         .into_state()
-}
-
-fn legacy_aggregate() -> SessionAggregateV1 {
-    let authored = json!({
-        "schema": "podway.procedure/v1",
-        "id": "legacy-before-v2",
-        "version": "1",
-        "name": "Legacy before v2",
-        "stages": [{
-            "id": "first",
-            "title": "First",
-            "instructions": [],
-            "items": [{"type": "confirm", "id": "done", "prompt": "Done", "required": false}]
-        }],
-        "rework": {"allow_return_to": "any_previous"}
-    });
-    let canonical = canonicalize_json_v1(&authored).unwrap();
-    let snapshot = ProcedureSnapshotV1::from_canonical_json(CanonicalProcedureSnapshotInputV1 {
-        snapshot_id: ProcedureSnapshotId::new(uuid(420)).unwrap(),
-        schema_id: "podway.procedure/v1".to_owned(),
-        procedure_id: "legacy-before-v2".to_owned(),
-        procedure_version: "1".to_owned(),
-        name: "Legacy before v2".to_owned(),
-        source_label: ProcedureSourceLabelV1::file("legacy.yaml").unwrap(),
-        canonical_json: CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
-        digest: Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
-            .unwrap(),
-        created_at: UnixMillis::new(5),
-    })
-    .unwrap();
-    SessionAggregateV1::start(
-        SessionId::new(uuid(421)).unwrap(),
-        "Legacy task",
-        snapshot,
-        AttemptId::new(uuid(422)).unwrap(),
-        UnixMillis::new(6),
-    )
-    .unwrap()
-}
-
-fn seed_legacy_session(store: &SqliteStoreV1) -> SessionAggregateV1 {
-    let aggregate = legacy_aggregate();
-    let request = AdmitRequestV1::new(
-        DomainCommand::SessionStart,
-        IdempotencyKeyV1::new("legacy-seed").unwrap(),
-        podway_core::JobId::new(uuid(423)).unwrap(),
-        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
-        digest('c'),
-        UnixMillis::new(7),
-    )
-    .with_admitted_procedure_snapshot(aggregate.snapshot().clone());
-    store.admit(&identity(), request).unwrap();
-    let claim = store
-        .claim_next(
-            &identity(),
-            WorkerIdV1::new("legacy-seed-worker").unwrap(),
-            UnixMillis::new(8),
-        )
-        .unwrap()
-        .unwrap();
-    store
-        .commit_terminal(
-            claim.claim().clone(),
-            Revision::ZERO,
-            Some(
-                StateTransitionV1::new_persisted(
-                    Some(aggregate.session_id().clone()),
-                    Revision::ZERO,
-                    aggregate.revision(),
-                    PersistedSessionMutationV1::Replace(aggregate.clone()),
-                )
-                .unwrap(),
-            ),
-            TerminalResultV1::Success(DomainResult::SessionChanged {
-                session_id: aggregate.session_id().clone(),
-                revision_before: Revision::ZERO,
-                revision_after: aggregate.revision(),
-                changed: true,
-            }),
-            UnixMillis::new(9),
-        )
-        .unwrap();
-    aggregate
 }
 
 fn admit_and_claim(
@@ -1507,38 +1423,6 @@ fn graph_start_replace_atomically_replaces_a_graph_task() {
             UnixMillis::new(23),
         )
         .unwrap();
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(next)
-    );
-}
-
-#[test]
-fn graph_start_replace_atomically_replaces_a_legacy_task() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
-    let previous = seed_legacy_session(&store);
-    let next = graph_state(430, 440, 22);
-    let claimed = admit_and_claim(
-        &store,
-        DomainCommand::SessionStartReplace,
-        "legacy-to-v2-replace",
-        450,
-        AdmissionSessionIdentityV1::Exact(previous.session_id().clone()),
-        Some(previous.revision()),
-    );
-    store
-        .commit_graph_start_terminal_v2(
-            claimed.claim().clone(),
-            GraphStartCurrentTaskV2::Exact {
-                session_id: previous.session_id().clone(),
-                session_revision: previous.revision(),
-            },
-            next.clone(),
-            UnixMillis::new(23),
-        )
-        .unwrap();
-    assert!(store.read_session_aggregate(&identity()).unwrap().is_none());
     assert_eq!(
         store.read_graph_session_v2(&identity()).unwrap(),
         Some(next)

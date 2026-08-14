@@ -429,12 +429,6 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
-        words: "procedure convert",
-        flags: DISPLAY_FLAGS,
-        values: "",
-        dynamic: None,
-    },
-    Route {
         words: "preset list",
         flags: DISPLAY_FLAGS,
         values: "",
@@ -443,13 +437,13 @@ const ROUTES: &[Route] = &[
     Route {
         words: "preset show",
         flags: DISPLAY_FLAGS,
-        values: "analysis bug-fix bug-fix-v2 docs-only sw-dev sw-dev-v2",
+        values: "bug-fix-v2 sw-dev-v2",
         dynamic: None,
     },
     Route {
         words: "preset explain",
         flags: DISPLAY_FLAGS,
-        values: "analysis bug-fix bug-fix-v2 docs-only sw-dev sw-dev-v2",
+        values: "bug-fix-v2 sw-dev-v2",
         dynamic: None,
     },
     Route {
@@ -540,7 +534,7 @@ const ROUTES: &[Route] = &[
     Route {
         words: "start",
         flags: START_FLAGS,
-        values: "analysis bug-fix bug-fix-v2 docs-only sw-dev sw-dev-v2",
+        values: "bug-fix-v2 sw-dev-v2",
         dynamic: None,
     },
     Route {
@@ -753,29 +747,6 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
-        words: "return",
-        flags: &[
-            &JSON,
-            &DEV,
-            &WORKTREE,
-            &TIMEOUT,
-            &SOCKET,
-            &NO_COLOR,
-            &QUIET,
-            &IDEMPOTENCY_KEY,
-            &DETACH,
-            &IF_WORKSPACE_UUID,
-            &IF_SESSION_ID,
-            &IF_SESSION_REVISION,
-            &IF_ATTEMPT,
-            &TO,
-            &REASON,
-            &DRY_RUN,
-        ],
-        values: "",
-        dynamic: Some("returns"),
-    },
-    Route {
         words: "block",
         flags: &[
             &JSON,
@@ -837,28 +808,6 @@ const ROUTES: &[Route] = &[
         ],
         values: "",
         dynamic: None,
-    },
-    Route {
-        words: "reopen",
-        flags: &[
-            &JSON,
-            &DEV,
-            &WORKTREE,
-            &TIMEOUT,
-            &SOCKET,
-            &NO_COLOR,
-            &QUIET,
-            &IDEMPOTENCY_KEY,
-            &DETACH,
-            &IF_WORKSPACE_UUID,
-            &IF_SESSION_ID,
-            &IF_SESSION_REVISION,
-            &TO,
-            &REASON,
-            &DRY_RUN,
-        ],
-        values: "",
-        dynamic: Some("returns"),
     },
     Route {
         words: "reset",

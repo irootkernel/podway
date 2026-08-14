@@ -18,7 +18,7 @@ use std::{
 use podway_config::{
     ConfigError, DEFAULT_WORKSPACE_CONFIG_YAML_V1, WorkspaceConfigV1, parse_workspace_config_v1,
 };
-use podway_core::{DomainResult, SessionAggregateV1, UnixMillis, WorkspaceId};
+use podway_core::{DomainResult, UnixMillis, WorkspaceId};
 use podway_git::{
     GitResolveErrorV1, GitResolverContractV1, NativeGitResolverV1, WORKTREE_SELECTOR_VERSION_V1,
     WorkspaceLayoutErrorV1, WorkspaceLayoutInitializerV1, WorktreeSelectorV1,
@@ -182,13 +182,6 @@ impl WorkspaceStoreReadFacadeV1 {
 }
 
 impl StoreReadContractV1 for WorkspaceStoreReadFacadeV1 {
-    fn read_session_aggregate(
-        &self,
-        identity: &podway_store::DurableWorktreeIdentityV1,
-    ) -> Result<Option<SessionAggregateV1>, StoreErrorV1> {
-        self.slot.read_session_aggregate(identity)
-    }
-
     fn read_job(
         &self,
         identity: &podway_store::DurableWorktreeIdentityV1,
@@ -497,13 +490,6 @@ impl StoreGraphReadContractV2 for WorkspaceStoreSlotV1 {
 }
 
 impl StoreReadContractV1 for WorkspaceStoreSlotV1 {
-    fn read_session_aggregate(
-        &self,
-        identity: &podway_store::DurableWorktreeIdentityV1,
-    ) -> Result<Option<SessionAggregateV1>, StoreErrorV1> {
-        self.with_open_store(|store| store.read_session_aggregate(identity))
-    }
-
     fn read_job(
         &self,
         identity: &podway_store::DurableWorktreeIdentityV1,
@@ -2666,7 +2652,8 @@ fn reset_seed_requires_fixed_replacement(error: &StoreErrorV1) -> bool {
     match error {
         StoreErrorV1::CorruptStateV1 { .. }
         | StoreErrorV1::StorageIntegrityV1 { .. }
-        | StoreErrorV1::NewerStateV1 { .. } => true,
+        | StoreErrorV1::NewerStateV1 { .. }
+        | StoreErrorV1::LegacyProcedureStateUnsupportedV1 => true,
         StoreErrorV1::AdmissionCommittedV1 { .. }
         | StoreErrorV1::AdmissionOutcomeUnknownV1 { .. }
         | StoreErrorV1::PrimaryOperationAndCleanupFailureV1 { .. } => false,

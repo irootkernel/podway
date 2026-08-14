@@ -24,7 +24,6 @@ fn bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow() {
         .expect("bug-fix-v2 must parse")
     {
         ParsedProcedure::V2(parsed) => parsed,
-        ParsedProcedure::V1(_) => panic!("bug-fix-v2 must dispatch as Procedure v2"),
     };
     let validated = validate_procedure_v2(parsed).expect("bug-fix-v2 must validate");
     let context = AuthoringContext::new(

@@ -7,7 +7,7 @@ use std::{
 };
 
 use podway_core::{
-    ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
+    ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, BlockerId,
     CanonicalProcedureJsonV1, CriterionAssessmentReasonV2, CriterionAssessmentResultV2,
     CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
     DomainCommand, EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2, GoalCriterionV2,
@@ -1014,6 +1014,42 @@ fn decided_state(revision: u64, completed: bool) -> GraphSessionStateV2 {
     )
 }
 
+pub(crate) fn rich_v2_state_for_schema_migration() -> GraphSessionStateV2 {
+    let reworked = decided_state(9, true)
+        .manual_rework_v2(
+            Revision::new(9),
+            None,
+            node("clarify"),
+            attempt_id(4),
+            ReasonV2::new("Recheck the preserved assessment history.").unwrap(),
+            Some(ActorAttributionV2::new("migration-reviewer").unwrap()),
+            UnixMillis::new(80),
+        )
+        .unwrap()
+        .into_state();
+    let blocker = BlockerId::new("00000000-0000-4000-8000-000000000499").unwrap();
+    let blocked = reworked
+        .block_active_attempt_v2(
+            Revision::new(10),
+            &attempt_id(4),
+            blocker.clone(),
+            "Preserve this blocker through migration.",
+            UnixMillis::new(81),
+        )
+        .unwrap()
+        .into_state();
+    blocked
+        .unblock_active_attempt_v2(
+            Revision::new(11),
+            &attempt_id(4),
+            Some(&blocker),
+            false,
+            UnixMillis::new(82),
+        )
+        .unwrap()
+        .into_state()
+}
+
 fn revised_state() -> GraphSessionStateV2 {
     let clarify = clarify_memory(1, true);
     let assess = assess_memory(&clarify, true);
@@ -1771,7 +1807,7 @@ fn v2_session_reset_is_revision_checked_atomic_and_complete() {
 }
 
 #[test]
-fn populated_newer_schema_and_downgrade_stamp_fail_without_changing_v2_state() {
+fn populated_newer_schema_fails_without_changing_v2_state() {
     let newer = TempDir::new().unwrap();
     let store = open(&newer, SqliteStoreOptionsV1::new(8).unwrap());
     persist_through_completed(&store);
@@ -1780,7 +1816,7 @@ fn populated_newer_schema_and_downgrade_stamp_fail_without_changing_v2_state() {
     let newer_counts = v2_table_counts(&newer_path);
     let newer_base = base_store_identity(&newer_path);
     let connection = Connection::open(&newer_path).unwrap();
-    connection.pragma_update(None, "user_version", 4).unwrap();
+    connection.pragma_update(None, "user_version", 5).unwrap();
     drop(connection);
 
     let newer_error = match SqliteStoreV1::open(
@@ -1796,8 +1832,8 @@ fn populated_newer_schema_and_downgrade_stamp_fail_without_changing_v2_state() {
     assert_eq!(
         newer_error,
         StoreErrorV1::NewerStateV1 {
-            found_schema_version: 4,
-            supported_schema_version: 3,
+            found_schema_version: 5,
+            supported_schema_version: 4,
         }
     );
     assert_eq!(v2_table_counts(&newer_path), newer_counts);
@@ -1806,42 +1842,7 @@ fn populated_newer_schema_and_downgrade_stamp_fail_without_changing_v2_state() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
-
-    let downgrade = TempDir::new().unwrap();
-    let store = open(&downgrade, SqliteStoreOptionsV1::new(8).unwrap());
-    persist_through_completed(&store);
-    drop(store);
-    let downgrade_path = database_path(&downgrade);
-    let downgrade_counts = v2_table_counts(&downgrade_path);
-    let downgrade_base = base_store_identity(&downgrade_path);
-    let connection = Connection::open(&downgrade_path).unwrap();
-    connection.pragma_update(None, "user_version", 2).unwrap();
-    drop(connection);
-
-    let downgrade_error = match SqliteStoreV1::open(
-        downgrade_path.clone(),
-        &root(),
-        identity(),
-        SqliteStoreOptionsV1::new(8).unwrap(),
-        UnixMillis::new(30),
-    ) {
-        Ok(_) => panic!("a v3 database stamped as v2 must not be downgraded or reopened"),
-        Err(error) => error,
-    };
-    assert_eq!(
-        downgrade_error,
-        StoreErrorV1::StorageIntegrityV1 {
-            check: StoreIntegrityCheckV1::RequiredSchemaObjects,
-        }
-    );
-    assert_eq!(v2_table_counts(&downgrade_path), downgrade_counts);
-    assert_eq!(base_store_identity(&downgrade_path), downgrade_base);
-    let version: i64 = Connection::open(&downgrade_path)
-        .unwrap()
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 5);
 }
 
 #[test]

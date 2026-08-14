@@ -138,6 +138,12 @@
       "summary": "Workspace schema is unsupported."
     },
     {
+      "code": "LEGACY_PROCEDURE_STATE_UNSUPPORTED",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Procedure v1 state requires backup and a confirmed reset --all."
+    },
+    {
       "code": "WORKSPACE_QUEUE_FULL",
       "exit_code": 4,
       "retryable": true,
@@ -224,12 +230,6 @@
       "summary": "The command requires a running session."
     },
     {
-      "code": "SESSION_NOT_COMPLETED",
-      "exit_code": 1,
-      "retryable": false,
-      "summary": "The command requires a completed session."
-    },
-    {
       "code": "SESSION_CANCELLED",
       "exit_code": 1,
       "retryable": false,
@@ -250,28 +250,10 @@
       "summary": "The target attempt is no longer active."
     },
     {
-      "code": "STAGE_NOT_FOUND",
-      "exit_code": 1,
-      "retryable": false,
-      "summary": "The stage does not exist."
-    },
-    {
       "code": "STAGE_NOT_SKIPPABLE",
       "exit_code": 1,
       "retryable": false,
       "summary": "The active stage cannot be skipped."
-    },
-    {
-      "code": "RETURN_NOT_ALLOWED",
-      "exit_code": 1,
-      "retryable": false,
-      "summary": "The return destination is not allowed."
-    },
-    {
-      "code": "REOPEN_NOT_ALLOWED",
-      "exit_code": 1,
-      "retryable": false,
-      "summary": "The session or destination cannot be reopened."
     },
     {
       "code": "REQUIRED_ITEMS_MISSING",

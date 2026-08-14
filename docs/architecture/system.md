@@ -228,8 +228,8 @@ Podway is optimized for local task state, not bulk workflow data.
 Design limits:
 
 - at most one session per workspace;
-- at most 64 stages per procedure;
-- at most 128 items per stage;
+- at most 64 graph placements per procedure;
+- at most 128 items per node definition;
 - at most 256 queued jobs by default per workspace;
 - IPC frame size at most 1 MiB;
 - text item size at most 8 KiB by default and 64 KiB hard maximum;

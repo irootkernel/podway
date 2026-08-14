@@ -13,7 +13,7 @@ use podway_daemon::server::{DaemonRequestV1, RequestDispatcherV1};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, OperationV1, PreconditionsV1,
     RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
-    StatusResultV1, WorkspaceContextV1,
+    WorkspaceContextV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -51,22 +51,6 @@ graph:
       use: finish
       terminal: true
 "#;
-const V1_SKIP_PROCEDURE: &str = r#"schema: podway.procedure/v1
-id: retained-v1-skip
-version: "1"
-name: Retained v1 skip
-stages:
-  - id: only
-    title: Only
-    instructions: []
-    skip:
-      allowed: true
-      reason_required: true
-    items: []
-rework:
-  allow_return_to: any_previous
-"#;
-
 fn status_with(
     dispatcher: &impl RequestDispatcherV1,
     selector: &podway_protocol::WorktreeSelectorWireV1,
@@ -203,7 +187,7 @@ fn v2run005_production_skip_discards_values_advances_terminates_restarts_and_rep
     );
     assert!(matches!(
         runtime::dispatch(&production, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let start = runtime::request(
         50_002,
@@ -459,7 +443,7 @@ fn v2run005_skip_reason_uses_the_v2_unicode_scalar_boundary_before_admission() {
     );
     assert!(matches!(
         runtime::dispatch(&production, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let start = runtime::request(
         50_202,
@@ -501,7 +485,7 @@ fn v2run005_skip_reason_uses_the_v2_unicode_scalar_boundary_before_admission() {
         runtime::session_preconditions(&source),
     );
     let too_long_daemon = DaemonRequestV1::from_envelope(&too_long)
-        .expect("the retained v1 wire contract must admit a 2,001-scalar reason");
+        .expect("the general wire request must admit a 2,001-scalar reason");
     let ResponseEnvelopeV2::Error(error) = production.dispatch_daemon(&too_long, &too_long_daemon)
     else {
         panic!("a 2,001-scalar Procedure v2 skip reason must be rejected")
@@ -548,12 +532,10 @@ fn v2run005_skip_reason_uses_the_v2_unicode_scalar_boundary_before_admission() {
 }
 
 #[test]
-fn v2run005_production_rejects_decision_skip_and_retains_v1_output() {
+fn v2run005_production_rejects_decision_skip() {
     let fixture = support_phase4_workspace::git_worktrees();
     runtime::make_runtime_private(fixture.main());
-    runtime::make_runtime_private(fixture.linked());
     fs::write(fixture.main().join("decision.yaml"), DECISION_PROCEDURE).unwrap();
-    fs::write(fixture.linked().join("v1-skip.yaml"), V1_SKIP_PROCEDURE).unwrap();
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(DECISION_PROCEDURE.as_bytes(), ProcedureDocumentFormat::Yaml)
             .unwrap()
@@ -562,27 +544,21 @@ fn v2run005_production_rejects_decision_skip_and_retains_v1_output() {
     };
     let decision_digest = validate_procedure_v2(parsed).unwrap().digest().clone();
     let main_selector = runtime::selector(fixture.main());
-    let linked_selector = runtime::selector(fixture.linked());
     let manager = Arc::new(runtime::manager(fixture.temporary_path()));
     let production = runtime::dispatcher(manager, "v2run005-compatibility");
 
-    for (number, selector, key) in [
-        (50_301, &main_selector, "v2run005-decision-initialize"),
-        (50_302, &linked_selector, "v2run005-v1-initialize"),
-    ] {
-        let initialize = runtime::request(
-            number,
-            "workspace.init",
-            selector,
-            Map::new(),
-            key,
-            PreconditionsV1::default(),
-        );
-        assert!(matches!(
-            runtime::dispatch(&production, &initialize),
-            ResponseEnvelopeV2::OutputV1(_)
-        ));
-    }
+    let initialize = runtime::request(
+        50_301,
+        "workspace.init",
+        &main_selector,
+        Map::new(),
+        "v2run005-decision-initialize",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        runtime::dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
 
     let start_decision = runtime::request(
         50_303,
@@ -636,59 +612,4 @@ fn v2run005_production_rejects_decision_skip_and_retains_v1_output() {
             false,
         ),
     );
-
-    let start_v1 = runtime::request(
-        50_307,
-        "session.start",
-        &linked_selector,
-        json!({
-            "procedure": "v1-skip.yaml",
-            "task_title": "Retained v1 skip"
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-        "v2run005-v1-start",
-        PreconditionsV1::default(),
-    );
-    assert!(matches!(
-        runtime::dispatch(&production, &start_v1),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
-    let status_v1_request = runtime::request(
-        50_308,
-        "session.status",
-        &linked_selector,
-        Map::new(),
-        "unused-v1-status-key",
-        PreconditionsV1::default(),
-    );
-    let ResponseEnvelopeV2::OutputV1(status_output) =
-        runtime::dispatch(&production, &status_v1_request)
-    else {
-        panic!("a retained Procedure v1 session must return podway.output/v1")
-    };
-    let status = StatusResultV1::from_result_map(status_output.result()).unwrap();
-    let current = status.current.as_ref().unwrap();
-    let preconditions = PreconditionsV1::new(
-        Some(status.session.id.clone()),
-        Some(status.session.revision),
-        Some(current.attempt_id.clone()),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
-    let skip_v1 = raw_skip_request(
-        50_309,
-        &linked_selector,
-        "v".repeat(3_000),
-        "v2run005-retained-v1-skip",
-        preconditions,
-    );
-    let daemon_v1 = DaemonRequestV1::from_envelope(&skip_v1).unwrap();
-    assert!(matches!(
-        production.dispatch_daemon(&skip_v1, &daemon_v1),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
 }

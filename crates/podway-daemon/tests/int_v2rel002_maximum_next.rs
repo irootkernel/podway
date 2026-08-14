@@ -14,13 +14,13 @@ use podway_core::{
 };
 use podway_daemon::{
     execution::{
-        ExecutionBoundaryErrorV1, ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1,
-        prepare_custom_procedure_v2_start, workspace_procedure_snapshot_from_bytes_v2,
+        ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, prepare_custom_procedure_v2_start,
+        workspace_procedure_snapshot_from_bytes_v2,
     },
     v2_read_service::project_graph_next_v2,
 };
 use podway_protocol::{
-    CommandNameV1, OutputEnvelopeInputV2, OutputEnvelopeV2, RequestIdV1, ResponseEnvelopeV2,
+    CommandNameV1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1, ResponseEnvelopeV2,
     Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
     decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
     encode_response_payload_v2, validate_frame_payload_length,
@@ -61,25 +61,6 @@ const SELECTED: [&str; 16] = [
 struct BytesProcedure<'a>(&'a [u8]);
 
 impl ProcedureProviderV1 for BytesProcedure<'_> {
-    fn load_preset_snapshot(
-        &self,
-        _: &str,
-        _: ProcedureSnapshotId,
-        _: UnixMillis,
-    ) -> Result<podway_core::ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        unreachable!()
-    }
-
-    fn load_workspace_procedure_snapshot(
-        &self,
-        _: &WorkspaceBindingV1,
-        _: &str,
-        _: ProcedureSnapshotId,
-        _: UnixMillis,
-    ) -> Result<podway_core::ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        unreachable!()
-    }
-
     fn load_workspace_procedure_snapshot_v2(
         &self,
         _: &WorkspaceBindingV1,
@@ -681,7 +662,7 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
                 .clone()
         })
         .collect();
-    let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new("session.next").unwrap(),
         generated_at: Rfc3339MillisV1::new("2026-08-12T00:00:00.000Z").unwrap(),

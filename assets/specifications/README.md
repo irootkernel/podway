@@ -3,6 +3,7 @@
 - `sqlite-v1.sql`: reference authoritative base database DDL.
 - `sqlite-v2.sql`: response-context migration for durable terminal-envelope reconstruction.
 - `sqlite-v3.sql`: parallel Procedure v2 relational state and recovery migration.
+- `sqlite-v4.sql`: v2-only migration with fail-closed legacy Procedure state rejection.
 - `launchagent.plist.template`: reference macOS user LaunchAgent.
 - `error-codes.json`: stable public error and exit-code catalog.
 - `authoring-diagnostics.json`: stable authoring-time diagnostic catalog.

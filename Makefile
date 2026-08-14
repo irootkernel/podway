@@ -42,7 +42,6 @@ release-prepare:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_evidence.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_release_bundle.py self-test
 
 dist-preflight:

@@ -59,12 +59,12 @@ impl ValidatedProcedureV2 {
     }
 
     /// The model-derived Canonical JSON/IR document: the validation, digest, snapshot, and runtime
-    /// authority of section 12.1. Mirrors `ValidatedProcedureV1::canonical_json`.
+    /// authority of section 12.1.
     pub fn canonical_json(&self) -> &CanonicalJsonV1 {
         &self.canonical_json
     }
 
-    /// The SHA-256 digest over the canonical bytes. Mirrors `ValidatedProcedureV1::digest`.
+    /// The SHA-256 digest over the canonical bytes.
     pub fn digest(&self) -> &Sha256Digest {
         &self.digest
     }

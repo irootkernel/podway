@@ -42,8 +42,7 @@ pub use observability::{
 };
 pub use podway_config::{WORKSPACE_SCHEMA_V1, WorkspaceConfigV1};
 pub use podway_presets::{
-    EmbeddedPreset, EmbeddedPresetV2, catalog_v2 as embedded_preset_catalog_v2,
-    list as embedded_presets_v1,
+    EmbeddedPresetV2, catalog_v2 as embedded_preset_catalog_v2, list as embedded_presets,
 };
 pub use podway_service::ServiceManagerV1;
 

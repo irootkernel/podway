@@ -7,7 +7,7 @@ use std::{
 
 use podway_core::{
     AttemptId, DomainError, ItemId, JobId, MAX_PROCEDURE_IDENTIFIER_BYTES, Revision, SessionId,
-    Sha256Digest, StageId, WorkspaceId,
+    Sha256Digest, WorkspaceId,
 };
 
 const CANONICAL_UUID: &str = "123e4567-e89b-12d3-a456-426614174000";
@@ -101,15 +101,11 @@ fn arc_007_dependency_graph_is_a_closed_pure_world_with_no_infrastructure_crates
     }
 }
 
-// DOM-001: Stage and item identifiers are stable lowercase kebab-case procedure keys.
+// DOM-001: Item identifiers are stable lowercase kebab-case procedure keys.
 #[test]
-fn dom_001_stage_and_item_identifiers_enforce_the_frozen_contract() {
+fn dom_001_item_identifiers_enforce_the_frozen_contract() {
     let maximum_length_identifier = format!("a{}", "b".repeat(MAX_PROCEDURE_IDENTIFIER_BYTES - 1));
 
-    assert_eq!(
-        StageId::new("prepare-release").unwrap().as_str(),
-        "prepare-release"
-    );
     assert_eq!(
         ItemId::new(maximum_length_identifier.clone())
             .unwrap()
@@ -117,8 +113,8 @@ fn dom_001_stage_and_item_identifiers_enforce_the_frozen_contract() {
         maximum_length_identifier
     );
     assert_eq!(
-        StageId::new("prepare--release"),
-        Err(DomainError::InvalidIdentifier { field: "StageId" })
+        ItemId::new("prepare--release"),
+        Err(DomainError::InvalidIdentifier { field: "ItemId" })
     );
     assert_eq!(
         ItemId::new(""),

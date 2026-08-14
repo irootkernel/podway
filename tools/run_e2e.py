@@ -10,10 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from run_g005_vertical import cargo_target_directory, verification_root
-
-
-ROOT = verification_root()
+ROOT = Path(__file__).resolve().parents[1]
 EXACT_TEST_RE = re.compile(
     r"^(?P<package>[A-Za-z0-9_-]+)::(?P<target>e2e_[A-Za-z0-9_]+)::"
     r"(?P<function>[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)$"
@@ -24,6 +21,14 @@ def run(argv: list[str], *, env: dict[str, str] | None = None) -> None:
     completed = subprocess.run(argv, cwd=ROOT, env=env, check=False)
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
+
+
+def cargo_target_directory() -> Path:
+    configured = os.environ.get("CARGO_TARGET_DIR")
+    target = Path(configured) if configured else ROOT / "target"
+    if not target.is_absolute():
+        target = ROOT / target
+    return target.resolve()
 
 
 def parse_exact_test(value: str) -> tuple[str, str, str]:

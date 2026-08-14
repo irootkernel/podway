@@ -2,16 +2,15 @@ use podway_core::{JobId, Revision, SessionId, WorkspaceId};
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, ERROR_SCHEMA_V1, ErrorCodeV1, ErrorEnvelopeInputV1,
     ErrorEnvelopeV1, ExitCodeV1, FRAME_LENGTH_PREFIX_BYTES_V1, IPC_PROTOCOL_V1, JobOutputV1,
-    JobStateV1, MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, MAX_FRAME_PAYLOAD_BYTES_V1,
-    MAX_JSON_DEPTH_V1, MAX_WORKSPACE_ROOT_SCALARS_V1, MIN_FRAME_PAYLOAD_BYTES_V1, OUTPUT_SCHEMA_V1,
-    OperationV1, OutputEnvelopeInputV1, OutputEnvelopeV1, PayloadCodecErrorV1, PreconditionsV1,
-    ProtocolCompatibilityV1, ProtocolError, ProtocolVersionV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1,
-    SUPPORTED_ERROR_SCHEMAS_V1, SUPPORTED_OUTPUT_SCHEMAS_V1, SUPPORTED_PROTOCOLS_V1,
-    SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1, build_identity_v1,
-    decode_request_payload_v1, decode_response_payload_v1, encode_request_payload_v1,
-    encode_response_payload_v1, error_code_catalog_v1, negotiate_protocol,
-    require_compatible_protocol, validate_frame_payload_length,
+    JobStateV1, MAX_FRAME_PAYLOAD_BYTES_V1, MAX_JSON_DEPTH_V1, MAX_WORKSPACE_ROOT_SCALARS_V1,
+    MIN_FRAME_PAYLOAD_BYTES_V1, OUTPUT_SCHEMA_V3, OperationV1, OutputEnvelopeInputV3,
+    OutputEnvelopeV3, PreconditionsV1, ProtocolCompatibilityV1, ProtocolError, ProtocolVersionV1,
+    RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
+    Rfc3339MillisV1, SUPPORTED_ERROR_SCHEMAS_V1, SUPPORTED_OUTPUT_SCHEMAS_V3,
+    SUPPORTED_PROTOCOLS_V1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
+    build_identity_v1, decode_request_payload_v1, decode_response_payload_v2,
+    encode_request_payload_v1, encode_response_payload_v2, error_code_catalog_v1,
+    negotiate_protocol, require_compatible_protocol, validate_frame_payload_length,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -22,10 +21,10 @@ const REQUEST_ID: &str = "123e4567-e89b-12d3-a456-426614174000";
 #[test]
 fn api_004_v1_constants_and_frame_payload_bounds_are_stable() {
     assert_eq!(IPC_PROTOCOL_V1, "podway.ipc/v1");
-    assert_eq!(OUTPUT_SCHEMA_V1, "podway.output/v1");
+    assert_eq!(OUTPUT_SCHEMA_V3, "podway.output/v3");
     assert_eq!(ERROR_SCHEMA_V1, "podway.error/v1");
     assert_eq!(SUPPORTED_PROTOCOLS_V1, &[IPC_PROTOCOL_V1]);
-    assert_eq!(SUPPORTED_OUTPUT_SCHEMAS_V1, &[OUTPUT_SCHEMA_V1]);
+    assert_eq!(SUPPORTED_OUTPUT_SCHEMAS_V3, &[OUTPUT_SCHEMA_V3]);
     assert_eq!(SUPPORTED_ERROR_SCHEMAS_V1, &[ERROR_SCHEMA_V1]);
     assert_eq!(FRAME_LENGTH_PREFIX_BYTES_V1, 4);
     assert_eq!(MIN_FRAME_PAYLOAD_BYTES_V1, 1);
@@ -189,25 +188,6 @@ fn api_004_request_envelope_validation_and_serde_rejection_are_enforced() {
     }
 }
 
-#[test]
-fn api_004_public_request_fixture_is_a_valid_fuzz_seed() {
-    let fixture = include_bytes!("../../../docs/examples/json/ipc-complete-request.json");
-    let request = decode_request_payload_v1(fixture)
-        .expect("the public IPC request fixture must satisfy the runtime decoder");
-
-    assert_eq!(request.client().product(), "podway");
-    assert_eq!(
-        request.client().contract_manifest_digest(),
-        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    );
-    assert_eq!(
-        decode_request_payload_v1(
-            &encode_request_payload_v1(&request).expect("the public fixture must re-encode")
-        )
-        .expect("the re-encoded public fixture must decode"),
-        request
-    );
-}
 const WORKSPACE_ID: &str = "223e4567-e89b-12d3-a456-426614174000";
 const JOB_ID: &str = "323e4567-e89b-12d3-a456-426614174000";
 const SESSION_ID: &str = "423e4567-e89b-12d3-a456-426614174000";
@@ -217,7 +197,7 @@ fn timestamp() -> Rfc3339MillisV1 {
     Rfc3339MillisV1::new(GENERATED_AT).expect("timestamp fixture must be valid")
 }
 
-fn valid_output_envelope() -> OutputEnvelopeV1 {
+fn valid_output_envelope() -> OutputEnvelopeV3 {
     let workspace = WorkspaceOutputV1::new(
         WorkspaceId::new(WORKSPACE_ID).expect("workspace id fixture must be valid"),
         "/tmp/podway",
@@ -245,7 +225,7 @@ fn valid_output_envelope() -> OutputEnvelopeV1 {
     let mut result = Map::new();
     result.insert("status".to_owned(), json!({"complete": true}));
 
-    OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+    OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(REQUEST_ID).expect("request id fixture must be valid"),
         command: CommandNameV1::new("workspace.show").expect("command fixture must be valid"),
         generated_at: timestamp(),
@@ -253,7 +233,7 @@ fn valid_output_envelope() -> OutputEnvelopeV1 {
         job: Some(job),
         session: Some(session),
         result,
-        warnings: vec![Map::new()],
+        warnings: Vec::new(),
     })
     .expect("output fixture must be valid")
 }
@@ -289,119 +269,6 @@ fn valid_error_envelope_json() -> Value {
     serde_json::to_value(valid_error_envelope()).expect("error fixture must serialize")
 }
 
-fn compact_status_result(sequence: u64) -> Map<String, Value> {
-    json!({
-        "schema": "podway.compact-status-result/v1",
-        "procedure": {
-            "id": "bug-fix",
-            "version": "1",
-            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        },
-        "session": {
-            "id": SESSION_ID,
-            "lifecycle": "completed",
-            "revision": 2
-        },
-        "current": null,
-        "items": [],
-        "blockers": [],
-        "queue": {
-            "pending_mutations": false,
-            "queued_count": 0,
-            "running_job_id": null,
-            "latest_workspace_sequence": sequence
-        }
-    })
-    .as_object()
-    .unwrap()
-    .clone()
-}
-
-fn compact_status_output(
-    sequence: u64,
-    workspace_sequence: Option<u64>,
-    padding: Option<String>,
-) -> Result<OutputEnvelopeV1, ProtocolError> {
-    let workspace = workspace_sequence.map(|sequence| {
-        WorkspaceOutputV1::new(
-            WorkspaceId::new(WORKSPACE_ID).unwrap(),
-            "/tmp/podway",
-            sequence,
-        )
-        .unwrap()
-    });
-    let warnings = padding
-        .map(|padding| Map::from_iter([("padding".to_owned(), Value::String(padding))]))
-        .into_iter()
-        .collect();
-    OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
-        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
-        command: CommandNameV1::new("session.status").unwrap(),
-        generated_at: timestamp(),
-        workspace,
-        job: None,
-        session: None,
-        result: compact_status_result(sequence),
-        warnings,
-    })
-}
-
-#[test]
-fn aut_obs_004_compact_status_requires_matching_workspace_and_exact_byte_bound() {
-    assert_eq!(
-        compact_status_output(7, None, None),
-        Err(ProtocolError::InvalidCompactStatusEnvelope)
-    );
-    assert_eq!(
-        compact_status_output(7, Some(8), None),
-        Err(ProtocolError::InvalidCompactStatusEnvelope)
-    );
-
-    let base = compact_status_output(7, Some(7), Some(String::new())).unwrap();
-    let base_length = serde_json::to_vec(&base).unwrap().len() + 1;
-    let padding_length = MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 - base_length;
-    let exact = compact_status_output(7, Some(7), Some("x".repeat(padding_length))).unwrap();
-    assert_eq!(
-        serde_json::to_vec(&exact).unwrap().len() + 1,
-        MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1
-    );
-    assert_eq!(
-        compact_status_output(7, Some(7), Some("x".repeat(padding_length + 1))),
-        Err(ProtocolError::CompactStatusEnvelopeTooLarge {
-            length: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 + 1,
-            maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
-        })
-    );
-}
-
-#[test]
-fn aut_obs_004_compact_status_decode_counts_open_envelope_fields() {
-    let expected = compact_status_output(7, Some(7), None).unwrap();
-    let mut document = serde_json::to_value(&expected).unwrap();
-    document["future_padding"] = json!("");
-    let base_length = serde_json::to_vec(&document).unwrap().len() + 1;
-    let padding_length = MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 - base_length;
-    document["future_padding"] = json!("x".repeat(padding_length));
-
-    let exact = serde_json::to_vec(&document).unwrap();
-    assert_eq!(exact.len() + 1, MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1);
-    assert_eq!(
-        decode_response_payload_v1(&exact).unwrap(),
-        ResponseEnvelopeV1::Output(expected)
-    );
-
-    document["future_padding"] = json!("x".repeat(padding_length + 1));
-    let oversized = serde_json::to_vec(&document).unwrap();
-    assert!(matches!(
-        decode_response_payload_v1(&oversized),
-        Err(PayloadCodecErrorV1::JsonContract(
-            ProtocolError::CompactStatusEnvelopeTooLarge {
-                length,
-                maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
-            }
-        )) if length == MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 + 1
-    ));
-}
 const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("DAEMON_NOT_INSTALLED", 3, false),
     ("DAEMON_UNAVAILABLE", 3, true),
@@ -423,6 +290,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("WORKSPACE_CONFIG_INVALID", 5, false),
     ("WORKSPACE_STATE_UNREADABLE", 5, false),
     ("WORKSPACE_SCHEMA_UNSUPPORTED", 5, false),
+    ("LEGACY_PROCEDURE_STATE_UNSUPPORTED", 5, false),
     ("WORKSPACE_QUEUE_FULL", 4, true),
     ("WORKSPACE_MAINTENANCE", 4, true),
     ("WORKSPACE_PATH_UNSAFE", 5, false),
@@ -437,14 +305,10 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("SESSION_ID_MISMATCH", 4, false),
     ("SESSION_ALREADY_EXISTS", 1, false),
     ("SESSION_NOT_RUNNING", 1, false),
-    ("SESSION_NOT_COMPLETED", 1, false),
     ("SESSION_CANCELLED", 1, false),
     ("SESSION_REVISION_CONFLICT", 4, true),
     ("ATTEMPT_NOT_CURRENT", 4, true),
-    ("STAGE_NOT_FOUND", 1, false),
     ("STAGE_NOT_SKIPPABLE", 1, false),
-    ("RETURN_NOT_ALLOWED", 1, false),
-    ("REOPEN_NOT_ALLOWED", 1, false),
     ("REQUIRED_ITEMS_MISSING", 1, false),
     ("BLOCKERS_PRESENT", 1, false),
     ("BLOCKER_LIMIT_REACHED", 1, false),
@@ -618,7 +482,7 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 json!("00000000-0000-4000-8000-000000000019"),
             )]),
             "BLOCKER_LIMIT_REACHED" => {
-                Map::from_iter([("maximum_open_blockers".to_owned(), json!(1024))])
+                Map::from_iter([("maximum_open_blockers".to_owned(), json!(64))])
             }
             "IDEMPOTENCY_KEY_REUSED" => {
                 Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
@@ -986,13 +850,13 @@ where
 }
 
 fn assert_output_rejected(value: Value) {
-    assert!(serde_json::from_value::<OutputEnvelopeV1>(value.clone()).is_err());
-    assert!(serde_json::from_value::<ResponseEnvelopeV1>(value).is_err());
+    assert!(serde_json::from_value::<OutputEnvelopeV3>(value.clone()).is_err());
+    assert!(serde_json::from_value::<ResponseEnvelopeV2>(value).is_err());
 }
 
 fn assert_error_rejected(value: Value) {
     assert!(serde_json::from_value::<ErrorEnvelopeV1>(value.clone()).is_err());
-    assert!(serde_json::from_value::<ResponseEnvelopeV1>(value).is_err());
+    assert!(serde_json::from_value::<ResponseEnvelopeV2>(value).is_err());
 }
 
 // API-004: The public response wire surface is serializable, deserializable, and schema-stable.
@@ -1001,25 +865,25 @@ fn api_004_response_wire_surface_is_executable_and_round_trips() {
     assert_wire_type::<WorkspaceOutputV1>();
     assert_wire_type::<JobOutputV1>();
     assert_wire_type::<SessionOutputV1>();
-    assert_wire_type::<OutputEnvelopeV1>();
+    assert_wire_type::<OutputEnvelopeV3>();
     assert_wire_type::<ErrorCodeV1>();
     assert_wire_type::<ExitCodeV1>();
     assert_wire_type::<ErrorEnvelopeV1>();
-    assert_wire_type::<ResponseEnvelopeV1>();
+    assert_wire_type::<ResponseEnvelopeV2>();
 
     let output = valid_output_envelope();
     let output_value = serde_json::to_value(&output).expect("output fixture must serialize");
-    assert_eq!(output_value["schema"], OUTPUT_SCHEMA_V1);
+    assert_eq!(output_value["schema"], OUTPUT_SCHEMA_V3);
     assert_eq!(output_value["command"], "workspace.show");
     assert_round_trip(output.clone());
-    assert_round_trip(ResponseEnvelopeV1::Output(output));
+    assert_round_trip(ResponseEnvelopeV2::OutputV2(output));
 
     let error = valid_error_envelope();
     let error_value = serde_json::to_value(&error).expect("error fixture must serialize");
     assert_eq!(error_value["schema"], ERROR_SCHEMA_V1);
     assert_eq!(error_value["command"], "session.status");
     assert_round_trip(error.clone());
-    assert_round_trip(ResponseEnvelopeV1::Error(error));
+    assert_round_trip(ResponseEnvelopeV2::Error(error));
 }
 
 #[test]
@@ -1031,7 +895,7 @@ fn api_004_admission_metadata_is_closed_and_matches_the_output_job() {
     });
     let mut output = valid_output_envelope_json();
     output["result"]["admission"] = admitted.clone();
-    assert!(serde_json::from_value::<OutputEnvelopeV1>(output.clone()).is_ok());
+    assert!(serde_json::from_value::<OutputEnvelopeV3>(output.clone()).is_ok());
 
     for malformed in [
         json!({"admitted": true}),
@@ -1142,7 +1006,7 @@ fn api_004_response_deserialization_rejects_invalid_known_and_nested_values() {
         let mut additive_nested_output = valid_output_envelope_json();
         additive_nested_output[field]["future_extension"] = json!({"enabled": true});
         assert!(
-            serde_json::from_value::<ResponseEnvelopeV1>(additive_nested_output).is_ok(),
+            serde_json::from_value::<ResponseEnvelopeV2>(additive_nested_output).is_ok(),
             "additive {field} DTO field must decode"
         );
     }
@@ -1151,11 +1015,11 @@ fn api_004_response_deserialization_rejects_invalid_known_and_nested_values() {
     let mut additive_output = serde_json::to_value(&output).expect("output fixture must serialize");
     additive_output["unknown"] = json!({"extension": ["supported", true]});
     assert_eq!(
-        decode_response_payload_v1(
+        decode_response_payload_v2(
             &serde_json::to_vec(&additive_output).expect("additive output must serialize")
         )
         .expect("additive output must decode"),
-        ResponseEnvelopeV1::Output(output)
+        ResponseEnvelopeV2::OutputV2(output)
     );
 
     let mut deeply_nested_warning = Value::Null;
@@ -1197,11 +1061,11 @@ fn api_004_response_deserialization_rejects_invalid_known_and_nested_values() {
     let mut additive_error = serde_json::to_value(&error).expect("error fixture must serialize");
     additive_error["unknown"] = json!({"extension": ["supported", true]});
     assert_eq!(
-        decode_response_payload_v1(
+        decode_response_payload_v2(
             &serde_json::to_vec(&additive_error).expect("additive error must serialize")
         )
         .expect("additive error must decode"),
-        ResponseEnvelopeV1::Error(error)
+        ResponseEnvelopeV2::Error(error)
     );
 }
 #[test]
@@ -1294,17 +1158,17 @@ fn response_with_additive_depth(mut response: Value, path: &[&str], array_count:
 }
 fn assert_response_decodes(value: Value) {
     match value["schema"].as_str() {
-        Some(OUTPUT_SCHEMA_V1) => {
-            assert!(serde_json::from_value::<OutputEnvelopeV1>(value.clone()).is_ok());
+        Some(OUTPUT_SCHEMA_V3) => {
+            assert!(serde_json::from_value::<OutputEnvelopeV3>(value.clone()).is_ok());
         }
         Some(ERROR_SCHEMA_V1) => {
             assert!(serde_json::from_value::<ErrorEnvelopeV1>(value.clone()).is_ok());
         }
         _ => panic!("response depth fixture must have a supported schema"),
     }
-    assert!(serde_json::from_value::<ResponseEnvelopeV1>(value.clone()).is_ok());
+    assert!(serde_json::from_value::<ResponseEnvelopeV2>(value.clone()).is_ok());
     assert!(
-        decode_response_payload_v1(
+        decode_response_payload_v2(
             &serde_json::to_vec(&value).expect("response depth fixture must serialize")
         )
         .is_ok()
@@ -1313,17 +1177,17 @@ fn assert_response_decodes(value: Value) {
 
 fn assert_response_depth_rejected(value: Value) {
     match value["schema"].as_str() {
-        Some(OUTPUT_SCHEMA_V1) => {
-            assert!(serde_json::from_value::<OutputEnvelopeV1>(value.clone()).is_err());
+        Some(OUTPUT_SCHEMA_V3) => {
+            assert!(serde_json::from_value::<OutputEnvelopeV3>(value.clone()).is_err());
         }
         Some(ERROR_SCHEMA_V1) => {
             assert!(serde_json::from_value::<ErrorEnvelopeV1>(value.clone()).is_err());
         }
         _ => panic!("response depth fixture must have a supported schema"),
     }
-    assert!(serde_json::from_value::<ResponseEnvelopeV1>(value.clone()).is_err());
+    assert!(serde_json::from_value::<ResponseEnvelopeV2>(value.clone()).is_err());
     assert!(
-        decode_response_payload_v1(
+        decode_response_payload_v2(
             &serde_json::to_vec(&value).expect("response depth fixture must serialize")
         )
         .is_err()
@@ -1377,9 +1241,7 @@ fn api_004_response_additive_fields_enforce_full_document_depth() {
 fn api_004_component_depth_matches_the_full_envelope_boundary() {
     let mut result = Map::new();
     result.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 2));
-    let mut warning = Map::new();
-    warning.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 3));
-    let output = OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new("workspace.show").unwrap(),
         generated_at: timestamp(),
@@ -1387,12 +1249,12 @@ fn api_004_component_depth_matches_the_full_envelope_boundary() {
         job: None,
         session: None,
         result,
-        warnings: vec![warning],
+        warnings: Vec::new(),
     })
     .expect("maximum output component depth must encode");
-    let encoded_output = encode_response_payload_v1(&ResponseEnvelopeV1::Output(output))
+    let encoded_output = encode_response_payload_v2(&ResponseEnvelopeV2::OutputV2(output))
         .expect("maximum output depth must encode");
-    assert!(decode_response_payload_v1(&encoded_output).is_ok());
+    assert!(decode_response_payload_v2(&encoded_output).is_ok());
 
     let mut details = Map::new();
     details.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 2));
@@ -1408,9 +1270,9 @@ fn api_004_component_depth_matches_the_full_envelope_boundary() {
         details,
     })
     .expect("maximum error component depth must encode");
-    let encoded_error = encode_response_payload_v1(&ResponseEnvelopeV1::Error(error))
+    let encoded_error = encode_response_payload_v2(&ResponseEnvelopeV2::Error(error))
         .expect("maximum error depth must encode");
-    assert!(decode_response_payload_v1(&encoded_error).is_ok());
+    assert!(decode_response_payload_v2(&encoded_error).is_ok());
 
     let mut payload = Map::new();
     payload.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 2));
@@ -1433,7 +1295,7 @@ fn api_004_component_depth_matches_the_full_envelope_boundary() {
     let mut too_deep_result = Map::new();
     too_deep_result.insert("nested".to_owned(), nested_arrays(MAX_JSON_DEPTH_V1 - 1));
     assert!(
-        OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
             request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
             command: CommandNameV1::new("session.status").unwrap(),
             generated_at: timestamp(),

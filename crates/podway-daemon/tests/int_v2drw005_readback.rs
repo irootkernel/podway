@@ -2,11 +2,7 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{
-    fs,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{fs, sync::Arc};
 
 use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
@@ -106,27 +102,6 @@ fn next_number(number: &mut u64) -> u64 {
     current
 }
 
-fn dispatch_after_cold_reopen(
-    dispatcher: &impl RequestDispatcherV1,
-    request: &(RequestEnvelopeV1, DaemonRequestV1),
-) -> ResponseEnvelopeV2 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let response = runtime::dispatch(dispatcher, request);
-        if !matches!(
-            &response,
-            ResponseEnvelopeV2::Error(error) if error.code().as_str() == "WORKSPACE_MAINTENANCE"
-        ) {
-            return response;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "cold-reopen lifecycle maintenance did not release within 5 seconds: {response:?}"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 fn assert_bounded_response(response: &ResponseEnvelopeV2) {
     let payload = encode_response_payload_v2(response).unwrap();
     assert!(
@@ -161,7 +136,7 @@ fn mutation_request(
         workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new(idempotency_key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();
@@ -221,7 +196,10 @@ fn query_after_cold_reopen(
         )
         .unwrap(),
     );
-    result(dispatch_after_cold_reopen(dispatcher, &request), command)
+    result(
+        runtime::dispatch_after_cold_reopen(dispatcher, &request),
+        command,
+    )
 }
 
 fn status(
@@ -461,7 +439,7 @@ fn v2drw005_production_readback_is_bounded_immutable_pageable_and_cold_stable() 
     );
     let initialized = runtime::dispatch(&production, &initialize);
     assert_bounded_response(&initialized);
-    assert!(matches!(initialized, ResponseEnvelopeV2::OutputV1(_)));
+    assert!(matches!(initialized, ResponseEnvelopeV2::OutputV2(_)));
     let start = runtime::request(
         next_number(&mut number),
         "session.start",

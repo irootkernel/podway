@@ -22,12 +22,11 @@ use std::{
 use podway_protocol::{
     CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, IdempotencyKeyV1, OperationV1,
-    OutputEnvelopeInputV1, OutputEnvelopeV1, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
-    ProcedureV2StartRequestV1, ProtocolError, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV1,
-    ResponseEnvelopeV2, Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceErrorV1, SliceRequestV1,
-    build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
-    encode_response_payload_v2, read_single_frame_v1, validate_frame_payload_length,
-    write_frame_v1,
+    OutputEnvelopeInputV3, OutputEnvelopeV3, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
+    ProcedureV2StartRequestV1, ProtocolError, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV2,
+    Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceErrorV1, SliceRequestV1, build_identity_v1,
+    decode_request_payload_v1, decode_single_frame_v1, encode_response_payload_v2,
+    read_single_frame_v1, validate_frame_payload_length, write_frame_v1,
 };
 use serde_json::{Map, Value};
 
@@ -377,7 +376,7 @@ pub trait RequestDispatcherV1: Send + Sync {
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-    ) -> ResponseEnvelopeV1;
+    ) -> ResponseEnvelopeV2;
 
     /// Dispatches one version-aware daemon request after the transport has closed decoding.
     fn dispatch_daemon(
@@ -398,9 +397,6 @@ pub enum DaemonRequestV1 {
 impl DaemonRequestV1 {
     /// Classifies a fully decoded IPC envelope without making reserved v2 routes executable.
     pub fn from_envelope(request: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
-        if let Ok(slice) = SliceRequestV1::from_envelope(request) {
-            return Ok(Self::Legacy(slice));
-        }
         if podway_protocol::RESERVED_V2_MUTATION_COMMAND_NAMES_V1
             .contains(&request.command().as_str())
         {
@@ -410,8 +406,7 @@ impl DaemonRequestV1 {
         if matches!(
             request.command().as_str(),
             "session.start" | "session.start_replace"
-        ) && request.payload().contains_key("goal")
-        {
+        ) {
             return ProcedureV2StartRequestV1::from_envelope(request).map(Self::ProcedureV2Start);
         }
         SliceRequestV1::from_envelope(request).map(Self::Legacy)
@@ -821,9 +816,7 @@ where
                 &self.observability,
                 EventOperationV1::ServiceDispatch,
                 match &response {
-                    ResponseEnvelopeV2::OutputV1(_) | ResponseEnvelopeV2::OutputV2(_) => {
-                        EventOutcomeV1::Succeeded
-                    }
+                    ResponseEnvelopeV2::OutputV2(_) => EventOutcomeV1::Succeeded,
                     ResponseEnvelopeV2::Error(_) => EventOutcomeV1::Rejected,
                 },
             );
@@ -854,7 +847,7 @@ where
     fn contract_mismatch_response(
         &self,
         request: &RequestEnvelopeV1,
-    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+    ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
         let expected = build_identity_v1();
         let details = serde_json::json!({
             "expected": {
@@ -870,7 +863,7 @@ where
         .as_object()
         .expect("contract mismatch details are an object")
         .clone();
-        Ok(ResponseEnvelopeV1::Error(
+        Ok(ResponseEnvelopeV2::Error(
             ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
@@ -894,7 +887,7 @@ where
         &self,
         request: &RequestEnvelopeV1,
         process: &DaemonProcessIdentityV1,
-    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+    ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
         let identity = build_identity_v1();
         let result = serde_json::json!({
             "schema": "podway.daemon-status-result/v1",
@@ -917,8 +910,8 @@ where
         .as_object()
         .expect("daemon status is an object")
         .clone();
-        Ok(ResponseEnvelopeV1::Output(
-            OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+        Ok(ResponseEnvelopeV2::OutputV2(
+            OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self
@@ -938,7 +931,7 @@ where
     fn daemon_terminate_response(
         &self,
         request: &RequestEnvelopeV1,
-    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+    ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
         let result = serde_json::json!({
             "mode": "dev",
             "termination": "requested",
@@ -947,8 +940,8 @@ where
         .as_object()
         .expect("daemon termination result is an object")
         .clone();
-        Ok(ResponseEnvelopeV1::Output(
-            OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+        Ok(ResponseEnvelopeV2::OutputV2(
+            OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self
@@ -969,7 +962,7 @@ where
         &self,
         context: Option<RequestContextV1>,
         kind: TransportErrorKindV1,
-    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+    ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
         let (request_id, command, operation, request_id_recovered) = match context {
             Some(context) => (context.request_id, context.command, context.operation, true),
             None => (
@@ -1028,7 +1021,7 @@ where
                 6,
             ),
         };
-        Ok(ResponseEnvelopeV1::Error(
+        Ok(ResponseEnvelopeV2::Error(
             ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
                 request_id,
                 command,
@@ -1052,7 +1045,7 @@ where
     fn invalid_dispatcher_response(
         &self,
         context: RequestContextV1,
-    ) -> Result<ResponseEnvelopeV1, ServerConnectionErrorV1> {
+    ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
         let Some(idempotency_key) = context.idempotency_key.as_ref().filter(|_| {
             matches!(
                 context.operation,
@@ -1073,7 +1066,7 @@ where
         .as_object()
         .expect("mutation outcome details are an object")
         .clone();
-        Ok(ResponseEnvelopeV1::Error(
+        Ok(ResponseEnvelopeV2::Error(
             ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
                 request_id: context.request_id,
                 command: context.command,
@@ -1096,13 +1089,9 @@ where
     fn write_response(
         &self,
         connection: &mut UnixStream,
-        response: &ResponseEnvelopeV1,
+        response: &ResponseEnvelopeV2,
     ) -> Result<(), ServerConnectionErrorV1> {
-        let response = match response {
-            ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output.clone()),
-            ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error.clone()),
-        };
-        self.write_response_v2(connection, &response)
+        self.write_response_v2(connection, response)
     }
 
     fn write_response_v2(
@@ -1258,9 +1247,6 @@ fn classify_payload_error(error: &PayloadCodecErrorV1) -> TransportErrorKindV1 {
 
 fn response_matches_request(response: &ResponseEnvelopeV2, request: &RequestEnvelopeV1) -> bool {
     match response {
-        ResponseEnvelopeV2::OutputV1(output) => {
-            output.request_id() == request.request_id() && output.command() == request.command()
-        }
         ResponseEnvelopeV2::OutputV2(output) => {
             output.request_id() == request.request_id() && output.command() == request.command()
         }

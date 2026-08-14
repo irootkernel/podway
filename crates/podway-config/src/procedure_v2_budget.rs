@@ -287,7 +287,7 @@ fn suggestion(command: &str, argv: &[&str], item_id: Option<&str>) -> u64 {
     let mut charge = ARRAY_ELEMENT_OVERHEAD;
     charge = add(charge, string_field(actual_chars(command)));
     charge = add(charge, array_field());
-    // Section 10.1 reuses the v1 JSON-contract argv shape, whose first element is always the
+    // Section 10.1 reuses the current JSON-contract v1 argv shape, whose first element is always the
     // executable name even though callers do not type it as a subcommand argument.
     charge = add(charge, array_string(actual_chars("podway")));
     for argument in argv {
@@ -543,12 +543,9 @@ mod tests {
     #[test]
     fn v2dog001_sw_dev_preset_records_budget_headroom() {
         let source = include_bytes!("../../../assets/presets/sw-dev-v2.yaml");
-        let parsed = match parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
-            .expect("sw-dev-v2 must parse")
-        {
-            ParsedProcedure::V2(parsed) => parsed,
-            ParsedProcedure::V1(_) => panic!("sw-dev-v2 must dispatch as Procedure v2"),
-        };
+        let ParsedProcedure::V2(parsed) =
+            parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
+                .expect("sw-dev-v2 must parse");
         let validated = validate_procedure_v2(parsed).expect("sw-dev-v2 must validate");
         let usages: Vec<ProcedurePlacementBudgetV2> = validated
             .parsed()
@@ -577,12 +574,9 @@ mod tests {
     #[test]
     fn v2dog002_bug_fix_preset_records_budget_headroom() {
         let source = include_bytes!("../../../assets/presets/bug-fix-v2.yaml");
-        let parsed = match parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
-            .expect("bug-fix-v2 must parse")
-        {
-            ParsedProcedure::V2(parsed) => parsed,
-            ParsedProcedure::V1(_) => panic!("bug-fix-v2 must dispatch as Procedure v2"),
-        };
+        let ParsedProcedure::V2(parsed) =
+            parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
+                .expect("bug-fix-v2 must parse");
         let validated = validate_procedure_v2(parsed).expect("bug-fix-v2 must validate");
         let usages: Vec<ProcedurePlacementBudgetV2> = validated
             .parsed()

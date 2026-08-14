@@ -134,7 +134,7 @@ def create_staged_file(directory: Path, content: bytes) -> Path:
 def validator_result(podway: Path, staged: Path) -> dict[str, Any]:
     try:
         completed = subprocess.run(
-            [podway.as_posix(), "--json", "procedure", "validate", staged.as_posix()],
+        [podway.as_posix(), "--json", "procedure", "validate", staged.as_posix()],
             cwd=ROOT,
             check=False,
             capture_output=True,
@@ -152,24 +152,70 @@ def validator_result(podway: Path, staged: Path) -> dict[str, Any]:
         envelope = json.loads(completed.stdout.decode("utf-8"), object_pairs_hook=object_no_duplicates)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         fail(f"podway validator did not return valid JSON: {error}")
-    if not isinstance(envelope, dict) or envelope.get("schema") != "podway.output/v1" or envelope.get("command") != "procedure.validate":
+    if not isinstance(envelope, dict) or envelope.get("schema") != "podway.output/v3" or envelope.get("command") != "procedure.validate":
         fail("podway validator returned an unexpected envelope")
     result = envelope.get("result")
     if not isinstance(result, dict):
         fail("podway validator result is missing")
-    procedure = result.get("procedure")
-    if not isinstance(procedure, dict):
-        fail("podway validator procedure metadata is missing")
+    if result.get("valid") is not True or result.get("procedure_schema") != "podway.procedure/v2":
+        fail("podway validator did not admit the Procedure v2 source")
     return result
 
 
-def admitted_metadata(result: dict[str, Any]) -> tuple[str, str, str, str]:
-    procedure = result["procedure"]
-    identifier = validate_identifier(procedure.get("id", ""))
-    version = validate_text(procedure.get("version", ""), "preset version", 64)
-    name = validate_text(procedure.get("name", ""), "preset name", 120)
-    description = validate_text(procedure.get("description", ""), "preset description", 4_000)
-    return identifier, version, name, description
+def top_level_metadata(source: bytes) -> dict[str, str]:
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError as error:
+        fail(f"validated preset source is not UTF-8: {error}")
+    stripped = text.lstrip()
+    if stripped.startswith("{"):
+        try:
+            value = json.loads(text, object_pairs_hook=object_no_duplicates)
+        except json.JSONDecodeError as error:
+            fail(f"validated preset JSON cannot be read for metadata: {error}")
+        if not isinstance(value, dict):
+            fail("validated preset JSON root is not an object")
+        return {field: value.get(field, "") for field in ("id", "version", "name", "purpose", "description")}
+
+    metadata: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line or line[0].isspace() or line.startswith("#") or ":" not in line:
+            continue
+        key, raw = line.split(":", 1)
+        if key not in {"id", "version", "name", "purpose", "description"}:
+            continue
+        raw = raw.strip()
+        if raw.startswith('"'):
+            try:
+                value = json.loads(raw)
+            except json.JSONDecodeError as error:
+                fail(f"validated preset metadata {key} is not a JSON-compatible scalar: {error}")
+        else:
+            value = raw
+        if not isinstance(value, str):
+            fail(f"validated preset metadata {key} is not text")
+        metadata[key] = value
+    return metadata
+
+
+def admitted_metadata(
+    result: dict[str, Any], source: bytes, expected: tuple[str, str, str] | None
+) -> tuple[str, str, str, str]:
+    metadata = top_level_metadata(source)
+    identifier = validate_identifier(metadata.get("id", ""))
+    version = validate_text(metadata.get("version", ""), "preset version", 64)
+    purpose = validate_text(metadata.get("purpose", ""), "preset purpose", 4_000)
+    if expected is None:
+        return identifier, version, identifier, purpose
+    expected_identifier, name, description = expected
+    if identifier != expected_identifier:
+        fail("generated preset identity did not round-trip through Podway preview")
+    return (
+        identifier,
+        version,
+        validate_text(name, "preset name", 120),
+        validate_text(description, "preset description", 4_000),
+    )
 
 
 def publish_staged(staged: Path, destination: Path) -> None:
@@ -191,14 +237,17 @@ def scaffold(identifier: str, name: str, description: str) -> bytes:
     quoted_name = json.dumps(name, ensure_ascii=False)
     quoted_description = json.dumps(description, ensure_ascii=False)
     return (
-        "schema: podway.procedure/v1\n"
+        "schema: podway.procedure/v2\n"
         f"id: {identifier}\n"
         'version: "1"\n'
         f"name: {quoted_name}\n"
+        f"purpose: {quoted_description}\n"
         f"description: {quoted_description}\n"
-        "stages:\n"
-        "  - id: prepare\n"
+        "node_definitions:\n"
+        "  prepare:\n"
+        "    type: action\n"
         "    title: Prepare\n"
+        "    intent: Define the work and its completion conditions.\n"
         "    instructions:\n"
         "      - Define the work and its completion conditions.\n"
         "    items:\n"
@@ -206,8 +255,10 @@ def scaffold(identifier: str, name: str, description: str) -> bytes:
         "        type: confirm\n"
         "        prompt: Preparation is complete.\n"
         "        required: true\n"
-        "  - id: finish\n"
+        "  finish:\n"
+        "    type: action\n"
         "    title: Finish\n"
+        "    intent: Verify the result and record that it is ready.\n"
         "    instructions:\n"
         "      - Verify the result and record that it is ready.\n"
         "    items:\n"
@@ -215,8 +266,17 @@ def scaffold(identifier: str, name: str, description: str) -> bytes:
         "        type: confirm\n"
         "        prompt: The result is verified and ready.\n"
         "        required: true\n"
-        "rework:\n"
-        "  allow_return_to:\n"
+        "graph:\n"
+        "  entry: prepare\n"
+        "  nodes:\n"
+        "    - id: prepare\n"
+        "      use: prepare\n"
+        "      next: finish\n"
+        "    - id: finish\n"
+        "      use: finish\n"
+        "      terminal: true\n"
+        "manual_rework:\n"
+        "  allowed_targets:\n"
         "    - prepare\n"
     ).encode("utf-8")
 
@@ -227,9 +287,7 @@ def install_content(content: bytes, directory: Path, podway: Path, expected: tup
     staged = create_staged_file(directory, content)
     try:
         result = validator_result(podway, staged)
-        identifier, version, name, description = admitted_metadata(result)
-        if expected is not None and (identifier, name, description) != expected:
-            fail("generated preset metadata did not round-trip through Podway validation")
+        identifier, version, name, description = admitted_metadata(result, content, expected)
         destination = directory / f"{identifier}.yaml"
         publish_staged(staged, destination)
         return {

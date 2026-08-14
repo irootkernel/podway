@@ -12,7 +12,7 @@ description: Operate a Podway Procedure v2 session safely in a Git worktree by r
 - Use JSON fields and stable error codes for decisions. Use human output only for an interactive explanation.
 - Use `podway help <route>` as the current command grammar. Do not invent flags from this skill.
 - Do not install Podway or mutate repository guidance merely because this skill is present.
-- Support Procedure v2 only. Treat Procedure v1 as a compatibility-only legacy surface: do not start, author, convert, replace, or mutate a v1 session with this skill.
+- Support Procedure v2 only. On `LEGACY_PROCEDURE_STATE_UNSUPPORTED`, stop and ask the user to back up the runtime state before authorizing `podway reset --all`.
 
 ## Enter a worktree
 
@@ -25,7 +25,7 @@ description: Operate a Podway Procedure v2 session safely in a Git worktree by r
    podway next --json
    ```
 
-4. Require the session results to identify `podway.status-result/v2` and `podway.next-result/v2`. If either result identifies a Procedure v1 session, stop and report the unsupported legacy session without changing state.
+4. Require the session results to identify `podway.status-result/v2` and `podway.next-result/v2`.
 5. Treat the returned v2 state as authoritative. Do not rely on chat memory. For status, anchor on `purpose`, `procedure`, `session`, `current.node`, `current.attempt`, `items`, `item_values`, `missing_required_item_ids`, `blocker_window`, and `references`. For next, use `node`, `attempt`, `readiness`, `missing_required_items`, `blockers`, `allowed_actions`, `suggestions`, `references`, and `readback`.
 6. If no active session exists, continue the user's work without creating one unless the user explicitly asks to start or manage a Podway session.
 

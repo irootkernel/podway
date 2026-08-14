@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
-ADAPTER_CONTRACT_RELATIVE = Path("release/dolgorae-v2-adapter-contract-v1.json")
+ADAPTER_CONTRACT_RELATIVE = Path("release/dolgorae-adapter-contract-v2.json")
 
 
 class VerificationError(RuntimeError):
@@ -232,7 +232,7 @@ def self_test() -> dict[str, Any]:
         tree="2" * 40,
         conformance_result=release_evidence.PASSED,
     )
-    adapter = {"schema": "podway.dolgorae-v2-adapter-contract/v1", "sentinel": True}
+    adapter = {"schema": "podway.dolgorae-adapter-contract/v2", "sentinel": True}
     adapter_catalog_sha256 = f"sha256:{'4' * 64}"
     handoff = release_evidence.handoff_from_provenance(
         provenance,

@@ -3,7 +3,7 @@
 | ID | Risk | Likelihood | Impact | Trigger or signal | Mitigation | Primary owner |
 |---|---|---:|---:|---|---|---|
 | `R-01` | Queue implementation creates duplicate effects after crash | medium | critical | crash test produces two revisions or attempts | durable admission, atomic terminal commit, idempotency, crash matrix | Store/Queue |
-| `R-02` | A stale queued command mutates a later stage | medium | critical | command succeeds after active attempt changed | require attempt and revision preconditions; never auto-retarget | Domain/Store |
+| `R-02` | A stale queued command mutates a later graph node | medium | critical | command succeeds after active attempt changed | require attempt and revision preconditions; never auto-retarget | Domain/Store |
 | `R-03` | Same-item concurrent updates silently overwrite | medium | high | last writer wins without conflict | persistent item revisions and compare-and-set | Domain/Store |
 | `R-04` | Worktree path or symlink escapes state boundary | low | critical | runtime or artifact opens outside root | canonical containment, no runtime symlink, adversarial fixtures | Git/Filesystem |
 | `R-05` | Worktree-local queue cannot recover after daemon restart | medium | high | acknowledged jobs remain idle | minimal registry, startup scan, path repair | Daemon |

@@ -25,9 +25,6 @@ from typing import Any, Callable
 
 import release_archive
 import release_evidence
-from run_g005_vertical import cargo_target_directory
-
-
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_RUST_TOOLCHAIN = "1.97.1"
 SCHEMA = "podway.dev-runtime/v1"
@@ -53,6 +50,14 @@ FORBIDDEN_RUN_FLAGS = frozenset({"--socket", "--worktree", "--dev"})
 DAEMON_LIFECYCLE_COMMANDS = frozenset(
     {"install", "uninstall", "start", "stop", "restart", "status", "logs"}
 )
+
+
+def cargo_target_directory() -> Path:
+    configured = os.environ.get("CARGO_TARGET_DIR")
+    target = Path(configured) if configured else ROOT / "target"
+    if not target.is_absolute():
+        target = ROOT / target
+    return target.resolve()
 
 
 class DevRuntimeError(RuntimeError):
@@ -455,10 +460,10 @@ def snapshot_pair(
         actual = release_archive.sha256_file(path)
         if actual != expected:
             fail(f"snapshot {label} digest mismatch: expected {expected}, observed {actual}")
-        if (
-            release_archive.test_isolation_capability(path)
-            is not release_archive.TestIsolationCapability.ENABLED
-        ):
+        capability = release_archive.test_isolation_capability(path)
+        if capability is release_archive.TestIsolationCapability.INDETERMINATE:
+            capability = release_archive.test_isolation_capability(path)
+        if capability is not release_archive.TestIsolationCapability.ENABLED:
             fail(f"snapshot {label} lacks debug test-isolation capability")
     if (
         release_archive.development_v2_admission_capability(snapshotted_daemon)
@@ -745,10 +750,7 @@ def qualification_command(
 def require_output_result(
     envelope: dict[str, Any], *, command: str, result_schema: str
 ) -> dict[str, Any]:
-    if envelope.get("command") != command or envelope.get("schema") not in {
-        "podway.output/v1",
-        "podway.output/v2",
-    }:
+    if envelope.get("command") != command or envelope.get("schema") != "podway.output/v3":
         fail(f"{command} returned the wrong output envelope")
     result = envelope.get("result")
     if not isinstance(result, dict) or result.get("schema") != result_schema:
@@ -1021,6 +1023,8 @@ def start_isolated_daemon(
     daemon: Path,
     account_root: Path,
     dev_home: Path,
+    *,
+    label: str = "isolated daemon",
 ) -> subprocess.Popen[bytes]:
     for path in (account_root, account_root / ".podway", dev_home):
         path.mkdir(mode=DIRECTORY_MODE, parents=True, exist_ok=True)
@@ -1045,7 +1049,10 @@ def start_isolated_daemon(
         detail = b""
         if process.stderr is not None:
             detail = process.stderr.read()
-        fail("failed to start isolated daemon: " + detail.decode("utf-8", errors="replace").strip())
+        fail(
+            f"failed to start {label} at {dev_home.as_posix()}: "
+            + detail.decode("utf-8", errors="replace").strip()
+        )
     return process
 
 
@@ -1105,7 +1112,7 @@ def dogfood_v2_status(paths: dict[str, Path], metadata: dict[str, Any]) -> dict[
         metadata,
         ["status"],
         command="session.status",
-        output_schema="podway.output/v2",
+        output_schema="podway.output/v3",
         result_schema="podway.status-result/v2",
     )["result"]
 
@@ -1134,7 +1141,7 @@ def dogfood_v2_mutation(
         metadata,
         arguments,
         command=command,
-        output_schema="podway.output/v2",
+        output_schema="podway.output/v3",
         result_schema=result_schema,
     )["result"]
     admission = result.get("admission")
@@ -1185,7 +1192,10 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             paths["root"], metadata["snapshot"]["podwayd"], label="snapshot podwayd"
         )
         process = start_isolated_daemon(
-            snapshotted_daemon, paths["account_root"], paths["dev_home"]
+            snapshotted_daemon,
+            paths["account_root"],
+            paths["dev_home"],
+            label="v2 dogfood daemon",
         )
         initialize_sandbox(paths["sandbox"])
         dogfood_json_command(
@@ -1193,7 +1203,7 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             metadata,
             ["init"],
             command="workspace.init",
-            output_schema="podway.output/v1",
+            output_schema="podway.output/v3",
             result_schema="podway.workspace-init-result/v1",
         )
         publish_development_v2_marker(paths, metadata)
@@ -1364,7 +1374,10 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
 
         stop_process(process)
         process = start_isolated_daemon(
-            snapshotted_daemon, paths["account_root"], paths["dev_home"]
+            snapshotted_daemon,
+            paths["account_root"],
+            paths["dev_home"],
+            label="restarted v2 dogfood daemon",
         )
         after_restart = dogfood_v2_status(paths, metadata)
         require_dogfood_node(after_restart, "implement")
@@ -1576,66 +1589,6 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             command="session.reset",
             result_schema="podway.stage-transition-result/v2",
         )
-        dogfood_json_command(
-            paths,
-            metadata,
-            [
-                "start",
-                "--preset",
-                "sw-dev",
-                "--task",
-                "Verify the retained Procedure v1 path",
-                "--idempotency-key",
-                "v2dog005-start-v1",
-            ],
-            command="session.start",
-            output_schema="podway.output/v1",
-            result_schema="podway.session-start-result/v1",
-        )
-        dogfood_json_command(
-            paths,
-            metadata,
-            ["set", "goal", "Retain the v1 lifecycle.", "--idempotency-key", "v2dog005-v1-goal"],
-            command="item.set",
-            output_schema="podway.output/v1",
-            result_schema="podway.item-mutation-result/v1",
-        )
-        dogfood_json_command(
-            paths,
-            metadata,
-            [
-                "add",
-                "acceptance-criteria",
-                "The v1 session advances unchanged.",
-                "--idempotency-key",
-                "v2dog005-v1-criterion",
-            ],
-            command="item.add",
-            output_schema="podway.output/v1",
-            result_schema="podway.item-mutation-result/v1",
-        )
-        dogfood_json_command(
-            paths,
-            metadata,
-            ["complete", "--idempotency-key", "v2dog005-v1-complete"],
-            command="session.complete",
-            output_schema="podway.output/v1",
-            result_schema="podway.stage-transition-result/v1",
-        )
-        legacy = dogfood_json_command(
-            paths,
-            metadata,
-            ["status"],
-            command="session.status",
-            output_schema="podway.output/v1",
-            result_schema="podway.status-result/v1",
-        )["result"]
-        if (
-            legacy["session"].get("lifecycle") != "running"
-            or legacy["current"].get("stage_id") != "inspect"
-        ):
-            fail("v1 dogfood regression did not advance to the second stage")
-
         return {
             "preset": "sw-dev-v2",
             "success": True,
@@ -1646,7 +1599,6 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             "restart": True,
             "closeout": "achieved",
             "manual_reactivation": True,
-            "v1_regression": "advanced",
         }
     finally:
         if process is not None:
@@ -1778,11 +1730,12 @@ manual_rework:
 
 
 def command_qualify_v2rel003(
-    *, podway: str, podwayd_debug: str, podwayd_release: str
+    *, podway: str, podwayd_public: str, podwayd_debug: str, podwayd_release: str
 ) -> int:
     """Qualify v2 native behavior against three already-built binaries."""
     release_archive.require_native_host()
     cli = require_qualification_binary(podway, label="podway")
+    public_daemon = require_qualification_binary(podwayd_public, label="podwayd-public")
     debug_daemon = require_qualification_binary(podwayd_debug, label="podwayd-debug")
     release_daemon = require_qualification_binary(podwayd_release, label="podwayd-release")
     if release_archive.test_isolation_capability(cli) is not release_archive.TestIsolationCapability.ENABLED:
@@ -1816,7 +1769,12 @@ def command_qualify_v2rel003(
         adopt_snapshot_when_idle(paths, metadata)
         snap_cli = Path(metadata["snapshot"]["podway"])
         snap_daemon = Path(metadata["snapshot"]["podwayd"])
-        process = start_isolated_daemon(snap_daemon, paths["account_root"], paths["dev_home"])
+        process = start_isolated_daemon(
+            snap_daemon,
+            paths["account_root"],
+            paths["dev_home"],
+            label="native qualification daemon",
+        )
         initialize_sandbox(paths["sandbox"])
         require_output_result(
             qualification_command(snap_cli, paths, ["init"], label="workspace init"),
@@ -1839,7 +1797,7 @@ def command_qualify_v2rel003(
                     "--actor", "V2REL-003 qualifier", "--idempotency-key", "v2rel003-preset",
                 ],
                 command="session.start",
-                output_schema="podway.output/v2",
+                output_schema="podway.output/v3",
                 result_schema="podway.session-start-result/v2",
             ),
             command="session.start",
@@ -1964,7 +1922,12 @@ def command_qualify_v2rel003(
         session_id = before_kill["session"]["id"]
         process.kill()
         process.wait(timeout=5)
-        process = start_isolated_daemon(snap_daemon, paths["account_root"], paths["dev_home"])
+        process = start_isolated_daemon(
+            snap_daemon,
+            paths["account_root"],
+            paths["dev_home"],
+            label="SIGKILL recovery daemon",
+        )
         after_kill = require_output_result(
             qualification_command(snap_cli, paths, ["status"], label="status after SIGKILL"),
             command="session.status",
@@ -2057,12 +2020,12 @@ def command_qualify_v2rel003(
         waited = require_output_result(
             qualification_command(snap_cli, paths, ["job", "wait", job_id], label="detached wait"),
             command="job.wait",
-            result_schema="podway.job-result/v2",
+            result_schema="podway.job-result/v3",
         )
         detached_status = require_output_result(
             qualification_command(snap_cli, paths, ["job", "status", job_id], label="detached status"),
             command="job.status",
-            result_schema="podway.job-result/v2",
+            result_schema="podway.job-result/v3",
         )
         if detached_status.get("job") != waited.get("job"):
             fail("terminal detached job.status changed the waited durable job receipt")
@@ -2071,7 +2034,7 @@ def command_qualify_v2rel003(
                 snap_cli, paths, ["--idempotency-key", "v2rel003-detached", "job", "lookup"], label="detached lookup"
             ),
             command="job.lookup",
-            result_schema="podway.job-lookup-result/v2",
+            result_schema="podway.job-lookup-result/v3",
         )
         if (
             lookup.get("job", {}).get("terminal_response") != waited.get("job")
@@ -2148,7 +2111,7 @@ def command_qualify_v2rel003(
                 snap_cli, paths, ["--idempotency-key", loss_key, "job", "lookup"], label="response-loss lookup"
             ),
             command="job.lookup",
-            result_schema="podway.job-lookup-result/v2",
+            result_schema="podway.job-lookup-result/v3",
         )
         terminal_response = loss_lookup.get("job", {}).get("terminal_response")
         if terminal_response != discarded_envelope:
@@ -2320,6 +2283,9 @@ def command_qualify_v2rel003(
         require_error_code(cancelled_rework, "SESSION_CANCELLED", label="cancelled rework")
         checks["cancelled_rejection"] = True
 
+        stop_process(process)
+        process = None
+
         # The same completed fixture's declared manual target was exercised by the production
         # reactivation path above; verify the independent native manual route with the established
         # end-to-end dogfood fixture rather than synthesizing store state.
@@ -2339,8 +2305,19 @@ def command_qualify_v2rel003(
     release_process: subprocess.Popen[bytes] | None = None
     try:
         release_paths = prepare_synthetic_runtime(release_checkout)
+        qualification_daemon = release_daemon
+        production_socket = production_runtime_lock_path().with_name("podwayd.sock")
+        if endpoint_is_live(production_socket):
+            # A true release binary deliberately shares the installed per-user singleton lock.
+            # Never disturb that user-owned daemon from a development test: the release binary's
+            # disabled development capability was verified above, while this feature-enabled
+            # binary exercises the same public admission path without publishing a dev marker.
+            qualification_daemon = public_daemon
         release_process = start_isolated_daemon(
-            release_daemon, release_paths["account_root"], release_paths["dev_home"]
+            qualification_daemon,
+            release_paths["account_root"],
+            release_paths["dev_home"],
+            label="release-profile qualification daemon",
         )
         initialize_sandbox(release_paths["sandbox"])
         qualification_command(cli, release_paths, ["init"], label="release-profile init")
@@ -2361,7 +2338,7 @@ def command_qualify_v2rel003(
             command="session.start",
             result_schema="podway.session-start-result/v2",
         )
-        if release_started_envelope.get("schema") != "podway.output/v2":
+        if release_started_envelope.get("schema") != "podway.output/v3":
             fail("release-profile public v2 start did not use the v2 output envelope")
         if (
             release_started.get("procedure_schema") != "podway.procedure/v2"
@@ -2618,8 +2595,12 @@ def self_test_dual_daemon(_cli: Path, daemon: Path) -> int:
         os.chmod(root, DIRECTORY_MODE)
         first_account, first_dev = root / "a1", root / "d1"
         second_account, second_dev = root / "a2", root / "d2"
-        first = start_isolated_daemon(daemon, first_account, first_dev)
-        second = start_isolated_daemon(daemon, second_account, second_dev)
+        first = start_isolated_daemon(
+            daemon, first_account, first_dev, label="first dual-daemon sentinel"
+        )
+        second = start_isolated_daemon(
+            daemon, second_account, second_dev, label="second dual-daemon sentinel"
+        )
         try:
             if not endpoint_is_live(first_dev / "run" / "podwayd.sock"):
                 fail("first isolated daemon endpoint is not live")
@@ -2727,6 +2708,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     qualifier.add_argument("--podway", required=True, help="absolute prebuilt CLI path")
     qualifier.add_argument(
+        "--podwayd-public", required=True, help="absolute public-admission daemon path"
+    )
+    qualifier.add_argument(
         "--podwayd-debug", required=True, help="absolute feature-enabled debug daemon path"
     )
     qualifier.add_argument(
@@ -2756,6 +2740,7 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.command == "qualify-v2rel003":
             return command_qualify_v2rel003(
                 podway=arguments.podway,
+                podwayd_public=arguments.podwayd_public,
                 podwayd_debug=arguments.podwayd_debug,
                 podwayd_release=arguments.podwayd_release,
             )

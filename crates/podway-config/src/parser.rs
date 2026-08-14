@@ -11,14 +11,11 @@ use yaml_rust2::{
     scanner::{Scanner, TScalarStyle, TokenType},
 };
 
-use crate::{ConfigError, ProcedureDefinitionV1, ValidatedProcedureV1, WorkspaceConfigV1};
+use crate::{ConfigError, WorkspaceConfigV1};
 
-pub const MAX_PROCEDURE_DOCUMENT_BYTES: usize = podway_core::MAX_PROCEDURE_DOCUMENT_BYTES_V1;
+pub const MAX_PROCEDURE_DOCUMENT_BYTES: usize = podway_core::MAX_PROCEDURE_DOCUMENT_BYTES;
 pub const MAX_PROCEDURE_DOCUMENT_DEPTH: usize = 64;
 pub const MAX_PROCEDURE_DOCUMENT_NODES: usize = 100_000;
-pub const MAX_PROCEDURE_DOCUMENT_BYTES_V1: usize = MAX_PROCEDURE_DOCUMENT_BYTES;
-pub const MAX_PROCEDURE_DOCUMENT_DEPTH_V1: usize = MAX_PROCEDURE_DOCUMENT_DEPTH;
-pub const MAX_PROCEDURE_DOCUMENT_NODES_V1: usize = MAX_PROCEDURE_DOCUMENT_NODES;
 pub const MAX_WORKSPACE_CONFIG_BYTES_V1: usize = 64 * 1024;
 pub const MAX_WORKSPACE_CONFIG_DEPTH_V1: usize = 16;
 pub const MAX_WORKSPACE_CONFIG_NODES_V1: usize = 1_024;
@@ -41,17 +38,13 @@ pub struct ProcedureDocumentLimits {
 impl Default for ProcedureDocumentLimits {
     fn default() -> Self {
         Self {
-            max_bytes: MAX_PROCEDURE_DOCUMENT_BYTES_V1,
-            max_depth: MAX_PROCEDURE_DOCUMENT_DEPTH_V1,
-            max_nodes: MAX_PROCEDURE_DOCUMENT_NODES_V1,
+            max_bytes: MAX_PROCEDURE_DOCUMENT_BYTES,
+            max_depth: MAX_PROCEDURE_DOCUMENT_DEPTH,
+            max_nodes: MAX_PROCEDURE_DOCUMENT_NODES,
         }
     }
 }
 
-/// Backward-compatible v1 name for [`ProcedureDocumentFormat`].
-pub type ProcedureFormatV1 = ProcedureDocumentFormat;
-/// Backward-compatible v1 name for [`ProcedureDocumentLimits`].
-pub type ProcedureParseLimitsV1 = ProcedureDocumentLimits;
 /// Resource limits applied before a workspace config is admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkspaceConfigParseLimitsV1 {
@@ -76,8 +69,8 @@ struct BoundedYamlLimitsV1 {
     max_nodes: usize,
 }
 
-impl From<ProcedureParseLimitsV1> for BoundedYamlLimitsV1 {
-    fn from(limits: ProcedureParseLimitsV1) -> Self {
+impl From<ProcedureDocumentLimits> for BoundedYamlLimitsV1 {
+    fn from(limits: ProcedureDocumentLimits) -> Self {
         Self {
             max_depth: limits.max_depth,
             max_nodes: limits.max_nodes,
@@ -128,21 +121,14 @@ fn decode_procedure_document_with_name(
     Ok(value)
 }
 
-/// The version-dispatched result of parsing a YAML procedure document.
+/// The result of parsing a supported Procedure document.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ParsedProcedure {
-    V1(ValidatedProcedureV1),
     V2(crate::procedure_v2_parse::ParsedProcedureV2),
 }
 
-/// Parses a Procedure document in either source encoding, dispatching on its exact `schema`
-/// field to the unchanged v1 parser or the v2 parser. The shared bounded decoder
-/// (`decode_procedure_document`) is the single admission path for both `Yaml` and `Json`; from
-/// there v1 dispatches to [`parse_procedure_v1`] with the matching [`ProcedureFormatV1`], and v2
-/// dispatches to the format-matched wire parser (`parse_procedure_v2_yaml` /
-/// `parse_procedure_v2_json`). The YAML dispatch additionally rejects a top-level flow-collection
-/// document (JSON written where block YAML is expected); the JSON dispatch has no such
-/// restriction since `Json` is exactly that form.
+/// Parses a Procedure v2 document in either source encoding. The shared bounded decoder is the
+/// single admission path for both YAML and JSON before the exact schema check and wire mapping.
 pub fn parse_procedure_document(
     input: &[u8],
     format: ProcedureDocumentFormat,
@@ -163,7 +149,6 @@ pub fn parse_procedure_document(
     };
     let text = std::str::from_utf8(input).expect("decoded procedure document is valid UTF-8");
     match schema {
-        crate::PROCEDURE_SCHEMA_V1 => Ok(ParsedProcedure::V1(parse_procedure_v1(input, format)?)),
         podway_core::PROCEDURE_SCHEMA_V2 => match format {
             ProcedureDocumentFormat::Yaml => {
                 if begins_with_flow_collection(input) {
@@ -182,7 +167,7 @@ pub fn parse_procedure_document(
             )),
         },
         other => Err(ConfigError::InvalidSchema {
-            expected: "podway.procedure/v1 or podway.procedure/v2",
+            expected: podway_core::PROCEDURE_SCHEMA_V2,
             actual: other.to_owned(),
         }),
     }
@@ -190,21 +175,14 @@ pub fn parse_procedure_document(
 
 /// Reads a Procedure document's declared `schema` without admitting it.
 ///
-/// Returns the matching schema constant — [`crate::PROCEDURE_SCHEMA_V1`] or
-/// [`podway_core::PROCEDURE_SCHEMA_V2`] — and `None` for anything else: a decode failure, a missing
-/// or non-string `schema`, or a schema string this build does not know. It never panics.
-///
-/// This exists so a caller can route a document to the version-specific pipeline *before* choosing
-/// an error surface, without letting a v1 document reach a v2 admission path or vice versa. Because
-/// a `None` outcome carries no claim, the caller's existing behaviour is the correct fallback for
-/// it; only `Some` is a positive dispatch signal.
+/// Returns the v2 schema constant, or `None` for a decode failure, missing/non-string schema, or
+/// any unsupported schema. It never panics.
 pub fn sniff_procedure_schema(
     input: &[u8],
     format: ProcedureDocumentFormat,
 ) -> Option<&'static str> {
     let value = decode_procedure_document(input, format).ok()?;
     match value.get("schema")?.as_str()? {
-        crate::PROCEDURE_SCHEMA_V1 => Some(crate::PROCEDURE_SCHEMA_V1),
         podway_core::PROCEDURE_SCHEMA_V2 => Some(podway_core::PROCEDURE_SCHEMA_V2),
         _ => None,
     }
@@ -212,7 +190,7 @@ pub fn sniff_procedure_schema(
 
 /// Parses a YAML procedure document. Equivalent to
 /// [`parse_procedure_document`]`(input, `[`ProcedureDocumentFormat::Yaml`]`)`; kept as the
-/// dedicated YAML entry point, mirroring [`parse_procedure_v1`]'s format-specific style.
+/// dedicated YAML entry point.
 pub fn parse_procedure_yaml(input: &[u8]) -> Result<ParsedProcedure, ConfigError> {
     parse_procedure_document(input, ProcedureDocumentFormat::Yaml)
 }
@@ -266,31 +244,6 @@ pub fn parse_workspace_config_v1_with_limits(
     let config = parse_yaml_workspace_config(text, limits)?;
     config.validate()?;
     Ok(config)
-}
-
-/// Parses, default-expands, canonicalizes, and semantically validates a procedure v1 document.
-pub fn parse_procedure_v1(
-    input: impl AsRef<[u8]>,
-    format: ProcedureFormatV1,
-) -> Result<ValidatedProcedureV1, ConfigError> {
-    parse_procedure_v1_with_limits(input, format, ProcedureParseLimitsV1::default())
-}
-
-/// As [`parse_procedure_v1`], with explicit resource limits for a trusted caller's boundary.
-pub fn parse_procedure_v1_with_limits(
-    input: impl AsRef<[u8]>,
-    format: ProcedureFormatV1,
-    limits: ProcedureParseLimitsV1,
-) -> Result<ValidatedProcedureV1, ConfigError> {
-    let value = decode_procedure_document_with_name(input, format, limits, "procedure v1")?;
-    let mut definition: ProcedureDefinitionV1 =
-        serde_json::from_value(value).map_err(|error| ConfigError::InvalidDocument {
-            reason: error.to_string(),
-        })?;
-
-    definition.validate()?;
-    definition.apply_documented_defaults();
-    ValidatedProcedureV1::new(definition)
 }
 
 fn parse_yaml_value(
@@ -461,7 +414,7 @@ impl<'de> Visitor<'de> for BoundedYamlSeed<'_> {
     type Value = ();
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a procedure v1 YAML value")
+        formatter.write_str("a Procedure YAML value")
     }
 
     fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E>
@@ -946,7 +899,7 @@ fn json_string_quote_is_escaped(bytes: &[u8], index: usize) -> bool {
 fn count_node(
     depth: usize,
     nodes: &mut usize,
-    limits: ProcedureParseLimitsV1,
+    limits: ProcedureDocumentLimits,
 ) -> Result<(), ConfigError> {
     if depth > limits.max_depth {
         return Err(ConfigError::InputTooDeep {
@@ -968,11 +921,11 @@ struct JsonParser<'a> {
     input: &'a str,
     position: usize,
     nodes: usize,
-    limits: ProcedureParseLimitsV1,
+    limits: ProcedureDocumentLimits,
 }
 
 impl<'a> JsonParser<'a> {
-    fn new(input: &'a str, limits: ProcedureParseLimitsV1) -> Self {
+    fn new(input: &'a str, limits: ProcedureDocumentLimits) -> Self {
         Self {
             input,
             position: 0,

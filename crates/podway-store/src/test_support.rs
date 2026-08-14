@@ -6,6 +6,55 @@ use podway_core::JobId;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
+/// Restores the schema-v3 legacy tables and inserts one Procedure v1 snapshot.
+pub fn downgrade_to_schema_v3_with_legacy_snapshot(
+    database_path: &Path,
+    legacy_schema_id: &str,
+) -> Result<(), String> {
+    let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    let reference = Connection::open_in_memory().map_err(|error| error.to_string())?;
+    reference
+        .execute_batch(crate::schema::sqlite_v1_ddl())
+        .map_err(|error| error.to_string())?;
+    let mut statement = reference
+        .prepare(
+            "SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND (\
+             (type = 'table' AND name IN ('procedure_snapshots', 'task_sessions', \
+             'stage_progress', 'attempts', 'item_slots', 'blockers')) OR \
+             (type = 'index' AND name IN ('ux_stage_progress_one_current', \
+             'ux_attempts_one_active', 'ix_attempts_stage', 'ix_blockers_attempt_state'))) \
+             ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name",
+        )
+        .map_err(|error| error.to_string())?;
+    let objects = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    for sql in objects {
+        connection
+            .execute_batch(&sql)
+            .map_err(|error| error.to_string())?;
+    }
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 4", [])
+        .map_err(|error| error.to_string())?;
+    connection
+        .pragma_update(None, "user_version", 3)
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "INSERT INTO procedure_snapshots (
+                snapshot_id, schema_id, procedure_id, procedure_version, name, digest,
+                canonical_json, source_kind, source_label, created_at_ms
+             ) VALUES ('legacy-reset-fixture', ?1, 'legacy-reset', '1',
+                       'Legacy reset fixture', ?2, '{}', 'file', 'legacy.yaml', 1)",
+            params![legacy_schema_id, format!("sha256:{}", "c".repeat(64))],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// Rewrites one start terminal receipt to its pre-PSTRT shape in both durable copies.
 pub fn rewrite_start_terminal_as_legacy(
     database_path: &Path,

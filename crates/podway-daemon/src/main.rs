@@ -14,7 +14,7 @@ use podway_daemon::{
     },
 };
 use podway_protocol::{
-    CommandNameV1, OutputEnvelopeInputV1, OutputEnvelopeV1, RequestIdV1, build_identity_v1,
+    CommandNameV1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1, build_identity_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
@@ -89,7 +89,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .as_object()
                 .cloned()
                 .expect("the static build identity is an object");
-            let output = OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+            let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: RequestIdV1::new(Uuid::new_v4().to_string())?,
                 command: CommandNameV1::new("version")?,
                 generated_at,

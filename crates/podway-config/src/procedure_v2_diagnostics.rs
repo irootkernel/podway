@@ -466,13 +466,10 @@ fn classify(error: &ConfigError) -> Classification<'_> {
             shape: None,
             value: None,
         },
-        // v1-only variants and canonicalization failures are unreachable from the v2 stages. They
-        // classify defensively rather than panicking: a production diagnostic path must not be able
-        // to abort the process.
+        // Canonicalization failures are unreachable from the v2 authoring stages. They classify
+        // defensively rather than panicking: a production diagnostic path must not abort.
         ConfigError::Serialization(_)
         | ConfigError::InvalidDigest
-        | ConfigError::UnknownReturnTarget { .. }
-        | ConfigError::WarningsAsErrors { .. }
         | ConfigError::CoreAdmission { .. } => Classification::schema_invalid(None),
     }
 }

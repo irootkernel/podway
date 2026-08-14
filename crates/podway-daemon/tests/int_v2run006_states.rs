@@ -8,29 +8,16 @@ use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
     validate_procedure_v2, vet_procedure_v2,
 };
-use podway_core::{Revision, SessionId};
+use podway_core::{AttemptId, GoalRevisionNumberV2, Revision, SessionId};
 use podway_daemon::server::{DaemonRequestV1, RequestDispatcherV1};
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2, StatusResultV1,
+    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, OperationV1, PreconditionsV1,
+    RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
     WorkspaceContextV1, validate_command_result_v2,
 };
 use serde_json::{Map, Value, json};
 
 const STATE_PROCEDURE: &str = include_str!("fixtures/state-derivation-procedure.yaml");
-const V1_STATE_PROCEDURE: &str = r#"schema: podway.procedure/v1
-id: retained-v1-state
-version: "1"
-name: Retained v1 state
-stages:
-  - id: only
-    title: Only
-    instructions: []
-    items: []
-rework:
-  allow_return_to: any_previous
-"#;
-
 fn status(
     dispatcher: &impl RequestDispatcherV1,
     selector: &podway_protocol::WorktreeSelectorWireV1,
@@ -108,6 +95,52 @@ fn dry_run_reset_request(
     (envelope, daemon)
 }
 
+fn typed_mutation_request(
+    request_number: u64,
+    command: &str,
+    selector: &podway_protocol::WorktreeSelectorWireV1,
+    mut payload: Map<String, Value>,
+    idempotency_key: &str,
+    preconditions: PreconditionsV1,
+) -> (RequestEnvelopeV1, DaemonRequestV1) {
+    payload.insert(
+        "selector".to_owned(),
+        serde_json::to_value(selector).unwrap(),
+    );
+    let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{request_number:012x}"))
+            .unwrap(),
+        client: ClientInfoV1::new("v2run006-test", "1", 1).unwrap(),
+        operation: OperationV1::Mutate,
+        command: CommandNameV1::new(command).unwrap(),
+        workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
+        idempotency_key: Some(IdempotencyKeyV1::new(idempotency_key).unwrap()),
+        preconditions,
+        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        payload,
+    })
+    .unwrap();
+    let daemon = DaemonRequestV1::from_envelope(&envelope).unwrap();
+    assert!(matches!(daemon, DaemonRequestV1::ProcedureV2Mutation(_)));
+    (envelope, daemon)
+}
+
+fn assert_absent_session_mismatch(response: ResponseEnvelopeV2, session_id: &str) {
+    let ResponseEnvelopeV2::Error(error) = response else {
+        panic!("an expected session with no current session must be rejected")
+    };
+    assert_eq!(error.code().as_str(), "SESSION_ID_MISMATCH");
+    assert_eq!(error.exit_code().get(), 4);
+    assert!(!error.retryable());
+    assert_eq!(
+        error.details()["schema"],
+        "podway.session-id-mismatch-details/v1"
+    );
+    assert_eq!(error.details()["expected_session_id"], session_id);
+    assert!(error.details()["actual_session_id"].is_null());
+    assert_eq!(error.details()["admission"], json!({"admitted": false}));
+}
+
 fn assert_session_absent(
     dispatcher: &impl RequestDispatcherV1,
     selector: &podway_protocol::WorktreeSelectorWireV1,
@@ -130,10 +163,7 @@ fn assert_session_absent(
         )
         .unwrap(),
     );
-    let ResponseEnvelopeV2::Error(error) = runtime::dispatch(dispatcher, &request) else {
-        panic!("reset must remove the current graph session")
-    };
-    assert_eq!(error.code().as_str(), "SESSION_NOT_FOUND");
+    assert_absent_session_mismatch(runtime::dispatch(dispatcher, &request), session_id);
 }
 
 fn next_response(
@@ -202,7 +232,7 @@ fn start(
     );
     assert!(matches!(
         runtime::dispatch(dispatcher, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let start = runtime::request(
         request_number + 1,
@@ -457,7 +487,7 @@ fn v2run006_blocked_state_unblocks_restarts_completes_and_resets() {
     let dry_run_response = runtime::dispatch(&restarted, &dry_run_request);
     let dry_run_value = serde_json::to_value(&dry_run_response).unwrap();
     assert_eq!(
-        dry_run_value["schema"], "podway.output/v2",
+        dry_run_value["schema"], "podway.output/v3",
         "v2 reset dry-run must project a non-admitted result: {dry_run_value}"
     );
     assert!(dry_run_value.get("job").is_none());
@@ -513,6 +543,153 @@ fn v2run006_blocked_state_unblocks_restarts_completes_and_resets() {
         reset_replay_request.0.request_id(),
     );
     assert_session_absent(&restarted, &selector, 60_041, &session_id);
+
+    assert_absent_session_mismatch(
+        next_response(&restarted, &selector, 60_042, &session_id),
+        &session_id,
+    );
+    let status_without_identity = runtime::request(
+        60_043,
+        "session.status",
+        &selector,
+        Map::new(),
+        "unused-v2run006-status-without-identity",
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV2::Error(error) = runtime::dispatch(&restarted, &status_without_identity)
+    else {
+        panic!("a read without an expected identity must report the absent session")
+    };
+    assert_eq!(error.code().as_str(), "SESSION_NOT_FOUND");
+
+    let absent_revision = Revision::new(reset_before["session"]["revision"].as_u64().unwrap());
+    let session_identity = PreconditionsV1::new(
+        Some(SessionId::new(&session_id).unwrap()),
+        Some(absent_revision),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let absent_dry_run = dry_run_reset_request(60_044, &selector, session_identity.clone());
+    assert_absent_session_mismatch(runtime::dispatch(&restarted, &absent_dry_run), &session_id);
+
+    let absent_reset = runtime::request(
+        60_045,
+        "session.reset",
+        &selector,
+        json!({"confirmed": true}).as_object().unwrap().clone(),
+        "v2run006-reset-absent",
+        session_identity.clone(),
+    );
+    assert_absent_session_mismatch(runtime::dispatch(&restarted, &absent_reset), &session_id);
+
+    let absent_attempt = AttemptId::new("00000000-0000-4000-8000-000000006006").unwrap();
+    let attempt_preconditions = PreconditionsV1::new(
+        Some(SessionId::new(&session_id).unwrap()),
+        Some(absent_revision),
+        Some(absent_attempt),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let typed_mutations = [
+        typed_mutation_request(
+            60_046,
+            "session.decide",
+            &selector,
+            json!({"option_id": "accept", "reason": "Reject an absent session."})
+                .as_object()
+                .unwrap()
+                .clone(),
+            "v2run006-decide-absent",
+            attempt_preconditions.clone(),
+        ),
+        typed_mutation_request(
+            60_047,
+            "session.rework",
+            &selector,
+            json!({
+                "target_graph_node_id": "work",
+                "reason": "Reject an absent session."
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "v2run006-rework-absent",
+            session_identity.clone(),
+        ),
+        typed_mutation_request(
+            60_048,
+            "goal.define",
+            &selector,
+            json!({
+                "goal": "Reject an absent session.",
+                "criteria": [{
+                    "criterion_id": "verified",
+                    "statement": "The mutation is rejected before admission."
+                }]
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "v2run006-goal-define-absent",
+            session_identity.clone(),
+        ),
+        typed_mutation_request(
+            60_049,
+            "goal.revise",
+            &selector,
+            json!({
+                "goal": "Reject an absent session.",
+                "criteria": [{
+                    "criterion_id": "verified",
+                    "statement": "The mutation is rejected before admission."
+                }],
+                "target_graph_node_id": "work",
+                "reason": "Reject an absent session."
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "v2run006-goal-revise-absent",
+            session_identity
+                .clone()
+                .with_goal_revision(GoalRevisionNumberV2::FIRST)
+                .unwrap(),
+        ),
+        typed_mutation_request(
+            60_050,
+            "goal.assess_criterion",
+            &selector,
+            json!({
+                "criterion_id": "verified",
+                "status": "satisfied",
+                "reason": "Reject an absent session."
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "v2run006-goal-assess-absent",
+            attempt_preconditions
+                .with_goal_revision(GoalRevisionNumberV2::FIRST)
+                .unwrap(),
+        ),
+    ];
+    for request in typed_mutations {
+        assert_absent_session_mismatch(runtime::dispatch(&restarted, &request), &session_id);
+    }
+
+    drop(restarted);
+    let cold_manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let cold = runtime::dispatcher(cold_manager, "v2run006-reset-cold-read");
+    assert_session_absent(&cold, &selector, 60_051, &session_id);
+    assert_absent_session_mismatch(
+        next_response(&cold, &selector, 60_052, &session_id),
+        &session_id,
+    );
 }
 
 #[test]
@@ -765,112 +942,5 @@ fn v2run006_cancel_restarts_without_a_cursor_and_reset_clears_running_and_cancel
         assert_eq!(reset["transition"], "reset");
         assert_eq!(reset["reset"], true);
         assert_session_absent(&restarted, selector, number + 2, session_id);
-    }
-}
-
-#[test]
-fn v2run006_retained_v1_block_unblock_cancel_and_reset_keep_output_v1() {
-    let fixture = support_phase4_workspace::git_worktrees();
-    runtime::make_runtime_private(fixture.main());
-    fs::write(fixture.main().join("v1-states.yaml"), V1_STATE_PROCEDURE).unwrap();
-    let selector = runtime::selector(fixture.main());
-    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
-    let production = runtime::dispatcher(manager, "v2run006-v1");
-    let initialize = runtime::request(
-        60_500,
-        "workspace.init",
-        &selector,
-        Map::new(),
-        "v2run006-v1-init",
-        PreconditionsV1::default(),
-    );
-    runtime::dispatch(&production, &initialize);
-    let start = runtime::request(
-        60_501,
-        "session.start",
-        &selector,
-        json!({"procedure": "v1-states.yaml", "task_title": "Retained v1 states"})
-            .as_object()
-            .unwrap()
-            .clone(),
-        "v2run006-v1-start",
-        PreconditionsV1::default(),
-    );
-    assert!(matches!(
-        runtime::dispatch(&production, &start),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
-
-    for (number, command, payload, key) in [
-        (
-            60_502,
-            "session.block",
-            json!({"reason": "Retained v1 blocker"}),
-            "v2run006-v1-block",
-        ),
-        (
-            60_504,
-            "session.unblock",
-            json!({"all": true}),
-            "v2run006-v1-unblock",
-        ),
-        (
-            60_506,
-            "session.cancel",
-            json!({"reason": "Retained v1 cancel"}),
-            "v2run006-v1-cancel",
-        ),
-        (
-            60_508,
-            "session.reset",
-            json!({"confirmed": true}),
-            "v2run006-v1-reset",
-        ),
-    ] {
-        let status_request = runtime::request(
-            number,
-            "session.status",
-            &selector,
-            Map::new(),
-            "unused-v2run006-v1-status",
-            PreconditionsV1::default(),
-        );
-        let ResponseEnvelopeV2::OutputV1(output) = runtime::dispatch(&production, &status_request)
-        else {
-            panic!("retained v1 status must use podway.output/v1")
-        };
-        let status = StatusResultV1::from_result_map(output.result()).unwrap();
-        let attempt = status
-            .current
-            .as_ref()
-            .map(|current| current.attempt_id.clone())
-            .filter(|_| command != "session.reset");
-        let preconditions = PreconditionsV1::new(
-            Some(status.session.id.clone()),
-            Some(status.session.revision),
-            attempt,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        if command == "session.reset" {
-            let dry_run = dry_run_reset_request(number + 10, &selector, preconditions.clone());
-            let dry_run_response = runtime::dispatch(&production, &dry_run);
-            assert!(
-                matches!(dry_run_response, ResponseEnvelopeV2::OutputV1(_)),
-                "retained v1 reset dry-run must use podway.output/v1: {dry_run_response:?}"
-            );
-        }
-        let request = runtime::request(
-            number + 1,
-            command,
-            &selector,
-            payload.as_object().unwrap().clone(),
-            key,
-            preconditions,
-        );
-        let response = runtime::dispatch(&production, &request);
-        assert!(matches!(response, ResponseEnvelopeV2::OutputV1(_)));
     }
 }

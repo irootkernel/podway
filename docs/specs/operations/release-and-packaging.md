@@ -7,7 +7,7 @@ The `v0.2.0` release is a macOS product. It includes:
 - `podway`;
 - `podwayd`;
 - LaunchAgent support;
-- six embedded presets: four retained v1 procedures and two Procedure v2 procedures;
+- two embedded Procedure v2 presets: `sw-dev-v2` and `bug-fix-v2`;
 - JSON schemas and user documentation;
 - zsh, bash, and fish completion;
 - MIT License;
@@ -25,11 +25,11 @@ Independent versioned contracts:
 ```text
 product binary version: 0.2.0
 IPC: podway.ipc/v1
-output: podway.output/v1 and podway.output/v2
+output: podway.output/v3
 error: podway.error/v1
 workspace config: podway.workspace/v1
-procedure: podway.procedure/v1 and podway.procedure/v2
-SQLite schema: integer migration version, currently schema-v3
+procedure: podway.procedure/v2
+SQLite schema: integer migration version, currently schema-v4
 ```
 
 A product minor release may add backward-compatible fields or commands. Breaking public contract changes require a new contract version and migration plan.
@@ -138,11 +138,10 @@ this closed identity set rather than inferring compatibility from a version stri
 For the v2 contract surface, the handoff discriminator is
 `podway.dolgorae-compatibility-handoff/v2`. It additionally embeds the exact
 manifest-bound
-[`podway.dolgorae-v2-adapter-contract/v1`](../../../release/dolgorae-v2-adapter-contract-v1.json)
-and its packaged member digest. That catalog records the v1 baseline, exact v2
-route/schema/error/diagnostic delta, reactivation notices, storage migration
-boundary, and adapter acceptance requirements without claiming downstream
-adoption. The catalog deliberately omits the final manifest digest to avoid a
+[`podway.dolgorae-adapter-contract/v2`](../../../release/dolgorae-adapter-contract-v2.json)
+self-contained v2-only route, schema, error, diagnostic, reactivation, and
+storage-migration surface together with adapter acceptance requirements. The
+catalog deliberately omits the final manifest digest to avoid a
 self-reference; the enclosing handoff supplies that release-specific pin through
 its existing `contract.digest` field.
 Handoff creation rejects pending, incomplete, unknown, or malformed evidence and
@@ -203,8 +202,9 @@ Upgrade procedure:
 5. migrate worktree databases lazily on first access.
 
 New worktree databases begin in schema-0/uninitialized state; on first access, the daemon
-transactionally initializes them to canonical schema-v3. Existing canonical schema-v1 and
-schema-v2 databases migrate forward lazily to schema-v3 on first access.
+transactionally initializes them to canonical schema-v4. Empty predecessors and
+v2-only schema-v3 databases migrate forward lazily to schema-v4 on first access;
+nonempty Procedure v1 state is rejected without mutation.
 
 The daemon handles one workspace migration failure without disabling other workspaces.
 

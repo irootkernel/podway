@@ -2,11 +2,11 @@ use std::io::{self, Read, Write};
 
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
-    FrameErrorV1, FrameIoPhaseV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1, OutputEnvelopeInputV1,
-    OutputEnvelopeV1, PayloadCodecErrorV1, PreconditionsV1, ProtocolError, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, Rfc3339MillisV1,
-    decode_request_payload_v1, decode_response_payload_v1, decode_single_frame_v1, encode_frame_v1,
-    encode_request_payload_v1, encode_response_payload_v1, read_single_frame_v1, write_frame_v1,
+    FrameErrorV1, FrameIoPhaseV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1, OutputEnvelopeInputV3,
+    OutputEnvelopeV3, PayloadCodecErrorV1, PreconditionsV1, ProtocolError, RequestEnvelopeInputV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2, Rfc3339MillisV1,
+    decode_request_payload_v1, decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
+    encode_request_payload_v1, encode_response_payload_v2, read_single_frame_v1, write_frame_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -131,7 +131,7 @@ fn valid_request_with_payload(payload: Map<String, Value>) -> RequestEnvelopeV1 
         request_id: RequestIdV1::new(REQUEST_ID).expect("request fixture must be valid"),
         client: ClientInfoV1::new("podway-cli", "0.1.0", 1).expect("client fixture must be valid"),
         operation: OperationV1::Query,
-        command: CommandNameV1::new("status").expect("command fixture must be valid"),
+        command: CommandNameV1::new("workspace.show").expect("command fixture must be valid"),
         workspace: None,
         idempotency_key: None,
         preconditions: PreconditionsV1::default(),
@@ -145,10 +145,10 @@ fn timestamp() -> Rfc3339MillisV1 {
     Rfc3339MillisV1::new(GENERATED_AT).expect("timestamp fixture must be valid")
 }
 
-fn valid_output() -> OutputEnvelopeV1 {
-    OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+fn valid_output() -> OutputEnvelopeV3 {
+    OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(REQUEST_ID).expect("request fixture must be valid"),
-        command: CommandNameV1::new("status").expect("command fixture must be valid"),
+        command: CommandNameV1::new("workspace.show").expect("command fixture must be valid"),
         generated_at: timestamp(),
         workspace: None,
         job: None,
@@ -334,17 +334,17 @@ fn payload_codecs_round_trip_requests_outputs_and_errors() {
         request
     );
 
-    let output = ResponseEnvelopeV1::Output(valid_output());
-    let output_payload = encode_response_payload_v1(&output).expect("output must encode");
+    let output = ResponseEnvelopeV2::OutputV2(valid_output());
+    let output_payload = encode_response_payload_v2(&output).expect("output must encode");
     assert_eq!(
-        decode_response_payload_v1(&output_payload).expect("output must decode"),
+        decode_response_payload_v2(&output_payload).expect("output must decode"),
         output
     );
 
-    let error = ResponseEnvelopeV1::Error(valid_error());
-    let error_payload = encode_response_payload_v1(&error).expect("error must encode");
+    let error = ResponseEnvelopeV2::Error(valid_error());
+    let error_payload = encode_response_payload_v2(&error).expect("error must encode");
     assert_eq!(
-        decode_response_payload_v1(&error_payload).expect("error must decode"),
+        decode_response_payload_v2(&error_payload).expect("error must decode"),
         error
     );
 }
@@ -394,7 +394,7 @@ fn framing_rejects_malformed_and_catalog_invalid_errors() {
         })) if length == MAX_FRAME_PAYLOAD_BYTES_V1 + 1
     ));
     assert!(matches!(
-        decode_response_payload_v1(&vec![b' '; MAX_FRAME_PAYLOAD_BYTES_V1 + 1]),
+        decode_response_payload_v2(&vec![b' '; MAX_FRAME_PAYLOAD_BYTES_V1 + 1]),
         Err(PayloadCodecErrorV1::InvalidLength(ProtocolError::FrameTooLarge {
             length,
             maximum: MAX_FRAME_PAYLOAD_BYTES_V1,
@@ -416,13 +416,13 @@ fn framing_rejects_malformed_and_catalog_invalid_errors() {
 
     let mut unsupported_schema =
         serde_json::to_value(valid_output()).expect("output fixture must serialize");
-    unsupported_schema["schema"] = json!("podway.output/v2");
+    unsupported_schema["schema"] = json!("podway.output/v4");
     let unsupported_schema =
         serde_json::to_vec(&unsupported_schema).expect("fixture must serialize");
     assert!(matches!(
-        decode_response_payload_v1(&unsupported_schema),
+        decode_response_payload_v2(&unsupported_schema),
         Err(PayloadCodecErrorV1::UnsupportedResponseSchema { received, .. })
-            if received == "podway.output/v2"
+            if received == "podway.output/v4"
     ));
 
     let valid = serde_json::to_value(valid_error()).expect("error fixture must serialize");
@@ -432,7 +432,7 @@ fn framing_rejects_malformed_and_catalog_invalid_errors() {
     let invalid_catalog_code =
         serde_json::to_vec(&invalid_catalog_code).expect("invalid fixture must serialize");
     assert!(matches!(
-        decode_response_payload_v1(&invalid_catalog_code),
+        decode_response_payload_v2(&invalid_catalog_code),
         Err(PayloadCodecErrorV1::InvalidEnvelope(error))
             if error.to_string().contains("invalid type")
     ));
@@ -442,7 +442,7 @@ fn framing_rejects_malformed_and_catalog_invalid_errors() {
     let unknown_catalog_code =
         serde_json::to_vec(&unknown_catalog_code).expect("unknown fixture must serialize");
     assert!(matches!(
-        decode_response_payload_v1(&unknown_catalog_code),
+        decode_response_payload_v2(&unknown_catalog_code),
         Err(PayloadCodecErrorV1::InvalidEnvelope(error))
             if error
                 .to_string()
@@ -454,7 +454,7 @@ fn framing_rejects_malformed_and_catalog_invalid_errors() {
     let mismatched_catalog_metadata =
         serde_json::to_vec(&mismatched_catalog_metadata).expect("mismatch fixture must serialize");
     assert!(matches!(
-        decode_response_payload_v1(&mismatched_catalog_metadata),
+        decode_response_payload_v2(&mismatched_catalog_metadata),
         Err(PayloadCodecErrorV1::InvalidEnvelope(error))
             if error
                 .to_string()
@@ -477,7 +477,7 @@ fn payload_codecs_reject_invalid_json_contracts_in_protocol_order() {
         Err(PayloadCodecErrorV1::MissingOrInvalidDiscriminator { field: "protocol" })
     ));
     assert!(matches!(
-        decode_response_payload_v1(b"{}"),
+        decode_response_payload_v2(b"{}"),
         Err(PayloadCodecErrorV1::MissingOrInvalidDiscriminator { field: "schema" })
     ));
 
@@ -494,11 +494,11 @@ fn payload_codecs_reject_invalid_json_contracts_in_protocol_order() {
     ));
 
     let unsupported_schema =
-        serde_json::to_vec(&json!({"schema": "podway.output/v2"})).expect("fixture must serialize");
+        serde_json::to_vec(&json!({"schema": "podway.output/v4"})).expect("fixture must serialize");
     assert!(matches!(
-        decode_response_payload_v1(&unsupported_schema),
+        decode_response_payload_v2(&unsupported_schema),
         Err(PayloadCodecErrorV1::UnsupportedResponseSchema { received, .. })
-            if received == "podway.output/v2"
+            if received == "podway.output/v4"
     ));
 
     let mut non_string_schema =
@@ -506,7 +506,7 @@ fn payload_codecs_reject_invalid_json_contracts_in_protocol_order() {
     non_string_schema["schema"] = json!(false);
     let non_string_schema = serde_json::to_vec(&non_string_schema).expect("fixture must serialize");
     assert!(matches!(
-        decode_response_payload_v1(&non_string_schema),
+        decode_response_payload_v2(&non_string_schema),
         Err(PayloadCodecErrorV1::MissingOrInvalidDiscriminator { field: "schema" })
     ));
 }
@@ -554,7 +554,7 @@ fn payload_codec_and_frame_decoders_are_safe_for_a_small_arbitrary_byte_corpus()
     for bytes in corpus {
         let _ = decode_single_frame_v1(&bytes);
         let _ = decode_request_payload_v1(&bytes);
-        let _ = decode_response_payload_v1(&bytes);
+        let _ = decode_response_payload_v2(&bytes);
     }
 }
 

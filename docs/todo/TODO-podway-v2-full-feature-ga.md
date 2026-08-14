@@ -14,6 +14,10 @@
 - Repository scope: Podway only; Dolgorae changes require separate authorization
 - Last accepted planning baseline: August 4, 2026
 
+> **Superseded product boundary:** This file is an immutable v0.2.0 planning snapshot retained at
+> its evidence-bound path. ADR-0019 makes Procedure v2 the only current product model. Compatibility
+> and implementation statements below describe the historical release and are not current authority.
+
 ## 1. Purpose
 
 Podway v1 is an evidence-gated, linearly ordered procedure tracker with retry,

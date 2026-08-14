@@ -18,9 +18,8 @@ use nix::unistd::geteuid;
 use podway_protocol::{
     FrameErrorV1, OperationV1, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
     ProcedureV2StartRequestV1, RESERVED_V2_MUTATION_COMMAND_NAMES_V1, RequestEnvelopeV1,
-    ResponseEnvelopeV1, ResponseEnvelopeV2, SliceErrorV1, SliceRequestV1,
-    decode_response_payload_v1, decode_response_payload_v2, encode_request_payload_v1,
-    read_single_frame_v1, write_frame_v1,
+    ResponseEnvelopeV2, SliceErrorV1, SliceRequestV1, decode_response_payload_v2,
+    encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 
@@ -280,31 +279,27 @@ impl DaemonClientV1 {
     pub fn request(
         &self,
         request: &RequestEnvelopeV1,
-    ) -> Result<ResponseEnvelopeV1, DaemonClientErrorV1> {
+    ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
         SliceRequestV1::from_envelope(request)
             .map_err(|source| DaemonClientErrorV1::RequestAdmission { source })?;
-        self.exchange(request)
+        self.exchange_v2(request)
     }
 
-    /// Exchanges one request through the additive Procedure v2-aware contract boundary.
-    ///
-    /// This preserves the released request envelope and framing. It only widens admission to the
-    /// typed Procedure v2 start and mutation families and widens response decoding to accept
-    /// `podway.output/v2` alongside the released v1 output and error envelopes.
+    /// Exchanges one request through the Procedure v2-only contract boundary.
     pub fn request_v2(
         &self,
         request: &RequestEnvelopeV1,
     ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
-        let requires_output_v2 = admit_version_aware_request(request)
+        admit_version_aware_request(request)
             .map_err(|source| DaemonClientErrorV1::RequestAdmission { source })?;
-        self.exchange_v2(request, requires_output_v2)
+        self.exchange_v2(request)
     }
 
     /// Exchanges the exact read-only daemon process status probe outside the durable command slice.
     pub fn daemon_status(
         &self,
         request: &RequestEnvelopeV1,
-    ) -> Result<ResponseEnvelopeV1, DaemonClientErrorV1> {
+    ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
         if request.command().as_str() != "daemon.status"
             || request.operation() != OperationV1::Control
             || request.workspace().is_some()
@@ -325,14 +320,14 @@ impl DaemonClientV1 {
                 },
             });
         }
-        self.exchange(request)
+        self.exchange_v2(request)
     }
 
     /// Requests orderly shutdown of a foreground dev daemon.
     pub fn daemon_terminate(
         &self,
         request: &RequestEnvelopeV1,
-    ) -> Result<ResponseEnvelopeV1, DaemonClientErrorV1> {
+    ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
         if request.command().as_str() != "daemon.terminate"
             || request.operation() != OperationV1::Control
             || request.workspace().is_some()
@@ -353,26 +348,12 @@ impl DaemonClientV1 {
                 },
             });
         }
-        self.exchange(request)
-    }
-
-    fn exchange(
-        &self,
-        request: &RequestEnvelopeV1,
-    ) -> Result<ResponseEnvelopeV1, DaemonClientErrorV1> {
-        let response = self.exchange_payload(request)?;
-        let response = decode_response_payload_v1(&response)
-            .map_err(|source| DaemonClientErrorV1::ResponseDecoding { source })
-            .map_err(DaemonClientErrorV1::possibly_transmitted)?;
-        validate_response_correlation(request, &response)
-            .map_err(DaemonClientErrorV1::possibly_transmitted)?;
-        Ok(response)
+        self.exchange_v2(request)
     }
 
     fn exchange_v2(
         &self,
         request: &RequestEnvelopeV1,
-        requires_output_v2: bool,
     ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
         let response = self.exchange_payload(request)?;
         let response = decode_response_payload_v2(&response)
@@ -380,14 +361,6 @@ impl DaemonClientV1 {
             .map_err(DaemonClientErrorV1::possibly_transmitted)?;
         validate_response_correlation_v2(request, &response)
             .map_err(DaemonClientErrorV1::possibly_transmitted)?;
-        if requires_output_v2 && matches!(response, ResponseEnvelopeV2::OutputV1(_)) {
-            return Err(DaemonClientErrorV1::ResponseMismatch {
-                field: "schema",
-                expected: "podway.output/v2".to_owned(),
-                received: "podway.output/v1".to_owned(),
-            }
-            .possibly_transmitted());
-        }
         Ok(response)
     }
 
@@ -444,10 +417,6 @@ impl DaemonClientV1 {
 }
 
 fn admit_version_aware_request(request: &RequestEnvelopeV1) -> Result<bool, SliceErrorV1> {
-    let legacy_error = match SliceRequestV1::from_envelope(request) {
-        Ok(_) => return Ok(false),
-        Err(error) => error,
-    };
     let command = request.command().as_str();
     if RESERVED_V2_MUTATION_COMMAND_NAMES_V1.contains(&command) {
         return ProcedureV2MutationRequestV1::from_envelope(request).map(|_| true);
@@ -455,7 +424,7 @@ fn admit_version_aware_request(request: &RequestEnvelopeV1) -> Result<bool, Slic
     if matches!(command, "session.start" | "session.start_replace") {
         return ProcedureV2StartRequestV1::from_envelope(request).map(|_| true);
     }
-    Err(legacy_error)
+    SliceRequestV1::from_envelope(request).map(|_| false)
 }
 
 fn validate_endpoint_path(socket_path: &Path) -> Result<(), DaemonClientErrorV1> {
@@ -765,37 +734,11 @@ fn map_io_error(operation: DaemonClientIoOperationV1, source: io::Error) -> Daem
     }
 }
 
-fn validate_response_correlation(
-    request: &RequestEnvelopeV1,
-    response: &ResponseEnvelopeV1,
-) -> Result<(), DaemonClientErrorV1> {
-    let (request_id, command) = match response {
-        ResponseEnvelopeV1::Output(output) => (output.request_id(), output.command()),
-        ResponseEnvelopeV1::Error(error) => (error.request_id(), error.command()),
-    };
-    if request_id != request.request_id() {
-        return Err(DaemonClientErrorV1::ResponseMismatch {
-            field: "request_id",
-            expected: request.request_id().as_str().to_owned(),
-            received: request_id.as_str().to_owned(),
-        });
-    }
-    if command != request.command() {
-        return Err(DaemonClientErrorV1::ResponseMismatch {
-            field: "command",
-            expected: request.command().as_str().to_owned(),
-            received: command.as_str().to_owned(),
-        });
-    }
-    Ok(())
-}
-
 fn validate_response_correlation_v2(
     request: &RequestEnvelopeV1,
     response: &ResponseEnvelopeV2,
 ) -> Result<(), DaemonClientErrorV1> {
     let (request_id, command) = match response {
-        ResponseEnvelopeV2::OutputV1(output) => (output.request_id(), output.command()),
         ResponseEnvelopeV2::OutputV2(output) => (output.request_id(), output.command()),
         ResponseEnvelopeV2::Error(error) => (error.request_id(), error.command()),
     };

@@ -25,8 +25,8 @@ use nix::unistd::geteuid;
 use podway_cli::client::DaemonClientV1;
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1,
-    decode_request_payload_v1, decode_response_payload_v1, decode_single_frame_v1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
+    decode_request_payload_v1, decode_response_payload_v2, decode_single_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::Value;
@@ -110,7 +110,7 @@ impl ControlledPathFixtureV1 {
             let mut output = Command::new("/usr/bin/true")
                 .output()
                 .expect("synthetic restart status");
-            output.stdout = br#"{"schema":"podway.output/v1","command":"daemon.restart","result":{"status":"running"},"warnings":[]}"#.to_vec();
+            output.stdout = br#"{"schema":"podway.output/v3","command":"daemon.restart","result":{"status":"running"},"warnings":[]}"#.to_vec();
             return output;
         }
         if self.production_service && !arguments.contains(&"--socket") {
@@ -589,16 +589,16 @@ fn cli_binary() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_podway")))
 }
 
-const DOLGI_PROCEDURE: &str = r#"schema: podway.procedure/v1
+const DOLGI_PROCEDURE: &str = r#"schema: podway.procedure/v2
 id: dolgorae-conformance
 version: "1"
 name: Dolgorae Conformance
-description: Exercise fenced consumer mutations against an immutable snapshot.
-stages:
-  - id: execute
+purpose: Exercise fenced consumer mutations against an immutable v2 snapshot.
+node_definitions:
+  execute:
+    type: action
     title: Execute the fenced lifecycle
-    instructions:
-      - Populate every supported item shape before completing.
+    intent: Populate every supported item shape before completing.
     items:
       - id: confirmed
         type: confirm
@@ -630,8 +630,15 @@ stages:
         type: artifact
         prompt: Attach lifecycle evidence.
         required: true
-rework:
-  allow_return_to: any_previous
+graph:
+  entry: execute
+  nodes:
+    - id: execute
+      use: execute
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - execute
 "#;
 
 const PUBLIC_V2_PROCEDURE: &str = r#"schema: podway.procedure/v2
@@ -759,7 +766,7 @@ impl FencedStatusV1 {
                 "session revision",
             )
             .to_string(),
-            attempt_id: raw["result"]["current"]["attempt_id"]
+            attempt_id: raw["result"]["current"]["attempt"]["attempt_id"]
                 .as_str()
                 .map(str::to_owned),
             raw,
@@ -771,7 +778,7 @@ impl FencedStatusV1 {
             .as_array()
             .expect("compact items must be an array")
             .iter()
-            .find(|item| item["id"] == item_id)
+            .find(|item| item["item_id"] == item_id)
             .unwrap_or_else(|| panic!("compact status must contain item {item_id}"));
         required_u64(&item["revision"], "item revision").to_string()
     }
@@ -933,7 +940,7 @@ fn public_v2_status(
         ["status", "--wait-for-idle"].as_slice()
     };
     let output = public_v2_command(fixture, path, socket, worktree, arguments);
-    assert_eq!(output["schema"], "podway.output/v2");
+    assert_eq!(output["schema"], "podway.output/v3");
     assert_eq!(output["command"], "session.status");
     assert_eq!(output["result"]["schema"], "podway.status-result/v2");
     output["result"].clone()
@@ -1084,7 +1091,11 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
             "11111111-1111-4111-8111-111111111111",
             "start",
             "--preset",
-            "analysis",
+            "sw-dev-v2",
+            "--goal",
+            "Observe compact idle status through the v2-only product.",
+            "--criterion",
+            "observed=The compact status is bounded and quiescent.",
             "--task",
             "Observe compact idle status",
         ],
@@ -1113,16 +1124,20 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
     assert_eq!(
         result.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from([
-            "blockers",
+            "counters",
             "current",
+            "goal_defined",
+            "goal_revision",
+            "goal_tracking",
             "items",
             "procedure",
             "queue",
             "schema",
             "session",
+            "trace_length",
         ])
     );
-    assert_eq!(result["schema"], "podway.compact-status-result/v1");
+    assert_eq!(result["schema"], "podway.compact-status-result/v2");
     assert_eq!(result["queue"]["pending_mutations"], false);
     assert_eq!(result["queue"]["queued_count"], 0);
     assert!(result["queue"]["running_job_id"].is_null());
@@ -1365,17 +1380,17 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
             &terminal.session_id,
             "--if-session-revision",
             &terminal.session_revision,
-            "reopen",
+            "rework",
             "--to",
             "execute",
             "--reason",
-            "verify the reopen transition",
+            "verify the declared rework transition",
         ]
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>(),
     );
-    assert_eq!(reopened["command"], "session.reopen");
+    assert_eq!(reopened["command"], "session.rework");
     let reopened_status = compact_status(
         &fixture,
         &controlled_path,
@@ -1489,8 +1504,9 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
         .collect::<Vec<_>>(),
     );
     assert_eq!(reset["command"], "session.reset");
-    assert_eq!(reset["result"]["changed"], true);
-    assert_eq!(reset["result"]["revision_after"], 0);
+    assert_eq!(reset["result"]["transition"], "reset");
+    assert_eq!(reset["result"]["reset"], true);
+    assert!(reset["result"]["revision"].as_u64().is_some());
 
     fixture.uninstall(&controlled_path);
 }
@@ -1537,7 +1553,7 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
         payload: serde_json::Map::new(),
     })
     .expect("mismatch request");
-    let ResponseEnvelopeV1::Error(mismatch) = DaemonClientV1::new(paths)
+    let ResponseEnvelopeV2::Error(mismatch) = DaemonClientV1::new(paths)
         .daemon_status(&mismatch_request)
         .expect("mismatch daemon exchange must complete")
     else {
@@ -1585,7 +1601,7 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
         ],
     );
     assert_eq!(missing["result"]["found"], false);
-    assert_eq!(missing["result"]["schema"], "podway.job-lookup-result/v1");
+    assert_eq!(missing["result"]["schema"], "podway.job-lookup-result/v3");
 
     let digest_mismatch = assert_json_error(
         fixture.run(
@@ -1779,7 +1795,7 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
         "SESSION_REVISION_CONFLICT",
         4,
     );
-    assert_eq!(revision_conflict["details"]["admission"]["admitted"], true);
+    assert_eq!(revision_conflict["details"]["admission"]["admitted"], false);
 
     fixture.uninstall(&controlled_path);
 }
@@ -1869,7 +1885,7 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
                 RESPONSE_LOSS_KEY,
                 "start",
                 "--preset",
-                "analysis",
+                "sw-dev-v2",
                 "--task",
                 "Recover the discarded daemon response",
             ],
@@ -1902,12 +1918,12 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
 
     let response_payload =
         decode_single_frame_v1(&response_wire).expect("relay response must contain one frame");
-    let ResponseEnvelopeV1::Output(discarded) =
-        decode_response_payload_v1(response_payload).expect("relay response must decode")
+    let ResponseEnvelopeV2::OutputV2(discarded) =
+        decode_response_payload_v2(response_payload).expect("relay response must decode")
     else {
         panic!("discarded response must be a successful mutation");
     };
-    let discarded_json = serde_json::to_value(ResponseEnvelopeV1::Output(discarded.clone()))
+    let discarded_json = serde_json::to_value(ResponseEnvelopeV2::OutputV2(discarded.clone()))
         .expect("discarded response must serialize");
     let lookup = terminal_lookup(
         &fixture,
@@ -1939,7 +1955,7 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
             RESPONSE_LOSS_KEY,
             "start",
             "--preset",
-            "analysis",
+            "sw-dev-v2",
             "--task",
             "Recover the discarded daemon response",
         ],
@@ -1963,7 +1979,7 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
                 RESPONSE_LOSS_KEY,
                 "start",
                 "--preset",
-                "analysis",
+                "sw-dev-v2",
                 "--task",
                 "A different canonical request",
             ],
@@ -1998,7 +2014,7 @@ fn aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_clos
         worktree_text,
         &["init"],
     );
-    assert_eq!(initialized["schema"], "podway.output/v1");
+    assert_eq!(initialized["schema"], "podway.output/v3");
     assert_eq!(initialized["command"], "workspace.init");
     let development_marker = worktree.join(".podway/runtime/development-v2.marker");
     assert!(
@@ -2014,7 +2030,7 @@ fn aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_clos
         ),
         ["--json", "procedure", "preview", "packaged-public-v2.yaml"],
     );
-    assert_eq!(preview["schema"], "podway.output/v2");
+    assert_eq!(preview["schema"], "podway.output/v3");
     assert_eq!(preview["command"], "procedure.preview");
     assert_eq!(preview["result"]["admissible"], true);
     let procedure_digest = required_text(
@@ -2045,7 +2061,7 @@ fn aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_clos
             "66666666-0000-4000-8000-000000000001",
         ],
     );
-    assert_eq!(started["schema"], "podway.output/v2");
+    assert_eq!(started["schema"], "podway.output/v3");
     assert_eq!(started["command"], "session.start");
     assert_eq!(
         started["result"]["schema"],

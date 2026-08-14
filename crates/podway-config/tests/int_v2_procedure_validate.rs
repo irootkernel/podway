@@ -27,7 +27,6 @@ use serde_json::{Value, json};
 fn parse(text: &str, format: ProcedureDocumentFormat) -> Result<ParsedProcedureV2, ConfigError> {
     match parse_procedure_document(text.as_bytes(), format) {
         Ok(ParsedProcedure::V2(parsed)) => Ok(parsed),
-        Ok(ParsedProcedure::V1(_)) => panic!("expected v2 dispatch, got v1"),
         Err(error) => Err(error),
     }
 }
@@ -1278,7 +1277,6 @@ fn decode_hex(hex: &str) -> Vec<u8> {
 fn admit_bytes(bytes: &[u8], format: ProcedureDocumentFormat, case: &str) -> ConfigError {
     match parse_procedure_document(bytes, format) {
         Err(error) => error,
-        Ok(ParsedProcedure::V1(_)) => panic!("case {case}: expected v2 dispatch, got v1"),
         Ok(ParsedProcedure::V2(parsed)) => validate_procedure_v2(parsed)
             .err()
             .unwrap_or_else(|| panic!("case {case}: expected rejection, parsed and validated")),

@@ -1,13 +1,12 @@
 use podway_protocol::{
-    MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, PayloadCodecErrorV1, ProtocolError, ResponseEnvelopeV1,
-    ResponseEnvelopeV2, decode_response_payload_v1, decode_response_payload_v2,
-    encode_response_payload_v1, encode_response_payload_v2,
+    MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1, PayloadCodecErrorV1, ProtocolError, ResponseEnvelopeV2,
+    decode_response_payload_v2, encode_response_payload_v2,
 };
 use serde_json::{Value, json};
 
 fn diagnostics_output_v2() -> Value {
     json!({
-        "schema": "podway.output/v2",
+        "schema": "podway.output/v3",
         "request_id": "00000000-0000-4000-8000-000000000001",
         "command": "procedure.validate",
         "generated_at": "2026-08-09T00:00:00.000Z",
@@ -43,7 +42,7 @@ fn shared_mutation_output_v2(command: &str, result_schema: &str) -> Value {
     .unwrap();
     let result = fixtures["fixtures"][result_schema].take();
     json!({
-        "schema": "podway.output/v2",
+        "schema": "podway.output/v3",
         "request_id": "00000000-0000-4000-8000-000000000001",
         "command": command,
         "generated_at": "2026-08-09T00:00:00.000Z",
@@ -67,7 +66,7 @@ fn shared_mutation_output_v2(command: &str, result_schema: &str) -> Value {
 
 fn reset_dry_run_output_v2() -> Value {
     json!({
-        "schema": "podway.output/v2",
+        "schema": "podway.output/v3",
         "request_id": "00000000-0000-4000-8000-000000000001",
         "command": "session.reset",
         "generated_at": "2026-08-09T00:00:00.000Z",
@@ -125,24 +124,22 @@ fn v2run006_reset_dry_run_round_trips_only_without_a_job() {
 }
 
 #[test]
-fn v2run006_blocker_limit_details_accept_only_the_v1_and_v2_limits() {
-    for maximum in [64, 1_024] {
-        let error = json!({
-            "schema": "podway.error/v1",
-            "request_id": "00000000-0000-4000-8000-000000000001",
-            "command": "session.block",
-            "generated_at": "2026-08-09T00:00:00.000Z",
-            "code": "BLOCKER_LIMIT_REACHED",
-            "message": "The active attempt reached the open blocker limit.",
-            "retryable": false,
-            "exit_code": 1,
-            "details": {
-                "schema": "podway.blocker-limit-details/v1",
-                "maximum_open_blockers": maximum
-            }
-        });
-        assert!(decode_response_payload_v2(&serde_json::to_vec(&error).unwrap()).is_ok());
-    }
+fn v2run006_blocker_limit_details_accept_only_the_v2_limit() {
+    let error = json!({
+        "schema": "podway.error/v1",
+        "request_id": "00000000-0000-4000-8000-000000000001",
+        "command": "session.block",
+        "generated_at": "2026-08-09T00:00:00.000Z",
+        "code": "BLOCKER_LIMIT_REACHED",
+        "message": "The active attempt reached the open blocker limit.",
+        "retryable": false,
+        "exit_code": 1,
+        "details": {
+            "schema": "podway.blocker-limit-details/v1",
+            "maximum_open_blockers": 64
+        }
+    });
+    assert!(decode_response_payload_v2(&serde_json::to_vec(&error).unwrap()).is_ok());
 
     let mut invalid = json!({
         "schema": "podway.error/v1",
@@ -159,7 +156,7 @@ fn v2run006_blocker_limit_details_accept_only_the_v1_and_v2_limits() {
         }
     });
     assert!(decode_response_payload_v2(&serde_json::to_vec(&invalid).unwrap()).is_err());
-    invalid["details"]["maximum_open_blockers"] = json!(1_023);
+    invalid["details"]["maximum_open_blockers"] = json!(1_024);
     assert!(decode_response_payload_v2(&serde_json::to_vec(&invalid).unwrap()).is_err());
 }
 
@@ -171,9 +168,9 @@ fn v2run003_shared_mutation_commands_select_output_v2_result_families() {
     ] {
         let expected = shared_mutation_output_v2(command, result_schema);
         let decoded = decode_response_payload_v2(&serde_json::to_vec(&expected).unwrap())
-            .unwrap_or_else(|error| panic!("{command} output/v2 must decode: {error}"));
+            .unwrap_or_else(|error| panic!("{command} output/v3 must decode: {error}"));
         let ResponseEnvelopeV2::OutputV2(output) = &decoded else {
-            panic!("{command} must select output/v2")
+            panic!("{command} must select output/v3")
         };
         assert_eq!(output.command().as_str(), command);
         assert_eq!(output.result()["schema"], result_schema);
@@ -186,28 +183,14 @@ fn v2run003_shared_mutation_commands_select_output_v2_result_families() {
 }
 
 #[test]
-fn v2plt006_released_v1_decoder_still_rejects_output_v2() {
-    let input = serde_json::to_vec(&diagnostics_output_v2()).unwrap();
-
-    assert!(matches!(
-        decode_response_payload_v1(&input),
-        Err(PayloadCodecErrorV1::UnsupportedResponseSchema { received, supported })
-            if received == "podway.output/v2"
-                && supported == ["podway.output/v1", "podway.error/v1"]
-    ));
-}
-
-#[test]
-fn v2plt006_v2_aware_codec_preserves_released_v1_output_bytes() {
+fn v2_only_codec_rejects_released_v1_output() {
     let input = serde_json::to_vec(&legacy_output_v1()).unwrap();
-    let decoded = decode_response_payload_v2(&input).expect("v1 output must remain compatible");
-    let ResponseEnvelopeV2::OutputV1(output) = decoded else {
-        panic!("v1 schema must select the v1 output variant");
-    };
-
-    let legacy = encode_response_payload_v1(&ResponseEnvelopeV1::Output(output.clone())).unwrap();
-    let aware = encode_response_payload_v2(&ResponseEnvelopeV2::OutputV1(output)).unwrap();
-    assert_eq!(aware, legacy);
+    assert!(matches!(
+        decode_response_payload_v2(&input),
+        Err(PayloadCodecErrorV1::UnsupportedResponseSchema { received, supported })
+            if received == "podway.output/v1"
+                && supported == ["podway.output/v3", "podway.error/v1"]
+    ));
 }
 
 #[test]
@@ -237,18 +220,14 @@ fn v2plt006_v2_aware_codec_round_trips_released_error_v1() {
 #[test]
 fn v2plt006_v2_aware_decoder_keeps_schema_dispatch_closed() {
     let mut value = diagnostics_output_v2();
-    value["schema"] = json!("podway.output/v3");
+    value["schema"] = json!("podway.output/v2");
     let input = serde_json::to_vec(&value).unwrap();
 
     assert!(matches!(
         decode_response_payload_v2(&input),
         Err(PayloadCodecErrorV1::UnsupportedResponseSchema { received, supported })
-            if received == "podway.output/v3"
-                && supported == [
-                    "podway.output/v1",
-                    "podway.output/v2",
-                    "podway.error/v1"
-                ]
+            if received == "podway.output/v2"
+                && supported == ["podway.output/v3", "podway.error/v1"]
     ));
 }
 

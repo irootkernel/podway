@@ -154,16 +154,11 @@ fn invalid_yaml() -> String {
     MINIMAL_YAML.replace("      use: work\n", "      use: absent\n")
 }
 
-/// A Procedure v1 document, which the aggregate gate has no v2 findings for.
-const V1_YAML: &str = r#"schema: podway.procedure/v1
-id: release
+/// A document declaring an unsupported Procedure schema.
+const UNSUPPORTED_SCHEMA_YAML: &str = r#"schema: podway.procedure/v3
+id: future
 version: "1"
-name: Release
-stages:
-  - id: prepare
-    title: Prepare
-rework:
-  allow_return_to: [prepare]
+name: Future
 "#;
 
 // ---------------------------------------------------------------------------------------------
@@ -191,7 +186,6 @@ fn admit(source: &str) -> ValidatedProcedureV2 {
         Ok(ParsedProcedure::V2(parsed)) => {
             validate_procedure_v2(parsed).expect("the fixture must validate")
         }
-        Ok(ParsedProcedure::V1(_)) => panic!("expected v2 dispatch, got v1"),
         Err(error) => panic!("the fixture must parse: {error}\n{source}"),
     }
 }
@@ -401,14 +395,11 @@ fn v2aut005_a_clean_canonical_document_reports_nothing_and_one_agreed_digest() {
     assert_eq!(report.digest(), Some(formatted.digest()));
 }
 
-/// A Procedure v1 document has no representable v2 findings, so the library answers with the one
-/// true thing it can say: the source does not declare the v2 authoring schema.
-///
-/// The CLI never reaches this arm — it sniffs the schema and refuses a v1 file as a command-level
-/// failure — but the library entry point is public and must be total.
+/// A non-v2 document has no representable v2 findings, so the library reports only the unsupported
+/// schema. The public library entry point remains total for every declared schema value.
 #[test]
-fn v2aut005_a_v1_document_is_reported_as_a_schema_violation_with_no_digest() {
-    let report = check(V1_YAML);
+fn v2aut005_an_unsupported_schema_is_reported_with_no_digest() {
+    let report = check(UNSUPPORTED_SCHEMA_YAML);
 
     assert_eq!(codes(&report), vec!["AUTHORING_SCHEMA_INVALID"]);
     assert_eq!(report.diagnostics()[0].field(), "schema");

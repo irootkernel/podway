@@ -18,13 +18,13 @@ use podway_core::{
 };
 use podway_daemon::{
     execution::{
-        ExecutionBoundaryErrorV1, ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1,
-        prepare_custom_procedure_v2_start, workspace_procedure_snapshot_from_bytes_v2,
+        ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, prepare_custom_procedure_v2_start,
+        workspace_procedure_snapshot_from_bytes_v2,
     },
     v2_read_service::{GraphStatusTierV2, project_graph_next_v2, project_graph_status_v2},
 };
 use podway_protocol::{
-    CommandNameV1, OutputEnvelopeInputV2, OutputEnvelopeV2, RequestIdV1, ResponseEnvelopeV2,
+    CommandNameV1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1, ResponseEnvelopeV2,
     Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
     decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
     encode_response_payload_v2, validate_frame_payload_length,
@@ -198,25 +198,6 @@ struct ByteProcedureV2<'a> {
 }
 
 impl ProcedureProviderV1 for ByteProcedureV2<'_> {
-    fn load_preset_snapshot(
-        &self,
-        _preset: &str,
-        _snapshot_id: ProcedureSnapshotId,
-        _created_at: UnixMillis,
-    ) -> Result<podway_core::ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        panic!("the focused custom Procedure v2 fixture must not resolve a preset")
-    }
-
-    fn load_workspace_procedure_snapshot(
-        &self,
-        _workspace: &WorkspaceBindingV1,
-        _procedure: &str,
-        _snapshot_id: ProcedureSnapshotId,
-        _created_at: UnixMillis,
-    ) -> Result<podway_core::ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        panic!("the focused Procedure v2 fixture must not enter the retained v1 loader")
-    }
-
     fn load_workspace_procedure_snapshot_v2(
         &self,
         _workspace: &WorkspaceBindingV1,
@@ -288,8 +269,8 @@ fn view(state: GraphSessionStateV2) -> GraphWorkspaceViewV2 {
     )
 }
 
-fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV2 {
-    OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {
+    OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new(command).unwrap(),
         generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
@@ -302,7 +283,7 @@ fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV2 {
     .unwrap()
 }
 
-fn maximum_production_output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV2 {
+fn maximum_production_output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {
     let warnings = (0..4)
         .map(|_| {
             json!({
@@ -315,7 +296,7 @@ fn maximum_production_output(command: &str, result: Map<String, Value>) -> Outpu
             .clone()
         })
         .collect();
-    OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+    OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new(command).unwrap(),
         generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
@@ -2763,7 +2744,7 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
         Revision::new(u64::MAX),
     )
     .unwrap();
-    let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new("session.next").unwrap(),
         generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
@@ -3231,7 +3212,7 @@ fn v2run002_maxish_projector_outputs_remain_within_window_and_frame_budgets() {
         let encoded = serde_json::to_vec(&envelope).unwrap();
         assert!(encoded.len() <= 1_048_576);
         validate_frame_payload_length(encoded.len()).unwrap();
-        let decoded: OutputEnvelopeV2 = serde_json::from_slice(&encoded).unwrap();
+        let decoded: OutputEnvelopeV3 = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, envelope);
     }
 }

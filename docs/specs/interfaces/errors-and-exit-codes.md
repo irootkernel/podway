@@ -84,7 +84,7 @@ behavior. Manifest registration alone does not imply executable capability.
 | `PROCEDURE_SCHEMA_UNSUPPORTED` | 1 | no | Procedure schema identifier is unsupported |
 | `PRESET_NOT_FOUND` | 1 | no | Built-in preset name does not exist |
 
-## Session and stage errors
+## Session and graph errors
 
 | Code | Exit | Retryable | Meaning |
 |---|---:|---:|---|
@@ -92,22 +92,18 @@ behavior. Manifest registration alone does not imply executable capability.
 | `SESSION_ID_MISMATCH` | 4 | no | Authoritative session ID differs from the expected ID, including when no current session exists |
 | `SESSION_ALREADY_EXISTS` | 1 | no | Start requested while a session exists |
 | `SESSION_NOT_RUNNING` | 1 | no | Command requires a running session |
-| `SESSION_NOT_COMPLETED` | 1 | no | Reopen requires a completed session |
 | `SESSION_CANCELLED` | 1 | no | Cancelled session cannot perform the operation |
 | `SESSION_REVISION_CONFLICT` | 4 | yes | Observed session revision is stale |
 | `ATTEMPT_NOT_CURRENT` | 4 | yes | Observed attempt is no longer active |
-| `STAGE_NOT_FOUND` | 1 | no | Stage ID is absent from the snapshot |
 | `STAGE_NOT_SKIPPABLE` | 1 | no | Skip is not permitted |
-| `RETURN_NOT_ALLOWED` | 1 | no | Destination is not an allowed earlier stage |
-| `REOPEN_NOT_ALLOWED` | 1 | no | Session lifecycle or destination forbids reopen |
-| `REQUIRED_ITEMS_MISSING` | 1 | no | Active stage lacks required satisfied items |
+| `REQUIRED_ITEMS_MISSING` | 1 | no | Active action node lacks required satisfied items |
 | `BLOCKERS_PRESENT` | 1 | no | Open blockers prevent completion |
 
 ## Item and artifact errors
 
 | Code | Exit | Retryable | Meaning |
 |---|---:|---:|---|
-| `ITEM_NOT_FOUND` | 1 | no | Item is absent from active stage |
+| `ITEM_NOT_FOUND` | 1 | no | Item is absent from the active node definition |
 | `ITEM_TYPE_MISMATCH` | 1 | no | Command is incompatible with item type |
 | `ITEM_CONSTRAINT_FAILED` | 1 | no | Value violates item constraints |
 | `ITEM_REVISION_CONFLICT` | 4 | yes | Same-item value changed since observation |
@@ -200,7 +196,7 @@ On revision conflicts, details include current values:
 }
 ```
 
-Clients should refresh `status --json`, reassess the active stage, and issue a new command rather than blindly changing only the revision.
+Clients should refresh `status --json`, reassess the active graph node, and issue a new command rather than blindly changing only the revision.
 
 ## Identity-conflict details
 
@@ -229,7 +225,7 @@ errors use exactly `{ "admitted": false }`; terminal errors and
 [automation error contract](automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
 
 `BLOCKER_LIMIT_REACHED` uses the closed
-`podway.blocker-limit-details/v1` object. `maximum_open_blockers` is `1024`.
+`podway.blocker-limit-details/v1` object. `maximum_open_blockers` is `64`.
 Its `admission` follows the same pre-admission or terminal form above; terminal
 details also carry the matching top-level `job_id` and `job_sequence` fields.
 

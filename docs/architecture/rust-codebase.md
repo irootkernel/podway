@@ -40,7 +40,7 @@ Owns:
 - immutable domain types;
 - command and transition types;
 - item satisfaction rules;
-- stage-status derivation;
+- graph-node status derivation;
 - invariants;
 - pure state transition functions;
 - domain error codes.

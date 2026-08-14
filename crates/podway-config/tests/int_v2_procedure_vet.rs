@@ -88,7 +88,6 @@ fn admit(source: &str) -> ValidatedProcedureV2 {
         Ok(ParsedProcedure::V2(parsed)) => {
             validate_procedure_v2(parsed).expect("the fixture must pass closed validation")
         }
-        Ok(ParsedProcedure::V1(_)) => panic!("expected Procedure v2"),
         Err(error) => panic!("fixture must parse: {error}\n{source}"),
     }
 }

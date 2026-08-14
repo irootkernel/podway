@@ -71,7 +71,6 @@ REQUIRED_RELEASE_PREPARE_COMMANDS = (
     "python3 tools/release_evidence.py self-test",
     "python3 tools/release_archive.py self-test",
     "python3 tools/qualify_distribution.py self-test",
-    "python3 tools/create_dolgorae_handoff.py self-test",
     "python3 tools/verify_release_bundle.py self-test",
 )
 REQUIRED_RELEASE_COMMANDS = (
@@ -134,7 +133,6 @@ LOCAL_COMMANDS = {
     "procedure.graph",
     "procedure.preview",
     "procedure.scaffold",
-    "procedure.convert",
     "preset.list",
     "preset.show",
     "preset.explain",
@@ -152,7 +150,7 @@ PROHIBITED_CAPABILITIES = {"command_runner", "git_mutation", "network"}
 DEPENDENCY_TABLES = {"dependencies", "dev-dependencies", "build-dependencies"}
 V2_ROUTE_DELTA = {
     "procedure.format", "procedure.vet", "procedure.lint", "procedure.check",
-    "procedure.graph", "procedure.preview", "procedure.scaffold", "procedure.convert",
+    "procedure.graph", "procedure.preview", "procedure.scaffold",
     "session.decide", "session.rework", "goal.define", "goal.revise",
     "goal.assess_criterion",
 }
@@ -167,7 +165,6 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "procedure.graph",
         "procedure.preview",
         "procedure.scaffold",
-        "procedure.convert",
         "session.decide",
         "session.rework",
         "goal.define",
@@ -175,19 +172,19 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "goal.assess_criterion",
     }
 )
-V1_ROUTE_BASELINE = {
+PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {
     "help", "version", "completions", "procedure.validate", "procedure.show",
     "preset.list", "preset.show", "preset.explain", "daemon.install", "daemon.uninstall",
     "daemon.start", "daemon.stop", "daemon.restart", "daemon.status", "daemon.terminate",
     "daemon.logs", "workspace.init", "workspace.doctor", "workspace.show", "workspace.repair",
     "session.start", "session.start_replace", "session.status", "session.next",
-    "session.complete", "session.skip", "session.retry", "session.return", "session.block",
-    "session.unblock", "session.cancel", "session.reopen", "session.reset",
+    "session.complete", "session.skip", "session.retry", "session.block",
+    "session.unblock", "session.cancel", "session.reset",
     "workspace.reset_all", "item.check", "item.uncheck", "item.set", "item.add",
     "item.remove", "item.attach", "item.clear", "job.list", "job.lookup", "job.status",
     "job.wait", "job.cancel",
 }
-V1_RUNTIME_ERROR_BASELINE = (
+PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
     "DAEMON_NOT_INSTALLED", "DAEMON_UNAVAILABLE", "DAEMON_SHUTTING_DOWN",
     "DAEMON_VERSION_INCOMPATIBLE", "DAEMON_CONTRACT_MISMATCH",
     "PROTOCOL_VERSION_UNSUPPORTED", "REQUEST_TOO_LARGE", "REQUEST_INVALID",
@@ -199,9 +196,8 @@ V1_RUNTIME_ERROR_BASELINE = (
     "PATH_OUTSIDE_WORKTREE", "MIGRATION_FAILED", "PROCEDURE_NOT_FOUND", "PROCEDURE_INVALID",
     "PROCEDURE_SCHEMA_UNSUPPORTED", "PROCEDURE_DIGEST_MISMATCH", "PRESET_NOT_FOUND",
     "SESSION_NOT_FOUND", "SESSION_ID_MISMATCH", "SESSION_ALREADY_EXISTS",
-    "SESSION_NOT_RUNNING", "SESSION_NOT_COMPLETED", "SESSION_CANCELLED",
-    "SESSION_REVISION_CONFLICT", "ATTEMPT_NOT_CURRENT", "STAGE_NOT_FOUND",
-    "STAGE_NOT_SKIPPABLE", "RETURN_NOT_ALLOWED", "REOPEN_NOT_ALLOWED",
+    "SESSION_NOT_RUNNING", "SESSION_CANCELLED", "SESSION_REVISION_CONFLICT",
+    "ATTEMPT_NOT_CURRENT", "STAGE_NOT_SKIPPABLE",
     "REQUIRED_ITEMS_MISSING", "BLOCKERS_PRESENT", "BLOCKER_LIMIT_REACHED", "ITEM_NOT_FOUND",
     "ITEM_TYPE_MISMATCH", "ITEM_CONSTRAINT_FAILED", "ITEM_REVISION_CONFLICT",
     "ITEM_ALREADY_SET", "LIST_VALUE_NOT_FOUND", "LIST_VALUE_DUPLICATE", "ARTIFACT_NOT_FOUND",
@@ -262,6 +258,89 @@ def fail(message: str, code: str = "contract_verification_failed") -> None:
     raise VerificationError(message, code)
 
 
+FORBIDDEN_PROCEDURE_V1_PATHS = (
+    Path("assets/schemas/procedure-v1.schema.json"),
+    Path("assets/presets/analysis.yaml"),
+    Path("assets/presets/bug-fix.yaml"),
+    Path("assets/presets/docs-only.yaml"),
+    Path("assets/presets/sw-dev.yaml"),
+    Path("crates/podway-config/src/validation.rs"),
+    Path("crates/podway-core/src/derive.rs"),
+    Path("crates/podway-core/src/transition.rs"),
+)
+FORBIDDEN_PROCEDURE_V1_SYMBOLS = (
+    "StageId",
+    "StageProgressState",
+    "SessionState",
+    "active_stage_id",
+    "UnknownReturnTarget",
+    "ProcedureFormatV1",
+    "ProcedureParseLimitsV1",
+    "MAX_PROCEDURE_DOCUMENT_BYTES_V1",
+    "MAX_PROCEDURE_DOCUMENT_DEPTH_V1",
+    "MAX_PROCEDURE_DOCUMENT_NODES_V1",
+    "procedure_format_v1",
+)
+PROCEDURE_V1_LITERAL = "podway.procedure/" + "v1"
+PROCEDURE_V1_LITERAL_ALLOWLIST = {
+    Path("assets/specifications/sqlite-v1.sql"),
+    Path("crates/podway-daemon/tests/int_v2_only_reset_recovery.rs"),
+    Path("crates/podway-store/tests/int_v2_only_schema.rs"),
+    Path("docs/architecture-decision-records/0019-procedure-v2-only-product.md"),
+    Path("docs/todo/TODO-podway-v2-full-feature-ga.md"),
+}
+V2_ONLY_TEXT_SUFFIXES = {".csv", ".json", ".md", ".py", ".rs", ".sql", ".toml", ".yaml", ".yml"}
+V2_ONLY_SCAN_ROOTS = ("assets", "contracts", "crates", "docs", "fuzz", "quality", "release", "tests", "tools")
+V2_ONLY_EXCLUDED_DIRECTORIES = {"target", ".gaori", "artifacts", "dist"}
+HISTORICAL_DOSSIER = Path("docs/todo/TODO-podway-v2-full-feature-ga.md")
+HISTORICAL_SUPERSESSION_MARKER = "> **Superseded product boundary:**"
+
+
+def validate_v2_only_surface(root: Path) -> int:
+    for relative in FORBIDDEN_PROCEDURE_V1_PATHS:
+        if (root / relative).exists():
+            fail(f"Procedure v1 path must not exist: {relative}")
+
+    symbol_pattern = re.compile(
+        r"\b(?:" + "|".join(re.escape(symbol) for symbol in FORBIDDEN_PROCEDURE_V1_SYMBOLS) + r")\b"
+    )
+    checked = 0
+    for directory_name in ("crates", "fuzz"):
+        directory = root / directory_name
+        if not directory.exists():
+            continue
+        for path in directory.rglob("*.rs"):
+            if V2_ONLY_EXCLUDED_DIRECTORIES.intersection(path.relative_to(root).parts):
+                continue
+            match = symbol_pattern.search(path.read_text(encoding="utf-8"))
+            if match is not None:
+                fail(
+                    f"Procedure v1 symbol `{match.group(0)}` must not exist in "
+                    f"{path.relative_to(root)}"
+                )
+            checked += 1
+
+    for directory_name in V2_ONLY_SCAN_ROOTS:
+        directory = root / directory_name
+        if not directory.exists():
+            continue
+        for path in directory.rglob("*"):
+            relative = path.relative_to(root)
+            if V2_ONLY_EXCLUDED_DIRECTORIES.intersection(relative.parts):
+                continue
+            if not path.is_file() or path.suffix not in V2_ONLY_TEXT_SUFFIXES:
+                continue
+            if PROCEDURE_V1_LITERAL not in path.read_text(encoding="utf-8"):
+                continue
+            if relative not in PROCEDURE_V1_LITERAL_ALLOWLIST:
+                fail(f"Procedure v1 schema literal is not allowlisted in {relative}")
+
+    dossier = root / HISTORICAL_DOSSIER
+    if not dossier.exists() or HISTORICAL_SUPERSESSION_MARKER not in dossier.read_text(encoding="utf-8"):
+        fail("historical v0.2.0 dossier must carry the ADR-0019 supersession banner")
+    return checked
+
+
 def read_json(root: Path, relative: Path, label: str) -> dict[str, Any]:
     path = repository_assets.checked_path(root, relative, label)
     if not path.is_file():
@@ -319,23 +398,26 @@ def expected_route_availability(command: str) -> str:
 def validate_v2_catalog_delta(root: Path) -> int:
     availability = catalog_route_availability(root)
     commands = set(availability)
-    if commands != V1_ROUTE_BASELINE | V2_ROUTE_DELTA:
-        fail("command catalog must contain the 46-route baseline plus exactly 13 v2 routes")
+    if commands != PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES | V2_ROUTE_DELTA:
+        fail("command catalog must contain the v2-only executable route set")
     expected_availability = {command: expected_route_availability(command) for command in commands}
     if availability != expected_availability:
-        fail("command catalog availability must match the served v1 baseline and v2 delta exactly")
+        fail("command catalog availability must match the v2-only route set exactly")
 
     runtime = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 91:
-        fail("runtime error catalog must contain the 65-code baseline plus 26 v2 codes")
+    if not isinstance(entries, list) or len(entries) != 88:
+        fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
         fail("runtime error catalog codes must be unique strings")
-    if tuple(runtime_codes[:65]) != V1_RUNTIME_ERROR_BASELINE or set(runtime_codes[65:]) != V2_RUNTIME_ERROR_CODES:
-        fail("runtime error catalog omits a required v2 code")
+    expected_codes = set(PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES) | V2_RUNTIME_ERROR_CODES | {
+        "LEGACY_PROCEDURE_STATE_UNSUPPORTED"
+    }
+    if set(runtime_codes) != expected_codes:
+        fail("runtime error catalog omits a required v2-only code")
     for entry in entries:
         if not isinstance(entry.get("summary"), str) or not entry["summary"]:
             fail("runtime error entries require a summary")
@@ -344,7 +426,9 @@ def validate_v2_catalog_delta(root: Path) -> int:
         if not isinstance(entry.get("retryable"), bool):
             fail("runtime error entry has an invalid retryability value")
     v2_details_schemas = {
-        entry.get("code"): entry.get("details_schema") for entry in entries[65:]
+        entry.get("code"): entry.get("details_schema")
+        for entry in entries
+        if entry.get("code") in V2_RUNTIME_ERROR_CODES
     }
     if v2_details_schemas != dict.fromkeys(
         V2_RUNTIME_ERROR_CODES, "podway.v2-runtime-error-details/v1"
@@ -546,7 +630,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 59:
+    if not isinstance(routes, list) or len(routes) != 56:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}
@@ -838,6 +922,21 @@ def run_sentinels(root: Path) -> list[str]:
             lambda: validate_v2_catalog_delta(diagnostic_overlap_fixture),
         )
         completed.append("runtime_authoring_overlap")
+
+        v1_surface_fixture = temporary / "procedure-v1-surface"
+        (v1_surface_fixture / "crates/podway-core/src").mkdir(parents=True)
+        (v1_surface_fixture / HISTORICAL_DOSSIER.parent).mkdir(parents=True)
+        (v1_surface_fixture / HISTORICAL_DOSSIER).write_text(
+            HISTORICAL_SUPERSESSION_MARKER + "\n", encoding="utf-8"
+        )
+        (v1_surface_fixture / "crates/podway-core/src/lib.rs").write_text(
+            "pub struct StageId(String);\n", encoding="utf-8"
+        )
+        require_known_failure(
+            "Procedure v1 symbol reintroduction",
+            lambda: validate_v2_only_surface(v1_surface_fixture),
+        )
+        completed.append("procedure_v1_surface")
         completed.extend(f"contract_manifest_{item}" for item in contract_manifest.self_test(root))
     return completed
 
@@ -850,6 +949,7 @@ def production_checks(root: Path) -> dict[str, int]:
     return {
         "canonical_assets": repository_assets.validate_layout(root),
         "contract_identifiers": validate_contract_identifiers(root),
+        "v2_only_surface": validate_v2_only_surface(root),
         "v2_catalog_delta": validate_v2_catalog_delta(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),

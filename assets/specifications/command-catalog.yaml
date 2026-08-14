@@ -40,7 +40,6 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-validation-result/v1
   - podway.procedure-validation-result/v2
   - podway.procedure-diagnostics-result/v1
 - name: procedure.show
@@ -221,8 +220,6 @@ commands:
   idempotency_scope: workspace
   maintenance_barrier: false
   result_schemas:
-  - podway.session-start-result/v1
-  - podway.detached-admission-result/v1
   - podway.session-start-result/v2
   - podway.detached-admission-result/v2
 - name: session.start_replace
@@ -243,8 +240,6 @@ commands:
   - procedure_digest_file_source_only
   idempotency_scope: workspace
   result_schemas:
-  - podway.session-start-result/v1
-  - podway.detached-admission-result/v1
   - podway.session-start-result/v2
   - podway.detached-admission-result/v2
 - name: session.status
@@ -259,8 +254,6 @@ commands:
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.status-result/v1
-  - podway.compact-status-result/v1
   - podway.status-result/v2
   - podway.compact-status-result/v2
 - name: session.next
@@ -275,7 +268,6 @@ commands:
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.next-result/v1
   - podway.next-result/v2
 - name: session.complete
   availability: executable
@@ -293,8 +285,6 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.skip
@@ -313,8 +303,6 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.retry
@@ -333,28 +321,8 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
-- name: session.return
-  availability: executable
-  cli:
-  - return
-  operation: mutate
-  workspace_required: true
-  durable_job: true
-  session_mutation: true
-  destructive_confirmation: false
-  preconditions:
-  - workspace_uuid
-  - session_id
-  - session_revision
-  - attempt_id
-  idempotency_scope: session
-  result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
 - name: session.block
   availability: executable
   cli:
@@ -371,8 +339,6 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.unblock
@@ -391,8 +357,6 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: session.cancel
@@ -411,27 +375,8 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
-- name: session.reopen
-  availability: executable
-  cli:
-  - reopen
-  operation: mutate
-  workspace_required: true
-  durable_job: true
-  session_mutation: true
-  destructive_confirmation: false
-  preconditions:
-  - workspace_uuid
-  - session_id
-  - session_revision
-  idempotency_scope: session
-  result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
 - name: session.reset
   availability: executable
   cli:
@@ -448,8 +393,6 @@ commands:
   idempotency_scope: workspace
   maintenance_barrier: true
   result_schemas:
-  - podway.stage-transition-result/v1
-  - podway.detached-admission-result/v1
   - podway.stage-transition-result/v2
   - podway.detached-admission-result/v2
 - name: workspace.reset_all
@@ -482,8 +425,6 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v1
-  - podway.detached-admission-result/v1
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.uncheck
@@ -502,8 +443,6 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v1
-  - podway.detached-admission-result/v1
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.set
@@ -522,8 +461,6 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v1
-  - podway.detached-admission-result/v1
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.add
@@ -542,8 +479,6 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v1
-  - podway.detached-admission-result/v1
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.remove
@@ -562,8 +497,6 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v1
-  - podway.detached-admission-result/v1
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.attach
@@ -582,8 +515,6 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v1
-  - podway.detached-admission-result/v1
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: item.clear
@@ -602,8 +533,6 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v1
-  - podway.detached-admission-result/v1
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
 - name: job.list
@@ -627,8 +556,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.job-lookup-result/v1
-  - podway.job-lookup-result/v2
+  - podway.job-lookup-result/v3
 - name: job.status
   availability: executable
   cli:
@@ -640,8 +568,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.job-result/v1
-  - podway.job-result/v2
+  - podway.job-result/v3
 - name: job.wait
   availability: executable
   cli:
@@ -653,8 +580,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.job-result/v1
-  - podway.job-result/v2
+  - podway.job-result/v3
 - name: job.cancel
   availability: executable
   cli:
@@ -746,19 +672,6 @@ commands:
   cli:
   - procedure
   - scaffold
-  operation: static
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.procedure-source-result/v1
-  - podway.procedure-diagnostics-result/v1
-- name: procedure.convert
-  availability: executable
-  cli:
-  - procedure
-  - convert
   operation: static
   workspace_required: false
   durable_job: false

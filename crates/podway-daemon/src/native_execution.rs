@@ -6,10 +6,10 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use podway_config::MAX_PROCEDURE_DOCUMENT_BYTES_V1;
+use podway_config::MAX_PROCEDURE_DOCUMENT_BYTES;
 use podway_core::{
     ArtifactLocationKindV1, ArtifactValueV1, AttemptId, BlockerId, DomainError, ItemId, JobId,
-    LocalArtifactVerificationV1, ProcedureSnapshotId, ProcedureSnapshotV1, SessionId, UnixMillis,
+    ProcedureSnapshotId, SessionId, UnixMillis,
 };
 use podway_git::{
     Base64UrlPathBytesV1, DiagnosticPathDisplayV1, GitInvariantViolationV1, GitReadOperationV1,
@@ -23,8 +23,8 @@ use uuid::Uuid;
 use crate::{
     execution::{
         ArtifactVerifierV1, EmbeddedPresetProcedureProviderV1, ExecutionBoundaryErrorV1,
-        ExecutionClockV1, ExecutionIdSourceV1, ProcedureProviderV1, WorkspaceRevalidatorV1,
-        workspace_procedure_snapshot_from_bytes_v1,
+        ExecutionClockV1, ExecutionIdSourceV1, LocalArtifactVerificationV2, ProcedureProviderV1,
+        WorkspaceRevalidatorV1,
     },
     workspace::{
         ResolvedWorkspaceV1, WorkspaceBindingInspectorV1, WorkspaceResolutionErrorV1,
@@ -253,45 +253,6 @@ impl<I> ProcedureProviderV1 for NativeProcedureProviderV1<I>
 where
     I: WorkspaceBindingInspectorV1 + Send + Sync,
 {
-    fn load_preset_snapshot(
-        &self,
-        preset: &str,
-        snapshot_id: ProcedureSnapshotId,
-        created_at: UnixMillis,
-    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        EmbeddedPresetProcedureProviderV1.load_preset_snapshot(preset, snapshot_id, created_at)
-    }
-
-    fn load_workspace_procedure_snapshot(
-        &self,
-        workspace: &WorkspaceBindingV1,
-        procedure: &str,
-        snapshot_id: ProcedureSnapshotId,
-        created_at: UnixMillis,
-    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        let resolved = self.resolve_bound_workspace(workspace)?;
-        let candidate = artifact_path_from_root_v1(resolved.workspace_root(), procedure)?;
-        let source = self
-            .git_resolver
-            .read_bounded_local_file(
-                resolved.worktree(),
-                &candidate,
-                MAX_PROCEDURE_DOCUMENT_BYTES_V1,
-            )
-            .map_err(git_resolution_boundary_error_v1)?;
-        if source.canonical_path() != &candidate {
-            return Err(domain_invalid_state_v1(
-                "Procedure resolver returned a path outside the requested worktree location",
-            ));
-        }
-        workspace_procedure_snapshot_from_bytes_v1(
-            procedure,
-            source.bytes(),
-            snapshot_id,
-            created_at,
-        )
-    }
-
     fn load_workspace_procedure_snapshot_v2(
         &self,
         workspace: &WorkspaceBindingV1,
@@ -314,7 +275,7 @@ where
             .read_bounded_local_file(
                 resolved.worktree(),
                 &candidate,
-                MAX_PROCEDURE_DOCUMENT_BYTES_V1,
+                MAX_PROCEDURE_DOCUMENT_BYTES,
             )
             .map_err(git_resolution_boundary_error_v1)
             .map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
@@ -432,7 +393,7 @@ where
         workspace: &WorkspaceBindingV1,
         item_id: &ItemId,
         artifact: &ArtifactValueV1,
-    ) -> Result<LocalArtifactVerificationV1, ExecutionBoundaryErrorV1> {
+    ) -> Result<LocalArtifactVerificationV2, ExecutionBoundaryErrorV1> {
         if artifact.location_kind() != ArtifactLocationKindV1::LocalPath {
             return Err(domain_invalid_state_v1(
                 "local artifact revalidation requires a local-path artifact",
@@ -452,7 +413,7 @@ where
                 DomainError::ArtifactChanged,
             ));
         }
-        Ok(LocalArtifactVerificationV1 {
+        Ok(LocalArtifactVerificationV2 {
             item_id: item_id.clone(),
             location: observed.location().to_owned(),
             digest: observed.digest().clone(),

@@ -211,14 +211,15 @@ fn v2gol_epic_v12_replay_requires_exact_version_and_workspace() {
         Err(ExecutionErrorV1::InvalidPersistedExecution { .. })
     ));
 
-    let mut missing_goal: Value = serde_json::from_str(canonical.as_str()).unwrap();
-    missing_goal["initial_goal"] = Value::Null;
-    let missing_goal =
-        CanonicalExecutionJsonV1::new(canonicalize_json_v1(&missing_goal).unwrap()).unwrap();
-    assert!(matches!(
-        decode_typed_start_replay_execution_v1(&missing_goal, &expected_workspace),
-        Err(ExecutionErrorV1::InvalidPersistedExecution { .. })
-    ));
+    let mut omitted_goal: Value = serde_json::from_str(canonical.as_str()).unwrap();
+    omitted_goal["initial_goal"] = Value::Null;
+    let omitted_goal =
+        CanonicalExecutionJsonV1::new(canonicalize_json_v1(&omitted_goal).unwrap()).unwrap();
+    assert!(
+        decode_typed_start_replay_execution_v1(&omitted_goal, &expected_workspace)
+            .unwrap()
+            .is_some()
+    );
 
     let mut wrong_version: Value = serde_json::from_str(canonical.as_str()).unwrap();
     wrong_version["execution_version"] = json!(EXECUTION_DOCUMENT_VERSION_V6);

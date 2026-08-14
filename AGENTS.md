@@ -167,9 +167,10 @@ Apply these distinctions as well:
 - Podway is a local procedure guard for one task in one Git worktree. It is not a
   project manager, CI system, shell runner, Git mutation layer, arbitrary workflow
   engine, evidence archive, AI runtime, or remote collaboration service.
-- Keep the v1 lifecycle ordered with one active stage attempt. Do not introduce
-  parallel stages, arbitrary branching, expressions, plugins, or execution hooks
-  without a new accepted architecture decision and explicitly adopted work.
+- Keep the Procedure v2 single-cursor graph lifecycle ordered with one active
+  attempt. Do not introduce parallel active nodes, undeclared routes, expressions,
+  plugins, or execution hooks without a new accepted architecture decision and
+  explicitly adopted work.
 - Podway enforces formal progression conditions; it does not execute the work or
   judge the semantic truth of recorded results.
 - Preserve the daemon as the sole normal writer and exactly one executing mutation

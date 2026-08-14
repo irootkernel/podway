@@ -171,7 +171,7 @@ Reference configuration:
 schema: podway.workspace/v1
 procedure_paths:
   - .podway/procedures
-default_preset: sw-dev
+default_preset: sw-dev-v2
 job_queue:
   max_pending: 256
 ui:

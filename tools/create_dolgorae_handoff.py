@@ -24,79 +24,8 @@ VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
 SCHEMA = release_evidence.HANDOFF_SCHEMA
-ADAPTER_CONTRACT_SCHEMA = "podway.dolgorae-v2-adapter-contract/v1"
-ADAPTER_CONTRACT_PATH = ROOT / "release/dolgorae-v2-adapter-contract-v1.json"
-V1_MANIFEST_DIGEST = "sha256:4588ba06328c9fc0dd28e0a5879a842f6b68065195192d61f3b2a652a82e4937"
-V1_SCHEMA_PATHS = {
-    "schemas/attempt-conflict-details-v1.schema.json",
-    "schemas/blocker-limit-details-v1.schema.json",
-    "schemas/compact-status-result-v1.schema.json",
-    "schemas/contract-manifest-v1.schema.json",
-    "schemas/daemon-contract-mismatch-details-v1.schema.json",
-    "schemas/daemon-status-result-v1.schema.json",
-    "schemas/detached-admission-result-v1.schema.json",
-    "schemas/endpoint-error-details-v1.schema.json",
-    "schemas/error-v1.schema.json",
-    "schemas/idempotency-key-reused-details-v1.schema.json",
-    "schemas/ipc-request-v1.schema.json",
-    "schemas/item-mutation-result-v1.schema.json",
-    "schemas/job-lookup-result-v1.schema.json",
-    "schemas/job-result-v1.schema.json",
-    "schemas/job-wait-timeout-details-v1.schema.json",
-    "schemas/next-result-v1.schema.json",
-    "schemas/output-v1.schema.json",
-    "schemas/procedure-v1.schema.json",
-    "schemas/procedure-validation-result-v1.schema.json",
-    "schemas/registry-v1.schema.json",
-    "schemas/revision-conflict-details-v1.schema.json",
-    "schemas/session-start-result-v1.schema.json",
-    "schemas/socket-endpoint-error-details-v1.schema.json",
-    "schemas/stage-transition-result-v1.schema.json",
-    "schemas/status-result-v1.schema.json",
-    "schemas/version-result-v1.schema.json",
-    "schemas/version-summary-v1.schema.json",
-    "schemas/workspace-init-result-v1.schema.json",
-    "schemas/workspace-v1.schema.json",
-}
-V2_ADDED_ROUTES = (
-    "procedure.format",
-    "procedure.vet",
-    "procedure.lint",
-    "procedure.check",
-    "procedure.graph",
-    "procedure.preview",
-    "procedure.scaffold",
-    "procedure.convert",
-    "session.decide",
-    "session.rework",
-    "goal.define",
-    "goal.revise",
-    "goal.assess_criterion",
-)
-V2_VERSION_AWARE_ROUTES = (
-    "procedure.validate",
-    "session.start",
-    "session.start_replace",
-    "session.status",
-    "session.next",
-    "session.complete",
-    "session.skip",
-    "session.retry",
-    "session.block",
-    "session.unblock",
-    "session.cancel",
-    "session.reset",
-    "item.check",
-    "item.uncheck",
-    "item.set",
-    "item.add",
-    "item.remove",
-    "item.attach",
-    "item.clear",
-    "job.lookup",
-    "job.status",
-    "job.wait",
-)
+ADAPTER_CONTRACT_SCHEMA = "podway.dolgorae-adapter-contract/v2"
+ADAPTER_CONTRACT_PATH = ROOT / "release/dolgorae-adapter-contract-v2.json"
 
 
 class HandoffError(RuntimeError):
@@ -233,12 +162,6 @@ def adapter_contract() -> dict[str, Any]:
     assets = manifest.get("assets")
     if not isinstance(assets, list):
         fail("contract manifest assets must be a list")
-    manifest_assets = {
-        asset.get("path"): asset
-        for asset in assets
-        if isinstance(asset, dict) and isinstance(asset.get("path"), str)
-    }
-
     route_catalog = read_object(ROOT / "contracts/command-routes.json", "command route catalog")
     routes = route_catalog.get("routes")
     if not isinstance(routes, list) or not routes:
@@ -250,19 +173,13 @@ def adapter_contract() -> dict[str, Any]:
         or len(route_inventory) != len(set(route_inventory))
     ):
         fail("command route catalog contains invalid or duplicate commands")
-    required_routes = set(V2_ADDED_ROUTES) | set(V2_VERSION_AWARE_ROUTES)
-    if len(route_inventory) != 59 or not required_routes.issubset(route_inventory):
-        fail("command route catalog does not retain the 46-route baseline plus 13-route delta")
+    if len(route_inventory) != 56:
+        fail("command route catalog does not contain the v2-only route inventory")
 
     error_catalog = read_object(ROOT / "assets/specifications/error-codes.json", "error catalog")
     runtime_error_codes = catalog_codes(error_catalog, "errors", "error catalog")
-    v2_runtime_errors = [
-        entry
-        for entry in error_catalog["errors"]
-        if entry.get("details_schema") == "podway.v2-runtime-error-details/v1"
-    ]
-    if len(runtime_error_codes) != 91 or len(v2_runtime_errors) != 26:
-        fail("error catalog does not retain the 65-error baseline plus 26-error delta")
+    if len(runtime_error_codes) != 88:
+        fail("error catalog does not contain the v2-only runtime inventory")
 
     diagnostic_catalog = read_object(
         ROOT / "assets/specifications/authoring-diagnostics.json", "authoring diagnostic catalog"
@@ -282,13 +199,9 @@ def adapter_contract() -> dict[str, Any]:
     ):
         fail("contract manifest contains an invalid schema path")
     current_schema_paths = {asset["path"] for asset in schema_assets}
-    if len(current_schema_paths) != 53 or not V1_SCHEMA_PATHS.issubset(current_schema_paths):
-        fail("contract manifest does not retain the 29-schema baseline plus 24-schema delta")
     schema_pins: list[dict[str, str]] = []
-    for path in sorted(current_schema_paths - V1_SCHEMA_PATHS):
-        asset = manifest_assets.get(path)
-        if not isinstance(asset, dict) or asset.get("kind") != "schema":
-            fail(f"contract manifest schema delta is invalid: {path}")
+    for asset in sorted(schema_assets, key=lambda item: item["path"]):
+        path = asset["path"]
         digest = asset.get("sha256")
         if not isinstance(path, str) or not isinstance(digest, str):
             fail("contract manifest contains an invalid schema asset")
@@ -302,43 +215,26 @@ def adapter_contract() -> dict[str, Any]:
         if f"sha256:{release_archive.sha256_file(source)}" != digest:
             fail(f"contract manifest schema digest is stale for {path}")
         schema_pins.append({"id": schema_id, "path": path, "sha256": digest})
-    if len(schema_pins) != 24 or len({pin["id"] for pin in schema_pins}) != 24:
-        fail("contract manifest schema delta must contain 24 unique schema pins")
-
-    compatibility = read_object(
-        ROOT / "quality/v2-compatibility-matrix-v1.json", "v2 compatibility matrix"
-    )
-    inventories = compatibility.get("result_family_inventories")
-    if not isinstance(inventories, dict):
-        fail("v2 compatibility matrix has no result family inventories")
-    result_families = {
-        "existing_route_v2": logical_result_family_paths(
-            inventories.get("existing_route_v2"),
-            "existing-route v2 result family inventory",
-        ),
-        "new_route_v1": logical_result_family_paths(
-            inventories.get("new_route_v1"),
-            "new-route v1 result family inventory",
-        ),
-    }
-    if len(result_families["existing_route_v2"]) != 10 or len(result_families["new_route_v1"]) != 9:
-        fail("v2 compatibility result family inventory is incomplete")
+    if len(schema_pins) != len(current_schema_paths) or len(
+        {pin["id"] for pin in schema_pins}
+    ) != len(schema_pins):
+        fail("contract manifest schemas must have unique identifiers")
 
     return {
         "adapter_acceptance": [
             {
-                "expected": "manifest-and-adapter-catalog-pins-exact-match-before-dispatch",
+                "expected": "manifest-and-adapter-catalog-pins-match-before-dispatch",
                 "id": "DOLV2-001",
                 "check": "manifest-identity",
             },
             {"expected": "all-pinned-bytes-validate-closed", "id": "DOLV2-002", "check": "schema-pins"},
-            {"expected": "added-and-version-aware-routes-dispatch", "id": "DOLV2-003", "check": "route-surface"},
+            {"expected": "v2-only-routes-dispatch", "id": "DOLV2-003", "check": "route-surface"},
             {
-                "expected": "all-listed-result-error-and-diagnostic-families-decode-with-output-v2-success-error-v1-failure",
+                "expected": "all-listed-results-use-output-v3-and-errors-use-error-v1",
                 "id": "DOLV2-004",
                 "check": "envelope-dispatch",
             },
-            {"expected": "no-adapter-db-write-v1-state-unchanged", "id": "DOLV2-005", "check": "migration-boundary"},
+            {"expected": "adapter-never-writes-worktree-state", "id": "DOLV2-005", "check": "migration-boundary"},
             {"expected": "completed-to-running-notice-refreshes-status", "id": "DOLV2-006", "check": "reactivation"},
             {
                 "expected": "identity-revision-attempt-idempotency-detached-replay-and-job-invariants-retained",
@@ -356,37 +252,24 @@ def adapter_contract() -> dict[str, Any]:
                 "check": "packaged-byte-verification",
             },
         ],
-        "baseline": {
-            "authoring_diagnostics": 0,
-            "contract_manifest_digest": V1_MANIFEST_DIGEST,
-            "routes": 46,
-            "runtime_errors": 65,
-            "schemas": 29,
-        },
-        "contract_delta": {
+        "contract_surface": {
             "authoring_diagnostics": diagnostic_catalog["diagnostics"],
-            "result_families": result_families,
-            "routes": {
-                "added": list(V2_ADDED_ROUTES),
-                "version_aware": list(V2_VERSION_AWARE_ROUTES),
-            },
-            "runtime_errors": v2_runtime_errors,
+            "routes": route_inventory,
+            "runtime_errors": error_catalog["errors"],
             "schema_pins": schema_pins,
         },
         "current_surface_counts": {
             "authoring_diagnostics": 53,
-            "routes": 59,
-            "runtime_errors": 91,
-            "schemas": 53,
+            "routes": len(route_inventory),
+            "runtime_errors": len(runtime_error_codes),
+            "schemas": len(schema_pins),
         },
         "migration_boundary": {
             "adapter_database_access": "forbidden",
             "development_state_migration_promise": False,
-            "released_workspace_upgrade": "transactional-schema-v1-or-v2-to-v3",
+            "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v4",
             "released_workspace_upgrade_owner": "podway-daemon",
-            "retained_v1_sessions": "preserved-with-immutable-v1-procedure-semantics",
-            "v1_history_conversion": "forbidden",
-            "v1_reopen": "not-reinterpreted-as-v2-reactivation",
+            "legacy_procedure_state": "rejected-without-conversion-or-deletion",
             "v2_downgrade": "forbidden",
         },
         "product": "podway",
@@ -410,12 +293,11 @@ def adapter_contract() -> dict[str, Any]:
                     "trigger_value": True,
                 },
             ],
-            "v1_reopen_notification": False,
         },
         "release_activation_owner": "V2REL-006",
         "schema": ADAPTER_CONTRACT_SCHEMA,
         "status": "prepared-not-released",
-        "version": 1,
+        "version": 2,
     }
 
 
@@ -428,7 +310,7 @@ def validate_adapter_contract(value: dict[str, Any]) -> None:
 def prepare_adapter_contract(output: Path) -> dict[str, Any]:
     value = adapter_contract()
     write_reviewable_json(output, value)
-    return {"contract": str(output.resolve()), "mode": "prepare-v2-adapter", "ok": True}
+    return {"contract": str(output.resolve()), "mode": "prepare-adapter", "ok": True}
 
 
 def packaged_adapter_contract(archive: Path) -> tuple[dict[str, Any], str]:
@@ -512,19 +394,19 @@ def self_test() -> dict[str, Any]:
     sentinels += 1
     for mutation, label in (
         (
-            lambda value: value["contract_delta"]["routes"]["added"].pop(),
+            lambda value: value["contract_surface"]["routes"].pop(),
             "route inventory drift",
         ),
         (
-            lambda value: value["contract_delta"]["schema_pins"].pop(),
+            lambda value: value["contract_surface"]["schema_pins"].pop(),
             "schema pin drift",
         ),
         (
-            lambda value: value["contract_delta"]["runtime_errors"].pop(),
+            lambda value: value["contract_surface"]["runtime_errors"].pop(),
             "runtime error drift",
         ),
         (
-            lambda value: value["contract_delta"]["authoring_diagnostics"].pop(),
+            lambda value: value["contract_surface"]["authoring_diagnostics"].pop(),
             "authoring diagnostic drift",
         ),
         (
@@ -604,7 +486,7 @@ def self_test() -> dict[str, Any]:
         adapter_catalog_sha256,
     )
     adapter_tamper = json.loads(json.dumps(first))
-    adapter_tamper["adapter"]["contract_delta"]["routes"]["added"].pop()
+    adapter_tamper["adapter"]["contract_surface"]["routes"].pop()
     try:
         release_evidence.validate_handoff(
             adapter_tamper,
@@ -720,7 +602,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="mode", required=True)
     subparsers.add_parser("self-test")
-    prepare_parser = subparsers.add_parser("prepare-v2-adapter")
+    prepare_parser = subparsers.add_parser("prepare-adapter")
     prepare_parser.add_argument("--output", type=Path, default=ADAPTER_CONTRACT_PATH)
     create_parser = subparsers.add_parser("create")
     create_parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
@@ -728,7 +610,7 @@ def main() -> int:
     try:
         if arguments.mode == "self-test":
             result = self_test()
-        elif arguments.mode == "prepare-v2-adapter":
+        elif arguments.mode == "prepare-adapter":
             result = prepare_adapter_contract(arguments.output)
         else:
             result = create(arguments.output_dir)

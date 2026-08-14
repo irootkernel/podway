@@ -43,7 +43,7 @@ fn embedded_provider_prepares_both_v2_presets_from_their_shipped_digest() {
 }
 
 #[test]
-fn embedded_v2_provider_leaves_v1_and_unknown_names_to_existing_dispatch() {
+fn embedded_v2_provider_rejects_removed_and_unknown_preset_names() {
     let provider = EmbeddedPresetProcedureProviderV1;
     for name in ["analysis", "bug-fix", "docs-only", "sw-dev", "missing"] {
         assert!(
@@ -53,7 +53,7 @@ fn embedded_v2_provider_leaves_v1_and_unknown_names_to_existing_dispatch() {
                     ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000001").unwrap(),
                     UnixMillis::new(1),
                 )
-                .expect("catalog miss is not a v2 admission failure")
+                .expect("catalog miss is not a source-admission failure")
                 .is_none(),
             "{name} must not be reinterpreted as a v2 preset"
         );

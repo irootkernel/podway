@@ -7,23 +7,20 @@
 
 use std::{sync::Arc, time::Instant};
 
-use podway_core::{
-    AttemptId, CommandContextV1, DomainError, ProcedureSnapshotId, ReopenSessionV1, ResetSessionV1,
-    ReturnSessionV1, Revision, SessionCommandV1, SessionId, Sha256Digest, StartReplaceSessionV1,
-    StartSessionV1, TraceSequenceV2, UnixMillis, preview_transition_v1,
-};
+#[cfg(test)]
+use podway_core::DomainError;
+use podway_core::{Revision, SessionId, Sha256Digest, TraceSequenceV2, UnixMillis};
 use podway_git::{
     Base64UrlPathBytesV1, DiagnosticPathDisplayV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1,
     WorktreeSelectorV1,
 };
 use podway_protocol::{
-    CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OutputEnvelopeInputV2,
-    OutputEnvelopeV2, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1, RequestEnvelopeV1,
-    RequestIdV1, ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1,
-    SessionOutputV1, SessionStartSourceV1, SliceCommandV1, SliceRequestV1,
-    TerminalJobCancellationProjectionV1, TerminalJobResponseV1, TerminalJobSuccessResultV1,
-    WorkspaceOutputV1, WorktreeSelectorWireV1, canonical_reset_all_identity_v1,
-    decode_response_payload_v2,
+    CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OutputEnvelopeInputV3,
+    OutputEnvelopeV3, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1, RequestEnvelopeV1,
+    RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
+    SessionStartSourceV1, SliceCommandV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
+    TerminalJobResponseV1, TerminalJobSuccessResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
+    canonical_reset_all_identity_v1, decode_response_payload_v2,
 };
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
@@ -47,17 +44,16 @@ use crate::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatchErrorDetailsV1, DispatchFailureKindV1,
         DispatchFailureV1, DispatchResponseMetadataV1, DispatcherControlServiceV1,
-        DispatcherJobOutputV1, DispatcherNextRequestV1, DispatcherPreviewServiceV1,
-        DispatcherReadOutputV1, DispatcherReadServiceV1, DispatcherReconciliationOutputV1,
-        DispatcherStatusRequestV1, DispatcherTerminalOutputV1, DispatcherTerminalResultV1,
-        DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1, MutationDispatchOutcomeV1,
-        MutationResponseContextV1, MutationWaitV1, ProcedureV2AdmissionProofV1,
-        RequestDispatcherV1Adapter, RequestReadWaitV1, TerminalResponseContextV1,
-        WorkspaceRuntimeV1, terminal_response_envelope_v1,
+        DispatcherJobOutputV1, DispatcherPreviewServiceV1, DispatcherReadOutputV1,
+        DispatcherReadServiceV1, DispatcherReconciliationOutputV1, DispatcherTerminalOutputV1,
+        DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1,
+        MutationDispatchOutcomeV1, MutationResponseContextV1, MutationWaitV1,
+        ProcedureV2AdmissionProofV1, RequestDispatcherV1Adapter, RequestReadWaitV1,
+        TerminalResponseContextV1, WorkspaceRuntimeV1, terminal_response_envelope_v1,
     },
     execution::{
         DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1, ExecutionIdSourceV1,
-        ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
+        ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
         ResetAllPreparationOutcomeV1, admitted_procedure_v2_start_projection_v1,
         admitted_start_procedure_digest_v1, bind_initial_goal_for_start_v2,
         prepare_custom_procedure_v2_start, prepare_preset_procedure_v2_start,
@@ -792,41 +788,28 @@ impl ProductionReadServiceV1 {
     }
 }
 
-impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 {
-    fn status(
-        &self,
-        workspace: &ProductionWorkspaceV1,
-        input: DispatcherStatusRequestV1,
-    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
-        let context = workspace.scheduler.context_snapshot();
-        let result = self
-            .service(workspace)
-            .status_guarded(
-                context.binding().identity(),
-                self.wait(input.wait)?,
-                input.verbose,
-                input.expected_session_id.as_ref(),
-            )
-            .map_err(map_read_error)?;
-        protocol_result_map(&result).map(|result| DispatcherReadOutputV1::new(result, Vec::new()))
-    }
+fn job_lookup_missing_result_v3() -> Map<String, Value> {
+    Map::from_iter([
+        (
+            "schema".to_owned(),
+            Value::String("podway.job-lookup-result/v3".to_owned()),
+        ),
+        ("found".to_owned(), Value::Bool(false)),
+    ])
+}
 
-    fn next(
-        &self,
-        workspace: &ProductionWorkspaceV1,
-        input: DispatcherNextRequestV1,
-    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
-        let context = workspace.scheduler.context_snapshot();
-        let result = self
-            .service(workspace)
-            .next_guarded(
-                context.binding().identity(),
-                self.wait(input.wait)?,
-                input.expected_session_id.as_ref(),
-            )
-            .map_err(map_read_error)?;
-        protocol_result_map(&result).map(|result| DispatcherReadOutputV1::new(result, Vec::new()))
-    }
+fn job_lookup_found_result_v3(job: Value) -> Map<String, Value> {
+    Map::from_iter([
+        (
+            "schema".to_owned(),
+            Value::String("podway.job-lookup-result/v3".to_owned()),
+        ),
+        ("found".to_owned(), Value::Bool(true)),
+        ("job".to_owned(), job),
+    ])
+}
+
+impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 {
     fn job_list(
         &self,
         workspace: &ProductionWorkspaceV1,
@@ -869,7 +852,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             ReadonlyReconciliationResolutionV1::Missing => {
                 return Ok(DispatcherReconciliationOutputV1::new(
                     None,
-                    Map::from_iter([("found".to_owned(), Value::Bool(false))]),
+                    job_lookup_missing_result_v3(),
                     Vec::new(),
                 ));
             }
@@ -877,7 +860,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
                 if marker.idempotency_key() != &key {
                     return Ok(DispatcherReconciliationOutputV1::new(
                         None,
-                        Map::from_iter([("found".to_owned(), Value::Bool(false))]),
+                        job_lookup_missing_result_v3(),
                         Vec::new(),
                     ));
                 }
@@ -912,10 +895,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
                 job.insert("terminal_response".to_owned(), Value::Null);
                 return Ok(DispatcherReconciliationOutputV1::new(
                     Some(workspace),
-                    Map::from_iter([
-                        ("found".to_owned(), Value::Bool(true)),
-                        ("job".to_owned(), Value::Object(job.clone())),
-                    ]),
+                    job_lookup_found_result_v3(Value::Object(job.clone())),
                     Vec::new(),
                 ));
             }
@@ -951,7 +931,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         let Some(binding) = snapshot.lookup() else {
             return Ok(DispatcherReconciliationOutputV1::new(
                 Some(workspace),
-                Map::from_iter([("found".to_owned(), Value::Bool(false))]),
+                job_lookup_missing_result_v3(),
                 Vec::new(),
             ));
         };
@@ -975,19 +955,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             "request_digest".to_owned(),
             Value::String(binding.request_digest().as_str().to_owned()),
         );
-        let mut result = Map::from_iter([
-            ("found".to_owned(), Value::Bool(true)),
-            ("job".to_owned(), Value::Object(job.clone())),
-        ]);
-        if job
-            .get("terminal_response")
-            .is_some_and(terminal_response_requires_v2_wrapper)
-        {
-            result.insert(
-                "schema".to_owned(),
-                Value::String("podway.job-lookup-result/v2".to_owned()),
-            );
-        }
+        let result = job_lookup_found_result_v3(Value::Object(job.clone()));
         Ok(DispatcherReconciliationOutputV1::new(
             Some(workspace),
             result,
@@ -1007,14 +975,13 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             .job(context.binding().identity(), job_id, self.wait(wait)?)
             .map_err(map_read_error)?;
         let (job, result) = job_read_projection(&view)?;
-        let uses_v2 = terminal_response_requires_v2_wrapper(&result);
-        let mut result = Map::from_iter([("job".to_owned(), result)]);
-        if uses_v2 {
-            result.insert(
+        let result = Map::from_iter([
+            (
                 "schema".to_owned(),
-                Value::String("podway.job-result/v2".to_owned()),
-            );
-        }
+                Value::String("podway.job-result/v3".to_owned()),
+            ),
+            ("job".to_owned(), result),
+        ]);
         Ok(DispatcherJobOutputV1::new(job, result, Vec::new()))
     }
 }
@@ -1022,50 +989,22 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
 /// Concrete non-durable dry-run projection over the scheduler-owned committed Store state.
 #[derive(Clone)]
 pub struct ProductionPreviewServiceV1 {
-    clock: Arc<NativeProductionClockV1>,
+    _clock: Arc<NativeProductionClockV1>,
 }
 
 impl ProductionPreviewServiceV1 {
     pub fn new(clock: Arc<NativeProductionClockV1>) -> Self {
-        Self { clock }
+        Self { _clock: clock }
     }
 }
 
 impl DispatcherPreviewServiceV1<ProductionWorkspaceV1> for ProductionPreviewServiceV1 {
     fn preview(
         &self,
-        workspace: &ProductionWorkspaceV1,
-        request: &SliceRequestV1,
+        _workspace: &ProductionWorkspaceV1,
+        _request: &SliceRequestV1,
     ) -> Result<DispatcherReadOutputV1, DispatchFailureV1> {
-        let context = workspace.scheduler.context_snapshot();
-        let view = context
-            .store()
-            .read_workspace_view(context.binding().identity())
-            .map_err(map_store_error)?;
-        let now = self.clock.now();
-        let provider = NativeProcedureProviderV1::new(SqliteWorkspaceBindingInspectorV1::new(
-            context.store_options().clone(),
-        ));
-        let (command, expected_revision) = preview_command(
-            request.command(),
-            context.binding(),
-            view.current_session(),
-            now,
-            &provider,
-        )?;
-        let outcome = preview_transition_v1(
-            view.current_session(),
-            &command,
-            CommandContextV1 {
-                expected_revision,
-                now,
-            },
-        )
-        .map_err(|error| map_preview_domain_error(error, request.command()))?;
-        Ok(DispatcherReadOutputV1::new(
-            preview_result_map(&outcome, view.current_session()),
-            Vec::new(),
-        ))
+        Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
     }
 }
 /// Concrete queued-job cancellation control path. It owns no mutation-admission capability.
@@ -1556,7 +1495,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     "workspace_sequence": job.sequence(),
                 },
             });
-            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self.clock.generated_at(),
@@ -1647,7 +1586,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     "procedure_digest":state.snapshot().digest(), "dry_run":true,
                     "goal_tracking":state.snapshot().goal_tracking(), "goal_defined":true,
                 });
-                return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                     request_id: request.request_id().clone(),
                     command: request.command().clone(),
                     generated_at: self.clock.generated_at(),
@@ -1728,12 +1667,14 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                         .with_job(&job_output(view)?),
                 );
             }
-            let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
+            let (job, procedure_digest) =
+                job_output_from_context(&workspace.scheduler, submission.admission())?;
             let result = json!({
                 "schema": "podway.detached-admission-result/v2", "detached": true,
                 "admission": { "admitted": true, "job_id": job.id(), "workspace_sequence": job.sequence() },
+                "procedure_digest": procedure_digest,
             });
-            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self.clock.generated_at(),
@@ -1769,7 +1710,10 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             )
             .map_err(map_store_error)?;
             let Some(state) = view.graph_state() else {
-                return Ok(None);
+                return Err(session_id_mismatch_failure(
+                    input.preconditions.expected_session_id.clone(),
+                    None,
+                ));
             };
             validate_graph_view_session_v2(&view, Some(&input.preconditions.expected_session_id))?;
             if state.trace().revision() != input.preconditions.expected_session_revision {
@@ -1802,7 +1746,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 "reset": true,
                 "revision": state.trace().revision(),
             });
-            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self.clock.generated_at(),
@@ -1877,10 +1821,12 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                             EpochMillisV1::new(self.clock.now().get()),
                         )
                         .map_err(map_store_error)?;
-                    if view.graph_state().is_none() {
-                        return Ok(None);
-                    }
                     validate_graph_view_session_v2(&view, expected_session_id)?;
+                    if view.graph_state().is_none() {
+                        return Err(map_graph_view_error_v2(
+                            GraphViewErrorV2::MissingGraphSession,
+                        ));
+                    }
                     let deadline = match &durable_wait {
                         ReadWaitV1::Immediate => break view,
                         ReadWaitV1::IdleUntil(deadline)
@@ -1918,7 +1864,9 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 }
             };
             if view.graph_state().is_none() {
-                return Ok(None);
+                return Err(map_graph_view_error_v2(
+                    GraphViewErrorV2::MissingGraphSession,
+                ));
             }
             let result = match slice_request.command() {
                 SliceCommandV1::SessionStatus(input) => {
@@ -1950,7 +1898,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 view.latest_workspace_sequence(),
             )
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
-            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self.clock.generated_at(),
@@ -2039,7 +1987,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     "workspace_sequence": job.sequence(),
                 },
             });
-            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self.clock.generated_at(),
@@ -2095,9 +2043,6 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                         now,
                     ) {
                         Ok(state) => Ok(Some(state)),
-                        Err(ProcedureV2StartPreparationErrorV1::Source(
-                            ProcedureV2SourceAdmissionErrorV1::NotProcedureV2,
-                        )) => Ok(None),
                         Err(error) => Err(error),
                     }
                 }
@@ -2139,7 +2084,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 "goal_tracking": state.snapshot().goal_tracking(),
                 "goal_defined": false,
             });
-            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self.clock.generated_at(),
@@ -2238,7 +2183,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 "workspace_sequence": job.sequence(),
             },
         });
-        OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
             request_id: request.request_id().clone(),
             command: request.command().clone(),
             generated_at: self.clock.generated_at(),
@@ -2413,272 +2358,7 @@ fn selector_from_wire(
     )
     .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))
 }
-const PREVIEW_SESSION_ID_V1: &str = "00000000-0000-4000-8000-000000000201";
-const PREVIEW_ATTEMPT_ID_V1: &str = "00000000-0000-4000-8000-000000000202";
-const PREVIEW_SNAPSHOT_ID_V1: &str = "00000000-0000-4000-8000-000000000203";
-
-fn preview_command(
-    command: &SliceCommandV1,
-    workspace: &WorkspaceBindingV1,
-    prior: Option<&podway_core::SessionAggregateV1>,
-    now: UnixMillis,
-    provider: &impl ProcedureProviderV1,
-) -> Result<(SessionCommandV1, Revision), DispatchFailureV1> {
-    if let Some(expected) = preview_expected_session_id(command) {
-        let actual = prior
-            .map(podway_core::SessionAggregateV1::session_id)
-            .cloned();
-        if actual.as_ref() != Some(expected) {
-            return Err(session_id_mismatch_failure(expected.clone(), actual));
-        }
-    }
-    match command {
-        SliceCommandV1::SessionStart(input) => Ok((
-            SessionCommandV1::Start(preview_start(
-                input,
-                workspace,
-                now,
-                provider,
-                "session.start",
-            )?),
-            Revision::ZERO,
-        )),
-        SliceCommandV1::SessionStartReplace(input) => {
-            let _prior = prior
-                .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound))?;
-            Ok((
-                SessionCommandV1::StartReplace(StartReplaceSessionV1 {
-                    expected_session_id: input.preconditions.expected_session_id.clone(),
-                    confirmed: true,
-                    start: preview_start(
-                        &input.start,
-                        workspace,
-                        now,
-                        provider,
-                        "session.start_replace",
-                    )?,
-                }),
-                input.preconditions.expected_session_revision,
-            ))
-        }
-        SliceCommandV1::SessionReturn(input) => Ok((
-            SessionCommandV1::Return(ReturnSessionV1 {
-                expected_attempt_id: input.preconditions.expected_attempt_id.clone(),
-                destination_stage_id: input.destination_stage_id.clone(),
-                reason: input.reason.clone(),
-                destination_attempt_id: AttemptId::new(PREVIEW_ATTEMPT_ID_V1)
-                    .expect("preview attempt ID is valid"),
-            }),
-            input.preconditions.expected_session_revision,
-        )),
-        SliceCommandV1::SessionReopen(input) => Ok((
-            SessionCommandV1::Reopen(ReopenSessionV1 {
-                expected_session_id: input.preconditions.expected_session_id.clone(),
-                destination_stage_id: input.destination_stage_id.clone(),
-                reason: input.reason.clone(),
-                destination_attempt_id: AttemptId::new(PREVIEW_ATTEMPT_ID_V1)
-                    .expect("preview attempt ID is valid"),
-            }),
-            input.preconditions.expected_session_revision,
-        )),
-        SliceCommandV1::SessionReset(input) => Ok((
-            SessionCommandV1::Reset(ResetSessionV1 {
-                expected_session_id: input.preconditions.expected_session_id.clone(),
-                confirmed: true,
-            }),
-            input.preconditions.expected_session_revision,
-        )),
-        _ => Err(DispatchFailureV1::new(
-            DispatchFailureKindV1::RequestInvalid,
-        )),
-    }
-}
-
-fn preview_expected_session_id(command: &SliceCommandV1) -> Option<&SessionId> {
-    match command {
-        SliceCommandV1::SessionStartReplace(input) => {
-            Some(&input.preconditions.expected_session_id)
-        }
-        SliceCommandV1::SessionReturn(input) => Some(&input.preconditions.expected_session_id),
-        SliceCommandV1::SessionReopen(input) => Some(&input.preconditions.expected_session_id),
-        SliceCommandV1::SessionReset(input) => Some(&input.preconditions.expected_session_id),
-        _ => None,
-    }
-}
-
-fn preview_start(
-    input: &podway_protocol::SessionStartV1,
-    workspace: &WorkspaceBindingV1,
-    now: UnixMillis,
-    provider: &impl ProcedureProviderV1,
-    capability: &'static str,
-) -> Result<StartSessionV1, DispatchFailureV1> {
-    let snapshot_id =
-        ProcedureSnapshotId::new(PREVIEW_SNAPSHOT_ID_V1).expect("preview snapshot ID is valid");
-    let snapshot = match &input.source {
-        podway_protocol::SessionStartSourceV1::Preset { preset } => {
-            provider.load_preset_snapshot(preset, snapshot_id, now)
-        }
-        podway_protocol::SessionStartSourceV1::Procedure { procedure } => {
-            provider.load_workspace_procedure_snapshot(workspace, procedure, snapshot_id, now)
-        }
-    }
-    .map_err(|error| map_preview_procedure_error(error, capability))?;
-    if let Some(expected) = input.expected_procedure_digest.as_ref()
-        && snapshot.digest() != expected
-    {
-        return Err(procedure_digest_mismatch_failure(
-            expected.clone(),
-            snapshot.digest().clone(),
-        ));
-    }
-    Ok(StartSessionV1 {
-        task_title: input.task_title.clone(),
-        snapshot,
-        session_id: SessionId::new(PREVIEW_SESSION_ID_V1).expect("preview session ID is valid"),
-        first_attempt_id: AttemptId::new(PREVIEW_ATTEMPT_ID_V1)
-            .expect("preview attempt ID is valid"),
-    })
-}
-
-fn preview_result_map(
-    outcome: &podway_core::TransitionOutcomeV1,
-    prior: Option<&podway_core::SessionAggregateV1>,
-) -> Map<String, Value> {
-    let next = outcome.next_aggregate();
-    let active_before = active_attempt_projection(prior);
-    let active_after = active_attempt_projection(next);
-    Map::from_iter([
-        ("preview".to_owned(), Value::Bool(true)),
-        ("changed".to_owned(), Value::Bool(outcome.changed())),
-        (
-            "revision_before".to_owned(),
-            outcome
-                .revision_before()
-                .map_or(Value::Null, |revision| Value::from(revision.get())),
-        ),
-        (
-            "revision_after".to_owned(),
-            outcome
-                .revision_after()
-                .map_or(Value::Null, |revision| Value::from(revision.get())),
-        ),
-        ("active_before".to_owned(), active_before),
-        ("active_after".to_owned(), active_after.clone()),
-        ("destination_attempt".to_owned(), active_after),
-        (
-            "affected_stages".to_owned(),
-            Value::Array(
-                outcome
-                    .affected_stages()
-                    .iter()
-                    .map(|stage_id| {
-                        Value::Object(Map::from_iter([
-                            (
-                                "stage_id".to_owned(),
-                                Value::String(stage_id.as_str().to_owned()),
-                            ),
-                            ("before".to_owned(), stage_state_projection(prior, stage_id)),
-                            ("after".to_owned(), stage_state_projection(next, stage_id)),
-                            (
-                                "before_attempt".to_owned(),
-                                stage_attempt_projection(prior, stage_id),
-                            ),
-                            (
-                                "after_attempt".to_owned(),
-                                stage_attempt_projection(next, stage_id),
-                            ),
-                        ]))
-                    })
-                    .collect(),
-            ),
-        ),
-    ])
-}
-
-fn active_attempt_projection(aggregate: Option<&podway_core::SessionAggregateV1>) -> Value {
-    let Some(aggregate) = aggregate else {
-        return Value::Null;
-    };
-    let Some(stage_id) = aggregate.active_stage_id() else {
-        return Value::Null;
-    };
-    let Some(attempt_id) = aggregate.active_attempt_id() else {
-        return Value::Null;
-    };
-    let Some(attempt) = aggregate
-        .attempts()
-        .iter()
-        .find(|attempt| attempt.attempt_id() == attempt_id)
-    else {
-        return Value::Null;
-    };
-    Value::Object(Map::from_iter([
-        (
-            "stage_id".to_owned(),
-            Value::String(stage_id.as_str().to_owned()),
-        ),
-        (
-            "attempt_id".to_owned(),
-            Value::String(attempt.attempt_id().as_str().to_owned()),
-        ),
-        ("attempt_number".to_owned(), Value::from(attempt.number())),
-    ]))
-}
-
-fn stage_state_projection(
-    aggregate: Option<&podway_core::SessionAggregateV1>,
-    stage_id: &podway_core::StageId,
-) -> Value {
-    aggregate
-        .and_then(|aggregate| {
-            aggregate
-                .stage_progress()
-                .iter()
-                .find(|stage| stage.stage_id() == stage_id)
-        })
-        .map(|stage| Value::String(stage_progress_state_name(stage.state()).to_owned()))
-        .unwrap_or(Value::Null)
-}
-
-fn stage_attempt_projection(
-    aggregate: Option<&podway_core::SessionAggregateV1>,
-    stage_id: &podway_core::StageId,
-) -> Value {
-    let Some(stage) = aggregate.and_then(|aggregate| {
-        aggregate
-            .stage_progress()
-            .iter()
-            .find(|stage| stage.stage_id() == stage_id)
-    }) else {
-        return Value::Null;
-    };
-    let Some(attempt_id) = stage.latest_attempt_id() else {
-        return Value::Null;
-    };
-    Value::Object(Map::from_iter([
-        (
-            "attempt_id".to_owned(),
-            Value::String(attempt_id.as_str().to_owned()),
-        ),
-        (
-            "attempt_number".to_owned(),
-            Value::from(stage.latest_attempt_number()),
-        ),
-    ]))
-}
-
-const fn stage_progress_state_name(state: podway_core::StageProgressState) -> &'static str {
-    match state {
-        podway_core::StageProgressState::Pending => "pending",
-        podway_core::StageProgressState::Current => "current",
-        podway_core::StageProgressState::Done => "done",
-        podway_core::StageProgressState::Skipped => "skipped",
-        podway_core::StageProgressState::Redo => "redo",
-        podway_core::StageProgressState::Abandoned => "abandoned",
-    }
-}
-
+#[cfg(test)]
 fn map_preview_procedure_error(
     error: crate::execution::ExecutionBoundaryErrorV1,
     capability: &'static str,
@@ -2702,6 +2382,7 @@ fn map_preview_procedure_error(
     }
 }
 
+#[cfg(test)]
 fn unsupported_v2_capability_failure(capability: &'static str) -> DispatchFailureV1 {
     DispatchFailureV1::new(DispatchFailureKindV1::UnsupportedV2Capability).with_details(
         DispatchErrorDetailsV1::default()
@@ -2709,7 +2390,8 @@ fn unsupported_v2_capability_failure(capability: &'static str) -> DispatchFailur
     )
 }
 
-fn map_preview_domain_error(error: DomainError, command: &SliceCommandV1) -> DispatchFailureV1 {
+#[cfg(test)]
+fn map_preview_domain_error(error: DomainError, _command: &SliceCommandV1) -> DispatchFailureV1 {
     match error {
         DomainError::PreconditionFailed { expected, actual } => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict).with_details(
@@ -2726,12 +2408,7 @@ fn map_preview_domain_error(error: DomainError, command: &SliceCommandV1) -> Dis
         )
         .with_details(DispatchErrorDetailsV1::default().with_attempt_mismatch(expected, actual)),
         DomainError::InvalidTransition { .. } | DomainError::InvalidState { .. } => {
-            let kind = match command {
-                SliceCommandV1::SessionReturn(_) => DispatchFailureKindV1::ReturnNotAllowed,
-                SliceCommandV1::SessionReopen(_) => DispatchFailureKindV1::ReopenNotAllowed,
-                _ => DispatchFailureKindV1::SessionNotRunning,
-            };
-            DispatchFailureV1::new(kind)
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotRunning)
         }
         DomainError::RequiredItemsMissing => {
             DispatchFailureV1::new(DispatchFailureKindV1::RequiredItemsMissing)
@@ -2933,19 +2610,6 @@ fn protocol_job_state(state: StoreJobStateV1) -> JobStateV1 {
     }
 }
 
-fn terminal_response_requires_v2_wrapper(response: &Value) -> bool {
-    // V2PLT-007 rejects every Procedure v2 mutation before durable admission, so only imported or
-    // future terminal receipts can currently require a v2 wrapper. Enabling queued/running v2 jobs
-    // must add an immutable request-version discriminator to the persisted job identity instead of
-    // extending this terminal-response inference.
-    response.get("schema").and_then(Value::as_str) == Some("podway.output/v2")
-        || response
-            .get("details")
-            .and_then(|details| details.get("schema"))
-            .and_then(Value::as_str)
-            == Some("podway.v2-runtime-error-details/v1")
-}
-
 fn job_read_projection(view: &JobViewV1) -> Result<(JobOutputV1, Value), DispatchFailureV1> {
     match (view.state(), view.terminal_receipt()) {
         (StoreJobStateV1::Queued | StoreJobStateV1::Running, None)
@@ -3043,11 +2707,9 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
         podway_store::CommandV1::SessionComplete => "session.complete",
         podway_store::CommandV1::SessionSkip => "session.skip",
         podway_store::CommandV1::SessionRetry => "session.retry",
-        podway_store::CommandV1::SessionReturn => "session.return",
         podway_store::CommandV1::SessionBlock => "session.block",
         podway_store::CommandV1::SessionUnblock => "session.unblock",
         podway_store::CommandV1::SessionCancel => "session.cancel",
-        podway_store::CommandV1::SessionReopen => "session.reopen",
         podway_store::CommandV1::SessionReset => "session.reset",
         podway_store::CommandV1::SessionDecide => "session.decide",
         podway_store::CommandV1::SessionRework => "session.rework",
@@ -3070,8 +2732,6 @@ enum TerminalCommandKindV1 {
     ItemMutation,
     SessionReset,
     Skip,
-    Return,
-    Reopen,
     Decision,
     Rework,
     GoalDefinition,
@@ -3086,8 +2746,6 @@ fn terminal_command_kind_from_store(command: &podway_store::CommandV1) -> Termin
         | "item.clear" => TerminalCommandKindV1::ItemMutation,
         "session.reset" => TerminalCommandKindV1::SessionReset,
         "session.skip" => TerminalCommandKindV1::Skip,
-        "session.return" => TerminalCommandKindV1::Return,
-        "session.reopen" => TerminalCommandKindV1::Reopen,
         "session.decide" => TerminalCommandKindV1::Decision,
         "session.rework" => TerminalCommandKindV1::Rework,
         "goal.define" => TerminalCommandKindV1::GoalDefinition,
@@ -3168,8 +2826,25 @@ fn terminal_job_response(
         terminal_result_for_kind(receipt, command)?,
         false,
     )?;
-    serde_json::to_value(envelope)
-        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+    match envelope {
+        ResponseEnvelopeV2::OutputV2(output) => {
+            let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                request_id: output.request_id().clone(),
+                command: output.command().clone(),
+                generated_at: output.generated_at().clone(),
+                workspace: output.workspace().cloned(),
+                job: output.job().cloned(),
+                session: output.session().cloned(),
+                result: output.result().clone(),
+                warnings: output.warnings().to_vec(),
+            })
+            .map_err(|_| terminal_replay_integrity_failure())?;
+            serde_json::to_value(output).map_err(|_| terminal_replay_integrity_failure())
+        }
+        ResponseEnvelopeV2::Error(error) => {
+            serde_json::to_value(error).map_err(|_| terminal_replay_integrity_failure())
+        }
+    }
 }
 
 fn terminal_direct_response_v2(
@@ -3201,10 +2876,8 @@ fn validate_frozen_terminal_envelope(
         .response_context()
         .ok_or_else(terminal_replay_integrity_failure)?;
     let schema = object.get("schema").and_then(Value::as_str);
-    if !matches!(
-        schema,
-        Some("podway.output/v1" | "podway.output/v2" | "podway.error/v1")
-    ) || object.get("request_id").and_then(Value::as_str) != Some(context.request_id())
+    if !matches!(schema, Some("podway.output/v3" | "podway.error/v1"))
+        || object.get("request_id").and_then(Value::as_str) != Some(context.request_id())
         || object.get("command").and_then(Value::as_str) != Some(context.command())
     {
         return Err(terminal_replay_integrity_failure());
@@ -3219,17 +2892,7 @@ fn validate_frozen_terminal_envelope(
     }
     let job = job_output_from_terminal_receipt(receipt)?;
     match schema {
-        Some("podway.output/v1") => {
-            if object.get("job")
-                != Some(
-                    &serde_json::to_value(job)
-                        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?,
-                )
-            {
-                return Err(terminal_replay_integrity_failure());
-            }
-        }
-        Some("podway.output/v2") => {
+        Some("podway.output/v3") => {
             validate_frozen_v2_terminal_envelope(receipt, envelope, &job)?;
         }
         Some("podway.error/v1") => {
@@ -3329,7 +2992,7 @@ fn validate_frozen_terminal_error(
         DispatcherTerminalResultV1::Error(expected_failure),
         false,
     )?;
-    let ResponseEnvelopeV1::Error(expected) = expected else {
+    let ResponseEnvelopeV2::Error(expected) = expected else {
         return Err(terminal_replay_integrity_failure());
     };
     let mut actual =
@@ -3758,8 +3421,6 @@ fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'
         | PersistedDomainCommandV1::WorkspaceResetAll
         | PersistedDomainCommandV1::SessionStart
         | PersistedDomainCommandV1::SessionStartReplace
-        | PersistedDomainCommandV1::SessionReturn
-        | PersistedDomainCommandV1::SessionReopen
         | PersistedDomainCommandV1::SessionDecide
         | PersistedDomainCommandV1::SessionRework
         | PersistedDomainCommandV1::GoalDefine
@@ -4193,7 +3854,7 @@ fn graph_success_terminal_envelope_v2(
     let projection = receipt
         .job_projection()
         .ok_or_else(terminal_replay_integrity_failure)?;
-    let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(context.request_id())
             .map_err(|_| terminal_replay_integrity_failure())?,
         command: CommandNameV1::new(context.command())
@@ -4218,7 +3879,7 @@ fn graph_success_terminal_envelope_v2(
 
 fn graph_start_terminal_envelope_v2(
     receipt: &PersistedTerminalReceiptV1,
-) -> Result<OutputEnvelopeV2, DispatchFailureV1> {
+) -> Result<OutputEnvelopeV3, DispatchFailureV1> {
     let graph = receipt
         .graph_session_projection()
         .ok_or_else(terminal_replay_integrity_failure)?;
@@ -4245,7 +3906,7 @@ fn graph_start_terminal_envelope_v2(
         "revision": graph.revision_after(),
         "entry_graph_node_id": graph.entry_graph_node_id(),
     });
-    OutputEnvelopeV2::new(podway_protocol::OutputEnvelopeInputV2 {
+    OutputEnvelopeV3::new(podway_protocol::OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(context.request_id())
             .map_err(|_| terminal_replay_integrity_failure())?,
         command: CommandNameV1::new(context.command())
@@ -4499,8 +4160,6 @@ fn terminal_command_kind(command: &SliceCommandV1) -> TerminalCommandKindV1 {
         }
         SliceCommandV1::SessionReset(_) => TerminalCommandKindV1::SessionReset,
         SliceCommandV1::SessionSkip(_) => TerminalCommandKindV1::Skip,
-        SliceCommandV1::SessionReturn(_) => TerminalCommandKindV1::Return,
-        SliceCommandV1::SessionReopen(_) => TerminalCommandKindV1::Reopen,
         _ => TerminalCommandKindV1::Other,
     }
 }
@@ -4515,8 +4174,6 @@ fn map_terminal_domain_error(
                 TerminalCommandKindV1::ItemMutation => DispatchFailureKindV1::ItemRevisionConflict,
                 TerminalCommandKindV1::SessionReset
                 | TerminalCommandKindV1::Skip
-                | TerminalCommandKindV1::Return
-                | TerminalCommandKindV1::Reopen
                 | TerminalCommandKindV1::Decision
                 | TerminalCommandKindV1::Rework
                 | TerminalCommandKindV1::GoalDefinition
@@ -4550,8 +4207,6 @@ fn map_terminal_domain_error(
         | PersistedDomainErrorV1::InvalidState { .. } => {
             let kind = match command {
                 TerminalCommandKindV1::Skip => DispatchFailureKindV1::StageNotSkippable,
-                TerminalCommandKindV1::Return => DispatchFailureKindV1::ReturnNotAllowed,
-                TerminalCommandKindV1::Reopen => DispatchFailureKindV1::ReopenNotAllowed,
                 TerminalCommandKindV1::ItemMutation
                 | TerminalCommandKindV1::SessionReset
                 | TerminalCommandKindV1::Start
@@ -4853,15 +4508,6 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
     }
 }
 
-fn protocol_result_map<T: serde::Serialize>(
-    result: &T,
-) -> Result<Map<String, Value>, DispatchFailureV1> {
-    serde_json::to_value(result)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
-}
-
 fn map_mutation_worker_error(request: &SliceRequestV1, error: WorkerErrorV1) -> DispatchFailureV1 {
     let failure = map_worker_error(error);
     if failure.kind() == DispatchFailureKindV1::SessionRevisionConflict
@@ -4970,9 +4616,6 @@ fn map_procedure_v2_start_preparation_error(
                 actual,
             } => workspace_uuid_mismatch_failure(expected, actual),
         },
-        ProcedureV2StartPreparationErrorV1::Source(
-            ProcedureV2SourceAdmissionErrorV1::NotProcedureV2,
-        ) => DispatchFailureV1::new(DispatchFailureKindV1::ProcedureInvalid),
         ProcedureV2StartPreparationErrorV1::PinnedPresetDigestMismatch { expected, actual } => {
             procedure_digest_mismatch_failure(expected, actual)
         }
@@ -5278,6 +4921,9 @@ fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
         StoreErrorV1::NewerStateV1 { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceSchemaUnsupported)
         }
+        StoreErrorV1::LegacyProcedureStateUnsupportedV1 => {
+            DispatchFailureV1::new(DispatchFailureKindV1::LegacyProcedureStateUnsupported)
+        }
         StoreErrorV1::StorageUnavailableV1 { .. }
         | StoreErrorV1::AlreadyClaimedV1 { .. }
         | StoreErrorV1::CancellationLostV1 { .. }
@@ -5359,18 +5005,14 @@ fn civil_date_from_unix_days(days: u64) -> (i128, i128, i128) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use podway_config::{ProcedureFormatV1, ProcedureWarningPolicyV1, parse_procedure_v1};
     use podway_core::{
-        AttemptId, CompleteSessionV1, GraphNodeId, ItemId, JobId, ProcedureSnapshotId,
-        ProcedureSourceLabelV1, ReasonV2, Revision, SessionAggregateV1, SessionCommandV1,
-        SessionId, Sha256Digest, WorkspaceId, preview_transition_v1,
+        AttemptId, GraphNodeId, ItemId, JobId, ReasonV2, Revision, SessionId, Sha256Digest,
+        WorkspaceId,
     };
     use podway_store::{
-        ClaimedExecutionV1, DurableWorktreeIdentityV1, JobReceiptV1, JobViewV1,
-        PersistedGraphTerminalSessionProjectionV2, PersistedResponseContextV1,
-        PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
+        ClaimedExecutionV1, JobReceiptV1, JobViewV1, PersistedGraphTerminalSessionProjectionV2,
+        PersistedResponseContextV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
         PersistedTerminalSessionProjectionV1, RevisionAttemptItemPreconditionsV1,
-        ValidatedWorkspaceRootV1,
     };
 
     fn fixture_job(sequence: u64) -> JobReceiptV1 {
@@ -5489,7 +5131,7 @@ mod tests {
             SliceCommandV1::WorkspaceInit(podway_protocol::WorkspaceInitV1 { repair: false });
         let preview = map_preview_domain_error(
             DomainError::BlockerLimitReached {
-                maximum_open_blockers: 1_024,
+                maximum_open_blockers: 64,
             },
             &command,
         );
@@ -5497,21 +5139,21 @@ mod tests {
         assert_eq!(
             preview.into_details().into_json(true),
             Map::from_iter([
-                ("maximum_open_blockers".to_owned(), json!(1024)),
+                ("maximum_open_blockers".to_owned(), json!(64)),
                 ("admission".to_owned(), json!({"admitted": false})),
             ])
         );
 
         let terminal = map_terminal_domain_error(
             &PersistedDomainErrorV1::BlockerLimitReached {
-                maximum_open_blockers: 1_024,
+                maximum_open_blockers: 64,
             },
             TerminalCommandKindV1::Other,
         );
         assert_eq!(terminal.kind(), DispatchFailureKindV1::BlockerLimitReached);
         assert_eq!(
             terminal.into_details().into_json(false),
-            Map::from_iter([("maximum_open_blockers".to_owned(), json!(1024))])
+            Map::from_iter([("maximum_open_blockers".to_owned(), json!(64))])
         );
     }
 
@@ -5709,6 +5351,35 @@ mod tests {
     }
 
     #[test]
+    fn reset_marker_lookup_key_match_and_mismatch_emit_v3_results() {
+        let mismatched_key = job_lookup_missing_result_v3();
+        assert_eq!(
+            mismatched_key.get("schema"),
+            Some(&json!("podway.job-lookup-result/v3"))
+        );
+        assert_eq!(mismatched_key.get("found"), Some(&Value::Bool(false)));
+        assert!(podway_protocol::decode_result_schema_contract_v2(&mismatched_key).is_some());
+
+        let matched_key = job_lookup_found_result_v3(json!({
+            "id": "00000000-0000-4000-8000-000000000071",
+            "sequence": 1,
+            "state": "running",
+            "submitted_at": "2026-08-04T00:00:00.000Z",
+            "claimed_at": "2026-08-04T00:00:00.001Z",
+            "finished_at": null,
+            "command": "workspace.reset_all",
+            "request_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+            "terminal_response": null,
+        }));
+        assert_eq!(
+            matched_key.get("schema"),
+            Some(&json!("podway.job-lookup-result/v3"))
+        );
+        assert_eq!(matched_key.get("found"), Some(&Value::Bool(true)));
+        assert!(podway_protocol::decode_result_schema_contract_v2(&matched_key).is_some());
+    }
+
+    #[test]
     fn pstrt001_digest_mismatch_mapper_preserves_closed_details() {
         let expected = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
         let actual = Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap();
@@ -5786,201 +5457,6 @@ mod tests {
             changed: true,
         }
     }
-    fn terminal_session_clear_result(session_id: SessionId) -> PersistedDomainResultV1 {
-        PersistedDomainResultV1::SessionChanged {
-            session_id,
-            revision_before: Revision::new(4),
-            revision_after: Revision::ZERO,
-            changed: true,
-        }
-    }
-
-    fn fixture_terminal_session_projection(
-        session_id: SessionId,
-    ) -> PersistedTerminalSessionProjectionV1 {
-        PersistedTerminalSessionProjectionV1::new(
-            session_id,
-            "Stored immutable terminal session".to_owned(),
-            PersistedSessionLifecycleV1::Running,
-            Revision::new(4),
-            Revision::new(5),
-        )
-        .unwrap()
-    }
-    fn preview_binding() -> WorkspaceBindingV1 {
-        let digest = Sha256Digest::new(
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        )
-        .unwrap();
-        WorkspaceBindingV1::new(
-            DurableWorktreeIdentityV1::new(
-                digest.clone(),
-                WorkspaceId::new("00000000-0000-4000-8000-000000000030").unwrap(),
-                digest,
-            ),
-            ValidatedWorkspaceRootV1::from_encoded("podway.unix-path/v1:2f776f726b74726565")
-                .unwrap(),
-        )
-    }
-
-    fn preview_snapshot() -> podway_core::ProcedureSnapshotV1 {
-        parse_procedure_v1(
-            r#"{
-                "schema": "podway.procedure/v1",
-                "id": "preview-fixture",
-                "version": "1",
-                "name": "Preview fixture",
-                "stages": [
-                    {"id": "first", "title": "First", "instructions": [], "items": []},
-                    {"id": "second", "title": "Second", "instructions": [], "items": []}
-                ],
-                "rework": {"allow_return_to": "any_previous"}
-            }"#,
-            ProcedureFormatV1::Json,
-        )
-        .unwrap()
-        .into_snapshot_v1(
-            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000031").unwrap(),
-            ProcedureSourceLabelV1::file("preview-fixture").unwrap(),
-            UnixMillis::new(1),
-            ProcedureWarningPolicyV1::Accept,
-        )
-        .unwrap()
-    }
-
-    fn preview_running_session() -> SessionAggregateV1 {
-        SessionAggregateV1::start(
-            SessionId::new("00000000-0000-4000-8000-000000000032").unwrap(),
-            "Preview fixture",
-            preview_snapshot(),
-            AttemptId::new("00000000-0000-4000-8000-000000000033").unwrap(),
-            UnixMillis::new(10),
-        )
-        .unwrap()
-    }
-
-    fn preview_apply(
-        prior: &SessionAggregateV1,
-        command: SessionCommandV1,
-        now: u64,
-    ) -> SessionAggregateV1 {
-        preview_transition_v1(
-            Some(prior),
-            &command,
-            CommandContextV1 {
-                expected_revision: prior.revision(),
-                now: UnixMillis::new(now),
-            },
-        )
-        .unwrap()
-        .next_aggregate()
-        .unwrap()
-        .clone()
-    }
-
-    fn preview_second_stage_session() -> SessionAggregateV1 {
-        let first = preview_running_session();
-        preview_apply(
-            &first,
-            SessionCommandV1::Complete(CompleteSessionV1 {
-                expected_attempt_id: first.active_attempt_id().unwrap().clone(),
-                next_attempt_id: Some(
-                    AttemptId::new("00000000-0000-4000-8000-000000000034").unwrap(),
-                ),
-                local_artifact_verifications: Vec::new(),
-            }),
-            11,
-        )
-    }
-
-    fn preview_completed_session() -> SessionAggregateV1 {
-        let second = preview_second_stage_session();
-        preview_apply(
-            &second,
-            SessionCommandV1::Complete(CompleteSessionV1 {
-                expected_attempt_id: second.active_attempt_id().unwrap().clone(),
-                next_attempt_id: None,
-                local_artifact_verifications: Vec::new(),
-            }),
-            12,
-        )
-    }
-
-    fn production_preview_map(
-        command: SliceCommandV1,
-        binding: &WorkspaceBindingV1,
-        prior: Option<&SessionAggregateV1>,
-    ) -> Result<Map<String, Value>, DispatchFailureV1> {
-        let (domain_command, expected_revision) = preview_command(
-            &command,
-            binding,
-            prior,
-            UnixMillis::new(30),
-            &crate::execution::EmbeddedPresetProcedureProviderV1,
-        )?;
-        let outcome = preview_transition_v1(
-            prior,
-            &domain_command,
-            CommandContextV1 {
-                expected_revision,
-                now: UnixMillis::new(30),
-            },
-        )
-        .map_err(|error| map_preview_domain_error(error, &command))?;
-        Ok(preview_result_map(&outcome, prior))
-    }
-
-    fn preview_start_command(title: &str) -> SliceCommandV1 {
-        SliceCommandV1::SessionStart(podway_protocol::SessionStartV1 {
-            source: podway_protocol::SessionStartSourceV1::Preset {
-                preset: "bug-fix".to_owned(),
-            },
-            expected_procedure_digest: None,
-            task_title: title.to_owned(),
-            dry_run: true,
-        })
-    }
-
-    fn assert_preview_projection(
-        result: &Map<String, Value>,
-        revision_before: Value,
-        revision_after: Value,
-        destination_stage: Option<&str>,
-        destination_attempt_number: Option<u64>,
-        affected_stages: &[&str],
-    ) {
-        assert_eq!(result.get("preview"), Some(&Value::Bool(true)));
-        assert_eq!(result.get("changed"), Some(&Value::Bool(true)));
-        assert_eq!(result.get("revision_before"), Some(&revision_before));
-        assert_eq!(result.get("revision_after"), Some(&revision_after));
-        match destination_stage {
-            Some(stage_id) => {
-                assert_eq!(
-                    result["destination_attempt"]["stage_id"],
-                    Value::String(stage_id.to_owned())
-                );
-                assert_eq!(
-                    result["destination_attempt"]["attempt_id"],
-                    Value::String(PREVIEW_ATTEMPT_ID_V1.to_owned())
-                );
-                assert_eq!(
-                    result["destination_attempt"]["attempt_number"],
-                    Value::from(destination_attempt_number.unwrap())
-                );
-            }
-            None => assert_eq!(result["destination_attempt"], Value::Null),
-        }
-        assert_eq!(
-            result["affected_stages"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|stage| stage["stage_id"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            affected_stages.to_vec()
-        );
-    }
-
     #[test]
     fn terminal_job_projection_builds_output_without_a_live_job_view() {
         let job = JobReceiptV1::new(
@@ -6067,6 +5543,85 @@ mod tests {
     }
 
     #[test]
+    fn v2cut_pruned_workspace_receipts_reconcile_success_and_failure() {
+        let workspace_id = WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap();
+        for (sequence, command, success) in [
+            (
+                18,
+                PersistedDomainCommandV1::WorkspaceInitialize,
+                PersistedDomainResultV1::WorkspaceInitialized {
+                    workspace_id: workspace_id.clone(),
+                    revision: Revision::ZERO,
+                },
+            ),
+            (
+                19,
+                PersistedDomainCommandV1::WorkspaceResetAll,
+                PersistedDomainResultV1::WorkspaceReset {
+                    workspace_id: workspace_id.clone(),
+                    revision: Revision::ZERO,
+                },
+            ),
+        ] {
+            let request_id = format!("00000000-0000-4000-8000-{sequence:012x}");
+            let public_command = command.public_command_name().to_owned();
+            for (state, result) in [
+                (
+                    PersistedTerminalJobStateV1::Succeeded,
+                    PersistedTerminalResultV1::Success(success.clone()),
+                ),
+                (
+                    PersistedTerminalJobStateV1::Failed,
+                    PersistedTerminalResultV1::Failure(PersistedDomainErrorV1::InvalidState {
+                        reason: "workspace operation failed".to_owned(),
+                    }),
+                ),
+            ] {
+                let receipt = PersistedTerminalReceiptV1::new_with_projections(
+                    fixture_job(sequence),
+                    result,
+                    terminal_job_projection(state),
+                    None,
+                )
+                .unwrap()
+                .with_lookup_command(command.clone())
+                .unwrap()
+                .with_response_context(
+                    PersistedResponseContextV1::new(
+                        request_id.clone(),
+                        public_command.clone(),
+                        workspace_id.clone(),
+                        "/safe/worktree",
+                        sequence,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                let job = receipt_only_job_result_value(
+                    &receipt,
+                    &CanonicalRequestDigestV1::new(
+                        receipt.job().request_digest().as_str().to_owned(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                let lookup = Map::from_iter([
+                    (
+                        "schema".to_owned(),
+                        Value::String("podway.job-lookup-result/v3".to_owned()),
+                    ),
+                    ("found".to_owned(), Value::Bool(true)),
+                    ("job".to_owned(), job),
+                ]);
+                assert!(
+                    podway_protocol::decode_result_schema_contract_v2(&lookup).is_some(),
+                    "pruned {public_command} {state:?} receipt must satisfy job lookup/v3"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn terminal_session_projection_is_independent_of_current_session_state() {
         let session_id = SessionId::new("00000000-0000-4000-8000-000000000008").unwrap();
         let result = PersistedDomainResultV1::SessionChanged {
@@ -6095,89 +5650,6 @@ mod tests {
         assert_eq!(output.revision_before(), Revision::new(4));
         assert_eq!(output.revision_after(), Revision::new(5));
     }
-    #[test]
-    fn pstrt004_terminal_job_replay_exposes_the_admitted_procedure_digest() {
-        let session_id = SessionId::new("00000000-0000-4000-8000-000000000018").unwrap();
-        let digest = Sha256Digest::new(
-            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        )
-        .unwrap();
-        let projection = PersistedTerminalSessionProjectionV1::new(
-            session_id.clone(),
-            "Immutable start digest".to_owned(),
-            PersistedSessionLifecycleV1::Running,
-            Revision::ZERO,
-            Revision::new(1),
-        )
-        .unwrap()
-        .with_procedure_digest(digest.clone());
-        let receipt = PersistedTerminalReceiptV1::new_with_projections(
-            fixture_job(18),
-            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
-                session_id,
-                revision_before: Revision::ZERO,
-                revision_after: Revision::new(1),
-                changed: true,
-            }),
-            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
-            Some(projection),
-        )
-        .unwrap()
-        .with_lookup_command(PersistedDomainCommandV1::SessionStart)
-        .unwrap()
-        .with_response_context(
-            PersistedResponseContextV1::new(
-                "00000000-0000-4000-8000-000000000018",
-                "session.start",
-                WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
-                "/safe/worktree",
-                18,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
-        let output = terminal_job_response(&receipt, TerminalCommandKindV1::Start).unwrap();
-        assert_eq!(output["schema"], "podway.output/v1");
-        assert_eq!(output["result"]["procedure_digest"], json!(digest));
-    }
-    #[test]
-    fn recon003_terminal_replay_prefers_the_frozen_public_envelope() {
-        let receipt = PersistedTerminalReceiptV1::new_with_projections(
-            fixture_job(19),
-            PersistedTerminalResultV1::Success(PersistedDomainResultV1::WorkspaceInitialized {
-                workspace_id: WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
-                revision: Revision::ZERO,
-            }),
-            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
-            None,
-        )
-        .unwrap()
-        .with_lookup_command(PersistedDomainCommandV1::WorkspaceInitialize)
-        .unwrap()
-        .with_response_context(
-            PersistedResponseContextV1::new(
-                "00000000-0000-4000-8000-000000000019",
-                "workspace.init",
-                WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
-                "/safe/worktree",
-                19,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let mut frozen = terminal_job_response(&receipt, TerminalCommandKindV1::Other).unwrap();
-        frozen["warnings"] = json!([{"code": "frozen-renderer"}]);
-        let receipt = receipt
-            .with_public_terminal_envelope(frozen.clone())
-            .unwrap();
-
-        assert_eq!(
-            terminal_job_response(&receipt, TerminalCommandKindV1::Other).unwrap(),
-            frozen
-        );
-    }
-
     fn procedure_v2_terminal_fixture(sequence: u64) -> (PersistedTerminalReceiptV1, Value) {
         let session_id = SessionId::new("00000000-0000-4000-8000-000000000080").unwrap();
         let session_projection = PersistedTerminalSessionProjectionV1::new(
@@ -6212,7 +5684,7 @@ mod tests {
         let generated_at = job_output.finished_at().unwrap().as_str().to_owned();
         let job = serde_json::to_value(job_output).unwrap();
         let envelope = json!({
-            "schema": "podway.output/v2",
+            "schema": "podway.output/v3",
             "request_id": format!("00000000-0000-4000-8000-{sequence:012x}"),
             "command": "session.complete",
             "generated_at": generated_at,
@@ -6581,104 +6053,6 @@ mod tests {
             DispatchFailureKindV1::WorkspaceStateUnreadable
         );
     }
-    #[test]
-    fn session_reset_terminal_without_projection_renders_immediate_replay_and_job_read() {
-        let session_id = SessionId::new("00000000-0000-4000-8000-000000000011").unwrap();
-        let receipt = PersistedTerminalReceiptV1::new_with_projections(
-            fixture_job(11),
-            PersistedTerminalResultV1::Success(terminal_session_clear_result(session_id.clone())),
-            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
-            None,
-        )
-        .unwrap();
-        let reset = SliceCommandV1::SessionReset(podway_protocol::SessionResetV1 {
-            confirmed: true,
-            dry_run: false,
-            preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
-                expected_session_id: session_id,
-                expected_session_revision: Revision::new(4),
-            },
-        });
-
-        let PersistedTerminalResultV1::Success(result) = receipt.result() else {
-            panic!("fixture terminal receipt must succeed");
-        };
-        assert_eq!(
-            terminal_result(&receipt, &reset),
-            Ok(DispatcherTerminalResultV1::Output(
-                DispatcherTerminalOutputV1::new(
-                    None,
-                    terminal_success_result_map(&terminal_job_success_result(result)),
-                    Vec::new(),
-                ),
-            )),
-        );
-        assert_eq!(
-            terminal_result(
-                &receipt,
-                &SliceCommandV1::WorkspaceInit(podway_protocol::WorkspaceInitV1 { repair: false }),
-            )
-            .unwrap_err()
-            .kind(),
-            DispatchFailureKindV1::WorkspaceStateUnreadable
-        );
-        let invalid_view = terminal_view(
-            podway_store::CommandV1::WorkspaceInitialize,
-            StoreJobStateV1::Succeeded,
-            PersistedTerminalReceiptV1::new_with_projections(
-                fixture_job(12),
-                PersistedTerminalResultV1::Success(terminal_session_clear_result(
-                    SessionId::new("00000000-0000-4000-8000-000000000011").unwrap(),
-                )),
-                terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
-                None,
-            )
-            .unwrap(),
-        );
-        assert_eq!(
-            job_read_projection(&invalid_view).unwrap_err().kind(),
-            DispatchFailureKindV1::WorkspaceStateUnreadable
-        );
-
-        let view = terminal_view(
-            podway_store::CommandV1::SessionReset,
-            StoreJobStateV1::Succeeded,
-            receipt,
-        );
-        let (_, terminal) = job_read_projection(&view).unwrap();
-        assert_eq!(terminal["schema"], "podway.output/v1");
-        assert_eq!(terminal["result"]["changed"], true);
-        assert_eq!(terminal["result"]["revision_after"], 0);
-        assert_eq!(terminal["session"], Value::Null);
-    }
-    #[test]
-    fn job_reads_project_complete_terminal_success_receipts() {
-        let session_id = SessionId::new("00000000-0000-4000-8000-000000000020").unwrap();
-        let receipt = PersistedTerminalReceiptV1::new_with_projections(
-            fixture_job(20),
-            PersistedTerminalResultV1::Success(terminal_session_result(session_id.clone())),
-            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
-            Some(fixture_terminal_session_projection(session_id)),
-        )
-        .unwrap();
-        let view = terminal_view(
-            podway_store::CommandV1::SessionComplete,
-            StoreJobStateV1::Succeeded,
-            receipt,
-        );
-
-        let (job, terminal) = job_read_projection(&view).unwrap();
-
-        assert_eq!(job.state(), JobStateV1::Succeeded);
-        assert_eq!(terminal["schema"], "podway.output/v1");
-        assert_eq!(terminal["result"]["changed"], true);
-        assert_eq!(
-            terminal["session"]["title"],
-            "Stored immutable terminal session"
-        );
-        assert_eq!(terminal["session"]["revision_before"], 4);
-        assert_eq!(terminal["session"]["revision_after"], 5);
-    }
 
     #[test]
     fn job_reads_render_failed_receipts_with_public_catalog_errors() {
@@ -6851,267 +6225,6 @@ mod tests {
         assert_eq!(
             job_read_projection(&mismatched).unwrap_err().kind(),
             DispatchFailureKindV1::WorkspaceStateUnreadable
-        );
-    }
-
-    #[test]
-    fn terminal_job_reads_replay_the_immutable_persisted_projection() {
-        let session_id = SessionId::new("00000000-0000-4000-8000-000000000025").unwrap();
-        let receipt = PersistedTerminalReceiptV1::new_with_projections(
-            fixture_job(25),
-            PersistedTerminalResultV1::Success(terminal_session_result(session_id.clone())),
-            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
-            Some(fixture_terminal_session_projection(session_id)),
-        )
-        .unwrap();
-        let view = terminal_view(
-            podway_store::CommandV1::SessionComplete,
-            StoreJobStateV1::Succeeded,
-            receipt,
-        );
-
-        let first = job_result_value(&view).unwrap();
-        let replay = job_result_value(&view).unwrap();
-
-        assert_eq!(replay, first);
-        assert_eq!(
-            replay["terminal_response"]["session"]["title"],
-            "Stored immutable terminal session"
-        );
-        assert!(
-            replay["terminal_response"]["result"]
-                .get("session_id")
-                .is_none()
-        );
-    }
-    #[test]
-    fn production_preview_projects_all_dry_run_variants_from_core_outcomes() {
-        let binding = preview_binding();
-
-        let start =
-            production_preview_map(preview_start_command("Preview start"), &binding, None).unwrap();
-        assert_preview_projection(
-            &start,
-            Value::Null,
-            Value::from(1),
-            Some("reproduce"),
-            Some(1),
-            &["reproduce"],
-        );
-
-        let running = preview_running_session();
-        let start_replace = production_preview_map(
-            SliceCommandV1::SessionStartReplace(podway_protocol::SessionStartReplaceV1 {
-                start: podway_protocol::SessionStartV1 {
-                    source: podway_protocol::SessionStartSourceV1::Preset {
-                        preset: "bug-fix".to_owned(),
-                    },
-                    expected_procedure_digest: None,
-                    task_title: "Preview replacement".to_owned(),
-                    dry_run: true,
-                },
-                confirmed: true,
-                preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
-                    expected_session_id: running.session_id().clone(),
-                    expected_session_revision: running.revision(),
-                },
-            }),
-            &binding,
-            Some(&running),
-        )
-        .unwrap();
-        assert_preview_projection(
-            &start_replace,
-            Value::from(1),
-            Value::from(1),
-            Some("reproduce"),
-            Some(1),
-            &["reproduce"],
-        );
-
-        let second = preview_second_stage_session();
-        let returned = production_preview_map(
-            SliceCommandV1::SessionReturn(podway_protocol::SessionReturnV1 {
-                destination_stage_id: podway_core::StageId::new("first").unwrap(),
-                reason: "Return to first".to_owned(),
-                dry_run: true,
-                preconditions: podway_protocol::SessionMutationPreconditionsWireV1 {
-                    expected_session_id: second.session_id().clone(),
-                    expected_attempt_id: second.active_attempt_id().unwrap().clone(),
-                    expected_session_revision: second.revision(),
-                },
-            }),
-            &binding,
-            Some(&second),
-        )
-        .unwrap();
-        assert_preview_projection(
-            &returned,
-            Value::from(2),
-            Value::from(3),
-            Some("first"),
-            Some(2),
-            &["first", "second"],
-        );
-
-        let completed = preview_completed_session();
-        let reopened = production_preview_map(
-            SliceCommandV1::SessionReopen(podway_protocol::SessionReopenV1 {
-                destination_stage_id: podway_core::StageId::new("first").unwrap(),
-                reason: "Reopen first".to_owned(),
-                dry_run: true,
-                preconditions: podway_protocol::SessionRevisionPreconditionsWireV1 {
-                    expected_session_id: completed.session_id().clone(),
-                    expected_session_revision: completed.revision(),
-                },
-            }),
-            &binding,
-            Some(&completed),
-        )
-        .unwrap();
-        assert_preview_projection(
-            &reopened,
-            Value::from(3),
-            Value::from(4),
-            Some("first"),
-            Some(2),
-            &["first", "second"],
-        );
-
-        let reset = production_preview_map(
-            SliceCommandV1::SessionReset(podway_protocol::SessionResetV1 {
-                confirmed: true,
-                dry_run: true,
-                preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
-                    expected_session_id: running.session_id().clone(),
-                    expected_session_revision: running.revision(),
-                },
-            }),
-            &binding,
-            Some(&running),
-        )
-        .unwrap();
-        assert_preview_projection(
-            &reset,
-            Value::from(1),
-            Value::Null,
-            None,
-            None,
-            &["first", "second"],
-        );
-    }
-
-    #[test]
-    fn production_preview_preserves_variant_specific_public_errors() {
-        let binding = preview_binding();
-        let running = preview_running_session();
-
-        assert_eq!(
-            production_preview_map(
-                preview_start_command("Existing session"),
-                &binding,
-                Some(&running)
-            )
-            .unwrap_err()
-            .kind(),
-            DispatchFailureKindV1::SessionNotRunning
-        );
-        assert_eq!(
-            production_preview_map(
-                SliceCommandV1::SessionStartReplace(podway_protocol::SessionStartReplaceV1 {
-                    start: podway_protocol::SessionStartV1 {
-                        source: podway_protocol::SessionStartSourceV1::Preset {
-                            preset: "bug-fix".to_owned(),
-                        },
-                        expected_procedure_digest: None,
-                        task_title: "Missing session".to_owned(),
-                        dry_run: true,
-                    },
-                    confirmed: true,
-                    preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
-                        expected_session_id: running.session_id().clone(),
-                        expected_session_revision: running.revision(),
-                    },
-                }),
-                &binding,
-                None,
-            )
-            .unwrap_err()
-            .kind(),
-            DispatchFailureKindV1::SessionIdMismatch
-        );
-        assert_eq!(
-            production_preview_map(
-                SliceCommandV1::SessionReturn(podway_protocol::SessionReturnV1 {
-                    destination_stage_id: podway_core::StageId::new("second").unwrap(),
-                    reason: "Invalid forward return".to_owned(),
-                    dry_run: true,
-                    preconditions: podway_protocol::SessionMutationPreconditionsWireV1 {
-                        expected_session_id: running.session_id().clone(),
-                        expected_attempt_id: running.active_attempt_id().unwrap().clone(),
-                        expected_session_revision: running.revision(),
-                    },
-                }),
-                &binding,
-                Some(&running),
-            )
-            .unwrap_err()
-            .kind(),
-            DispatchFailureKindV1::ReturnNotAllowed
-        );
-        assert_eq!(
-            production_preview_map(
-                SliceCommandV1::SessionReopen(podway_protocol::SessionReopenV1 {
-                    destination_stage_id: podway_core::StageId::new("first").unwrap(),
-                    reason: "Running sessions cannot reopen".to_owned(),
-                    dry_run: true,
-                    preconditions: podway_protocol::SessionRevisionPreconditionsWireV1 {
-                        expected_session_id: running.session_id().clone(),
-                        expected_session_revision: running.revision(),
-                    },
-                }),
-                &binding,
-                Some(&running),
-            )
-            .unwrap_err()
-            .kind(),
-            DispatchFailureKindV1::ReopenNotAllowed
-        );
-        assert_eq!(
-            production_preview_map(
-                SliceCommandV1::SessionReset(podway_protocol::SessionResetV1 {
-                    confirmed: true,
-                    dry_run: true,
-                    preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
-                        expected_session_id: running.session_id().clone(),
-                        expected_session_revision: Revision::ZERO,
-                    },
-                }),
-                &binding,
-                Some(&running),
-            )
-            .unwrap_err()
-            .kind(),
-            DispatchFailureKindV1::SessionRevisionConflict
-        );
-
-        let foreign_session_id = SessionId::new("00000000-0000-4000-8000-000000000099").unwrap();
-        assert_eq!(
-            production_preview_map(
-                SliceCommandV1::SessionReset(podway_protocol::SessionResetV1 {
-                    confirmed: true,
-                    dry_run: true,
-                    preconditions: podway_protocol::SessionIdentityPreconditionsWireV1 {
-                        expected_session_id: foreign_session_id,
-                        expected_session_revision: running.revision(),
-                    },
-                }),
-                &binding,
-                Some(&running),
-            )
-            .unwrap_err()
-            .kind(),
-            DispatchFailureKindV1::SessionIdMismatch
         );
     }
 }

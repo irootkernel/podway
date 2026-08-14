@@ -1,17 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:podway:schema:job-result:v2",
-  "title": "Podway Job Status and Wait Result v2",
+  "$id": "urn:podway:schema:job-result:v3",
+  "title": "Podway Job Status and Wait Result v3",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "job"],
   "properties": {
-    "schema": { "const": "podway.job-result/v2" },
+    "schema": { "const": "podway.job-result/v3" },
     "job": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/terminalResponse" }] }
   },
   "$defs": {
     "terminalSuccessResponse": {
-      "$ref": "urn:podway:schema:output:v2#/$defs/terminalMutationOutput"
+      "$ref": "urn:podway:schema:output:v3#/$defs/terminalMutationOutput"
     },
     "terminalErrorResponse": {
       "x-podway-max-json-bytes": 524288,
@@ -23,7 +23,7 @@
             "enum": ["schema", "request_id", "command", "generated_at", "code", "message", "retryable", "exit_code", "workspace", "details"]
           },
           "properties": {
-            "command": { "enum": ["session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
+            "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
             "message": { "type": "string", "minLength": 1, "maxLength": 512 },
             "workspace": {
               "type": "object",

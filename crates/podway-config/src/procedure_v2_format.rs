@@ -190,7 +190,7 @@ fn common_prefix_characters(left: &str, right: &str) -> u32 {
 /// Why a format request produced no document.
 ///
 /// The two variants map to different result families, which is why they are distinct rather than
-/// both being diagnostics: a v1 document cannot be *described* by the authoring diagnostic schema,
+/// both being diagnostics: a non-v2 document cannot be described by the authoring diagnostic schema,
 /// whose `schema` field is `const "podway.procedure/v2"`, so it is a command-level failure rather
 /// than a finding about a v2 procedure.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -224,20 +224,8 @@ pub fn format_procedure_v2(
 pub(crate) fn admit_procedure_v2(
     context: &AuthoringContext<'_>,
 ) -> Result<ValidatedProcedureV2, FormatFailure> {
-    // A document that *declares* the v1 schema is refused before the dispatching parser runs, so
-    // a malformed v1 document is a wrong-schema command failure, never a v2 authoring finding
-    // about a document that does not claim to be v2. The `V1` arm below stays as the total-match
-    // backstop, but the sniff and the dispatcher read the same decoded `schema` field, so a
-    // declared-v1 document cannot reach it.
-    if crate::parser::sniff_procedure_schema(context.source().as_bytes(), context.format())
-        == Some(crate::PROCEDURE_SCHEMA_V1)
-    {
-        return Err(FormatFailure::NotProcedureV2);
-    }
-
     let parsed = match parse_procedure_document(context.source().as_bytes(), context.format()) {
         Ok(ParsedProcedure::V2(parsed)) => parsed,
-        Ok(ParsedProcedure::V1(_)) => return Err(FormatFailure::NotProcedureV2),
         Err(error) => {
             return Err(FormatFailure::Diagnostics(vec![config_error_diagnostic(
                 &error, context,
@@ -280,27 +268,6 @@ pub(crate) fn render_procedure_v2(
         document_value: authoring,
         digest: validated.digest().clone(),
     })
-}
-
-/// Renders a validated model as canonical authoring YAML from a comment table the caller supplies.
-///
-/// The seam section 11.6's `convert` enters through. A converted document has no v2 source, so
-/// there is nothing to scan for comments and nothing to compare against for drift — but everything
-/// downstream of the scan is identical, and it must be: the authoring tree, the emitter, and the
-/// projection bound here are the very ones [`render_procedure_v2`] uses, so a converted document is
-/// in canonical authoring form by construction rather than by a second implementation that could
-/// disagree with the first.
-///
-/// `context` supplies only the diagnostic geography for the projection bound; nothing is read out
-/// of its source text.
-pub(crate) fn emit_procedure_v2_yaml(
-    validated: &ValidatedProcedureV2,
-    comments: SourceComments,
-    context: &AuthoringContext<'_>,
-) -> Result<String, Vec<AuthoringDiagnostic>> {
-    let rendered = emit_yaml(&authoring_document_value(validated.parsed()), comments);
-    bound_projection(&rendered, context)?;
-    Ok(rendered)
 }
 
 /// Enforces the emitted-document budget, shared by every caller that produces authoring text.

@@ -26,7 +26,7 @@
   "construction": [
     "materialize every applicable next-result-v2 field exactly once while the schema and payload matrix exhaustively assign every conditional field",
     "admit and vet a maximum Procedure v2, construct a consistent GraphSessionStateV2, and project the complete next result through project_graph_next_v2",
-    "serialize the projected next result directly in one podway.output/v2 envelope",
+    "serialize the projected next result directly in one podway.output/v3 envelope",
     "fill procedure-static content to NEXT_STATIC_BUDGET",
     "fill read-back to READBACK_BUDGET",
     "include 16 criteria and their runtime suggestion argv",

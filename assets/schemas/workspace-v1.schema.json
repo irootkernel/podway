@@ -29,7 +29,7 @@
       "type": "string",
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
       "maxLength": 64,
-      "default": "sw-dev"
+      "default": "sw-dev-v2"
     },
     "job_queue": {
       "type": "object",

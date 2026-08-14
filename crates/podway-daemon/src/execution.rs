@@ -12,58 +12,45 @@ use crate::{
 };
 use podway_config::{
     AuthoringContext, ParsedNodeDefinition, ParsedProcedure, ParsedProcedureV2,
-    ProcedureDocumentFormat, ProcedureFormatV1, ProcedureSourceLabel, ProcedureWarningPolicyV1,
-    parse_procedure_document, parse_procedure_v1, sniff_procedure_schema, validate_procedure_v2,
-    vet_procedure_v2,
+    ProcedureDocumentFormat, ProcedureSourceLabel, parse_procedure_document,
+    sniff_procedure_schema, validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
-    ActorAttributionV2, AddItemV1, ArtifactLocationKindV1, ArtifactValueV1, AttachItemV1,
-    AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptV1, AttemptValidityV2, AuthoringSeverity,
-    BlockSessionV1, BlockerId, BlockerState, CancelSessionV1, CanonicalProcedureJsonV1,
-    CanonicalProcedureSnapshotInputV1, CheckItemV1, ClearItemV1, CommandContextV1,
-    CompleteSessionV1, CriterionAssessmentReasonV2, CriterionAssessmentResultV2,
-    CriterionCitationV2, CriterionStatusV2, DecisionRecordV2, DomainCommand, DomainError,
-    DomainResult, GoalAssessmentRecordV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
-    GoalRevisionReasonV2, GoalStatementV2, GraphPlacementV2, ItemId, ItemMutationPreconditionsV1,
-    ItemTypeV1, ItemValueV1, JobId, LocalArtifactVerificationV1, ProcedureSnapshotId,
-    ProcedureSnapshotV1, ProcedureSourceLabelV1, ReasonV2, RemoveItemV1, ReopenSessionV1,
-    ResetAllWorkspaceV1, ResetSessionV1, ResolvedEvidenceReferenceV2, RetrySessionV1,
-    ReturnSessionV1, Revision, SessionAggregateV1, SessionAttemptV2, SessionCommandV1, SessionId,
-    SessionLifecycle, SessionTraceV2, SetItemV1, Sha256Digest, SkipSessionV1, StageSpecV1,
-    StartReplaceSessionV1, StartSessionV1, TraceSequenceV2, UnblockSessionV1, UncheckItemV1,
-    UnixMillis, WorkspaceId, apply_transition_v1, canonicalize_json_v1, required_items_satisfied,
+    ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
+    AttemptNumberV2, AttemptValidityV2, AuthoringSeverity, BlockerId, CanonicalProcedureJsonV1,
+    CriterionAssessmentReasonV2, CriterionAssessmentResultV2, CriterionCitationV2,
+    CriterionStatusV2, DecisionRecordV2, DomainCommand, DomainError, DomainResult,
+    GoalAssessmentRecordV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
+    GoalRevisionReasonV2, GoalStatementV2, GraphPlacementV2, ItemId, JobId, ProcedureSnapshotId,
+    ProcedureSourceLabelV1, ReasonV2, ResolvedEvidenceReferenceV2, Revision, SessionAttemptV2,
+    SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
+    WorkspaceId, canonicalize_json_v1,
 };
-use podway_presets::{EmbeddedPresetV2, catalog_v2, lookup as lookup_embedded_preset_v1};
+use podway_presets::{EmbeddedPresetV2, catalog_v2};
 use podway_protocol::{
     GoalAssessCriterionV2, GoalCriterionWireV2, GoalDefineV2, GoalReviseV2, ItemAddV1,
     ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1, ItemRemoveV1, ItemSetV1,
     ItemUncheckV1, ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1,
     ProcedureV2StartCommandV1, ProcedureV2StartRequestV1, RequestIdV1, Rfc3339MillisV1,
     SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionDecideV2,
-    SessionMutationPreconditionsWireV1, SessionReopenV1, SessionResetV1, SessionRetryV1,
-    SessionReturnV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1, SessionStartV1,
-    SessionUnblockV1, SliceCommandV1, SliceRequestV1, WorktreeSelectorWireV1,
-    canonical_procedure_v2_mutation_identity_v1, canonical_procedure_v2_start_identity_v1,
-    canonical_reset_all_identity_v1,
+    SessionMutationPreconditionsWireV1, SessionResetV1, SessionRetryV1, SessionReworkV2,
+    SessionSkipV1, SessionStartSourceV1, SessionStartV1, SessionUnblockV1, SliceCommandV1,
+    SliceRequestV1, WorktreeSelectorWireV1, canonical_procedure_v2_mutation_identity_v1,
+    canonical_procedure_v2_start_identity_v1, canonical_reset_all_identity_v1,
 };
 use podway_store::{
     ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1,
     AttemptMetadataV2, CanonicalExecutionJsonV1, ClaimedJobV1, DurableWorktreeIdentityV1,
     GraphMutationErrorV2, GraphNodeCounterV2, GraphSessionStateV2, GraphStartCurrentTaskV2,
     IdempotencyKeyV1, PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2,
-    PersistedResponseContextV1, PersistedSessionMutationV1, ProcedureSnapshotV2,
-    RevisionAttemptItemPreconditionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
-    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreIdempotencyReadContractV1,
-    StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkflowMemoryStateV2,
-    WorkspaceBindingV1,
+    PersistedResponseContextV1, ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1,
+    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreGraphMutationContractV2,
+    StoreGraphReadContractV2, StoreIdempotencyReadContractV1, StoreValueErrorV1, TerminalReceiptV1,
+    TerminalResultV1, WorkerIdV1, WorkflowMemoryStateV2, WorkspaceBindingV1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
-const EXECUTION_DOCUMENT_VERSION_V1: u8 = 1;
-const EXECUTION_DOCUMENT_VERSION_V2: u8 = 2;
-const EXECUTION_DOCUMENT_VERSION_V3: u8 = 3;
-const EXECUTION_DOCUMENT_VERSION_V4: u8 = 4;
 const EXECUTION_DOCUMENT_VERSION_V5: u8 = 5;
 const EXECUTION_DOCUMENT_VERSION_V6: u8 = 6;
 const EXECUTION_DOCUMENT_VERSION_V7: u8 = 7;
@@ -74,33 +61,11 @@ const EXECUTION_DOCUMENT_VERSION_V11: u8 = 11;
 const EXECUTION_DOCUMENT_VERSION_V12: u8 = 12;
 const EXECUTION_DOCUMENT_VERSION_V13: u8 = 13;
 const EXECUTION_DOCUMENT_VERSION_V14: u8 = 14;
+const EXECUTION_DOCUMENT_VERSION_V15: u8 = 15;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
     None,
-    SessionStart {
-        snapshot: Box<ProcedureSnapshotV1>,
-        session_id: SessionId,
-        first_attempt_id: AttemptId,
-    },
-    SessionBlock {
-        blocker_id: BlockerId,
-    },
-    SessionRetry {
-        next_attempt_id: AttemptId,
-    },
-    SessionReturn {
-        destination_attempt_id: AttemptId,
-    },
-    SessionComplete {
-        next_attempt_id: AttemptId,
-    },
-    SessionSkip {
-        next_attempt_id: AttemptId,
-    },
-    SessionReopen {
-        destination_attempt_id: AttemptId,
-    },
 }
 
 /// A boundary outcome that can either become a durable domain failure or leave the claim for
@@ -160,22 +125,6 @@ pub trait ExecutionClockV1: Send + Sync {
 /// Loads an admitted preset through the public preset/config path and returns its immutable core
 /// snapshot. Implementations must not apply daemon-only preset semantics.
 pub trait ProcedureProviderV1: Send + Sync {
-    fn load_preset_snapshot(
-        &self,
-        preset: &str,
-        snapshot_id: ProcedureSnapshotId,
-        created_at: UnixMillis,
-    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1>;
-    /// Reads and validates a relative procedure source under an already revalidated worktree.
-    /// The returned snapshot is persisted at admission and never reconstructed during replay.
-    fn load_workspace_procedure_snapshot(
-        &self,
-        workspace: &WorkspaceBindingV1,
-        procedure: &str,
-        snapshot_id: ProcedureSnapshotId,
-        created_at: UnixMillis,
-    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1>;
-
     /// Reads, validates, and vets a relative Procedure v2 source under an already revalidated
     /// worktree. Implementations that do not own descriptor-safe filesystem authority remain
     /// closed by default.
@@ -204,11 +153,17 @@ pub trait ProcedureProviderV1: Send + Sync {
     }
 }
 
-/// Version-sensitive outcome of inspecting one custom Procedure source. A declared v1 document
-/// is not a v2 failure: dispatch may safely fall back to the unchanged v1 start path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalArtifactVerificationV2 {
+    pub item_id: ItemId,
+    pub location: String,
+    pub digest: Sha256Digest,
+    pub size_bytes: u64,
+}
+
+/// Outcome of inspecting one custom Procedure v2 source.
 #[derive(Debug)]
 pub enum ProcedureV2SourceAdmissionErrorV1 {
-    NotProcedureV2,
     SchemaInvalid { diagnostic_codes: Vec<String> },
     Rejected(ExecutionBoundaryErrorV1),
 }
@@ -306,43 +261,6 @@ fn embedded_preset_snapshot_v2(
 }
 
 impl ProcedureProviderV1 for EmbeddedPresetProcedureProviderV1 {
-    fn load_preset_snapshot(
-        &self,
-        preset: &str,
-        snapshot_id: ProcedureSnapshotId,
-        created_at: UnixMillis,
-    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        let preset = lookup_embedded_preset_v1(preset).ok_or(ExecutionBoundaryErrorV1::domain(
-            DomainError::InvalidState {
-                reason: "requested preset is unavailable",
-            },
-        ))?;
-        preset
-            .validate()
-            .and_then(|preset| {
-                preset.into_snapshot_v1(snapshot_id, created_at, ProcedureWarningPolicyV1::Accept)
-            })
-            .map_err(|_| {
-                ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                    reason: "embedded preset admission failed",
-                })
-            })
-    }
-
-    fn load_workspace_procedure_snapshot(
-        &self,
-        _workspace: &WorkspaceBindingV1,
-        _procedure: &str,
-        _snapshot_id: ProcedureSnapshotId,
-        _created_at: UnixMillis,
-    ) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        Err(ExecutionBoundaryErrorV1::domain(
-            DomainError::InvalidState {
-                reason: "workspace procedure sources require native workspace authority",
-            },
-        ))
-    }
-
     fn load_preset_snapshot_v2(
         &self,
         preset: &str,
@@ -355,48 +273,6 @@ impl ProcedureProviderV1 for EmbeddedPresetProcedureProviderV1 {
         };
         embedded_preset_snapshot_v2(preset, snapshot_id, created_at).map(Some)
     }
-}
-
-pub(crate) fn workspace_procedure_snapshot_from_bytes_v1(
-    procedure: &str,
-    source: &[u8],
-    snapshot_id: ProcedureSnapshotId,
-    created_at: UnixMillis,
-) -> Result<ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-    let source_label = ProcedureSourceLabel::workspace_path(procedure).map_err(|_| {
-        ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-            reason: "workspace procedure path is invalid",
-        })
-    })?;
-    let format = match std::path::Path::new(procedure)
-        .extension()
-        .and_then(|extension| extension.to_str())
-    {
-        Some("json") => ProcedureFormatV1::Json,
-        Some("yaml" | "yml") => ProcedureFormatV1::Yaml,
-        _ => Err(ExecutionBoundaryErrorV1::domain(
-            DomainError::InvalidState {
-                reason: "workspace procedure source has an unsupported extension",
-            },
-        ))?,
-    };
-    if sniff_procedure_schema(source, format) == Some(podway_core::PROCEDURE_SCHEMA_V2) {
-        return Err(ExecutionBoundaryErrorV1::procedure_v2_unsupported());
-    }
-    parse_procedure_v1(source, format)
-        .and_then(|procedure| {
-            procedure.into_snapshot_v1(
-                snapshot_id,
-                source_label,
-                created_at,
-                ProcedureWarningPolicyV1::Accept,
-            )
-        })
-        .map_err(|_| {
-            ExecutionBoundaryErrorV1::domain(DomainError::InvalidState {
-                reason: "workspace procedure admission failed",
-            })
-        })
 }
 
 /// Admits already bounded workspace bytes through the complete Procedure v2 configuration path.
@@ -414,10 +290,12 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
             },
         ))
     })?;
-    let format =
-        procedure_format_v1(procedure).map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
+    let format = procedure_document_format(procedure)
+        .map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
     if sniff_procedure_schema(source, format) != Some(podway_core::PROCEDURE_SCHEMA_V2) {
-        return Err(ProcedureV2SourceAdmissionErrorV1::NotProcedureV2);
+        return Err(ProcedureV2SourceAdmissionErrorV1::SchemaInvalid {
+            diagnostic_codes: vec!["AUTHORING_SCHEMA_INVALID".to_owned()],
+        });
     }
     let source_text = std::str::from_utf8(source).map_err(|_| {
         ProcedureV2SourceAdmissionErrorV1::SchemaInvalid {
@@ -426,9 +304,6 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
     })?;
     let parsed = match parse_procedure_document(source, format) {
         Ok(ParsedProcedure::V2(parsed)) => parsed,
-        Ok(ParsedProcedure::V1(_)) => {
-            return Err(ProcedureV2SourceAdmissionErrorV1::NotProcedureV2);
-        }
         Err(_) => {
             return Err(ProcedureV2SourceAdmissionErrorV1::SchemaInvalid {
                 diagnostic_codes: vec!["AUTHORING_SCHEMA_INVALID".to_owned()],
@@ -860,21 +735,25 @@ fn decode_procedure_v2_start_execution_v1(
     .map_err(|_| invalid_execution_v1("Procedure v2 graph state cannot be reconstructed"))?;
     if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V12) {
         let initial_goal = value_v1(object, "initial_goal")?;
-        let goal = initial_goal
-            .as_object()
-            .ok_or_else(|| invalid_execution_v1("Procedure v2 initial goal is invalid"))?;
-        require_exact_keys_v1(goal, &["actor", "criteria", "goal"])?;
-        let statement = GoalStatementV2::new(value_string_v1(goal, "goal")?.to_owned())
-            .map_err(ExecutionErrorV1::BoundaryDomain)?;
-        let criteria = decode_goal_criteria_v2(value_v1(goal, "criteria")?)?;
-        let actor = optional_string_v1(goal, "actor")?
-            .map(|actor| ActorAttributionV2::new(actor.to_owned()))
-            .transpose()
-            .map_err(ExecutionErrorV1::BoundaryDomain)?;
-        state = state
-            .bind_initial_goal_at_start_v2(statement, criteria, actor, state.created_at())
-            .map_err(|_| invalid_execution_v1("Procedure v2 initial goal cannot be reconstructed"))?
-            .into_state();
+        if !initial_goal.is_null() {
+            let goal = initial_goal
+                .as_object()
+                .ok_or_else(|| invalid_execution_v1("Procedure v2 initial goal is invalid"))?;
+            require_exact_keys_v1(goal, &["actor", "criteria", "goal"])?;
+            let statement = GoalStatementV2::new(value_string_v1(goal, "goal")?.to_owned())
+                .map_err(ExecutionErrorV1::BoundaryDomain)?;
+            let criteria = decode_goal_criteria_v2(value_v1(goal, "criteria")?)?;
+            let actor = optional_string_v1(goal, "actor")?
+                .map(|actor| ActorAttributionV2::new(actor.to_owned()))
+                .transpose()
+                .map_err(ExecutionErrorV1::BoundaryDomain)?;
+            state = state
+                .bind_initial_goal_at_start_v2(statement, criteria, actor, state.created_at())
+                .map_err(|_| {
+                    invalid_execution_v1("Procedure v2 initial goal cannot be reconstructed")
+                })?
+                .into_state();
+        }
     }
     Ok(AdmittedProcedureV2StartV1 {
         selector: serde_json::from_value(value_v1(object, "selector")?.clone())
@@ -2043,11 +1922,7 @@ fn rehydrate_procedure_v2_execution_v1(
         ProcedureDocumentFormat::Json,
     )
     .map_err(|_| invalid_execution_v1("Procedure v2 snapshot cannot be parsed"))?;
-    let ParsedProcedure::V2(parsed) = parsed else {
-        return Err(invalid_execution_v1(
-            "Procedure v2 snapshot has an invalid schema",
-        ));
-    };
+    let ParsedProcedure::V2(parsed) = parsed;
     let validated = validate_procedure_v2(parsed)
         .map_err(|_| invalid_execution_v1("Procedure v2 snapshot cannot be validated"))?;
     if validated.digest() != state.snapshot().digest()
@@ -2212,13 +2087,15 @@ fn prepare_procedure_v2_item_mutation_v1(
     })
 }
 
-fn procedure_format_v1(procedure: &str) -> Result<ProcedureFormatV1, ExecutionBoundaryErrorV1> {
+fn procedure_document_format(
+    procedure: &str,
+) -> Result<ProcedureDocumentFormat, ExecutionBoundaryErrorV1> {
     match std::path::Path::new(procedure)
         .extension()
         .and_then(|extension| extension.to_str())
     {
-        Some("json") => Ok(ProcedureFormatV1::Json),
-        Some("yaml" | "yml") => Ok(ProcedureFormatV1::Yaml),
+        Some("json") => Ok(ProcedureDocumentFormat::Json),
+        Some("yaml" | "yml") => Ok(ProcedureDocumentFormat::Yaml),
         _ => Err(ExecutionBoundaryErrorV1::domain(
             DomainError::InvalidState {
                 reason: "workspace procedure source has an unsupported extension",
@@ -2269,7 +2146,7 @@ pub trait ArtifactVerifierV1: Send + Sync {
         workspace: &WorkspaceBindingV1,
         item_id: &ItemId,
         artifact: &ArtifactValueV1,
-    ) -> Result<LocalArtifactVerificationV1, ExecutionBoundaryErrorV1>;
+    ) -> Result<LocalArtifactVerificationV2, ExecutionBoundaryErrorV1>;
 }
 
 /// Errors surfaced by admission or worker execution. Domain failures are represented by a durable
@@ -2792,39 +2669,14 @@ where
         idempotency_key: IdempotencyKeyV1,
         response_context: Option<PersistedResponseContextV1>,
     ) -> Result<AdmitOutcomeV1, ExecutionErrorV1> {
-        if matches!(request.command(), SliceCommandV1::WorkspaceResetAll(_)) {
+        if !matches!(request.command(), SliceCommandV1::WorkspaceInit(_)) {
             return Err(ExecutionErrorV1::InvalidPersistedExecution {
-                reason: "workspace reset must be prepared through the maintenance path",
+                reason: "only workspace initialization uses the bootstrap executor",
             });
-        }
-        let is_start = matches!(
-            request.command(),
-            SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
-        );
-        let expected_procedure_digest = expected_start_procedure_digest_v1(request.command());
-        if let Some(expected_workspace) = expected_workspace
-            && let Some(outcome) = self.read_admission_idempotent_outcome(
-                expected_workspace.identity(),
-                request,
-                &idempotency_key,
-                expected_procedure_digest,
-            )?
-        {
-            return Ok(outcome);
         }
         let binding = self
             .bound_workspace(request.selector())
             .map_err(ExecutionErrorV1::from_boundary)?;
-        if expected_workspace.is_none()
-            && let Some(outcome) = self.read_admission_idempotent_outcome(
-                binding.identity(),
-                request,
-                &idempotency_key,
-                expected_procedure_digest,
-            )?
-        {
-            return Ok(outcome);
-        }
         if let Some(expected) = expected_workspace
             && expected.identity() != binding.identity()
         {
@@ -2840,34 +2692,22 @@ where
                 },
             ));
         }
-        if !is_start {
-            self.enforce_admission_session_identity(request.command(), &binding)?;
+        let request_digest = request_digest_v1(request, binding.identity().workspace_uuid(), None)?;
+        if let Some(outcome) = self.store.read_idempotent_outcome(
+            binding.identity(),
+            &idempotency_key,
+            &request_digest,
+        )? {
+            return Ok(outcome);
         }
         let command = command_for_admission_v1(request.command())?;
         let preconditions = store_preconditions_v1(request.command())?;
         let now = self.clock.now();
-        let resolution = self.admission_resolution(request.command(), &binding, now)?;
-        let canonical_execution =
-            canonical_execution_document_v1(request, binding.identity(), &resolution)?;
-        let procedure_digest = match &resolution {
-            AdmissionResolutionV1::SessionStart { snapshot, .. } => Some(snapshot.digest()),
-            _ => None,
-        };
-        let request_digest = request_digest_v1(
+        let canonical_execution = canonical_execution_document_v1(
             request,
-            binding.identity().workspace_uuid(),
-            procedure_digest,
+            binding.identity(),
+            &AdmissionResolutionV1::None,
         )?;
-        if is_start {
-            if let Some(outcome) = self.store.read_idempotent_outcome(
-                binding.identity(),
-                &idempotency_key,
-                &request_digest,
-            )? {
-                return Ok(outcome);
-            }
-            self.enforce_admission_session_identity(request.command(), &binding)?;
-        }
         let admitted = AdmitRequestV1::new_with_canonical_execution(
             command,
             idempotency_key,
@@ -2876,119 +2716,16 @@ where
             request_digest,
             now,
             canonical_execution,
-        )
-        .with_session_identity(admission_session_identity_v1(request.command()));
+        );
         let admitted = match response_context {
             Some(context) => admitted.with_response_context(context),
             None => admitted,
-        };
-        let admitted = match &resolution {
-            AdmissionResolutionV1::SessionStart { snapshot, .. } => {
-                admitted.with_admitted_procedure_snapshot(snapshot.as_ref().clone())
-            }
-            _ => admitted,
         };
         let outcome = self
             .store
             .admit(binding.identity(), admitted)
             .map_err(ExecutionErrorV1::from)?;
         Ok(outcome)
-    }
-
-    fn read_admission_idempotent_outcome(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        request: &SliceRequestV1,
-        idempotency_key: &IdempotencyKeyV1,
-        expected_procedure_digest: Option<&Sha256Digest>,
-    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
-        if matches!(
-            request.command(),
-            SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
-        ) && expected_procedure_digest.is_none()
-        {
-            return self.read_unresolved_start_idempotent_outcome(
-                identity,
-                request,
-                idempotency_key,
-            );
-        }
-        let request_digest = request_digest_v1(
-            request,
-            identity.workspace_uuid(),
-            expected_procedure_digest,
-        )?;
-        self.store
-            .read_idempotent_outcome(identity, idempotency_key, &request_digest)
-            .map_err(ExecutionErrorV1::from)
-    }
-
-    fn read_unresolved_start_idempotent_outcome(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        request: &SliceRequestV1,
-        idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<Option<AdmitOutcomeV1>, ExecutionErrorV1> {
-        let Some(existing) = self
-            .store
-            .read_idempotent_execution(identity, idempotency_key)?
-        else {
-            return Ok(None);
-        };
-        let (execution_version, procedure_digest) =
-            if let Some(canonical_execution) = existing.canonical_execution() {
-                let (
-                    execution_version,
-                    _selector,
-                    persisted_workspace_id,
-                    persisted_command,
-                    resolution,
-                ) = decode_execution_document_v1(canonical_execution.as_str())?;
-                if persisted_workspace_id != *identity.workspace_uuid() {
-                    return Err(invalid_execution_v1(
-                        "idempotent execution workspace identity is invalid",
-                    ));
-                }
-                if !matches!(
-                    persisted_command,
-                    SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
-                ) {
-                    return Ok(None);
-                }
-                let AdmissionResolutionV1::SessionStart { snapshot, .. } = resolution else {
-                    return Err(invalid_execution_v1(
-                        "idempotent start has no admitted Procedure snapshot",
-                    ));
-                };
-                (execution_version, snapshot.digest().clone())
-            } else if let Some(start_identity) = existing.retained_start_identity() {
-                if !matches!(
-                    request.command(),
-                    SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
-                ) {
-                    return Ok(None);
-                }
-                (
-                    u64::from(start_identity.execution_version()),
-                    start_identity.procedure_digest().clone(),
-                )
-            } else {
-                return Ok(None);
-            };
-        let actual = if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V4) {
-            request_digest_v1(request, identity.workspace_uuid(), None)?
-        } else {
-            request_digest_v1(request, identity.workspace_uuid(), Some(&procedure_digest))?
-        };
-        if existing.request_digest() != &actual {
-            return Err(ExecutionErrorV1::Store(
-                StoreErrorV1::IdempotencyDigestConflictV1 {
-                    expected: existing.request_digest().clone(),
-                    actual,
-                },
-            ));
-        }
-        Ok(Some(existing.outcome().clone()))
     }
 
     /// Revalidates the manager-selected workspace before claiming at most one job. A transient
@@ -3026,9 +2763,6 @@ where
         claimed: ClaimedJobV1,
         now: UnixMillis,
     ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
-        let expected_workspace_revision = claimed
-            .current_session()
-            .map_or(Revision::ZERO, SessionAggregateV1::revision);
         let (_execution_version, _selector, workspace_id, command, resolution) =
             decode_execution_document_v1(claimed.execution().canonical_execution().as_str())?;
         if workspace_id != *claimed.claim().identity().workspace_uuid() {
@@ -3042,22 +2776,15 @@ where
             });
         }
 
-        let admitted_command = match command_for_admission_v1(&command) {
-            Ok(command) => command,
-            Err(_) => {
-                return Err(ExecutionErrorV1::InvalidPersistedExecution {
-                    reason: "command is not admitted for execution",
-                });
-            }
-        };
-        let admitted_preconditions = match store_preconditions_v1(&command) {
-            Ok(preconditions) => preconditions,
-            Err(_) => {
-                return Err(ExecutionErrorV1::InvalidPersistedExecution {
-                    reason: "command preconditions cannot be reconstructed",
-                });
-            }
-        };
+        if !matches!(command, SliceCommandV1::WorkspaceInit(_))
+            || !matches!(resolution, AdmissionResolutionV1::None)
+        {
+            return Err(ExecutionErrorV1::InvalidPersistedExecution {
+                reason: "bootstrap executor received a non-initialization command",
+            });
+        }
+        let admitted_command = command_for_admission_v1(&command)?;
+        let admitted_preconditions = store_preconditions_v1(&command)?;
         if claimed.execution().command() != &admitted_command
             || claimed.execution().preconditions() != &admitted_preconditions
         {
@@ -3066,123 +2793,16 @@ where
             });
         }
 
-        if matches!(command, SliceCommandV1::WorkspaceInit(_)) {
-            return self.commit_workspace_initialization(
-                &claimed,
-                expected_workspace_revision,
-                now,
-            );
-        }
-
-        if let Err(error) = enforce_session_identity_v1(&command, claimed.current_session()) {
-            return self.commit_domain_failure(&claimed, expected_workspace_revision, error, now);
-        }
-
-        let session_command = match self.prepare_session_command(
-            &command,
-            &resolution,
-            claimed.current_session(),
-            workspace,
-            now,
-        ) {
-            Ok(command) => command,
-            Err(BoundaryDispositionV1::Domain(error)) => {
-                return self.commit_domain_failure(
-                    &claimed,
-                    expected_workspace_revision,
-                    error,
-                    now,
-                );
-            }
-            Err(BoundaryDispositionV1::WorkspaceIdentityMismatch { expected, actual }) => {
-                return Err(ExecutionErrorV1::WorkspaceIdentityMismatch { expected, actual });
-            }
-            Err(BoundaryDispositionV1::Transient { operation }) => {
-                return Err(ExecutionErrorV1::BoundaryTransient { operation });
-            }
-        };
-
-        let context = CommandContextV1 {
-            expected_revision: expected_revision_v1(&command),
-            now,
-        };
-        let outcome =
-            match apply_transition_v1(claimed.current_session(), &session_command, context) {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    return self.commit_domain_failure(
-                        &claimed,
-                        expected_workspace_revision,
-                        error,
-                        now,
-                    );
-                }
-            };
-        let transition =
-            match state_transition_v1(&admitted_command, claimed.current_session(), &outcome) {
-                Ok(transition) => transition,
-                Err(error) => {
-                    return self.commit_domain_failure(
-                        &claimed,
-                        expected_workspace_revision,
-                        error,
-                        now,
-                    );
-                }
-            };
-        let result = match domain_result_v1(
-            &admitted_command,
-            claimed.current_session(),
-            &outcome,
-            claimed.claim().identity().workspace_uuid(),
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                return self.commit_domain_failure(
-                    &claimed,
-                    expected_workspace_revision,
-                    error,
-                    now,
-                );
-            }
-        };
-        let receipt = self
-            .store
-            .commit_terminal(
-                claimed.claim().clone(),
-                expected_workspace_revision,
-                Some(transition),
-                TerminalResultV1::Success(result),
-                now,
-            )
-            .map_err(ExecutionErrorV1::from)?;
-        self.emit(EventOperationV1::JobTerminal, EventOutcomeV1::Succeeded);
-        Ok(receipt)
+        self.commit_workspace_initialization(&claimed, now)
     }
 
     fn commit_workspace_initialization(
         &self,
         claimed: &ClaimedJobV1,
-        expected_workspace_revision: Revision,
         now: UnixMillis,
     ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
-        if expected_workspace_revision != Revision::ZERO || claimed.current_session().is_some() {
-            return self.commit_domain_failure(
-                claimed,
-                expected_workspace_revision,
-                DomainError::InvalidState {
-                    reason: "workspace initialization requires an empty workspace",
-                },
-                now,
-            );
-        }
-        let transition = StateTransitionV1::new_persisted(
-            None,
-            Revision::ZERO,
-            Revision::ZERO,
-            PersistedSessionMutationV1::Unchanged,
-        )
-        .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+        let transition = StateTransitionV1::new_persisted(None, Revision::ZERO, Revision::ZERO)
+            .map_err(ExecutionErrorV1::InvalidStoreValue)?;
         let result = DomainResult::WorkspaceInitialized {
             workspace_id: claimed.claim().identity().workspace_uuid().clone(),
             revision: Revision::ZERO,
@@ -3242,31 +2862,6 @@ where
         Ok(binding)
     }
 
-    fn enforce_admission_session_identity(
-        &self,
-        command: &SliceCommandV1,
-        workspace: &WorkspaceBindingV1,
-    ) -> Result<(), ExecutionErrorV1> {
-        if expected_session_id_v1(command).is_none() {
-            return Ok(());
-        }
-        let view = self.store.read_workspace_view(workspace.identity())?;
-        if view.identity() != workspace.identity()
-            || view.state().workspace_id() != workspace.identity().workspace_uuid()
-        {
-            return Err(ExecutionErrorV1::InvalidPersistedExecution {
-                reason: "Store read returned a different workspace identity before admission",
-            });
-        }
-        match enforce_session_identity_v1(command, view.current_session()) {
-            Err(DomainError::SessionIdentityMismatch { expected, actual }) => {
-                Err(ExecutionErrorV1::SessionIdentityMismatch { expected, actual })
-            }
-            Err(error) => Err(ExecutionErrorV1::BoundaryDomain(error)),
-            Ok(()) => Ok(()),
-        }
-    }
-
     fn emit_admission_result(&self, result: &Result<AdmitOutcomeV1, ExecutionErrorV1>) {
         let (operation, outcome) = match result {
             Ok(AdmitOutcomeV1::New(_)) => {
@@ -3302,397 +2897,6 @@ where
         }
         Ok(binding)
     }
-    fn admission_resolution(
-        &self,
-        command: &SliceCommandV1,
-        workspace: &WorkspaceBindingV1,
-        now: UnixMillis,
-    ) -> Result<AdmissionResolutionV1, ExecutionErrorV1> {
-        match command {
-            SliceCommandV1::SessionStart(input) => {
-                self.resolve_session_start(input, workspace, now, "session.start")
-            }
-            SliceCommandV1::SessionStartReplace(input) => {
-                self.resolve_session_start(&input.start, workspace, now, "session.start_replace")
-            }
-            SliceCommandV1::SessionBlock(_) => Ok(AdmissionResolutionV1::SessionBlock {
-                blocker_id: self.ids.next_blocker_id(),
-            }),
-            SliceCommandV1::SessionSkip(_) => Ok(AdmissionResolutionV1::SessionSkip {
-                next_attempt_id: self.ids.next_attempt_id(),
-            }),
-            SliceCommandV1::SessionRetry(_) => Ok(AdmissionResolutionV1::SessionRetry {
-                next_attempt_id: self.ids.next_attempt_id(),
-            }),
-            SliceCommandV1::SessionReturn(_) => Ok(AdmissionResolutionV1::SessionReturn {
-                destination_attempt_id: self.ids.next_attempt_id(),
-            }),
-            SliceCommandV1::SessionComplete(_) => Ok(AdmissionResolutionV1::SessionComplete {
-                next_attempt_id: self.ids.next_attempt_id(),
-            }),
-            SliceCommandV1::SessionReopen(_) => Ok(AdmissionResolutionV1::SessionReopen {
-                destination_attempt_id: self.ids.next_attempt_id(),
-            }),
-            SliceCommandV1::WorkspaceInit(_)
-            | SliceCommandV1::WorkspaceResetAll(_)
-            | SliceCommandV1::ItemCheck(_)
-            | SliceCommandV1::ItemUncheck(_)
-            | SliceCommandV1::ItemSet(_)
-            | SliceCommandV1::ItemAdd(_)
-            | SliceCommandV1::ItemRemove(_)
-            | SliceCommandV1::ItemAttach(_)
-            | SliceCommandV1::ItemClear(_)
-            | SliceCommandV1::SessionUnblock(_)
-            | SliceCommandV1::SessionCancel(_)
-            | SliceCommandV1::SessionReset(_) => Ok(AdmissionResolutionV1::None),
-            SliceCommandV1::WorkspaceDoctor(_)
-            | SliceCommandV1::WorkspaceShow(_)
-            | SliceCommandV1::WorkspaceRepair(_)
-            | SliceCommandV1::SessionStatus(_)
-            | SliceCommandV1::SessionNext(_)
-            | SliceCommandV1::JobList(_)
-            | SliceCommandV1::JobLookup(_)
-            | SliceCommandV1::JobStatus(_)
-            | SliceCommandV1::JobWait(_)
-            | SliceCommandV1::JobCancel(_) => Err(ExecutionErrorV1::InvalidPersistedExecution {
-                reason: "non-durable command reached the mutation executor",
-            }),
-        }
-    }
-
-    fn resolve_session_start(
-        &self,
-        input: &SessionStartV1,
-        workspace: &WorkspaceBindingV1,
-        now: UnixMillis,
-        capability: &'static str,
-    ) -> Result<AdmissionResolutionV1, ExecutionErrorV1> {
-        let snapshot_id = self.ids.next_procedure_snapshot_id();
-        let snapshot = match &input.source {
-            SessionStartSourceV1::Preset { preset } => {
-                self.procedures
-                    .load_preset_snapshot(preset, snapshot_id, now)
-            }
-            SessionStartSourceV1::Procedure { procedure } => self
-                .procedures
-                .load_workspace_procedure_snapshot(workspace, procedure, snapshot_id, now),
-        }
-        .map_err(|error| match error {
-            ExecutionBoundaryErrorV1::ProcedureV2Unsupported => {
-                ExecutionErrorV1::UnsupportedV2Capability {
-                    capability,
-                    required_result_schema: "podway.session-start-result/v2",
-                }
-            }
-            other => ExecutionErrorV1::from_boundary(other.into()),
-        })?;
-        if let Some(expected) = input.expected_procedure_digest.as_ref()
-            && snapshot.digest() != expected
-        {
-            return Err(ExecutionErrorV1::ProcedureDigestMismatch {
-                expected: expected.clone(),
-                actual: snapshot.digest().clone(),
-            });
-        }
-        Ok(AdmissionResolutionV1::SessionStart {
-            snapshot: Box::new(snapshot),
-            session_id: self.ids.next_session_id(),
-            first_attempt_id: self.ids.next_attempt_id(),
-        })
-    }
-
-    fn prepare_session_command(
-        &self,
-        command: &SliceCommandV1,
-        resolution: &AdmissionResolutionV1,
-        prior: Option<&SessionAggregateV1>,
-        workspace: &WorkspaceBindingV1,
-        _now: UnixMillis,
-    ) -> Result<SessionCommandV1, BoundaryDispositionV1> {
-        match command {
-            SliceCommandV1::SessionStart(input) => Ok(SessionCommandV1::Start(
-                start_session_input_v1(input, resolution)?,
-            )),
-            SliceCommandV1::SessionStartReplace(input) => {
-                Ok(SessionCommandV1::StartReplace(StartReplaceSessionV1 {
-                    expected_session_id: input.preconditions.expected_session_id.clone(),
-                    confirmed: input.confirmed,
-                    start: start_session_input_v1(&input.start, resolution)?,
-                }))
-            }
-            SliceCommandV1::ItemCheck(input) => Ok(SessionCommandV1::Check(CheckItemV1 {
-                item_id: input.item_id.clone(),
-                preconditions: core_item_preconditions_v1(&input.preconditions),
-            })),
-            SliceCommandV1::ItemUncheck(input) => Ok(SessionCommandV1::Uncheck(UncheckItemV1 {
-                item_id: input.item_id.clone(),
-                preconditions: core_item_preconditions_v1(&input.preconditions),
-            })),
-            SliceCommandV1::ItemSet(input) => {
-                let value = set_item_value_v1(prior, &input.item_id, &input.value)
-                    .map_err(BoundaryDispositionV1::Domain)?;
-                Ok(SessionCommandV1::Set(SetItemV1 {
-                    item_id: input.item_id.clone(),
-                    value,
-                    preconditions: core_item_preconditions_v1(&input.preconditions),
-                }))
-            }
-            SliceCommandV1::ItemAdd(input) => Ok(SessionCommandV1::Add(AddItemV1 {
-                item_id: input.item_id.clone(),
-                value: input.value.clone(),
-                preconditions: core_item_preconditions_v1(&input.preconditions),
-            })),
-            SliceCommandV1::ItemRemove(input) => Ok(SessionCommandV1::Remove(RemoveItemV1 {
-                item_id: input.item_id.clone(),
-                value: input.value.clone(),
-                ignore_missing: input.ignore_missing,
-                preconditions: core_item_preconditions_v1(&input.preconditions),
-            })),
-            SliceCommandV1::ItemAttach(input) => {
-                let artifact = match &input.source {
-                    ItemAttachSourceV1::Path { path, media_type } => {
-                        let artifact = self
-                            .artifacts
-                            .hash_local_artifact(workspace, path, media_type.as_deref())
-                            .map_err(BoundaryDispositionV1::from)?;
-                        validate_local_attached_artifact_v1(path, media_type.as_deref(), &artifact)
-                            .map_err(BoundaryDispositionV1::Domain)?;
-                        artifact
-                    }
-                    ItemAttachSourceV1::OpaqueReference {
-                        reference,
-                        digest,
-                        size_bytes,
-                        media_type,
-                    } => ArtifactValueV1::external_reference(
-                        reference,
-                        digest.clone(),
-                        *size_bytes,
-                        media_type,
-                    )
-                    .map_err(BoundaryDispositionV1::Domain)?,
-                };
-                Ok(SessionCommandV1::Attach(AttachItemV1 {
-                    item_id: input.item_id.clone(),
-                    value: artifact,
-                    preconditions: core_item_preconditions_v1(&input.preconditions),
-                }))
-            }
-            SliceCommandV1::ItemClear(input) => Ok(SessionCommandV1::Clear(ClearItemV1 {
-                item_id: input.item_id.clone(),
-                preconditions: core_item_preconditions_v1(&input.preconditions),
-            })),
-            SliceCommandV1::SessionBlock(input) => {
-                let blocker_id = match resolution {
-                    AdmissionResolutionV1::SessionBlock { blocker_id } => blocker_id.clone(),
-                    _ => {
-                        return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                            reason: "persisted admission resolution does not match session block",
-                        }));
-                    }
-                };
-                Ok(SessionCommandV1::Block(BlockSessionV1 {
-                    expected_attempt_id: input.preconditions.expected_attempt_id.clone(),
-                    blocker_id,
-                    reason: input.reason.clone(),
-                }))
-            }
-            SliceCommandV1::SessionUnblock(input) => {
-                Ok(SessionCommandV1::Unblock(UnblockSessionV1 {
-                    expected_attempt_id: input.preconditions.expected_attempt_id.clone(),
-                    blocker_id: input.blocker_id.clone(),
-                    unblock_all: input.all,
-                }))
-            }
-            SliceCommandV1::SessionSkip(input) => {
-                let (stage, _) =
-                    active_stage_attempt_v1(prior).map_err(BoundaryDispositionV1::Domain)?;
-                let next_attempt_id = if is_final_stage_v1(prior, stage)
-                    .map_err(BoundaryDispositionV1::Domain)?
-                {
-                    None
-                } else {
-                    Some(match resolution {
-                        AdmissionResolutionV1::SessionSkip { next_attempt_id } => {
-                            next_attempt_id.clone()
-                        }
-                        _ => {
-                            return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                                reason: "persisted admission resolution does not match session skip",
-                            }));
-                        }
-                    })
-                };
-                Ok(SessionCommandV1::Skip(SkipSessionV1 {
-                    expected_attempt_id: input.preconditions.expected_attempt_id.clone(),
-                    reason: input.reason.clone(),
-                    next_attempt_id,
-                }))
-            }
-            SliceCommandV1::SessionRetry(input) => {
-                let next_attempt_id = match resolution {
-                    AdmissionResolutionV1::SessionRetry { next_attempt_id } => {
-                        next_attempt_id.clone()
-                    }
-                    _ => {
-                        return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                            reason: "persisted admission resolution does not match session retry",
-                        }));
-                    }
-                };
-                Ok(SessionCommandV1::Retry(RetrySessionV1 {
-                    expected_attempt_id: input.preconditions.expected_attempt_id.clone(),
-                    reason: input.reason.clone(),
-                    next_attempt_id,
-                }))
-            }
-            SliceCommandV1::SessionReturn(input) => {
-                let destination_attempt_id = match resolution {
-                    AdmissionResolutionV1::SessionReturn {
-                        destination_attempt_id,
-                    } => destination_attempt_id.clone(),
-                    _ => {
-                        return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                            reason: "persisted admission resolution does not match session return",
-                        }));
-                    }
-                };
-                Ok(SessionCommandV1::Return(ReturnSessionV1 {
-                    expected_attempt_id: input.preconditions.expected_attempt_id.clone(),
-                    destination_stage_id: input.destination_stage_id.clone(),
-                    reason: input.reason.clone(),
-                    destination_attempt_id,
-                }))
-            }
-            SliceCommandV1::SessionComplete(input) => {
-                let (stage, attempt) =
-                    active_stage_attempt_v1(prior).map_err(BoundaryDispositionV1::Domain)?;
-                if attempt
-                    .blockers()
-                    .iter()
-                    .any(|blocker| blocker.state() == BlockerState::Open)
-                {
-                    return Err(BoundaryDispositionV1::Domain(DomainError::BlockersPresent));
-                }
-                if !required_items_satisfied(stage, attempt.item_slots()) {
-                    return Err(BoundaryDispositionV1::Domain(
-                        DomainError::RequiredItemsMissing,
-                    ));
-                }
-                if !attempt.is_ready_to_complete(stage) {
-                    return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                        reason: "the active attempt is not ready to complete",
-                    }));
-                }
-                let verifications = self.local_artifact_verifications(attempt, workspace)?;
-                let next_attempt_id = if is_final_stage_v1(prior, stage)
-                    .map_err(BoundaryDispositionV1::Domain)?
-                {
-                    None
-                } else {
-                    Some(match resolution {
-                        AdmissionResolutionV1::SessionComplete { next_attempt_id } => {
-                            next_attempt_id.clone()
-                        }
-                        _ => {
-                            return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                                reason: "persisted admission resolution does not match session completion",
-                            }));
-                        }
-                    })
-                };
-                Ok(SessionCommandV1::Complete(CompleteSessionV1 {
-                    expected_attempt_id: input.preconditions.expected_attempt_id.clone(),
-                    next_attempt_id,
-                    local_artifact_verifications: verifications,
-                }))
-            }
-            SliceCommandV1::SessionCancel(input) => Ok(SessionCommandV1::Cancel(CancelSessionV1 {
-                expected_attempt_id: input.preconditions.expected_attempt_id.clone(),
-                reason: input.reason.clone(),
-            })),
-            SliceCommandV1::SessionReopen(input) => {
-                let destination_attempt_id = match resolution {
-                    AdmissionResolutionV1::SessionReopen {
-                        destination_attempt_id,
-                    } => destination_attempt_id.clone(),
-                    _ => {
-                        return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                            reason: "persisted admission resolution does not match session reopen",
-                        }));
-                    }
-                };
-                Ok(SessionCommandV1::Reopen(ReopenSessionV1 {
-                    expected_session_id: input.preconditions.expected_session_id.clone(),
-                    destination_stage_id: input.destination_stage_id.clone(),
-                    reason: input.reason.clone(),
-                    destination_attempt_id,
-                }))
-            }
-            SliceCommandV1::SessionReset(input) => Ok(SessionCommandV1::Reset(ResetSessionV1 {
-                expected_session_id: input.preconditions.expected_session_id.clone(),
-                confirmed: input.confirmed,
-            })),
-            SliceCommandV1::WorkspaceResetAll(input) => {
-                if input
-                    .preconditions
-                    .expected_workspace_id
-                    .as_ref()
-                    .is_some_and(|expected| expected != workspace.identity().workspace_uuid())
-                {
-                    return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                        reason: "workspace reset precondition does not match the claim",
-                    }));
-                }
-                Ok(SessionCommandV1::ResetAll(ResetAllWorkspaceV1 {
-                    workspace_id: input.preconditions.expected_workspace_id.clone(),
-                    confirmed: input.confirmed,
-                }))
-            }
-            SliceCommandV1::WorkspaceInit(_)
-            | SliceCommandV1::WorkspaceDoctor(_)
-            | SliceCommandV1::WorkspaceShow(_)
-            | SliceCommandV1::WorkspaceRepair(_)
-            | SliceCommandV1::SessionStatus(_)
-            | SliceCommandV1::SessionNext(_)
-            | SliceCommandV1::JobList(_)
-            | SliceCommandV1::JobLookup(_)
-            | SliceCommandV1::JobStatus(_)
-            | SliceCommandV1::JobWait(_)
-            | SliceCommandV1::JobCancel(_) => {
-                Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                    reason: "command is not a session mutation",
-                }))
-            }
-        }
-    }
-
-    fn local_artifact_verifications(
-        &self,
-        attempt: &AttemptV1,
-        workspace: &WorkspaceBindingV1,
-    ) -> Result<Vec<LocalArtifactVerificationV1>, BoundaryDispositionV1> {
-        let mut verifications = Vec::new();
-        for slot in attempt.item_slots() {
-            let Some(artifact) = slot.value().and_then(ItemValueV1::as_artifact) else {
-                continue;
-            };
-            if artifact.location_kind() != ArtifactLocationKindV1::LocalPath {
-                continue;
-            }
-            let verification = self
-                .artifacts
-                .revalidate_local_artifact(workspace, slot.item_id(), artifact)
-                .map_err(BoundaryDispositionV1::from)?;
-            if verification.item_id != *slot.item_id() {
-                return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                    reason: "artifact verifier returned a different item identifier",
-                }));
-            }
-            verifications.push(verification);
-        }
-        Ok(verifications)
-    }
 }
 
 impl<Store, Ids, Clock, Procedures, Artifacts, Workspaces>
@@ -3708,8 +2912,7 @@ where
     Artifacts: ArtifactVerifierV1,
     Workspaces: WorkspaceRevalidatorV1,
 {
-    /// Attempts the Procedure v2 start path after runtime admission. `None` means the source is not
-    /// a Procedure v2 document and the unchanged v1 admission path may inspect it.
+    /// Attempts the Procedure v2 start path after runtime admission.
     pub fn admit_procedure_v2_start_for_workspace_with_response_context(
         &self,
         expected_workspace: &WorkspaceBindingV1,
@@ -3783,25 +2986,17 @@ where
         let first_attempt_id = self.ids.next_attempt_id();
         let snapshot_id = self.ids.next_procedure_snapshot_id();
         let state = match &start.source {
-            SessionStartSourceV1::Procedure { procedure } => {
-                match prepare_custom_procedure_v2_start(
-                    &self.procedures,
-                    &binding,
-                    procedure,
-                    start.expected_procedure_digest.as_ref(),
-                    &start.task_title,
-                    session_id,
-                    first_attempt_id,
-                    snapshot_id,
-                    now,
-                ) {
-                    Ok(state) => state,
-                    Err(ProcedureV2StartPreparationErrorV1::Source(
-                        ProcedureV2SourceAdmissionErrorV1::NotProcedureV2,
-                    )) => return Ok(None),
-                    Err(error) => return Err(error),
-                }
-            }
+            SessionStartSourceV1::Procedure { procedure } => prepare_custom_procedure_v2_start(
+                &self.procedures,
+                &binding,
+                procedure,
+                start.expected_procedure_digest.as_ref(),
+                &start.task_title,
+                session_id,
+                first_attempt_id,
+                snapshot_id,
+                now,
+            )?,
             SessionStartSourceV1::Preset { preset } => {
                 let Some((snapshot, pinned_digest)) = self
                     .procedures
@@ -3885,9 +3080,6 @@ where
                 DomainCommand::SessionStartReplace,
             ),
         };
-        if initial_goal.is_none() {
-            return Ok(None);
-        }
         if let Some(existing) = self
             .store
             .read_idempotent_execution(expected_workspace.identity(), &idempotency_key)
@@ -3963,8 +3155,9 @@ where
                 state
             }
         };
-        let initial_goal = initial_goal.expect("goal-bearing start was checked above");
-        state = bind_initial_goal_for_start_v2(state, initial_goal, now)?;
+        if let Some(initial_goal) = initial_goal {
+            state = bind_initial_goal_for_start_v2(state, initial_goal, now)?;
+        }
         let admitted = AdmittedProcedureV2StartV1 {
             selector: request.selector().clone(),
             workspace_id: binding.identity().workspace_uuid().clone(),
@@ -4027,8 +3220,7 @@ where
     }
 
     /// Attempts the Procedure v2 complete, skip, retry, or item path. The immutable execution
-    /// document freezes all generated IDs and attachment metadata before admission; an absent
-    /// graph task preserves the unchanged v1 fallback.
+    /// document freezes all generated IDs and attachment metadata before admission.
     pub fn admit_procedure_v2_mutation_for_workspace_with_response_context(
         &self,
         expected_workspace: &WorkspaceBindingV1,
@@ -4092,7 +3284,13 @@ where
             .store
             .read_graph_workspace_view_v2(binding.identity())?;
         let Some(state) = view.graph_state() else {
-            return Ok(None);
+            let expected = expected_session_id_v1(request.command()).ok_or_else(|| {
+                invalid_execution_v1("Procedure v2 graph mutation is missing a session identity")
+            })?;
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: expected.clone(),
+                actual: None,
+            });
         };
         if let Some(expected) = expected_session_id_v1(request.command())
             && state.trace().session_id() != expected
@@ -4284,7 +3482,10 @@ where
             .store
             .read_graph_workspace_view_v2(binding.identity())?;
         let Some(state) = view.graph_state() else {
-            return Ok(None);
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: command.preconditions.expected_session_id.clone(),
+                actual: None,
+            });
         };
         if state.trace().session_id() != &command.preconditions.expected_session_id {
             return Err(ExecutionErrorV1::SessionIdentityMismatch {
@@ -4409,7 +3610,10 @@ where
             .store
             .read_graph_workspace_view_v2(binding.identity())?;
         let Some(state) = view.graph_state() else {
-            return Ok(None);
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: procedure_v2_mutation_session_id_v1(request.command()).clone(),
+                actual: None,
+            });
         };
         let (admitted, domain_command, preconditions, session_id) = match request.command() {
             ProcedureV2MutationCommandV1::GoalDefine(command) => {
@@ -4574,7 +3778,10 @@ where
             .store
             .read_graph_workspace_view_v2(binding.identity())?;
         let Some(state) = view.graph_state() else {
-            return Ok(None);
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: command.preconditions.expected_session_id.clone(),
+                actual: None,
+            });
         };
         if state.trace().session_id() != &command.preconditions.expected_session_id {
             return Err(ExecutionErrorV1::SessionIdentityMismatch {
@@ -4707,7 +3914,10 @@ where
             .store
             .read_graph_workspace_view_v2(binding.identity())?;
         let Some(state) = view.graph_state() else {
-            return Ok(None);
+            return Err(ExecutionErrorV1::SessionIdentityMismatch {
+                expected: command.preconditions.expected_session_id.clone(),
+                actual: None,
+            });
         };
         if state.trace().session_id() != &command.preconditions.expected_session_id {
             return Err(ExecutionErrorV1::SessionIdentityMismatch {
@@ -5871,33 +5081,6 @@ fn validate_procedure_v2_mutation_durable_execution_v1(
     }
     Ok(())
 }
-fn start_session_input_v1(
-    input: &SessionStartV1,
-    resolution: &AdmissionResolutionV1,
-) -> Result<StartSessionV1, BoundaryDispositionV1> {
-    let (snapshot, session_id, first_attempt_id) = match resolution {
-        AdmissionResolutionV1::SessionStart {
-            snapshot,
-            session_id,
-            first_attempt_id,
-        } => (
-            snapshot.as_ref().clone(),
-            session_id.clone(),
-            first_attempt_id.clone(),
-        ),
-        _ => {
-            return Err(BoundaryDispositionV1::Domain(DomainError::InvalidState {
-                reason: "persisted admission resolution does not match session start",
-            }));
-        }
-    };
-    Ok(StartSessionV1 {
-        task_title: input.task_title.clone(),
-        snapshot,
-        session_id,
-        first_attempt_id,
-    })
-}
 
 #[derive(Debug)]
 enum BoundaryDispositionV1 {
@@ -5953,11 +5136,9 @@ fn command_for_admission_v1(command: &SliceCommandV1) -> Result<DomainCommand, E
         SliceCommandV1::SessionComplete(_) => DomainCommand::SessionComplete,
         SliceCommandV1::SessionSkip(_) => DomainCommand::SessionSkip,
         SliceCommandV1::SessionRetry(_) => DomainCommand::SessionRetry,
-        SliceCommandV1::SessionReturn(_) => DomainCommand::SessionReturn,
         SliceCommandV1::SessionBlock(_) => DomainCommand::SessionBlock,
         SliceCommandV1::SessionUnblock(_) => DomainCommand::SessionUnblock,
         SliceCommandV1::SessionCancel(_) => DomainCommand::SessionCancel,
-        SliceCommandV1::SessionReopen(_) => DomainCommand::SessionReopen,
         SliceCommandV1::SessionReset(_) => DomainCommand::SessionReset,
         SliceCommandV1::ItemCheck(input) => DomainCommand::ItemCheck {
             item_id: input.item_id.clone(),
@@ -6028,9 +5209,6 @@ fn store_preconditions_v1(
         }
         SliceCommandV1::SessionSkip(input) => session_store_preconditions_v1(&input.preconditions),
         SliceCommandV1::SessionRetry(input) => session_store_preconditions_v1(&input.preconditions),
-        SliceCommandV1::SessionReturn(input) => {
-            session_store_preconditions_v1(&input.preconditions)
-        }
         SliceCommandV1::SessionBlock(input) => session_store_preconditions_v1(&input.preconditions),
         SliceCommandV1::SessionUnblock(input) => {
             session_store_preconditions_v1(&input.preconditions)
@@ -6039,9 +5217,6 @@ fn store_preconditions_v1(
             session_store_preconditions_v1(&input.preconditions)
         }
         SliceCommandV1::SessionStartReplace(input) => {
-            session_revision_store_preconditions_v1(input.preconditions.expected_session_revision)
-        }
-        SliceCommandV1::SessionReopen(input) => {
             session_revision_store_preconditions_v1(input.preconditions.expected_session_revision)
         }
         SliceCommandV1::SessionReset(input) => {
@@ -6077,11 +5252,9 @@ fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
         SliceCommandV1::SessionComplete(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::SessionSkip(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::SessionRetry(input) => Some(&input.preconditions.expected_session_id),
-        SliceCommandV1::SessionReturn(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::SessionBlock(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::SessionUnblock(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::SessionCancel(input) => Some(&input.preconditions.expected_session_id),
-        SliceCommandV1::SessionReopen(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::SessionReset(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::ItemCheck(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::ItemUncheck(input) => Some(&input.preconditions.expected_session_id),
@@ -6106,13 +5279,19 @@ fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
     }
 }
 
-fn expected_start_procedure_digest_v1(command: &SliceCommandV1) -> Option<&Sha256Digest> {
+fn procedure_v2_mutation_session_id_v1(command: &ProcedureV2MutationCommandV1) -> &SessionId {
     match command {
-        SliceCommandV1::SessionStart(input) => input.expected_procedure_digest.as_ref(),
-        SliceCommandV1::SessionStartReplace(input) => {
-            input.start.expected_procedure_digest.as_ref()
+        ProcedureV2MutationCommandV1::SessionDecide(input) => {
+            &input.preconditions.expected_session_id
         }
-        _ => None,
+        ProcedureV2MutationCommandV1::SessionRework(input) => {
+            &input.preconditions.expected_session_id
+        }
+        ProcedureV2MutationCommandV1::GoalDefine(input) => &input.preconditions.expected_session_id,
+        ProcedureV2MutationCommandV1::GoalRevise(input) => &input.preconditions.expected_session_id,
+        ProcedureV2MutationCommandV1::GoalAssessCriterion(input) => {
+            &input.preconditions.expected_session_id
+        }
     }
 }
 
@@ -6124,23 +5303,6 @@ fn admission_session_identity_v1(command: &SliceCommandV1) -> AdmissionSessionId
     } else {
         AdmissionSessionIdentityV1::Any
     }
-}
-
-fn enforce_session_identity_v1(
-    command: &SliceCommandV1,
-    current: Option<&SessionAggregateV1>,
-) -> Result<(), DomainError> {
-    let Some(expected) = expected_session_id_v1(command) else {
-        return Ok(());
-    };
-    let actual = current.map(SessionAggregateV1::session_id).cloned();
-    if actual.as_ref() != Some(expected) {
-        return Err(DomainError::SessionIdentityMismatch {
-            expected: expected.clone(),
-            actual,
-        });
-    }
-    Ok(())
 }
 
 fn item_store_preconditions_v1(
@@ -6187,78 +5349,6 @@ fn session_revision_store_preconditions_v1(
     (Some(expected_session_revision), None, None, None)
 }
 
-fn expected_revision_v1(command: &SliceCommandV1) -> Revision {
-    match command {
-        SliceCommandV1::SessionStartReplace(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionComplete(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionSkip(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionRetry(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionReturn(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionBlock(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionUnblock(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionCancel(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionReopen(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::SessionReset(input) => input.preconditions.expected_session_revision,
-        SliceCommandV1::WorkspaceInit(_)
-        | SliceCommandV1::WorkspaceResetAll(_)
-        | SliceCommandV1::SessionStart(_)
-        | SliceCommandV1::ItemCheck(_)
-        | SliceCommandV1::ItemUncheck(_)
-        | SliceCommandV1::ItemSet(_)
-        | SliceCommandV1::ItemAdd(_)
-        | SliceCommandV1::ItemRemove(_)
-        | SliceCommandV1::ItemAttach(_)
-        | SliceCommandV1::ItemClear(_)
-        | SliceCommandV1::WorkspaceDoctor(_)
-        | SliceCommandV1::WorkspaceShow(_)
-        | SliceCommandV1::WorkspaceRepair(_)
-        | SliceCommandV1::SessionStatus(_)
-        | SliceCommandV1::SessionNext(_)
-        | SliceCommandV1::JobList(_)
-        | SliceCommandV1::JobLookup(_)
-        | SliceCommandV1::JobStatus(_)
-        | SliceCommandV1::JobWait(_)
-        | SliceCommandV1::JobCancel(_) => Revision::ZERO,
-    }
-}
-
-fn core_item_preconditions_v1(
-    preconditions: &podway_protocol::ItemMutationPreconditionsWireV1,
-) -> ItemMutationPreconditionsV1 {
-    ItemMutationPreconditionsV1 {
-        expected_attempt_id: preconditions.expected_attempt_id.clone(),
-        expected_item_revision: preconditions.expected_item_revision,
-    }
-}
-
-fn set_item_value_v1(
-    prior: Option<&SessionAggregateV1>,
-    item_id: &ItemId,
-    wire_value: &str,
-) -> Result<ItemValueV1, DomainError> {
-    let (stage, _) = active_stage_attempt_v1(prior)?;
-    let specification = stage
-        .item(item_id)
-        .ok_or_else(|| DomainError::ItemNotFound {
-            item_id: item_id.clone(),
-        })?;
-    match specification.item_type() {
-        ItemTypeV1::Text => Ok(ItemValueV1::text(wire_value)),
-        ItemTypeV1::Choice => ItemValueV1::choice(wire_value),
-        ItemTypeV1::Integer => wire_value
-            .parse::<i64>()
-            .map(ItemValueV1::integer)
-            .map_err(|_| DomainError::InvalidState {
-                reason: "integer item values must be canonical signed integers",
-            }),
-        ItemTypeV1::Confirm | ItemTypeV1::List | ItemTypeV1::Artifact => {
-            Err(DomainError::InvalidState {
-                reason: "set is not valid for this item type",
-            })
-        }
-    }
-}
-
 fn validate_local_attached_artifact_v1(
     path: &str,
     media_type: Option<&str>,
@@ -6283,183 +5373,16 @@ fn validate_local_attached_artifact_v1(
     Ok(())
 }
 
-fn active_stage_attempt_v1(
-    prior: Option<&SessionAggregateV1>,
-) -> Result<(&StageSpecV1, &AttemptV1), DomainError> {
-    let session = prior.ok_or(DomainError::InvalidState {
-        reason: "a session is required",
-    })?;
-    let stage_id = session.active_stage_id().ok_or(DomainError::InvalidState {
-        reason: "a running session requires an active stage",
-    })?;
-    let attempt_id = session
-        .active_attempt_id()
-        .ok_or(DomainError::InvalidState {
-            reason: "a running session requires an active attempt",
-        })?;
-    let stage = session
-        .snapshot()
-        .stages()
-        .iter()
-        .find(|stage| stage.id() == stage_id)
-        .ok_or(DomainError::InvalidState {
-            reason: "active stage is absent from the procedure snapshot",
-        })?;
-    let attempt = session
-        .attempts()
-        .iter()
-        .find(|attempt| attempt.attempt_id() == attempt_id)
-        .ok_or(DomainError::InvalidState {
-            reason: "active attempt is absent from the session",
-        })?;
-    Ok((stage, attempt))
-}
-
-fn is_final_stage_v1(
-    prior: Option<&SessionAggregateV1>,
-    stage: &StageSpecV1,
-) -> Result<bool, DomainError> {
-    let session = prior.ok_or(DomainError::InvalidState {
-        reason: "a session is required",
-    })?;
-    let stage_index = session
-        .snapshot()
-        .stages()
-        .iter()
-        .position(|candidate| candidate.id() == stage.id())
-        .ok_or(DomainError::InvalidState {
-            reason: "active stage is absent from the procedure snapshot",
-        })?;
-    Ok(stage_index + 1 == session.snapshot().stages().len())
-}
-
-fn state_transition_v1(
-    command: &DomainCommand,
-    prior: Option<&SessionAggregateV1>,
-    outcome: &podway_core::TransitionOutcomeV1,
-) -> Result<StateTransitionV1, DomainError> {
-    let previous_workspace_revision = prior.map_or(Revision::ZERO, SessionAggregateV1::revision);
-    let (session_id, resulting_workspace_revision, persisted_session_mutation) =
-        match outcome.next_aggregate() {
-            Some(next) => {
-                let resulting_workspace_revision = outcome
-                    .revision_after()
-                    .unwrap_or(previous_workspace_revision);
-                let persisted_session_mutation = if outcome.changed() {
-                    match prior {
-                        Some(prior)
-                            if matches!(command, DomainCommand::SessionStartReplace)
-                                && prior.session_id() != next.session_id() =>
-                        {
-                            PersistedSessionMutationV1::ReplaceFresh(next.clone())
-                        }
-                        _ => PersistedSessionMutationV1::Replace(next.clone()),
-                    }
-                } else {
-                    PersistedSessionMutationV1::Unchanged
-                };
-                (
-                    Some(next.session_id().clone()),
-                    resulting_workspace_revision,
-                    persisted_session_mutation,
-                )
-            }
-            None if outcome.changed() => (None, Revision::ZERO, PersistedSessionMutationV1::Clear),
-            None => {
-                return Err(DomainError::InvalidState {
-                    reason: "admitted session transition has no next aggregate",
-                });
-            }
-        };
-    StateTransitionV1::new_persisted(
-        session_id,
-        previous_workspace_revision,
-        resulting_workspace_revision,
-        persisted_session_mutation,
-    )
-    .map_err(|_| DomainError::InvalidState {
-        reason: "transition cannot be persisted",
-    })
-}
-
-fn domain_result_v1(
-    command: &DomainCommand,
-    prior: Option<&SessionAggregateV1>,
-    outcome: &podway_core::TransitionOutcomeV1,
-    workspace_id: &WorkspaceId,
-) -> Result<DomainResult, DomainError> {
-    let session_id = outcome
-        .next_aggregate()
-        .or(prior)
-        .map(|session| session.session_id().clone());
-    let revision_before = outcome.revision_before().unwrap_or(Revision::ZERO);
-    let revision_after = if matches!(command, DomainCommand::SessionReset) {
-        Revision::ZERO
-    } else {
-        outcome.revision_after().unwrap_or(revision_before)
-    };
-    let changed = outcome.changed();
-    let result = match command {
-        DomainCommand::ItemCheck { item_id }
-        | DomainCommand::ItemUncheck { item_id }
-        | DomainCommand::ItemSet { item_id }
-        | DomainCommand::ItemAdd { item_id }
-        | DomainCommand::ItemRemove { item_id }
-        | DomainCommand::ItemAttach { item_id }
-        | DomainCommand::ItemClear { item_id } => DomainResult::ItemChanged {
-            session_id: session_id.clone().ok_or(DomainError::InvalidState {
-                reason: "admitted session transition has no session aggregate",
-            })?,
-            item_id: item_id.clone(),
-            revision_before,
-            revision_after,
-            changed,
-        },
-        DomainCommand::SessionStart
-        | DomainCommand::SessionStartReplace
-        | DomainCommand::SessionComplete
-        | DomainCommand::SessionSkip
-        | DomainCommand::SessionRetry
-        | DomainCommand::SessionReturn
-        | DomainCommand::SessionBlock
-        | DomainCommand::SessionUnblock
-        | DomainCommand::SessionCancel
-        | DomainCommand::SessionReopen
-        | DomainCommand::SessionReset
-        | DomainCommand::SessionDecide
-        | DomainCommand::SessionRework
-        | DomainCommand::GoalDefine
-        | DomainCommand::GoalRevise
-        | DomainCommand::GoalAssessCriterion => DomainResult::SessionChanged {
-            session_id: session_id.ok_or(DomainError::InvalidState {
-                reason: "admitted session transition has no session aggregate",
-            })?,
-            revision_before,
-            revision_after,
-            changed,
-        },
-        DomainCommand::WorkspaceInitialize => DomainResult::WorkspaceInitialized {
-            workspace_id: workspace_id.clone(),
-            revision: Revision::ZERO,
-        },
-        DomainCommand::WorkspaceResetAll => DomainResult::WorkspaceReset {
-            workspace_id: workspace_id.clone(),
-            revision: Revision::ZERO,
-        },
-    };
-    Ok(result)
-}
-
 fn canonical_execution_document_v1(
     request: &SliceRequestV1,
     identity: &DurableWorktreeIdentityV1,
-    resolution: &AdmissionResolutionV1,
+    _resolution: &AdmissionResolutionV1,
 ) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
     let (preconditions, payload) = execution_components_v1(request.command());
     let document = json!({
         "command": request.command().command_name(),
-        "execution": admission_resolution_value_v1(resolution),
-        "execution_version": EXECUTION_DOCUMENT_VERSION_V5,
+        "execution": { "kind": "workspace_bootstrap" },
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V15,
         "payload": payload,
         "preconditions": preconditions,
         "selector": request.selector(),
@@ -6591,10 +5514,6 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
             session_preconditions_value_v1(&input.preconditions),
             json!({"reason": input.reason}),
         ),
-        SliceCommandV1::SessionReturn(input) => (
-            session_preconditions_value_v1(&input.preconditions),
-            json!({"destination_stage_id": input.destination_stage_id, "reason": input.reason}),
-        ),
         SliceCommandV1::SessionBlock(input) => (
             session_preconditions_value_v1(&input.preconditions),
             json!({"reason": input.reason}),
@@ -6606,10 +5525,6 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
         SliceCommandV1::SessionCancel(input) => (
             session_preconditions_value_v1(&input.preconditions),
             json!({"reason": input.reason}),
-        ),
-        SliceCommandV1::SessionReopen(input) => (
-            session_revision_preconditions_value_v1(&input.preconditions),
-            json!({"destination_stage_id": input.destination_stage_id, "reason": input.reason}),
         ),
         SliceCommandV1::SessionReset(input) => (
             session_identity_preconditions_value_v1(&input.preconditions),
@@ -6694,15 +5609,6 @@ fn session_identity_preconditions_value_v1(
     })
 }
 
-fn session_revision_preconditions_value_v1(
-    preconditions: &podway_protocol::SessionRevisionPreconditionsWireV1,
-) -> Value {
-    json!({
-        "session_id": preconditions.expected_session_id,
-        "session_revision": preconditions.expected_session_revision,
-    })
-}
-
 fn workspace_reset_all_preconditions_value_v1(
     preconditions: &podway_protocol::WorkspaceResetAllPreconditionsWireV1,
 ) -> Value {
@@ -6734,231 +5640,6 @@ fn item_attach_source_value_v1(source: &ItemAttachSourceV1) -> Value {
         }),
     }
 }
-fn admission_resolution_value_v1(resolution: &AdmissionResolutionV1) -> Value {
-    match resolution {
-        AdmissionResolutionV1::None => json!({"kind": "none"}),
-        AdmissionResolutionV1::SessionStart {
-            snapshot,
-            session_id,
-            first_attempt_id,
-        } => json!({
-            "first_attempt_id": first_attempt_id.as_str(),
-            "kind": "session_start",
-            "session_id": session_id.as_str(),
-            "snapshot": {
-                "canonical_json": snapshot.canonical_json().as_str(),
-                "created_at": snapshot.created_at().get(),
-                "digest": snapshot.digest().as_str(),
-                "name": snapshot.name(),
-                "procedure_id": snapshot.procedure_id(),
-                "procedure_version": snapshot.procedure_version(),
-                "snapshot_id": snapshot.snapshot_id().as_str(),
-                "source_label": snapshot.source_label().as_str(),
-            },
-        }),
-        AdmissionResolutionV1::SessionBlock { blocker_id } => {
-            json!({"blocker_id": blocker_id.as_str(), "kind": "session_block"})
-        }
-        AdmissionResolutionV1::SessionSkip { next_attempt_id } => {
-            json!({"kind": "session_skip", "next_attempt_id": next_attempt_id.as_str()})
-        }
-        AdmissionResolutionV1::SessionRetry { next_attempt_id } => {
-            json!({"kind": "session_retry", "next_attempt_id": next_attempt_id.as_str()})
-        }
-        AdmissionResolutionV1::SessionReturn {
-            destination_attempt_id,
-        } => {
-            json!({
-                "destination_attempt_id": destination_attempt_id.as_str(),
-                "kind": "session_return",
-            })
-        }
-        AdmissionResolutionV1::SessionComplete { next_attempt_id } => {
-            json!({"kind": "session_complete", "next_attempt_id": next_attempt_id.as_str()})
-        }
-        AdmissionResolutionV1::SessionReopen {
-            destination_attempt_id,
-        } => {
-            json!({
-                "destination_attempt_id": destination_attempt_id.as_str(),
-                "kind": "session_reopen",
-            })
-        }
-    }
-}
-
-fn decode_admission_resolution_v1(
-    command: &SliceCommandV1,
-    object: &Map<String, Value>,
-) -> Result<AdmissionResolutionV1, ExecutionErrorV1> {
-    let kind = value_string_v1(object, "kind")?;
-    match command {
-        SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_) => {
-            require_exact_keys_v1(
-                object,
-                &["first_attempt_id", "kind", "session_id", "snapshot"],
-            )?;
-            if kind != "session_start" {
-                return Err(invalid_execution_v1(
-                    "execution resolution kind does not match command",
-                ));
-            }
-            Ok(AdmissionResolutionV1::SessionStart {
-                snapshot: Box::new(decode_snapshot_v1(value_object_v1(object, "snapshot")?)?),
-                session_id: value_typed_v1(object, "session_id")?,
-                first_attempt_id: value_typed_v1(object, "first_attempt_id")?,
-            })
-        }
-        SliceCommandV1::SessionBlock(_) => {
-            require_exact_keys_v1(object, &["blocker_id", "kind"])?;
-            if kind != "session_block" {
-                return Err(invalid_execution_v1(
-                    "execution resolution kind does not match command",
-                ));
-            }
-            Ok(AdmissionResolutionV1::SessionBlock {
-                blocker_id: value_typed_v1(object, "blocker_id")?,
-            })
-        }
-        SliceCommandV1::SessionSkip(_) => {
-            decode_next_attempt_resolution_v1(object, kind, "session_skip", |next_attempt_id| {
-                AdmissionResolutionV1::SessionSkip { next_attempt_id }
-            })
-        }
-        SliceCommandV1::SessionRetry(_) => {
-            decode_next_attempt_resolution_v1(object, kind, "session_retry", |next_attempt_id| {
-                AdmissionResolutionV1::SessionRetry { next_attempt_id }
-            })
-        }
-        SliceCommandV1::SessionReturn(_) => decode_destination_attempt_resolution_v1(
-            object,
-            kind,
-            "session_return",
-            |destination_attempt_id| AdmissionResolutionV1::SessionReturn {
-                destination_attempt_id,
-            },
-        ),
-        SliceCommandV1::SessionComplete(_) => {
-            decode_next_attempt_resolution_v1(object, kind, "session_complete", |next_attempt_id| {
-                AdmissionResolutionV1::SessionComplete { next_attempt_id }
-            })
-        }
-        SliceCommandV1::SessionReopen(_) => decode_destination_attempt_resolution_v1(
-            object,
-            kind,
-            "session_reopen",
-            |destination_attempt_id| AdmissionResolutionV1::SessionReopen {
-                destination_attempt_id,
-            },
-        ),
-        SliceCommandV1::WorkspaceInit(_)
-        | SliceCommandV1::WorkspaceResetAll(_)
-        | SliceCommandV1::ItemCheck(_)
-        | SliceCommandV1::ItemUncheck(_)
-        | SliceCommandV1::ItemSet(_)
-        | SliceCommandV1::ItemAdd(_)
-        | SliceCommandV1::ItemRemove(_)
-        | SliceCommandV1::ItemAttach(_)
-        | SliceCommandV1::ItemClear(_)
-        | SliceCommandV1::SessionUnblock(_)
-        | SliceCommandV1::SessionCancel(_)
-        | SliceCommandV1::SessionReset(_)
-        | SliceCommandV1::WorkspaceDoctor(_)
-        | SliceCommandV1::WorkspaceShow(_)
-        | SliceCommandV1::WorkspaceRepair(_)
-        | SliceCommandV1::SessionStatus(_)
-        | SliceCommandV1::SessionNext(_)
-        | SliceCommandV1::JobList(_)
-        | SliceCommandV1::JobLookup(_)
-        | SliceCommandV1::JobStatus(_)
-        | SliceCommandV1::JobWait(_)
-        | SliceCommandV1::JobCancel(_) => {
-            require_exact_keys_v1(object, &["kind"])?;
-            if kind != "none" {
-                return Err(invalid_execution_v1(
-                    "execution resolution kind does not match command",
-                ));
-            }
-            Ok(AdmissionResolutionV1::None)
-        }
-    }
-}
-
-fn decode_next_attempt_resolution_v1<F>(
-    object: &Map<String, Value>,
-    kind: &str,
-    expected_kind: &'static str,
-    constructor: F,
-) -> Result<AdmissionResolutionV1, ExecutionErrorV1>
-where
-    F: FnOnce(AttemptId) -> AdmissionResolutionV1,
-{
-    require_exact_keys_v1(object, &["kind", "next_attempt_id"])?;
-    if kind != expected_kind {
-        return Err(invalid_execution_v1(
-            "execution resolution kind does not match command",
-        ));
-    }
-    Ok(constructor(value_typed_v1(object, "next_attempt_id")?))
-}
-
-fn decode_destination_attempt_resolution_v1<F>(
-    object: &Map<String, Value>,
-    kind: &str,
-    expected_kind: &'static str,
-    constructor: F,
-) -> Result<AdmissionResolutionV1, ExecutionErrorV1>
-where
-    F: FnOnce(AttemptId) -> AdmissionResolutionV1,
-{
-    require_exact_keys_v1(object, &["destination_attempt_id", "kind"])?;
-    if kind != expected_kind {
-        return Err(invalid_execution_v1(
-            "execution resolution kind does not match command",
-        ));
-    }
-    Ok(constructor(value_typed_v1(
-        object,
-        "destination_attempt_id",
-    )?))
-}
-
-fn decode_snapshot_v1(
-    object: &Map<String, Value>,
-) -> Result<ProcedureSnapshotV1, ExecutionErrorV1> {
-    require_exact_keys_v1(
-        object,
-        &[
-            "canonical_json",
-            "created_at",
-            "digest",
-            "name",
-            "procedure_id",
-            "procedure_version",
-            "snapshot_id",
-            "source_label",
-        ],
-    )?;
-    let canonical_json =
-        CanonicalProcedureJsonV1::new(value_string_v1(object, "canonical_json")?.to_owned())
-            .map_err(|_| invalid_execution_v1("snapshot canonical procedure is invalid"))?;
-    let source_label =
-        ProcedureSourceLabelV1::new(value_string_v1(object, "source_label")?.to_owned())
-            .map_err(|_| invalid_execution_v1("snapshot source label is invalid"))?;
-    ProcedureSnapshotV1::from_canonical_json(CanonicalProcedureSnapshotInputV1 {
-        snapshot_id: value_typed_v1(object, "snapshot_id")?,
-        schema_id: "podway.procedure/v1".to_owned(),
-        procedure_id: value_string_v1(object, "procedure_id")?.to_owned(),
-        procedure_version: value_string_v1(object, "procedure_version")?.to_owned(),
-        name: value_string_v1(object, "name")?.to_owned(),
-        source_label,
-        canonical_json,
-        digest: value_typed_v1(object, "digest")?,
-        created_at: UnixMillis::new(value_u64_v1(object, "created_at")?),
-    })
-    .map_err(|_| invalid_execution_v1("snapshot content identity is invalid"))
-}
-
 fn decode_execution_document_v1(
     source: &str,
 ) -> Result<
@@ -6978,26 +5659,7 @@ fn decode_execution_document_v1(
         .ok_or_else(|| invalid_execution_v1("root is not an object"))?;
     let version = value_u64_v1(object, "execution_version")?;
     let resolution = match version {
-        version
-            if version == u64::from(EXECUTION_DOCUMENT_VERSION_V1)
-                || version == u64::from(EXECUTION_DOCUMENT_VERSION_V2) =>
-        {
-            require_exact_keys_v1(
-                object,
-                &[
-                    "command",
-                    "execution_version",
-                    "payload",
-                    "preconditions",
-                    "selector",
-                    "workspace_id",
-                ],
-            )?;
-            return Err(invalid_execution_v1(
-                "legacy execution document lacks immutable admission resolution",
-            ));
-        }
-        version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V3) => {
+        version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V15) => {
             require_exact_keys_v1(
                 object,
                 &[
@@ -7010,26 +5672,13 @@ fn decode_execution_document_v1(
                     "workspace_id",
                 ],
             )?;
-            return Err(invalid_execution_v1(
-                "legacy execution document lacks session identity fences",
-            ));
-        }
-        version
-            if version == u64::from(EXECUTION_DOCUMENT_VERSION_V4)
-                || version == u64::from(EXECUTION_DOCUMENT_VERSION_V5) =>
-        {
-            require_exact_keys_v1(
-                object,
-                &[
-                    "command",
-                    "execution",
-                    "execution_version",
-                    "payload",
-                    "preconditions",
-                    "selector",
-                    "workspace_id",
-                ],
-            )?;
+            let execution = value_object_v1(object, "execution")?;
+            require_exact_keys_v1(execution, &["kind"])?;
+            if value_string_v1(execution, "kind")? != "workspace_bootstrap" {
+                return Err(invalid_execution_v1(
+                    "invalid workspace bootstrap execution",
+                ));
+            }
             AdmissionResolutionV1::None
         }
         _ => return Err(invalid_execution_v1("unsupported execution version")),
@@ -7044,12 +5693,11 @@ fn decode_execution_document_v1(
     let preconditions = value_object_v1(object, "preconditions")?;
     let payload = value_object_v1(object, "payload")?;
     let command = decode_command_components_v1(version, command, preconditions, payload)?;
-    let resolution = match resolution {
-        AdmissionResolutionV1::None => {
-            decode_admission_resolution_v1(&command, value_object_v1(object, "execution")?)?
-        }
-        _ => unreachable!("only the v4 placeholder resolution is constructed here"),
-    };
+    if !matches!(command, SliceCommandV1::WorkspaceInit(_)) {
+        return Err(invalid_execution_v1(
+            "workspace bootstrap document contains another command",
+        ));
+    }
     Ok((version, selector, workspace_id, command, resolution))
 }
 
@@ -7059,19 +5707,16 @@ fn decode_execution_document_v1(
 pub(crate) fn admitted_start_procedure_digest_v1(
     execution: &CanonicalExecutionJsonV1,
 ) -> Result<Option<Sha256Digest>, ExecutionErrorV1> {
-    let (_, _, _, command, resolution) = decode_execution_document_v1(execution.as_str())?;
-    if !matches!(
-        command,
-        SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_)
-    ) {
-        return Ok(None);
+    if matches!(serde_json::from_str::<Value>(execution.as_str())
+        .ok()
+        .and_then(|value| value.get("execution_version").and_then(Value::as_u64))
+        , Some(version) if version == u64::from(EXECUTION_DOCUMENT_VERSION_V6)
+            || version == u64::from(EXECUTION_DOCUMENT_VERSION_V12))
+    {
+        return decode_procedure_v2_start_execution_v1(execution.as_str())
+            .map(|admitted| Some(admitted.state.snapshot().digest().clone()));
     }
-    let AdmissionResolutionV1::SessionStart { snapshot, .. } = resolution else {
-        return Err(invalid_execution_v1(
-            "admitted start has no Procedure snapshot",
-        ));
-    };
-    Ok(Some(snapshot.digest().clone()))
+    Ok(None)
 }
 
 fn decode_command_components_v1(
@@ -7168,15 +5813,6 @@ fn decode_command_components_v1(
             reason: required_payload_string_v1(payload, &["reason"], "reason")?,
             preconditions: decode_session_preconditions_v1(preconditions)?,
         })),
-        "session.return" => {
-            require_exact_keys_v1(payload, &["destination_stage_id", "reason"])?;
-            Ok(SliceCommandV1::SessionReturn(SessionReturnV1 {
-                destination_stage_id: value_typed_v1(payload, "destination_stage_id")?,
-                reason: value_string_v1(payload, "reason")?.to_owned(),
-                dry_run: false,
-                preconditions: decode_session_preconditions_v1(preconditions)?,
-            }))
-        }
         "session.block" => Ok(SliceCommandV1::SessionBlock(SessionBlockV1 {
             reason: required_payload_string_v1(payload, &["reason"], "reason")?,
             preconditions: decode_session_preconditions_v1(preconditions)?,
@@ -7193,15 +5829,6 @@ fn decode_command_components_v1(
             reason: required_payload_string_v1(payload, &["reason"], "reason")?,
             preconditions: decode_session_preconditions_v1(preconditions)?,
         })),
-        "session.reopen" => {
-            require_exact_keys_v1(payload, &["destination_stage_id", "reason"])?;
-            Ok(SliceCommandV1::SessionReopen(SessionReopenV1 {
-                destination_stage_id: value_typed_v1(payload, "destination_stage_id")?,
-                reason: value_string_v1(payload, "reason")?.to_owned(),
-                dry_run: false,
-                preconditions: decode_session_revision_preconditions_v1(preconditions)?,
-            }))
-        }
         "session.reset" => {
             require_exact_keys_v1(payload, &["confirmed"])?;
             Ok(SliceCommandV1::SessionReset(SessionResetV1 {
@@ -7335,16 +5962,6 @@ fn decode_session_identity_preconditions_v1(
 ) -> Result<podway_protocol::SessionIdentityPreconditionsWireV1, ExecutionErrorV1> {
     require_exact_keys_v1(object, &["session_id", "session_revision"])?;
     Ok(podway_protocol::SessionIdentityPreconditionsWireV1 {
-        expected_session_id: value_typed_v1(object, "session_id")?,
-        expected_session_revision: value_typed_v1(object, "session_revision")?,
-    })
-}
-
-fn decode_session_revision_preconditions_v1(
-    object: &Map<String, Value>,
-) -> Result<podway_protocol::SessionRevisionPreconditionsWireV1, ExecutionErrorV1> {
-    require_exact_keys_v1(object, &["session_id", "session_revision"])?;
-    Ok(podway_protocol::SessionRevisionPreconditionsWireV1 {
         expected_session_id: value_typed_v1(object, "session_id")?,
         expected_session_revision: value_typed_v1(object, "session_revision")?,
     })

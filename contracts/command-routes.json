@@ -224,14 +224,6 @@
       "capabilities": []
     },
     {
-      "command": "session.return",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
       "command": "session.block",
       "availability": "executable",
       "owner": "podway-daemon",
@@ -249,14 +241,6 @@
     },
     {
       "command": "session.cancel",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "session.reopen",
       "availability": "executable",
       "owner": "podway-daemon",
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
@@ -425,14 +409,6 @@
     },
     {
       "command": "procedure.scaffold",
-      "availability": "executable",
-      "owner": "podway-cli",
-      "path": ["podway-cli"],
-      "execution": "local",
-      "capabilities": []
-    },
-    {
-      "command": "procedure.convert",
       "availability": "executable",
       "owner": "podway-cli",
       "path": ["podway-cli"],

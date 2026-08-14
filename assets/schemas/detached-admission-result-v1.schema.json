@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:podway:schema:detached-admission-result:v1",
-  "title": "Podway Detached Admission Result v1",
+  "title": "Podway Workspace Bootstrap Detached Admission Result v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "admission", "detached"],
   "properties": {
     "schema": { "const": "podway.detached-admission-result/v1" },
-    "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" },
     "detached": { "const": true },
-    "procedure_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+    "procedure_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }
   }
 }

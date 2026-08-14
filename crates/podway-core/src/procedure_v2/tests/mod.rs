@@ -7,7 +7,7 @@ mod helpers;
 mod items;
 
 #[test]
-fn identifiers_enforce_kebab_bounds_and_reuse_v1_rule() {
+fn identifiers_enforce_shared_kebab_bounds() {
     assert!(NodeDefinitionId::new("a").is_ok());
     assert!(GraphNodeId::new("implement-change-2").is_ok());
     assert_eq!(

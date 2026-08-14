@@ -2,9 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use podway_core::{
-    CanonicalJsonErrorV1, ProcedureWarningCodeV1, Sha256Digest, canonicalize_json_v1,
-};
+use podway_core::{CanonicalJsonErrorV1, Sha256Digest, canonicalize_json_v1};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -14,7 +12,6 @@ mod procedure_v2_authoring;
 mod procedure_v2_budget;
 mod procedure_v2_canonical;
 mod procedure_v2_check;
-mod procedure_v2_convert;
 mod procedure_v2_diagnostics;
 mod procedure_v2_document;
 mod procedure_v2_dot_projection;
@@ -31,23 +28,19 @@ mod procedure_v2_source;
 mod procedure_v2_validate;
 mod procedure_v2_vet;
 mod procedure_v2_wire;
-mod validation;
 
 pub use parser::{
-    MAX_PROCEDURE_DOCUMENT_BYTES, MAX_PROCEDURE_DOCUMENT_BYTES_V1, MAX_PROCEDURE_DOCUMENT_DEPTH,
-    MAX_PROCEDURE_DOCUMENT_DEPTH_V1, MAX_PROCEDURE_DOCUMENT_NODES, MAX_PROCEDURE_DOCUMENT_NODES_V1,
+    MAX_PROCEDURE_DOCUMENT_BYTES, MAX_PROCEDURE_DOCUMENT_DEPTH, MAX_PROCEDURE_DOCUMENT_NODES,
     MAX_WORKSPACE_CONFIG_BYTES_V1, MAX_WORKSPACE_CONFIG_DEPTH_V1, MAX_WORKSPACE_CONFIG_NODES_V1,
-    ParsedProcedure, ProcedureDocumentFormat, ProcedureDocumentLimits, ProcedureFormatV1,
-    ProcedureParseLimitsV1, WorkspaceConfigParseLimitsV1, decode_procedure_document,
-    decode_procedure_document_with_limits, parse_procedure_document, parse_procedure_v1,
-    parse_procedure_v1_with_limits, parse_procedure_yaml, parse_workspace_config_v1,
+    ParsedProcedure, ProcedureDocumentFormat, ProcedureDocumentLimits,
+    WorkspaceConfigParseLimitsV1, decode_procedure_document, decode_procedure_document_with_limits,
+    parse_procedure_document, parse_procedure_yaml, parse_workspace_config_v1,
     parse_workspace_config_v1_with_limits, sniff_procedure_schema,
 };
 pub use procedure_v2_budget::{
     NEXT_STATIC_BUDGET, ProcedurePlacementBudgetV2, READBACK_BUDGET, procedure_placement_budget_v2,
 };
 pub use procedure_v2_check::{ProcedureCheckReport, check_procedure_v2};
-pub use procedure_v2_convert::{ConvertedProcedureV2, convert_procedure_v1_to_v2};
 pub use procedure_v2_diagnostics::{
     AuthoringContext, AuthoringStage, FinalizedDiagnostics, config_error_diagnostic,
     finalize_diagnostics,
@@ -79,21 +72,13 @@ pub use procedure_v2_scaffold::{
 };
 pub use procedure_v2_validate::{ValidatedProcedureV2, validate_procedure_v2};
 pub use procedure_v2_vet::vet_procedure_v2;
-pub use validation::{
-    IntoProcedureSnapshotSourceV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
-    ValidatedProcedureV1,
-};
 
 pub const WORKSPACE_SCHEMA_V1: &str = "podway.workspace/v1";
-pub const PROCEDURE_SCHEMA_V1: &str = "podway.procedure/v1";
 /// The complete, explicit v1 workspace configuration written for a new workspace.
-pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev\njob_queue:\n  max_pending: 256\nui:\n  show_stage_in_prompt: false\n";
+pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\njob_queue:\n  max_pending: 256\nui:\n  show_stage_in_prompt: false\n";
 
-const DEFAULT_PRESET: &str = "sw-dev";
+const DEFAULT_PRESET: &str = "sw-dev-v2";
 const DEFAULT_MAX_PENDING: u16 = 256;
-const DEFAULT_TEXT_MAX_LENGTH: u32 = 8_000;
-const DEFAULT_LIST_MAX_ITEMS: u16 = 100;
-const DEFAULT_LIST_MAX_ITEM_LENGTH: u16 = 500;
 
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
 pub enum ConfigError {
@@ -118,8 +103,6 @@ pub enum ConfigError {
     },
     #[error("duplicate {field} value `{value}`")]
     DuplicateValue { field: &'static str, value: String },
-    #[error("return target `{stage_id}` is not a procedure stage")]
-    UnknownReturnTarget { stage_id: String },
     /// A Procedure v2 closed reference names a declaration the same document does not make
     /// (dossier section 11.2). `field` is a static authored path; `value` is the offending
     /// identifier.
@@ -152,10 +135,6 @@ pub enum ConfigError {
     UnsupportedYamlFeature { feature: &'static str },
     #[error("invalid procedure document: {reason}")]
     InvalidDocument { reason: String },
-    #[error("procedure warnings are errors: {warnings:?}")]
-    WarningsAsErrors {
-        warnings: Vec<ProcedureWarningCodeV1>,
-    },
     #[error("core procedure admission failed: {reason}")]
     CoreAdmission { reason: String },
 }
@@ -251,470 +230,6 @@ impl JobQueueConfigV1 {
 pub struct UiConfigV1 {
     #[serde(default)]
     pub show_stage_in_prompt: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProcedureDefinitionV1 {
-    pub schema: String,
-    pub id: String,
-    pub version: String,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub stages: Vec<StageDefinitionV1>,
-    pub rework: ReworkPolicyV1,
-}
-
-impl ProcedureDefinitionV1 {
-    pub fn new(
-        id: impl Into<String>,
-        version: impl Into<String>,
-        name: impl Into<String>,
-        stages: Vec<StageDefinitionV1>,
-        rework: ReworkPolicyV1,
-    ) -> Result<Self, ConfigError> {
-        let definition = Self {
-            schema: PROCEDURE_SCHEMA_V1.to_owned(),
-            id: id.into(),
-            version: version.into(),
-            name: name.into(),
-            description: None,
-            stages,
-            rework,
-        };
-        definition.validate()?;
-        Ok(definition)
-    }
-
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        validate_schema(&self.schema, PROCEDURE_SCHEMA_V1)?;
-        validate_identifier("procedure.id", &self.id)?;
-        validate_text("procedure.version", &self.version, 1, 64, false)?;
-        validate_text("procedure.name", &self.name, 1, 120, true)?;
-        if let Some(description) = &self.description {
-            validate_text("procedure.description", description, 0, 4_000, false)?;
-        }
-        validate_count("procedure.stages", self.stages.len(), 1, 64)?;
-
-        let mut stage_ids = BTreeSet::new();
-        for stage in &self.stages {
-            stage.validate()?;
-            if !stage_ids.insert(stage.id.as_str()) {
-                return Err(ConfigError::DuplicateValue {
-                    field: "stage.id",
-                    value: stage.id.clone(),
-                });
-            }
-        }
-        self.rework.validate(&stage_ids)
-    }
-
-    pub(crate) fn apply_documented_defaults(&mut self) {
-        for stage in &mut self.stages {
-            match &mut stage.skip {
-                Some(skip) if skip.allowed && skip.reason_required.is_none() => {
-                    skip.reason_required = Some(true);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn normalized_for_canonical_json(&self) -> Self {
-        let mut normalized = self.clone();
-        normalized.apply_documented_defaults();
-        for stage in &mut normalized.stages {
-            if stage.skip.as_ref().is_some_and(|skip| !skip.allowed) {
-                stage.skip = None;
-            }
-            for item in &mut stage.items {
-                match item {
-                    ItemDefinitionV1::Artifact {
-                        allowed_media_types,
-                        ..
-                    } if allowed_media_types.as_ref().is_some_and(Vec::is_empty) => {
-                        *allowed_media_types = None;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        normalized
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StageDefinitionV1 {
-    pub id: String,
-    pub title: String,
-    #[serde(default)]
-    pub instructions: Vec<String>,
-    #[serde(default)]
-    pub items: Vec<ItemDefinitionV1>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skip: Option<SkipPolicyV1>,
-}
-
-impl StageDefinitionV1 {
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        validate_identifier("stage.id", &self.id)?;
-        validate_text("stage.title", &self.title, 1, 120, true)?;
-        validate_count("stage.instructions", self.instructions.len(), 0, 32)?;
-        for instruction in &self.instructions {
-            validate_text("stage.instructions", instruction, 1, 2_000, true)?;
-        }
-        validate_count("stage.items", self.items.len(), 0, 128)?;
-
-        let mut item_ids = BTreeSet::new();
-        for item in &self.items {
-            item.validate()?;
-            if !item_ids.insert(item.id()) {
-                return Err(ConfigError::DuplicateValue {
-                    field: "item.id",
-                    value: item.id().to_owned(),
-                });
-            }
-        }
-
-        if let Some(skip) = &self.skip {
-            skip.validate()?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SkipPolicyV1 {
-    pub allowed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason_required: Option<bool>,
-}
-
-impl SkipPolicyV1 {
-    pub fn allowed(reason_required: bool) -> Self {
-        Self {
-            allowed: true,
-            reason_required: Some(reason_required),
-        }
-    }
-
-    pub fn disallowed() -> Self {
-        Self {
-            allowed: false,
-            reason_required: None,
-        }
-    }
-
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        if !self.allowed && self.reason_required.is_some() {
-            return Err(ConfigError::InvalidValue {
-                field: "stage.skip.reason_required",
-                reason: "must be absent when skipping is disabled",
-            });
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReworkPolicyV1 {
-    pub allow_return_to: ReturnTargetsV1,
-}
-
-impl ReworkPolicyV1 {
-    pub fn any_previous() -> Self {
-        Self {
-            allow_return_to: ReturnTargetsV1::AnyPrevious,
-        }
-    }
-
-    pub fn only(stage_ids: Vec<String>) -> Result<Self, ConfigError> {
-        let policy = Self {
-            allow_return_to: ReturnTargetsV1::Only(stage_ids),
-        };
-        policy.validate(&BTreeSet::new())?;
-        Ok(policy)
-    }
-
-    fn validate(&self, known_stages: &BTreeSet<&str>) -> Result<(), ConfigError> {
-        match &self.allow_return_to {
-            ReturnTargetsV1::AnyPrevious => Ok(()),
-            ReturnTargetsV1::Only(stage_ids) => {
-                validate_count("rework.allow_return_to", stage_ids.len(), 1, 64)?;
-                let mut seen = BTreeSet::new();
-                for stage_id in stage_ids {
-                    validate_identifier("rework.allow_return_to", stage_id)?;
-                    if !seen.insert(stage_id.as_str()) {
-                        return Err(ConfigError::DuplicateValue {
-                            field: "rework.allow_return_to",
-                            value: stage_id.clone(),
-                        });
-                    }
-                    if !known_stages.is_empty() && !known_stages.contains(stage_id.as_str()) {
-                        return Err(ConfigError::UnknownReturnTarget {
-                            stage_id: stage_id.clone(),
-                        });
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ReturnTargetsV1 {
-    AnyPrevious,
-    Only(Vec<String>),
-}
-
-impl Serialize for ReturnTargetsV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::AnyPrevious => serializer.serialize_str("any_previous"),
-            Self::Only(stage_ids) => stage_ids.serialize(serializer),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ReturnTargetsV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum RawReturnTargets {
-            Keyword(String),
-            Only(Vec<String>),
-        }
-
-        match RawReturnTargets::deserialize(deserializer)? {
-            RawReturnTargets::Keyword(keyword) if keyword == "any_previous" => {
-                Ok(Self::AnyPrevious)
-            }
-            RawReturnTargets::Keyword(keyword) => Err(serde::de::Error::custom(format!(
-                "unsupported return target policy `{keyword}`"
-            ))),
-            RawReturnTargets::Only(stage_ids) => Ok(Self::Only(stage_ids)),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
-pub enum ItemDefinitionV1 {
-    Confirm {
-        id: String,
-        prompt: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        help: Option<String>,
-        required: bool,
-    },
-    Text {
-        id: String,
-        prompt: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        help: Option<String>,
-        required: bool,
-        #[serde(default)]
-        min_length: u32,
-        #[serde(default = "default_text_max_length")]
-        max_length: u32,
-        #[serde(default = "default_multiline")]
-        multiline: bool,
-    },
-    Choice {
-        id: String,
-        prompt: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        help: Option<String>,
-        required: bool,
-        choices: Vec<String>,
-    },
-    Integer {
-        id: String,
-        prompt: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        help: Option<String>,
-        required: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        minimum: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        maximum: Option<i64>,
-    },
-    List {
-        id: String,
-        prompt: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        help: Option<String>,
-        required: bool,
-        #[serde(default)]
-        min_items: u16,
-        #[serde(default = "default_list_max_items")]
-        max_items: u16,
-        #[serde(default = "default_list_max_item_length")]
-        max_item_length: u16,
-        #[serde(default = "default_unique")]
-        unique: bool,
-    },
-    Artifact {
-        id: String,
-        prompt: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        help: Option<String>,
-        required: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        allowed_media_types: Option<Vec<String>>,
-    },
-}
-
-impl ItemDefinitionV1 {
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Confirm { id, .. }
-            | Self::Text { id, .. }
-            | Self::Choice { id, .. }
-            | Self::Integer { id, .. }
-            | Self::List { id, .. }
-            | Self::Artifact { id, .. } => id,
-        }
-    }
-
-    pub fn required(&self) -> bool {
-        match self {
-            Self::Confirm { required, .. }
-            | Self::Text { required, .. }
-            | Self::Choice { required, .. }
-            | Self::Integer { required, .. }
-            | Self::List { required, .. }
-            | Self::Artifact { required, .. } => *required,
-        }
-    }
-
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        let (id, prompt, help) = match self {
-            Self::Confirm {
-                id, prompt, help, ..
-            }
-            | Self::Text {
-                id, prompt, help, ..
-            }
-            | Self::Choice {
-                id, prompt, help, ..
-            }
-            | Self::Integer {
-                id, prompt, help, ..
-            }
-            | Self::List {
-                id, prompt, help, ..
-            }
-            | Self::Artifact {
-                id, prompt, help, ..
-            } => (id, prompt, help),
-        };
-        validate_identifier("item.id", id)?;
-        validate_text("item.prompt", prompt, 1, 500, true)?;
-        if let Some(help) = help {
-            validate_text("item.help", help, 0, 4_000, false)?;
-        }
-
-        match self {
-            Self::Confirm { .. } => Ok(()),
-            Self::Text {
-                min_length,
-                max_length,
-                ..
-            } => {
-                if min_length > max_length {
-                    return Err(ConfigError::InvalidValue {
-                        field: "item.text.length",
-                        reason: "minimum cannot exceed maximum",
-                    });
-                }
-                validate_count("item.text.max_length", *max_length as usize, 0, 65_536)
-            }
-            Self::Choice { choices, .. } => {
-                validate_count("item.choice.choices", choices.len(), 1, 64)?;
-                let mut seen = BTreeSet::new();
-                for choice in choices {
-                    validate_text("item.choice.choices", choice, 1, 120, true)?;
-                    if !seen.insert(choice) {
-                        return Err(ConfigError::DuplicateValue {
-                            field: "item.choice.choices",
-                            value: choice.clone(),
-                        });
-                    }
-                }
-                Ok(())
-            }
-            Self::Integer {
-                minimum, maximum, ..
-            } => {
-                match (minimum, maximum) {
-                    (Some(minimum), Some(maximum)) if minimum > maximum => {
-                        return Err(ConfigError::InvalidValue {
-                            field: "item.integer.bounds",
-                            reason: "minimum cannot exceed maximum",
-                        });
-                    }
-                    _ => {}
-                }
-                Ok(())
-            }
-            Self::List {
-                min_items,
-                max_items,
-                max_item_length,
-                ..
-            } => {
-                if min_items > max_items {
-                    return Err(ConfigError::InvalidValue {
-                        field: "item.list.item_count",
-                        reason: "minimum cannot exceed maximum",
-                    });
-                }
-                validate_count("item.list.max_items", *max_items as usize, 1, 1_000)?;
-                validate_count(
-                    "item.list.max_item_length",
-                    *max_item_length as usize,
-                    1,
-                    4_000,
-                )
-            }
-            Self::Artifact {
-                allowed_media_types,
-                ..
-            } => {
-                if let Some(media_types) = allowed_media_types {
-                    validate_count(
-                        "item.artifact.allowed_media_types",
-                        media_types.len(),
-                        0,
-                        64,
-                    )?;
-                    let mut seen = BTreeSet::new();
-                    for media_type in media_types {
-                        validate_media_type(media_type)?;
-                        if !seen.insert(media_type) {
-                            return Err(ConfigError::DuplicateValue {
-                                field: "item.artifact.allowed_media_types",
-                                value: media_type.clone(),
-                            });
-                        }
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -827,13 +342,6 @@ impl CanonicalJson for WorkspaceConfigV1 {
     }
 }
 
-impl CanonicalJson for ProcedureDefinitionV1 {
-    fn canonical_json_v1(&self) -> Result<CanonicalJsonV1, ConfigError> {
-        self.validate()?;
-        canonical_json_from_serializable(&self.normalized_for_canonical_json())
-    }
-}
-
 /// Uses core's dependency-free deterministic primitive without transferring configuration
 /// validation, normalization, or digest-production ownership out of this crate.
 fn canonical_json_from_serializable<T: Serialize>(
@@ -928,43 +436,6 @@ fn validate_safe_relative_path(field: &'static str, path: &str) -> Result<(), Co
     Ok(())
 }
 
-fn validate_media_type(media_type: &str) -> Result<(), ConfigError> {
-    validate_count(
-        "item.artifact.allowed_media_types",
-        media_type.len(),
-        1,
-        255,
-    )?;
-    let Some((kind, subtype)) = media_type.split_once('/') else {
-        return Err(ConfigError::InvalidValue {
-            field: "item.artifact.allowed_media_types",
-            reason: "must be a lowercase type/subtype value",
-        });
-    };
-    if subtype.contains('/') || !is_media_token(kind) || !is_media_token(subtype) {
-        return Err(ConfigError::InvalidValue {
-            field: "item.artifact.allowed_media_types",
-            reason: "must be a lowercase type/subtype value",
-        });
-    }
-    Ok(())
-}
-
-fn is_media_token(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes
-        .first()
-        .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        && bytes.iter().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(
-                    *byte,
-                    b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-'
-                )
-        })
-}
-
 fn default_procedure_paths() -> Vec<String> {
     vec![".podway/procedures".to_owned()]
 }
@@ -975,24 +446,4 @@ fn default_preset() -> String {
 
 const fn default_max_pending() -> u16 {
     DEFAULT_MAX_PENDING
-}
-
-const fn default_text_max_length() -> u32 {
-    DEFAULT_TEXT_MAX_LENGTH
-}
-
-const fn default_multiline() -> bool {
-    true
-}
-
-const fn default_list_max_items() -> u16 {
-    DEFAULT_LIST_MAX_ITEMS
-}
-
-const fn default_list_max_item_length() -> u16 {
-    DEFAULT_LIST_MAX_ITEM_LENGTH
-}
-
-const fn default_unique() -> bool {
-    true
 }

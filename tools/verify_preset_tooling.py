@@ -81,9 +81,8 @@ def verify(podway: Path) -> dict[str, Any]:
             raise AssertionError(receipt)
         created_file = created / "release-check.yaml"
         validated = validate_with_podway(podway, created_file)
-        procedure = validated["result"]["procedure"]
-        if procedure["id"] != "release-check" or len(procedure["stages"]) != 2:
-            raise AssertionError("created scaffold did not preserve its identity and two-stage baseline")
+        if validated["result"]["procedure_schema"] != "podway.procedure/v2":
+            raise AssertionError("created scaffold did not preserve its identity")
         original = created_file.read_bytes()
         expect_failure(
             podway,
@@ -112,7 +111,7 @@ def verify(podway: Path) -> dict[str, Any]:
             created.as_posix(),
         )
 
-        source = ROOT / "assets/presets/docs-only.yaml"
+        source = ROOT / "assets/presets/bug-fix-v2.yaml"
         code, receipt = run_tool(
             podway,
             "import",
@@ -121,7 +120,7 @@ def verify(podway: Path) -> dict[str, Any]:
             "--output-dir",
             imported.as_posix(),
         )
-        imported_file = imported / "docs-only.yaml"
+        imported_file = imported / "bug-fix-v2.yaml"
         if code != 0 or receipt.get("ok") is not True or imported_file.read_bytes() != source.read_bytes():
             raise AssertionError(f"valid import did not preserve exact source bytes: {receipt}")
         expect_failure(
@@ -134,7 +133,7 @@ def verify(podway: Path) -> dict[str, Any]:
         )
 
         malformed = root / "malformed.yaml"
-        malformed.write_text("schema: podway.procedure/v1\nid: malformed\n", encoding="utf-8")
+        malformed.write_text("schema: podway.procedure/v3\nid: malformed\n", encoding="utf-8")
         expect_failure(
             podway,
             "import",

@@ -1,13 +1,11 @@
 use podway_config::{
-    ConfigError, ParsedProcedure, ParsedProcedureV2, parse_procedure_v1, parse_procedure_yaml,
-    validate_procedure_v2,
+    ConfigError, ParsedProcedure, ParsedProcedureV2, parse_procedure_yaml, validate_procedure_v2,
 };
 use podway_core::TransitionEffectV2;
 
 fn v2(yaml: &str) -> Result<ParsedProcedureV2, ConfigError> {
     match parse_procedure_yaml(yaml.as_bytes()) {
         Ok(ParsedProcedure::V2(parsed)) => Ok(parsed),
-        Ok(ParsedProcedure::V1(_)) => panic!("expected v2 dispatch, got v1"),
         Err(error) => Err(error),
     }
 }
@@ -75,41 +73,15 @@ fn minimal_v2() -> &'static str {
     )
 }
 
-const V1_DOC: &str = concat!(
-    "schema: podway.procedure/v1\n",
-    "id: release\n",
-    "version: \"1\"\n",
-    "name: Release\n",
-    "stages:\n",
-    "  - id: prepare\n",
-    "    title: Prepare\n",
-    "    items:\n",
-    "      - id: approval\n",
-    "        type: confirm\n",
-    "        prompt: Approved\n",
-    "        required: true\n",
-    "rework:\n",
-    "  allow_return_to: [prepare]\n",
-);
-
 #[test]
-fn dispatch_routes_v1_unchanged_and_v2_only_by_exact_schema() {
-    let dispatched_v1 = match parse_procedure_yaml(V1_DOC.as_bytes()) {
-        Ok(ParsedProcedure::V1(validated)) => validated,
-        other => panic!("expected v1 dispatch, got {other:?}"),
-    };
-    assert_eq!(
-        dispatched_v1,
-        parse_procedure_v1(V1_DOC, podway_config::ProcedureFormatV1::Yaml).expect("v1 parses"),
-    );
-
+fn dispatch_accepts_only_the_exact_v2_schema() {
     v2(minimal_v2()).expect("exact v2 schema dispatches to v2");
 
-    let v3 = minimal_v2().replacen("podway.procedure/v2", "podway.procedure/v3", 1);
+    let unsupported = minimal_v2().replacen("podway.procedure/v2", "podway.procedure/v3", 1);
     assert!(matches!(
-        err(&v3),
+        err(&unsupported),
         ConfigError::InvalidSchema { expected, .. }
-            if expected == "podway.procedure/v1 or podway.procedure/v2"
+            if expected == "podway.procedure/v2"
     ));
     let wrong_case = minimal_v2().replacen("podway.procedure/v2", "Podway.Procedure/V2", 1);
     assert!(matches!(

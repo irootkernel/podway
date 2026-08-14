@@ -15,8 +15,8 @@ use std::sync::{Arc, OnceLock};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 use podway_core::{
-    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, ProcedureSnapshotV1,
-    Revision, SessionAggregateV1, SessionId, Sha256Digest, UnixMillis, WorkspaceId, WorkspaceState,
+    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, Revision, SessionId,
+    Sha256Digest, UnixMillis, WorkspaceId, WorkspaceState,
 };
 use serde_json::Value;
 
@@ -101,11 +101,9 @@ pub(crate) fn command_name_v1(command: &CommandV1) -> &'static str {
         CommandV1::SessionComplete => "session.complete",
         CommandV1::SessionSkip => "session.skip",
         CommandV1::SessionRetry => "session.retry",
-        CommandV1::SessionReturn => "session.return",
         CommandV1::SessionBlock => "session.block",
         CommandV1::SessionUnblock => "session.unblock",
         CommandV1::SessionCancel => "session.cancel",
-        CommandV1::SessionReopen => "session.reopen",
         CommandV1::SessionReset => "session.reset",
         CommandV1::SessionDecide => "session.decide",
         CommandV1::SessionRework => "session.rework",
@@ -127,11 +125,9 @@ pub(crate) fn command_is_session_scoped_v1(command: &CommandV1) -> bool {
         CommandV1::SessionComplete
             | CommandV1::SessionSkip
             | CommandV1::SessionRetry
-            | CommandV1::SessionReturn
             | CommandV1::SessionBlock
             | CommandV1::SessionUnblock
             | CommandV1::SessionCancel
-            | CommandV1::SessionReopen
             | CommandV1::SessionDecide
             | CommandV1::SessionRework
             | CommandV1::GoalDefine
@@ -803,11 +799,6 @@ pub trait StoreContractV1: Send + Sync {
 
 /// Additive coherent-read capability for storage consumers that need durable domain facts.
 pub trait StoreReadContractV1: StoreContractV1 {
-    fn read_session_aggregate(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Option<SessionAggregateV1>, StoreErrorV1>;
-
     fn read_job(
         &self,
         identity: &DurableWorktreeIdentityV1,
@@ -1045,13 +1036,6 @@ impl<Store> StoreReadContractV1 for Arc<Store>
 where
     Store: StoreReadContractV1 + ?Sized,
 {
-    fn read_session_aggregate(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Option<SessionAggregateV1>, StoreErrorV1> {
-        (**self).read_session_aggregate(identity)
-    }
-
     fn read_job(
         &self,
         identity: &DurableWorktreeIdentityV1,
@@ -1305,7 +1289,6 @@ impl RevisionAttemptItemPreconditionsV1 {
 /// A fully canonicalized mutation awaiting durable admission.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmitRequestV1 {
-    admitted_procedure_snapshot: Option<Box<ProcedureSnapshotV1>>,
     canonical_execution: CanonicalExecutionJsonV1,
     command: CommandV1,
     execution_flavor: DurableExecutionFlavorV1,
@@ -1333,7 +1316,6 @@ impl AdmitRequestV1 {
         submitted_at: EpochMillisV1,
     ) -> Self {
         Self {
-            admitted_procedure_snapshot: None,
             canonical_execution: direct_store_canonical_execution_v1(&command, &preconditions),
             command,
             execution_flavor: DurableExecutionFlavorV1::LegacyV1,
@@ -1359,7 +1341,6 @@ impl AdmitRequestV1 {
         canonical_execution: CanonicalExecutionJsonV1,
     ) -> Self {
         Self {
-            admitted_procedure_snapshot: None,
             canonical_execution,
             command,
             execution_flavor: DurableExecutionFlavorV1::LegacyV1,
@@ -1388,17 +1369,6 @@ impl AdmitRequestV1 {
     pub fn with_response_context(mut self, context: PersistedResponseContextV1) -> Self {
         self.response_context = Some(context);
         self
-    }
-
-    /// Binds the immutable Procedure snapshot that must be committed in the same transaction as
-    /// this start job. The Store retains the normalized row independently of worker execution.
-    pub fn with_admitted_procedure_snapshot(mut self, snapshot: ProcedureSnapshotV1) -> Self {
-        self.admitted_procedure_snapshot = Some(Box::new(snapshot));
-        self
-    }
-
-    pub fn admitted_procedure_snapshot(&self) -> Option<&ProcedureSnapshotV1> {
-        self.admitted_procedure_snapshot.as_deref()
     }
 
     pub fn command(&self) -> &CommandV1 {
@@ -1594,7 +1564,6 @@ pub struct ClaimedJobV1 {
     claim: ClaimTokenV1,
     job: JobReceiptV1,
     execution: ClaimedExecutionV1,
-    current_session: Option<SessionAggregateV1>,
 }
 
 impl ClaimedJobV1 {
@@ -1602,13 +1571,11 @@ impl ClaimedJobV1 {
         claim: ClaimTokenV1,
         job: JobReceiptV1,
         execution: ClaimedExecutionV1,
-        current_session: Option<SessionAggregateV1>,
     ) -> Self {
         Self {
             claim,
             job,
             execution,
-            current_session,
         }
     }
 
@@ -1623,37 +1590,13 @@ impl ClaimedJobV1 {
     pub fn execution(&self) -> &ClaimedExecutionV1 {
         &self.execution
     }
-
-    pub fn current_session(&self) -> Option<&SessionAggregateV1> {
-        self.current_session.as_ref()
-    }
 }
 
-/// The session aggregate mutation a successful terminal transaction must persist.
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PersistedSessionMutationV1 {
-    /// The transition has no session-row change.
-    Unchanged,
-    /// Replace the current normalized session state with this validated aggregate.
-    Replace(SessionAggregateV1),
-    /// Replace an existing session with a distinct fresh session at revision one.
-    ReplaceFresh(SessionAggregateV1),
-    /// Remove the current session and expose workspace revision zero.
-    Clear,
-}
-
-/// Domain state transition committed together with a successful terminal result.
-///
-/// Store v1 defines workspace revision as the current session revision, or zero
-/// when there is no current session. A concrete store must preserve that invariant
-/// when applying a persisted session mutation.
+/// Procedure-independent workspace transition committed with bootstrap success.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateTransitionV1 {
-    session_id: Option<SessionId>,
     previous_workspace_revision: RevisionV1,
     resulting_workspace_revision: RevisionV1,
-    persisted_session_mutation: PersistedSessionMutationV1,
 }
 
 impl StateTransitionV1 {
@@ -1661,50 +1604,18 @@ impl StateTransitionV1 {
         session_id: Option<SessionId>,
         previous_workspace_revision: RevisionV1,
         resulting_workspace_revision: RevisionV1,
-        persisted_session_mutation: PersistedSessionMutationV1,
     ) -> Result<Self, StoreValueErrorV1> {
-        match &persisted_session_mutation {
-            PersistedSessionMutationV1::Unchanged
-                if resulting_workspace_revision != previous_workspace_revision =>
-            {
-                return Err(StoreValueErrorV1::SessionMutationRevisionMismatch);
-            }
-            PersistedSessionMutationV1::Unchanged => {}
-            PersistedSessionMutationV1::Replace(aggregate) => {
-                if session_id.as_ref() != Some(aggregate.session_id())
-                    || resulting_workspace_revision != aggregate.revision()
-                    || resulting_workspace_revision
-                        != previous_workspace_revision
-                            .checked_next()
-                            .map_err(|_| StoreValueErrorV1::RevisionRegressed)?
-                {
-                    return Err(StoreValueErrorV1::SessionMutationRevisionMismatch);
-                }
-            }
-            PersistedSessionMutationV1::ReplaceFresh(aggregate) => {
-                if session_id.as_ref() != Some(aggregate.session_id())
-                    || resulting_workspace_revision != RevisionV1::new(1)
-                    || aggregate.revision() != RevisionV1::new(1)
-                {
-                    return Err(StoreValueErrorV1::SessionMutationRevisionMismatch);
-                }
-            }
-            PersistedSessionMutationV1::Clear => {
-                if session_id.is_some() || resulting_workspace_revision != RevisionV1::ZERO {
-                    return Err(StoreValueErrorV1::SessionMutationRevisionMismatch);
-                }
-            }
+        if session_id.is_some() || resulting_workspace_revision != previous_workspace_revision {
+            return Err(StoreValueErrorV1::SessionMutationRevisionMismatch);
         }
         Ok(Self {
-            session_id,
             previous_workspace_revision,
             resulting_workspace_revision,
-            persisted_session_mutation,
         })
     }
 
     pub fn session_id(&self) -> Option<&SessionId> {
-        self.session_id.as_ref()
+        None
     }
 
     pub fn previous_workspace_revision(&self) -> RevisionV1 {
@@ -1713,10 +1624,6 @@ impl StateTransitionV1 {
 
     pub fn resulting_workspace_revision(&self) -> RevisionV1 {
         self.resulting_workspace_revision
-    }
-
-    pub fn persisted_session_mutation(&self) -> &PersistedSessionMutationV1 {
-        &self.persisted_session_mutation
     }
 }
 
@@ -1762,7 +1669,6 @@ pub enum CancelOutcomeV1 {
 /// Coherent read model for one workspace at a committed point in time.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceViewV1 {
-    current_session: Option<SessionAggregateV1>,
     identity: DurableWorktreeIdentityV1,
     latest_workspace_sequence: u64,
     state: WorkspaceState,
@@ -1782,7 +1688,6 @@ impl WorkspaceViewV1 {
         Self::new_coherent(
             identity,
             state,
-            None,
             queued_job_count,
             running_job_id,
             0,
@@ -1794,14 +1699,12 @@ impl WorkspaceViewV1 {
     pub fn new_coherent(
         identity: DurableWorktreeIdentityV1,
         state: WorkspaceState,
-        current_session: Option<SessionAggregateV1>,
         queued_job_count: u32,
         running_job_id: Option<JobIdV1>,
         latest_workspace_sequence: u64,
         observed_at: EpochMillisV1,
     ) -> Self {
         Self {
-            current_session,
             identity,
             latest_workspace_sequence,
             state,
@@ -1813,10 +1716,6 @@ impl WorkspaceViewV1 {
 
     pub fn identity(&self) -> &DurableWorktreeIdentityV1 {
         &self.identity
-    }
-
-    pub fn current_session(&self) -> Option<&SessionAggregateV1> {
-        self.current_session.as_ref()
     }
 
     pub fn state(&self) -> &WorkspaceState {
@@ -2014,6 +1913,7 @@ pub enum StoreErrorV1 {
     JobNotFoundV1 {
         job_id: JobIdV1,
     },
+    LegacyProcedureStateUnsupportedV1,
     NewerStateV1 {
         found_schema_version: u32,
         supported_schema_version: u32,

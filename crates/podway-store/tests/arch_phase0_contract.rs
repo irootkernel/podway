@@ -11,9 +11,9 @@ use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
     ClaimedExecutionV1, ClaimedJobV1, DurableWorktreeIdentityV1, EpochMillisV1, IdempotencyKeyV1,
     JobIdV1, JobReceiptOrTerminalV1, JobReceiptV1, MAX_IDEMPOTENCY_KEY_BYTES_V1,
-    MAX_WORKER_ID_BYTES_V1, PersistedGraphMutationFailureV2, PersistedSessionMutationV1,
-    PersistedTerminalReceiptV1, RevisionAttemptItemPreconditionsV1, RevisionV1, StateTransitionV1,
-    StoreContractV1, StoreErrorV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreRecordKindV1,
+    MAX_WORKER_ID_BYTES_V1, PersistedGraphMutationFailureV2, PersistedTerminalReceiptV1,
+    RevisionAttemptItemPreconditionsV1, RevisionV1, StateTransitionV1, StoreContractV1,
+    StoreErrorV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreRecordKindV1,
     StoreUnavailableReasonV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1,
     WorkspaceViewV1,
 };
@@ -331,7 +331,6 @@ fn sto_002_sto_005_claim_and_terminal_construction_preserve_atomic_boundaries() 
             RevisionAttemptItemPreconditionsV1::new(None, None, None, None)
                 .expect("empty preconditions must be valid"),
         ),
-        None,
     );
     assert_eq!(claimed.job().identity_sequence(), 7);
     assert_eq!(
@@ -342,37 +341,16 @@ fn sto_002_sto_005_claim_and_terminal_construction_preserve_atomic_boundaries() 
         claimed.execution().command(),
         &DomainCommand::WorkspaceInitialize
     );
-    assert!(claimed.current_session().is_none());
-
-    let transition = StateTransitionV1::new_persisted(
-        None,
-        Revision::new(9),
-        Revision::new(9),
-        PersistedSessionMutationV1::Unchanged,
-    )
-    .expect("unchanged metadata transition");
+    let transition = StateTransitionV1::new_persisted(None, Revision::new(9), Revision::new(9))
+        .expect("unchanged metadata transition");
     assert_eq!(transition.previous_workspace_revision().get(), 9);
     assert_eq!(transition.resulting_workspace_revision().get(), 9);
     assert!(matches!(
-        transition.persisted_session_mutation(),
-        PersistedSessionMutationV1::Unchanged
-    ));
-    assert!(matches!(
-        StateTransitionV1::new_persisted(
-            None,
-            Revision::new(10),
-            Revision::new(9),
-            PersistedSessionMutationV1::Unchanged,
-        ),
+        StateTransitionV1::new_persisted(None, Revision::new(10), Revision::new(9),),
         Err(StoreValueErrorV1::SessionMutationRevisionMismatch)
     ));
     assert!(matches!(
-        StateTransitionV1::new_persisted(
-            None,
-            Revision::new(9),
-            Revision::new(10),
-            PersistedSessionMutationV1::Unchanged,
-        ),
+        StateTransitionV1::new_persisted(None, Revision::new(9), Revision::new(10),),
         Err(StoreValueErrorV1::SessionMutationRevisionMismatch)
     ));
 
@@ -473,6 +451,7 @@ fn store_v1_constructs_every_typed_error_variant() {
         StoreErrorV1::StorageUnavailableV1 {
             reason: StoreUnavailableReasonV1::Locked,
         },
+        StoreErrorV1::LegacyProcedureStateUnsupportedV1,
     ];
 
     for error in errors {
@@ -570,6 +549,7 @@ fn store_v1_constructs_every_typed_error_variant() {
             StoreErrorV1::StorageUnavailableV1 { reason } => {
                 assert_eq!(reason, StoreUnavailableReasonV1::Locked);
             }
+            StoreErrorV1::LegacyProcedureStateUnsupportedV1 => {}
         }
     }
 }

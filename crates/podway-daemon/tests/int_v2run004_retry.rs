@@ -13,7 +13,7 @@ use podway_daemon::server::RequestDispatcherV1;
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, OperationV1, PreconditionsV1,
     RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
-    StatusResultV1, WorkspaceContextV1,
+    WorkspaceContextV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -170,7 +170,7 @@ fn v2run004_production_retry_is_clean_durable_replayable_and_re_resolves_evidenc
     );
     assert!(matches!(
         runtime::dispatch(&production, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let start = runtime::request(
         40_002,
@@ -442,7 +442,7 @@ fn v2run004_retry_reason_uses_the_v2_unicode_scalar_boundary_before_admission() 
     );
     assert!(matches!(
         runtime::dispatch(&production, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let start = runtime::request(
         40_202,
@@ -471,7 +471,7 @@ fn v2run004_retry_reason_uses_the_v2_unicode_scalar_boundary_before_admission() 
         runtime::session_preconditions(&before),
     );
     let too_long_daemon = podway_daemon::server::DaemonRequestV1::from_envelope(&too_long)
-        .expect("the retained v1 wire contract must still admit a 2,001-scalar reason");
+        .expect("the general wire request must admit a 2,001-scalar reason");
     let ResponseEnvelopeV2::Error(too_long_error) =
         production.dispatch_daemon(&too_long, &too_long_daemon)
     else {
@@ -517,82 +517,4 @@ fn v2run004_retry_reason_uses_the_v2_unicode_scalar_boundary_before_admission() 
         accepted_result["revision"],
         before["session"]["revision"].as_u64().unwrap() + 1
     );
-}
-
-#[test]
-fn v2run004_retained_v1_retry_keeps_output_v1() {
-    let fixture = support_phase4_workspace::git_worktrees();
-    runtime::make_runtime_private(fixture.main());
-    fs::write(
-        fixture.main().join("legacy-retry.yaml"),
-        "schema: podway.procedure/v1\nid: v2run004-legacy\nversion: \"1\"\nname: Legacy retry\nstages:\n  - id: only\n    title: Only\n    instructions: []\n    items: []\nrework:\n  allow_return_to: any_previous\n",
-    )
-    .unwrap();
-    let workspace_selector = runtime::selector(fixture.main());
-    let runtime_manager = Arc::new(runtime::manager(fixture.temporary_path()));
-    let production = runtime::dispatcher(runtime_manager, "v2run004-v1-fallback");
-    let initialize = runtime::request(
-        40_101,
-        "workspace.init",
-        &workspace_selector,
-        Map::new(),
-        "v2run004-v1-initialize",
-        PreconditionsV1::default(),
-    );
-    assert!(matches!(
-        runtime::dispatch(&production, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
-    let start = runtime::request(
-        40_102,
-        "session.start",
-        &workspace_selector,
-        json!({"procedure": "legacy-retry.yaml", "task_title": "Retained v1 retry"})
-            .as_object()
-            .unwrap()
-            .clone(),
-        "v2run004-v1-start",
-        PreconditionsV1::default(),
-    );
-    assert!(matches!(
-        runtime::dispatch(&production, &start),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
-    let status_request = runtime::request(
-        40_103,
-        "session.status",
-        &workspace_selector,
-        Map::new(),
-        "unused-v2run004-v1-status",
-        PreconditionsV1::default(),
-    );
-    let ResponseEnvelopeV2::OutputV1(output) = runtime::dispatch(&production, &status_request)
-    else {
-        panic!("retained v1 status must use podway.output/v1")
-    };
-    let status = StatusResultV1::from_result_map(output.result()).unwrap();
-    let current = status.current.as_ref().unwrap();
-    let retry = runtime::request(
-        40_104,
-        "session.retry",
-        &workspace_selector,
-        json!({"reason": "한".repeat(4_000)})
-            .as_object()
-            .unwrap()
-            .clone(),
-        "v2run004-v1-retry",
-        PreconditionsV1::new(
-            Some(status.session.id.clone()),
-            Some(status.session.revision),
-            Some(current.attempt_id.clone()),
-            None,
-            None,
-            None,
-        )
-        .unwrap(),
-    );
-    assert!(matches!(
-        runtime::dispatch(&production, &retry),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
 }

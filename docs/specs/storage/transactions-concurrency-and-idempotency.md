@@ -8,7 +8,7 @@ Podway has three independent ordering concepts:
 2. **Session revision:** total order of successful session state changes.
 3. **Item revision:** conflict boundary for one item in one attempt.
 
-This allows multiple callers to update different active-stage items without silent same-item overwrites, while cursor-changing commands remain strict.
+This allows multiple callers to update different active-node items without silent same-item overwrites, while cursor-changing commands remain strict.
 
 ## Admission transaction
 
@@ -121,16 +121,16 @@ If the daemon cannot prove the outcome, it closes the workspace scheduler and re
 
 ## Cursor concurrency
 
-Complete, skip, retry, return, block, unblock, and cancel validate:
+Complete, skip, retry, block, unblock, decide, rework, and cancel validate:
 
 ```text
 expected_session_revision
 expected_attempt_id
 ```
 
-A queued command may become stale before execution because an earlier job changed the cursor. It then fails with a conflict and does not adapt itself to the new stage.
+A queued command may become stale before execution because an earlier job changed the cursor. It then fails with a conflict and does not adapt itself to the new graph node.
 
-This is deliberate. A command intended for one stage must never mutate another.
+This is deliberate. A command intended for one graph node must never mutate another.
 
 ## Item concurrency
 
@@ -153,7 +153,7 @@ client 2 sets y expecting 0 -> succeeds, y=1, session revision increments
 client 3 sets x expecting 0 -> ITEM_REVISION_CONFLICT
 ```
 
-The session revision may change between unrelated item updates without causing a conflict. Attempt identity prevents updates after complete, retry, or return.
+The session revision may change between unrelated item updates without causing a conflict. Attempt identity prevents updates after complete, retry, decide, or rework.
 
 ## No-op behavior
 
@@ -216,9 +216,9 @@ It includes queue indicators so the caller knows whether later admitted mutation
 
 IPC transport may retry and responses may be lost. Podway guarantees **one logical state effect per idempotency key and canonical request**, not exactly one network exchange.
 
-Lookup by idempotency key does not replay a request. Store terminal receipt v4 retains
-the bounded semantic projections plus canonical `podway.output/v1` for v1 jobs,
-non-recursive terminal-mutation `podway.output/v2` for Procedure v2 jobs,
+Lookup by idempotency key does not replay a request. Store terminal receipt v5 adds
+the durable Procedure v2 execution flavor to the bounded semantic projections and
+retains the canonical non-recursive terminal-mutation `podway.output/v3` envelope,
 `podway.error/v1` for failures, or the closed cancellation summary. Lookup returns that
 stored envelope after job-row pruning instead of applying the current catalog or result
 renderer. Canonical execution JSON and the full original request are not copied into the

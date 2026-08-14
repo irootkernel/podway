@@ -2,7 +2,13 @@
 
 use crate::support_phase4_workspace;
 
-use std::{fs, path::Path, sync::Arc};
+use std::{
+    fs,
+    path::Path,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -28,7 +34,7 @@ use podway_daemon::{
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1, OperationV1, PreconditionsV1,
     RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
-    Rfc3339MillisV1, SliceRequestV1, StatusResultV1, WorkspaceContextV1, WorktreeSelectorWireV1,
+    Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{SqliteStoreOptionsV1, SqliteStoreV1, StoreGraphStateContractV2, WorkerIdV1};
@@ -37,6 +43,8 @@ use sha2::{Digest as _, Sha256};
 use support_phase4_workspace::selector as git_selector;
 
 const ACTION_READBACK_PROCEDURE: &str = include_str!("fixtures/action-readback-procedure.yaml");
+
+pub(super) const TEST_WAIT_TIMEOUT_MILLIS: u64 = 30_000;
 
 fn fixture_runtime_directory(root: &Path) -> std::path::PathBuf {
     let root = fs::canonicalize(root).unwrap();
@@ -78,7 +86,7 @@ pub(super) fn selector(path: &Path) -> WorktreeSelectorWireV1 {
     .unwrap()
 }
 
-fn observation() -> WorkspaceRuntimeObservationV1 {
+pub(super) fn observation() -> WorkspaceRuntimeObservationV1 {
     WorkspaceRuntimeObservationV1::new(
         UnixMillis::new(1_700_000_000_123),
         Rfc3339MillisV1::new("2026-07-15T12:34:56.789Z").unwrap(),
@@ -187,8 +195,34 @@ pub(super) fn request(
         payload,
         idempotency_key,
         preconditions,
-        RequestOptionsV1::new(false, 5_000).unwrap(),
+        RequestOptionsV1::new(false, TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
     )
+}
+
+pub(super) fn dispatch_after_cold_reopen(
+    dispatcher: &impl RequestDispatcherV1,
+    request: &(RequestEnvelopeV1, DaemonRequestV1),
+) -> ResponseEnvelopeV2 {
+    let deadline = Instant::now() + Duration::from_millis(TEST_WAIT_TIMEOUT_MILLIS);
+    loop {
+        let response = dispatch(dispatcher, request);
+        if !matches!(
+            &response,
+            ResponseEnvelopeV2::Error(error)
+                if matches!(
+                    error.code().as_str(),
+                    "DAEMON_UNAVAILABLE" | "WORKSPACE_MAINTENANCE"
+                )
+        ) {
+            return response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cold-reopen lifecycle did not become available within {} seconds: {response:?}",
+            TEST_WAIT_TIMEOUT_MILLIS / 1_000
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn request_with_options(
@@ -205,10 +239,9 @@ fn request_with_options(
         serde_json::to_value(selector).unwrap(),
     );
     let operation = match command {
-        "workspace.init" => OperationV1::Bootstrap,
-        "session.status" | "session.next" | "job.lookup" | "job.status" | "job.wait" => {
-            OperationV1::Query
-        }
+        "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
+        "workspace.show" | "session.status" | "session.next" | "job.lookup" | "job.status"
+        | "job.wait" => OperationV1::Query,
         _ => OperationV1::Mutate,
     };
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
@@ -217,7 +250,9 @@ fn request_with_options(
         client: ClientInfoV1::new("v2run003-test", "1", 1).unwrap(),
         operation,
         command: CommandNameV1::new(command).unwrap(),
-        workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
+        workspace: Some(
+            WorkspaceContextV1::new(selector.display(), selector.expected_uuid().cloned()).unwrap(),
+        ),
         idempotency_key: matches!(operation, OperationV1::Bootstrap | OperationV1::Mutate)
             .then(|| IdempotencyKeyV1::new(idempotency_key).unwrap()),
         preconditions,
@@ -241,7 +276,7 @@ pub(super) fn dispatch(
 pub(super) fn v2_result(response: ResponseEnvelopeV2, command: &str) -> Map<String, Value> {
     let ResponseEnvelopeV2::OutputV2(output) = &response else {
         panic!(
-            "{command} against a Procedure v2 session must return podway.output/v2: {response:?}"
+            "{command} against a Procedure v2 session must return podway.output/v3: {response:?}"
         )
     };
     assert_eq!(output.command().as_str(), command);
@@ -250,7 +285,6 @@ pub(super) fn v2_result(response: ResponseEnvelopeV2, command: &str) -> Map<Stri
 
 pub(super) fn response_request_id(response: &ResponseEnvelopeV2) -> &RequestIdV1 {
     match response {
-        ResponseEnvelopeV2::OutputV1(output) => output.request_id(),
         ResponseEnvelopeV2::OutputV2(output) => output.request_id(),
         ResponseEnvelopeV2::Error(error) => error.request_id(),
     }
@@ -374,7 +408,7 @@ fn v2run003_action_readback_fixture_is_valid_and_vetted() {
 }
 
 #[test]
-fn v2run003_detached_job_wait_reads_terminal_v2_job_without_v1_session() {
+fn v2run003_detached_job_wait_reads_terminal_v2_job_from_v2_only_store() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());
     fs::write(
@@ -405,7 +439,7 @@ fn v2run003_detached_job_wait_reads_terminal_v2_job_without_v1_session() {
     );
     assert!(matches!(
         dispatch(&production, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
 
     let start = request(
@@ -440,7 +474,7 @@ fn v2run003_detached_job_wait_reads_terminal_v2_job_without_v1_session() {
     );
     let retry_response = dispatch(&production, &retry);
     let ResponseEnvelopeV2::OutputV2(detached) = retry_response else {
-        panic!("detached Procedure v2 retry must return podway.output/v2: {retry_response:?}")
+        panic!("detached Procedure v2 retry must return podway.output/v3: {retry_response:?}")
     };
     let job_id = detached
         .job()
@@ -488,11 +522,11 @@ fn v2run003_detached_job_wait_reads_terminal_v2_job_without_v1_session() {
         PreconditionsV1::default(),
     );
     let ResponseEnvelopeV2::OutputV2(waited) = dispatch(&production, &wait_request) else {
-        panic!("terminal Procedure v2 job.wait must return podway.output/v2")
+        panic!("terminal Procedure v2 job.wait must return podway.output/v3")
     };
     assert_eq!(waited.command().as_str(), "job.wait");
     assert_eq!(waited.job().unwrap().id(), &job_id);
-    assert_eq!(waited.result()["schema"], "podway.job-result/v2");
+    assert_eq!(waited.result()["schema"], "podway.job-result/v3");
     assert_eq!(
         serde_json::to_value(waited.job().unwrap()).unwrap()["state"],
         "succeeded"
@@ -534,7 +568,7 @@ fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipe
     );
     assert!(matches!(
         dispatch(&production, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
 
     let payload = json!({
@@ -556,7 +590,7 @@ fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipe
     );
     let detached_response = dispatch(&production, &detached_start);
     let ResponseEnvelopeV2::OutputV2(detached) = detached_response else {
-        panic!("detached Procedure v2 start must return podway.output/v2: {detached_response:?}")
+        panic!("detached Procedure v2 start must return podway.output/v3: {detached_response:?}")
     };
     assert_eq!(
         detached.result()["schema"],
@@ -653,7 +687,7 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
     );
     assert!(matches!(
         dispatch(&production, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
 
     let start = request(
@@ -674,58 +708,7 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
     let started = v2_result(dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
 
-    let compatibility_status = status(&production, &workspace_selector, 30_003, &session_id);
-    for (request_number, command, key) in [
-        (30_004, "session.return", "retained-return-v2-session"),
-        (30_006, "session.reopen", "retained-reopen-v2-session"),
-    ] {
-        let preconditions = if command == "session.return" {
-            session_preconditions(&compatibility_status)
-        } else {
-            PreconditionsV1::new(
-                Some(SessionId::new(session_id.clone()).unwrap()),
-                Some(Revision::new(
-                    compatibility_status["session"]["revision"]
-                        .as_u64()
-                        .unwrap(),
-                )),
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap()
-        };
-        let retained_v1_command = request(
-            request_number,
-            command,
-            &workspace_selector,
-            json!({
-                "destination_stage_id": "capture",
-                "reason": "retained v1 command must not become v2 rework",
-                "dry_run": false,
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-            key,
-            preconditions,
-        );
-        let ResponseEnvelopeV2::Error(error) = dispatch(&production, &retained_v1_command) else {
-            panic!("{command} against a v2 session must fail without reinterpretation")
-        };
-        assert_eq!(error.code().as_str(), "SESSION_ID_MISMATCH");
-        assert_eq!(
-            status(
-                &production,
-                &workspace_selector,
-                request_number + 1,
-                &session_id,
-            ),
-            compatibility_status,
-            "{command} rejection must preserve the v2 session exactly"
-        );
-    }
+    let _ = status(&production, &workspace_selector, 30_003, &session_id);
 
     mutate_item(
         &production,
@@ -1063,74 +1046,4 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
     let finished = v2_result(dispatch(&restarted, &complete_finish), "session.complete");
     assert_eq!(finished["from_graph_node_id"], "finish");
     assert_eq!(finished["session_state"], "completed");
-
-    make_runtime_private(fixture.linked());
-    let legacy_selector = selector(fixture.linked());
-    let initialize_legacy = request(
-        30_200,
-        "workspace.init",
-        &legacy_selector,
-        Map::new(),
-        "v2run003-initialize-legacy",
-        PreconditionsV1::default(),
-    );
-    assert!(matches!(
-        dispatch(&restarted, &initialize_legacy),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
-    fs::write(
-        fixture.linked().join("legacy.yaml"),
-        "schema: podway.procedure/v1\nid: v2run003-legacy\nversion: \"1\"\nname: Legacy fallback\nstages:\n  - id: only\n    title: Only\n    instructions: []\n    items: []\nrework:\n  allow_return_to: any_previous\n",
-    )
-    .unwrap();
-    let legacy_start = request(
-        30_201,
-        "session.start",
-        &legacy_selector,
-        json!({"procedure": "legacy.yaml", "task_title": "Retained v1 fallback"})
-            .as_object()
-            .unwrap()
-            .clone(),
-        "v2run003-start-legacy",
-        PreconditionsV1::default(),
-    );
-    assert!(matches!(
-        dispatch(&restarted, &legacy_start),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
-    let legacy_status_request = request(
-        30_202,
-        "session.status",
-        &legacy_selector,
-        Map::new(),
-        "unused-legacy-status-key",
-        PreconditionsV1::default(),
-    );
-    let ResponseEnvelopeV2::OutputV1(legacy_status_output) =
-        dispatch(&restarted, &legacy_status_request)
-    else {
-        panic!("retained v1 status must keep podway.output/v1")
-    };
-    let legacy_status = StatusResultV1::from_result_map(legacy_status_output.result()).unwrap();
-    let legacy_current = legacy_status.current.as_ref().unwrap();
-    let legacy_complete = request(
-        30_203,
-        "session.complete",
-        &legacy_selector,
-        Map::new(),
-        "v2run003-complete-legacy",
-        PreconditionsV1::new(
-            Some(legacy_status.session.id.clone()),
-            Some(legacy_status.session.revision),
-            Some(legacy_current.attempt_id.clone()),
-            None,
-            None,
-            None,
-        )
-        .unwrap(),
-    );
-    assert!(matches!(
-        dispatch(&restarted, &legacy_complete),
-        ResponseEnvelopeV2::OutputV1(_)
-    ));
 }

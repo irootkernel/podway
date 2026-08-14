@@ -2,12 +2,7 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{
-    fs,
-    path::Path,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{fs, path::Path, sync::Arc};
 
 use podway_config::{
     ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document, validate_procedure_v2,
@@ -177,27 +172,6 @@ fn assert_error(response: ResponseEnvelopeV2, code: &str, admitted: bool) -> Val
     serde_json::to_value(error).unwrap()
 }
 
-fn dispatch_after_cold_reopen(
-    dispatcher: &impl RequestDispatcherV1,
-    request: &(RequestEnvelopeV1, DaemonRequestV1),
-) -> ResponseEnvelopeV2 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let response = runtime::dispatch(dispatcher, request);
-        if !matches!(
-            &response,
-            ResponseEnvelopeV2::Error(error) if error.code().as_str() == "WORKSPACE_MAINTENANCE"
-        ) {
-            return response;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "cold-reopen lifecycle maintenance did not release within 5 seconds: {response:?}"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 struct RunningFixture {
     selector: podway_protocol::WorktreeSelectorWireV1,
     session_id: String,
@@ -222,7 +196,7 @@ fn start_left_branch(
     );
     assert!(matches!(
         runtime::dispatch(dispatcher, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(REWORK_PROCEDURE.as_bytes(), ProcedureDocumentFormat::Yaml)
@@ -553,7 +527,7 @@ fn v2drw003_completed_reactivation_cold_replays_and_rejects_attempt_or_payload_d
         completed_revision,
         None,
     );
-    let replayed = dispatch_after_cold_reopen(&reopened, &replay);
+    let replayed = runtime::dispatch_after_cold_reopen(&reopened, &replay);
     assert_eq!(
         runtime::without_request_id(&replayed),
         runtime::without_request_id(&first_response),

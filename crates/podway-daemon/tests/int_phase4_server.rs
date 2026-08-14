@@ -34,11 +34,11 @@ use podway_daemon::{
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     FrameIoPhaseV1, IdempotencyKeyV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1,
-    OutputEnvelopeInputV1, OutputEnvelopeInputV2, OutputEnvelopeV1, OutputEnvelopeV2,
-    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1, build_identity_v1, decode_response_payload_v1,
-    decode_response_payload_v2, encode_frame_v1, encode_request_payload_v1, read_single_frame_v1,
+    OutputEnvelopeInputV3, OutputEnvelopeV3, PreconditionsV1, RequestEnvelopeInputV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2, Rfc3339MillisV1,
+    SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
+    decode_response_payload_v2, encode_frame_v1, encode_request_payload_v1,
+    ensure_procedure_independent_result_schema_v1, read_single_frame_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -129,7 +129,7 @@ impl RequestDispatcherV1 for TestDispatcher {
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-    ) -> ResponseEnvelopeV1 {
+    ) -> ResponseEnvelopeV2 {
         self.calls.fetch_add(1, Ordering::SeqCst);
         assert_eq!(
             slice_request.command().command_name(),
@@ -137,7 +137,7 @@ impl RequestDispatcherV1 for TestDispatcher {
         );
         match self.outcome {
             DispatcherOutcome::Success => success_response(request),
-            DispatcherOutcome::Error => ResponseEnvelopeV1::Error(
+            DispatcherOutcome::Error => ResponseEnvelopeV2::Error(
                 ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
                     request_id: request.request_id().clone(),
                     command: request.command().clone(),
@@ -168,9 +168,21 @@ impl RequestDispatcherV1 for TestDispatcher {
             return oversized_v2_response(request);
         }
         if let Some(slice) = daemon_request.legacy() {
-            return match self.dispatch(request, slice) {
-                ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
-                ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
+            let _ = slice;
+            return match self.outcome {
+                DispatcherOutcome::Success => {
+                    self.calls.fetch_add(1, Ordering::SeqCst);
+                    success_response_v2(request, true)
+                }
+                DispatcherOutcome::Error => match self.dispatch(request, slice) {
+                    ResponseEnvelopeV2::Error(error) => ResponseEnvelopeV2::Error(error),
+                    ResponseEnvelopeV2::OutputV2(_) => unreachable!(),
+                },
+                DispatcherOutcome::InvalidResponse => {
+                    self.calls.fetch_add(1, Ordering::SeqCst);
+                    success_response_v2(request, false)
+                }
+                DispatcherOutcome::OversizedResponse => unreachable!(),
             };
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -220,7 +232,7 @@ impl RequestDispatcherV1 for BlockingDispatcher {
         &self,
         request: &RequestEnvelopeV1,
         _slice_request: &SliceRequestV1,
-    ) -> ResponseEnvelopeV1 {
+    ) -> ResponseEnvelopeV2 {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let (lock, changed) = &*self.gate;
         let mut state = lock.lock().expect("test gate lock must not be poisoned");
@@ -238,17 +250,20 @@ impl RequestDispatcherV1 for BlockingDispatcher {
     fn dispatch_daemon(
         &self,
         request: &RequestEnvelopeV1,
-        daemon_request: &podway_daemon::server::DaemonRequestV1,
+        _daemon_request: &podway_daemon::server::DaemonRequestV1,
     ) -> podway_protocol::ResponseEnvelopeV2 {
-        let slice = daemon_request
-            .legacy()
-            .expect("legacy server fixtures must remain legacy requests");
-        match self.dispatch(request, slice) {
-            ResponseEnvelopeV1::Output(output) => {
-                podway_protocol::ResponseEnvelopeV2::OutputV1(output)
-            }
-            ResponseEnvelopeV1::Error(error) => podway_protocol::ResponseEnvelopeV2::Error(error),
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let (lock, changed) = &*self.gate;
+        let mut state = lock.lock().expect("test gate lock must not be poisoned");
+        state.entered = true;
+        changed.notify_all();
+        while !state.release {
+            state = changed
+                .wait(state)
+                .expect("test gate lock must not be poisoned");
         }
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        success_response_v2(request, true)
     }
 }
 #[derive(Debug)]
@@ -547,11 +562,11 @@ fn status_transport(
     )
 }
 
-fn read_response(client: &mut UnixStream) -> ResponseEnvelopeV1 {
+fn read_response(client: &mut UnixStream) -> ResponseEnvelopeV2 {
     let payload = read_single_frame_v1(client)
         .expect("server response must be one complete frame")
         .expect("server must send one response frame");
-    decode_response_payload_v1(&payload).expect("server response payload must be valid")
+    decode_response_payload_v2(&payload).expect("server response payload must be valid")
 }
 
 fn read_response_v2(client: &mut UnixStream) -> ResponseEnvelopeV2 {
@@ -574,13 +589,13 @@ fn send_and_half_close(client: &mut UnixStream, frame: &[u8]) {
     }
 }
 
-fn assert_error_code(response: ResponseEnvelopeV1, code: &str) -> podway_protocol::ErrorEnvelopeV1 {
+fn assert_error_code(response: ResponseEnvelopeV2, code: &str) -> podway_protocol::ErrorEnvelopeV1 {
     match response {
-        ResponseEnvelopeV1::Error(error) => {
+        ResponseEnvelopeV2::Error(error) => {
             assert_eq!(error.code().as_str(), code);
             error
         }
-        ResponseEnvelopeV1::Output(_) => panic!("expected protocol error response"),
+        ResponseEnvelopeV2::OutputV2(_) => panic!("expected protocol error response"),
     }
 }
 
@@ -606,11 +621,11 @@ fn fragmented_same_uid_request_dispatches_once_and_returns_one_framed_output() {
     let handler_result = transport.handle_connection(server);
     let response = read_response(&mut client);
     match response {
-        ResponseEnvelopeV1::Output(output) => {
+        ResponseEnvelopeV2::OutputV2(output) => {
             assert_eq!(output.request_id().to_string(), REQUEST_ID);
             assert_eq!(output.command().as_str(), "session.status");
         }
-        ResponseEnvelopeV1::Error(error) => {
+        ResponseEnvelopeV2::Error(error) => {
             panic!("unexpected transport error: {error:?}; handler result: {handler_result:?}")
         }
     }
@@ -773,7 +788,7 @@ fn declared_version_does_not_override_matching_contract_identity() {
     };
 
     send_and_half_close(&mut client, &request_frame(&request));
-    let ResponseEnvelopeV1::Output(output) = read_response(&mut client) else {
+    let ResponseEnvelopeV2::OutputV2(output) = read_response(&mut client) else {
         panic!("matching product and manifest must authorize the request");
     };
     assert_eq!(output.command().as_str(), "session.status");
@@ -850,7 +865,7 @@ fn daemon_status_is_stable_live_and_bypasses_dispatch() {
         let transport = Arc::clone(&transport);
         let handler = thread::spawn(move || transport.handle_connection(server));
         send_and_half_close(&mut client, &request_frame(&daemon_status_request(0)));
-        let ResponseEnvelopeV1::Output(output) = read_response(&mut client) else {
+        let ResponseEnvelopeV2::OutputV2(output) = read_response_v2(&mut client) else {
             panic!("daemon status must return output");
         };
         assert!(handler.join().expect("handler must not panic").is_ok());
@@ -1188,7 +1203,7 @@ fn malformed_mutation_envelope_recovers_operation_and_reports_not_admitted() {
                 "/tmp/podway-worktree",
                 None,
             ).unwrap(),
-            "preset": "sw-dev",
+            "preset": "sw-dev-v2",
             "task_title": "Task",
         })
         .as_object()
@@ -1233,20 +1248,31 @@ fn invalid_dispatcher_mutation_response_reports_unknown_outcome_for_reconciliati
     );
     let selector =
         WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None).unwrap();
-    let request = mutation_request(
-        "session.start",
-        json!({ "selector": selector, "preset": "sw-dev", "task_title": "Task" })
+    let request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        client: ClientInfoV1::new("podway-test", "1.0.0", 42).unwrap(),
+        operation: OperationV1::Bootstrap,
+        command: CommandNameV1::new("workspace.reset_all").unwrap(),
+        workspace: Some(WorkspaceContextV1::new("/tmp/podway-worktree", None).unwrap()),
+        idempotency_key: Some(IdempotencyKeyV1::new("server-admission-key").unwrap()),
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(true, 0).unwrap(),
+        payload: json!({ "selector": selector, "confirmed": true })
             .as_object()
             .unwrap()
             .clone(),
-    );
+    })
+    .unwrap();
     let handler = {
         let transport = Arc::clone(&transport);
         thread::spawn(move || transport.handle_connection(server))
     };
 
     send_and_half_close(&mut client, &request_frame(&request));
-    let error = assert_error_code(read_response(&mut client), "MUTATION_OUTCOME_UNKNOWN");
+    let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
+        panic!("invalid dispatcher output must return a protocol error")
+    };
+    assert_eq!(error.code().as_str(), "MUTATION_OUTCOME_UNKNOWN");
     assert_eq!(error.details()["outcome"], "unknown");
     assert_eq!(error.details()["idempotency_key"], "server-admission-key");
     assert_eq!(error.details()["reconcile"]["command"], "job.lookup");
@@ -1311,8 +1337,8 @@ fn disconnected_client_before_a_complete_frame_never_reaches_dispatch() {
     let selector =
         WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None).unwrap();
     let mutation = mutation_request(
-        "session.start",
-        json!({ "selector": selector, "preset": "sw-dev", "task_title": "Task" })
+        "workspace.reset_all",
+        json!({ "selector": selector, "confirmed": true })
             .as_object()
             .unwrap()
             .clone(),
@@ -1360,7 +1386,7 @@ fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
         WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None).unwrap();
     let mutation = mutation_request(
         "session.start",
-        json!({ "selector": selector, "preset": "sw-dev", "task_title": "Task" })
+        json!({ "selector": selector, "preset": "sw-dev-v2", "task_title": "Task" })
             .as_object()
             .unwrap()
             .clone(),
@@ -1542,8 +1568,8 @@ fn accept_loop_rejects_queued_connections_at_capacity_with_one_saturation_event(
     admission.request_shutdown();
     release_dispatcher(&gate);
     match read_response(&mut first) {
-        ResponseEnvelopeV1::Output(_) => {}
-        ResponseEnvelopeV1::Error(error) => panic!("admitted request must finish: {error:?}"),
+        ResponseEnvelopeV2::OutputV2(_) => {}
+        ResponseEnvelopeV2::Error(error) => panic!("admitted request must finish: {error:?}"),
     }
     assert!(
         loop_thread
@@ -1740,8 +1766,8 @@ fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
 
     release_dispatcher(&gate);
     match read_response(&mut first) {
-        ResponseEnvelopeV1::Output(_) => {}
-        ResponseEnvelopeV1::Error(error) => panic!("admitted request must finish: {error:?}"),
+        ResponseEnvelopeV2::OutputV2(_) => {}
+        ResponseEnvelopeV2::Error(error) => panic!("admitted request must finish: {error:?}"),
     }
     assert!(
         loop_thread
@@ -1836,8 +1862,8 @@ fn handler_spawn_failure_closes_admission_releases_ticket_and_drains_existing_ha
     release_dispatcher(&gate);
 
     match read_response(&mut first) {
-        ResponseEnvelopeV1::Output(_) => {}
-        ResponseEnvelopeV1::Error(error) => panic!("admitted request must finish: {error:?}"),
+        ResponseEnvelopeV2::OutputV2(_) => {}
+        ResponseEnvelopeV2::Error(error) => panic!("admitted request must finish: {error:?}"),
     }
     assert_eq!(
         second
@@ -1857,8 +1883,8 @@ fn handler_spawn_failure_closes_admission_releases_ticket_and_drains_existing_ha
     assert_eq!(completed.load(Ordering::SeqCst), 1);
 }
 
-fn success_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
-    let output = OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+fn success_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
+    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: request.request_id().clone(),
         command: request.command().clone(),
         generated_at: timestamp(),
@@ -1874,11 +1900,58 @@ fn success_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
         "fixture output must satisfy the public response contract: {:?}",
         output.validate()
     );
-    ResponseEnvelopeV1::Output(output)
+    ResponseEnvelopeV2::OutputV2(output)
 }
-fn invalid_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
-    ResponseEnvelopeV1::Output(
-        OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+
+fn success_response_v2(request: &RequestEnvelopeV1, correlated: bool) -> ResponseEnvelopeV2 {
+    let mut fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/result-families.json"
+    ))
+    .expect("v2 result fixture catalog");
+    let result = match request.command().as_str() {
+        "session.status" => fixtures["fixtures"]["podway.status-result/v2"]
+            .take()
+            .as_object()
+            .expect("v2 status fixture is an object")
+            .clone(),
+        "session.start" | "session.start_replace" => {
+            let mut result = fixtures["fixtures"]["podway.session-start-result/v2"]
+                .take()
+                .as_object()
+                .expect("v2 start fixture is an object")
+                .clone();
+            result.insert("dry_run".to_owned(), Value::Bool(true));
+            for field in ["admission", "session_id", "revision", "entry_graph_node_id"] {
+                result.remove(field);
+            }
+            result
+        }
+        command => {
+            let mut result = fixture_result(command);
+            ensure_procedure_independent_result_schema_v1(command, &mut result);
+            result
+        }
+    };
+    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+        request_id: if correlated {
+            request.request_id().clone()
+        } else {
+            fallback_request_id()
+        },
+        command: request.command().clone(),
+        generated_at: timestamp(),
+        workspace: None,
+        job: None,
+        session: None,
+        result,
+        warnings: Vec::new(),
+    })
+    .expect("v2 fixture output is valid");
+    ResponseEnvelopeV2::OutputV2(output)
+}
+fn invalid_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
+    ResponseEnvelopeV2::OutputV2(
+        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
             request_id: fallback_request_id(),
             command: request.command().clone(),
             generated_at: timestamp(),
@@ -1948,7 +2021,7 @@ fn oversized_v2_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
     .as_object()
     .expect("oversized v2 next result must be an object")
     .clone();
-    let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: request.request_id().clone(),
         command: request.command().clone(),
         generated_at: timestamp(),
@@ -1979,7 +2052,7 @@ fn fixture_result(command: &str) -> Map<String, Value> {
         json!({
             "dry_run": true,
             "task": "Fixture",
-            "source": {"preset": "sw-dev"},
+            "source": {"preset": "sw-dev-v2"},
             "procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
             "first_stage": {"id": "implement", "title": "Implement"}
         })

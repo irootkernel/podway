@@ -198,3 +198,19 @@ Dependencies: `V2CTR`, `V2MOD`, `V2AUT`, `V2GRF`, `V2PLT`, `V2RUN`, `V2DRW`,
 | `V2REL-005` | Pass the development gate | Completed | Pass `make test` from the final integrated candidate. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
 | `V2REL-006` | Enable and qualify the native distribution | Completed | Implement production public v2 admission, then pass `make dist` on the exact clean unpublished commit and prove packaged identity plus development-unlock exclusion. | [V2REL plan](../todo/TODO-podway-v2-full-feature-ga.md#1910-epic-v2rel-conformance-and-ga) |
 | `V2REL-007` | Publish and close v0.2.0 GA | Completed | Publish the unchanged qualified bytes, independently reverify immutable assets, and record the release report and archive bookkeeping. | [Final report](archive/v0.2.0-release-report.md) |
+
+## V2CUT — Procedure v2-Only Product
+
+Dependencies: completed `PV2GA` release program.
+
+This epic is unreleased v0.2.1 work. It does not itself advance the product
+version or authorize distribution.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2CUT-001` | Adopt the v2-only authority | Completed | Supersede v1 preservation and define the breaking contract boundary. | [V2CUT dossier](archive/podway-v2-only.md) |
+| `V2CUT-002` | Remove the v1 model and presets | Completed | Delete v1 parsing, linear domain behavior, conversion, and shipped presets. | [V2CUT dossier](archive/podway-v2-only.md) |
+| `V2CUT-003` | Unify v2-only success contracts | Completed | Produce only the closed `podway.output/v3` success family. | [V2CUT dossier](archive/podway-v2-only.md) |
+| `V2CUT-004` | Migrate to v2-only storage | Completed | Add schema-v4 and reject nonempty legacy state without mutation. | [V2CUT dossier](archive/podway-v2-only.md) |
+| `V2CUT-005` | Synchronize product surfaces | Completed | Align machine assets, tests, current specifications, examples, and guidance. | [V2CUT dossier](archive/podway-v2-only.md) |
+| `V2CUT-006` | Pass the development gate | Completed | Pass focused coverage and complete `make test`. | [V2CUT dossier](archive/podway-v2-only.md) |

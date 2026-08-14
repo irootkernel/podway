@@ -37,7 +37,6 @@ fn admit(source: &str) -> ValidatedProcedureV2 {
         Ok(ParsedProcedure::V2(parsed)) => {
             validate_procedure_v2(parsed).expect("the lint fixture must validate")
         }
-        Ok(ParsedProcedure::V1(_)) => panic!("expected v2 dispatch, got v1"),
         Err(error) => panic!("the lint fixture must parse: {error}\n{source}"),
     }
 }

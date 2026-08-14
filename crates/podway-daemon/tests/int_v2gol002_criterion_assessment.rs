@@ -123,7 +123,7 @@ fn initialize(
     );
     assert!(matches!(
         runtime::dispatch(dispatcher, &request),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
 }
 
@@ -143,7 +143,7 @@ fn goal_start_request(
         workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new("v2gol002-start").unwrap()),
         preconditions: PreconditionsV1::default(),
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();
@@ -258,7 +258,7 @@ fn goal_mutation_request(
         workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new(key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();
@@ -410,8 +410,26 @@ fn v2gol002_assessment_mode_records_citations_attribution_replay_and_restart() {
 
     drop(dispatcher);
     let restarted = runtime::dispatcher(Arc::clone(&fixture.manager), "v2gol002-restart");
-    let after_restart =
-        runtime::status(&restarted, &fixture.selector, 102_026, &fixture.session_id);
+    let status_request = runtime::request(
+        102_026,
+        "session.status",
+        &fixture.selector,
+        Map::new(),
+        "unused-v2gol002-restart-status-key",
+        PreconditionsV1::new(
+            Some(SessionId::new(&fixture.session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let after_restart = runtime::v2_result(
+        runtime::dispatch_after_cold_reopen(&restarted, &status_request),
+        "session.status",
+    );
     assert_eq!(
         after_restart["current"]["attempt"]["attempt_id"],
         before_first["current"]["attempt"]["attempt_id"]
@@ -425,7 +443,7 @@ fn v2gol002_assessment_mode_records_citations_attribution_replay_and_restart() {
         ])
     );
     assert_eq!(
-        runtime::without_request_id(&runtime::dispatch(&restarted, &second)),
+        runtime::without_request_id(&runtime::dispatch_after_cold_reopen(&restarted, &second)),
         runtime::without_request_id(&second_response),
         "the final criterion result must replay after a cold reopen"
     );
@@ -701,7 +719,7 @@ fn v2gol002_duplicate_citations_fail_during_closed_request_decode_without_mutati
         workspace: Some(WorkspaceContextV1::new(fixture.selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new("v2gol002-duplicate-citations").unwrap()),
         preconditions: assessment_preconditions(&before),
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();

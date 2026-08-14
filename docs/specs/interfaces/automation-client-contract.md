@@ -106,7 +106,7 @@ When no explicit endpoint is supplied, an interactive client may read
 | ID | Normative requirement |
 |---|---|
 | `AUT-CONTRACT-001` | `podway.contract-manifest/v1` MUST deterministically cover product version, supported IPC IDs, Procedure and IPC schemas, all integration result and error schemas, catalogs, transition matrix, canonicalization rules, and known-answer fixtures. |
-| `AUT-CONTRACT-002` | `podway version --json` MUST emit exactly the compact `name` and `v`-prefixed `version`; `podway version --json --identity` MUST emit a validated `podway.output/v1` envelope with a closed `podway.version-result/v1` result exposing product, version, target, build identity, source commit when available, manifest schema and digest, and supported IPC IDs. |
+| `AUT-CONTRACT-002` | `podway version --json` MUST emit exactly the compact `name` and `v`-prefixed `version`; `podway version --json --identity` MUST emit a validated `podway.output/v3` envelope with a closed `podway.version-result/v1` result exposing product, version, target, build identity, source commit when available, manifest schema and digest, and supported IPC IDs. |
 | `AUT-CONTRACT-003` | `podway` and `podwayd` from one release MUST emit exactly equal closed identity results and embed the same manifest digest. |
 | `AUT-CONTRACT-004` | Installation and every daemon connection MUST reject a malformed complete identity envelope or a product or manifest mismatch before command execution or durable admission; IPC compatibility alone MUST NOT authorize the connection. |
 | `AUT-CONTRACT-005` | `daemon status --json` MUST expose daemon version, executable path, process-instance identity, configured and effective socket, and manifest digest. |
@@ -132,9 +132,9 @@ not create a contract mismatch.
 | `AUT-ID-001` | The public CLI MUST expose `--if-workspace-uuid` and `--if-session-id` alongside revision, attempt, and item-revision preconditions. |
 | `AUT-ID-002` | Session-bearing reads MUST enforce workspace UUID and, when supplied by the client, session ID. |
 | `AUT-ID-003` | `start` MUST enforce workspace UUID and the normal no-existing-session rule. |
-| `AUT-ID-004` | Stage transitions MUST enforce workspace UUID, session ID, session revision, and attempt ID for automation requests. |
+| `AUT-ID-004` | Graph-node transitions MUST enforce workspace UUID, session ID, session revision, and attempt ID for automation requests. |
 | `AUT-ID-005` | Item mutations MUST enforce workspace UUID, session ID, attempt ID, and item revision for automation requests. |
-| `AUT-ID-006` | `reopen`, replacement, and reset MUST enforce the currently observed workspace, session, and applicable session revision before mutation. |
+| `AUT-ID-006` | Replacement and reset MUST enforce the currently observed workspace, session, and applicable session revision before mutation. |
 | `AUT-ID-007` | Identity mismatches MUST return stable typed errors with closed details containing expected and actual identities and no mutation. |
 
 A matching numeric revision is not sufficient evidence that an operation targets
@@ -172,7 +172,7 @@ not replace, the session revision or active-attempt fence.
 |---|---|
 | `AUT-RECON-001` | `job lookup --idempotency-key <key>` MUST be a read-only, worktree-scoped query and MUST NOT submit or replay a mutation. |
 | `AUT-RECON-002` | Lookup MUST return `found=false` for no record and MUST return job ID, sequence, command, request digest, and state for admitted non-terminal jobs. |
-| `AUT-RECON-003` | Lookup MUST return the complete immutable original success envelope (`podway.output/v1` for v1 jobs or `podway.output/v2` for Procedure v2 jobs) or `podway.error/v1` terminal envelope, including request correlation, command, completion timestamp, workspace, job, session/result or public error details, from the retained receipt after the terminal job row is pruned. It MUST NOT retain or reveal the full original request. Cancelled jobs retain the closed cancellation summary. |
+| `AUT-RECON-003` | Lookup MUST return the complete immutable original `podway.output/v3` success envelope or `podway.error/v1` terminal envelope, including request correlation, command, completion timestamp, workspace, job, session/result or public error details, from the retained receipt after the terminal job row is pruned. It MUST NOT retain or reveal the full original request. Cancelled jobs retain the closed cancellation summary. |
 | `AUT-RECON-004` | Reusing an idempotency key for a different canonical request MUST continue to fail with the stable reuse error. |
 
 ## 19. Quiescent observation (AUT-OBS-001)
@@ -185,7 +185,7 @@ not replace, the session revision or active-attempt fence.
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-OBS-002` | `status --wait-for-idle --compact` MUST return workspace and queue identity, Procedure identity, session lifecycle and revision, current stage and attempt, completion readiness, item identity/state/revision, and blocker identity/state. |
+| `AUT-OBS-002` | `status --wait-for-idle --compact` MUST return workspace and queue identity, Procedure identity, session lifecycle and revision, current graph node and attempt, completion readiness, item identity/state/revision, and blocker identity/state. |
 | `AUT-OBS-003` | Compact status MUST omit instructions, prompts, task titles, previous-attempt narratives, and item values unless a value is strictly required to form a valid mutation. |
 | `AUT-OBS-004` | Compact status MUST use a closed schema and the complete serialized JSON envelope MUST NOT exceed 262,144 UTF-8 bytes. |
 
@@ -193,7 +193,7 @@ not replace, the session revision or active-attempt fence.
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, status, next, item mutation, stage transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
+| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, status, next, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
 | `AUT-JSON-002` | Daemon, socket, identity, revision, attempt, digest, idempotency, and timeout failures MUST each have closed error-detail schemas. |
 | `AUT-JSON-003` | Results and error details MUST carry an unambiguous schema identifier or discriminator. |
 | `AUT-JSON-004` | A closed v1 object MUST reject unknown fields; adding fields requires a new schema identifier or discriminator version rather than an undocumented additive-field exception. |
@@ -236,7 +236,7 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-PATH` | sanitized environment, arbitrary directory, CLI symlink, sibling/explicit/PATH daemon resolution, absolute plist path | `RPATH006`, `DOLGI001` |
 | `AUT-T-SOCK` | correct, wrong, relative, over-long, regular-file, symlink, insecure-parent, wrong-owner, stale, same/different-socket duplicate daemon | `RPATH003`–`RPATH006` |
 | `AUT-T-CONTRACT` | matching peers, complete source/package schema validation, malformed v0.1.1 and generated identity/manifest/schema/reference drift, same version/different manifest, different version/same IPC, replaced executable, restart after upgrade | `CONID003`–`CONID006`, `REL12003`–`REL12004` |
-| `AUT-T-ID` | replaced workspace/session, same numeric revision on another session, stale reopen, wrong attempt/item, guarded reads | `CASID003`–`CASID005` |
+| `AUT-T-ID` | replaced workspace/session, same numeric revision on another session, stale replacement, wrong attempt/item, guarded reads | `CASID003`–`CASID005` |
 | `AUT-T-START` | matching/mismatching digest, source deletion/replacement/race, restart, exact replay, key reuse with another digest | `PSTRT001`–`PSTRT005` |
 | `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |
 | `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
@@ -260,41 +260,6 @@ an admitted terminal error carry the same bounded job admission identity used by
 lookup and replay. A retained terminal envelope always names a v2 mutation, and
 job lookup requires its nested command to equal the immutable job command.
 Preview and other authoring reads remain side-effect free.
-Existing v1 commands and sessions retain their v1 meanings and wire families.
-
-### Dolgorae v2 adapter handoff
-
-The manifest-bound
-[`podway.dolgorae-v2-adapter-contract/v1`](../../../release/dolgorae-v2-adapter-contract-v1.json)
-is the prepared downstream migration contract. It freezes the released v1
-baseline and enumerates the exact v2 route delta, version-aware routes, result
-families, schema pins, runtime errors, and authoring diagnostics. Runtime errors
-and authoring diagnostics remain separate inventories. The contract is marked
-`prepared-not-released`; its acceptance checks are requirements for a downstream
-adapter, not evidence that any Dolgorae repository has adopted them.
-
-The release handoff uses the new closed
-`podway.dolgorae-compatibility-handoff/v2` discriminator. It embeds the exact
-adapter contract and its packaged member digest next to the release's final
-contract-manifest digest. Consumers MUST verify that identity before dispatch,
-vendor every listed logical `schemas/...` member by its exact digest, select
-success decoding by the versioned result schema, and retain
-`podway.error/v1` for failures. Capability discovery uses the manifest and route
-inventory; it MUST NOT use error probing or version text.
-
-Completed-session reactivation has two machine notices. Every successful
-`session.rework` emits `/result/reactivated` in
-`podway.rework-result/v1`, and every successful `goal.revise` emits the same
-field in `podway.goal-revision-result/v1`; revising a completed session requires
-`--reactivate`. The boolean `true` is the reactivation notice. On `true`, an
-adapter invalidates terminal cache state and refreshes status and cursor. It does
-not infer reactivation from human text. Cancelled sessions cannot reactivate, and
-v1 `reopen` remains a v1 operation rather than an alias for either notice.
-
-Workspace migration remains Podway-owned and transactional. The adapter never
-reads or writes `.podway/runtime` databases, never converts v1 history into v2
-graph history, and preserves retained v1 session semantics and `reopen` behavior.
-Development-unlock state is disposable and carries no migration promise.
 
 ## 25. Requirements-to-roadmap traceability
 
@@ -338,7 +303,7 @@ podway --json \
   start \
   --procedure ".dolgorae/runtime/podway/request-42/procedure.json" \
   --expect-procedure-digest "$PROCEDURE_DIGEST" \
-  --task "WI-0042: Implement Podway stage dispatch"
+  --task "WI-0042: Implement Podway graph dispatch"
 
 podway --json \
   --socket "/Users/example/.podway/run/podwayd.sock" \

@@ -9,7 +9,7 @@
   "future_assertions": [
     "YAML and JSON parse to the same structural value and canonical bytes",
     "field ordering and non-semantic formatting preserve canonical_sha256",
-    "podway.procedure/v1 dispatch remains v1 and podway.procedure/v2 dispatch remains v2",
+    "unsupported Procedure schemas fail closed and podway.procedure/v2 dispatch remains v2",
     "purpose objective evidence_guidance evidence_from skip and assessment mappings retain closed canonical forms"
   ]
 }

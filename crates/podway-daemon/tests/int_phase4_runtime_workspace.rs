@@ -29,7 +29,7 @@ use podway_daemon::{
 use podway_protocol::Rfc3339MillisV1;
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
-    SqliteStoreOptionsV1, StoreContractV1, StoreErrorV1, StoreReadContractV1,
+    SqliteStoreOptionsV1, StoreContractV1, StoreErrorV1, StoreGraphReadContractV2,
     StoreUnavailableReasonV1, WorkerIdV1,
 };
 use serde_json::Value;
@@ -228,8 +228,9 @@ fn init_creates_only_workspace_state_not_a_task_or_session() {
     assert!(
         context
             .store()
-            .read_session_aggregate(context.binding().identity())
+            .read_graph_workspace_view_v2(context.binding().identity())
             .expect("new Store must be readable")
+            .graph_state()
             .is_none(),
         "workspace.init must not create a session"
     );

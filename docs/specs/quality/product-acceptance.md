@@ -1,132 +1,53 @@
 # Product Acceptance Criteria
 
-The criteria below describe the implemented baseline checked by `make test` and completed by the distribution qualification in `make dist`.
+The criteria below define the current Procedure v2 product checked by `make test`.
+Distribution qualification in `make dist` adds native packaging evidence.
 
-## Product purpose
+## Procedure and lifecycle
 
-- A user can initialize a valid Git worktree without starting a task.
-- A user can start one task from a preset or custom procedure.
-- `status` makes the active stage, attempt, item state, blockers, and pending jobs clear.
-- `next` lists every missing required item and a structured command suggestion.
-- A stage cannot complete with missing required items, changed required local artifacts, or open blockers.
-- The common interface emphasizes current task execution rather than historical evidence.
+- Only `podway.procedure/v2` input is admitted.
+- The shipped presets are exactly `sw-dev-v2` and `bug-fix-v2`, with pinned
+  embedded identities.
+- A session snapshots its Procedure and starts at the unique graph entry.
+- Action, decision, and terminal nodes enforce their declared transition rules.
+- Retry creates a fresh attempt; rework follows only a declared edge and applies
+  its declared invalidation policy.
+- Goal definition, revision, criterion assessment, and closeout remain fenced and
+  durable.
 
-## Procedure semantics
+## Runtime and persistence
 
-- Custom ordered procedures validate and run without source changes.
-- Procedure snapshots are immutable for a running session.
-- All six item types and constraints behave as specified.
-- Skip works only when explicitly permitted.
-- A running session has exactly one active attempt.
-- Retry creates a clean attempt of the same stage.
-- Return creates a clean destination attempt and marks reached downstream stages `redo`.
-- Reopen applies the same redo semantics to a completed session.
-- Cancelled sessions cannot reopen.
-- Reset removes the task session and its session-local history.
-
-## Daemon and queue
-
-- `podwayd` is the sole normal writer.
-- Mutations are durable before admission acknowledgement.
-- FIFO ordering is proven within one worktree.
-- independent worktrees can execute mutations concurrently.
-- same-item concurrent updates cannot silently overwrite.
-- cursor commands cannot apply to a different active stage.
-- client retry after lost response does not duplicate a mutation.
-- queued jobs survive daemon restart while the worktree remains discoverable.
-- job cancellation works only before claim.
-
-## Crash safety
-
-- Every defined crash-injection point has a deterministic valid recovery outcome.
-- A state transition and terminal job result commit atomically.
-- A failed job changes no session state.
-- Running jobs recover to queued after daemon restart when no terminal commit exists.
-- Reset-all recovers idempotently from an interrupted marker state.
-
-## Git and filesystem boundary
-
-- Workspace commands fail outside a valid non-bare Git worktree.
-- Main and linked worktrees are supported.
-- Path and symlink escapes are rejected.
-- Copied live workspace UUID conflicts are detected.
-- A moved worktree can repair its registry path after identity validation.
-- Runtime state remains inside `.podway/runtime/` and is ignored by Git.
-- Deleting the worktree deletes task state and queued jobs.
-
-## Persistence
-
-- SQLite schema, foreign keys, WAL, and synchronous durability are configured as specified.
-- The non-file `uninitialized-database` fixture starts from exact schema-0 state and commits canonical schema-v3.
-- Deterministic schema-0 to v3 conformance proves required pragmas, transactional initialization, no user task-state loss, no duplicated mutation, and no partial installation.
-- Migrations are transactional and checksummed.
-- Unsupported newer state fails closed.
-- Corrupt state fails closed and is diagnosable.
-- Destructive reset-all recreates a usable workspace.
-- Terminal jobs, idempotency data, and journal remain bounded according to policy.
-- No global task-state copy exists.
+- `podwayd` is the sole normal writer and executes one mutation per worktree.
+- Admission, idempotency, ordering, terminal receipts, and domain state are atomic.
+- SQLite schema-v4 contains only Procedure v2 domain state.
+- Empty predecessors and v2-only schema-v3 stores migrate transactionally.
+- Any nonempty Procedure v1 predecessor fails without mutation and requires user
+  backup followed by confirmed `reset --all`.
+- Crash recovery never duplicates an admitted mutation or terminal result.
 
 ## Interfaces
 
-- Every public command has complete help.
-- Every public command emits valid versioned JSON.
-- Public error codes and exit codes match the catalog.
-- Text and JSON never disagree on successful state.
-- zsh, bash, and fish completion are shipped and tested.
-- IPC rejects unsupported versions and oversized or malformed frames safely.
-- Automation can pass explicit revision, attempt, item revision, and idempotency values.
+- Every successful public command emits `podway.output/v3`; failures emit the
+  procedure-independent `podway.error/v1` envelope.
+- v1-only lifecycle commands, routes, presets, result schemas, and completions are
+  absent.
+- Machine fields, command bindings, schemas, limits, and error codes match the
+  canonical catalogs and manifest.
+- Automation uses explicit identity fences and reconciles unknown mutation
+  outcomes through idempotency lookup.
 
-## macOS operation
+## Safety and operation
 
-- Both `podway` and `podwayd` install and run natively on the sole supported tuple `{triple: aarch64-apple-darwin, arch: arm64, host_arch: arm64, mach_o_arch: arm64}`.
-- LaunchAgent install is idempotent.
-- Daemon starts at user login.
-- Explicit stop, start, restart, status, logs, and uninstall work.
-- Socket and runtime permissions are correct.
-- Stale sockets and unexpected daemon exits recover.
-- Service uninstall preserves all worktree state.
-
-## Safety and trust
-
-- No command executes arbitrary procedure-defined code.
-- No command performs Git mutation.
-- No daemon component listens on a network socket or performs network I/O.
-- Artifact bytes are never stored.
-- Logs exclude item values and task content by default.
-- Same-user trust limitations are documented in help and release documentation.
-- No workspace access key or misleading authentication claim exists.
-
-## Built-in presets
-
-- The retained v1 presets `sw-dev`, `bug-fix`, `docs-only`, and `analysis` validate without semantic drift, while the shipped v0.2.0 presets `sw-dev-v2` and `bug-fix-v2` validate and vet with their embedded bytes and pinned digests intact.
-- Each retained v1 preset has clear help and stage descriptions, while CLI help exposes the shipped v2 preset identities and graph-workflow guidance.
-- Each retained v1 preset passes a complete end-to-end scenario, while both v2 presets pass full-graph conformance and embedded-identity checks.
-- Each retained v1 preset executes retry and return, while both v2 presets declare their bounded decision and rework scenarios.
-
-## Distribution
-
-- Rust lockfile is committed.
-- Apple Silicon (`aarch64-apple-darwin`) binaries are built and exercised on the local arm64 release host.
-- Release archive contains both binaries, completions, schemas, presets, README, and MIT License.
-- Public artifacts have documented signing and notarization status.
-- Upgrade from the previous supported database schema is tested.
-- Release notes document contract versions and any migration.
-
-## Automation integrity
-
-- Procedure starts enforce digest guards, durable admitted snapshots, source-drift and restart independence, digest-bound idempotent replay, and consistent returned Procedure identity.
-- Mutation response loss reconciles by idempotency key without duplicate admission or cancellation, across pre-admission disconnect, wait timeout, every job state, domain failure, and terminal pruning.
+- Podway executes no configured commands, mutates no Git state, performs no
+  network requests, and stores no artifact bytes.
+- Paths, frames, queues, collections, logs, and timeouts are bounded.
+- Worktree state remains under `.podway/runtime/`; global state is limited to the
+  documented endpoint, registry, socket, and bounded logs.
+- Native Apple Silicon macOS service installation and lifecycle behavior are
+  verified separately from product semantics.
 
 ## Final acceptance rule
 
-No criterion may be waived. A failed `make test` result means the tree is not ready
-for distribution work; a failed `make dist` result means it is not release-ready.
-Independent signatures, approval quorums, holdout runs,
-qualification archives, and attestation bundles are not acceptance criteria.
-Signing and notarization status must be documented when artifacts are distributed,
-but neither replaces the distribution gate.
-
-The implemented automation acceptance scenarios are tracked separately in the
-[automation client contract](../interfaces/automation-client-contract.md#24-acceptance-matrix).
-They remain `AUT-*` evidence rather than `PAC-*` rows in this mandatory product
-matrix; both inventories are enforced by the repository-local gate.
+A failed `make test` means the development revision is not ready. A failed
+`make dist` means it is not release-ready. Review, signatures, or generated
+evidence never replace the relevant executable gate.

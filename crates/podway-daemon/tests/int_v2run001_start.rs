@@ -8,9 +8,9 @@ use podway_core::{
     Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_daemon::execution::{
-    ExecutionBoundaryErrorV1, ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1,
-    ProcedureV2StartPreparationErrorV1, prepare_custom_procedure_v2_start,
-    prepare_preset_procedure_v2_start, workspace_procedure_snapshot_from_bytes_v2,
+    ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
+    prepare_custom_procedure_v2_start, prepare_preset_procedure_v2_start,
+    workspace_procedure_snapshot_from_bytes_v2,
 };
 use podway_store::{
     DurableWorktreeIdentityV1, ProcedureSnapshotV2, ValidatedWorkspaceRootV1, WorkspaceBindingV1,
@@ -40,25 +40,6 @@ struct PinnedPresetV2 {
 }
 
 impl ProcedureProviderV1 for PinnedPresetV2 {
-    fn load_preset_snapshot(
-        &self,
-        _preset: &str,
-        _snapshot_id: ProcedureSnapshotId,
-        _created_at: UnixMillis,
-    ) -> Result<podway_core::ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        panic!("v2 preset must not enter the v1 preset loader")
-    }
-
-    fn load_workspace_procedure_snapshot(
-        &self,
-        _workspace: &WorkspaceBindingV1,
-        _procedure: &str,
-        _snapshot_id: ProcedureSnapshotId,
-        _created_at: UnixMillis,
-    ) -> Result<podway_core::ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        panic!("v2 preset must not read a workspace source")
-    }
-
     fn load_preset_snapshot_v2(
         &self,
         preset: &str,
@@ -72,25 +53,6 @@ impl ProcedureProviderV1 for PinnedPresetV2 {
 }
 
 impl ProcedureProviderV1 for ByteProcedureV2<'_> {
-    fn load_preset_snapshot(
-        &self,
-        _preset: &str,
-        _snapshot_id: ProcedureSnapshotId,
-        _created_at: UnixMillis,
-    ) -> Result<podway_core::ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        panic!("V2RUN-001 custom-start fixture must not resolve a preset")
-    }
-
-    fn load_workspace_procedure_snapshot(
-        &self,
-        _workspace: &WorkspaceBindingV1,
-        _procedure: &str,
-        _snapshot_id: ProcedureSnapshotId,
-        _created_at: UnixMillis,
-    ) -> Result<podway_core::ProcedureSnapshotV1, ExecutionBoundaryErrorV1> {
-        panic!("positive Procedure v2 dispatch must not enter the retained v1 loader")
-    }
-
     fn load_workspace_procedure_snapshot_v2(
         &self,
         _workspace: &WorkspaceBindingV1,
@@ -236,35 +198,27 @@ fn v2run001_yaml_and_json_formatting_share_one_confirmed_semantic_digest() {
 }
 
 #[test]
-fn v2run001_v1_document_remains_owned_by_the_v1_parser() {
-    let source = br#"schema: podway.procedure/v1
-id: retained
+fn v2run001_an_unsupported_schema_document_is_rejected() {
+    let source = br#"schema: podway.procedure/v3
+id: future
 version: "1"
-name: Retained v1
-stages:
-  - id: work
-    title: Work
-rework:
-  allow_return_to: any_previous
+name: Future
 "#;
-    assert!(matches!(
-        parse_procedure_document(source, ProcedureDocumentFormat::Yaml).unwrap(),
-        ParsedProcedure::V1(_)
-    ));
+    assert!(parse_procedure_document(source, ProcedureDocumentFormat::Yaml).is_err());
     assert!(matches!(
         workspace_procedure_snapshot_from_bytes_v2(
-            "retained.yaml",
+            "future.yaml",
             source,
             ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
             UnixMillis::new(1),
         ),
-        Err(ProcedureV2SourceAdmissionErrorV1::NotProcedureV2)
+        Err(ProcedureV2SourceAdmissionErrorV1::SchemaInvalid { .. })
     ));
 
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(EQUIVALENT_YAML, ProcedureDocumentFormat::Yaml).unwrap()
     else {
-        panic!("Procedure v2 fixture was reinterpreted as v1")
+        panic!("Procedure v2 fixture was not dispatched as v2")
     };
     assert!(validate_procedure_v2(parsed).is_ok());
 }

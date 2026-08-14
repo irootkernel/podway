@@ -30,7 +30,6 @@ use serde_json::Value;
 fn admit(text: &str, format: ProcedureDocumentFormat) -> Result<ValidatedProcedureV2, ConfigError> {
     match parse_procedure_document(text.as_bytes(), format) {
         Ok(ParsedProcedure::V2(parsed)) => validate_procedure_v2(parsed),
-        Ok(ParsedProcedure::V1(_)) => panic!("expected v2 dispatch, got v1"),
         Err(error) => Err(error),
     }
 }

@@ -9,6 +9,6 @@
     "schema": { "const": "podway.workspace-init-result/v1" },
     "initialized": { "const": true },
     "revision": { "type": "integer", "minimum": 0 },
-    "admission": { "$ref": "urn:podway:schema:output:v1#/$defs/admitted" }
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" }
   }
 }

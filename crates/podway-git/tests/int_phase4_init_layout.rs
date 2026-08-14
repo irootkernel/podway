@@ -199,7 +199,7 @@ fn pac036_runtime_is_confined_to_podway_and_ignored_by_the_exact_rule() {
     let validated = resolve(&worktree);
 
     let report = WorkspaceLayoutInitializerV1::new()
-        .initialize_with_config(&validated, b"schema: podway.procedure/v1\n")
+        .initialize_with_config(&validated, b"schema: podway.workspace/v1\n")
         .expect("layout initialization");
     let podway = worktree.join(".podway");
     let runtime = podway.join("runtime");

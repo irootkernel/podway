@@ -17,25 +17,13 @@ fn common(id: &str) -> ItemCommonV2 {
 }
 
 #[test]
-fn item_specs_enforce_v2_bounds_while_keeping_v1_unchanged() {
-    // v2 item prompt is capped at 300 characters (v1 keeps 500).
+fn item_specs_enforce_v2_bounds() {
+    // v2 item prompt is capped at 300 characters.
     assert!(ItemCommonV2::new(ItemId::new("i").unwrap(), "p".repeat(300), None, true).is_ok());
     assert_eq!(
         ItemCommonV2::new(ItemId::new("i").unwrap(), "p".repeat(301), None, true).unwrap_err(),
         invalid("item prompt")
     );
-    // v1 item prompt bound stays at 500 (no drift).
-    assert!(
-        crate::ItemCommonV1::new(ItemId::new("i").unwrap(), "p".repeat(500), None, true).is_ok()
-    );
-    assert_eq!(
-        crate::ItemCommonV1::new(ItemId::new("i").unwrap(), "p".repeat(501), None, true)
-            .unwrap_err(),
-        crate::DomainError::InvalidState {
-            reason: "item prompt"
-        }
-    );
-
     // item help is capped at 1000 characters.
     assert!(
         ItemCommonV2::new(ItemId::new("i").unwrap(), "p", Some("h".repeat(1000)), true).is_ok()
@@ -80,7 +68,7 @@ fn item_specs_enforce_v2_bounds_while_keeping_v1_unchanged() {
         invalid("invalid list entry length constraint")
     );
 
-    // item kind taxonomy is reused from the v1 item contracts.
+    // Procedure v2 reuses the current first-version item contract taxonomy.
     assert_eq!(item("confirm").item_type(), ItemTypeV1::Confirm);
 }
 

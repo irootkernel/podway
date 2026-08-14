@@ -24,7 +24,7 @@ Direct `python3 tools/dev_runtime.py ...` invocation resolves Cargo through
 `rustup` for the checkout-pinned `1.97.1` toolchain from `rust-toolchain.toml`,
 even when Make has not adjusted `PATH`. It fails clearly when that toolchain is
 missing. Builds honor `CARGO_TARGET_DIR` using the same relative/absolute
-resolution as `tools/run_g005_vertical.py`.
+resolution as the repository E2E runner.
 
 - `daemon` builds with `--locked` and the daemon-only
   `development-v2-admission` feature, verifies both debug test-isolation and
@@ -53,7 +53,7 @@ resolution as `tools/run_g005_vertical.py`.
   recreated-root survival, and a real dual-daemon coexistence regression. It also
   starts the shipped `sw-dev-v2` preset in a fresh synthetic managed runtime and
   drives success, decision rework, goal revision, retry, skip, same-snapshot
-  daemon restart, achieved closeout, and a retained v1 stage transition. The
+  daemon restart, and achieved closeout. The
   synthetic checkout and runtime root must both be absent after the check. The
   self-test is part of `make test` through `make dev-runtime-test`.
 

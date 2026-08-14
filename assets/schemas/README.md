@@ -3,12 +3,10 @@
 These JSON Schema Draft 2020-12 files define Podway's versioned structural contracts.
 
 - `workspace-v1.schema.json`: `.podway/config.yaml` after YAML parsing.
-- `procedure-v1.schema.json`: custom procedures and built-in presets.
 - `procedure-v2.schema.json`: closed and bounded Procedure v2 YAML/JSON authoring shape.
 - `registry-v1.schema.json`: minimal daemon path registry.
 - `ipc-request-v1.schema.json`: framed daemon request payload.
-- `output-v1.schema.json`: success envelope.
-- `output-v2.schema.json`: Procedure v2 success envelope with closed command-to-result selection.
+- `output-v3.schema.json`: unified success envelope with closed command-to-result selection.
 - `error-v1.schema.json`: error envelope.
 - `endpoint-error-details-v1.schema.json`: daemon endpoint and availability failures.
 - `socket-endpoint-error-details-v1.schema.json`: invalid explicit Unix socket paths.
@@ -18,22 +16,13 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `blocker-limit-details-v1.schema.json`: active-attempt open-blocker limit failures.
 - `idempotency-key-reused-details-v1.schema.json`: rejected idempotency-key reuse.
 - `job-wait-timeout-details-v1.schema.json`: query and admitted mutation wait timeouts.
-- `status-result-v1.schema.json`: `status` result object.
-- `compact-status-result-v1.schema.json`: bounded `status --wait-for-idle --compact` result object.
 - `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
 - `version-summary-v1.schema.json`: compact public product name and version.
 - `version-result-v1.schema.json`: detailed static build and contract identity.
-- `procedure-validation-result-v1.schema.json`: validated Procedure digest and canonical form.
-- `session-start-result-v1.schema.json`: terminal and dry-run session start outcomes.
-- `next-result-v1.schema.json`: `next` result object.
-- `item-mutation-result-v1.schema.json`: terminal item mutation outcome.
-- `stage-transition-result-v1.schema.json`: terminal stage transition outcome.
-- `detached-admission-result-v1.schema.json`: durable detached mutation admission.
 - `workspace-init-result-v1.schema.json`: terminal workspace initialization outcome.
-- `job-result-v1.schema.json`: `job status` and `job wait` result object.
-- `job-lookup-result-v1.schema.json`: idempotency-key reconciliation result.
-- `job-result-v2.schema.json`: Procedure v2 job status/wait wrapper and terminal response.
-- `job-lookup-result-v2.schema.json`: Procedure v2 idempotency-key reconciliation result.
+- `detached-admission-result-v1.schema.json`: detached workspace initialization admission.
+- `job-result-v3.schema.json`: job status/wait wrapper and terminal response.
+- `job-lookup-result-v3.schema.json`: idempotency-key reconciliation result.
 - `procedure-validation-result-v2.schema.json`: metadata-only Procedure v2 validation success.
 - `detached-admission-result-v2.schema.json`: Procedure v2 durable mutation admission.
 - `session-start-result-v2.schema.json`: Procedure v2 dry-run and live start outcomes.
@@ -43,7 +32,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `stage-transition-result-v2.schema.json`: Procedure v2 action and administrative transitions.
 - `item-mutation-result-v2.schema.json`: Procedure v2 item mutation outcome.
 - `authoring-diagnostic-v1.schema.json`: standalone bounded authoring diagnostic.
-- `procedure-source-result-v1.schema.json`: format, scaffold, and convert source output.
+- `procedure-source-result-v1.schema.json`: format and scaffold source output.
 - `procedure-diagnostics-result-v1.schema.json`: shared bounded diagnostics for every Procedure v2 authoring command.
 - `procedure-graph-result-v1.schema.json`: deterministic graph projection output.
 - `procedure-preview-result-v1.schema.json`: closed read-only preview report with checks, diagnostics, graph, Mermaid, digest, and an admissible start suggestion.
@@ -56,7 +45,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `v2-runtime-error-details-v1.schema.json`: closed code-bound details for registered Procedure v2 runtime errors.
 - `contract-manifest-v1.schema.json`: deterministic integration contract inventory.
 
-JSON Schema does not express every semantic rule, including duplicate stage IDs,
-min/max relationships, return-destination existence, path containment, or
+JSON Schema does not express every semantic rule, including duplicate identifiers,
+min/max relationships, graph liveness, path containment, or
 procedure canonicalization. The [procedure specification](../../docs/specs/domain/procedure-and-item-specification.md)
 defines those additional checks.

@@ -8,18 +8,14 @@ use std::{
 };
 
 use jsonschema::{Retrieve, Uri, Validator};
-use podway_core::{
-    AttemptId, CanonicalProcedureJsonV1, ItemId, JobId, Revision, Sha256Digest, StageId,
-    verify_canonical_procedure_document_v1,
-};
+use podway_core::{JobId, Revision, Sha256Digest};
 use serde::{Deserialize, Deserializer, Serialize, de, de::Error as _};
 use serde_json::{Map, Value};
 
 use crate::{
-    CommandNameV1, CompactStatusResultV1, ErrorEnvelopeV1, JobOutputV1, JobStateV1, NextResultV1,
-    OptionalField, ProtocolError, RequestIdV1, ResponseEnvelopeV1, Rfc3339MillisV1,
-    SessionOutputV1, StatusResultV1, WorkspaceOutputV1, validate_admission_metadata_v1,
-    validate_json_document_depth, validate_json_map_depth,
+    CommandNameV1, ErrorEnvelopeV1, JobOutputV1, JobStateV1, OptionalField, ProtocolError,
+    RequestIdV1, Rfc3339MillisV1, SessionOutputV1, WorkspaceOutputV1,
+    validate_admission_metadata_v1, validate_json_document_depth, validate_json_map_depth,
 };
 
 mod embedded_schemas {
@@ -96,7 +92,7 @@ fn build_result_validators_v2() -> Result<HashMap<&'static str, Validator>, Stri
             })?;
         validators.insert(contract.schema, validator);
     }
-    let filename = "output-v2.schema.json";
+    let filename = "output-v3.schema.json";
     let source = sources
         .get(filename)
         .ok_or_else(|| format!("embedded output schema {filename} is missing"))?;
@@ -112,7 +108,7 @@ fn build_result_validators_v2() -> Result<HashMap<&'static str, Validator>, Stri
         .should_validate_formats(true)
         .build(&schema)
         .map_err(|error| format!("embedded output schema {filename} does not compile: {error}"))?;
-    validators.insert(OUTPUT_SCHEMA_V2, validator);
+    validators.insert(OUTPUT_SCHEMA_V3, validator);
     Ok(validators)
 }
 
@@ -243,23 +239,18 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
         ],
     ),
     result_schema_v2(
-        "podway.job-lookup-result/v2",
-        "schemas/job-lookup-result-v2.schema.json",
+        "podway.job-lookup-result/v3",
+        "schemas/job-lookup-result-v3.schema.json",
         &["job.lookup"],
     ),
     result_schema_v2(
-        "podway.job-result/v2",
-        "schemas/job-result-v2.schema.json",
+        "podway.job-result/v3",
+        "schemas/job-result-v3.schema.json",
         &["job.status", "job.wait"],
     ),
 ];
 
-/// The shared authoring diagnostics family.
-///
-/// Named because two selectors read it: the v2 registry below binds it to every authoring route,
-/// and the *v1* selector [`command_result_schema_v1`] abstains on it for `procedure.validate`, the
-/// one route that can report either a v1 result or a v2 diagnostics result. One constant keeps the
-/// registration and the abstention from drifting apart.
+/// The shared Procedure v2 authoring diagnostics family.
 pub const PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1: &str = "podway.procedure-diagnostics-result/v1";
 
 /// Result families for v2-only routes. New command surfaces begin at `/v1`.
@@ -267,11 +258,7 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
         "podway.procedure-source-result/v1",
         "schemas/procedure-source-result-v1.schema.json",
-        &[
-            "procedure.format",
-            "procedure.scaffold",
-            "procedure.convert",
-        ],
+        &["procedure.format", "procedure.scaffold"],
     ),
     result_schema_v2(
         PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1,
@@ -284,7 +271,6 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
             "procedure.check",
             "procedure.graph",
             "procedure.scaffold",
-            "procedure.convert",
         ],
     ),
     result_schema_v2(
@@ -380,14 +366,14 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
                     .is_some_and(|(projected, recorded)| projected == recorded)
             })
         }
-        "podway.job-result/v2" => {
+        "podway.job-result/v3" => {
             terminal_response_command_v2(result.get("job"))
-                .is_some_and(|command| command.is_none_or(is_v2_mutation_command))
+                .is_some_and(|command| command.is_none_or(is_durable_job_command_v3))
                 && result
                     .get("job")
                     .is_some_and(validate_terminal_response_typed_v2)
         }
-        "podway.job-lookup-result/v2" => match result.get("found") {
+        "podway.job-lookup-result/v3" => match result.get("found") {
             Some(Value::Bool(false)) => !result.contains_key("job"),
             Some(Value::Bool(true)) => {
                 let Some(job) = result.get("job").and_then(Value::as_object) else {
@@ -396,7 +382,7 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
                 let Some(job_command) = job.get("command").and_then(Value::as_str) else {
                     return false;
                 };
-                is_v2_mutation_command(job_command)
+                is_durable_job_command_v3(job_command)
                     && terminal_response_command_v2(job.get("terminal_response")).is_some_and(
                         |terminal_command| {
                             terminal_command.is_none_or(|value| value == job_command)
@@ -418,8 +404,8 @@ fn validate_terminal_response_typed_v2(response: &Value) -> bool {
         return response.is_null();
     };
     match response.get("schema").and_then(Value::as_str) {
-        Some(OUTPUT_SCHEMA_V2) => {
-            serde_json::from_value::<OutputEnvelopeV2>(Value::Object(response.clone())).is_ok()
+        Some(OUTPUT_SCHEMA_V3) => {
+            serde_json::from_value::<OutputEnvelopeV3>(Value::Object(response.clone())).is_ok()
         }
         Some(crate::ERROR_SCHEMA_V1) => {
             serde_json::from_value::<ErrorEnvelopeV1>(Value::Object(response.clone())).is_ok()
@@ -494,7 +480,7 @@ fn terminal_response_identity_matches_job_v2(job: &Map<String, Value>) -> bool {
         return false;
     };
     let admission = match response.get("schema").and_then(Value::as_str) {
-        Some(OUTPUT_SCHEMA_V2) => response
+        Some(OUTPUT_SCHEMA_V3) => response
             .get("result")
             .and_then(Value::as_object)
             .and_then(|result| result.get("admission")),
@@ -513,7 +499,7 @@ fn terminal_response_identity_matches_job_v2(job: &Map<String, Value>) -> bool {
     {
         return false;
     }
-    if response.get("schema").and_then(Value::as_str) == Some(OUTPUT_SCHEMA_V2) {
+    if response.get("schema").and_then(Value::as_str) == Some(OUTPUT_SCHEMA_V3) {
         let Some(response_job) = response.get("job").and_then(Value::as_object) else {
             return false;
         };
@@ -531,8 +517,8 @@ fn terminal_response_identity_matches_job_v2(job: &Map<String, Value>) -> bool {
     true
 }
 
-fn validate_job_result_output_v2(output: &OutputEnvelopeV2) -> bool {
-    if output.result.get("schema").and_then(Value::as_str) != Some("podway.job-result/v2") {
+fn validate_job_result_output_v2(output: &OutputEnvelopeV3) -> bool {
+    if output.result.get("schema").and_then(Value::as_str) != Some("podway.job-result/v3") {
         return true;
     }
     let Some(job) = output.job.as_ref() else {
@@ -544,7 +530,7 @@ fn validate_job_result_output_v2(output: &OutputEnvelopeV2) -> bool {
     let state_matches = match job.state() {
         JobStateV1::Queued | JobStateV1::Running => response.is_null(),
         JobStateV1::Succeeded => {
-            response.get("schema").and_then(Value::as_str) == Some(OUTPUT_SCHEMA_V2)
+            response.get("schema").and_then(Value::as_str) == Some(OUTPUT_SCHEMA_V3)
         }
         JobStateV1::Failed => {
             response.get("schema").and_then(Value::as_str) == Some(crate::ERROR_SCHEMA_V1)
@@ -576,6 +562,10 @@ fn terminal_response_command_v2(value: Option<&Value>) -> Option<Option<&str>> {
 
 fn is_v2_mutation_command(command: &str) -> bool {
     V2_MUTATION_COMMANDS.contains(&command)
+}
+
+fn is_durable_job_command_v3(command: &str) -> bool {
+    matches!(command, "workspace.init" | "workspace.reset_all") || is_v2_mutation_command(command)
 }
 
 fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
@@ -659,8 +649,8 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "item_id",
             "revision",
         ],
-        "podway.job-lookup-result/v2" => &["schema", "found"],
-        "podway.job-result/v2" => &["schema", "job"],
+        "podway.job-lookup-result/v3" => &["schema", "found"],
+        "podway.job-result/v3" => &["schema", "job"],
         "podway.procedure-source-result/v1" => &[
             "schema",
             "operation",
@@ -886,8 +876,8 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "revision",
             "value_digest",
         ],
-        "podway.job-lookup-result/v2" => &["schema", "found", "job"],
-        "podway.job-result/v2" => &["schema", "job"],
+        "podway.job-lookup-result/v3" => &["schema", "found", "job"],
+        "podway.job-result/v3" => &["schema", "job"],
         "podway.procedure-source-result/v1" => &[
             "schema",
             "operation",
@@ -1007,8 +997,33 @@ pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
 pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
 /// Maximum encoded bytes for an error retained inside one v2 job-result wrapper.
 pub const MAX_V2_TERMINAL_ERROR_BYTES: usize = 524_288;
-pub const OUTPUT_SCHEMA_V2: &str = "podway.output/v2";
-pub const SUPPORTED_OUTPUT_SCHEMAS_V2: &[&str] = &[OUTPUT_SCHEMA_V2];
+pub const OUTPUT_SCHEMA_V3: &str = "podway.output/v3";
+pub const SUPPORTED_OUTPUT_SCHEMAS_V3: &[&str] = &[OUTPUT_SCHEMA_V3];
+const PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3: &[&str] = &[
+    "help",
+    "version",
+    "completions",
+    "preset.list",
+    "preset.show",
+    "preset.explain",
+    "procedure.show",
+    "daemon.install",
+    "daemon.uninstall",
+    "daemon.start",
+    "daemon.stop",
+    "daemon.restart",
+    "daemon.status",
+    "daemon.logs",
+    "daemon.terminate",
+    "workspace.init",
+    "workspace.show",
+    "workspace.doctor",
+    "workspace.repair",
+    "workspace.reset_all",
+    "job.list",
+    "job.cancel",
+    "__complete",
+];
 
 /// Checks the production warning bound for the open v2 success envelope.
 pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
@@ -1050,6 +1065,8 @@ pub fn validate_command_result_v2(
 ) -> Result<(), ProtocolError> {
     if decode_result_schema_contract_v2(result)
         .is_some_and(|contract| contract.commands.contains(&command))
+        || (PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command)
+            && validate_command_result_v1(command, result).is_ok())
     {
         Ok(())
     } else {
@@ -1059,9 +1076,9 @@ pub fn validate_command_result_v2(
     }
 }
 
-/// Validated fields used to construct one v2 success envelope.
+/// Validated fields used to construct one current success envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutputEnvelopeInputV2 {
+pub struct OutputEnvelopeInputV3 {
     pub request_id: RequestIdV1,
     pub command: CommandNameV1,
     pub generated_at: Rfc3339MillisV1,
@@ -1072,9 +1089,9 @@ pub struct OutputEnvelopeInputV2 {
     pub warnings: Vec<Map<String, Value>>,
 }
 
-/// A validated `podway.output/v2` response envelope.
+/// A validated `podway.output/v3` response envelope.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct OutputEnvelopeV2 {
+pub struct OutputEnvelopeV3 {
     schema: String,
     request_id: RequestIdV1,
     command: CommandNameV1,
@@ -1089,20 +1106,23 @@ pub struct OutputEnvelopeV2 {
     warnings: Vec<Map<String, Value>>,
 }
 
-impl OutputEnvelopeV2 {
-    pub fn new(input: OutputEnvelopeInputV2) -> Result<Self, ProtocolError> {
-        let OutputEnvelopeInputV2 {
+impl OutputEnvelopeV3 {
+    pub fn new(input: OutputEnvelopeInputV3) -> Result<Self, ProtocolError> {
+        let OutputEnvelopeInputV3 {
             request_id,
             command,
             generated_at,
             workspace,
             job,
             session,
-            result,
+            mut result,
             warnings,
         } = input;
+        if PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command.as_str()) {
+            ensure_procedure_independent_result_schema_v1(command.as_str(), &mut result);
+        }
         let output = Self {
-            schema: OUTPUT_SCHEMA_V2.to_owned(),
+            schema: OUTPUT_SCHEMA_V3.to_owned(),
             request_id,
             command,
             generated_at,
@@ -1117,10 +1137,10 @@ impl OutputEnvelopeV2 {
     }
 
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.schema != OUTPUT_SCHEMA_V2 {
+        if self.schema != OUTPUT_SCHEMA_V3 {
             return Err(ProtocolError::UnsupportedProtocol {
                 received: self.schema.clone(),
-                supported: SUPPORTED_OUTPUT_SCHEMAS_V2,
+                supported: SUPPORTED_OUTPUT_SCHEMAS_V3,
             });
         }
         self.request_id.validate()?;
@@ -1134,6 +1154,11 @@ impl OutputEnvelopeV2 {
         }
         if let Some(session) = &self.session {
             session.validate()?;
+        }
+        if !self.validate_procedure_independent_projection_v1() {
+            return Err(ProtocolError::InvalidCommandResult {
+                command: self.command.as_str().to_owned(),
+            });
         }
         validate_json_map_depth(&self.result, 1)?;
         validate_command_result_v2(self.command.as_str(), &self.result)?;
@@ -1163,12 +1188,26 @@ impl OutputEnvelopeV2 {
             serde_json::to_value(self).map_err(|_| ProtocolError::InvalidCommandResult {
                 command: self.command.as_str().to_owned(),
             })?;
-        if !validate_embedded_schema_v2(OUTPUT_SCHEMA_V2, &envelope_value) {
+        if !PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&self.command.as_str())
+            && !validate_embedded_schema_v2(OUTPUT_SCHEMA_V3, &envelope_value)
+        {
             return Err(ProtocolError::InvalidCommandResult {
                 command: self.command.as_str().to_owned(),
             });
         }
         Ok(())
+    }
+
+    fn validate_procedure_independent_projection_v1(&self) -> bool {
+        match self.command.as_str() {
+            "version" | "daemon.status" => {
+                self.workspace.is_none() && self.job.is_none() && self.session.is_none()
+            }
+            "workspace.init" => {
+                self.workspace.is_some() && self.job.is_some() && self.session.is_none()
+            }
+            _ => true,
+        }
     }
 
     pub fn request_id(&self) -> &RequestIdV1 {
@@ -1203,13 +1242,13 @@ impl OutputEnvelopeV2 {
         &self.warnings
     }
 }
-impl<'de> Deserialize<'de> for OutputEnvelopeV2 {
+impl<'de> Deserialize<'de> for OutputEnvelopeV3 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct RawOutputEnvelopeV2 {
+        struct RawOutputEnvelopeV3 {
             schema: String,
             request_id: RequestIdV1,
             command: CommandNameV1,
@@ -1226,7 +1265,7 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV2 {
 
         let value = Value::deserialize(deserializer)?;
         validate_json_document_depth(&value).map_err(de::Error::custom)?;
-        let raw = RawOutputEnvelopeV2::deserialize(value).map_err(de::Error::custom)?;
+        let raw = RawOutputEnvelopeV3::deserialize(value).map_err(de::Error::custom)?;
         let output = Self {
             schema: raw.schema,
             request_id: raw.request_id,
@@ -1243,33 +1282,16 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV2 {
     }
 }
 
-macro_rules! define_result_schemas_v1 {
-    ($($name:ident = $value:literal;)+) => {
-        $(const $name: &str = $value;)+
-
-        /// Closed result schema identifiers understood by the v1 runtime decoder.
-        pub const SUPPORTED_RESULT_SCHEMAS_V1: &[&str] = &[$($name),+];
-    };
-}
-
-define_result_schemas_v1! {
-    VERSION_RESULT_SCHEMA_V1 = "podway.version-result/v1";
-    DAEMON_STATUS_RESULT_SCHEMA_V1 = "podway.daemon-status-result/v1";
-    PROCEDURE_VALIDATION_RESULT_SCHEMA_V1 = "podway.procedure-validation-result/v1";
-    WORKSPACE_INIT_RESULT_SCHEMA_V1 = "podway.workspace-init-result/v1";
-    DETACHED_ADMISSION_RESULT_SCHEMA_V1 = "podway.detached-admission-result/v1";
-    SESSION_START_RESULT_SCHEMA_V1 = "podway.session-start-result/v1";
-    STATUS_RESULT_SCHEMA_V1 = "podway.status-result/v1";
-    COMPACT_STATUS_RESULT_SCHEMA_V1 = "podway.compact-status-result/v1";
-    NEXT_RESULT_SCHEMA_V1 = "podway.next-result/v1";
-    STAGE_TRANSITION_RESULT_SCHEMA_V1 = "podway.stage-transition-result/v1";
-    ITEM_MUTATION_RESULT_SCHEMA_V1 = "podway.item-mutation-result/v1";
-    JOB_LOOKUP_RESULT_SCHEMA_V1 = "podway.job-lookup-result/v1";
-    JOB_RESULT_SCHEMA_V1 = "podway.job-result/v1";
-}
+const VERSION_RESULT_SCHEMA_V1: &str = "podway.version-result/v1";
+const DAEMON_STATUS_RESULT_SCHEMA_V1: &str = "podway.daemon-status-result/v1";
+const WORKSPACE_INIT_RESULT_SCHEMA_V1: &str = "podway.workspace-init-result/v1";
+const DETACHED_ADMISSION_RESULT_SCHEMA_V1: &str = "podway.detached-admission-result/v1";
 
 /// Adds the schema identifier for a command-selected closed result family.
-pub fn ensure_command_result_schema_v1(command: &str, result: &mut Map<String, Value>) {
+pub fn ensure_procedure_independent_result_schema_v1(
+    command: &str,
+    result: &mut Map<String, Value>,
+) {
     if let Some(schema) = command_result_schema_v1(command, result) {
         result
             .entry("schema".to_owned())
@@ -1277,26 +1299,32 @@ pub fn ensure_command_result_schema_v1(command: &str, result: &mut Map<String, V
     }
 }
 
+pub(crate) fn ensure_command_result_schema_v1(command: &str, result: &mut Map<String, Value>) {
+    ensure_procedure_independent_result_schema_v1(command, result);
+}
+
 /// Validates the closed result family selected by a public command name.
-pub fn validate_command_result_v1(
+pub fn validate_procedure_independent_result_v1(
     command: &str,
     result: &Map<String, Value>,
 ) -> Result<(), ProtocolError> {
-    if result
-        .get("schema")
-        .and_then(Value::as_str)
-        .is_some_and(|schema| {
-            is_known_result_schema(schema) && !schema_allows_command(schema, command)
-        })
-    {
+    if !PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command) {
         return Err(ProtocolError::InvalidCommandResult {
             command: command.to_owned(),
         });
     }
-    let Some(expected_schema) = command_result_schema_v1(command, result) else {
-        return Ok(());
+    let expected_schema = command_result_schema_v1(command, result);
+    let actual_schema = result.get("schema").and_then(Value::as_str);
+    let Some(expected_schema) = expected_schema else {
+        return if actual_schema.is_none() {
+            Ok(())
+        } else {
+            Err(ProtocolError::InvalidCommandResult {
+                command: command.to_owned(),
+            })
+        };
     };
-    if result.get("schema").and_then(Value::as_str) != Some(expected_schema) {
+    if actual_schema != Some(expected_schema) {
         return Err(ProtocolError::InvalidCommandResult {
             command: command.to_owned(),
         });
@@ -1304,56 +1332,15 @@ pub fn validate_command_result_v1(
     let mut content = result.clone();
     content.remove("schema");
     let value = Value::Object(content);
-    let valid = if result.get("detached") == Some(&Value::Bool(true))
-        || result.get("schema").and_then(Value::as_str) == Some(DETACHED_ADMISSION_RESULT_SCHEMA_V1)
-    {
-        if matches!(command, "session.start" | "session.start_replace") {
-            decode::<DetachedStartResultV1>(value)
-        } else {
-            decode::<DetachedMutationResultV1>(value)
+    let valid = match expected_schema {
+        VERSION_RESULT_SCHEMA_V1 => validate_version_result(value),
+        DAEMON_STATUS_RESULT_SCHEMA_V1 => {
+            validate_daemon_status_result(value.clone())
+                || validate_daemon_service_status_result(value)
         }
-    } else {
-        match command {
-            "version" => validate_version_result(value),
-            "daemon.status" => {
-                validate_daemon_status_result(value.clone())
-                    || validate_daemon_service_status_result(value)
-            }
-            "procedure.validate" => validate_procedure_validation_result(value),
-            "workspace.init" => decode::<WorkspaceInitResultV1>(value),
-            "session.status" => {
-                if result.contains_key("procedure") {
-                    CompactStatusResultV1::from_result_map(result).is_ok()
-                } else {
-                    StatusResultV1::from_result_map(result).is_ok()
-                }
-            }
-            "session.next" => NextResultV1::from_result_map(result).is_ok(),
-            "job.status" | "job.wait" => decode::<JobReadResultV1>(value),
-            "job.lookup" => match result.get("found") {
-                Some(Value::Bool(false)) => decode::<JobLookupMissingResultV1>(value),
-                Some(Value::Bool(true)) => validate_job_lookup_found_result(value),
-                _ => false,
-            },
-            "session.start" | "session.start_replace" => {
-                if result.contains_key("dry_run") {
-                    validate_start_dry_run_result(value)
-                } else {
-                    validate_start_terminal_result(value)
-                }
-            }
-            command if is_item_mutation(command) => decode::<ItemMutationResultV1>(value),
-            command if is_stage_transition(command) => {
-                if result.get("preview") == Some(&Value::Bool(true)) {
-                    decode::<StagePreviewResultV1>(value)
-                } else if command == "session.reset" && result.contains_key("reset") {
-                    validate_reset_result(value)
-                } else {
-                    decode::<StageTransitionResultV1>(value)
-                }
-            }
-            _ => unreachable!("schema selection and result validation use the same command set"),
-        }
+        WORKSPACE_INIT_RESULT_SCHEMA_V1 => decode::<WorkspaceInitResultV1>(value),
+        DETACHED_ADMISSION_RESULT_SCHEMA_V1 => decode::<DetachedMutationResultV1>(value),
+        _ => unreachable!("procedure-independent schema selection is closed"),
     };
     if valid {
         Ok(())
@@ -1364,28 +1351,11 @@ pub fn validate_command_result_v1(
     }
 }
 
-fn is_known_result_schema(schema: &str) -> bool {
-    SUPPORTED_RESULT_SCHEMAS_V1.contains(&schema)
-}
-
-fn schema_allows_command(schema: &str, command: &str) -> bool {
-    match schema {
-        VERSION_RESULT_SCHEMA_V1 => command == "version",
-        DAEMON_STATUS_RESULT_SCHEMA_V1 => command == "daemon.status",
-        PROCEDURE_VALIDATION_RESULT_SCHEMA_V1 => command == "procedure.validate",
-        WORKSPACE_INIT_RESULT_SCHEMA_V1 => command == "workspace.init",
-        DETACHED_ADMISSION_RESULT_SCHEMA_V1 => supports_detached(command),
-        SESSION_START_RESULT_SCHEMA_V1 => {
-            matches!(command, "session.start" | "session.start_replace")
-        }
-        STATUS_RESULT_SCHEMA_V1 | COMPACT_STATUS_RESULT_SCHEMA_V1 => command == "session.status",
-        NEXT_RESULT_SCHEMA_V1 => command == "session.next",
-        STAGE_TRANSITION_RESULT_SCHEMA_V1 => is_stage_transition(command),
-        ITEM_MUTATION_RESULT_SCHEMA_V1 => is_item_mutation(command),
-        JOB_LOOKUP_RESULT_SCHEMA_V1 => command == "job.lookup",
-        JOB_RESULT_SCHEMA_V1 => matches!(command, "job.status" | "job.wait"),
-        _ => false,
-    }
+pub(crate) fn validate_command_result_v1(
+    command: &str,
+    result: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    validate_procedure_independent_result_v1(command, result)
 }
 
 fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Option<&'static str> {
@@ -1399,39 +1369,13 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
     match command {
         "version" => Some(VERSION_RESULT_SCHEMA_V1),
         "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
-        // `procedure.validate` carries two closed families: the v1 validation result, and — for a
-        // document that declares Procedure v2 — the shared authoring diagnostics family. The v1
-        // selector abstains on the second rather than claiming it, so `ensure_command_result_schema_v1`
-        // never stamps the v1 schema onto a diagnostics result and `validate_command_result_v1` never
-        // decodes one as a v1 result. A diagnostics result is validated by the v2 registry
-        // (`validate_command_result_v2`), which already binds this family to this route.
-        "procedure.validate"
-            if result.get("schema").and_then(Value::as_str)
-                == Some(PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1) =>
-        {
-            None
-        }
-        "procedure.validate" => Some(PROCEDURE_VALIDATION_RESULT_SCHEMA_V1),
         "workspace.init" => Some(WORKSPACE_INIT_RESULT_SCHEMA_V1),
-        "session.status" if result.contains_key("procedure") => {
-            Some(COMPACT_STATUS_RESULT_SCHEMA_V1)
-        }
-        "session.status" => Some(STATUS_RESULT_SCHEMA_V1),
-        "session.next" => Some(NEXT_RESULT_SCHEMA_V1),
-        "job.status" | "job.wait" => Some(JOB_RESULT_SCHEMA_V1),
-        "job.lookup" => Some(JOB_LOOKUP_RESULT_SCHEMA_V1),
-        "session.start" | "session.start_replace" => Some(SESSION_START_RESULT_SCHEMA_V1),
-        command if is_item_mutation(command) => Some(ITEM_MUTATION_RESULT_SCHEMA_V1),
-        command if is_stage_transition(command) => Some(STAGE_TRANSITION_RESULT_SCHEMA_V1),
         _ => None,
     }
 }
 
 fn supports_detached(command: &str) -> bool {
     command == "workspace.init"
-        || matches!(command, "session.start" | "session.start_replace")
-        || is_item_mutation(command)
-        || is_stage_transition(command)
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> bool {
@@ -1532,75 +1476,6 @@ fn validate_daemon_service_status_result(value: Value) -> bool {
     })
 }
 
-fn validate_procedure_validation_result(value: Value) -> bool {
-    serde_json::from_value::<ProcedureValidationResultV1>(value).is_ok_and(|result| {
-        let Ok(canonical_json) = CanonicalProcedureJsonV1::new(result.canonical_json) else {
-            return false;
-        };
-        non_empty(&result.file)
-            && result.warnings.iter().all(|warning| {
-                non_empty(&warning.code) && non_empty(&warning.path) && non_empty(&warning.message)
-            })
-            && verify_canonical_procedure_document_v1(&canonical_json, &result.digest).is_ok()
-            && serde_json::from_str::<Value>(canonical_json.as_str())
-                .is_ok_and(|canonical| canonical == Value::Object(result.procedure))
-    })
-}
-
-fn validate_start_terminal_result(value: Value) -> bool {
-    serde_json::from_value::<StartTerminalResultV1>(value)
-        .is_ok_and(|result| result.revision_after != Revision::ZERO)
-}
-
-fn validate_start_dry_run_result(value: Value) -> bool {
-    serde_json::from_value::<StartDryRunResultV1>(value).is_ok_and(|result| {
-        non_empty(&result.task)
-            && match result.source {
-                StartSourceV1::Preset(source) => non_empty(&source.preset),
-                StartSourceV1::Procedure(source) => non_empty(&source.procedure),
-            }
-            && non_empty(&result.first_stage.title)
-    })
-}
-
-fn validate_reset_result(value: Value) -> bool {
-    serde_json::from_value::<ResetResultV1>(value)
-        .is_ok_and(|result| result.revision != Revision::ZERO)
-}
-
-fn validate_job_lookup_found_result(value: Value) -> bool {
-    serde_json::from_value::<JobLookupFoundResultV1>(value)
-        .is_ok_and(|result| non_empty(&result.job.command))
-}
-
-fn is_item_mutation(command: &str) -> bool {
-    matches!(
-        command,
-        "item.check"
-            | "item.uncheck"
-            | "item.set"
-            | "item.add"
-            | "item.remove"
-            | "item.attach"
-            | "item.clear"
-    )
-}
-
-fn is_stage_transition(command: &str) -> bool {
-    matches!(
-        command,
-        "session.complete"
-            | "session.skip"
-            | "session.retry"
-            | "session.return"
-            | "session.block"
-            | "session.unblock"
-            | "session.cancel"
-            | "session.reopen"
-            | "session.reset"
-    )
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VersionResultV1 {
@@ -1686,24 +1561,6 @@ struct DaemonServiceStatusResultV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProcedureValidationResultV1 {
-    file: String,
-    digest: Sha256Digest,
-    procedure: Map<String, Value>,
-    warnings: Vec<ProcedureWarningResultV1>,
-    canonical_json: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProcedureWarningResultV1 {
-    code: String,
-    path: String,
-    message: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AdmissionResultV1 {
     #[serde(deserialize_with = "deserialize_true")]
     admitted: bool,
@@ -1727,206 +1584,8 @@ struct DetachedMutationResultV1 {
     admission: AdmissionResultV1,
     #[serde(deserialize_with = "deserialize_true")]
     detached: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DetachedStartResultV1 {
-    admission: AdmissionResultV1,
-    #[serde(deserialize_with = "deserialize_true")]
-    detached: bool,
-    procedure_digest: Sha256Digest,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ChangeResultV1 {
-    changed: bool,
-    revision_before: Revision,
-    revision_after: Revision,
-    admission: AdmissionResultV1,
-}
-
-type StageTransitionResultV1 = ChangeResultV1;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResetResultV1 {
-    #[serde(deserialize_with = "deserialize_true")]
-    reset: bool,
-    revision: Revision,
-    admission: AdmissionResultV1,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StartTerminalResultV1 {
-    changed: bool,
-    revision_before: Revision,
-    revision_after: Revision,
-    procedure_digest: Sha256Digest,
-    admission: AdmissionResultV1,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ItemMutationResultV1 {
-    changed: bool,
-    item_id: ItemId,
-    revision_before: Revision,
-    revision_after: Revision,
-    admission: AdmissionResultV1,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StartDryRunResultV1 {
-    #[serde(deserialize_with = "deserialize_true")]
-    dry_run: bool,
-    task: String,
-    source: StartSourceV1,
-    procedure_digest: Sha256Digest,
-    first_stage: FirstStageV1,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum StartSourceV1 {
-    Preset(PresetSourceV1),
-    Procedure(ProcedureSourceV1),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PresetSourceV1 {
-    preset: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProcedureSourceV1 {
-    procedure: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FirstStageV1 {
-    id: StageId,
-    title: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ActiveAttemptV1 {
-    stage_id: StageId,
-    attempt_id: AttemptId,
-    #[serde(deserialize_with = "deserialize_positive_u32")]
-    attempt_number: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StageAttemptV1 {
-    attempt_id: AttemptId,
-    #[serde(deserialize_with = "deserialize_positive_u32")]
-    attempt_number: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AffectedStageV1 {
-    stage_id: StageId,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    before: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    after: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    before_attempt: Option<StageAttemptV1>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    after_attempt: Option<StageAttemptV1>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StagePreviewResultV1 {
-    #[serde(deserialize_with = "deserialize_true")]
-    preview: bool,
-    changed: bool,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    revision_before: Option<Revision>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    revision_after: Option<Revision>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    active_before: Option<ActiveAttemptV1>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    active_after: Option<ActiveAttemptV1>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    destination_attempt: Option<ActiveAttemptV1>,
-    affected_stages: Vec<AffectedStageV1>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JobReadResultV1 {
-    #[serde(deserialize_with = "deserialize_required_option")]
-    job: Option<ResponseEnvelopeOrCancellationV1>,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum ResponseEnvelopeOrCancellationV1 {
-    Envelope(Box<ResponseEnvelopeV1>),
-    Cancellation(CancelledTerminalV1),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CancelledTerminalV1 {
-    kind: CancelledKindV1,
-    payload: CancelledPayloadV1,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum CancelledKindV1 {
-    Cancelled,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CancelledPayloadV1 {
-    #[serde(deserialize_with = "deserialize_true")]
-    cancelled: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JobLookupMissingResultV1 {
-    found: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JobLookupFoundResultV1 {
-    found: bool,
-    job: LookupJobV1,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LookupJobV1 {
-    id: JobId,
-    #[serde(deserialize_with = "deserialize_positive_u64")]
-    sequence: u64,
-    state: JobStateV1,
-    submitted_at: Rfc3339MillisV1,
-    claimed_at: Option<Rfc3339MillisV1>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    finished_at: Option<Rfc3339MillisV1>,
-    command: String,
-    request_digest: Sha256Digest,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    terminal_response: Option<ResponseEnvelopeOrCancellationV1>,
+    #[serde(default)]
+    procedure_digest: Option<Sha256Digest>,
 }
 
 fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -1957,25 +1616,18 @@ where
     }
 }
 
-fn deserialize_positive_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    match u32::deserialize(deserializer)? {
-        value if value > 0 => Ok(value),
-        _ => Err(D::Error::custom("field must be positive")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
 
-    use super::validate_command_result_v1;
+    use super::{build_result_validators_v2, validate_command_result_v1};
+
+    #[test]
+    fn embedded_v2_only_result_schemas_compile() {
+        build_result_validators_v2().expect("embedded v2-only result schemas must compile");
+    }
 
     const JOB_ID: &str = "00000000-0000-4000-8000-000000000001";
-    const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
     fn object(value: Value) -> serde_json::Map<String, Value> {
         value.as_object().expect("test result object").clone()
     }
@@ -1991,7 +1643,7 @@ mod tests {
             },
             "detached": true
         }));
-        assert!(validate_command_result_v1("item.set", &valid).is_ok());
+        assert!(validate_command_result_v1("workspace.init", &valid).is_ok());
 
         for malformed in [
             json!({
@@ -2019,105 +1671,35 @@ mod tests {
                 "detached": true
             }),
         ] {
-            assert!(validate_command_result_v1("item.set", &object(malformed)).is_err());
+            assert!(validate_command_result_v1("workspace.init", &object(malformed)).is_err());
         }
     }
 
     #[test]
-    fn start_and_next_reject_missing_wrong_type_and_unknown_fields() {
-        let start = object(json!({
-            "schema": "podway.detached-admission-result/v1",
-            "admission": {
-                "admitted": true,
-                "job_id": JOB_ID,
-                "workspace_sequence": 1
-            },
-            "detached": true,
-            "procedure_digest": DIGEST
-        }));
-        assert!(validate_command_result_v1("session.start", &start).is_ok());
-        let mut missing = start.clone();
-        missing.remove("procedure_digest");
-        assert!(validate_command_result_v1("session.start", &missing).is_err());
+    fn procedure_v1_result_commands_and_discriminators_are_rejected() {
+        for (command, schema) in [
+            ("session.start", "podway.session-start-result/v1"),
+            ("session.status", "podway.status-result/v1"),
+            ("session.status", "podway.compact-status-result/v1"),
+            ("session.next", "podway.next-result/v1"),
+            ("session.complete", "podway.stage-transition-result/v1"),
+            ("item.set", "podway.item-mutation-result/v1"),
+            ("job.lookup", "podway.job-lookup-result/v1"),
+            ("job.status", "podway.job-result/v1"),
+        ] {
+            assert!(
+                validate_command_result_v1(command, &object(json!({"schema": schema}))).is_err(),
+                "removed {schema} must not remain accepted for {command}"
+            );
+        }
 
-        let mut next = object(json!({
-            "schema": "podway.next-result/v1",
-            "stage": null,
-            "missing_required_items": [],
-            "blockers": [],
-            "allowed_actions": {
-                "complete": false,
-                "skip": false,
-                "retry": false,
-                "return_to": [],
-                "cancel": true
-            },
-            "next_stage_after_completion": null,
-            "suggestions": []
-        }));
-        assert!(validate_command_result_v1("session.next", &next).is_ok());
-        next.get_mut("allowed_actions")
-            .and_then(Value::as_object_mut)
-            .expect("actions")
-            .insert("future".to_owned(), Value::Bool(true));
-        assert!(validate_command_result_v1("session.next", &next).is_err());
-    }
-
-    #[test]
-    fn job_read_requires_nullable_field_and_lookup_variants_are_exclusive() {
+        assert!(validate_command_result_v1("help", &object(json!({"text": "help"}))).is_ok());
         assert!(
             validate_command_result_v1(
-                "job.status",
-                &object(json!({"schema": "podway.job-result/v1", "job": null}))
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_command_result_v1(
-                "job.status",
-                &object(json!({"schema": "podway.job-result/v1"}))
+                "help",
+                &object(json!({"schema": "podway.status-result/v1", "text": "help"}))
             )
             .is_err()
         );
-        assert!(
-            validate_command_result_v1(
-                "job.lookup",
-                &object(json!({"schema": "podway.job-lookup-result/v1", "found": false}))
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_command_result_v1(
-                "job.lookup",
-                &object(
-                    json!({"schema": "podway.job-lookup-result/v1", "found": false, "job": null})
-                )
-            )
-            .is_err()
-        );
-        assert!(
-            validate_command_result_v1(
-                "job.lookup",
-                &object(json!({"schema": "podway.job-lookup-result/v1", "found": true}))
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn result_discriminators_are_required_and_command_specific() {
-        let valid = object(json!({
-            "schema": "podway.job-lookup-result/v1",
-            "found": false
-        }));
-        assert!(validate_command_result_v1("job.lookup", &valid).is_ok());
-
-        let mut missing = valid.clone();
-        missing.remove("schema");
-        assert!(validate_command_result_v1("job.lookup", &missing).is_err());
-
-        let mut wrong = valid;
-        wrong.insert("schema".to_owned(), json!("podway.job-result/v1"));
-        assert!(validate_command_result_v1("job.lookup", &wrong).is_err());
     }
 }

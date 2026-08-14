@@ -31,14 +31,13 @@ use podway_cli::client::{
     DaemonClientTimeoutsV1, DaemonClientV1,
 };
 use podway_config::{
-    AuthoringContext, AuthoringStage, ConfigError, ConvertedProcedureV2, FormatFailure,
-    FormatRequest, FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES_V1, PROCEDURE_SCHEMA_V1,
-    ParsedProcedure, ProcedureFormatV1, ProcedureWarningPolicyV1, ProcedureWarningV1,
-    ScaffoldTemplate, check_procedure_v2, config_error_diagnostic, convert_procedure_v1_to_v2,
-    finalize_diagnostics, format_procedure_v2, lint_procedure_v2, normalize_procedure_v2_graph,
-    parse_procedure_document, parse_procedure_v1, preview_procedure_v2, project_procedure_v2_dot,
-    project_procedure_v2_graph, project_procedure_v2_mermaid, project_procedure_v2_plantuml,
-    scaffold_procedure_v2, sniff_procedure_schema, validate_procedure_v2, vet_procedure_v2,
+    AuthoringContext, AuthoringStage, ConfigError, FormatFailure, FormatRequest,
+    FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES, ParsedProcedure, ProcedureDocumentFormat,
+    ScaffoldTemplate, check_procedure_v2, config_error_diagnostic, finalize_diagnostics,
+    format_procedure_v2, lint_procedure_v2, normalize_procedure_v2_graph, parse_procedure_document,
+    preview_procedure_v2, project_procedure_v2_dot, project_procedure_v2_graph,
+    project_procedure_v2_mermaid, project_procedure_v2_plantuml, scaffold_procedure_v2,
+    validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
     ActorAttributionV2, AttemptId, CriterionAssessmentReasonV2, CriterionId, GoalCriterionV2,
@@ -46,15 +45,15 @@ use podway_core::{
     ItemId, OptionId, PROCEDURE_SCHEMA_V2, ReasonV2, Revision, SessionId, Sha256Digest, UnixMillis,
     WorkspaceId,
 };
-use podway_presets::{PresetError, catalog_v1, catalog_v2};
+use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, CompactStatusResultV1, IdempotencyKeyV1, JobOutputV1, JobStateV1,
-    MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, NextResultV1, OperationV1,
-    OutputEnvelopeInputV1, OutputEnvelopeInputV2, OutputEnvelopeV1, OutputEnvelopeV2,
+    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobStateV1, MAX_SLICE_ITEM_TEXT_SCALARS_V1,
+    MAX_WAIT_TIMEOUT_MILLIS_V1, OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, StatusResultV1, WorkspaceContextV1,
-    WorktreeSelectorWireV1, build_identity_v1, ensure_command_result_schema_v1,
-    ensure_error_details_schema_v1, validate_command_result_v1, validate_command_result_v2,
+    ResponseEnvelopeV2, Rfc3339MillisV1, WorkspaceContextV1, WorktreeSelectorWireV1,
+    build_identity_v1, ensure_error_details_schema_v1,
+    ensure_procedure_independent_result_schema_v1, validate_command_result_v2,
+    validate_procedure_independent_result_v1,
 };
 use podway_service::{
     DaemonContractVerifierV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
@@ -222,7 +221,6 @@ enum Command {
         #[arg(long, value_name = "TEXT")]
         reason: String,
     },
-    Return(StageMutationArgs),
     Block {
         #[arg(long, value_name = "TEXT")]
         reason: String,
@@ -241,7 +239,6 @@ enum Command {
         #[arg(long, value_name = "TEXT")]
         reason: String,
     },
-    Reopen(StageMutationArgs),
     Reset(ResetArgs),
     Check {
         #[arg(value_name = "ITEM_ID")]
@@ -421,16 +418,6 @@ struct GoalAssessCriterionArgs {
 }
 
 #[derive(Debug, Args)]
-struct StageMutationArgs {
-    #[arg(long, value_name = "STAGE_ID")]
-    to: String,
-    #[arg(long, value_name = "TEXT")]
-    reason: String,
-    #[arg(long, action = ArgAction::SetTrue)]
-    dry_run: bool,
-}
-
-#[derive(Debug, Args)]
 struct ResetArgs {
     #[arg(long, action = ArgAction::SetTrue)]
     all: bool,
@@ -529,10 +516,6 @@ enum ProcedureCommand {
         #[arg(long, default_value = "minimal", value_parser = ScaffoldTemplate::NAMES)]
         template: String,
     },
-    Convert {
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -626,11 +609,9 @@ impl Command {
             } => Some("goal.assess_criterion"),
             Self::Skip { .. } => Some("session.skip"),
             Self::Retry { .. } => Some("session.retry"),
-            Self::Return(_) => Some("session.return"),
             Self::Block { .. } => Some("session.block"),
             Self::Unblock { .. } => Some("session.unblock"),
             Self::Cancel { .. } => Some("session.cancel"),
-            Self::Reopen(_) => Some("session.reopen"),
             Self::Reset(args) if args.all => Some("workspace.reset_all"),
             Self::Reset(_) => Some("session.reset"),
             Self::Check { .. } => Some("item.check"),
@@ -697,9 +678,6 @@ impl Command {
             Self::Procedure {
                 command: ProcedureCommand::Scaffold { .. },
             } => "procedure.scaffold",
-            Self::Procedure {
-                command: ProcedureCommand::Convert { .. },
-            } => "procedure.convert",
             Self::Preset {
                 command: PresetCommand::List,
             } => "preset.list",
@@ -738,7 +716,6 @@ impl Command {
             | Self::Attach(_)
             | Self::Clear { .. } => true,
             Self::Start(args) => !args.dry_run,
-            Self::Return(args) | Self::Reopen(args) => !args.dry_run,
             Self::Reset(args) => !args.dry_run,
             _ => false,
         }
@@ -752,11 +729,9 @@ impl Command {
             | Self::Goal { .. }
             | Self::Skip { .. }
             | Self::Retry { .. }
-            | Self::Return(_)
             | Self::Block { .. }
             | Self::Unblock { .. }
             | Self::Cancel { .. }
-            | Self::Reopen(_)
             | Self::Check { .. }
             | Self::Uncheck { .. }
             | Self::Set(_)
@@ -795,11 +770,9 @@ impl Command {
                 | Self::Goal { .. }
                 | Self::Skip { .. }
                 | Self::Retry { .. }
-                | Self::Return(_)
                 | Self::Block { .. }
                 | Self::Unblock { .. }
                 | Self::Cancel { .. }
-                | Self::Reopen(_)
                 | Self::Reset(_)
                 | Self::Check { .. }
                 | Self::Uncheck { .. }
@@ -823,11 +796,9 @@ impl Command {
                 | Self::Goal { .. }
                 | Self::Skip { .. }
                 | Self::Retry { .. }
-                | Self::Return(_)
                 | Self::Block { .. }
                 | Self::Unblock { .. }
                 | Self::Cancel { .. }
-                | Self::Reopen(_)
                 | Self::Reset(ResetArgs { all: false, .. })
                 | Self::Check { .. }
                 | Self::Uncheck { .. }
@@ -851,8 +822,6 @@ impl Command {
         matches!(
             self,
             Self::Start(StartArgs { dry_run: true, .. })
-                | Self::Return(StageMutationArgs { dry_run: true, .. })
-                | Self::Reopen(StageMutationArgs { dry_run: true, .. })
                 | Self::Reset(ResetArgs { dry_run: true, .. })
         )
     }
@@ -899,22 +868,7 @@ struct StatusPreflight {
 }
 
 impl StatusPreflight {
-    fn from_output(output: &podway_protocol::OutputEnvelopeV1) -> Result<Self, LocalFailure> {
-        let status = StatusResultV1::from_result_map(output.result())
-            .map_err(|_| typed_result_failure(output))?;
-        let transport_workspace_id = output
-            .workspace()
-            .map(|workspace| workspace.uuid().clone())
-            .ok_or_else(|| {
-                LocalFailure::response_invalid("status response omitted workspace identity")
-            })?;
-        Ok(Self {
-            transport_workspace_id,
-            facts: StatusFacts::from_status(&status),
-        })
-    }
-
-    fn from_output_v2(output: &OutputEnvelopeV2) -> Result<Self, LocalFailure> {
+    fn from_output_v2(output: &OutputEnvelopeV3) -> Result<Self, LocalFailure> {
         let result = output.result();
         if result.get("schema").and_then(Value::as_str) != Some("podway.status-result/v2") {
             return Err(LocalFailure::response_invalid(
@@ -982,23 +936,6 @@ impl StatusPreflight {
 }
 
 impl StatusFacts {
-    fn from_status(status: &StatusResultV1) -> Self {
-        Self {
-            session_id: status.session.id.clone(),
-            session_revision: status.session.revision,
-            attempt_id: status
-                .current
-                .as_ref()
-                .map(|current| current.attempt_id.clone()),
-            item_revisions: status
-                .items
-                .iter()
-                .map(|item| (item.id.as_str().to_owned(), item.revision))
-                .collect(),
-            goal_revision: None,
-        }
-    }
-
     fn preconditions(
         &self,
         command: &Command,
@@ -1126,17 +1063,6 @@ impl StatusFacts {
                 None,
             )
             .map_err(|_| LocalFailure::response_invalid("reset preconditions are invalid"));
-        }
-        if matches!(command, Command::Reopen(_)) {
-            return PreconditionsV1::new(
-                Some(session_id),
-                Some(session_revision),
-                None,
-                None,
-                None,
-                None,
-            )
-            .map_err(|_| LocalFailure::response_invalid("reopen preconditions are invalid"));
         }
         PreconditionsV1::new(
             Some(session_id),
@@ -1450,8 +1376,7 @@ impl LocalFailure {
 }
 
 enum RunResult {
-    Response(Box<ResponseEnvelopeV1>),
-    ResponseV2(Box<ResponseEnvelopeV2>),
+    Response(Box<ResponseEnvelopeV2>),
     VersionSummary {
         name: &'static str,
         version: String,
@@ -1521,7 +1446,6 @@ fn parse_failure_command_context_from_matches(
                 // top-level `item.check` arm below and is deliberately left alone.
                 ("check", "procedure.check"),
                 ("scaffold", "procedure.scaffold"),
-                ("convert", "procedure.convert"),
             ],
         )?,
         "preset" => nested_parse_failure_context(
@@ -1577,11 +1501,9 @@ fn parse_failure_command_context_from_matches(
         }
         "skip" => ParseFailureCommandContext::new("session.skip", true),
         "retry" => ParseFailureCommandContext::new("session.retry", true),
-        "return" => ParseFailureCommandContext::new("session.return", !matches.get_flag("dry_run")),
         "block" => ParseFailureCommandContext::new("session.block", true),
         "unblock" => ParseFailureCommandContext::new("session.unblock", true),
         "cancel" => ParseFailureCommandContext::new("session.cancel", true),
-        "reopen" => ParseFailureCommandContext::new("session.reopen", !matches.get_flag("dry_run")),
         "reset" => ParseFailureCommandContext::new(
             if matches.get_flag("all") {
                 "workspace.reset_all"
@@ -1716,15 +1638,6 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             match request_daemon(&client, &status_request)
                 .map_err(|failure| failure.with_command(wire_name))?
             {
-                ResponseEnvelopeV2::OutputV1(status) => Some(
-                    explicit.workspace_id.clone().unwrap_or(
-                        StatusPreflight::from_output(&status)
-                            .map_err(|failure| {
-                                failure.with_correlation(wire_name, status.request_id().as_str())
-                            })?
-                            .transport_workspace_id,
-                    ),
-                ),
                 ResponseEnvelopeV2::OutputV2(status) => Some(
                     explicit.workspace_id.clone().unwrap_or(
                         StatusPreflight::from_output_v2(&status)
@@ -1758,7 +1671,6 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         let status_response = request_daemon(&client, &status_request)
             .map_err(|failure| failure.with_command(wire_name))?;
         let preflight = match status_response {
-            ResponseEnvelopeV2::OutputV1(status) => StatusPreflight::from_output(&status),
             ResponseEnvelopeV2::OutputV2(status) => StatusPreflight::from_output_v2(&status),
             ResponseEnvelopeV2::Error(error) => {
                 return re_correlate_preflight_error(&error, wire_name);
@@ -1791,7 +1703,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             },
         )?;
         return request_daemon(&client, &request)
-            .map(|response| RunResult::ResponseV2(Box::new(response)));
+            .map(|response| RunResult::Response(Box::new(response)));
     }
 
     let (operation, mut payload) =
@@ -1817,7 +1729,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             payload,
         },
     )?;
-    request_daemon(&client, &request).map(|response| RunResult::ResponseV2(Box::new(response)))
+    request_daemon(&client, &request).map(|response| RunResult::Response(Box::new(response)))
 }
 fn requires_idempotency_key(operation: OperationV1) -> bool {
     matches!(operation, OperationV1::Mutate | OperationV1::Bootstrap)
@@ -1885,7 +1797,9 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
 fn reset_probe_can_recover(error: &podway_protocol::ErrorEnvelopeV1) -> bool {
     matches!(
         error.code().as_str(),
-        "WORKSPACE_STATE_UNREADABLE" | "WORKSPACE_SCHEMA_UNSUPPORTED"
+        "WORKSPACE_STATE_UNREADABLE"
+            | "WORKSPACE_SCHEMA_UNSUPPORTED"
+            | "LEGACY_PROCEDURE_STATE_UNSUPPORTED"
     )
 }
 
@@ -2013,9 +1927,10 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
             "dry-run requires session start",
         ));
     };
-    if let Some(preset_name) = &args.preset
-        && let Some(preset) = catalog_v2().lookup(preset_name)
-    {
+    if let Some(preset_name) = &args.preset {
+        let preset = catalog_v2().lookup(preset_name).ok_or_else(|| {
+            LocalFailure::preset_not_found("unknown preset").with_command("session.start")
+        })?;
         let admitted = preset
             .validate()
             .map_err(|error| preset_failure(error).with_command("session.start"))?;
@@ -2044,101 +1959,22 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
         return Ok(local_result_v2(command, result, text, 0));
     }
 
-    let custom_procedure = if let Some(procedure) = args.procedure.as_deref() {
-        let root = workspace_target(cli.worktree.clone())?;
-        let bytes = read_worktree_procedure(&root, Path::new(procedure))
-            .map_err(|failure| failure.with_command("session.start"))?;
-        let format = procedure_format(Path::new(procedure));
-        if sniff_procedure_schema(&bytes, format) == Some(PROCEDURE_SCHEMA_V2) {
-            return execute_start_dry_run_v2(cli, args, procedure, &bytes, format);
-        }
-        Some((bytes, format))
-    } else {
-        None
-    };
-
-    let (definition, source, digest) = if let Some(preset) = &args.preset {
-        let preset = catalog_v1().lookup(preset).ok_or_else(|| {
-            LocalFailure::preset_not_found("unknown preset").with_command("session.start")
-        })?;
-        if args.goal.is_some() {
-            return Err(LocalFailure::request_invalid(
-                "goal tracking requires a Procedure v2 preset",
-            )
-            .with_command("session.start"));
-        }
-        let admitted = preset
-            .validate()
-            .map_err(|error| preset_failure(error).with_command("session.start"))?;
-        (
-            admitted.definition().clone(),
-            json!({ "preset": preset.metadata.id }),
-            admitted.digest().as_str().to_owned(),
-        )
-    } else {
-        let procedure = args
-            .procedure
-            .as_deref()
-            .ok_or_else(|| LocalFailure::request_invalid("start requires a preset or procedure"))?;
-        let (bytes, format) = custom_procedure
-            .as_ref()
-            .expect("custom Procedure bytes are read once before version dispatch");
-        let admitted = parse_procedure_v1(bytes, *format)
-            .map_err(|error| procedure_config_failure(error).with_command("session.start"))?;
-        if args.goal.is_some() {
-            return Err(LocalFailure::request_invalid(
-                "goal tracking requires a Procedure v2 document",
-            )
-            .with_command("session.start"));
-        }
-        if let Some(expected) = args.expect_procedure_digest.as_deref() {
-            let expected = Sha256Digest::new(expected.to_owned()).map_err(|_| {
-                LocalFailure::request_invalid(
-                    "expected procedure digest must be sha256:<lowercase-hex>",
-                )
-                .with_command("session.start")
-            })?;
-            if admitted.digest() != &expected {
-                return Err(LocalFailure::procedure_digest_mismatch(
-                    &expected,
-                    admitted.digest(),
-                    "session.start",
-                ));
-            }
-        }
-        (
-            admitted.definition().clone(),
-            json!({ "procedure": procedure }),
-            admitted.digest().as_str().to_owned(),
-        )
-    };
-    let first_stage = definition
-        .stages
-        .first()
-        .ok_or_else(|| LocalFailure::request_invalid("procedure has no stages"))?;
-    let command = cli
-        .command
-        .daemon_wire_name()
-        .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
-    let result = json!({
-        "dry_run": true,
-        "task": args.task,
-        "source": source,
-        "procedure_digest": digest,
-        "first_stage": { "id": first_stage.id, "title": first_stage.title },
-    });
-    let text = format!(
-        "dry run: first stage {} ({})",
-        first_stage.id, first_stage.title
-    );
-    Ok(local_result(command, result, text))
+    let procedure = args
+        .procedure
+        .as_deref()
+        .ok_or_else(|| LocalFailure::request_invalid("start requires a preset or procedure"))?;
+    let root = workspace_target(cli.worktree.clone())?;
+    let bytes = read_worktree_procedure(&root, Path::new(procedure))
+        .map_err(|failure| failure.with_command("session.start"))?;
+    let format = procedure_format(Path::new(procedure));
+    execute_start_dry_run_v2(cli, args, procedure, &bytes, format)
 }
 
-fn procedure_format(path: &Path) -> ProcedureFormatV1 {
+fn procedure_format(path: &Path) -> ProcedureDocumentFormat {
     if path.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
+        ProcedureDocumentFormat::Json
     } else {
-        ProcedureFormatV1::Yaml
+        ProcedureDocumentFormat::Yaml
     }
 }
 
@@ -2147,23 +1983,13 @@ fn execute_start_dry_run_v2(
     args: &StartArgs,
     procedure: &str,
     bytes: &[u8],
-    format: ProcedureFormatV1,
+    format: ProcedureDocumentFormat,
 ) -> Result<RunResult, LocalFailure> {
     let source = std::str::from_utf8(bytes).map_err(|_| {
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command("session.start")
     })?;
-    let parsed = match parse_procedure_document(bytes, format)
-        .map_err(|error| procedure_config_failure(error).with_command("session.start"))?
-    {
-        ParsedProcedure::V2(parsed) => parsed,
-        ParsedProcedure::V1(_) => {
-            return Err(LocalFailure::catalog(
-                "PROCEDURE_SCHEMA_UNSUPPORTED",
-                "Procedure v2 dry-run received a Procedure v1 document.",
-                "session.start",
-            ));
-        }
-    };
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(bytes, format)
+        .map_err(|error| procedure_config_failure(error).with_command("session.start"))?;
     let validated = validate_procedure_v2(parsed)
         .map_err(|error| procedure_config_failure(error).with_command("session.start"))?;
     let context = AuthoringContext::new(procedure, source, format);
@@ -2353,17 +2179,17 @@ fn open_descriptor_relative_procedure(
             "procedure must be a regular file",
         ));
     }
-    if metadata.len() > MAX_PROCEDURE_DOCUMENT_BYTES_V1 as u64 {
+    if metadata.len() > MAX_PROCEDURE_DOCUMENT_BYTES as u64 {
         return Err(LocalFailure::procedure_invalid(
             "procedure exceeds the maximum document size",
         ));
     }
     let mode = permission_bits(&metadata);
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_PROCEDURE_DOCUMENT_BYTES_V1 as u64 + 1)
+    file.take(MAX_PROCEDURE_DOCUMENT_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| LocalFailure::procedure_not_found("cannot read procedure file"))?;
-    if bytes.len() > MAX_PROCEDURE_DOCUMENT_BYTES_V1 {
+    if bytes.len() > MAX_PROCEDURE_DOCUMENT_BYTES {
         return Err(LocalFailure::procedure_invalid(
             "procedure exceeds the maximum document size",
         ));
@@ -2545,7 +2371,7 @@ fn execute_dev_terminate(wait_timeout_ms: u64) -> Result<RunResult, LocalFailure
                 .with_correlation("daemon.terminate", request.request_id().as_str()));
         }
     };
-    if matches!(response, ResponseEnvelopeV1::Error(_)) {
+    if matches!(response, ResponseEnvelopeV2::Error(_)) {
         return Ok(RunResult::Response(Box::new(response)));
     }
     let deadline = Instant::now() + Duration::from_millis(wait_timeout_ms);
@@ -2916,13 +2742,13 @@ fn probe_daemon_identity_with_runner(
             message: "daemon identity probe returned malformed output".to_owned(),
         });
     }
-    let response = serde_json::from_str::<ResponseEnvelopeV1>(&output.stdout).map_err(|_| {
+    let response = serde_json::from_str::<ResponseEnvelopeV2>(&output.stdout).map_err(|_| {
         ServiceErrorV1::IoV1 {
             operation: None,
             message: "daemon identity probe returned malformed output".to_owned(),
         }
     })?;
-    let ResponseEnvelopeV1::Output(envelope) = response else {
+    let ResponseEnvelopeV2::OutputV2(envelope) = response else {
         return Err(ServiceErrorV1::IoV1 {
             operation: None,
             message: "daemon identity probe returned malformed output".to_owned(),
@@ -2995,13 +2821,13 @@ fn wait_for_verified_service(
     while Instant::now() < deadline {
         let request = build_daemon_status_request()?;
         match client.daemon_status(&request) {
-            Ok(ResponseEnvelopeV1::Output(output)) => {
+            Ok(ResponseEnvelopeV2::OutputV2(output)) => {
                 match validated_live_daemon_status(&output, None, paths, Some(expected_binary)) {
                     Ok(_) => return Ok(()),
                     Err(failure) => last_identity_failure = Some(failure),
                 }
             }
-            Ok(ResponseEnvelopeV1::Error(error))
+            Ok(ResponseEnvelopeV2::Error(error))
                 if error.code().as_str() == "DAEMON_CONTRACT_MISMATCH" =>
             {
                 last_identity_failure = Some(
@@ -3009,7 +2835,7 @@ fn wait_for_verified_service(
                         .with_details(error.details().clone()),
                 );
             }
-            Ok(ResponseEnvelopeV1::Error(_)) => {
+            Ok(ResponseEnvelopeV2::Error(_)) => {
                 last_identity_failure = Some(LocalFailure::response_invalid(
                     "daemon readiness returned an unexpected error",
                 ));
@@ -3114,12 +2940,12 @@ fn service_status_result(
         let request = build_daemon_status_request()?;
         let client = DaemonClientV1::new(paths.clone());
         match client.daemon_status(&request) {
-            Ok(ResponseEnvelopeV1::Error(error)) => {
-                return Ok(RunResult::Response(Box::new(ResponseEnvelopeV1::Error(
+            Ok(ResponseEnvelopeV2::Error(error)) => {
+                return Ok(RunResult::Response(Box::new(ResponseEnvelopeV2::Error(
                     error,
                 ))));
             }
-            Ok(ResponseEnvelopeV1::Output(output)) => {
+            Ok(ResponseEnvelopeV2::OutputV2(output)) => {
                 let live = validated_live_daemon_status(
                     &output,
                     static_identity.as_ref(),
@@ -3151,7 +2977,7 @@ fn service_status_result(
 }
 
 fn validated_live_daemon_status(
-    output: &podway_protocol::OutputEnvelopeV1,
+    output: &podway_protocol::OutputEnvelopeV3,
     installed: Option<&DaemonStaticIdentityV1>,
     paths: &ServiceRuntimePathsV1,
     expected_executable: Option<&Path>,
@@ -3466,8 +3292,8 @@ fn local_result(command: &str, result: Value, text: String) -> RunResult {
         .as_object()
         .cloned()
         .expect("local result is always an object");
-    ensure_command_result_schema_v1(command, &mut result);
-    validate_command_result_v1(command, &result)
+    ensure_procedure_independent_result_schema_v1(command, &mut result);
+    validate_procedure_independent_result_v1(command, &result)
         .expect("local command result must satisfy its closed protocol contract");
     RunResult::Local {
         command: command.to_owned(),
@@ -3500,41 +3326,17 @@ fn local_result_v2(
     }
 }
 
-fn procedure_warning_output(warnings: &[ProcedureWarningV1]) -> Vec<Value> {
-    warnings
-        .iter()
-        .map(|warning| {
-            let code = warning.code().as_str();
-            let path = match (warning.stage_id(), warning.item_id()) {
-                (Some(stage_id), Some(item_id)) => {
-                    format!("stages/{stage_id}/items/{item_id}")
-                }
-                (Some(stage_id), None) => format!("stages/{stage_id}"),
-                (None, Some(item_id)) => format!("items/{item_id}"),
-                (None, None) => "procedure".to_owned(),
-            };
-            json!({
-                "code": code,
-                "path": path,
-                "message": format!("procedure warning: {code}"),
-            })
-        })
-        .collect()
-}
-
 fn execute_preset(command: &PresetCommand) -> Result<RunResult, LocalFailure> {
     match command {
         PresetCommand::List => {
-            let mut presets: Vec<Value> = catalog_v1()
+            let presets: Vec<Value> = catalog_v2()
                 .list()
                 .iter()
                 .map(|preset| preset.metadata)
-                .chain(catalog_v2().list().iter().map(|preset| preset.metadata))
                 .map(|metadata| {
                     json!({ "id": metadata.id, "name": metadata.name, "version": metadata.version, "description": metadata.description })
                 })
                 .collect();
-            presets.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
             let text = presets
                 .iter()
                 .filter_map(|preset| preset.get("id").and_then(Value::as_str))
@@ -3547,120 +3349,77 @@ fn execute_preset(command: &PresetCommand) -> Result<RunResult, LocalFailure> {
             ))
         }
         PresetCommand::Show { name } => {
-            if let Some(preset) = catalog_v2().lookup(name) {
-                let admitted = preset
-                    .validate()
-                    .map_err(|error| preset_failure(error).with_command("preset.show"))?;
-                let procedure: Value = serde_json::from_str(admitted.canonical_json().as_str())
-                    .map_err(|_| {
-                        LocalFailure::procedure_invalid(
-                            "embedded Procedure v2 canonical JSON is invalid",
-                        )
-                        .with_command("preset.show")
-                    })?;
-                return Ok(local_result(
-                    "preset.show",
-                    json!({
-                        "preset": preset.metadata.id,
-                        "metadata": preset.metadata,
-                        "digest": admitted.digest().as_str(),
-                        "procedure": procedure,
-                        "warnings": [],
-                    }),
-                    preset.yaml.to_owned(),
-                ));
-            }
-            let preset = catalog_v1().lookup(name).ok_or_else(|| {
+            let preset = catalog_v2().lookup(name).ok_or_else(|| {
                 LocalFailure::preset_not_found("unknown preset").with_command("preset.show")
             })?;
             let admitted = preset
                 .validate()
                 .map_err(|error| preset_failure(error).with_command("preset.show"))?;
-            let warnings = procedure_warning_output(admitted.warnings());
+            let procedure: Value = serde_json::from_str(admitted.canonical_json().as_str())
+                .map_err(|_| {
+                    LocalFailure::procedure_invalid(
+                        "embedded Procedure v2 canonical JSON is invalid",
+                    )
+                    .with_command("preset.show")
+                })?;
             Ok(local_result(
                 "preset.show",
                 json!({
                     "preset": preset.metadata.id,
                     "metadata": preset.metadata,
                     "digest": admitted.digest().as_str(),
-                    "procedure": admitted.definition(),
-                    "warnings": warnings,
+                    "procedure": procedure,
+                    "warnings": [],
                 }),
                 preset.yaml.to_owned(),
             ))
         }
         PresetCommand::Explain { name } => {
-            if let Some(preset) = catalog_v2().lookup(name) {
-                let admitted = preset
-                    .validate()
-                    .map_err(|error| preset_failure(error).with_command("preset.explain"))?;
-                let document: Value = serde_json::from_str(admitted.canonical_json().as_str())
-                    .map_err(|_| {
-                        LocalFailure::procedure_invalid(
-                            "embedded Procedure v2 canonical JSON is invalid",
-                        )
-                        .with_command("preset.explain")
-                    })?;
-                let definitions = document["node_definitions"]
-                    .as_object()
-                    .expect("validated Procedure v2 has node definitions");
-                let nodes: Vec<Value> = document["graph"]["nodes"]
-                    .as_array()
-                    .expect("validated Procedure v2 has graph nodes")
-                    .iter()
-                    .map(|node| {
-                        let definition = node["use"]
-                            .as_str()
-                            .and_then(|id| definitions.get(id))
-                            .expect("validated graph node resolves its definition");
-                        json!({
-                            "id": node["id"],
-                            "title": definition["title"],
-                            "type": definition["type"],
-                        })
-                    })
-                    .collect();
-                let text = format!(
-                    "{}\n{}\nGraph nodes: {}",
-                    preset.metadata.name,
-                    preset.metadata.description,
-                    nodes
-                        .iter()
-                        .filter_map(|node| node.get("id").and_then(Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                return Ok(local_result(
-                    "preset.explain",
-                    json!({ "preset": preset.metadata, "nodes": nodes }),
-                    text,
-                ));
-            }
-            let preset = catalog_v1().lookup(name).ok_or_else(|| {
+            let preset = catalog_v2().lookup(name).ok_or_else(|| {
                 LocalFailure::preset_not_found("unknown preset").with_command("preset.explain")
             })?;
             let admitted = preset
                 .validate()
                 .map_err(|error| preset_failure(error).with_command("preset.explain"))?;
-            let stages: Vec<Value> = admitted
-                .definition()
-                .stages
+            let document: Value = serde_json::from_str(admitted.canonical_json().as_str())
+                .map_err(|_| {
+                    LocalFailure::procedure_invalid(
+                        "embedded Procedure v2 canonical JSON is invalid",
+                    )
+                    .with_command("preset.explain")
+                })?;
+            let definitions = document["node_definitions"]
+                .as_object()
+                .expect("validated Procedure v2 has node definitions");
+            let nodes: Vec<Value> = document["graph"]["nodes"]
+                .as_array()
+                .expect("validated Procedure v2 has graph nodes")
                 .iter()
-                .map(|stage| json!({ "id": stage.id, "title": stage.title }))
+                .map(|node| {
+                    let definition = node["use"]
+                        .as_str()
+                        .and_then(|id| definitions.get(id))
+                        .expect("validated graph node resolves its definition");
+                    json!({
+                        "id": node["id"],
+                        "title": definition["title"],
+                        "type": definition["type"],
+                    })
+                })
                 .collect();
             let text = format!(
-                "{}\n{}\nStages: {}",
+                "{}\n{}\nGraph nodes: {}",
                 preset.metadata.name,
                 preset.metadata.description,
-                stages
+                nodes
                     .iter()
-                    .filter_map(|stage| stage.get("id").and_then(Value::as_str))
+                    .filter_map(|node| node.get("id").and_then(Value::as_str))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
             Ok(local_result(
                 "preset.explain",
-                json!({ "preset": preset.metadata, "stages": stages }),
+                json!({ "preset": preset.metadata, "nodes": nodes }),
                 text,
             ))
         }
@@ -3701,50 +3460,34 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         ProcedureCommand::Scaffold { template } => {
             return Ok(execute_procedure_scaffold(template));
         }
-        ProcedureCommand::Convert { file } => {
-            return execute_procedure_convert(file);
-        }
     };
     let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(name))?;
     std::str::from_utf8(&bytes).map_err(|_| {
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(name)
     })?;
     let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
+        ProcedureDocumentFormat::Json
     } else {
-        ProcedureFormatV1::Yaml
+        ProcedureDocumentFormat::Yaml
     };
-    // Versioned dispatch for `procedure validate`, placed after the read, the UTF-8 check, and the
-    // format decision the v1 path already made and before the v1 parser, so no step of the v1 path
-    // moves. The sniff is decode-only and its only positive signal is a document that declares
-    // Procedure v2; a v1 document, an unknown schema, and an undecodable one all fall through to
-    // `parse_procedure_v1` below, which is why the v1 surface — success bytes and every failure
-    // alike — is unchanged by this arm existing.
-    if matches!(command, ProcedureCommand::Validate { .. })
-        && sniff_procedure_schema(&bytes, format) == Some(PROCEDURE_SCHEMA_V2)
-    {
+    if matches!(command, ProcedureCommand::Validate { .. }) {
         return Ok(execute_procedure_validate_v2(file, &bytes, format));
     }
-    let validated = parse_procedure_v1(&bytes, format)
+    debug_assert!(!warnings_as_errors);
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(&bytes, format)
         .map_err(|error| procedure_config_failure(error).with_command(name))?;
-    if warnings_as_errors {
-        validated
-            .clone()
-            .admit(ProcedureWarningPolicyV1::Reject)
-            .map_err(|error| procedure_config_failure(error).with_command(name))?;
-    }
-    let warnings = procedure_warning_output(validated.warnings());
+    let validated = validate_procedure_v2(parsed)
+        .map_err(|error| procedure_config_failure(error).with_command(name))?;
     let result = json!({
         "file": file.display().to_string(),
         "digest": validated.digest().as_str(),
-        "procedure": validated.definition(),
-        "warnings": warnings,
         "canonical_json": validated.canonical_json().as_str(),
+        "procedure_schema": PROCEDURE_SCHEMA_V2,
     });
     let text = match command {
         ProcedureCommand::Validate { .. } => format!(
             "{} ({})",
-            validated.definition().name,
+            validated.parsed().name(),
             validated.digest().as_str()
         ),
         ProcedureCommand::Show {
@@ -3761,8 +3504,7 @@ fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult, LocalFailu
         | ProcedureCommand::Preview { .. }
         | ProcedureCommand::Lint { .. }
         | ProcedureCommand::Check { .. }
-        | ProcedureCommand::Scaffold { .. }
-        | ProcedureCommand::Convert { .. } => {
+        | ProcedureCommand::Scaffold { .. } => {
             unreachable!("the v2 authoring commands dispatch to their own execution paths")
         }
     };
@@ -3790,7 +3532,7 @@ const PROCEDURE_VALIDATE_COMMAND: &str = "procedure.validate";
 fn execute_procedure_validate_v2(
     file: &Path,
     bytes: &[u8],
-    format: ProcedureFormatV1,
+    format: ProcedureDocumentFormat,
 ) -> RunResult {
     let source = std::str::from_utf8(bytes)
         .expect("execute_procedure rejects a non-UTF-8 document before dispatching");
@@ -3799,13 +3541,6 @@ fn execute_procedure_validate_v2(
 
     let admitted = match parse_procedure_document(bytes, format) {
         Ok(ParsedProcedure::V2(parsed)) => validate_procedure_v2(parsed),
-        // Unreachable: the sniff and the dispatcher read the same decoded `schema`. Reported as a
-        // schema violation rather than a panic, because a diagnostic path must not be able to abort
-        // the process even on an impossible branch.
-        Ok(ParsedProcedure::V1(_)) => Err(ConfigError::InvalidSchema {
-            expected: PROCEDURE_SCHEMA_V2,
-            actual: PROCEDURE_SCHEMA_V1.to_owned(),
-        }),
         Err(error) => Err(error),
     };
 
@@ -3894,9 +3629,9 @@ fn execute_procedure_format(
     })?;
 
     let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
+        ProcedureDocumentFormat::Json
     } else {
-        ProcedureFormatV1::Yaml
+        ProcedureDocumentFormat::Yaml
     };
     let source_path = file.display().to_string();
     match format_procedure_v2(FormatRequest {
@@ -3930,7 +3665,7 @@ fn execute_procedure_format(
         }
         Err(FormatFailure::NotProcedureV2) => Err(LocalFailure::catalog(
             "PROCEDURE_SCHEMA_UNSUPPORTED",
-            "procedure format requires a podway.procedure/v2 document; run podway procedure convert first",
+            "procedure format requires a podway.procedure/v2 document",
             NAME,
         )),
         Err(FormatFailure::Diagnostics(diagnostics)) => {
@@ -4149,20 +3884,15 @@ fn execute_procedure_vet(file: &Path) -> Result<RunResult, LocalFailure> {
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
     })?;
     let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
+        ProcedureDocumentFormat::Json
     } else {
-        ProcedureFormatV1::Yaml
+        ProcedureDocumentFormat::Yaml
     };
     let source_path = file.display().to_string();
-
-    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V1) {
-        return Err(procedure_vet_schema_failure());
-    }
 
     let context = AuthoringContext::new(&source_path, source, format);
     let parsed = match parse_procedure_document(source.as_bytes(), format) {
         Ok(ParsedProcedure::V2(parsed)) => parsed,
-        Ok(ParsedProcedure::V1(_)) => return Err(procedure_vet_schema_failure()),
         Err(error) => {
             return Ok(procedure_vet_diagnostics(
                 &source_path,
@@ -4191,14 +3921,6 @@ fn execute_procedure_vet(file: &Path) -> Result<RunResult, LocalFailure> {
         AuthoringStage::Vet,
         findings,
     ))
-}
-
-fn procedure_vet_schema_failure() -> LocalFailure {
-    LocalFailure::catalog(
-        "PROCEDURE_SCHEMA_UNSUPPORTED",
-        "procedure vet requires a podway.procedure/v2 document; run podway procedure convert first",
-        PROCEDURE_VET_COMMAND,
-    )
 }
 
 fn procedure_vet_diagnostics(
@@ -4261,20 +3983,15 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
     })?;
     let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
+        ProcedureDocumentFormat::Json
     } else {
-        ProcedureFormatV1::Yaml
+        ProcedureDocumentFormat::Yaml
     };
     let source_path = file.display().to_string();
-
-    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V1) {
-        return Err(procedure_graph_schema_failure());
-    }
 
     let context = AuthoringContext::new(&source_path, source, format);
     let parsed = match parse_procedure_document(source.as_bytes(), format) {
         Ok(ParsedProcedure::V2(parsed)) => parsed,
-        Ok(ParsedProcedure::V1(_)) => return Err(procedure_graph_schema_failure()),
         Err(error) => {
             return Ok(procedure_graph_diagnostics(
                 &source_path,
@@ -4376,14 +4093,6 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
     Ok(local_result_v2(PROCEDURE_GRAPH_COMMAND, result, text, 0))
 }
 
-fn procedure_graph_schema_failure() -> LocalFailure {
-    LocalFailure::catalog(
-        "PROCEDURE_SCHEMA_UNSUPPORTED",
-        "procedure graph requires a podway.procedure/v2 document; run podway procedure convert first",
-        PROCEDURE_GRAPH_COMMAND,
-    )
-}
-
 fn procedure_graph_diagnostics(
     source_path: &str,
     digest: Option<&Sha256Digest>,
@@ -4445,18 +4154,10 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
     })?;
     let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
+        ProcedureDocumentFormat::Json
     } else {
-        ProcedureFormatV1::Yaml
+        ProcedureDocumentFormat::Yaml
     };
-    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V1) {
-        return Err(LocalFailure::catalog(
-            "PROCEDURE_SCHEMA_UNSUPPORTED",
-            "procedure preview requires a podway.procedure/v2 document; run podway procedure convert first",
-            NAME,
-        ));
-    }
-
     let report = preview_procedure_v2(FormatRequest {
         source,
         source_path,
@@ -4694,23 +4395,15 @@ fn execute_procedure_lint(
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
     })?;
     let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
+        ProcedureDocumentFormat::Json
     } else {
-        ProcedureFormatV1::Yaml
+        ProcedureDocumentFormat::Yaml
     };
     let source_path = file.display().to_string();
-
-    // A document that declares the v1 schema is refused before the dispatching parser runs, so a
-    // malformed v1 document is a wrong-schema command failure rather than a v2 authoring finding
-    // about a document that never claimed to be v2.
-    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V1) {
-        return Err(procedure_lint_schema_failure());
-    }
 
     let context = AuthoringContext::new(&source_path, source, format);
     let parsed = match parse_procedure_document(source.as_bytes(), format) {
         Ok(ParsedProcedure::V2(parsed)) => parsed,
-        Ok(ParsedProcedure::V1(_)) => return Err(procedure_lint_schema_failure()),
         Err(error) => {
             return Ok(procedure_lint_diagnostics(
                 &source_path,
@@ -4743,17 +4436,6 @@ fn execute_procedure_lint(
         findings,
         exit_code,
     ))
-}
-
-/// The failure a Procedure v1 input reports. The diagnostics result schema pins
-/// `procedure_schema` to `podway.procedure/v2`, so a v1 document has no representable findings
-/// document and must be refused as a wrong-schema command failure instead.
-fn procedure_lint_schema_failure() -> LocalFailure {
-    LocalFailure::catalog(
-        "PROCEDURE_SCHEMA_UNSUPPORTED",
-        "procedure lint requires a podway.procedure/v2 document; run podway procedure convert first",
-        PROCEDURE_LINT_COMMAND,
-    )
 }
 
 /// The pinned one-line verdict for a document with no advisory findings.
@@ -4842,22 +4524,11 @@ fn execute_procedure_check(
         LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
     })?;
     let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
+        ProcedureDocumentFormat::Json
     } else {
-        ProcedureFormatV1::Yaml
+        ProcedureDocumentFormat::Yaml
     };
     let source_path = file.display().to_string();
-
-    // A document that declares the v1 schema is refused before the pipeline runs: the diagnostics
-    // result pins `procedure_schema` to `podway.procedure/v2`, so a v1 document has no
-    // representable findings result and must be a wrong-schema command failure instead.
-    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V1) {
-        return Err(LocalFailure::catalog(
-            "PROCEDURE_SCHEMA_UNSUPPORTED",
-            "procedure check requires a podway.procedure/v2 document; run podway procedure convert first",
-            NAME,
-        ));
-    }
 
     let report = check_procedure_v2(FormatRequest {
         source,
@@ -4926,11 +4597,9 @@ fn execute_procedure_scaffold(template: &str) -> RunResult {
     let template =
         ScaffoldTemplate::from_name(template).expect("the parser closes --template to known names");
     let document = scaffold_procedure_v2(template);
-    let parsed = match parse_procedure_document(document.as_bytes(), ProcedureFormatV1::Yaml) {
-        Ok(ParsedProcedure::V2(parsed)) => parsed,
-        Ok(ParsedProcedure::V1(_)) => unreachable!("a scaffold template declares the v2 schema"),
-        Err(error) => unreachable!("a scaffold template must parse: {error}"),
-    };
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(document.as_bytes(), ProcedureDocumentFormat::Yaml)
+            .unwrap_or_else(|error| unreachable!("a scaffold template must parse: {error}"));
     let validated =
         validate_procedure_v2(parsed).expect("a scaffold template is a valid Procedure v2 model");
     let Value::Object(result) = json!({
@@ -4944,121 +4613,6 @@ fn execute_procedure_scaffold(template: &str) -> RunResult {
         unreachable!("the static source result is a JSON object");
     };
     local_result_v2(PROCEDURE_SCAFFOLD_COMMAND, result, document.to_owned(), 0)
-}
-
-/// The route every `procedure convert` result reports under, named once so the two result builders
-/// below cannot disagree with the route the failure paths use.
-const PROCEDURE_CONVERT_COMMAND: &str = "procedure.convert";
-
-/// Renders a Procedure v1 document as a Procedure v2 authoring candidate.
-///
-/// Convert reads and never writes. It does not touch the v1 file, does not create the v2 file, and
-/// does not start a session: the candidate goes to stdout, and deciding where it belongs — and
-/// whether the synthesized `purpose` and `intent` values say the right thing — is the author's
-/// review step, not this command's.
-///
-/// Two schema gates bracket the pipeline, and they are deliberately asymmetric. A document that
-/// already declares v2 is refused outright: there is nothing to convert, and reporting the refusal
-/// as an authoring finding would claim the document is defective when it is simply finished. A
-/// document that declares anything else — v1, an unknown schema, or nothing readable at all — goes
-/// to `parse_procedure_v1`, which is the byte-locked v1 admission path every other v1 command uses,
-/// so a malformed v1 file reports exactly the error `procedure validate` reports for it.
-///
-/// There is no `--warnings-as-errors`, and the default v1 warning policy applies: a v1 semantic
-/// warning describes the v1 procedure, and refusing to *show* an author what their procedure looks
-/// like in v2 because v1 already had an advisory finding about it would help nobody. The warnings
-/// are still reachable — `podway procedure validate` reports them for the same file — and the
-/// candidate has its own, better-targeted advisory pass in `podway procedure check`.
-fn execute_procedure_convert(file: &Path) -> Result<RunResult, LocalFailure> {
-    const NAME: &str = PROCEDURE_CONVERT_COMMAND;
-
-    let bytes = read_offline_procedure(file).map_err(|failure| failure.with_command(NAME))?;
-    let source = std::str::from_utf8(&bytes).map_err(|_| {
-        LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command(NAME)
-    })?;
-    let format = if file.extension().and_then(OsStr::to_str) == Some("json") {
-        ProcedureFormatV1::Json
-    } else {
-        ProcedureFormatV1::Yaml
-    };
-
-    if sniff_procedure_schema(source.as_bytes(), format) == Some(PROCEDURE_SCHEMA_V2) {
-        return Err(LocalFailure::catalog(
-            "PROCEDURE_SCHEMA_UNSUPPORTED",
-            "procedure convert requires a podway.procedure/v1 document; this document already declares podway.procedure/v2",
-            NAME,
-        ));
-    }
-
-    // Not the schema-dispatching parser: a v1 document is admitted by the v1 parser directly, which
-    // is what keeps the v1 error surface byte-identical to `procedure validate`'s for the same file.
-    let validated = parse_procedure_v1(&bytes, format)
-        .map_err(|error| procedure_config_failure(error).with_command(NAME))?;
-
-    let source_path = file.display().to_string();
-    let context = AuthoringContext::new(&source_path, source, format);
-    match convert_procedure_v1_to_v2(&validated, &context) {
-        Ok(converted) => Ok(procedure_convert_source(&converted)),
-        Err(diagnostics) => Ok(procedure_convert_diagnostics(&source_path, diagnostics)),
-    }
-}
-
-/// The `procedure convert` success result: the candidate, and the digest of each end of the
-/// conversion.
-///
-/// It names no file, carries no `mode`, and reports no `changed` flag — the source result schema's
-/// `convert` branch forbids all three, correctly: the candidate did not come from a v2 file, was
-/// not written to one, and has nothing to have changed against.
-fn procedure_convert_source(converted: &ConvertedProcedureV2) -> RunResult {
-    let Value::Object(result) = json!({
-        "schema": "podway.procedure-source-result/v1",
-        "operation": "convert",
-        "target_schema": "podway.procedure/v2",
-        "target_digest": converted.digest().as_str(),
-        "document": converted.document(),
-        "source_schema": PROCEDURE_SCHEMA_V1,
-        "source_digest": converted.source_digest().as_str(),
-    }) else {
-        unreachable!("the static source result is a JSON object");
-    };
-    local_result_v2(
-        PROCEDURE_CONVERT_COMMAND,
-        result,
-        converted.document().to_owned(),
-        0,
-    )
-}
-
-/// The `procedure convert` findings result: every v1 value Procedure v2 will not accept.
-///
-/// `procedure_schema` is `podway.procedure/v2` because the candidate is what is being diagnosed —
-/// these are the reasons no admissible v2 document exists — even though every `field` names a path
-/// in the v1 source, which is the document the author has to edit. No `digest` is reported: there
-/// is no procedure to have one.
-fn procedure_convert_diagnostics(
-    source_path: &str,
-    diagnostics: Vec<podway_core::AuthoringDiagnostic>,
-) -> RunResult {
-    let report = finalize_diagnostics(
-        diagnostics
-            .into_iter()
-            .map(|diagnostic| (AuthoringStage::Validate, diagnostic))
-            .collect(),
-    );
-    let text = render_authoring_diagnostics(report.diagnostics());
-    let Value::Object(result) = json!({
-        "schema": "podway.procedure-diagnostics-result/v1",
-        "operation": "convert",
-        "procedure_schema": "podway.procedure/v2",
-        "file": source_path,
-        "valid": report.valid(),
-        "diagnostics": report.diagnostics(),
-        "diagnostics_truncated": report.truncated(),
-        "diagnostics_total": report.total(),
-    }) else {
-        unreachable!("the static diagnostics result is a JSON object");
-    };
-    local_result_v2(PROCEDURE_CONVERT_COMMAND, result, text, 1)
 }
 
 /// The stable one-line-per-finding authoring report.
@@ -5162,9 +4716,7 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     if cli.if_attempt.is_some()
         && matches!(
             command,
-            Command::Start(StartArgs { replace: true, .. })
-                | Command::Reopen(_)
-                | Command::Reset(_)
+            Command::Start(StartArgs { replace: true, .. }) | Command::Reset(_)
         )
     {
         return Err(LocalFailure::request_invalid(
@@ -5534,16 +5086,6 @@ fn daemon_payload(
         }
         Command::Retry { reason } | Command::Block { reason } | Command::Cancel { reason } => {
             payload.insert("reason".to_owned(), Value::String(reason.clone()));
-        }
-        Command::Return(args) | Command::Reopen(args) => {
-            payload.insert(
-                "destination_stage_id".to_owned(),
-                Value::String(args.to.clone()),
-            );
-            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
-            if args.dry_run {
-                payload.insert("dry_run".to_owned(), Value::Bool(true));
-            }
         }
         Command::Unblock { blocker_id, all } => {
             if let Some(blocker_id) = blocker_id {
@@ -5970,7 +5512,7 @@ fn re_correlate_preflight_error(
     }
     let error = serde_json::from_value(envelope)
         .map_err(|_| LocalFailure::response_invalid("status preflight error is invalid"))?;
-    Ok(RunResult::Response(Box::new(ResponseEnvelopeV1::Error(
+    Ok(RunResult::Response(Box::new(ResponseEnvelopeV2::Error(
         error,
     ))))
 }
@@ -6145,15 +5687,7 @@ fn render_result_with_clock_and_writers(
     stderr: &mut dyn Write,
 ) -> i32 {
     match result {
-        RunResult::Response(response) => render_response_with_clock_and_writers(
-            response,
-            json_output,
-            quiet,
-            clock,
-            stdout,
-            stderr,
-        ),
-        RunResult::ResponseV2(response) => render_response_v2_with_clock_and_writers(
+        RunResult::Response(response) => render_response_v2_with_clock_and_writers(
             response,
             json_output,
             quiet,
@@ -6192,7 +5726,7 @@ fn render_result_with_clock_and_writers(
                     .expect("UUID-v4 request identifiers satisfy the public protocol");
                 let command = CommandNameV1::new(command.clone())
                     .expect("local command names satisfy the public protocol");
-                let output = OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+                let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                     request_id,
                     command,
                     generated_at,
@@ -6202,7 +5736,7 @@ fn render_result_with_clock_and_writers(
                     result: result.clone(),
                     warnings: Vec::new(),
                 })
-                .expect("local results satisfy the public output protocol");
+                .expect("local results satisfy the public v3 output protocol");
                 if serde_json::to_writer(&mut *stdout, &output).is_err()
                     || writeln!(stdout).is_err()
                 {
@@ -6228,7 +5762,7 @@ fn render_result_with_clock_and_writers(
                     .expect("UUID-v4 request identifiers satisfy the public protocol");
                 let command = CommandNameV1::new(command.clone())
                     .expect("local command names satisfy the public protocol");
-                let output = OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+                let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                     request_id,
                     command,
                     generated_at,
@@ -6279,46 +5813,6 @@ fn render_clock_failure_to(failure: LocalFailure, stderr: &mut dyn Write) -> i32
     }
 }
 
-fn render_response_with_clock_and_writers(
-    response: &ResponseEnvelopeV1,
-    json_output: bool,
-    quiet: bool,
-    clock: &impl LocalEnvelopeClock,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> i32 {
-    let output_validation = match response {
-        ResponseEnvelopeV1::Output(output) => Some(validate_typed_output_result(output)),
-        ResponseEnvelopeV1::Error(_) => None,
-    };
-    if let Some(Err(failure)) = output_validation {
-        return render_local_failure_with_clock_and_writers(
-            failure,
-            json_output,
-            clock,
-            stdout,
-            stderr,
-        );
-    }
-    if json_output {
-        if serde_json::to_writer(&mut *stdout, response).is_err() || writeln!(stdout).is_err() {
-            return LOCAL_CLIENT_EXIT;
-        }
-    } else {
-        let human_result = (!quiet || matches!(response, ResponseEnvelopeV1::Error(_)))
-            .then(|| render_human_response(response, stdout, stderr));
-        if let Some(Err(failure)) = human_result {
-            return render_local_failure_with_clock_and_writers(
-                failure, false, clock, stdout, stderr,
-            );
-        }
-    }
-    match response {
-        ResponseEnvelopeV1::Output(_) => 0,
-        ResponseEnvelopeV1::Error(error) => i32::from(error.exit_code().get()),
-    }
-}
-
 fn render_response_v2_with_clock_and_writers(
     response: &ResponseEnvelopeV2,
     json_output: bool,
@@ -6333,16 +5827,14 @@ fn render_response_v2_with_clock_and_writers(
         }
     } else {
         let rendered = match response {
-            ResponseEnvelopeV2::OutputV1(output) if !quiet => {
-                render_human_response(&ResponseEnvelopeV1::Output(output.clone()), stdout, stderr)
-            }
             ResponseEnvelopeV2::OutputV2(output) if !quiet => {
                 render_human_output_v2(output, stdout)
             }
-            ResponseEnvelopeV2::Error(error) => {
-                render_human_response(&ResponseEnvelopeV1::Error(error.clone()), stdout, stderr)
-            }
-            ResponseEnvelopeV2::OutputV1(_) | ResponseEnvelopeV2::OutputV2(_) => Ok(()),
+            ResponseEnvelopeV2::Error(error) => write_text_line(
+                stderr,
+                format_args!("error: {}: {}", error.code().as_str(), error.message()),
+            ),
+            ResponseEnvelopeV2::OutputV2(_) => Ok(()),
         };
         if let Err(failure) = rendered {
             return render_local_failure_with_clock_and_writers(
@@ -6351,13 +5843,13 @@ fn render_response_v2_with_clock_and_writers(
         }
     }
     match response {
-        ResponseEnvelopeV2::OutputV1(_) | ResponseEnvelopeV2::OutputV2(_) => 0,
+        ResponseEnvelopeV2::OutputV2(_) => 0,
         ResponseEnvelopeV2::Error(error) => i32::from(error.exit_code().get()),
     }
 }
 
 fn render_human_output_v2(
-    output: &OutputEnvelopeV2,
+    output: &OutputEnvelopeV3,
     stdout: &mut dyn Write,
 ) -> Result<(), LocalFailure> {
     if let Some(workspace) = output.workspace() {
@@ -6405,36 +5897,6 @@ fn render_human_output_v2(
     render_warnings(stdout, output.warnings())
 }
 
-fn validate_typed_output_result(
-    output: &podway_protocol::OutputEnvelopeV1,
-) -> Result<(), LocalFailure> {
-    match output.command().as_str() {
-        "session.status"
-            if output.result().get("schema").and_then(Value::as_str)
-                == Some("podway.compact-status-result/v1") =>
-        {
-            CompactStatusResultV1::from_result_map(output.result())
-                .map(|_| ())
-                .map_err(|_| typed_result_failure(output))
-        }
-        "session.status" => StatusResultV1::from_result_map(output.result())
-            .map(|_| ())
-            .map_err(|_| typed_result_failure(output)),
-        "session.next" => NextResultV1::from_result_map(output.result())
-            .map(|_| ())
-            .map_err(|_| typed_result_failure(output)),
-        _ => Ok(()),
-    }
-}
-
-fn typed_result_failure(output: &podway_protocol::OutputEnvelopeV1) -> LocalFailure {
-    LocalFailure::response_invalid(format!(
-        "the daemon returned an invalid {} result",
-        output.command().as_str()
-    ))
-    .with_correlation(output.command().as_str(), output.request_id().as_str())
-}
-
 fn render_local_failure(failure: LocalFailure, json_output: bool) -> i32 {
     render_local_failure_with_clock(failure, json_output, &SystemLocalEnvelopeClock)
 }
@@ -6472,7 +5934,7 @@ fn render_local_failure_with_clock_and_writers(
             .request_id
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let output = json!({ "schema": "podway.error/v1", "request_id": request_id, "command": failure.command, "generated_at": generated_at.as_str(), "code": failure.code, "message": failure.message, "retryable": failure.retryable, "exit_code": failure.exit_code, "details": failure.details });
-        let output = match serde_json::from_value::<ResponseEnvelopeV1>(output) {
+        let output = match serde_json::from_value::<ResponseEnvelopeV2>(output) {
             Ok(output) => output,
             Err(_) => {
                 failure = LocalFailure::response_invalid(
@@ -6489,7 +5951,7 @@ fn render_local_failure_with_clock_and_writers(
                     "exit_code": failure.exit_code,
                     "details": {}
                 });
-                serde_json::from_value::<ResponseEnvelopeV1>(fallback)
+                serde_json::from_value::<ResponseEnvelopeV2>(fallback)
                     .expect("the static local fallback error is protocol-valid")
             }
         };
@@ -6502,47 +5964,6 @@ fn render_local_failure_with_clock_and_writers(
     failure.exit_code
 }
 
-fn render_human_response(
-    response: &ResponseEnvelopeV1,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> Result<(), LocalFailure> {
-    match response {
-        ResponseEnvelopeV1::Output(output) => match output.command().as_str() {
-            "session.status" => {
-                render_output_metadata(stdout, output)?;
-                if output.result().get("schema").and_then(Value::as_str)
-                    == Some("podway.compact-status-result/v1")
-                {
-                    let status = CompactStatusResultV1::from_result_map(output.result())
-                        .map_err(|_| typed_result_failure(output))?;
-                    render_compact_status_text(stdout, &status)?;
-                } else {
-                    let status = StatusResultV1::from_result_map(output.result())
-                        .map_err(|_| typed_result_failure(output))?;
-                    render_status_text(stdout, &status)?;
-                }
-                render_warnings(stdout, output.warnings())?;
-            }
-            "session.next" => {
-                let next = NextResultV1::from_result_map(output.result())
-                    .map_err(|_| typed_result_failure(output))?;
-                render_output_metadata(stdout, output)?;
-                render_next_text(stdout, &next)?;
-                render_warnings(stdout, output.warnings())?;
-            }
-            _ => render_generic_output(stdout, output)?,
-        },
-        ResponseEnvelopeV1::Error(error) => {
-            write_text_line(
-                stderr,
-                format_args!("error: {}: {}", error.code().as_str(), error.message()),
-            )?;
-        }
-    }
-    Ok(())
-}
-
 fn render_write_failure() -> LocalFailure {
     LocalFailure::response_invalid("cannot write command output")
 }
@@ -6553,315 +5974,6 @@ fn write_text_line(
 ) -> Result<(), LocalFailure> {
     writer.write_fmt(text).map_err(|_| render_write_failure())?;
     writer.write_all(b"\n").map_err(|_| render_write_failure())
-}
-
-fn render_output_metadata(
-    stdout: &mut dyn Write,
-    output: &podway_protocol::OutputEnvelopeV1,
-) -> Result<(), LocalFailure> {
-    if let Some(workspace) = output.workspace() {
-        write_text_line(
-            stdout,
-            format_args!(
-                "workspace: {} {} sequence={}",
-                workspace.uuid().as_str(),
-                workspace.root(),
-                workspace.latest_workspace_sequence()
-            ),
-        )?;
-    }
-    if let Some(session) = output.session() {
-        write_text_line(
-            stdout,
-            format_args!(
-                "session: {} {} {:?} revision={}",
-                session.id().as_str(),
-                session.title(),
-                session.lifecycle(),
-                session.revision_after().get()
-            ),
-        )?;
-    }
-    if let Some(job) = output.job() {
-        write_text_line(
-            stdout,
-            format_args!(
-                "job: {} {:?} sequence={} submitted_at={} claimed_at={} finished_at={}",
-                job.id().as_str(),
-                job.state(),
-                job.sequence(),
-                job.submitted_at().as_str(),
-                job.claimed_at().map(Rfc3339MillisV1::as_str).unwrap_or("-"),
-                job.finished_at()
-                    .map(Rfc3339MillisV1::as_str)
-                    .unwrap_or("-")
-            ),
-        )?;
-    }
-    Ok(())
-}
-
-fn render_status_text(stdout: &mut dyn Write, status: &StatusResultV1) -> Result<(), LocalFailure> {
-    write_text_line(stdout, format_args!("task: {}", status.task.title))?;
-    write_text_line(
-        stdout,
-        format_args!(
-            "session: {} {:?} revision={} created_at={} completed_at={} cancelled_at={}",
-            status.session.id.as_str(),
-            status.session.lifecycle,
-            status.session.revision.get(),
-            status.session.created_at.as_str(),
-            status
-                .session
-                .completed_at
-                .as_ref()
-                .map(Rfc3339MillisV1::as_str)
-                .unwrap_or("-"),
-            status
-                .session
-                .cancelled_at
-                .as_ref()
-                .map(Rfc3339MillisV1::as_str)
-                .unwrap_or("-")
-        ),
-    )?;
-    match &status.current {
-        Some(current) => {
-            write_text_line(
-                stdout,
-                format_args!(
-                    "current: {} {} attempt={} id={} blocked={} ready_to_complete={}",
-                    current.stage_id.as_str(),
-                    current.title,
-                    current.attempt_number,
-                    current.attempt_id.as_str(),
-                    current.blocked,
-                    current.ready_to_complete
-                ),
-            )?;
-        }
-        None => write_text_line(stdout, format_args!("current: none"))?,
-    }
-    for stage in &status.stages {
-        write_text_line(
-            stdout,
-            format_args!(
-                "stage: {} {} status={:?} latest_attempt={}",
-                stage.id.as_str(),
-                stage.title,
-                stage.status,
-                stage.latest_attempt_number
-            ),
-        )?;
-    }
-    for item in &status.items {
-        let value = serde_json::to_string(&item.value).expect("JSON item values serialize");
-        write_text_line(
-            stdout,
-            format_args!(
-                "item: {} {:?} required={} satisfied={} revision={} prompt={} value={}",
-                item.id.as_str(),
-                item.item_type,
-                item.required,
-                item.satisfied,
-                item.revision.get(),
-                item.prompt,
-                value
-            ),
-        )?;
-    }
-    for blocker in &status.blockers {
-        write_text_line(
-            stdout,
-            format_args!(
-                "blocker: {} attempt={} reason={}",
-                blocker.id.as_str(),
-                blocker.attempt_id.as_str(),
-                blocker.reason
-            ),
-        )?;
-    }
-    write_text_line(
-        stdout,
-        format_args!(
-            "queue: pending_mutations={} queued_count={} running_job_id={} latest_workspace_sequence={}",
-            status.queue.pending_mutations,
-            status.queue.queued_count,
-            status
-                .queue
-                .running_job_id
-                .as_ref()
-                .map(|id| id.as_str())
-                .unwrap_or("-"),
-            status.queue.latest_workspace_sequence
-        ),
-    )
-}
-
-fn render_compact_status_text(
-    stdout: &mut dyn Write,
-    status: &CompactStatusResultV1,
-) -> Result<(), LocalFailure> {
-    write_text_line(
-        stdout,
-        format_args!(
-            "procedure: {} version={} digest={}",
-            status.procedure.id,
-            status.procedure.version,
-            status.procedure.digest.as_str()
-        ),
-    )?;
-    write_text_line(
-        stdout,
-        format_args!(
-            "session: {} {:?} revision={}",
-            status.session.id.as_str(),
-            status.session.lifecycle,
-            status.session.revision.get()
-        ),
-    )?;
-    match &status.current {
-        Some(current) => write_text_line(
-            stdout,
-            format_args!(
-                "current: {} attempt={} id={} ready_to_complete={}",
-                current.stage_id.as_str(),
-                current.attempt_number,
-                current.attempt_id.as_str(),
-                current.ready_to_complete
-            ),
-        )?,
-        None => write_text_line(stdout, format_args!("current: none"))?,
-    }
-    for item in &status.items {
-        write_text_line(
-            stdout,
-            format_args!(
-                "item: {} {:?} required={} satisfied={} revision={}",
-                item.id.as_str(),
-                item.item_type,
-                item.required,
-                item.satisfied,
-                item.revision.get()
-            ),
-        )?;
-    }
-    for blocker in &status.blockers {
-        write_text_line(
-            stdout,
-            format_args!(
-                "blocker: {} attempt={} state={:?}",
-                blocker.id.as_str(),
-                blocker.attempt_id.as_str(),
-                blocker.state
-            ),
-        )?;
-    }
-    write_text_line(
-        stdout,
-        format_args!(
-            "queue: pending_mutations={} queued_count={} running_job_id=- latest_workspace_sequence={}",
-            status.queue.pending_mutations,
-            status.queue.queued_count,
-            status.queue.latest_workspace_sequence
-        ),
-    )
-}
-
-fn render_next_text(stdout: &mut dyn Write, next: &NextResultV1) -> Result<(), LocalFailure> {
-    match &next.stage {
-        Some(stage) => {
-            write_text_line(
-                stdout,
-                format_args!(
-                    "stage: {} {} attempt={} id={} instructions={}",
-                    stage.id.as_str(),
-                    stage.title,
-                    stage.attempt_number,
-                    stage.attempt_id.as_str(),
-                    serde_json::to_string(&stage.instructions).expect("instructions serialize")
-                ),
-            )?;
-        }
-        None => write_text_line(stdout, format_args!("stage: none"))?,
-    }
-    for item in &next.missing_required_items {
-        write_text_line(
-            stdout,
-            format_args!(
-                "missing_item: {} {:?} prompt={}",
-                item.id.as_str(),
-                item.item_type,
-                item.prompt
-            ),
-        )?;
-    }
-    for blocker in &next.blockers {
-        write_text_line(
-            stdout,
-            format_args!(
-                "blocker: {} attempt={} reason={}",
-                blocker.id.as_str(),
-                blocker.attempt_id.as_str(),
-                blocker.reason
-            ),
-        )?;
-    }
-    write_text_line(
-        stdout,
-        format_args!(
-            "allowed_actions: complete={} skip={} retry={} return_to={} cancel={}",
-            next.allowed_actions.complete,
-            next.allowed_actions.skip,
-            next.allowed_actions.retry,
-            next.allowed_actions
-                .return_to
-                .iter()
-                .map(|stage| stage.as_str())
-                .collect::<Vec<_>>()
-                .join(","),
-            next.allowed_actions.cancel
-        ),
-    )?;
-    match &next.next_stage_after_completion {
-        Some(stage) => write_text_line(
-            stdout,
-            format_args!(
-                "next_stage_after_completion: {} {}",
-                stage.id.as_str(),
-                stage.title
-            ),
-        )?,
-        None => write_text_line(stdout, format_args!("next_stage_after_completion: none"))?,
-    }
-    for suggestion in &next.suggestions {
-        write_text_line(
-            stdout,
-            format_args!(
-                "suggestion: {} {}",
-                suggestion.command,
-                suggestion.argv.join(" ")
-            ),
-        )?;
-    }
-    Ok(())
-}
-
-fn render_generic_output(
-    stdout: &mut dyn Write,
-    output: &podway_protocol::OutputEnvelopeV1,
-) -> Result<(), LocalFailure> {
-    render_output_metadata(stdout, output)?;
-    if output.result().is_empty() {
-        write_text_line(
-            stdout,
-            format_args!("command: {}", output.command().as_str()),
-        )?;
-    } else {
-        let result = serde_json::to_string_pretty(output.result()).expect("JSON result serializes");
-        write_text_line(stdout, format_args!("result: {result}"))?;
-    }
-    render_warnings(stdout, output.warnings())
 }
 
 fn render_warnings(
@@ -6896,7 +6008,6 @@ fn dynamic_completion(
     let command = match kind {
         "items" | "blockers" | "options" | "rework-targets" | "goal-criteria"
         | "evidence-sources" | "item-values" => "session.status",
-        "returns" => "session.next",
         "jobs" => "job.list",
         _ => return Ok(empty_dynamic_completion()),
     };
@@ -6907,7 +6018,6 @@ fn dynamic_completion(
         }
     };
     let candidates = match request_daemon(&client, &request) {
-        Ok(ResponseEnvelopeV2::OutputV1(output)) => dynamic_candidates(output.result(), kind),
         Ok(ResponseEnvelopeV2::OutputV2(output)) => dynamic_candidates_v2(output.result(), kind),
         Ok(ResponseEnvelopeV2::Error(_)) | Err(_) => Vec::new(),
     };
@@ -6920,53 +6030,6 @@ fn dynamic_completion(
 
 fn empty_dynamic_completion() -> RunResult {
     local_result("__complete", json!({ "candidates": [] }), String::new())
-}
-
-fn dynamic_candidates(result: &Map<String, Value>, kind: &str) -> Vec<String> {
-    match kind {
-        "items" => StatusResultV1::from_result_map(result)
-            .map(|status| {
-                status
-                    .items
-                    .into_iter()
-                    .map(|item| item.id.as_str().to_owned())
-                    .take(128)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        "blockers" => StatusResultV1::from_result_map(result)
-            .map(|status| {
-                status
-                    .blockers
-                    .into_iter()
-                    .map(|blocker| blocker.id.as_str().to_owned())
-                    .take(128)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        "returns" => NextResultV1::from_result_map(result)
-            .map(|next| {
-                next.allowed_actions
-                    .return_to
-                    .into_iter()
-                    .map(|stage| stage.as_str().to_owned())
-                    .take(128)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        "jobs" => result
-            .get("jobs")
-            .cloned()
-            .and_then(|jobs| serde_json::from_value::<Vec<JobOutputV1>>(jobs).ok())
-            .map(|jobs| {
-                jobs.into_iter()
-                    .map(|job| job.id().as_str().to_owned())
-                    .take(128)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    }
 }
 
 fn dynamic_candidates_v2(result: &Map<String, Value>, kind: &str) -> Vec<String> {
@@ -7049,19 +6112,17 @@ fn candidate_strings(result: &Map<String, Value>, collection: &str) -> Vec<Strin
 fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
     let text = match topic.unwrap_or("overview") {
         "overview" => {
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev --task 'add retry backoff'\n  podway status --json\n  podway next --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold|convert\n  session.decide, session.rework, goal.define, goal.revise, goal.assess_criterion\n\nShipped Procedure v2 presets: bug-fix-v2, sw-dev-v2. Normal daemon endpoints admit complete Procedure v2 sessions. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway status --json\n  podway next --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.decide, session.rework, goal.define, goal.revise, goal.assess_criterion\n\nShipped presets: bug-fix-v2, sw-dev-v2. Normal daemon endpoints admit complete Procedure v2 sessions. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
         }
         "workflow" => {
             "Procedure v2 workflow:\n  podway init\n  podway --json preset show bug-fix-v2\n  podway --json start --preset bug-fix-v2 --task 'inspect the workflow' --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer\n  podway --json status\n  podway --json next\n\nAdd --dry-run to start for read-only inspection without creating a session. For an admitted session, follow the allowed item, option, evidence, and rework identifiers returned by status and next. Contributors can use python3 tools/dev_runtime.py for an isolated disposable daemon and sandbox. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
         }
-        "rework" => {
-            "Rework:\n  Procedure v1: podway return --to implement --reason 'review found a gap' --dry-run\n  Procedure v1: podway reopen --to implement --reason 'follow-up'\n  Procedure v2: podway rework --to implement --reason 'review found a gap'\n\nThe v1 return and reopen verbs are never aliases for Procedure v2 rework."
-        }
+        "rework" => "Rework:\n  podway rework --to implement --reason 'review found a gap'",
         "automation" => {
             "Automation:\n  podway complete --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 12 --if-attempt <uuid> --idempotency-key task-42 --json"
         }
         "procedures" => {
-            "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, graph, and convert."
+            "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, and graph."
         }
         "daemon" => {
             "Daemon lifecycle grammar:\n  podway daemon status\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
@@ -7103,15 +6164,12 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "procedure.scaffold" => {
             "Usage:\n  podway procedure scaffold [--template minimal]\n\nWrites a minimal Procedure v2 authoring starting point to stdout and reads\nnothing. The emitted document is already in canonical authoring form and already\npasses every authoring stage, so redirecting it to a file and running\nprocedure check on that file reports nothing.\n\nExample:\n  podway procedure scaffold --template minimal > .podway/procedures/custom.yaml"
         }
-        "procedure.convert" => {
-            "Usage:\n  podway procedure convert <file>\n\nRenders a Procedure v1 document as a Procedure v2 authoring candidate on stdout.\nReads only; never writes a file and never starts a session. Each stage becomes\none action node in a linear chain, and the synthesized purpose and intent values\nare marked with review comments. A v1 value Procedure v2 cannot hold is reported\nagainst its v1 path instead of being truncated.\n\nExample:\n  podway procedure convert legacy.yaml > .podway/procedures/legacy-v2.yaml"
-        }
         "preset.list" => "Usage:\n  podway preset list\n\nExample:\n  podway preset list",
         "preset.show" => {
-            "Usage:\n  podway preset show <name>\n\nExamples:\n  podway preset show sw-dev\n  podway preset show sw-dev-v2"
+            "Usage:\n  podway preset show <name>\n\nExample:\n  podway preset show sw-dev-v2"
         }
         "preset.explain" => {
-            "Usage:\n  podway preset explain <name>\n\nExamples:\n  podway preset explain sw-dev\n  podway preset explain sw-dev-v2"
+            "Usage:\n  podway preset explain <name>\n\nExample:\n  podway preset explain sw-dev-v2"
         }
         "daemon.install" => {
             "Usage:\n  podway daemon install [--daemon-path <path>] [--socket <absolute-path>]\n\nExample:\n  podway daemon install --daemon-path /absolute/podwayd --socket /absolute/podwayd.sock"
@@ -7140,7 +6198,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --preset bug-fix-v2 --task 'preview procedure' --goal 'Repair the defect.' --criterion verified='The fix is verified.' --actor developer --dry-run\n  podway --json start --preset bug-fix-v2 --task 'repair defect' --goal 'Repair the defect.' --criterion verified='The fix is verified.' --actor developer\n\nProcedure digests provide content integrity and correlation only; actor attribution is a caller-supplied correlation label. Neither authenticates nor authorizes a caller or confers cryptographic authority.\n\nNormal daemon endpoints admit complete Procedure v2 sessions. Contributors may use python3 tools/dev_runtime.py for isolated disposable development state."
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --preset bug-fix-v2 --task 'preview procedure' --goal 'Repair the defect.' --criterion verified='The fix is verified.' --actor developer --dry-run\n  podway --json start --preset bug-fix-v2 --task 'repair defect' --goal 'Repair the defect.' --criterion verified='The fix is verified.' --actor developer\n\nProcedure digests provide content integrity and correlation only; actor attribution is a caller-supplied correlation label. Neither authenticates nor authorizes a caller or confers cryptographic authority.\n\nNormal daemon endpoints admit complete Procedure v2 sessions. Contributors may use python3 tools/dev_runtime.py for isolated disposable development state."
         }
         "session.decide" => {
             "Usage:\n  podway decide --option <id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> [--if-goal-revision <n>]\n\nThe goal revision fence is required for a session-goal assessment decision and, when supplied for a general decision, must match the current goal.\n\nExample:\n  podway decide --option approve --reason 'The evidence supports this route.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid>"
@@ -7158,7 +6216,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway goal assess-criterion <criterion-id> --status <satisfied|unsatisfied|not_applicable> --reason <text> [--evidence <graph-node-id>]... [--item <item-id>]... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> --if-goal-revision <n>\n\nExample:\n  podway goal assess-criterion tested --status satisfied --reason 'The test passed.' --evidence test --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid> --if-goal-revision 1"
         }
         "session.start_replace" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --goal <text> --criterion <id>=<statement>... [--actor <text>] --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'replace goal' --goal 'Ship safely.' --criterion tested='Tests pass.' --replace --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n  podway start --preset sw-dev --task 'preview replacement' --replace --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --goal <text> --criterion <id>=<statement>... [--actor <text>] --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'replace goal' --goal 'Ship safely.' --criterion tested='Tests pass.' --replace --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n  podway start --preset sw-dev-v2 --task 'preview replacement' --replace --dry-run"
         }
         "session.status" => {
             "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --verbose --history-before 42\n  podway status --wait-for-idle --compact"
@@ -7175,9 +6233,6 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "session.retry" => {
             "Usage:\n  podway retry --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway retry --reason 'rerun after fixing input'"
         }
-        "session.return" => {
-            "Usage:\n  podway return --to <stage-id> --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>] [--dry-run]\n\nExample:\n  podway return --to implement --reason 'review found a gap' --dry-run"
-        }
         "session.block" => {
             "Usage:\n  podway block --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway block --reason 'waiting for API owner'"
         }
@@ -7186,9 +6241,6 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "session.cancel" => {
             "Usage:\n  podway cancel --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway cancel --reason 'task no longer needed'"
-        }
-        "session.reopen" => {
-            "Usage:\n  podway reopen --to <stage-id> --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run]\n\nExample:\n  podway reopen --to implement --reason 'follow-up' --dry-run"
         }
         "session.reset" => {
             "Usage:\n  podway reset [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExample:\n  podway reset --yes"
@@ -7363,7 +6415,7 @@ mod tests {
         )
         .expect("service status fixture paths");
         let valid_envelope = json!({
-            "schema": "podway.output/v1",
+            "schema": "podway.output/v3",
             "request_id": "123e4567-e89b-42d3-a456-426614174000",
             "command": "version",
             "generated_at": "2026-08-03T00:00:00.000Z",
@@ -7380,17 +6432,6 @@ mod tests {
         assert_eq!(
             observed.contract_manifest_digest,
             expected.contract_manifest_digest()
-        );
-
-        let malformed_v011 = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/contract/v0.1.1-daemon-version-output.json"
-        ));
-        let malformed_v011 =
-            VersionProbeScript::new(&format!("printf '%s' '{}'", malformed_v011.trim_end()));
-        assert!(
-            probe_daemon_identity(&malformed_v011.path).is_err(),
-            "the exact v0.1.1 daemon identity must fail for missing result.schema"
         );
 
         let mut malformed = Vec::new();
@@ -7515,7 +6556,7 @@ mod tests {
         assert!(terminate.dev);
         assert!(matches!(terminate.command, Command::Terminate));
         assert!(matches!(
-            Cli::try_parse_from(["podway", "start", "--preset", "sw-dev", "--task", "task"])
+            Cli::try_parse_from(["podway", "start", "--preset", "sw-dev-v2", "--task", "task"])
                 .unwrap()
                 .command,
             Command::Start(_)
@@ -7552,18 +6593,18 @@ mod tests {
         };
 
         assert_eq!(
-            context(&["podway", "start", "--preset", "sw-dev"]),
+            context(&["podway", "start", "--preset", "sw-dev-v2"]),
             Some(ParseFailureCommandContext::new("session.start", true))
         );
         assert_eq!(
-            context(&["podway", "start", "--preset", "sw-dev", "--replace"]),
+            context(&["podway", "start", "--preset", "sw-dev-v2", "--replace"]),
             Some(ParseFailureCommandContext::new(
                 "session.start_replace",
                 true
             ))
         );
         assert_eq!(
-            context(&["podway", "start", "--preset", "sw-dev", "--dry-run"]),
+            context(&["podway", "start", "--preset", "sw-dev-v2", "--dry-run"]),
             Some(ParseFailureCommandContext::new("session.start", false))
         );
         assert_eq!(
@@ -7838,7 +6879,7 @@ mod tests {
             ),
             3
         );
-        serde_json::from_slice::<podway_protocol::ResponseEnvelopeV1>(&stdout)
+        serde_json::from_slice::<podway_protocol::ResponseEnvelopeV2>(&stdout)
             .expect("local malformed-identity output must remain protocol-valid");
         assert!(stderr.is_empty());
 
@@ -8039,7 +7080,7 @@ mod phase6_health_tests {
                 )
                 .expect("readiness request payload");
                 let response = serde_json::json!({
-                    "schema": "podway.output/v1",
+                    "schema": "podway.output/v3",
                     "request_id": request.request_id().as_str(),
                     "command": request.command().as_str(),
                     "generated_at": "2026-07-25T00:00:00.000Z",

@@ -17,7 +17,7 @@ fn limits(max_bytes: usize, max_depth: usize, max_nodes: usize) -> WorkspaceConf
 fn default_workspace_config_bytes_are_explicit_canonical_and_replayable() {
     assert_eq!(
         DEFAULT_WORKSPACE_CONFIG_YAML_V1,
-        b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev\njob_queue:\n  max_pending: 256\nui:\n  show_stage_in_prompt: false\n",
+        b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\njob_queue:\n  max_pending: 256\nui:\n  show_stage_in_prompt: false\n",
     );
     let first = parse_workspace_config_v1(DEFAULT_WORKSPACE_CONFIG_YAML_V1).unwrap();
     let second = parse_workspace_config_v1(DEFAULT_WORKSPACE_CONFIG_YAML_V1).unwrap();
@@ -28,7 +28,7 @@ fn default_workspace_config_bytes_are_explicit_canonical_and_replayable() {
     assert_eq!(
         first.canonical_json_v1().unwrap().as_str(),
         concat!(
-            r#"{"default_preset":"sw-dev","job_queue":{"max_pending":256},"#,
+            r#"{"default_preset":"sw-dev-v2","job_queue":{"max_pending":256},"#,
             r#""procedure_paths":[".podway/procedures"],"#,
             r#""schema":"podway.workspace/v1","ui":{"show_stage_in_prompt":false}}"#,
         ),

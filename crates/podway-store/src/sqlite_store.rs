@@ -12,13 +12,13 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 
 use crate::codec::{
-    PersistedDomainCommandV1, PersistedDomainResultV1, PersistedGraphMutationFailureV2,
-    PersistedGraphTerminalOperationV2, PersistedGraphTerminalSessionProjectionV2,
-    PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
-    PersistedTerminalReceiptV1, PersistedTerminalResultV1, PersistedTerminalSessionProjectionV1,
-    decode_command_v1, decode_response_context_v1, decode_terminal_receipt_v1, encode_command_v1,
-    encode_persisted_terminal_receipt_v1, encode_response_context_v1,
-    validate_persisted_terminal_result_for_command_v1, validate_terminal_result_for_command_v1,
+    PersistedDomainCommandV1, PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2,
+    PersistedGraphTerminalSessionProjectionV2, PersistedStartIdentityV1,
+    PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
+    PersistedTerminalResultV1, decode_command_v1, decode_response_context_v1,
+    decode_terminal_receipt_v1, encode_command_v1, encode_persisted_terminal_receipt_v1,
+    encode_response_context_v1, validate_persisted_terminal_result_for_command_v1,
+    validate_terminal_result_for_command_v1,
 };
 use crate::schema::{
     DatabasePathStateV1, canonical_database_path_v1, inspect_database_path_v1,
@@ -26,12 +26,10 @@ use crate::schema::{
     open_or_initialize_with_temporary_cleanup_arm_v1, recover_interrupted_publication_v1,
     validate_database_parent_path_v1, validate_existing_database_path_v1,
     validate_existing_regular_private_file_metadata_v1, validate_existing_regular_private_file_v1,
-    validate_publication_link_pair_v1, verify_inspection_integrity_connection_v1, verify_schema_v1,
+    validate_publication_link_pair_v1, verify_inspection_integrity_connection_v1,
     write_temporary_ownership_marker_v1,
 };
-use crate::state_rows::{
-    load_current_session, load_workspace_state, persist_snapshot, replace_current_session,
-};
+use crate::state_rows::load_workspace_state;
 use crate::v2_state::{
     GraphSessionStateV2, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
     StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
@@ -42,8 +40,8 @@ use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
     ClaimedExecutionV1, ClaimedJobV1, DurableExecutionFlavorV1, DurableWorktreeIdentityV1,
     EpochMillisV1, IdempotentExecutionV1, IntegrityModeV1, JobIdV1, JobListQueryV1,
-    JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1, JobViewV1, PersistedSessionMutationV1,
-    PruneReportV1, ReconciliationSnapshotV1, RecoveryReportV1, RevisionV1, RusqliteErrorContextV1,
+    JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1, JobViewV1, PruneReportV1,
+    ReconciliationSnapshotV1, RecoveryReportV1, RevisionV1, RusqliteErrorContextV1,
     SqliteStoreOptionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1, StoreFailpointV1,
     StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreReadContractV1,
     StoreReconciliationReadContractV1, StoreRecordKindV1, StoreUnavailableReasonV1,
@@ -114,7 +112,7 @@ impl SqliteStoreV1 {
 
         let binding =
             inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
-                verify_schema_v1(connection)?;
+                crate::schema::verify_binding_inspection_schema_v1(connection)?;
                 let (
                     workspace_uuid,
                     common_dir_identity,
@@ -139,12 +137,8 @@ impl SqliteStoreV1 {
                 let last_validated_root =
                     ValidatedWorkspaceRootV1::from_encoded(last_validated_root)
                         .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?;
-                verify_inspection_integrity_connection_v1(
-                    connection,
-                    &identity,
-                    options,
-                    IntegrityModeV1::Fast,
-                    EpochMillisV1::new(0),
+                crate::schema::verify_binding_inspection_identity_v1(
+                    connection, &identity, options,
                 )?;
                 Ok(WorkspaceBindingV1::new(identity, last_validated_root))
             })?;
@@ -189,21 +183,11 @@ impl SqliteStoreV1 {
                 IntegrityModeV1::Fast,
                 checked_at,
             )?;
-            let current_v1 = load_current_session(connection)?;
-            let current_v2 = load_graph_session_connection_v2(connection)?;
-            if current_v1.is_some() && current_v2.is_some() {
-                return Err(corrupt(StoreRecordKindV1::Session));
-            }
-            Ok(current_v1
-                .map(|session| GraphStartCurrentTaskV2::Exact {
-                    session_id: session.session_id().clone(),
-                    session_revision: session.revision(),
-                })
-                .or_else(|| {
-                    current_v2.map(|state| GraphStartCurrentTaskV2::Exact {
-                        session_id: state.trace().session_id().clone(),
-                        session_revision: state.trace().revision(),
-                    })
+            let current = load_graph_session_connection_v2(connection)?;
+            Ok(current
+                .map(|state| GraphStartCurrentTaskV2::Exact {
+                    session_id: state.trace().session_id().clone(),
+                    session_revision: state.trace().revision(),
                 })
                 .unwrap_or(GraphStartCurrentTaskV2::Absent))
         })
@@ -379,19 +363,6 @@ impl SqliteStoreV1 {
         let report = prune_terminal_history_transaction(&transaction, now, &self.options, false)?;
         transaction.commit().map_err(storage)?;
         Ok(report)
-    }
-
-    /// Loads the complete validated normalized session aggregate for daemon diagnostics.
-    pub fn read_session_aggregate(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Option<podway_core::SessionAggregateV1>, StoreErrorV1> {
-        self.require_identity(identity)?;
-        let mut connection = self.lock_connection()?;
-        let transaction = connection.transaction().map_err(storage)?;
-        let aggregate = load_current_session(&transaction)?;
-        transaction.commit().map_err(storage)?;
-        Ok(aggregate)
     }
 
     fn require_identity(&self, identity: &DurableWorktreeIdentityV1) -> Result<(), StoreErrorV1> {
@@ -597,22 +568,13 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
         }
         verify_persisted_job_scope(&transaction, claim.job_id().as_str())?;
 
-        let current_v1 = load_current_session(&transaction)?;
         let current_v2 = load_graph_session_connection_v2(&transaction)?;
-        if current_v1.is_some() && current_v2.is_some() {
-            return Err(corrupt(StoreRecordKindV1::Session));
-        }
-        let actual = current_v1
-            .as_ref()
-            .map(|session| (session.session_id().clone(), session.revision()))
-            .or_else(|| {
-                current_v2.as_ref().map(|session| {
-                    (
-                        session.trace().session_id().clone(),
-                        session.trace().revision(),
-                    )
-                })
-            });
+        let actual = current_v2.as_ref().map(|session| {
+            (
+                session.trace().session_id().clone(),
+                session.trace().revision(),
+            )
+        });
         let expected = match &expected_current {
             GraphStartCurrentTaskV2::Absent => None,
             GraphStartCurrentTaskV2::Exact {
@@ -652,11 +614,6 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             } => *session_revision,
         };
 
-        let old_v1 = if current_v1.is_some() {
-            capture_old_session_for_barrier(&transaction, row.sequence)?
-        } else {
-            None
-        };
         if let Some(current) = &current_v2 {
             ensure_graph_session_barrier_v2(
                 &transaction,
@@ -668,10 +625,6 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 current.workspace_revision(),
                 current.trace().revision(),
             )?;
-        } else if current_v1.is_some() {
-            transaction
-                .execute("DELETE FROM task_sessions WHERE singleton = 1", [])
-                .map_err(storage)?;
         }
         create_graph_session_transaction_v2(&transaction, &state)?;
         self.trigger_failpoint(
@@ -767,17 +720,6 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 [sqlite_u64(now.get())?],
             )
             .map_err(storage)?;
-        if let Some((old_session_id, old_snapshot_id)) = old_v1 {
-            let report =
-                cleanup_old_session_barrier(&transaction, &old_session_id, &old_snapshot_id)?;
-            record_session_barrier_cleanup(
-                &transaction,
-                row.sequence,
-                claim.job_id().as_str(),
-                now,
-                &report,
-            )?;
-        }
         let prune_report =
             prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
         record_prune_report(
@@ -889,9 +831,6 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             return Err(corrupt(StoreRecordKindV1::Job));
         }
         verify_persisted_job_scope(&transaction, claim.job_id().as_str())?;
-        if load_current_session(&transaction)?.is_some() {
-            return Err(corrupt(StoreRecordKindV1::Session));
-        }
         let current = load_graph_session_connection_v2(&transaction)?
             .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
         if current.workspace_revision() != expected_workspace_revision {
@@ -1129,10 +1068,10 @@ impl StoreContractV1 for SqliteStoreV1 {
                 | crate::CommandV1::ItemAttach { .. }
                 | crate::CommandV1::ItemClear { .. }
         );
-        if is_v2 && !is_session_start && !is_v2_action_runtime {
+        if command_is_session_scoped_v1(request.command()) && !is_v2 {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
-        if request.admitted_procedure_snapshot().is_some() && (!is_session_start || is_v2) {
+        if is_v2 && !is_session_start && !is_v2_action_runtime {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
         self.trigger_failpoint(StoreFailpointV1::AdmissionBeforeTransaction)?;
@@ -1161,14 +1100,7 @@ impl StoreContractV1 for SqliteStoreV1 {
             transaction.commit().map_err(storage)?;
             return Ok(AdmitOutcomeV1::Existing(outcome));
         }
-        if is_session_start && !is_v2 && request.admitted_procedure_snapshot().is_none() {
-            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
-        }
-        let current_session = load_current_session(&transaction)?;
         let current_graph = load_graph_session_connection_v2(&transaction)?;
-        if current_session.is_some() && current_graph.is_some() {
-            return Err(corrupt(StoreRecordKindV1::Session));
-        }
         if is_v2 && is_v2_action_runtime && current_graph.is_none() {
             return Err(StoreErrorV1::SessionIdentityConflictV1 {
                 expected: match request.session_identity() {
@@ -1176,21 +1108,12 @@ impl StoreContractV1 for SqliteStoreV1 {
                     crate::AdmissionSessionIdentityV1::Any
                     | crate::AdmissionSessionIdentityV1::Absent => None,
                 },
-                actual: current_session
-                    .as_ref()
-                    .map(podway_core::SessionAggregateV1::session_id)
-                    .cloned(),
+                actual: None,
             });
         }
-        let actual_session_id = current_session
+        let actual_session_id = current_graph
             .as_ref()
-            .map(podway_core::SessionAggregateV1::session_id)
-            .cloned()
-            .or_else(|| {
-                current_graph
-                    .as_ref()
-                    .map(|state| state.trace().session_id().clone())
-            });
+            .map(|state| state.trace().session_id().clone());
         let session_identity_matches = match request.session_identity() {
             crate::AdmissionSessionIdentityV1::Any => true,
             crate::AdmissionSessionIdentityV1::Absent => actual_session_id.is_none(),
@@ -1218,10 +1141,7 @@ impl StoreContractV1 for SqliteStoreV1 {
             )?;
         }
         if is_v2 && matches!(request.command(), crate::CommandV1::SessionStartReplace) {
-            let actual_revision = current_session
-                .as_ref()
-                .map(podway_core::SessionAggregateV1::revision)
-                .or_else(|| current_graph.as_ref().map(|state| state.trace().revision()));
+            let actual_revision = current_graph.as_ref().map(|state| state.trace().revision());
             if request.preconditions().expected_session_revision() != actual_revision {
                 return Err(StoreErrorV1::PreconditionConflictV1 {
                     expected: request.preconditions().expected_session_revision(),
@@ -1242,24 +1162,23 @@ impl StoreContractV1 for SqliteStoreV1 {
                 reason: StoreUnavailableReasonV1::Busy,
             });
         }
-        let scope_session_id =
-            if is_v2 && is_v2_action_runtime && command_is_session_scoped_v1(request.command()) {
-                Some(
-                    current_graph
-                        .as_ref()
-                        .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?
-                        .trace()
-                        .session_id()
-                        .as_str()
-                        .to_owned(),
-                )
-            } else {
-                admission_session_scope(
-                    &transaction,
-                    request.command(),
-                    request.preconditions().expected_session_revision(),
-                )?
-            };
+        let scope_session_id = if command_is_session_scoped_v1(request.command()) {
+            Some(
+                current_graph
+                    .as_ref()
+                    .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?
+                    .trace()
+                    .session_id()
+                    .as_str()
+                    .to_owned(),
+            )
+        } else {
+            admission_session_scope(
+                &transaction,
+                request.command(),
+                request.preconditions().expected_session_revision(),
+            )?
+        };
         let scope_kind = if command_is_session_scoped_v1(request.command()) {
             "session"
         } else {
@@ -1276,9 +1195,6 @@ impl StoreContractV1 for SqliteStoreV1 {
             return Err(StoreErrorV1::StorageUnavailableV1 {
                 reason: StoreUnavailableReasonV1::Busy,
             });
-        }
-        if let Some(snapshot) = request.admitted_procedure_snapshot() {
-            persist_snapshot(&transaction, snapshot)?;
         }
         let sequence: i64 = transaction
             .query_row(
@@ -1430,7 +1346,6 @@ impl StoreContractV1 for SqliteStoreV1 {
         if command_name_v1(execution.command()) != job.command_name {
             return Err(corrupt(StoreRecordKindV1::Job));
         }
-        let session = load_current_session(&transaction)?;
         let claim = ClaimTokenV1::new(
             self.identity.clone(),
             job_id.clone(),
@@ -1441,7 +1356,6 @@ impl StoreContractV1 for SqliteStoreV1 {
             claim,
             JobReceiptV1::new(sequence, job_id, digest),
             execution,
-            session,
         );
         transaction.commit().map_err(storage)?;
         self.trigger_failpoint(StoreFailpointV1::ClaimAfterCommit)?;
@@ -1659,78 +1573,53 @@ impl StoreContractV1 for SqliteStoreV1 {
         verify_persisted_job_scope(&transaction, claim.job_id().as_str())?;
         validate_terminal_result_for_command_v1(execution.command(), &result)
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        let session_barrier = is_session_barrier(execution.command());
-        let failed_session_barrier =
-            session_barrier && matches!(&result, TerminalResultV1::Failure(_));
+        let failed_session_barrier = is_session_barrier(execution.command())
+            && matches!(&result, TerminalResultV1::Failure(_));
         if matches!(&result, TerminalResultV1::Success(_))
             && matches!(execution.command(), crate::CommandV1::WorkspaceResetAll)
         {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
 
-        let (old_session, post_transition_session) = match &result {
+        match &result {
             TerminalResultV1::Failure(_) => {
                 if transition.is_some() {
                     return Err(invariant(StoreInvariantV1::TransitionMutationShape));
                 }
-                (None, None)
             }
             TerminalResultV1::Success(result) => {
-                let current = load_current_session(&transaction)?;
-                let actual_revision = current
-                    .as_ref()
-                    .map_or(RevisionV1::ZERO, podway_core::SessionAggregateV1::revision);
-                if actual_revision != expected_workspace_revision {
+                if expected_workspace_revision != RevisionV1::ZERO {
                     return Err(StoreErrorV1::PreconditionConflictV1 {
                         expected: Some(expected_workspace_revision),
-                        actual: Some(actual_revision),
+                        actual: Some(RevisionV1::ZERO),
                     });
                 }
-                validate_preconditions(execution.preconditions(), current.as_ref())?;
                 let transition = transition
                     .as_ref()
                     .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
-                if transition.previous_workspace_revision() != actual_revision {
+                if transition.previous_workspace_revision() != RevisionV1::ZERO
+                    || transition.resulting_workspace_revision() != RevisionV1::ZERO
+                {
                     return Err(StoreErrorV1::PreconditionConflictV1 {
                         expected: Some(transition.previous_workspace_revision()),
-                        actual: Some(actual_revision),
+                        actual: Some(RevisionV1::ZERO),
                     });
                 }
-                validate_success_transition(
-                    execution.command(),
-                    result,
-                    transition,
-                    current.as_ref(),
-                    &self.identity,
-                )?;
-                let old_session = if session_barrier {
-                    capture_old_session_for_barrier(&transaction, row.sequence)?
-                } else {
-                    None
-                };
-                let post_transition_session = match transition.persisted_session_mutation() {
-                    PersistedSessionMutationV1::Unchanged => current,
-                    PersistedSessionMutationV1::Replace(aggregate)
-                    | PersistedSessionMutationV1::ReplaceFresh(aggregate) => {
-                        Some(aggregate.clone())
-                    }
-                    PersistedSessionMutationV1::Clear => None,
-                };
-                match transition.persisted_session_mutation() {
-                    PersistedSessionMutationV1::Unchanged => {}
-                    PersistedSessionMutationV1::Replace(aggregate)
-                    | PersistedSessionMutationV1::ReplaceFresh(aggregate) => {
-                        replace_current_session(&transaction, aggregate)?;
-                    }
-                    PersistedSessionMutationV1::Clear => {
-                        transaction
-                            .execute("DELETE FROM task_sessions WHERE singleton = 1", [])
-                            .map_err(storage)?;
-                    }
+                if !matches!(
+                    (execution.command(), result),
+                    (
+                        crate::CommandV1::WorkspaceInitialize,
+                        podway_core::DomainResult::WorkspaceInitialized {
+                            workspace_id,
+                            revision,
+                        }
+                    ) if workspace_id == self.identity.workspace_uuid()
+                        && *revision == RevisionV1::ZERO
+                ) {
+                    return Err(invariant(StoreInvariantV1::TransitionMutationShape));
                 }
-                (old_session, post_transition_session)
             }
-        };
+        }
         self.trigger_failpoint(
             StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate,
         )?;
@@ -1753,8 +1642,7 @@ impl StoreContractV1 for SqliteStoreV1 {
         let job_projection =
             PersistedTerminalJobProjectionV1::new(job_state, submitted_at, claimed_at, now)
                 .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        let session_projection =
-            terminal_session_projection(&persisted_result, post_transition_session.as_ref())?;
+        let session_projection = None;
         let mut persisted_receipt = enrich_terminal_from_execution(
             PersistedTerminalReceiptV1::new_with_projections(
                 receipt.job().clone(),
@@ -1819,17 +1707,6 @@ impl StoreContractV1 for SqliteStoreV1 {
                 [sqlite_u64(now.get())?],
             )
             .map_err(storage)?;
-        if let Some((old_session_id, old_snapshot_id)) = old_session {
-            let cleanup_report =
-                cleanup_old_session_barrier(&transaction, &old_session_id, &old_snapshot_id)?;
-            record_session_barrier_cleanup(
-                &transaction,
-                row.sequence,
-                claim.job_id().as_str(),
-                now,
-                &cleanup_report,
-            )?;
-        }
         if !failed_session_barrier {
             let prune_report =
                 prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
@@ -1856,7 +1733,6 @@ impl StoreContractV1 for SqliteStoreV1 {
         self.require_identity(identity)?;
         let mut connection = self.lock_connection()?;
         let transaction = connection.transaction().map_err(storage)?;
-        let current_session = load_current_session(&transaction)?;
         let state = load_workspace_state(&transaction, self.identity.workspace_uuid().clone())?;
         let queued: i64 = transaction
             .query_row(
@@ -1883,7 +1759,6 @@ impl StoreContractV1 for SqliteStoreV1 {
         let view = WorkspaceViewV1::new_coherent(
             self.identity.clone(),
             state,
-            current_session,
             u32::try_from(queued).map_err(|_| invariant(StoreInvariantV1::QueueSequence))?,
             running.map(job_id).transpose()?,
             u64::try_from(latest_workspace_sequence)
@@ -2155,13 +2030,6 @@ impl StoreReconciliationReadContractV1 for SqliteStoreV1 {
     }
 }
 impl StoreReadContractV1 for SqliteStoreV1 {
-    fn read_session_aggregate(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Option<podway_core::SessionAggregateV1>, StoreErrorV1> {
-        SqliteStoreV1::read_session_aggregate(self, identity)
-    }
-
     fn read_job(
         &self,
         identity: &DurableWorktreeIdentityV1,
@@ -2614,49 +2482,6 @@ fn prune_orphan_workspace_receipts(
     Ok(deleted)
 }
 
-fn capture_old_session_for_barrier(
-    transaction: &Transaction<'_>,
-    barrier_sequence: i64,
-) -> Result<Option<(String, String)>, StoreErrorV1> {
-    let earlier_nonterminal: i64 = transaction
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM jobs
-                WHERE workspace_sequence < ?1 AND state IN ('queued', 'running')
-            )",
-            [barrier_sequence],
-            |row| row.get(0),
-        )
-        .map_err(storage)?;
-    if earlier_nonterminal != 0 {
-        return Err(invariant(StoreInvariantV1::TransitionMutationShape));
-    }
-    let old_session: Option<(String, String)> = transaction
-        .query_row(
-            "SELECT session_id, procedure_snapshot_id FROM task_sessions WHERE singleton = 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(storage)?;
-    if let Some((session_id, _)) = &old_session {
-        let nonterminal_old_session_job: i64 = transaction
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM jobs
-                    WHERE session_id = ?1 AND state IN ('queued', 'running')
-                )",
-                [session_id.as_str()],
-                |row| row.get(0),
-            )
-            .map_err(storage)?;
-        if nonterminal_old_session_job != 0 {
-            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
-        }
-    }
-    Ok(old_session)
-}
-
 fn ensure_graph_session_barrier_v2(
     transaction: &Transaction<'_>,
     barrier_sequence: i64,
@@ -2710,26 +2535,6 @@ fn verify_session_cleanup_job_scopes(
     }
     Ok(())
 }
-fn cleanup_old_session_barrier(
-    transaction: &Transaction<'_>,
-    old_session_id: &str,
-    old_snapshot_id: &str,
-) -> Result<SessionBarrierCleanupReportV1, StoreErrorV1> {
-    let mut report = cleanup_session_scope_barrier(transaction, old_session_id)?;
-    let deleted_snapshots = transaction
-        .execute(
-            "DELETE FROM procedure_snapshots
-             WHERE snapshot_id = ?1
-               AND NOT EXISTS (
-                   SELECT 1 FROM task_sessions WHERE procedure_snapshot_id = ?1
-               )",
-            [old_snapshot_id],
-        )
-        .map_err(storage)?;
-    report.deleted_snapshots = retention_count(deleted_snapshots)?;
-    Ok(report)
-}
-
 fn cleanup_session_scope_barrier(
     transaction: &Transaction<'_>,
     old_session_id: &str,
@@ -3845,6 +3650,11 @@ fn enrich_terminal_from_execution(
             .with_lookup_command(PersistedDomainCommandV1::from_command(execution.command()))
             .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
     }
+    if execution.execution_flavor() == DurableExecutionFlavorV1::ProcedureV2 {
+        terminal = terminal
+            .with_procedure_v2_execution()
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    }
     let start_identity = if execution.execution_flavor() == DurableExecutionFlavorV1::ProcedureV2 {
         None
     } else {
@@ -3975,148 +3785,6 @@ fn verify_seeded_terminal_job_projection(
         return Err(corrupt(StoreRecordKindV1::Job));
     }
     Ok(())
-}
-
-fn terminal_session_projection(
-    result: &PersistedTerminalResultV1,
-    post_transition_session: Option<&podway_core::SessionAggregateV1>,
-) -> Result<Option<PersistedTerminalSessionProjectionV1>, StoreErrorV1> {
-    let (session_id, revision_before, revision_after) = match result {
-        PersistedTerminalResultV1::Success(
-            PersistedDomainResultV1::SessionChanged {
-                session_id,
-                revision_before,
-                revision_after,
-                ..
-            }
-            | PersistedDomainResultV1::ItemChanged {
-                session_id,
-                revision_before,
-                revision_after,
-                ..
-            },
-        ) => (session_id, *revision_before, *revision_after),
-        PersistedTerminalResultV1::Success(
-            PersistedDomainResultV1::WorkspaceInitialized { .. }
-            | PersistedDomainResultV1::WorkspaceReset { .. },
-        )
-        | PersistedTerminalResultV1::Failure(_)
-        | PersistedTerminalResultV1::Cancelled => return Ok(None),
-    };
-    let Some(aggregate) = post_transition_session else {
-        return Ok(None);
-    };
-    if aggregate.session_id() != session_id || aggregate.revision() != revision_after {
-        return Err(invariant(StoreInvariantV1::TransitionMutationShape));
-    }
-    PersistedTerminalSessionProjectionV1::new(
-        aggregate.session_id().clone(),
-        aggregate.task_title().to_owned(),
-        aggregate.lifecycle().into(),
-        revision_before,
-        revision_after,
-    )
-    .map(|projection| projection.with_procedure_digest(aggregate.snapshot().digest().clone()))
-    .map(Some)
-    .map_err(|_| corrupt(StoreRecordKindV1::Session))
-}
-fn validate_success_transition(
-    command: &crate::CommandV1,
-    result: &podway_core::DomainResult,
-    transition: &StateTransitionV1,
-    current: Option<&podway_core::SessionAggregateV1>,
-    identity: &DurableWorktreeIdentityV1,
-) -> Result<(), StoreErrorV1> {
-    if let PersistedSessionMutationV1::ReplaceFresh(aggregate) =
-        transition.persisted_session_mutation()
-    {
-        let matches = match result {
-            podway_core::DomainResult::SessionChanged {
-                session_id,
-                revision_before,
-                revision_after,
-                changed,
-            } => {
-                matches!(command, crate::CommandV1::SessionStartReplace)
-                    && *changed
-                    && transition.session_id() == Some(session_id)
-                    && aggregate.session_id() == session_id
-                    && transition.resulting_workspace_revision() == RevisionV1::new(1)
-                    && aggregate.revision() == RevisionV1::new(1)
-                    && *revision_after == RevisionV1::new(1)
-                    && current.is_some_and(|session| {
-                        session.session_id() != session_id
-                            && transition.previous_workspace_revision() == session.revision()
-                            && *revision_before == session.revision()
-                    })
-            }
-            podway_core::DomainResult::WorkspaceInitialized { .. }
-            | podway_core::DomainResult::WorkspaceReset { .. }
-            | podway_core::DomainResult::ItemChanged { .. } => false,
-        };
-        return matches
-            .then_some(())
-            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape));
-    }
-
-    let session_result_matches =
-        |session_id: &podway_core::SessionId| match transition.persisted_session_mutation() {
-            PersistedSessionMutationV1::Unchanged => {
-                transition.session_id() == Some(session_id)
-                    && current.is_some_and(|session| session.session_id() == session_id)
-            }
-            PersistedSessionMutationV1::Replace(aggregate) => {
-                transition.session_id() == Some(session_id)
-                    && aggregate.session_id() == session_id
-                    && current.is_none_or(|session| session.session_id() == session_id)
-            }
-            PersistedSessionMutationV1::ReplaceFresh(_) => false,
-            PersistedSessionMutationV1::Clear => {
-                transition.session_id().is_none()
-                    && current.is_some_and(|session| session.session_id() == session_id)
-            }
-        };
-    let matches = match result {
-        podway_core::DomainResult::WorkspaceInitialized {
-            workspace_id,
-            revision,
-        } => {
-            matches!(command, crate::CommandV1::WorkspaceInitialize)
-                && workspace_id == identity.workspace_uuid()
-                && *revision == transition.resulting_workspace_revision()
-                && transition.previous_workspace_revision() == RevisionV1::ZERO
-                && transition.session_id().is_none()
-                && matches!(
-                    transition.persisted_session_mutation(),
-                    PersistedSessionMutationV1::Unchanged
-                )
-                && current.is_none()
-        }
-        podway_core::DomainResult::WorkspaceReset { .. } => false,
-        podway_core::DomainResult::SessionChanged {
-            session_id,
-            revision_before,
-            revision_after,
-            ..
-        } => {
-            transition.previous_workspace_revision() == *revision_before
-                && transition.resulting_workspace_revision() == *revision_after
-                && session_result_matches(session_id)
-        }
-        podway_core::DomainResult::ItemChanged {
-            session_id,
-            revision_before,
-            revision_after,
-            ..
-        } => {
-            transition.previous_workspace_revision() == *revision_before
-                && transition.resulting_workspace_revision() == *revision_after
-                && session_result_matches(session_id)
-        }
-    };
-    matches
-        .then_some(())
-        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))
 }
 
 fn procedure_v2_skip_reason_v1(
@@ -6544,61 +6212,6 @@ fn graph_item_id_v2(command: &crate::CommandV1) -> Option<&podway_core::ItemId> 
     }
 }
 
-fn validate_preconditions(
-    preconditions: &crate::RevisionAttemptItemPreconditionsV1,
-    current: Option<&podway_core::SessionAggregateV1>,
-) -> Result<(), StoreErrorV1> {
-    let actual_session = current.map(podway_core::SessionAggregateV1::revision);
-    if preconditions.expected_session_revision() != actual_session
-        && preconditions.expected_session_revision().is_some()
-    {
-        return Err(StoreErrorV1::PreconditionConflictV1 {
-            expected: preconditions.expected_session_revision(),
-            actual: actual_session,
-        });
-    }
-    match preconditions.expected_attempt_id() {
-        Some(expected_attempt)
-            if current.and_then(podway_core::SessionAggregateV1::active_attempt_id)
-                != Some(expected_attempt) =>
-        {
-            return Err(StoreErrorV1::PreconditionConflictV1 {
-                expected: preconditions.expected_session_revision(),
-                actual: actual_session,
-            });
-        }
-        _ => {}
-    }
-    if let Some(item_id) = preconditions.expected_item_id() {
-        let actual = current
-            .and_then(|session| {
-                session.active_attempt_id().and_then(|attempt_id| {
-                    session
-                        .attempts()
-                        .iter()
-                        .find(|attempt| attempt.attempt_id() == attempt_id)
-                })
-            })
-            .and_then(|attempt| {
-                attempt
-                    .item_slots()
-                    .iter()
-                    .find(|slot| slot.item_id() == item_id)
-            })
-            .map(podway_core::ItemSlotV1::revision);
-        if actual.is_none()
-            || preconditions
-                .expected_item_revision()
-                .is_some_and(|expected| Some(expected) != actual)
-        {
-            return Err(StoreErrorV1::PreconditionConflictV1 {
-                expected: preconditions.expected_item_revision(),
-                actual,
-            });
-        }
-    }
-    Ok(())
-}
 fn admission_session_scope(
     transaction: &Transaction<'_>,
     command: &crate::CommandV1,
@@ -6609,7 +6222,7 @@ fn admission_session_scope(
     }
     transaction
         .query_row(
-            "SELECT session_id FROM task_sessions WHERE singleton = 1",
+            "SELECT session_id FROM v2_task_sessions WHERE singleton = 1",
             [],
             |row| row.get(0),
         )
@@ -6903,13 +6516,7 @@ fn read_graph_workspace_view_connection_v2(
     connection: &Connection,
     identity: &DurableWorktreeIdentityV1,
 ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
-    let legacy_session_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM task_sessions", [], |row| row.get(0))
-        .map_err(|error| storage_record(error, StoreRecordKindV1::Session))?;
     let graph_state = load_graph_session_connection_v2(connection)?;
-    if legacy_session_count != 0 && graph_state.is_some() {
-        return Err(corrupt(StoreRecordKindV1::Session));
-    }
     let queued: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM jobs WHERE state = 'queued'",

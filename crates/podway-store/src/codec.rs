@@ -30,6 +30,7 @@ pub const STORE_TERMINAL_SCHEMA_V1: &str = "podway.store-terminal/v1";
 pub const STORE_TERMINAL_SCHEMA_V2: &str = "podway.store-terminal/v2";
 pub const STORE_TERMINAL_SCHEMA_V3: &str = "podway.store-terminal/v3";
 pub const STORE_TERMINAL_SCHEMA_V4: &str = "podway.store-terminal/v4";
+pub const STORE_TERMINAL_SCHEMA_V5: &str = "podway.store-terminal/v5";
 pub const STORE_GRAPH_TERMINAL_SCHEMA_V1: &str = "podway.store-graph-terminal/v1";
 pub const STORE_GRAPH_TERMINAL_SCHEMA_V2: &str = "podway.store-graph-terminal/v2";
 pub const STORE_GRAPH_TERMINAL_SCHEMA_V3: &str = "podway.store-graph-terminal/v3";
@@ -188,11 +189,9 @@ pub enum PersistedDomainCommandV1 {
     SessionComplete,
     SessionSkip,
     SessionRetry,
-    SessionReturn,
     SessionBlock,
     SessionUnblock,
     SessionCancel,
-    SessionReopen,
     SessionReset,
     SessionDecide,
     SessionRework,
@@ -218,11 +217,9 @@ impl PersistedDomainCommandV1 {
             CommandV1::SessionComplete => Self::SessionComplete,
             CommandV1::SessionSkip => Self::SessionSkip,
             CommandV1::SessionRetry => Self::SessionRetry,
-            CommandV1::SessionReturn => Self::SessionReturn,
             CommandV1::SessionBlock => Self::SessionBlock,
             CommandV1::SessionUnblock => Self::SessionUnblock,
             CommandV1::SessionCancel => Self::SessionCancel,
-            CommandV1::SessionReopen => Self::SessionReopen,
             CommandV1::SessionReset => Self::SessionReset,
             CommandV1::SessionDecide => Self::SessionDecide,
             CommandV1::SessionRework => Self::SessionRework,
@@ -262,11 +259,9 @@ impl PersistedDomainCommandV1 {
             Self::SessionComplete => CommandV1::SessionComplete,
             Self::SessionSkip => CommandV1::SessionSkip,
             Self::SessionRetry => CommandV1::SessionRetry,
-            Self::SessionReturn => CommandV1::SessionReturn,
             Self::SessionBlock => CommandV1::SessionBlock,
             Self::SessionUnblock => CommandV1::SessionUnblock,
             Self::SessionCancel => CommandV1::SessionCancel,
-            Self::SessionReopen => CommandV1::SessionReopen,
             Self::SessionReset => CommandV1::SessionReset,
             Self::SessionDecide => CommandV1::SessionDecide,
             Self::SessionRework => CommandV1::SessionRework,
@@ -296,11 +291,9 @@ impl PersistedDomainCommandV1 {
             Self::SessionComplete => "session.complete",
             Self::SessionSkip => "session.skip",
             Self::SessionRetry => "session.retry",
-            Self::SessionReturn => "session.return",
             Self::SessionBlock => "session.block",
             Self::SessionUnblock => "session.unblock",
             Self::SessionCancel => "session.cancel",
-            Self::SessionReopen => "session.reopen",
             Self::SessionReset => "session.reset",
             Self::SessionDecide => "session.decide",
             Self::SessionRework => "session.rework",
@@ -668,11 +661,9 @@ pub enum PersistedDomainCommandKindV1 {
     SessionComplete,
     SessionSkip,
     SessionRetry,
-    SessionReturn,
     SessionBlock,
     SessionUnblock,
     SessionCancel,
-    SessionReopen,
     SessionReset,
     SessionDecide,
     SessionRework,
@@ -698,11 +689,9 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
             DomainCommandKind::SessionComplete => Self::SessionComplete,
             DomainCommandKind::SessionSkip => Self::SessionSkip,
             DomainCommandKind::SessionRetry => Self::SessionRetry,
-            DomainCommandKind::SessionReturn => Self::SessionReturn,
             DomainCommandKind::SessionBlock => Self::SessionBlock,
             DomainCommandKind::SessionUnblock => Self::SessionUnblock,
             DomainCommandKind::SessionCancel => Self::SessionCancel,
-            DomainCommandKind::SessionReopen => Self::SessionReopen,
             DomainCommandKind::SessionReset => Self::SessionReset,
             DomainCommandKind::SessionDecide => Self::SessionDecide,
             DomainCommandKind::SessionRework => Self::SessionRework,
@@ -2592,6 +2581,7 @@ pub struct PersistedTerminalReceiptV1 {
     lookup_command: Option<PersistedDomainCommandV1>,
     response_context: Option<PersistedResponseContextV1>,
     public_terminal_envelope: Option<Value>,
+    execution_flavor: crate::DurableExecutionFlavorV1,
 }
 
 impl PersistedTerminalReceiptV1 {
@@ -2607,6 +2597,7 @@ impl PersistedTerminalReceiptV1 {
             lookup_command: None,
             response_context: None,
             public_terminal_envelope: None,
+            execution_flavor: crate::DurableExecutionFlavorV1::LegacyV1,
         }
     }
 
@@ -2626,6 +2617,7 @@ impl PersistedTerminalReceiptV1 {
             lookup_command: None,
             response_context: None,
             public_terminal_envelope: None,
+            execution_flavor: crate::DurableExecutionFlavorV1::LegacyV1,
         };
         receipt.validate_v1_projections()?;
         Ok(receipt)
@@ -2678,6 +2670,7 @@ impl PersistedTerminalReceiptV1 {
             lookup_command: None,
             response_context: None,
             public_terminal_envelope: None,
+            execution_flavor: crate::DurableExecutionFlavorV1::ProcedureV2,
         };
         receipt.validate_v1_projections()?;
         Ok(receipt)
@@ -2699,15 +2692,22 @@ impl PersistedTerminalReceiptV1 {
         self.public_terminal_envelope.as_ref()
     }
 
+    pub const fn execution_flavor(&self) -> crate::DurableExecutionFlavorV1 {
+        self.execution_flavor
+    }
+
+    pub(crate) fn with_procedure_v2_execution(mut self) -> Result<Self, StoreCodecErrorV1> {
+        self.execution_flavor = crate::DurableExecutionFlavorV1::ProcedureV2;
+        self.validate_v2_projection()?;
+        Ok(self)
+    }
+
     pub fn with_public_terminal_envelope(
         mut self,
         envelope: Value,
     ) -> Result<Self, StoreCodecErrorV1> {
         let schema = envelope.get("schema").and_then(Value::as_str);
-        if !matches!(
-            schema,
-            Some("podway.output/v1" | "podway.output/v2" | "podway.error/v1")
-        ) {
+        if !matches!(schema, Some("podway.output/v3" | "podway.error/v1")) {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "public terminal envelope",
             });
@@ -2838,6 +2838,7 @@ impl PersistedTerminalReceiptV1 {
             || self.lookup_command.is_some()
             || self.response_context.is_some()
             || self.public_terminal_envelope.is_some()
+            || self.execution_flavor != crate::DurableExecutionFlavorV1::LegacyV1
         {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "terminal replay projections",
@@ -2880,6 +2881,29 @@ impl PersistedTerminalReceiptV1 {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "terminal session projection",
             });
+        }
+        match self.execution_flavor {
+            crate::DurableExecutionFlavorV1::LegacyV1 => {
+                if self.graph_session_projection.is_some() {
+                    return Err(StoreCodecErrorV1::InvalidValue {
+                        field: "Procedure v2 terminal execution flavor",
+                    });
+                }
+            }
+            crate::DurableExecutionFlavorV1::ProcedureV2 => {
+                let graph_receipt = self.graph_session_projection.is_some();
+                let non_graph_receipt = self.session_projection.is_none()
+                    && self.start_identity.is_none()
+                    && self
+                        .lookup_command
+                        .as_ref()
+                        .is_some_and(|command| procedure_v2_runtime_command(&command.command()));
+                if !graph_receipt && !non_graph_receipt {
+                    return Err(StoreCodecErrorV1::InvalidValue {
+                        field: "Procedure v2 terminal execution flavor",
+                    });
+                }
+            }
         }
         if let Some(graph) = &self.graph_session_projection {
             graph.validate()?;
@@ -3080,10 +3104,7 @@ impl PersistedTerminalReceiptV1 {
             .as_ref()
             .and_then(|envelope| envelope.get("schema"))
             .and_then(Value::as_str);
-        if !matches!(
-            schema,
-            Some("podway.output/v1" | "podway.output/v2" | "podway.error/v1")
-        ) {
+        if !matches!(schema, Some("podway.output/v3" | "podway.error/v1")) {
             return Err(StoreCodecErrorV1::InvalidValue {
                 field: "public terminal envelope",
             });
@@ -3217,6 +3238,25 @@ struct TerminalEnvelopeV4 {
 #[serde(deny_unknown_fields)]
 struct TerminalEnvelopeV5 {
     schema: String,
+    execution_flavor: String,
+    command: PersistedDomainCommandV1,
+    job: PersistedJobReceiptV1,
+    job_projection: PersistedTerminalJobProjectionV1,
+    result: PersistedTerminalResultV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    response_context: Option<PersistedResponseContextV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_terminal_envelope: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_projection: Option<PersistedTerminalSessionProjectionV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_identity: Option<PersistedStartIdentityV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphTerminalEnvelopeV1 {
+    schema: String,
     command: PersistedDomainCommandV1,
     job: PersistedJobReceiptV1,
     job_projection: PersistedTerminalJobProjectionV1,
@@ -3229,8 +3269,8 @@ struct TerminalEnvelopeV5 {
     start_identity: Option<PersistedStartIdentityV1>,
 }
 
-type TerminalEnvelopeV6 = TerminalEnvelopeV5;
-type TerminalEnvelopeV7 = TerminalEnvelopeV5;
+type GraphTerminalEnvelopeV2 = GraphTerminalEnvelopeV1;
+type GraphTerminalEnvelopeV3 = GraphTerminalEnvelopeV1;
 
 /// Core terminal receipts lack the immutable projections required by terminal schema v1, so they
 /// canonically encode as legacy schema v0.
@@ -3258,7 +3298,7 @@ pub fn encode_persisted_terminal_receipt_v1(
             receipt.validate_v4_projection()?;
             let _ = public_terminal_envelope;
         }
-        return canonical_json(&TerminalEnvelopeV5 {
+        return canonical_json(&GraphTerminalEnvelopeV1 {
             schema: if graph_session_projection.goal_defined() {
                 STORE_GRAPH_TERMINAL_SCHEMA_V3
             } else if graph_session_projection.operation().is_some() {
@@ -3287,6 +3327,37 @@ pub fn encode_persisted_terminal_receipt_v1(
             )?,
             graph_session_projection: graph_session_projection.clone(),
             public_terminal_envelope: receipt.public_terminal_envelope().cloned(),
+            start_identity: receipt.start_identity().cloned(),
+        });
+    }
+
+    if receipt.execution_flavor() == crate::DurableExecutionFlavorV1::ProcedureV2 {
+        if receipt.public_terminal_envelope().is_some() {
+            receipt.validate_v4_projection()?;
+        } else if receipt.response_context().is_some() {
+            receipt.validate_v3_projection()?;
+        } else {
+            receipt.validate_v2_projection()?;
+        }
+        return canonical_json(&TerminalEnvelopeV5 {
+            schema: STORE_TERMINAL_SCHEMA_V5.to_owned(),
+            execution_flavor: "procedure_v2".to_owned(),
+            command: receipt
+                .lookup_command()
+                .cloned()
+                .ok_or(StoreCodecErrorV1::InvalidValue {
+                    field: "terminal lookup command",
+                })?,
+            job: receipt.job().into(),
+            job_projection: receipt.job_projection().cloned().ok_or(
+                StoreCodecErrorV1::InvalidValue {
+                    field: "terminal replay projections",
+                },
+            )?,
+            result: receipt.result().clone(),
+            response_context: receipt.response_context().cloned(),
+            public_terminal_envelope: receipt.public_terminal_envelope().cloned(),
+            session_projection: receipt.session_projection().cloned(),
             start_identity: receipt.start_identity().cloned(),
         });
     }
@@ -3477,8 +3548,34 @@ pub fn decode_terminal_receipt_v1(
             }
             PersistedTerminalReceiptV1::from_v4_envelope(envelope)?
         }
-        STORE_GRAPH_TERMINAL_SCHEMA_V1 => {
+        STORE_TERMINAL_SCHEMA_V5 => {
             let envelope: TerminalEnvelopeV5 =
+                serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+            if envelope.execution_flavor != "procedure_v2" || envelope.job.identity_sequence == 0 {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 terminal execution flavor",
+                });
+            }
+            let mut receipt = PersistedTerminalReceiptV1::new_with_projections(
+                envelope.job.into(),
+                envelope.result,
+                envelope.job_projection,
+                envelope.session_projection,
+            )?
+            .with_lookup_command(envelope.command)?;
+            if let Some(start_identity) = envelope.start_identity {
+                receipt = receipt.with_start_identity(start_identity);
+            }
+            if let Some(response_context) = envelope.response_context {
+                receipt = receipt.with_response_context(response_context)?;
+            }
+            if let Some(public_terminal_envelope) = envelope.public_terminal_envelope {
+                receipt = receipt.with_public_terminal_envelope(public_terminal_envelope)?;
+            }
+            receipt.with_procedure_v2_execution()?
+        }
+        STORE_GRAPH_TERMINAL_SCHEMA_V1 => {
+            let envelope: GraphTerminalEnvelopeV1 =
                 serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
             if envelope.job.identity_sequence == 0 {
                 return Err(StoreCodecErrorV1::InvalidValue {
@@ -3507,7 +3604,7 @@ pub fn decode_terminal_receipt_v1(
             receipt
         }
         STORE_GRAPH_TERMINAL_SCHEMA_V2 => {
-            let envelope: TerminalEnvelopeV6 =
+            let envelope: GraphTerminalEnvelopeV2 =
                 serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
             if envelope.job.identity_sequence == 0
                 || envelope.graph_session_projection.operation().is_none()
@@ -3533,7 +3630,7 @@ pub fn decode_terminal_receipt_v1(
             receipt
         }
         STORE_GRAPH_TERMINAL_SCHEMA_V3 => {
-            let envelope: TerminalEnvelopeV7 =
+            let envelope: GraphTerminalEnvelopeV3 =
                 serde_json::from_value(document).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
             if envelope.job.identity_sequence == 0
                 || !envelope.graph_session_projection.goal_defined()
@@ -3560,7 +3657,7 @@ pub fn decode_terminal_receipt_v1(
         }
         found => {
             return Err(StoreCodecErrorV1::UnsupportedSchema {
-                expected: STORE_TERMINAL_SCHEMA_V4,
+                expected: STORE_TERMINAL_SCHEMA_V5,
                 found: found.to_owned(),
             });
         }
@@ -3629,6 +3726,61 @@ pub fn decode_terminal_receipt_v1(
         });
     }
     Ok(receipt)
+}
+
+/// Promotes a predecessor terminal receipt's frozen public success envelope to the
+/// current v3 schema before the v2-only schema migration verifies the receipt.
+///
+/// This is deliberately migration-only. Normal decoding continues to reject every
+/// public success schema except `podway.output/v3`.
+pub(crate) fn normalize_terminal_receipt_for_schema_v4_v1(
+    value: &str,
+    authoritative_execution_flavor: Option<crate::DurableExecutionFlavorV1>,
+) -> Result<(PersistedTerminalReceiptV1, String), StoreCodecErrorV1> {
+    let mut document: Value =
+        serde_json::from_str(value).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+    let envelope = document
+        .get_mut("public_terminal_envelope")
+        .and_then(Value::as_object_mut);
+    if let Some(envelope) = envelope {
+        match envelope.get("schema").and_then(Value::as_str) {
+            Some("podway.output/v1" | "podway.output/v2") => {
+                envelope.insert(
+                    "schema".to_owned(),
+                    Value::String("podway.output/v3".to_owned()),
+                );
+            }
+            Some("podway.output/v3" | "podway.error/v1") => {}
+            _ => {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "public terminal envelope",
+                });
+            }
+        }
+    }
+    let normalized = serde_json::to_string(&canonicalize_json(document))
+        .map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+    let mut receipt = decode_terminal_receipt_v1(&normalized)?;
+    let normalized = if receipt.execution_flavor() == crate::DurableExecutionFlavorV1::LegacyV1
+        && authoritative_execution_flavor == Some(crate::DurableExecutionFlavorV1::ProcedureV2)
+    {
+        receipt = receipt.with_procedure_v2_execution()?;
+        encode_persisted_terminal_receipt_v1(&receipt)?
+    } else {
+        normalized
+    };
+
+    if let (Some(context), Some(envelope)) = (
+        receipt.response_context(),
+        receipt.public_terminal_envelope(),
+    ) && (envelope.get("request_id").and_then(Value::as_str) != Some(context.request_id())
+        || envelope.get("command").and_then(Value::as_str) != Some(context.command()))
+    {
+        return Err(StoreCodecErrorV1::InvalidValue {
+            field: "public terminal envelope correlation",
+        });
+    }
+    Ok((receipt, normalized))
 }
 pub(crate) fn validate_terminal_result_for_command_v1(
     command: &CommandV1,
@@ -3710,11 +3862,9 @@ fn validate_success_result_for_command_v1(
             | CommandV1::GoalAssessCriterion
             | CommandV1::SessionSkip
             | CommandV1::SessionRetry
-            | CommandV1::SessionReturn
             | CommandV1::SessionBlock
             | CommandV1::SessionUnblock
-            | CommandV1::SessionCancel
-            | CommandV1::SessionReopen,
+            | CommandV1::SessionCancel,
             PersistedDomainResultV1::SessionChanged {
                 revision_before,
                 revision_after,
@@ -3809,5 +3959,174 @@ fn canonicalize_json(value: Value) -> Value {
             Value::Object(canonical)
         }
         primitive => primitive,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use podway_core::{GraphNodeId, JobId, SessionId, WorkspaceId};
+    use serde_json::json;
+
+    fn digest(nibble: char) -> Sha256Digest {
+        Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
+    }
+
+    #[test]
+    fn schema_v4_migration_promotes_frozen_v2_graph_success_to_output_v3() {
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000101").unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_graph_projection(
+            JobReceiptV1::new(
+                1,
+                JobId::new("00000000-0000-4000-8000-000000000102").unwrap(),
+                digest('a'),
+            ),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id: session_id.clone(),
+                revision_before: RevisionV1::ZERO,
+                revision_after: RevisionV1::new(1),
+                changed: true,
+            }),
+            PersistedTerminalJobProjectionV1::new(
+                PersistedTerminalJobStateV1::Succeeded,
+                EpochMillisV1::new(1),
+                Some(EpochMillisV1::new(1)),
+                EpochMillisV1::new(2),
+            )
+            .unwrap(),
+            PersistedGraphTerminalSessionProjectionV2::new(
+                session_id,
+                "Graph start".to_owned(),
+                PersistedSessionLifecycleV1::Running,
+                RevisionV1::ZERO,
+                RevisionV1::new(1),
+                digest('b'),
+                GraphNodeId::new("work").unwrap(),
+                false,
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionStart)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                "00000000-0000-4000-8000-000000000103",
+                "session.start",
+                WorkspaceId::new("00000000-0000-4000-8000-000000000104").unwrap(),
+                "/fixture/worktree",
+                1,
+            )
+            .unwrap()
+            .with_frozen_public_terminal_envelope(),
+        )
+        .unwrap()
+        .with_public_terminal_envelope(json!({
+            "schema": "podway.output/v3",
+            "request_id": "00000000-0000-4000-8000-000000000103",
+            "command": "session.start"
+        }))
+        .unwrap();
+        let encoded = encode_persisted_terminal_receipt_v1(&receipt).unwrap();
+        let mut predecessor: Value = serde_json::from_str(&encoded).unwrap();
+        predecessor["public_terminal_envelope"]["schema"] = json!("podway.output/v2");
+        let predecessor = serde_json::to_string(&canonicalize_json(predecessor)).unwrap();
+
+        assert!(decode_terminal_receipt_v1(&predecessor).is_err());
+        let (promoted, normalized) =
+            normalize_terminal_receipt_for_schema_v4_v1(&predecessor, None).unwrap();
+        assert_eq!(
+            promoted.public_terminal_envelope().unwrap()["schema"],
+            "podway.output/v3"
+        );
+        assert_eq!(decode_terminal_receipt_v1(&normalized).unwrap(), promoted);
+    }
+
+    #[test]
+    fn schema_v4_migration_marks_start_cancellation_only_with_authoritative_v2_execution() {
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            JobReceiptV1::new(
+                1,
+                JobId::new("00000000-0000-4000-8000-000000000201").unwrap(),
+                digest('c'),
+            ),
+            PersistedTerminalResultV1::Cancelled,
+            PersistedTerminalJobProjectionV1::new(
+                PersistedTerminalJobStateV1::Cancelled,
+                EpochMillisV1::new(1),
+                None,
+                EpochMillisV1::new(2),
+            )
+            .unwrap(),
+            None,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionStart)
+        .unwrap();
+        let predecessor = encode_persisted_terminal_receipt_v1(&receipt).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&predecessor).unwrap()["schema"],
+            STORE_TERMINAL_SCHEMA_V2
+        );
+
+        let (ambiguous, unchanged) =
+            normalize_terminal_receipt_for_schema_v4_v1(&predecessor, None).unwrap();
+        assert_eq!(
+            ambiguous.execution_flavor(),
+            crate::DurableExecutionFlavorV1::LegacyV1
+        );
+        assert_eq!(unchanged, predecessor);
+
+        let (promoted, normalized) = normalize_terminal_receipt_for_schema_v4_v1(
+            &predecessor,
+            Some(crate::DurableExecutionFlavorV1::ProcedureV2),
+        )
+        .unwrap();
+        assert_eq!(
+            promoted.execution_flavor(),
+            crate::DurableExecutionFlavorV1::ProcedureV2
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&normalized).unwrap()["schema"],
+            STORE_TERMINAL_SCHEMA_V5
+        );
+        assert_eq!(decode_terminal_receipt_v1(&normalized).unwrap(), promoted);
+    }
+
+    #[test]
+    fn schema_v4_migration_keeps_v1_start_cancellation_legacy() {
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            JobReceiptV1::new(
+                1,
+                JobId::new("00000000-0000-4000-8000-000000000202").unwrap(),
+                digest('d'),
+            ),
+            PersistedTerminalResultV1::Cancelled,
+            PersistedTerminalJobProjectionV1::new(
+                PersistedTerminalJobStateV1::Cancelled,
+                EpochMillisV1::new(1),
+                None,
+                EpochMillisV1::new(2),
+            )
+            .unwrap(),
+            None,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionStart)
+        .unwrap()
+        .with_start_identity(PersistedStartIdentityV1::new(4, digest('e')).unwrap());
+        let predecessor = encode_persisted_terminal_receipt_v1(&receipt).unwrap();
+
+        let (decoded, normalized) = normalize_terminal_receipt_for_schema_v4_v1(
+            &predecessor,
+            Some(crate::DurableExecutionFlavorV1::LegacyV1),
+        )
+        .unwrap();
+        assert_eq!(
+            decoded.execution_flavor(),
+            crate::DurableExecutionFlavorV1::LegacyV1
+        );
+        assert_eq!(normalized, predecessor);
     }
 }

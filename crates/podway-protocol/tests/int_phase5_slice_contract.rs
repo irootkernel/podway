@@ -107,18 +107,6 @@ fn session_identity_preconditions() -> PreconditionsV1 {
     .unwrap()
 }
 
-fn session_revision_preconditions() -> PreconditionsV1 {
-    PreconditionsV1::new(
-        Some(SESSION_ID.to_owned().try_into().unwrap()),
-        Some(Revision::new(3)),
-        None,
-        None,
-        None,
-        None,
-    )
-    .unwrap()
-}
-
 fn job_preconditions() -> PreconditionsV1 {
     PreconditionsV1::new(None, None, None, None, None, Some(JobStateV1::Queued)).unwrap()
 }
@@ -360,13 +348,6 @@ fn route_cases() -> Vec<RouteCase> {
             preconditions: session_preconditions(),
         },
         RouteCase {
-            command: "session.return",
-            operation: OperationV1::Mutate,
-            durable: true,
-            payload: json!({"selector": selector.clone(), "destination_stage_id": "diagnose", "reason": "Need diagnosis"}),
-            preconditions: session_preconditions(),
-        },
-        RouteCase {
             command: "session.block",
             operation: OperationV1::Mutate,
             durable: true,
@@ -386,13 +367,6 @@ fn route_cases() -> Vec<RouteCase> {
             durable: true,
             payload: json!({"selector": selector.clone(), "reason": "No longer needed"}),
             preconditions: session_preconditions(),
-        },
-        RouteCase {
-            command: "session.reopen",
-            operation: OperationV1::Mutate,
-            durable: true,
-            payload: json!({"selector": selector.clone(), "destination_stage_id": "verify", "reason": "New failure"}),
-            preconditions: session_revision_preconditions(),
         },
         RouteCase {
             command: "session.reset",
@@ -496,10 +470,10 @@ fn route_cases() -> Vec<RouteCase> {
 }
 
 #[test]
-fn recon001_exhaustively_admits_only_the_30_canonical_daemon_routes() {
+fn recon001_exhaustively_admits_only_the_28_canonical_daemon_routes() {
     let cases = route_cases();
-    assert_eq!(cases.len(), 30);
-    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 30);
+    assert_eq!(cases.len(), 28);
+    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 28);
     assert_eq!(
         cases.iter().map(|case| case.command).collect::<Vec<_>>(),
         DAEMON_COMMAND_NAMES_V1.to_vec(),
@@ -870,36 +844,6 @@ fn g006_dry_runs_are_query_only_and_excluded_from_mutation_identity() {
             }),
         ),
         (
-            "session.return",
-            session_preconditions(),
-            json!({
-                "selector": selector(),
-                "destination_stage_id": "diagnose",
-                "reason": "Preview return",
-                "dry_run": true,
-            }),
-            json!({
-                "selector": selector(),
-                "destination_stage_id": "diagnose",
-                "reason": "Preview return",
-            }),
-        ),
-        (
-            "session.reopen",
-            session_revision_preconditions(),
-            json!({
-                "selector": selector(),
-                "destination_stage_id": "verify",
-                "reason": "Preview reopen",
-                "dry_run": true,
-            }),
-            json!({
-                "selector": selector(),
-                "destination_stage_id": "verify",
-                "reason": "Preview reopen",
-            }),
-        ),
-        (
             "session.reset",
             session_identity_preconditions(),
             json!({"selector": selector(), "dry_run": true}),
@@ -987,20 +931,6 @@ fn g006_dry_runs_are_query_only_and_excluded_from_mutation_identity() {
         session_identity_preconditions(),
     );
     assert!(SliceRequestV1::from_envelope(&replace_with_confirmation).is_err());
-
-    let malformed_dry_run = envelope(
-        "session.return",
-        OperationV1::Query,
-        false,
-        json!({
-            "selector": selector(),
-            "destination_stage_id": "diagnose",
-            "reason": "Preview return",
-            "dry_run": "true",
-        }),
-        session_preconditions(),
-    );
-    assert!(SliceRequestV1::from_envelope(&malformed_dry_run).is_err());
 }
 
 #[test]

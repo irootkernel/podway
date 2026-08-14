@@ -2,12 +2,7 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{
-    fs,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, sync::Arc};
 
 use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
@@ -220,7 +215,7 @@ fn initialize(
     );
     assert!(matches!(
         runtime::dispatch(dispatcher, &request),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
 }
 
@@ -443,27 +438,6 @@ fn error(response: ResponseEnvelopeV2, code: &str) -> Value {
     };
     assert_eq!(error.code().as_str(), code);
     serde_json::to_value(error).unwrap()
-}
-
-fn dispatch_after_cold_reopen(
-    dispatcher: &impl RequestDispatcherV1,
-    request: &(RequestEnvelopeV1, DaemonRequestV1),
-) -> ResponseEnvelopeV2 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let response = runtime::dispatch(dispatcher, request);
-        if !matches!(
-            &response,
-            ResponseEnvelopeV2::Error(error) if error.code().as_str() == "WORKSPACE_MAINTENANCE"
-        ) {
-            return response;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "cold-reopen maintenance did not release within five seconds"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
 }
 
 fn stable_state(status: &Map<String, Value>) -> Value {
@@ -708,11 +682,11 @@ fn v2gol003_general_decision_never_creates_goal_assessment_state() {
         "v2gol003-general-restart",
     );
     assert_eq!(
-        runtime::without_request_id(&dispatch_after_cold_reopen(&restarted, &decide)),
+        runtime::without_request_id(&runtime::dispatch_after_cold_reopen(&restarted, &decide)),
         runtime::without_request_id(&decided)
     );
     assert_eq!(
-        runtime::without_request_id(&dispatch_after_cold_reopen(&restarted, &stale)),
+        runtime::without_request_id(&runtime::dispatch_after_cold_reopen(&restarted, &stale)),
         runtime::without_request_id(&stale_response),
         "the stale V14 failure must remain sealed after restart"
     );
@@ -933,12 +907,12 @@ fn v2gol003_queued_v9_goal_assessment_fails_and_replays_after_cold_reopen() {
 
     let first_manager = Arc::new(runtime::manager(fixture.workspace.temporary_path()));
     let first_replay = runtime::dispatcher(first_manager, "v2gol003-legacy-v9-replay-one");
-    let first = dispatch_after_cold_reopen(&first_replay, &legacy_request);
+    let first = runtime::dispatch_after_cold_reopen(&first_replay, &legacy_request);
     error(first.clone(), "REQUEST_INVALID");
     drop(first_replay);
     let second_manager = Arc::new(runtime::manager(fixture.workspace.temporary_path()));
     let second_replay = runtime::dispatcher(second_manager, "v2gol003-legacy-v9-replay-two");
-    let second = dispatch_after_cold_reopen(&second_replay, &legacy_request);
+    let second = runtime::dispatch_after_cold_reopen(&second_replay, &legacy_request);
     assert_eq!(
         runtime::without_request_id(&second),
         runtime::without_request_id(&first),
@@ -963,7 +937,7 @@ fn v2gol003_fresh_assessment_allows_terminal_complete_and_skip_after_restart() {
         let restart_worker_id = format!("v2gol003-restart-{index}");
         let restarted = runtime::dispatcher(manager, &restart_worker_id);
         assert_eq!(
-            runtime::without_request_id(&dispatch_after_cold_reopen(&restarted, &decide)),
+            runtime::without_request_id(&runtime::dispatch_after_cold_reopen(&restarted, &decide)),
             runtime::without_request_id(&decided)
         );
         let at_terminal =

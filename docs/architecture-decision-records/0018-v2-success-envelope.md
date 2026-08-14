@@ -1,6 +1,6 @@
 # ADR-0018: Version the Procedure v2 Success Envelope
 
-- Status: Accepted
+- Status: Superseded by [ADR-0019](0019-procedure-v2-only-product.md)
 - Date: 2026-08-04
 
 ## Context

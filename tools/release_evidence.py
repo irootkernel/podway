@@ -235,7 +235,7 @@ def handoff_from_provenance(
     return {
         "adapter": adapter,
         "adapter_catalog": {
-            "path": "release/dolgorae-v2-adapter-contract-v1.json",
+            "path": "release/dolgorae-adapter-contract-v2.json",
             "sha256": adapter_catalog_sha256,
         },
         "artifact": provenance["archive"],

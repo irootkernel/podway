@@ -1,4 +1,4 @@
-//! V2MOD-005: equivalent YAML and JSON Procedure v2 (and v1) documents must produce equal
+//! V2MOD-005: equivalent YAML and JSON Procedure v2 documents must produce equal
 //! `ParsedProcedure` values on success and equal `ConfigError` diagnostics on failure. Canonical
 //! bytes/digest equivalence is out of scope here (V2MOD-007); this file only proves the
 //! `ParsedProcedureV2`/`ParsedProcedure`/`ConfigError` values `parse_procedure_document` returns
@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 
 use podway_config::{
     ConfigError, MAX_PROCEDURE_DOCUMENT_BYTES, ParsedNodeDefinition, ParsedProcedure,
-    ParsedProcedureV2, ProcedureDocumentFormat, ProcedureFormatV1, parse_procedure_document,
-    parse_procedure_v1, parse_procedure_yaml,
+    ParsedProcedureV2, ProcedureDocumentFormat, parse_procedure_document, parse_procedure_yaml,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -29,7 +28,6 @@ fn fixture(relative: &str) -> Vec<u8> {
 fn v2(bytes: &[u8], format: ProcedureDocumentFormat) -> Result<ParsedProcedureV2, ConfigError> {
     match parse_procedure_document(bytes, format) {
         Ok(ParsedProcedure::V2(parsed)) => Ok(parsed),
-        Ok(ParsedProcedure::V1(_)) => panic!("expected v2 dispatch, got v1"),
         Err(error) => Err(error),
     }
 }
@@ -262,38 +260,6 @@ fn omitted_defaults_materialize_identically_for_both_formats() {
         .expect("first reference")
         .required();
     assert!(evidence_required);
-}
-
-#[test]
-fn v1_json_document_dispatches_identically_through_the_new_entry_point() {
-    let document = json!({
-        "schema": "podway.procedure/v1",
-        "id": "release",
-        "version": "1",
-        "name": "Release",
-        "stages": [{
-            "id": "prepare",
-            "title": "Prepare",
-            "items": [{
-                "id": "approval",
-                "type": "confirm",
-                "prompt": "Approved",
-                "required": true
-            }]
-        }],
-        "rework": { "allow_return_to": ["prepare"] }
-    })
-    .to_string();
-    let bytes = document.as_bytes();
-
-    let via_document = parse_procedure_document(bytes, ProcedureDocumentFormat::Json)
-        .expect("v1 json parses via parse_procedure_document");
-    let via_v1 = parse_procedure_v1(bytes, ProcedureFormatV1::Json).expect("v1 json parses");
-
-    match via_document {
-        ParsedProcedure::V1(validated) => assert_eq!(validated, via_v1),
-        ParsedProcedure::V2(_) => panic!("expected v1 dispatch, got v2"),
-    }
 }
 
 #[test]

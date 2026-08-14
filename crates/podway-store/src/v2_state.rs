@@ -3175,9 +3175,6 @@ pub(crate) fn create_graph_session_transaction_v2(
     transaction: &Transaction<'_>,
     state: &GraphSessionStateV2,
 ) -> Result<(), StoreErrorV1> {
-    let current_v1: i64 = transaction
-        .query_row("SELECT COUNT(*) FROM task_sessions", [], |row| row.get(0))
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
     let current_v2: i64 = transaction
         .query_row("SELECT COUNT(*) FROM v2_task_sessions", [], |row| {
             row.get(0)
@@ -3193,9 +3190,9 @@ pub(crate) fn create_graph_session_transaction_v2(
             row.get(0)
         })
         .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-    if current_v1 != 0 || current_v2 != 0 || v2_workspace != 0 || v2_snapshots != 0 {
+    if current_v2 != 0 || v2_workspace != 0 || v2_snapshots != 0 {
         return Err(invalid_store(
-            "a workspace may contain only one current v1 or v2 task",
+            "a workspace may contain only one current task",
         ));
     }
 
@@ -3586,15 +3583,12 @@ fn load_present_graph_session_v2(
     workspace_revision: i64,
     persisted: PersistedSessionV2,
 ) -> Result<GraphSessionStateV2, StoreErrorV1> {
-    let current_v1: i64 = connection
-        .query_row("SELECT COUNT(*) FROM task_sessions", [], |row| row.get(0))
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
     let snapshot_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM v2_procedure_snapshots", [], |row| {
             row.get(0)
         })
         .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-    if current_v1 != 0 || snapshot_count != 1 {
+    if snapshot_count != 1 {
         return Err(corrupt(StoreRecordKindV1::Session));
     }
     let snapshot = load_snapshot_v2(connection, &persisted.snapshot_id)?;

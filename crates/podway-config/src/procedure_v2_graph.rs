@@ -523,13 +523,9 @@ mod tests {
           },
           "manual_rework":{"allowed_targets":["assessment","work"]}
         }"#;
-        let parsed =
-            match crate::parse_procedure_document(source, crate::ProcedureDocumentFormat::Json)
-                .expect("fixture must parse")
-            {
-                crate::ParsedProcedure::V2(parsed) => parsed,
-                crate::ParsedProcedure::V1(_) => panic!("fixture must be Procedure v2"),
-            };
+        let crate::ParsedProcedure::V2(parsed) =
+            crate::parse_procedure_document(source, crate::ProcedureDocumentFormat::Json)
+                .expect("fixture must parse");
 
         let safe = goal_revision_safe_targets_v2(&parsed);
         assert_eq!(

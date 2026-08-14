@@ -79,7 +79,7 @@ fn initialize(
     );
     assert!(matches!(
         runtime::dispatch(dispatcher, &request),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
 }
 

@@ -6,11 +6,10 @@
 
 use podway_core::{AttemptId, GraphNodeId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
 use podway_protocol::{
-    CompactStatusResultV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
-    IdempotencyKeyV1, JobOutputV1, JobStateV1, NextResultV1, OperationV1, OutputEnvelopeInputV1,
-    OutputEnvelopeInputV2, OutputEnvelopeV1, OutputEnvelopeV2, QueryWaitV1, RequestEnvelopeV1,
-    ResponseEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
-    SliceRequestV1, StatusResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
+    ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
+    JobStateV1, OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3, QueryWaitV1,
+    RequestEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
+    SliceRequestV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -815,6 +814,7 @@ pub enum DispatchFailureKindV1 {
     WorkspaceConfigInvalid,
     WorkspaceStateUnreadable,
     WorkspaceSchemaUnsupported,
+    LegacyProcedureStateUnsupported,
     WorkspaceQueueFull,
     WorkspaceMaintenance,
     WorkspacePathUnsafe,
@@ -832,7 +832,6 @@ pub enum DispatchFailureKindV1 {
     SessionIdMismatch,
     SessionAlreadyExists,
     SessionNotRunning,
-    SessionNotCompleted,
     SessionCancelled,
     SessionRevisionConflict,
     AttemptNotCurrent,
@@ -844,10 +843,7 @@ pub enum DispatchFailureKindV1 {
     EvidenceReferenceStale,
     ManualReworkTargetNotAllowed,
     ManualReworkTargetNotOnTrace,
-    StageNotFound,
     StageNotSkippable,
-    ReturnNotAllowed,
-    ReopenNotAllowed,
     RequiredItemsMissing,
     BlockersPresent,
     SessionGoalMissing,
@@ -1121,25 +1117,7 @@ impl RequestReadWaitV1 {
     }
 }
 
-/// Typed dispatcher input for `session.status`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DispatcherStatusRequestV1 {
-    pub wait: RequestReadWaitV1,
-    pub verbose: bool,
-    pub expected_session_id: Option<SessionId>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DispatcherNextRequestV1 {
-    pub wait: RequestReadWaitV1,
-    pub expected_session_id: Option<SessionId>,
-}
-
 /// A pre-serialized authoritative query projection.
-///
-/// The concrete read adapter owns conversion from the protocol's typed status/next DTOs. Its
-/// result must be a protocol-valid JSON object; any invalid shape is converted to a bounded
-/// internal error rather than reflected to the client.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DispatcherReadOutputV1 {
     result: Map<String, Value>,
@@ -1176,18 +1154,6 @@ impl DispatcherJobOutputV1 {
 /// Projects authoritative Store state for all daemon query routes. Notifications may wake
 /// implementations, but they never establish a result without a Store read.
 pub trait DispatcherReadServiceV1<Workspace>: Send + Sync {
-    fn status(
-        &self,
-        workspace: &Workspace,
-        input: DispatcherStatusRequestV1,
-    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
-
-    fn next(
-        &self,
-        workspace: &Workspace,
-        input: DispatcherNextRequestV1,
-    ) -> Result<DispatcherReadOutputV1, DispatchFailureV1>;
-
     fn job_list(
         &self,
         workspace: &Workspace,
@@ -1328,7 +1294,7 @@ pub fn terminal_response_envelope_v1(
     job: JobOutputV1,
     result: DispatcherTerminalResultV1,
     bootstrap: bool,
-) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
     terminal_response_envelope_with_mapper_v1(
         context,
         job,
@@ -1344,7 +1310,7 @@ fn terminal_response_envelope_with_mapper_v1(
     result: DispatcherTerminalResultV1,
     bootstrap: bool,
     errors: &impl DispatchErrorMapperV1,
-) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
     match result {
         DispatcherTerminalResultV1::Output(output) if bootstrap && output.session.is_some() => {
             Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
@@ -1353,7 +1319,7 @@ fn terminal_response_envelope_with_mapper_v1(
             output
                 .result
                 .insert("admission".to_owned(), job_admission_value_v1(&job));
-            OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+            OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: context.request_id,
                 command: context.command,
                 generated_at: context.generated_at,
@@ -1363,7 +1329,7 @@ fn terminal_response_envelope_with_mapper_v1(
                 result: output.result,
                 warnings: output.warnings,
             })
-            .map(ResponseEnvelopeV1::Output)
+            .map(ResponseEnvelopeV2::OutputV2)
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
         }
         DispatcherTerminalResultV1::Error(failure) => {
@@ -1383,7 +1349,7 @@ fn terminal_response_envelope_with_mapper_v1(
                 workspace,
                 details: failure.into_details().into_json(true),
             })
-            .map(ResponseEnvelopeV1::Error)
+            .map(ResponseEnvelopeV2::Error)
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
         }
     }
@@ -1533,7 +1499,7 @@ where
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         if request.command().as_str() != slice_request.command().command_name() {
             return Err(DispatchFailureV1::new(
                 DispatchFailureKindV1::RequestInvalid,
@@ -1546,25 +1512,13 @@ where
             }
             SliceCommandV1::WorkspaceShow(_) => self.dispatch_show(request, slice_request),
             SliceCommandV1::WorkspaceRepair(_) => self.dispatch_repair(request, slice_request),
-            SliceCommandV1::SessionStatus(input) => {
-                self.dispatch_status(request, slice_request, input)
+            SliceCommandV1::SessionStatus(_) | SliceCommandV1::SessionNext(_) => {
+                Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
             }
-            SliceCommandV1::SessionNext(input) => self.dispatch_next(
-                request,
-                slice_request,
-                &input.wait,
-                input.preconditions.expected_session_id.clone(),
-            ),
             SliceCommandV1::SessionStart(input) if input.dry_run => {
                 self.dispatch_preview(request, slice_request)
             }
             SliceCommandV1::SessionStartReplace(input) if input.start.dry_run => {
-                self.dispatch_preview(request, slice_request)
-            }
-            SliceCommandV1::SessionReturn(input) if input.dry_run => {
-                self.dispatch_preview(request, slice_request)
-            }
-            SliceCommandV1::SessionReopen(input) if input.dry_run => {
                 self.dispatch_preview(request, slice_request)
             }
             SliceCommandV1::SessionReset(input) if input.dry_run => {
@@ -1610,7 +1564,7 @@ where
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
         deep: bool,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_query_options(request)?;
         self.workspace_output_response(
             request,
@@ -1622,7 +1576,7 @@ where
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_query_options(request)?;
         self.workspace_output_response(request, self.runtime.show(slice_request.selector())?)
     }
@@ -1631,91 +1585,16 @@ where
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_query_options(request)?;
         self.workspace_output_response(request, self.runtime.repair(slice_request.selector())?)
     }
 
-    fn dispatch_status(
-        &self,
-        request: &RequestEnvelopeV1,
-        slice_request: &SliceRequestV1,
-        input: &podway_protocol::SessionStatusV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
-        self.require_query_options(request)?;
-        if input.history_before.is_some() {
-            return Err(DispatchFailureV1::new(
-                DispatchFailureKindV1::RequestInvalid,
-            ));
-        }
-        let workspace = self.runtime.resolve_existing(slice_request.selector())?;
-        let output = self.reads.status(
-            &workspace,
-            DispatcherStatusRequestV1 {
-                wait: RequestReadWaitV1::from_query_wait(
-                    &input.wait,
-                    request.options().wait_timeout_ms(),
-                ),
-                verbose: input.verbose,
-                expected_session_id: input.preconditions.expected_session_id.clone(),
-            },
-        )?;
-        let status = StatusResultV1::from_result_map(&output.result)
-            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
-        let mut workspace_output = self.runtime.workspace_output(&workspace);
-        let result = if input.compact {
-            workspace_output =
-                workspace_at_sequence(workspace_output, status.queue.latest_workspace_sequence)?;
-            CompactStatusResultV1::from_status(&status).to_result_map()
-        } else {
-            status.to_result_map()
-        };
-        self.output_response(
-            request,
-            Some(workspace_output),
-            None,
-            None,
-            result,
-            output.warnings,
-        )
-    }
-
-    fn dispatch_next(
-        &self,
-        request: &RequestEnvelopeV1,
-        slice_request: &SliceRequestV1,
-        query_wait: &QueryWaitV1,
-        expected_session_id: Option<SessionId>,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
-        self.require_query_options(request)?;
-        let workspace = self.runtime.resolve_existing(slice_request.selector())?;
-        let output = self.reads.next(
-            &workspace,
-            DispatcherNextRequestV1 {
-                wait: RequestReadWaitV1::from_query_wait(
-                    query_wait,
-                    request.options().wait_timeout_ms(),
-                ),
-                expected_session_id,
-            },
-        )?;
-        let result = NextResultV1::from_result_map(&output.result)
-            .map(|result| result.to_result_map())
-            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
-        self.output_response(
-            request,
-            Some(self.runtime.workspace_output(&workspace)),
-            None,
-            None,
-            result,
-            output.warnings,
-        )
-    }
     fn dispatch_preview(
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_query_options(request)?;
         let workspace = self
             .runtime
@@ -1736,7 +1615,7 @@ where
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
         state: Option<JobStateV1>,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_query_options(request)?;
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
         let output = self.reads.job_list(&workspace, state)?;
@@ -1755,7 +1634,7 @@ where
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
         idempotency_key: &IdempotencyKeyV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_query_options(request)?;
         let output = self
             .reads
@@ -1776,7 +1655,7 @@ where
         slice_request: &SliceRequestV1,
         job_id: &JobId,
         wait: RequestReadWaitV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_query_options(request)?;
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
         let output = self.reads.job_status(&workspace, job_id, wait)?;
@@ -1838,9 +1717,9 @@ where
     ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         if matches!(
             result.get("schema").and_then(Value::as_str),
-            Some("podway.job-result/v2" | "podway.job-lookup-result/v2")
+            Some("podway.job-result/v3" | "podway.job-lookup-result/v3")
         ) {
-            return OutputEnvelopeV2::new(OutputEnvelopeInputV2 {
+            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
                 command: request.command().clone(),
                 generated_at: self.metadata.generated_at(),
@@ -1854,10 +1733,7 @@ where
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
         }
         self.output_response(request, workspace, job, None, result, warnings)
-            .map(|response| match response {
-                ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
-                ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
-            })
+            .map(procedure_independent_response_v1)
     }
 
     fn dispatch_job_cancel(
@@ -1866,7 +1742,7 @@ where
         slice_request: &SliceRequestV1,
         job_id: &JobId,
         expected_state: JobStateV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_query_options(request)?;
         let workspace = self.runtime.resolve_existing(slice_request.selector())?;
         let output = self
@@ -1886,7 +1762,7 @@ where
         &self,
         request: &RequestEnvelopeV1,
         output: DispatcherWorkspaceOutputV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.output_response(
             request,
             Some(output.workspace),
@@ -1922,7 +1798,7 @@ where
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         self.require_reset_all_options(request)?;
         let idempotency_key = request
             .idempotency_key()
@@ -1950,7 +1826,7 @@ where
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
         bootstrap: bool,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         let idempotency_key = request
             .idempotency_key()
             .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
@@ -2021,7 +1897,7 @@ where
         workspace: WorkspaceOutputV1,
         job: JobOutputV1,
         procedure_digest: Option<&Sha256Digest>,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         let mut result = Map::from_iter([
             ("admission".to_owned(), job_admission_value_v1(&job)),
             ("detached".to_owned(), Value::Bool(true)),
@@ -2047,7 +1923,7 @@ where
         result: DispatcherTerminalResultV1,
         response_context: Option<Box<TerminalResponseContextV1>>,
         bootstrap: bool,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         let context = response_context
             .filter(|context| context.request_id() == request.request_id())
             .map(|context| *context)
@@ -2070,8 +1946,8 @@ where
         session: Option<SessionOutputV1>,
         result: Map<String, Value>,
         warnings: Vec<Map<String, Value>>,
-    ) -> Result<ResponseEnvelopeV1, DispatchFailureV1> {
-        OutputEnvelopeV1::new(OutputEnvelopeInputV1 {
+    ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
+        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
             request_id: request.request_id().clone(),
             command: request.command().clone(),
             generated_at: self.metadata.generated_at(),
@@ -2081,7 +1957,7 @@ where
             result,
             warnings,
         })
-        .map(ResponseEnvelopeV1::Output)
+        .map(ResponseEnvelopeV2::OutputV2)
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
     }
 
@@ -2090,7 +1966,7 @@ where
         request: &RequestEnvelopeV1,
         failure: DispatchFailureV1,
         requires_admission: bool,
-    ) -> ResponseEnvelopeV1 {
+    ) -> ResponseEnvelopeV2 {
         let presentation = self.errors.map_failure(&failure);
         let generated_at = self.metadata.generated_at();
         let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
@@ -2123,7 +1999,7 @@ where
             })
             .expect("static internal dispatcher error must be protocol-valid")
         });
-        ResponseEnvelopeV1::Error(envelope)
+        ResponseEnvelopeV2::Error(envelope)
     }
 
     fn unsupported_v2_capability_response(
@@ -2142,13 +2018,12 @@ where
                 DispatchErrorDetailsV1::default()
                     .with_unsupported_v2_capability(capability, required_result_schema),
             );
-        match self.error_response(request, failure, true) {
-            ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
-            ResponseEnvelopeV1::Output(_) => {
-                unreachable!("dispatcher failures always produce error envelopes")
-            }
-        }
+        procedure_independent_response_v1(self.error_response(request, failure, true))
     }
+}
+
+fn procedure_independent_response_v1(response: ResponseEnvelopeV2) -> ResponseEnvelopeV2 {
+    response
 }
 
 fn workspace_at_least_sequence(
@@ -2157,14 +2032,6 @@ fn workspace_at_least_sequence(
 ) -> Result<WorkspaceOutputV1, DispatchFailureV1> {
     let latest = workspace.latest_workspace_sequence().max(sequence);
     WorkspaceOutputV1::new(workspace.uuid().clone(), workspace.root(), latest)
-        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
-}
-
-fn workspace_at_sequence(
-    workspace: WorkspaceOutputV1,
-    sequence: u64,
-) -> Result<WorkspaceOutputV1, DispatchFailureV1> {
-    WorkspaceOutputV1::new(workspace.uuid().clone(), workspace.root(), sequence)
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
 }
 
@@ -2183,7 +2050,7 @@ where
         &self,
         request: &RequestEnvelopeV1,
         slice_request: &SliceRequestV1,
-    ) -> ResponseEnvelopeV1 {
+    ) -> ResponseEnvelopeV2 {
         let requires_admission = matches!(
             slice_request.command().operation(),
             OperationV1::Mutate | OperationV1::Bootstrap
@@ -2245,16 +2112,11 @@ where
                 {
                     Ok(admission) => admission,
                     Err(failure) => {
-                        return match self.error_response(
+                        return procedure_independent_response_v1(self.error_response(
                             request,
                             failure,
                             development_v2_requires_admission,
-                        ) {
-                            ResponseEnvelopeV1::Output(output) => {
-                                ResponseEnvelopeV2::OutputV1(output)
-                            }
-                            ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
-                        };
+                        ));
                     }
                 }
             } else {
@@ -2268,16 +2130,11 @@ where
                     Ok(Some(response)) => return response,
                     Ok(None) => {}
                     Err(failure) => {
-                        return match self.error_response(
+                        return procedure_independent_response_v1(self.error_response(
                             request,
                             failure,
                             development_v2_requires_admission,
-                        ) {
-                            ResponseEnvelopeV1::Output(output) => {
-                                ResponseEnvelopeV2::OutputV1(output)
-                            }
-                            ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
-                        };
+                        ));
                     }
                 }
             }
@@ -2306,7 +2163,7 @@ where
                     let legacy = self.dispatch(request, slice_request);
                     let version_may_have_changed = matches!(
                         &legacy,
-                        ResponseEnvelopeV1::Error(error)
+                        ResponseEnvelopeV2::Error(error)
                             if matches!(
                                 error.code().as_str(),
                                 "SESSION_NOT_FOUND" | "SESSION_ID_MISMATCH"
@@ -2320,18 +2177,11 @@ where
                             {
                                 Ok(admission) => admission,
                                 Err(failure) => {
-                                    return match self.error_response(
+                                    return procedure_independent_response_v1(self.error_response(
                                         request,
                                         failure,
                                         development_v2_requires_admission,
-                                    ) {
-                                        ResponseEnvelopeV1::Output(output) => {
-                                            ResponseEnvelopeV2::OutputV1(output)
-                                        }
-                                        ResponseEnvelopeV1::Error(error) => {
-                                            ResponseEnvelopeV2::Error(error)
-                                        }
-                                    };
+                                    ));
                                 }
                             }
                         } else {
@@ -2345,32 +2195,19 @@ where
                             Ok(Some(response)) => return response,
                             Ok(None) => {}
                             Err(failure) => {
-                                return match self.error_response(
+                                return procedure_independent_response_v1(self.error_response(
                                     request,
                                     failure,
                                     development_v2_requires_admission,
-                                ) {
-                                    ResponseEnvelopeV1::Output(output) => {
-                                        ResponseEnvelopeV2::OutputV1(output)
-                                    }
-                                    ResponseEnvelopeV1::Error(error) => {
-                                        ResponseEnvelopeV2::Error(error)
-                                    }
-                                };
+                                ));
                             }
                         }
                     }
-                    return match legacy {
-                        ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
-                        ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
-                    };
+                    return procedure_independent_response_v1(legacy);
                 }
             };
             return versioned.unwrap_or_else(|failure| {
-                match self.error_response(request, failure, false) {
-                    ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
-                    ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
-                }
+                procedure_independent_response_v1(self.error_response(request, failure, false))
             });
         }
         let selector = match daemon_request {
@@ -2381,10 +2218,9 @@ where
         let proof = match self.runtime.procedure_v2_admission(selector) {
             Ok(proof) => proof,
             Err(failure) => {
-                return match self.error_response(request, failure, true) {
-                    ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
-                    ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
-                };
+                return procedure_independent_response_v1(
+                    self.error_response(request, failure, true),
+                );
             }
         };
         if let Some(proof) = proof {
@@ -2395,10 +2231,9 @@ where
                 Ok(Some(response)) => return response,
                 Ok(None) => {}
                 Err(failure) => {
-                    return match self.error_response(request, failure, true) {
-                        ResponseEnvelopeV1::Output(output) => ResponseEnvelopeV2::OutputV1(output),
-                        ResponseEnvelopeV1::Error(error) => ResponseEnvelopeV2::Error(error),
-                    };
+                    return procedure_independent_response_v1(
+                        self.error_response(request, failure, true),
+                    );
                 }
             }
         }
@@ -2480,6 +2315,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::WorkspaceSchemaUnsupported => (
             "WORKSPACE_SCHEMA_UNSUPPORTED",
             "Workspace schema is unsupported.",
+            false,
+            5,
+        ),
+        DispatchFailureKindV1::LegacyProcedureStateUnsupported => (
+            "LEGACY_PROCEDURE_STATE_UNSUPPORTED",
+            "Legacy Procedure v1 state is unsupported; back up the workspace and run confirmed reset --all.",
             false,
             5,
         ),
@@ -2576,12 +2417,6 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::SessionNotRunning => (
             "SESSION_NOT_RUNNING",
             "The command requires a running session.",
-            false,
-            1,
-        ),
-        DispatchFailureKindV1::SessionNotCompleted => (
-            "SESSION_NOT_COMPLETED",
-            "The command requires a completed session.",
             false,
             1,
         ),
@@ -2714,24 +2549,9 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             false,
             1,
         ),
-        DispatchFailureKindV1::StageNotFound => {
-            ("STAGE_NOT_FOUND", "The stage does not exist.", false, 1)
-        }
         DispatchFailureKindV1::StageNotSkippable => (
             "STAGE_NOT_SKIPPABLE",
             "The active stage cannot be skipped.",
-            false,
-            1,
-        ),
-        DispatchFailureKindV1::ReopenNotAllowed => (
-            "REOPEN_NOT_ALLOWED",
-            "The session or destination cannot be reopened.",
-            false,
-            1,
-        ),
-        DispatchFailureKindV1::ReturnNotAllowed => (
-            "RETURN_NOT_ALLOWED",
-            "The return destination is not allowed.",
             false,
             1,
         ),

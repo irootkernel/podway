@@ -2,12 +2,7 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{
-    fs,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, sync::Arc};
 
 use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
@@ -156,27 +151,6 @@ fn mutation_request(
     (envelope, daemon)
 }
 
-fn dispatch_after_cold_reopen(
-    dispatcher: &impl RequestDispatcherV1,
-    request: &(RequestEnvelopeV1, DaemonRequestV1),
-) -> ResponseEnvelopeV2 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let response = runtime::dispatch(dispatcher, request);
-        if !matches!(
-            &response,
-            ResponseEnvelopeV2::Error(error) if error.code().as_str() == "WORKSPACE_MAINTENANCE"
-        ) {
-            return response;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "cold reopen remained in maintenance"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
 fn query_request(
     number: u64,
     command: &str,
@@ -223,7 +197,10 @@ fn cold_query(
     payload: Map<String, Value>,
 ) -> Map<String, Value> {
     let request = query_request(next_number(number), command, selector, session_id, payload);
-    runtime::v2_result(dispatch_after_cold_reopen(dispatcher, &request), command)
+    runtime::v2_result(
+        runtime::dispatch_after_cold_reopen(dispatcher, &request),
+        command,
+    )
 }
 
 fn status(
@@ -621,7 +598,7 @@ fn v2gol004_command_generated_goal_history_is_complete_pageable_and_cold_stable(
     );
     assert!(matches!(
         runtime::dispatch(&dispatcher, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let start = runtime::request(
         next_number(&mut number),
@@ -960,7 +937,7 @@ fn v2gol004_max_escaped_assessment_stays_out_of_history_but_survives_next_readba
     );
     assert!(matches!(
         runtime::dispatch(&dispatcher, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let start = runtime::request(
         next_number(&mut number),

@@ -93,7 +93,7 @@ impl ContractFixture {
     fn valid_envelope(&self) -> Value {
         let manifest = self.manifest();
         json!({
-            "schema": "podway.output/v1",
+            "schema": "podway.output/v3",
             "request_id": "123e4567-e89b-42d3-a456-426614174000",
             "command": "version",
             "generated_at": "2026-08-03T00:00:00.000Z",
@@ -226,20 +226,9 @@ fn source_and_packaged_contract_roots_reject_v2_preset_byte_drift() {
 }
 
 #[test]
-fn complete_identity_validation_rejects_v011_and_generated_drift() {
+fn complete_identity_validation_rejects_generated_drift() {
     let fixture = ContractFixture::new(Layout::Source);
     let valid = fixture.valid_envelope();
-    let v011: Value = serde_json::from_slice(include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/contract/v0.1.1-daemon-version-output.json"
-    )))
-    .expect("v0.1.1 regression fixture");
-    assert!(
-        fixture
-            .verify_documents(&valid, &v011, SOURCE_COMMIT)
-            .is_err()
-    );
-
     let mut mutations = Vec::new();
     let required_fields = [
         "schema",
@@ -371,12 +360,12 @@ fn manifest_and_schema_registry_fail_closed_for_every_authority_drift() {
         let schema_path = physical_path(
             &external.root,
             external.layout,
-            "schemas/output-v1.schema.json",
+            "schemas/output-v3.schema.json",
         );
         let mut schema: Value = serde_json::from_slice(&fs::read(&schema_path).unwrap()).unwrap();
         schema["$ref"] = json!(reference);
         fs::write(&schema_path, serde_json::to_vec(&schema).unwrap()).unwrap();
-        external.refresh_asset("schemas/output-v1.schema.json");
+        external.refresh_asset("schemas/output-v3.schema.json");
         assert!(
             external.verify_valid().is_err(),
             "verifier accepted external or unknown reference {reference}"

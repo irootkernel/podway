@@ -477,8 +477,7 @@ where
         )
     }
 
-    /// Attempts the additive Procedure v2 start admission path. `None` preserves the v1 fallback
-    /// contract when the selected custom source is not a Procedure v2 document.
+    /// Attempts the Procedure v2 start admission path. `None` means the request is not a start.
     pub fn submit_procedure_v2_start_with_response_context(
         &self,
         scheduler: &Arc<WorkspaceSchedulerV1<Context>>,

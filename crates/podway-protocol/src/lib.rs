@@ -5,7 +5,7 @@
 use std::fmt;
 
 use podway_core::{
-    AttemptId, GoalRevisionNumberV2, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, Revision, SessionId,
+    AttemptId, GoalRevisionNumberV2, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V2, Revision, SessionId,
     Sha256Digest, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -18,9 +18,8 @@ mod result_contract;
 mod slice;
 
 pub use codec::{
-    PayloadCodecErrorV1, ResponseEnvelopeV2, decode_request_payload_v1, decode_response_payload_v1,
-    decode_response_payload_v2, encode_request_payload_v1, encode_response_payload_v1,
-    encode_response_payload_v2,
+    PayloadCodecErrorV1, ResponseEnvelopeV2, decode_request_payload_v1, decode_response_payload_v2,
+    encode_request_payload_v1, encode_response_payload_v2,
 };
 pub use framing::{
     FrameErrorV1, FrameIoPhaseV1, decode_single_frame_v1, encode_frame_v1, read_single_frame_v1,
@@ -35,21 +34,20 @@ pub use release_contract::{
 pub use result_contract::{
     EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_V2_OUTPUT_WARNINGS, MAX_V2_TERMINAL_ERROR_BYTES,
     MAX_V2_WARNING_CODE_CHARS, MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS,
-    NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V2, OutputEnvelopeInputV2, OutputEnvelopeV2,
-    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2, SUPPORTED_OUTPUT_SCHEMAS_V2,
-    SUPPORTED_RESULT_SCHEMAS_V1, V2_MUTATION_COMMANDS, decode_result_schema_contract_v2,
-    ensure_command_result_schema_v1, result_schema_top_level_fields_v2, validate_command_result_v1,
-    validate_command_result_v2, validate_v2_output_warnings,
+    NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V3, OutputEnvelopeInputV3, OutputEnvelopeV3,
+    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2, SUPPORTED_OUTPUT_SCHEMAS_V3,
+    V2_MUTATION_COMMANDS, decode_result_schema_contract_v2,
+    ensure_procedure_independent_result_schema_v1, result_schema_top_level_fields_v2,
+    validate_command_result_v2, validate_procedure_independent_result_v1,
+    validate_v2_output_warnings,
 };
 pub use slice::*;
 
 use serde_json::{Map, Value};
 
 pub const IPC_PROTOCOL_V1: &str = "podway.ipc/v1";
-pub const OUTPUT_SCHEMA_V1: &str = "podway.output/v1";
 pub const ERROR_SCHEMA_V1: &str = "podway.error/v1";
 pub const SUPPORTED_PROTOCOLS_V1: &[&str] = &[IPC_PROTOCOL_V1];
-pub const SUPPORTED_OUTPUT_SCHEMAS_V1: &[&str] = &[OUTPUT_SCHEMA_V1];
 pub const SUPPORTED_ERROR_SCHEMAS_V1: &[&str] = &[ERROR_SCHEMA_V1];
 
 pub const FRAME_LENGTH_PREFIX_BYTES_V1: usize = 4;
@@ -1331,203 +1329,6 @@ impl<'de> Deserialize<'de> for SessionOutputV1 {
     }
 }
 
-/// Validated fields used to construct one v1 success envelope.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutputEnvelopeInputV1 {
-    pub request_id: RequestIdV1,
-    pub command: CommandNameV1,
-    pub generated_at: Rfc3339MillisV1,
-    pub workspace: Option<WorkspaceOutputV1>,
-    pub job: Option<JobOutputV1>,
-    pub session: Option<SessionOutputV1>,
-    pub result: Map<String, Value>,
-    pub warnings: Vec<Map<String, Value>>,
-}
-
-/// A validated `podway.output/v1` response envelope.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct OutputEnvelopeV1 {
-    schema: String,
-    request_id: RequestIdV1,
-    command: CommandNameV1,
-    generated_at: Rfc3339MillisV1,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    workspace: Option<WorkspaceOutputV1>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    job: Option<JobOutputV1>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session: Option<SessionOutputV1>,
-    result: Map<String, Value>,
-    warnings: Vec<Map<String, Value>>,
-}
-
-impl OutputEnvelopeV1 {
-    pub fn new(input: OutputEnvelopeInputV1) -> Result<Self, ProtocolError> {
-        let OutputEnvelopeInputV1 {
-            request_id,
-            command,
-            generated_at,
-            workspace,
-            job,
-            session,
-            mut result,
-            warnings,
-        } = input;
-        ensure_command_result_schema_v1(command.as_str(), &mut result);
-        let output = Self {
-            schema: OUTPUT_SCHEMA_V1.to_owned(),
-            request_id,
-            command,
-            generated_at,
-            workspace,
-            job,
-            session,
-            result,
-            warnings,
-        };
-        output.validate()?;
-        Ok(output)
-    }
-
-    pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.schema != OUTPUT_SCHEMA_V1 {
-            return Err(ProtocolError::UnsupportedProtocol {
-                received: self.schema.clone(),
-                supported: SUPPORTED_OUTPUT_SCHEMAS_V1,
-            });
-        }
-        self.request_id.validate()?;
-        self.command.validate()?;
-        self.generated_at.validate()?;
-        if let Some(workspace) = &self.workspace {
-            workspace.validate()?;
-        }
-        if let Some(job) = &self.job {
-            job.validate()?;
-        }
-        if let Some(session) = &self.session {
-            session.validate()?;
-        }
-        validate_json_map_depth(&self.result, 1)?;
-        validate_command_result_v1(self.command.as_str(), &self.result)?;
-        if self.result.get("schema").and_then(Value::as_str)
-            == Some(COMPACT_STATUS_RESULT_SCHEMA_V1)
-        {
-            let compact = CompactStatusResultV1::from_result_map(&self.result)
-                .map_err(|_| ProtocolError::InvalidCompactStatusEnvelope)?;
-            let workspace = self
-                .workspace
-                .as_ref()
-                .ok_or(ProtocolError::InvalidCompactStatusEnvelope)?;
-            if compact.queue.latest_workspace_sequence == 0
-                || compact.queue.latest_workspace_sequence != workspace.latest_workspace_sequence()
-            {
-                return Err(ProtocolError::InvalidCompactStatusEnvelope);
-            }
-            let length = serde_json::to_vec(self)
-                .map_err(|_| ProtocolError::InvalidCompactStatusEnvelope)?
-                .len()
-                .checked_add(1)
-                .ok_or(ProtocolError::CompactStatusEnvelopeTooLarge {
-                    length: usize::MAX,
-                    maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
-                })?;
-            if length > MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 {
-                return Err(ProtocolError::CompactStatusEnvelopeTooLarge {
-                    length,
-                    maximum: MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1,
-                });
-            }
-        }
-        if let Some(admission) = self.result.get("admission") {
-            let (job_id, sequence) = validate_admission_metadata_v1(admission, false)?
-                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
-            let job = self
-                .job
-                .as_ref()
-                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
-            if job.id() != &job_id || job.sequence() != sequence {
-                return Err(ProtocolError::InvalidAdmissionMetadata);
-            }
-        }
-        for warning in &self.warnings {
-            validate_json_map_depth(warning, 2)?;
-        }
-        Ok(())
-    }
-
-    pub fn request_id(&self) -> &RequestIdV1 {
-        &self.request_id
-    }
-
-    pub fn command(&self) -> &CommandNameV1 {
-        &self.command
-    }
-
-    pub fn generated_at(&self) -> &Rfc3339MillisV1 {
-        &self.generated_at
-    }
-
-    pub fn workspace(&self) -> Option<&WorkspaceOutputV1> {
-        self.workspace.as_ref()
-    }
-
-    pub fn job(&self) -> Option<&JobOutputV1> {
-        self.job.as_ref()
-    }
-
-    pub fn session(&self) -> Option<&SessionOutputV1> {
-        self.session.as_ref()
-    }
-
-    pub fn result(&self) -> &Map<String, Value> {
-        &self.result
-    }
-
-    pub fn warnings(&self) -> &[Map<String, Value>] {
-        &self.warnings
-    }
-}
-impl<'de> Deserialize<'de> for OutputEnvelopeV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawOutputEnvelopeV1 {
-            schema: String,
-            request_id: RequestIdV1,
-            command: CommandNameV1,
-            generated_at: Rfc3339MillisV1,
-            #[serde(default)]
-            workspace: OptionalField<WorkspaceOutputV1>,
-            #[serde(default)]
-            job: OptionalField<JobOutputV1>,
-            #[serde(default)]
-            session: OptionalField<SessionOutputV1>,
-            result: Map<String, Value>,
-            warnings: Vec<Map<String, Value>>,
-        }
-
-        let value = Value::deserialize(deserializer)?;
-        validate_json_document_depth(&value).map_err(de::Error::custom)?;
-        let raw = RawOutputEnvelopeV1::deserialize(value).map_err(de::Error::custom)?;
-        let output = Self {
-            schema: raw.schema,
-            request_id: raw.request_id,
-            command: raw.command,
-            generated_at: raw.generated_at,
-            workspace: raw.workspace.0,
-            job: raw.job.0,
-            session: raw.session.0,
-            result: raw.result,
-            warnings: raw.warnings,
-        };
-        output.validate().map_err(de::Error::custom)?;
-        Ok(output)
-    }
-}
-
 #[derive(Clone, Copy)]
 struct ErrorCodeCatalogEntryV1 {
     code: &'static str,
@@ -1637,6 +1438,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "LEGACY_PROCEDURE_STATE_UNSUPPORTED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "WORKSPACE_QUEUE_FULL",
         exit_code: 4,
         retryable: true,
@@ -1707,11 +1513,6 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "SESSION_NOT_COMPLETED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
         code: "SESSION_CANCELLED",
         exit_code: 1,
         retryable: false,
@@ -1727,22 +1528,7 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "STAGE_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
         code: "STAGE_NOT_SKIPPABLE",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "RETURN_NOT_ALLOWED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "REOPEN_NOT_ALLOWED",
         exit_code: 1,
         retryable: false,
     },
@@ -2811,7 +2597,7 @@ fn validate_wait_timeout_details_v1(details: &Map<String, Value>) -> bool {
 fn validate_blocker_limit_details_v1(details: &Map<String, Value>) -> bool {
     let maximum = details.get("maximum_open_blockers").and_then(Value::as_u64);
     if details.get("schema").and_then(Value::as_str) != Some("podway.blocker-limit-details/v1")
-        || (maximum != Some(64) && maximum != u64::try_from(MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1).ok())
+        || (maximum != Some(64) && maximum != u64::try_from(MAX_OPEN_BLOCKERS_PER_ATTEMPT_V2).ok())
     {
         return false;
     }
@@ -2933,45 +2719,6 @@ impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {
         };
         output.validate().map_err(de::Error::custom)?;
         Ok(output)
-    }
-}
-
-/// The single response envelope carried in one IPC response frame.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum ResponseEnvelopeV1 {
-    Output(OutputEnvelopeV1),
-    Error(ErrorEnvelopeV1),
-}
-
-impl ResponseEnvelopeV1 {
-    pub fn validate(&self) -> Result<(), ProtocolError> {
-        match self {
-            Self::Output(output) => output.validate(),
-            Self::Error(error) => error.validate(),
-        }
-    }
-}
-impl<'de> Deserialize<'de> for ResponseEnvelopeV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        validate_json_document_depth(&value).map_err(de::Error::custom)?;
-
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum RawResponseEnvelopeV1 {
-            Output(OutputEnvelopeV1),
-            Error(ErrorEnvelopeV1),
-        }
-
-        let response = match RawResponseEnvelopeV1::deserialize(value).map_err(de::Error::custom)? {
-            RawResponseEnvelopeV1::Output(output) => Self::Output(output),
-            RawResponseEnvelopeV1::Error(error) => Self::Error(error),
-        };
-        Ok(response)
     }
 }
 

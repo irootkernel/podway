@@ -11,7 +11,7 @@ new adapter-catalog bytes:
 
 ```bash
 python3 tools/contract_manifest.py --write
-python3 tools/create_dolgorae_handoff.py prepare-v2-adapter
+python3 tools/create_dolgorae_handoff.py prepare-adapter
 python3 tools/contract_manifest.py --write
 ```
 

@@ -49,7 +49,6 @@ fn admit(source: &str) -> ValidatedProcedureV2 {
         Ok(ParsedProcedure::V2(parsed)) => {
             validate_procedure_v2(parsed).expect("a scaffold template must validate")
         }
-        Ok(ParsedProcedure::V1(_)) => panic!("a scaffold template declares the v2 schema"),
         Err(error) => panic!("a scaffold template must parse: {error}\n{source}"),
     }
 }

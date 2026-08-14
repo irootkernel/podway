@@ -48,7 +48,7 @@ The daemon is the sole writer. The implemented registry uses the user-global
 location above. Updates use a same-directory temporary write, fsync where
 appropriate, and atomic rename.
 
-The registry contains no task title, procedure, stage, attempt, item, blocker, artifact, or job payload data.
+The registry contains no task title, procedure, graph node, attempt, item, blocker, artifact, or job payload data.
 
 ## Moved worktrees
 
@@ -128,10 +128,11 @@ Default pruning:
 - reset and replace receipts are workspace-scoped and survive deletion of the old session;
 - workspace bootstrap and maintenance records retain the newest 100 or 30 days, whichever is smaller after the minimum set;
 - terminal response JSON remains after its job row is pruned;
-- receipt v4 retains the v3 command, projections, and bounded response context plus
-  the complete canonical public terminal envelope sealed atomically with terminal state;
-- v4 lookup returns the stored public envelope without reapplying the current catalog
-  or result renderer;
+- receipt v5 retains the v4 command, projections, bounded response context, and
+  complete canonical public terminal envelope plus an explicit durable Procedure v2
+  execution flavor sealed atomically with terminal state;
+- v5 lookup returns the stored public envelope without reapplying the current catalog
+  or result renderer; predecessor receipt schemas remain strictly decodable;
 - canonical requests, selectors, preconditions, idempotency keys, and submitted
   values are not copied into the retained response context;
 - v0-v2 succeeded/failed receipt-only lookup fails closed when a complete envelope

@@ -1,7 +1,7 @@
 {
   "adapter_acceptance": [
     {
-      "expected": "manifest-and-adapter-catalog-pins-exact-match-before-dispatch",
+      "expected": "manifest-and-adapter-catalog-pins-match-before-dispatch",
       "id": "DOLV2-001",
       "check": "manifest-identity"
     },
@@ -11,17 +11,17 @@
       "check": "schema-pins"
     },
     {
-      "expected": "added-and-version-aware-routes-dispatch",
+      "expected": "v2-only-routes-dispatch",
       "id": "DOLV2-003",
       "check": "route-surface"
     },
     {
-      "expected": "all-listed-result-error-and-diagnostic-families-decode-with-output-v2-success-error-v1-failure",
+      "expected": "all-listed-results-use-output-v3-and-errors-use-error-v1",
       "id": "DOLV2-004",
       "check": "envelope-dispatch"
     },
     {
-      "expected": "no-adapter-db-write-v1-state-unchanged",
+      "expected": "adapter-never-writes-worktree-state",
       "id": "DOLV2-005",
       "check": "migration-boundary"
     },
@@ -46,14 +46,7 @@
       "check": "packaged-byte-verification"
     }
   ],
-  "baseline": {
-    "authoring_diagnostics": 0,
-    "contract_manifest_digest": "sha256:4588ba06328c9fc0dd28e0a5879a842f6b68065195192d61f3b2a652a82e4937",
-    "routes": 46,
-    "runtime_errors": 65,
-    "schemas": 29
-  },
-  "contract_delta": {
+  "contract_surface": {
     "authoring_diagnostics": [
       {
         "code": "AUTHORING_SCHEMA_INVALID",
@@ -321,73 +314,453 @@
         "summary": "A placement references more than one goal-assessment source."
       }
     ],
-    "result_families": {
-      "existing_route_v2": [
-        "schemas/procedure-validation-result-v2.schema.json",
-        "schemas/detached-admission-result-v2.schema.json",
-        "schemas/session-start-result-v2.schema.json",
-        "schemas/status-result-v2.schema.json",
-        "schemas/compact-status-result-v2.schema.json",
-        "schemas/next-result-v2.schema.json",
-        "schemas/stage-transition-result-v2.schema.json",
-        "schemas/item-mutation-result-v2.schema.json",
-        "schemas/job-lookup-result-v2.schema.json",
-        "schemas/job-result-v2.schema.json"
-      ],
-      "new_route_v1": [
-        "schemas/procedure-source-result-v1.schema.json",
-        "schemas/procedure-diagnostics-result-v1.schema.json",
-        "schemas/procedure-graph-result-v1.schema.json",
-        "schemas/procedure-preview-result-v1.schema.json",
-        "schemas/decision-result-v1.schema.json",
-        "schemas/rework-result-v1.schema.json",
-        "schemas/goal-definition-result-v1.schema.json",
-        "schemas/goal-revision-result-v1.schema.json",
-        "schemas/criterion-assessment-result-v1.schema.json"
-      ]
-    },
-    "routes": {
-      "added": [
-        "procedure.format",
-        "procedure.vet",
-        "procedure.lint",
-        "procedure.check",
-        "procedure.graph",
-        "procedure.preview",
-        "procedure.scaffold",
-        "procedure.convert",
-        "session.decide",
-        "session.rework",
-        "goal.define",
-        "goal.revise",
-        "goal.assess_criterion"
-      ],
-      "version_aware": [
-        "procedure.validate",
-        "session.start",
-        "session.start_replace",
-        "session.status",
-        "session.next",
-        "session.complete",
-        "session.skip",
-        "session.retry",
-        "session.block",
-        "session.unblock",
-        "session.cancel",
-        "session.reset",
-        "item.check",
-        "item.uncheck",
-        "item.set",
-        "item.add",
-        "item.remove",
-        "item.attach",
-        "item.clear",
-        "job.lookup",
-        "job.status",
-        "job.wait"
-      ]
-    },
+    "routes": [
+      "help",
+      "version",
+      "completions",
+      "procedure.validate",
+      "procedure.show",
+      "preset.list",
+      "preset.show",
+      "preset.explain",
+      "daemon.install",
+      "daemon.uninstall",
+      "daemon.start",
+      "daemon.stop",
+      "daemon.restart",
+      "daemon.status",
+      "daemon.terminate",
+      "daemon.logs",
+      "workspace.init",
+      "workspace.doctor",
+      "workspace.show",
+      "workspace.repair",
+      "session.start",
+      "session.start_replace",
+      "session.status",
+      "session.next",
+      "session.complete",
+      "session.skip",
+      "session.retry",
+      "session.block",
+      "session.unblock",
+      "session.cancel",
+      "session.reset",
+      "workspace.reset_all",
+      "item.check",
+      "item.uncheck",
+      "item.set",
+      "item.add",
+      "item.remove",
+      "item.attach",
+      "item.clear",
+      "job.list",
+      "job.lookup",
+      "job.status",
+      "job.wait",
+      "job.cancel",
+      "procedure.format",
+      "procedure.vet",
+      "procedure.lint",
+      "procedure.check",
+      "procedure.graph",
+      "procedure.preview",
+      "procedure.scaffold",
+      "session.decide",
+      "session.rework",
+      "goal.define",
+      "goal.revise",
+      "goal.assess_criterion"
+    ],
     "runtime_errors": [
+      {
+        "code": "DAEMON_NOT_INSTALLED",
+        "details_schema": "podway.endpoint-error-details/v1",
+        "exit_code": 3,
+        "retryable": false,
+        "summary": "User service is not installed."
+      },
+      {
+        "code": "DAEMON_UNAVAILABLE",
+        "details_schema": "podway.endpoint-error-details/v1",
+        "exit_code": 3,
+        "retryable": true,
+        "summary": "Daemon socket cannot be reached."
+      },
+      {
+        "code": "DAEMON_SHUTTING_DOWN",
+        "details_schema": "podway.endpoint-error-details/v1",
+        "exit_code": 3,
+        "retryable": true,
+        "summary": "Daemon is draining and not accepting work."
+      },
+      {
+        "code": "DAEMON_VERSION_INCOMPATIBLE",
+        "details_schema": "podway.endpoint-error-details/v1",
+        "exit_code": 3,
+        "retryable": false,
+        "summary": "CLI and daemon are not contract-compatible."
+      },
+      {
+        "code": "DAEMON_CONTRACT_MISMATCH",
+        "details_schema": "podway.daemon-contract-mismatch-details/v1",
+        "exit_code": 3,
+        "retryable": false,
+        "summary": "CLI and daemon product or contract manifest identity differs."
+      },
+      {
+        "code": "PROTOCOL_VERSION_UNSUPPORTED",
+        "exit_code": 3,
+        "retryable": false,
+        "summary": "Requested IPC protocol is unsupported."
+      },
+      {
+        "code": "REQUEST_TOO_LARGE",
+        "exit_code": 2,
+        "retryable": false,
+        "summary": "IPC request exceeds configured limits."
+      },
+      {
+        "code": "REQUEST_INVALID",
+        "exit_code": 2,
+        "retryable": false,
+        "summary": "Request is malformed or violates schema."
+      },
+      {
+        "code": "SOCKET_ENDPOINT_INVALID",
+        "details_schema": "podway.socket-endpoint-error-details/v1",
+        "exit_code": 2,
+        "retryable": false,
+        "summary": "The explicit daemon socket path is invalid."
+      },
+      {
+        "code": "NOT_A_GIT_WORKTREE",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "No valid Git worktree contains the path."
+      },
+      {
+        "code": "BARE_GIT_REPOSITORY",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Bare repositories are unsupported."
+      },
+      {
+        "code": "WORKTREE_GONE",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "The worktree no longer exists."
+      },
+      {
+        "code": "WORKSPACE_NOT_INITIALIZED",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Podway workspace state is absent."
+      },
+      {
+        "code": "WORKSPACE_ALREADY_INITIALIZED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Workspace is already initialized."
+      },
+      {
+        "code": "WORKSPACE_INIT_CONFLICT",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Existing Podway files conflict with safe initialization."
+      },
+      {
+        "code": "WORKSPACE_ID_CONFLICT",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "The workspace UUID is active at another root."
+      },
+      {
+        "code": "WORKSPACE_UUID_MISMATCH",
+        "details_schema": "podway.workspace-uuid-mismatch-details/v1",
+        "exit_code": 4,
+        "retryable": false,
+        "summary": "The workspace UUID differs from the expected identity."
+      },
+      {
+        "code": "WORKSPACE_CONFIG_INVALID",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Workspace configuration is invalid."
+      },
+      {
+        "code": "WORKSPACE_STATE_UNREADABLE",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Workspace state is corrupt or inaccessible."
+      },
+      {
+        "code": "WORKSPACE_SCHEMA_UNSUPPORTED",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Workspace schema is unsupported."
+      },
+      {
+        "code": "LEGACY_PROCEDURE_STATE_UNSUPPORTED",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Procedure v1 state requires backup and a confirmed reset --all."
+      },
+      {
+        "code": "WORKSPACE_QUEUE_FULL",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "Workspace mutation queue is full."
+      },
+      {
+        "code": "WORKSPACE_MAINTENANCE",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "Workspace maintenance temporarily blocks mutation admission."
+      },
+      {
+        "code": "WORKSPACE_PATH_UNSAFE",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Podway workspace path is unsafe."
+      },
+      {
+        "code": "PATH_OUTSIDE_WORKTREE",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "A requested path escapes the worktree."
+      },
+      {
+        "code": "MIGRATION_FAILED",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Workspace migration failed."
+      },
+      {
+        "code": "PROCEDURE_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Procedure cannot be resolved."
+      },
+      {
+        "code": "PROCEDURE_INVALID",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Procedure is invalid."
+      },
+      {
+        "code": "PROCEDURE_SCHEMA_UNSUPPORTED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Procedure schema is unsupported."
+      },
+      {
+        "code": "PROCEDURE_DIGEST_MISMATCH",
+        "details_schema": "podway.procedure-digest-mismatch-details/v1",
+        "exit_code": 4,
+        "retryable": false,
+        "summary": "The canonical Procedure digest differs from the expected digest."
+      },
+      {
+        "code": "PRESET_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Built-in preset does not exist."
+      },
+      {
+        "code": "SESSION_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "No current task session exists."
+      },
+      {
+        "code": "SESSION_ID_MISMATCH",
+        "details_schema": "podway.session-id-mismatch-details/v1",
+        "exit_code": 4,
+        "retryable": false,
+        "summary": "The session ID differs from the expected identity."
+      },
+      {
+        "code": "SESSION_ALREADY_EXISTS",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "A task session already exists."
+      },
+      {
+        "code": "SESSION_NOT_RUNNING",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The command requires a running session."
+      },
+      {
+        "code": "SESSION_CANCELLED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The session was cancelled."
+      },
+      {
+        "code": "SESSION_REVISION_CONFLICT",
+        "details_schema": "podway.revision-conflict-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The session changed after it was observed."
+      },
+      {
+        "code": "ATTEMPT_NOT_CURRENT",
+        "details_schema": "podway.attempt-conflict-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The target attempt is no longer active."
+      },
+      {
+        "code": "STAGE_NOT_SKIPPABLE",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The active stage cannot be skipped."
+      },
+      {
+        "code": "REQUIRED_ITEMS_MISSING",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Required items are missing."
+      },
+      {
+        "code": "BLOCKERS_PRESENT",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Open blockers prevent completion."
+      },
+      {
+        "code": "BLOCKER_LIMIT_REACHED",
+        "details_schema": "podway.blocker-limit-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The active attempt already has the maximum number of open blockers."
+      },
+      {
+        "code": "ITEM_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The item does not exist on the active stage."
+      },
+      {
+        "code": "ITEM_TYPE_MISMATCH",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The command is incompatible with the item type."
+      },
+      {
+        "code": "ITEM_CONSTRAINT_FAILED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The item value violates its constraints."
+      },
+      {
+        "code": "ITEM_REVISION_CONFLICT",
+        "details_schema": "podway.revision-conflict-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The item changed after it was observed."
+      },
+      {
+        "code": "ITEM_ALREADY_SET",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The item was expected to be unset."
+      },
+      {
+        "code": "LIST_VALUE_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The list value does not exist."
+      },
+      {
+        "code": "LIST_VALUE_DUPLICATE",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The unique list already contains the value."
+      },
+      {
+        "code": "ARTIFACT_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The local artifact does not exist."
+      },
+      {
+        "code": "ARTIFACT_UNREADABLE",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "The local artifact cannot be opened or hashed."
+      },
+      {
+        "code": "ARTIFACT_CHANGED",
+        "exit_code": 1,
+        "retryable": true,
+        "summary": "The local artifact no longer matches stored metadata."
+      },
+      {
+        "code": "ARTIFACT_MEDIA_TYPE_NOT_ALLOWED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The artifact media type is not allowed."
+      },
+      {
+        "code": "BLOCKER_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The blocker does not exist."
+      },
+      {
+        "code": "BLOCKER_NOT_CURRENT",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The blocker belongs to an old attempt."
+      },
+      {
+        "code": "IDEMPOTENCY_KEY_REUSED",
+        "details_schema": "podway.idempotency-key-reused-details/v1",
+        "exit_code": 2,
+        "retryable": false,
+        "summary": "The idempotency key is bound to another request."
+      },
+      {
+        "code": "JOB_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The job does not exist or was pruned."
+      },
+      {
+        "code": "JOB_NOT_CANCELLABLE",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The job is running or terminal."
+      },
+      {
+        "code": "JOB_WAIT_TIMEOUT",
+        "details_schema": "podway.job-wait-timeout-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The wait expired; the admitted job may continue."
+      },
+      {
+        "code": "MUTATION_OUTCOME_UNKNOWN",
+        "details_schema": "podway.mutation-outcome-unknown-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The mutation may have been admitted; reconcile by idempotency key."
+      },
+      {
+        "code": "CONFIRMATION_REQUIRED",
+        "exit_code": 2,
+        "retryable": false,
+        "summary": "The command requires explicit confirmation."
+      },
+      {
+        "code": "INTERNAL_ERROR",
+        "exit_code": 6,
+        "retryable": false,
+        "summary": "An unexpected internal error occurred."
+      },
       {
         "code": "PROCEDURE_V2_SCHEMA_INVALID",
         "details_schema": "podway.v2-runtime-error-details/v1",
@@ -573,9 +946,19 @@
     ],
     "schema_pins": [
       {
+        "id": "urn:podway:schema:attempt-conflict-details:v1",
+        "path": "schemas/attempt-conflict-details-v1.schema.json",
+        "sha256": "sha256:865829b0bea4977601d07466abeaf2e505011eb72ee0c789e56ec99427b121a2"
+      },
+      {
         "id": "urn:podway:schema:authoring-diagnostic:v1",
         "path": "schemas/authoring-diagnostic-v1.schema.json",
         "sha256": "sha256:660d2d1e1e7a1decc8f0bc4fbdf713edb01bcc0f6599a659f80385ffebb723e4"
+      },
+      {
+        "id": "urn:podway:schema:blocker-limit-details:v1",
+        "path": "schemas/blocker-limit-details-v1.schema.json",
+        "sha256": "sha256:23824257c477c62873ab63cdfabf4d148bdaac29473ee66c9bbf7b7970974246"
       },
       {
         "id": "urn:podway:schema:compact-status-result:v2",
@@ -583,9 +966,24 @@
         "sha256": "sha256:de8b30d82a597940838981ebc344f4c7aea08aea70f37b745ad3f0b4cc73ed20"
       },
       {
+        "id": "urn:podway:schema:contract-manifest:v1",
+        "path": "schemas/contract-manifest-v1.schema.json",
+        "sha256": "sha256:798b3528db2495c819e45b091d9e594a812d49c1c9a6a55f6c429aa3cb2e5340"
+      },
+      {
         "id": "urn:podway:schema:criterion-assessment-result:v1",
         "path": "schemas/criterion-assessment-result-v1.schema.json",
         "sha256": "sha256:25edea7b9a3047f0a2baa9ee75005524ed91740e200ca97f477b976795c9f59d"
+      },
+      {
+        "id": "urn:podway:schema:daemon-contract-mismatch-details:v1",
+        "path": "schemas/daemon-contract-mismatch-details-v1.schema.json",
+        "sha256": "sha256:12dc22f9a7b9dce90f39af8c3a6fda8dc2765e9dfee4b643eed8cf71e4ace5c3"
+      },
+      {
+        "id": "urn:podway:schema:daemon-status-result:v1",
+        "path": "schemas/daemon-status-result-v1.schema.json",
+        "sha256": "sha256:998d14853d3d86b226d9a67f239ee6f0d3e90590ecbd7eaa15c1c91952552486"
       },
       {
         "id": "urn:podway:schema:decision-result:v1",
@@ -593,9 +991,24 @@
         "sha256": "sha256:ced9d63a2e9cf3d69c925d363822acccfcdd4d78a12423c93b4b248408814ad4"
       },
       {
+        "id": "urn:podway:schema:detached-admission-result:v1",
+        "path": "schemas/detached-admission-result-v1.schema.json",
+        "sha256": "sha256:c0eee4cb3d988f3ac40cad1cf6e1875fc5496cb57675fbddd6d59082c0b6a023"
+      },
+      {
         "id": "urn:podway:schema:detached-admission-result:v2",
         "path": "schemas/detached-admission-result-v2.schema.json",
         "sha256": "sha256:6385e8070cb663f36a9e0787666ae3df12ecf83e814506629bdaf12c77243974"
+      },
+      {
+        "id": "urn:podway:schema:endpoint-error-details:v1",
+        "path": "schemas/endpoint-error-details-v1.schema.json",
+        "sha256": "sha256:a5da30cfda8d774b1f5c6f499b7718cc10bcf15aee922da65322f20220a8b2fd"
+      },
+      {
+        "id": "urn:podway:schema:error:v1",
+        "path": "schemas/error-v1.schema.json",
+        "sha256": "sha256:371ccd1e07a0f503bc70a5a4b167ff43a0dfbe9ed8e5b78533cd9a7848d06bf8"
       },
       {
         "id": "urn:podway:schema:goal-definition-result:v1",
@@ -608,19 +1021,34 @@
         "sha256": "sha256:0252e7044d956a1e4bbd9cd8d384db3de6084e03389e9b56116f11315ee620e7"
       },
       {
+        "id": "urn:podway:schema:idempotency-key-reused-details:v1",
+        "path": "schemas/idempotency-key-reused-details-v1.schema.json",
+        "sha256": "sha256:df53a64adb45be10df7f112b3b032a26eef656f2d4e4a3c2dd73989ce8a94c6a"
+      },
+      {
+        "id": "urn:podway:schema:ipc-request:v1",
+        "path": "schemas/ipc-request-v1.schema.json",
+        "sha256": "sha256:5d80862cfbcaefb8edc7f1460e1fa6c152a52c35d87c7d4d94c80a356efd35ae"
+      },
+      {
         "id": "urn:podway:schema:item-mutation-result:v2",
         "path": "schemas/item-mutation-result-v2.schema.json",
         "sha256": "sha256:f7d945086b4a5ccaa1d1256621379f336befa0de163a2642437fc81b4485e214"
       },
       {
-        "id": "urn:podway:schema:job-lookup-result:v2",
-        "path": "schemas/job-lookup-result-v2.schema.json",
-        "sha256": "sha256:a799081d957d70a78f26a05b378d9259f7cb6155aa1c12fe02254a460d87b278"
+        "id": "urn:podway:schema:job-lookup-result:v3",
+        "path": "schemas/job-lookup-result-v3.schema.json",
+        "sha256": "sha256:00def052d3cb9f1975bb5c3c378a4bb503eb2374b9a203fb8470273ca68d57ab"
       },
       {
-        "id": "urn:podway:schema:job-result:v2",
-        "path": "schemas/job-result-v2.schema.json",
-        "sha256": "sha256:a146a565f3be1a91571be8b83fd2c455748125176ec0650dc18bf92830780557"
+        "id": "urn:podway:schema:job-result:v3",
+        "path": "schemas/job-result-v3.schema.json",
+        "sha256": "sha256:785667e42f2eaea1a8c08c5332f560a6ea02f3e5876f34597e2a20d5ebac8501"
+      },
+      {
+        "id": "urn:podway:schema:job-wait-timeout-details:v1",
+        "path": "schemas/job-wait-timeout-details-v1.schema.json",
+        "sha256": "sha256:df3d32bc0f8488b8b10ecb62b63a62dc514680eff08e570956797e2931a42903"
       },
       {
         "id": "urn:podway:schema:next-result:v2",
@@ -628,9 +1056,9 @@
         "sha256": "sha256:ef64559c7ede43ea11c64de1dcd60dea46539da92113fc20734aa2c006d4aa26"
       },
       {
-        "id": "urn:podway:schema:output:v2",
-        "path": "schemas/output-v2.schema.json",
-        "sha256": "sha256:19f5cb6c5615a404620325ce4b9ed8c3f52bda56d1007890094bb010b2ebea63"
+        "id": "urn:podway:schema:output:v3",
+        "path": "schemas/output-v3.schema.json",
+        "sha256": "sha256:6be137a3e934655f590b192631ac9b486aaed0845d68bae033e5ceba820a2e80"
       },
       {
         "id": "urn:podway:schema:procedure-diagnostics-result:v1",
@@ -650,7 +1078,7 @@
       {
         "id": "urn:podway:schema:procedure-source-result:v1",
         "path": "schemas/procedure-source-result-v1.schema.json",
-        "sha256": "sha256:8cbecbcf8ac5280b92f68893c9f5225ad1ec9d4664169867e2e614701e387bbe"
+        "sha256": "sha256:4ffbfafbb7e1c8883b3f5fdd3ca8bad2fbc8618342d5be1e0e4b2842bf85760b"
       },
       {
         "id": "urn:podway:schema:procedure:v2",
@@ -663,6 +1091,16 @@
         "sha256": "sha256:d2c5462dd720ef24ead7b2c10ea4a7ca21cc638ac18c2d300f52f835eb720230"
       },
       {
+        "id": "urn:podway:schema:registry:v1",
+        "path": "schemas/registry-v1.schema.json",
+        "sha256": "sha256:ae259c2fb9d5e285c8450a55b2f9133ab4758e32041905475fb0d1fd8ff3f2ad"
+      },
+      {
+        "id": "urn:podway:schema:revision-conflict-details:v1",
+        "path": "schemas/revision-conflict-details-v1.schema.json",
+        "sha256": "sha256:63572df5acaada406783daca68535c642fa14924d41cd8c44741d9977af13dbc"
+      },
+      {
         "id": "urn:podway:schema:rework-result:v1",
         "path": "schemas/rework-result-v1.schema.json",
         "sha256": "sha256:ac46b49fa31932a27a46034e479e7e86dcbb30e1cd5367f10de4344ea8849b15"
@@ -671,6 +1109,11 @@
         "id": "urn:podway:schema:session-start-result:v2",
         "path": "schemas/session-start-result-v2.schema.json",
         "sha256": "sha256:5f139d4490ced94204f47b32591c0ab319dd2566e690d6d3b82a6b2391df20f7"
+      },
+      {
+        "id": "urn:podway:schema:socket-endpoint-error-details:v1",
+        "path": "schemas/socket-endpoint-error-details-v1.schema.json",
+        "sha256": "sha256:cdca0c3c6ae8d1528a7566766e93ebd1b2792c434e1fe6b9039485b013010571"
       },
       {
         "id": "urn:podway:schema:stage-transition-result:v2",
@@ -685,29 +1128,47 @@
       {
         "id": "urn:podway:schema:v2-result-components:v1",
         "path": "schemas/v2-result-components-v1.schema.json",
-        "sha256": "sha256:6ff1565a8d3b0f51b569fdd2f9002dcdd5699f517db78df30b20a62c04cf69f7"
+        "sha256": "sha256:24548fed2cbd5bc91aa0c833c281a45a5c7151fb81eee36c3a4c87dfd72159ba"
       },
       {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",
         "path": "schemas/v2-runtime-error-details-v1.schema.json",
         "sha256": "sha256:7d6f76444e8219a43dda97b53d2562f83c2374870720d28d529c813f6158c366"
+      },
+      {
+        "id": "urn:podway:schema:version-result:v1",
+        "path": "schemas/version-result-v1.schema.json",
+        "sha256": "sha256:fe92513aa0cb4f75bd02e220b9feb5bf19795105cf364518f4119689e02baf7c"
+      },
+      {
+        "id": "urn:podway:schema:version-summary:v1",
+        "path": "schemas/version-summary-v1.schema.json",
+        "sha256": "sha256:06cfdec02feb3adaa8e28e5bbddb921691f678444917912e7f6cca3722a8c5b3"
+      },
+      {
+        "id": "urn:podway:schema:workspace-init-result:v1",
+        "path": "schemas/workspace-init-result-v1.schema.json",
+        "sha256": "sha256:6befefe2a87428f8e62140a24c63a01c3842fdbfa7ce19132eaaa934bb0f646b"
+      },
+      {
+        "id": "urn:podway:schema:workspace:v1",
+        "path": "schemas/workspace-v1.schema.json",
+        "sha256": "sha256:61461264d6da76953a1e41534360a28e3fe294bf329972da7b687f3ac7822d1a"
       }
     ]
   },
   "current_surface_counts": {
     "authoring_diagnostics": 53,
-    "routes": 59,
-    "runtime_errors": 91,
-    "schemas": 53
+    "routes": 56,
+    "runtime_errors": 88,
+    "schemas": 42
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",
     "development_state_migration_promise": false,
-    "released_workspace_upgrade": "transactional-schema-v1-or-v2-to-v3",
+    "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v4",
     "released_workspace_upgrade_owner": "podway-daemon",
-    "retained_v1_sessions": "preserved-with-immutable-v1-procedure-semantics",
-    "v1_history_conversion": "forbidden",
-    "v1_reopen": "not-reinterpreted-as-v2-reactivation",
+    "legacy_procedure_state": "rejected-without-conversion-or-deletion",
     "v2_downgrade": "forbidden"
   },
   "product": "podway",
@@ -730,11 +1191,10 @@
         "result_schema": "podway.goal-revision-result/v1",
         "trigger_value": true
       }
-    ],
-    "v1_reopen_notification": false
+    ]
   },
   "release_activation_owner": "V2REL-006",
-  "schema": "podway.dolgorae-v2-adapter-contract/v1",
+  "schema": "podway.dolgorae-adapter-contract/v2",
   "status": "prepared-not-released",
-  "version": 1
+  "version": 2
 }

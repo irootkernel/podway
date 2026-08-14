@@ -50,7 +50,6 @@ fn reject(source: &str) -> ConfigError {
 fn admit(source: &str) -> Result<ValidatedProcedureV2, ConfigError> {
     match parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Yaml)? {
         ParsedProcedure::V2(parsed) => validate_procedure_v2(parsed),
-        ParsedProcedure::V1(_) => panic!("expected v2 dispatch, got v1"),
     }
 }
 
@@ -610,12 +609,6 @@ fn every_config_error_variant() -> Vec<(&'static str, ConfigError)> {
             },
         ),
         (
-            "UnknownReturnTarget",
-            ConfigError::UnknownReturnTarget {
-                stage_id: "one".to_owned(),
-            },
-        ),
-        (
             "UnknownV2Reference",
             ConfigError::UnknownV2Reference {
                 field: "graph.nodes.use",
@@ -679,12 +672,6 @@ fn every_config_error_variant() -> Vec<(&'static str, ConfigError)> {
             },
         ),
         (
-            "WarningsAsErrors",
-            ConfigError::WarningsAsErrors {
-                warnings: Vec::new(),
-            },
-        ),
-        (
             "CoreAdmission",
             ConfigError::CoreAdmission {
                 reason: "boom".to_owned(),
@@ -710,20 +697,13 @@ fn v2aut008_every_config_error_variant_classifies_into_the_catalog_without_panic
 
 #[test]
 fn v2aut008_the_variants_unreachable_from_v2_classify_defensively_rather_than_precisely() {
-    // Verified by grep at V2AUT-008: every `DuplicateValue` raise site is in the v1 procedure or
-    // workspace validators, and the four below are v1 admission or canonicalization failures. None
-    // is reachable from `parse_procedure_document`'s v2 arm or from `validate_procedure_v2`. They
-    // must still classify — a diagnostic path that can panic is worse than an imprecise code — so
-    // each lands on the generic schema code rather than on a graph code it cannot have earned.
+    // `DuplicateValue` is raised only by workspace validation. The remaining cases are
+    // canonicalization failures. None is reachable from `parse_procedure_document` or
+    // `validate_procedure_v2`, but all must classify without panicking.
     for (label, error) in every_config_error_variant() {
         let unreachable = matches!(
             label,
-            "DuplicateValue"
-                | "UnknownReturnTarget"
-                | "Serialization"
-                | "InvalidDigest"
-                | "WarningsAsErrors"
-                | "CoreAdmission"
+            "DuplicateValue" | "Serialization" | "InvalidDigest" | "CoreAdmission"
         );
         if unreachable {
             assert_eq!(

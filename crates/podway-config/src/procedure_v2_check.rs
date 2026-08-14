@@ -159,15 +159,12 @@ pub fn check_procedure_v2(request: FormatRequest<'_>) -> ProcedureCheckReport {
 fn stopped(failure: FormatFailure, context: &AuthoringContext<'_>) -> ProcedureCheckReport {
     let diagnostics = match failure {
         // A caller that reaches this arm handed check a document declaring another schema. The CLI
-        // cannot: it sniffs the schema first and refuses a v1 file as a command-level failure,
-        // because the diagnostics result pins `procedure_schema` to `podway.procedure/v2` and
-        // therefore cannot describe a v1 document. This report is the library-level answer to the
-        // same question, and it is a true one — the source does not declare the v2 authoring
-        // schema — reached through the classifier every other schema violation goes through.
+        // refuses a non-v2 file as a command-level failure because the diagnostics result pins
+        // `procedure_schema` to `podway.procedure/v2`. This is the library-level answer.
         FormatFailure::NotProcedureV2 => vec![config_error_diagnostic(
             &ConfigError::InvalidSchema {
                 expected: podway_core::PROCEDURE_SCHEMA_V2,
-                actual: crate::PROCEDURE_SCHEMA_V1.to_owned(),
+                actual: "unsupported procedure schema".to_owned(),
             },
             context,
         )],

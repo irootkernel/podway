@@ -6,7 +6,6 @@ use std::{
     fs,
     sync::{Arc, Barrier},
     thread,
-    time::{Duration, Instant},
 };
 
 use podway_config::{
@@ -200,28 +199,6 @@ fn status(
         false,
     );
     runtime::v2_result(runtime::dispatch(dispatcher, &query), "session.status")
-}
-
-fn dispatch_after_cold_reopen(
-    dispatcher: &impl RequestDispatcherV1,
-    request: &(RequestEnvelopeV1, DaemonRequestV1),
-) -> ResponseEnvelopeV2 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let response = runtime::dispatch(dispatcher, request);
-        if !matches!(
-            &response,
-            ResponseEnvelopeV2::Error(error)
-                if error.code().as_str() == "WORKSPACE_MAINTENANCE"
-        ) {
-            return response;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "cold reopen remained in maintenance"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
 }
 
 fn public_error(response: &ResponseEnvelopeV2, code: &str, admitted: bool) -> Value {
@@ -430,7 +407,7 @@ fn start_fixture(
     );
     assert!(matches!(
         runtime::dispatch(dispatcher, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let start = request(
         number + 1,
@@ -864,7 +841,7 @@ fn v2gol005_failure_matrix_is_atomic_causal_and_cold_replayable() {
     drop(manager);
     let reopened_manager = Arc::new(runtime::manager(&manager_root));
     let reopened = runtime::dispatcher(reopened_manager, "v2gol005-failure-replay");
-    let replay = dispatch_after_cold_reopen(&reopened, &missing_reactivate);
+    let replay = runtime::dispatch_after_cold_reopen(&reopened, &missing_reactivate);
     assert_eq!(
         runtime::without_request_id(&replay),
         runtime::without_request_id(&missing_response),
@@ -982,7 +959,7 @@ fn v2gol005_queued_assessment_executes_after_cold_reopen_and_replays_exactly() {
 
     let reopened_manager = Arc::new(runtime::manager(&manager_root));
     let reopened = runtime::dispatcher(Arc::clone(&reopened_manager), "v2gol005-detached-run");
-    let terminal_response = dispatch_after_cold_reopen(&reopened, &synchronous);
+    let terminal_response = runtime::dispatch_after_cold_reopen(&reopened, &synchronous);
     let terminal = runtime::v2_result(terminal_response.clone(), "goal.assess_criterion");
     assert_eq!(terminal["result"]["criterion_id"], "correct");
     assert_eq!(terminal["result"]["status"], "satisfied");
@@ -1040,7 +1017,7 @@ fn v2gol005_queued_assessment_executes_after_cold_reopen_and_replays_exactly() {
 
     let final_manager = Arc::new(runtime::manager(&manager_root));
     let final_dispatcher = runtime::dispatcher(final_manager, "v2gol005-detached-replay");
-    let replay = dispatch_after_cold_reopen(&final_dispatcher, &synchronous);
+    let replay = runtime::dispatch_after_cold_reopen(&final_dispatcher, &synchronous);
     assert_eq!(
         runtime::without_request_id(&replay),
         runtime::without_request_id(&terminal_response)

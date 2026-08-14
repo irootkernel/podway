@@ -6,8 +6,7 @@ use podway_config::{
 };
 use podway_core::{AuthoringSeverity, PROCEDURE_SCHEMA_V2, Sha256Digest};
 use podway_presets::{
-    BUG_FIX_V2_SHIPPED_DIGEST, EmbeddedPresetV2, PresetError, SW_DEV_V2_SHIPPED_DIGEST, catalog_v1,
-    catalog_v2,
+    BUG_FIX_V2_SHIPPED_DIGEST, EmbeddedPresetV2, PresetError, SW_DEV_V2_SHIPPED_DIGEST, catalog_v2,
 };
 
 #[test]
@@ -45,7 +44,6 @@ fn v2_presets_embed_the_exact_canonical_sources_and_pinned_digests() {
             .expect("canonical source must parse")
         {
             ParsedProcedure::V2(parsed) => parsed,
-            ParsedProcedure::V1(_) => panic!("v2 preset must not dispatch through v1"),
         };
         let validated = validate_procedure_v2(parsed).expect("canonical source must validate");
         assert_eq!(admitted.canonical_json(), validated.canonical_json());
@@ -62,7 +60,7 @@ fn v2_presets_embed_the_exact_canonical_sources_and_pinned_digests() {
 }
 
 #[test]
-fn v2_preset_digest_pin_is_independent_and_v1_catalog_is_unchanged() {
+fn v2_preset_digest_pin_is_independent() {
     let preset = catalog_v2().lookup("bug-fix-v2").unwrap();
     let mismatched = EmbeddedPresetV2 {
         shipped_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -82,15 +80,4 @@ fn v2_preset_digest_pin_is_independent_and_v1_catalog_is_unchanged() {
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ).unwrap() && actual.as_str() == BUG_FIX_V2_SHIPPED_DIGEST
     ));
-
-    assert_eq!(
-        catalog_v1()
-            .list()
-            .iter()
-            .map(|preset| preset.metadata.id)
-            .collect::<Vec<_>>(),
-        vec!["analysis", "bug-fix", "docs-only", "sw-dev"]
-    );
-    assert_eq!(catalog_v1().lookup("bug-fix-v2"), None);
-    assert_eq!(catalog_v1().lookup("sw-dev-v2"), None);
 }

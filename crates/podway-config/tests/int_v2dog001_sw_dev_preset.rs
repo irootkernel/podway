@@ -24,7 +24,6 @@ fn sw_dev_v2_is_canonical_clean_and_exercises_the_full_graph_contract() {
         .expect("sw-dev-v2 must parse")
     {
         ParsedProcedure::V2(parsed) => parsed,
-        ParsedProcedure::V1(_) => panic!("sw-dev-v2 must dispatch as Procedure v2"),
     };
     let validated = validate_procedure_v2(parsed).expect("sw-dev-v2 must validate");
     let context = AuthoringContext::new(

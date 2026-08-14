@@ -123,7 +123,7 @@ job_state
 ```
 
 The command specification determines required fields. Session-bearing reads accept an optional
-`session_id`; stage, item, reopen, replacement, and session-reset mutations require it. Unknown
+`session_id`; graph-node, item, replacement, and session-reset mutations require it. Unknown
 precondition fields are rejected in v1.
 
 Procedure v2 goal revision and criterion-assessment mutations additionally carry
@@ -135,8 +135,8 @@ The protocol decoder also owns a closed Procedure v2 form of `session.start` and
 `session.start_replace` that may carry one complete initial goal definition
 (`goal`, ordered `criteria`, and optional `actor`). Its semantic mutation
 identity includes that definition and the resolved Procedure digest. This typed
-form is executable through Procedure v2 daemon dispatch; the retained v1 start
-decoder rejects these additional fields instead of discarding them.
+form is executable through Procedure v2 daemon dispatch; the decoder rejects
+unsupported Procedure input instead of discarding additional fields.
 
 The daemon compares these identities with the same authoritative Store view used by the operation.
 Waiting reads recheck the session identity on every Store observation. New mutations check identity
@@ -163,11 +163,8 @@ A client disconnect never cancels an admitted job.
 
 ## Response
 
-The response frame contains one of:
-
-- `podway.output/v1` for released v1 success families;
-- `podway.output/v2` for Procedure v2 success families; or
-- `podway.error/v1`.
+The response frame contains one `podway.output/v3` success or one
+`podway.error/v1` failure.
 
 Protocol-level failures use the same error envelope where possible. If the request is too malformed to recover `request_id`, the response generates a new ID and includes `details.request_id_recovered=false`.
 
@@ -210,27 +207,25 @@ After decoding a request, the daemon compares the client product and exact embed
 admission. The bundled v0.1.0 CLI fails closed against any daemon with a different
 product or manifest identity even when the IPC identifier is compatible.
 
-### V2 compatibility boundary
+### Procedure v2 boundary
 
 V2 retains `podway.ipc/v1` and `podway.error/v1`, and adds the success-only
-`podway.output/v2` envelope; it does not add an automation transport or weaken request framing, identity fences,
-idempotency, detached admission, or job reconciliation. Existing commands used
-against a v2 session select a closed `/v2` result family. A new v2-only command
-starts a distinct closed result family at `/v1`. V1 sessions continue to emit
-their released v1 result families without v2 fields or changed semantics.
+`podway.output/v3` envelope; it does not add an automation transport or weaken request framing, identity fences,
+idempotency, detached admission, or job reconciliation. Session commands select
+closed Procedure v2 result families. A result family's `/v1` suffix identifies
+that family's first contract version and does not identify Procedure v1.
 
 A peer MUST reject a registered command it cannot serve or a result family it
 does not support with a structured compatibility error. It MUST NOT ignore
-unknown v2 fields, extend a v1 result with v2 state, or downgrade a v2 Procedure
-to v1. A route absent from a build retains that build's ordinary unknown-command
+unknown fields or downgrade a Procedure. A route absent from a build retains that build's ordinary unknown-command
 or usage behavior; the exact contract-manifest digest is the machine-readable
 capability signal.
 
 The version-aware result registry reserves the complete Procedure v2 family set
 without registering five routes from the thirteen-route v2 delta;
 `procedure.format`, `procedure.vet`, `procedure.graph`, `procedure.preview`,
-`procedure.lint`, `procedure.check`, `procedure.scaffold`, and
-`procedure.convert` are registered and served. The production decoder validates
+`procedure.lint`, `procedure.check`, and `procedure.scaffold` are registered and
+served. The production decoder validates
 each selected family and the complete envelope, including nested terminal job
 responses, against the embedded canonical schemas after enforcing the frame and
 JSON-depth bounds. V2 producers also enforce the bounded-warning guard defined

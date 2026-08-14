@@ -19,9 +19,10 @@ use podway_cli::client::{
     DaemonClientErrorV1, DaemonClientIoOperationV1, DaemonClientTimeoutsV1, DaemonClientV1,
 };
 use podway_protocol::{
-    FrameErrorV1, OperationV1, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1,
-    ResponseEnvelopeV1, ResponseEnvelopeV2, SliceCommandV1, SliceRequestV1, build_identity_v1,
-    decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1, encode_request_payload_v1,
+    FrameErrorV1, OperationV1, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
+    ProcedureV2StartRequestV1, ResponseEnvelopeV2, SliceCommandV1, SliceRequestV1,
+    build_identity_v1, decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1,
+    encode_request_payload_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 
@@ -202,49 +203,47 @@ fn request() -> podway_protocol::RequestEnvelopeV1 {
 }
 
 fn output_payload(command: &str) -> Vec<u8> {
-    let result = if command == "session.status" {
-        serde_json::json!({
-            "schema": "podway.status-result/v1",
-            "task": {"title": "Fixture", "procedure": {"id": "fixture", "version": "1", "name": "Fixture", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}},
-            "session": {"id": "123e4567-e89b-42d3-a456-426614174010", "lifecycle": "running", "revision": 1, "created_at": "2026-07-15T12:34:56.789Z", "completed_at": null, "cancelled_at": null},
-            "current": null,
-            "stages": [],
-            "items": [],
-            "blockers": [],
-            "queue": {"pending_mutations": false, "queued_count": 0, "running_job_id": null, "latest_workspace_sequence": 1}
-        })
-    } else {
-        serde_json::json!({
-            "schema": "podway.detached-admission-result/v1",
-            "admission": {"admitted": true, "job_id": "123e4567-e89b-42d3-a456-426614174011", "workspace_sequence": 1},
-            "detached": true,
-            "procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-        })
-    };
-    let mut envelope = serde_json::json!({
+    if command == "session.start" {
+        return v2_start_output_payload();
+    }
+
+    let mut result_families: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/result-families.json"
+    ))
+    .expect("v2 result-family fixtures must decode");
+    let result = result_families["fixtures"]["podway.status-result/v2"].take();
+    serde_json::to_vec(&serde_json::json!({
+        "schema": "podway.output/v3",
+        "request_id": REQUEST_ID,
+        "command": command,
+        "generated_at": "2026-07-15T12:34:56.789Z",
+        "workspace": {
+            "uuid": WORKSPACE_ID,
+            "root": "/fixture/worktree",
+            "latest_workspace_sequence": 1
+        },
+        "result": result,
+        "warnings": []
+    }))
+    .expect("fixture output must serialize")
+}
+
+fn legacy_output_v1_payload(command: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
         "schema": "podway.output/v1",
         "request_id": REQUEST_ID,
         "command": command,
         "generated_at": "2026-07-15T12:34:56.789Z",
-        "result": result,
+        "result": {"legacy": true},
         "warnings": []
-    });
-    if command == "session.start" {
-        envelope["job"] = serde_json::json!({
-            "id": "123e4567-e89b-42d3-a456-426614174011",
-            "sequence": 1,
-            "state": "queued",
-            "submitted_at": "2026-07-15T12:34:56.789Z",
-            "finished_at": null
-        });
-    }
-    serde_json::to_vec(&envelope).expect("fixture output must serialize")
+    }))
+    .expect("fixture legacy output must serialize")
 }
 fn mutation_request() -> podway_protocol::RequestEnvelopeV1 {
     let identity = build_identity_v1();
     decode_request_payload_v1(
         format!(
-            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1,"product":"{}","contract_manifest_digest":"{}"}},"operation":"mutate","command":"session.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"start-fixture","options":{{"detach":true,"wait_timeout_ms":1234}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"preset":"sw-dev","task_title":"A bounded fixture task"}}}}"#,
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.1.0","pid":1,"product":"{}","contract_manifest_digest":"{}"}},"operation":"mutate","command":"session.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"start-fixture","options":{{"detach":true,"wait_timeout_ms":1234}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"preset":"sw-dev-v2","task_title":"A bounded fixture task"}}}}"#,
             identity.product(),
             identity.contract_manifest_digest(),
         )
@@ -281,7 +280,7 @@ fn v2_decide_request() -> podway_protocol::RequestEnvelopeV1 {
 
 fn v2_start_output_payload() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
-        "schema": "podway.output/v2",
+        "schema": "podway.output/v3",
         "request_id": REQUEST_ID,
         "command": "session.start",
         "generated_at": "2026-07-15T12:34:56.789Z",
@@ -348,7 +347,7 @@ fn fragmented_output_response_round_trips() {
     let response = client(&fixture)
         .request(&request())
         .expect("fragmented output response must decode");
-    assert!(matches!(response, ResponseEnvelopeV1::Output(_)));
+    assert!(matches!(response, ResponseEnvelopeV2::OutputV2(_)));
 
     let _ = server.request_wire();
     server.join();
@@ -369,7 +368,7 @@ fn delayed_response_fragments_within_the_absolute_deadline_round_trip() {
     let response = client_with_read_timeout(&fixture, Duration::from_secs(3))
         .request(&request())
         .expect("fragments delivered before the full deadline must decode");
-    assert!(matches!(response, ResponseEnvelopeV1::Output(_)));
+    assert!(matches!(response, ResponseEnvelopeV2::OutputV2(_)));
 
     let _ = server.request_wire();
     server.join();
@@ -416,7 +415,7 @@ fn error_response_round_trips_without_becoming_a_client_error() {
         .request(&request())
         .expect("daemon error envelopes are valid client responses");
     assert!(
-        matches!(response, ResponseEnvelopeV1::Error(error) if error.code().as_str() == "DAEMON_UNAVAILABLE")
+        matches!(response, ResponseEnvelopeV2::Error(error) if error.code().as_str() == "DAEMON_UNAVAILABLE")
     );
 
     let _ = server.request_wire();
@@ -590,7 +589,7 @@ fn request_is_one_exact_frame_and_preserves_envelope_wait_preferences() {
 }
 
 #[test]
-fn version_aware_request_admits_typed_v2_start_and_decodes_output_v2() {
+fn version_aware_request_admits_typed_v2_start_and_decodes_output_v3() {
     let fixture = RuntimeFixture::new();
     let frame = encode_frame_v1(&v2_start_output_payload()).expect("v2 output response must frame");
     let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
@@ -619,20 +618,19 @@ fn version_aware_request_admits_typed_v2_start_and_decodes_output_v2() {
 #[test]
 fn version_aware_request_rejects_output_v1_for_goal_bearing_v2_start() {
     let fixture = RuntimeFixture::new();
-    let frame = encode_frame_v1(&output_payload("session.start"))
+    let frame = encode_frame_v1(&legacy_output_v1_payload("session.start"))
         .expect("legacy output response must frame");
     let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
 
     let error = client(&fixture)
         .request_v2(&v2_start_request())
-        .expect_err("a goal-bearing v2 start must require output/v2");
+        .expect_err("a goal-bearing v2 start must require output/v3");
     assert!(matches!(
         transmitted_source(error),
-        DaemonClientErrorV1::ResponseMismatch {
-            field: "schema",
-            ref expected,
-            ref received,
-        } if expected == "podway.output/v2" && received == "podway.output/v1"
+        DaemonClientErrorV1::ResponseDecoding {
+            source: PayloadCodecErrorV1::UnsupportedResponseSchema { received, supported },
+        } if received == "podway.output/v1"
+            && supported == ["podway.output/v3", "podway.error/v1"]
     ));
 
     let _ = server.request_wire();
@@ -648,14 +646,13 @@ fn version_aware_request_rejects_output_v1_for_typed_v2_mutation() {
 
     let error = client(&fixture)
         .request_v2(&v2_decide_request())
-        .expect_err("a typed v2 mutation must require output/v2");
+        .expect_err("a typed v2 mutation must require output/v3");
     assert!(matches!(
         transmitted_source(error),
-        DaemonClientErrorV1::ResponseMismatch {
-            field: "schema",
-            ref expected,
-            ref received,
-        } if expected == "podway.output/v2" && received == "podway.output/v1"
+        DaemonClientErrorV1::ResponseDecoding {
+            source: PayloadCodecErrorV1::UnsupportedResponseSchema { received, supported },
+        } if received == "podway.output/v1"
+            && supported == ["podway.output/v3", "podway.error/v1"]
     ));
 
     let _ = server.request_wire();
@@ -663,16 +660,22 @@ fn version_aware_request_rejects_output_v1_for_typed_v2_mutation() {
 }
 
 #[test]
-fn version_aware_request_preserves_output_v1_for_legacy_reads() {
+fn version_aware_request_rejects_output_v1_for_all_reads() {
     let fixture = RuntimeFixture::new();
-    let frame =
-        encode_frame_v1(&output_payload("session.status")).expect("legacy output must frame");
+    let frame = encode_frame_v1(&legacy_output_v1_payload("session.status"))
+        .expect("legacy output must frame");
     let server = FakeSocketServer::start(&fixture, ServerBehavior::Response(frame));
 
-    let response = client(&fixture)
+    let error = client(&fixture)
         .request_v2(&request())
-        .expect("legacy reads must retain output/v1 compatibility");
-    assert!(matches!(response, ResponseEnvelopeV2::OutputV1(_)));
+        .expect_err("all successful reads must require output/v3");
+    assert!(matches!(
+        transmitted_source(error),
+        DaemonClientErrorV1::ResponseDecoding {
+            source: PayloadCodecErrorV1::UnsupportedResponseSchema { received, supported },
+        } if received == "podway.output/v1"
+            && supported == ["podway.output/v3", "podway.error/v1"]
+    ));
 
     let _ = server.request_wire();
     server.join();

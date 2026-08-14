@@ -20,7 +20,7 @@ use podway_store::{
     DurableWorktreeIdentityV1, GraphNodeCounterV2, GraphSessionStateV2, IdempotencyKeyV1,
     ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
     StoreContractV1, StoreErrorV1, StoreFailpointV1, StoreGraphReadContractV2,
-    StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreRecordKindV1, StoreUnavailableReasonV1,
+    StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1,
     ValidatedWorkspaceRootV1, WorkerIdV1, WorkflowMemoryStateV2,
 };
 use rusqlite::Connection;
@@ -784,7 +784,7 @@ fn disposable_graph_workspace_inspection_preserves_authoritative_artifact_bytes(
 }
 
 #[test]
-fn graph_workspace_view_rejects_wrong_identity_and_v1_v2_coexistence() {
+fn graph_workspace_view_rejects_wrong_identity() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, options());
     store
@@ -801,38 +801,6 @@ fn graph_workspace_view_rejects_wrong_identity_and_v1_v2_coexistence() {
             check: StoreIntegrityCheckV1::WorkspaceIdentity
         })
     ));
-
-    let connection = Connection::open(database_path(&temporary)).unwrap();
-    connection
-        .execute(
-            "INSERT INTO procedure_snapshots (snapshot_id, schema_id, procedure_id, \
-             procedure_version, name, digest, canonical_json, source_kind, source_label, \
-             created_at_ms) VALUES (?1, 'podway.procedure/v1', 'legacy', '1', 'Legacy', ?2, \
-             '{}', 'file', 'legacy.yaml', 30)",
-            ("00000000-0000-4000-8000-000000000030", digest('f').as_str()),
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO task_sessions (singleton, session_id, task_title, \
-             procedure_snapshot_id, lifecycle, session_revision, active_stage_id, \
-             active_attempt_id, created_at_ms) VALUES (1, ?1, 'Legacy task', ?2, \
-             'running', 1, 'work', ?3, 30)",
-            (
-                "00000000-0000-4000-8000-000000000031",
-                "00000000-0000-4000-8000-000000000030",
-                "00000000-0000-4000-8000-000000000032",
-            ),
-        )
-        .unwrap();
-    drop(connection);
-
-    assert_eq!(
-        store.read_graph_workspace_view_v2(&identity()).unwrap_err(),
-        StoreErrorV1::CorruptStateV1 {
-            record: StoreRecordKindV1::Session
-        }
-    );
 }
 
 #[test]

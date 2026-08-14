@@ -19,8 +19,8 @@ use nix::{
 };
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1,
-    decode_response_payload_v1, encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
+    decode_response_payload_v2, encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use serde_json::{Map, Value};
@@ -91,7 +91,7 @@ fn status_request(client: ClientInfoV1) -> RequestEnvelopeV1 {
     .expect("status request")
 }
 
-fn exchange_status(socket: &Path, request: &RequestEnvelopeV1) -> ResponseEnvelopeV1 {
+fn exchange_status(socket: &Path, request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
     let payload = encode_request_payload_v1(request).expect("status request must encode");
     let mut stream = UnixStream::connect(socket).expect("daemon status socket must connect");
     write_frame_v1(&mut stream, &payload).expect("status request must write");
@@ -101,7 +101,7 @@ fn exchange_status(socket: &Path, request: &RequestEnvelopeV1) -> ResponseEnvelo
     let payload = read_single_frame_v1(&mut stream)
         .expect("status response frame must read")
         .expect("status response must exist");
-    decode_response_payload_v1(&payload).expect("status response must decode")
+    decode_response_payload_v2(&payload).expect("status response must decode")
 }
 
 fn query_status(socket: &Path) -> Value {
@@ -110,8 +110,8 @@ fn query_status(socket: &Path) -> Value {
             .expect("client identity"),
     );
     match exchange_status(socket, &request) {
-        ResponseEnvelopeV1::Output(output) => output.result().clone().into(),
-        ResponseEnvelopeV1::Error(error) => panic!("daemon status failed: {:?}", error.code()),
+        ResponseEnvelopeV2::OutputV2(output) => output.result().clone().into(),
+        ResponseEnvelopeV2::Error(error) => panic!("daemon status failed: {:?}", error.code()),
     }
 }
 
@@ -172,7 +172,7 @@ fn podwayd_reports_stable_live_process_identity() {
         )
         .expect("stale client identity"),
     );
-    let ResponseEnvelopeV1::Error(mismatch) = exchange_status(socket, &stale_request) else {
+    let ResponseEnvelopeV2::Error(mismatch) = exchange_status(socket, &stale_request) else {
         panic!("a stale contract must not receive fabricated daemon status");
     };
     assert_eq!(mismatch.code().as_str(), "DAEMON_CONTRACT_MISMATCH");
@@ -290,9 +290,9 @@ fn podwayd_service_and_version_modes_are_explicit() {
     assert!(json_identity.stderr.is_empty());
     let envelope: Value =
         serde_json::from_slice(&json_identity.stdout).expect("podwayd JSON identity is valid");
-    let _: ResponseEnvelopeV1 = serde_json::from_slice(&json_identity.stdout)
+    let _: ResponseEnvelopeV2 = serde_json::from_slice(&json_identity.stdout)
         .expect("podwayd JSON identity satisfies the typed public protocol");
-    assert_eq!(envelope["schema"], "podway.output/v1");
+    assert_eq!(envelope["schema"], "podway.output/v3");
     assert_eq!(envelope["command"], "version");
     let identity = &envelope["result"];
     assert_eq!(identity["schema"], "podway.version-result/v1");

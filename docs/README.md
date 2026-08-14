@@ -22,9 +22,7 @@ as one product rather than maintaining separate CLI and daemon trees.
 
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
-Current adopted work is tracked by the [active roadmap](roadmap/). The completed
-[Podway v2 full-feature GA dossier](todo/TODO-podway-v2-full-feature-ga.md) remains
-at its executable-evidence-bound historical path.
+Current adopted work is tracked by the [active roadmap](roadmap/).
 
 ## Canonical assets
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`podwayd` provides one trusted write path, deterministic ordering, durable admission, idempotent retries, and crash recovery. The queue does not create parallel stages. It permits independent callers to submit updates safely and permits different worktrees to progress concurrently.
+`podwayd` provides one trusted write path, deterministic ordering, durable admission, idempotent retries, and crash recovery. The queue does not create parallel graph execution. It permits independent callers to submit updates safely and permits different worktrees to progress concurrently.
 
 ## Daemon singleton
 
@@ -135,7 +135,7 @@ The following commands require an expected session revision and active attempt I
 - complete;
 - skip;
 - retry;
-- return;
+- decide and rework;
 - block and unblock;
 - cancel;
 - reset of a running session.

@@ -10,10 +10,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use podway_core::{
-    CanonicalProcedureJsonV1, CanonicalProcedureSnapshotInputV1, ProcedureSnapshotId,
-    ProcedureSnapshotV1, ProcedureSourceKindV1, ProcedureSourceLabelV1, Sha256Digest, UnixMillis,
-};
+use podway_core::Sha256Digest;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -21,9 +18,8 @@ use tempfile::TempDir;
 use crate::codec::{
     PersistedDomainResultV1, PersistedTerminalResultV1, decode_command_v1,
     decode_terminal_receipt_v1, encode_command_v1, encode_persisted_terminal_receipt_v1,
-    validate_persisted_terminal_result_for_command_v1,
+    normalize_terminal_receipt_for_schema_v4_v1, validate_persisted_terminal_result_for_command_v1,
 };
-use crate::state_rows::load_current_session;
 use crate::v2_state::verify_v2_graph_state_connection_v2;
 use crate::{
     DurableWorktreeIdentityV1, EpochMillisV1, IdempotencyKeyV1, IntegrityCheckResultV1,
@@ -64,14 +60,17 @@ pub(crate) fn write_temporary_ownership_marker_v1(
 pub const SQLITE_SCHEMA_VERSION_V1: u32 = 1;
 pub const SQLITE_SCHEMA_VERSION_V2: u32 = 2;
 pub const SQLITE_SCHEMA_VERSION_V3: u32 = 3;
-pub const SQLITE_SCHEMA_VERSION_CURRENT: u32 = SQLITE_SCHEMA_VERSION_V3;
+pub const SQLITE_SCHEMA_VERSION_V4: u32 = 4;
+pub const SQLITE_SCHEMA_VERSION_CURRENT: u32 = SQLITE_SCHEMA_VERSION_V4;
 pub const SQLITE_INITIAL_MIGRATION_NAME_V1: &str = "schema-0-uninitialized";
 pub const SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2: &str = "schema-1-response-context";
 pub const SQLITE_PROCEDURE_V2_STATE_MIGRATION_NAME_V3: &str = "schema-2-procedure-v2-state";
+pub const SQLITE_V2_ONLY_MIGRATION_NAME_V4: &str = "schema-3-procedure-v2-only";
 
 const SQLITE_V1_DDL: &str = include_str!("../../../assets/specifications/sqlite-v1.sql");
 const SQLITE_V2_DDL: &str = include_str!("../../../assets/specifications/sqlite-v2.sql");
 const SQLITE_V3_DDL: &str = include_str!("../../../assets/specifications/sqlite-v3.sql");
+const SQLITE_V4_DDL: &str = include_str!("../../../assets/specifications/sqlite-v4.sql");
 const CONNECTION_PRAGMA_PREAMBLE_V1: &str = concat!(
     "PRAGMA foreign_keys = ON;\n",
     "PRAGMA journal_mode = WAL;\n",
@@ -82,6 +81,7 @@ const CONNECTION_PRAGMA_PREAMBLE_V1: &str = concat!(
 const USER_VERSION_SUFFIX_V1: &str = "PRAGMA user_version = 1;\n";
 const USER_VERSION_SUFFIX_V2: &str = "PRAGMA user_version = 2;\n";
 const USER_VERSION_SUFFIX_V3: &str = "PRAGMA user_version = 3;\n";
+const USER_VERSION_SUFFIX_V4: &str = "PRAGMA user_version = 4;\n";
 
 /// The exact immutable bytes of the canonical v1 migration.
 pub fn sqlite_v1_ddl() -> &'static str {
@@ -116,6 +116,15 @@ pub fn sqlite_v3_ddl() -> &'static str {
 
 pub fn sqlite_v3_ddl_checksum() -> String {
     let digest = Sha256::digest(SQLITE_V3_DDL.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
+pub fn sqlite_v4_ddl() -> &'static str {
+    SQLITE_V4_DDL
+}
+
+pub fn sqlite_v4_ddl_checksum() -> String {
+    let digest = Sha256::digest(SQLITE_V4_DDL.as_bytes());
     format!("sha256:{digest:x}")
 }
 
@@ -185,10 +194,13 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
             initialize_empty_schema_v1(&mut connection, root, identity, options, now)?;
         }
         SQLITE_SCHEMA_VERSION_V1 => {
-            migrate_schema_v1_to_v3(&mut connection, identity, options, now)?
+            migrate_schema_v1_to_v4(&mut connection, identity, options, now)?
         }
-        SQLITE_SCHEMA_VERSION_V2 => migrate_schema_v3(&mut connection, identity, options, now)?,
-        SQLITE_SCHEMA_VERSION_V3 => {}
+        SQLITE_SCHEMA_VERSION_V2 => {
+            migrate_schema_v2_to_v4(&mut connection, identity, options, now)?
+        }
+        SQLITE_SCHEMA_VERSION_V3 => migrate_schema_v4(&mut connection, identity, options, now)?,
+        SQLITE_SCHEMA_VERSION_V4 => {}
         found if found > SQLITE_SCHEMA_VERSION_CURRENT => {
             return Err(StoreErrorV1::NewerStateV1 {
                 found_schema_version: found,
@@ -280,6 +292,44 @@ pub fn verify_schema_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
     verify_schema_version_v1(connection)?;
     verify_exact_schema_objects_v1(connection)?;
     verify_migration_checksum_v1(connection)
+}
+
+pub(crate) fn verify_binding_inspection_schema_v1(
+    connection: &Connection,
+) -> Result<(), StoreErrorV1> {
+    let version = read_user_version_v1(connection)?;
+    match version {
+        SQLITE_SCHEMA_VERSION_V1 | SQLITE_SCHEMA_VERSION_V2 | SQLITE_SCHEMA_VERSION_V3 => {
+            verify_migration_predecessor_v1(connection, version)?;
+            reject_legacy_procedure_state_v1(connection)
+        }
+        SQLITE_SCHEMA_VERSION_V4 => verify_schema_v1(connection),
+        found if found > SQLITE_SCHEMA_VERSION_CURRENT => Err(StoreErrorV1::NewerStateV1 {
+            found_schema_version: found,
+            supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
+        }),
+        _ => Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion)),
+    }
+}
+
+pub(crate) fn verify_binding_inspection_identity_v1(
+    connection: &mut Connection,
+    expected_identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+) -> Result<(), StoreErrorV1> {
+    if read_user_version_v1(connection)? == SQLITE_SCHEMA_VERSION_V4 {
+        verify_inspection_integrity_connection_v1(
+            connection,
+            expected_identity,
+            options,
+            IntegrityModeV1::Fast,
+            EpochMillisV1::new(0),
+        )?;
+    } else {
+        verify_connection_pragmas_v1(connection, options.busy_timeout_ms())?;
+        verify_workspace_identity_v1(connection, expected_identity)?;
+    }
+    Ok(())
 }
 
 /// Inspects an existing database through a disposable byte-for-byte clone.
@@ -429,21 +479,9 @@ fn verify_integrity_connection_inner_v1(
     )?;
     record_integrity_check_v1(
         &mut checks,
-        StoreIntegrityCheckV1::SnapshotDigest,
-        verify_all_snapshots_v1(connection),
-    )?;
-    record_integrity_check_v1(
-        &mut checks,
-        StoreIntegrityCheckV1::ActiveAttempt,
-        verify_active_attempts_v1(connection),
-    )?;
-    record_integrity_check_v1(
-        &mut checks,
         StoreIntegrityCheckV1::SessionCursor,
-        verify_normalized_session_v1(connection).and_then(|()| {
-            verify_v2_graph_state_connection_v2(connection)
-                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SessionCursor))
-        }),
+        verify_v2_graph_state_connection_v2(connection)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::SessionCursor)),
     )?;
     record_integrity_check_v1(
         &mut checks,
@@ -615,6 +653,13 @@ fn expected_migrations_through_v1(
             sqlite_v3_ddl_checksum(),
         ));
     }
+    if expected_version >= SQLITE_SCHEMA_VERSION_V4 {
+        expected.push((
+            i64::from(SQLITE_SCHEMA_VERSION_V4),
+            SQLITE_V2_ONLY_MIGRATION_NAME_V4.to_owned(),
+            sqlite_v4_ddl_checksum(),
+        ));
+    }
     if !(SQLITE_SCHEMA_VERSION_V1..=SQLITE_SCHEMA_VERSION_CURRENT).contains(&expected_version) {
         return Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion));
     }
@@ -663,6 +708,11 @@ fn expected_schema_objects_through_v1(
     if expected_version >= SQLITE_SCHEMA_VERSION_V3 {
         reference
             .execute_batch(migration_schema_statements_v3()?)
+            .map_err(storage_error)?;
+    }
+    if expected_version >= SQLITE_SCHEMA_VERSION_V4 {
+        reference
+            .execute_batch(migration_schema_statements_v4()?)
             .map_err(storage_error)?;
     }
     if !(SQLITE_SCHEMA_VERSION_V1..=SQLITE_SCHEMA_VERSION_CURRENT).contains(&expected_version) {
@@ -717,190 +767,6 @@ fn verify_foreign_keys_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
     let mut rows = statement.query([]).map_err(storage_error)?;
     if rows.next().map_err(storage_error)?.is_some() {
         return Err(integrity_error(StoreIntegrityCheckV1::ForeignKeys));
-    }
-    Ok(())
-}
-
-fn verify_all_snapshots_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
-    let mut statement = connection
-        .prepare(
-            "SELECT snapshot_id, schema_id, procedure_id, procedure_version, name, digest, canonical_json, \
-             source_kind, source_label, created_at_ms FROM procedure_snapshots",
-        )
-        .map_err(storage_error)?;
-    let mut rows = statement.query([]).map_err(storage_error)?;
-    while let Some(row) = rows.next().map_err(storage_error)? {
-        let snapshot_id: String = row.get(0).map_err(storage_error)?;
-        let schema_id: String = row.get(1).map_err(storage_error)?;
-        let procedure_id: String = row.get(2).map_err(storage_error)?;
-        let procedure_version: String = row.get(3).map_err(storage_error)?;
-        let name: String = row.get(4).map_err(storage_error)?;
-        let digest: String = row.get(5).map_err(storage_error)?;
-        let canonical_json: String = row.get(6).map_err(storage_error)?;
-        let source_kind: String = row.get(7).map_err(storage_error)?;
-        let source_label: String = row.get(8).map_err(storage_error)?;
-        let created_at: i64 = row.get(9).map_err(storage_error)?;
-        let source_kind = ProcedureSourceKindV1::from_row_value(&source_kind)
-            .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?;
-        let created_at = u64::try_from(created_at)
-            .map(UnixMillis::new)
-            .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?;
-        ProcedureSnapshotV1::from_canonical_json(CanonicalProcedureSnapshotInputV1 {
-            snapshot_id: ProcedureSnapshotId::new(snapshot_id)
-                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?,
-            schema_id,
-            procedure_id,
-            procedure_version,
-            name,
-            source_label: ProcedureSourceLabelV1::from_row(source_kind, source_label)
-                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?,
-            canonical_json: CanonicalProcedureJsonV1::new(canonical_json)
-                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?,
-            digest: Sha256Digest::new(digest)
-                .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?,
-            created_at,
-        })
-        .map_err(|_| integrity_error(StoreIntegrityCheckV1::SnapshotDigest))?;
-    }
-    Ok(())
-}
-
-fn verify_active_attempts_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
-    let multiple_active: i64 = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM attempts WHERE lifecycle = 'active' \
-             GROUP BY session_id HAVING COUNT(*) > 1)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(storage_error)?;
-    if multiple_active == 0 {
-        Ok(())
-    } else {
-        Err(integrity_error(StoreIntegrityCheckV1::ActiveAttempt))
-    }
-}
-
-fn verify_normalized_session_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
-    let session_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM task_sessions", [], |row| row.get(0))
-        .map_err(storage_error)?;
-    if !(0..=1).contains(&session_count) {
-        return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
-    }
-
-    verify_latest_attempt_cursors_v1(connection)?;
-    if session_count == 1 {
-        verify_active_session_cursor_v1(connection)?;
-    }
-
-    load_current_session(connection).map_err(|error| match error {
-        StoreErrorV1::StorageUnavailableV1 { .. } => error,
-        _ => integrity_error(StoreIntegrityCheckV1::SessionCursor),
-    })?;
-    Ok(())
-}
-
-fn verify_latest_attempt_cursors_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
-    let mut statement = connection
-        .prepare(
-            "SELECT p.session_id, p.stage_id, p.latest_attempt_number, p.latest_attempt_id, \
-             (SELECT MAX(a.attempt_number) FROM attempts a WHERE a.session_id = p.session_id \
-              AND a.stage_id = p.stage_id), \
-             (SELECT a.attempt_id FROM attempts a WHERE a.session_id = p.session_id \
-              AND a.stage_id = p.stage_id AND a.attempt_number = p.latest_attempt_number) \
-             FROM stage_progress p",
-        )
-        .map_err(storage_error)?;
-    let mut rows = statement.query([]).map_err(storage_error)?;
-    while let Some(row) = rows.next().map_err(storage_error)? {
-        let latest_number: i64 = row.get(2).map_err(storage_error)?;
-        let latest_id: Option<String> = row.get(3).map_err(storage_error)?;
-        let actual_number: Option<i64> = row.get(4).map_err(storage_error)?;
-        let actual_id: Option<String> = row.get(5).map_err(storage_error)?;
-        let valid = match actual_number {
-            Some(actual_number) => {
-                latest_number == actual_number && latest_id.is_some() && latest_id == actual_id
-            }
-            None => latest_number == 0 && latest_id.is_none(),
-        };
-        if !valid {
-            return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
-        }
-    }
-    Ok(())
-}
-
-fn verify_active_session_cursor_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
-    let (session_id, lifecycle, active_stage_id, active_attempt_id): (
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-    ) = connection
-        .query_row(
-            "SELECT session_id, lifecycle, active_stage_id, active_attempt_id FROM task_sessions \
-             WHERE singleton = 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .map_err(storage_error)?;
-    let current_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM stage_progress WHERE session_id = ?1 AND progress_state = 'current'",
-            [&session_id],
-            |row| row.get(0),
-        )
-        .map_err(storage_error)?;
-    let active_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM attempts WHERE session_id = ?1 AND lifecycle = 'active'",
-            [&session_id],
-            |row| row.get(0),
-        )
-        .map_err(storage_error)?;
-
-    match lifecycle.as_str() {
-        "running" => {
-            let (Some(active_stage_id), Some(active_attempt_id)) =
-                (active_stage_id.as_deref(), active_attempt_id.as_deref())
-            else {
-                return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
-            };
-            let matching_current: i64 = connection
-                .query_row(
-                    "SELECT COUNT(*) FROM stage_progress WHERE session_id = ?1 AND stage_id = ?2 \
-                     AND progress_state = 'current'",
-                    params![&session_id, active_stage_id],
-                    |row| row.get(0),
-                )
-                .map_err(storage_error)?;
-            let matching_attempt: i64 = connection
-                .query_row(
-                    "SELECT COUNT(*) FROM attempts WHERE session_id = ?1 AND stage_id = ?2 \
-                     AND attempt_id = ?3 AND lifecycle = 'active'",
-                    params![&session_id, active_stage_id, active_attempt_id],
-                    |row| row.get(0),
-                )
-                .map_err(storage_error)?;
-            if current_count != 1
-                || active_count != 1
-                || matching_current != 1
-                || matching_attempt != 1
-            {
-                return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
-            }
-        }
-        "completed" | "cancelled" => {
-            if active_stage_id.is_some()
-                || active_attempt_id.is_some()
-                || current_count != 0
-                || active_count != 0
-            {
-                return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor));
-            }
-        }
-        _ => return Err(integrity_error(StoreIntegrityCheckV1::SessionCursor)),
     }
     Ok(())
 }
@@ -1307,6 +1173,7 @@ fn initialize_empty_schema_v1(
             ],
         )
         .map_err(storage_error)?;
+    apply_schema_v4_migration_v1(&transaction, now)?;
     transaction
         .execute(
             "INSERT INTO workspace_state (singleton, workspace_uuid, git_common_fingerprint, \
@@ -1403,7 +1270,15 @@ fn migration_schema_statements_v3() -> Result<&'static str, StoreErrorV1> {
     )
 }
 
-fn migrate_schema_v1_to_v3(
+fn migration_schema_statements_v4() -> Result<&'static str, StoreErrorV1> {
+    SQLITE_V4_DDL.strip_suffix(USER_VERSION_SUFFIX_V4).ok_or(
+        StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: crate::StoreInvariantV1::SchemaDefinition,
+        },
+    )
+}
+
+fn migrate_schema_v1_to_v4(
     connection: &mut Connection,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
@@ -1415,6 +1290,7 @@ fn migrate_schema_v1_to_v3(
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(storage_error)?;
     verify_migration_predecessor_v1(&transaction, SQLITE_SCHEMA_VERSION_V1)?;
+    reject_legacy_procedure_state_v1(&transaction)?;
     transaction
         .execute_batch(migration_schema_statements_v2()?)
         .map_err(storage_error)?;
@@ -1445,8 +1321,9 @@ fn migrate_schema_v1_to_v3(
             ],
         )
         .map_err(storage_error)?;
+    apply_schema_v4_migration_v1(&transaction, now)?;
     transaction
-        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V3)
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V4)
         .map_err(storage_error)?;
     verify_integrity_connection_inner_v1(
         &transaction,
@@ -1459,7 +1336,7 @@ fn migrate_schema_v1_to_v3(
     transaction.commit().map_err(storage_error)
 }
 
-fn migrate_schema_v3(
+fn migrate_schema_v2_to_v4(
     connection: &mut Connection,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
@@ -1469,6 +1346,7 @@ fn migrate_schema_v3(
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(storage_error)?;
     verify_migration_predecessor_v1(&transaction, SQLITE_SCHEMA_VERSION_V2)?;
+    reject_legacy_procedure_state_v1(&transaction)?;
     transaction
         .execute_batch(migration_schema_statements_v3()?)
         .map_err(storage_error)?;
@@ -1484,8 +1362,12 @@ fn migrate_schema_v3(
             ],
         )
         .map_err(storage_error)?;
+    apply_schema_v4_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     transaction
-        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V3)
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V4)
         .map_err(storage_error)?;
     verify_integrity_connection_inner_v1(
         &transaction,
@@ -1496,6 +1378,182 @@ fn migrate_schema_v3(
     )?;
     options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
     transaction.commit().map_err(storage_error)
+}
+
+fn migrate_schema_v4(
+    connection: &mut Connection,
+    identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    now: EpochMillisV1,
+) -> Result<(), StoreErrorV1> {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    verify_migration_predecessor_v1(&transaction, SQLITE_SCHEMA_VERSION_V3)?;
+    reject_legacy_procedure_state_v1(&transaction)?;
+    normalize_schema_v3_terminal_receipts_v1(&transaction)?;
+    apply_schema_v4_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
+    transaction
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V4)
+        .map_err(storage_error)?;
+    verify_integrity_connection_inner_v1(
+        &transaction,
+        identity,
+        options,
+        IntegrityModeV1::Fast,
+        now,
+    )?;
+    options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
+    transaction.commit().map_err(storage_error)
+}
+
+fn apply_schema_v4_migration_v1(connection: &Connection, now: i64) -> Result<(), StoreErrorV1> {
+    connection
+        .execute_batch(migration_schema_statements_v4()?)
+        .map_err(storage_error)?;
+    connection
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                i64::from(SQLITE_SCHEMA_VERSION_V4),
+                SQLITE_V2_ONLY_MIGRATION_NAME_V4,
+                sqlite_v4_ddl_checksum(),
+                now,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn reject_legacy_procedure_state_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    let legacy_rows: i64 = connection
+        .query_row(
+            "SELECT \
+               (SELECT COUNT(*) FROM procedure_snapshots) + \
+               (SELECT COUNT(*) FROM task_sessions) + \
+               (SELECT COUNT(*) FROM stage_progress) + \
+               (SELECT COUNT(*) FROM attempts) + \
+               (SELECT COUNT(*) FROM item_slots) + \
+               (SELECT COUNT(*) FROM blockers)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    if legacy_rows != 0 {
+        return Err(StoreErrorV1::LegacyProcedureStateUnsupportedV1);
+    }
+
+    let mut jobs = connection
+        .prepare("SELECT canonical_request_json FROM jobs ORDER BY workspace_sequence")
+        .map_err(storage_error)?;
+    let requests = jobs
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(storage_error)?;
+    for request in requests {
+        let request = request.map_err(storage_error)?;
+        let execution = decode_command_v1(&request)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+        if !execution_is_v2_only_compatible_v1(&execution) {
+            return Err(StoreErrorV1::LegacyProcedureStateUnsupportedV1);
+        }
+    }
+
+    let mut orphaned = connection
+        .prepare(
+            "SELECT idempotency_records.terminal_response_json \
+             FROM idempotency_records \
+             LEFT JOIN jobs ON jobs.job_id = idempotency_records.job_id \
+             WHERE jobs.job_id IS NULL AND idempotency_records.terminal_response_json IS NOT NULL \
+             ORDER BY idempotency_records.idempotency_key",
+        )
+        .map_err(storage_error)?;
+    let receipts = orphaned
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(storage_error)?;
+    for receipt in receipts {
+        let receipt = receipt.map_err(storage_error)?;
+        let (receipt, _) = normalize_terminal_receipt_for_schema_v4_v1(&receipt, None)
+            .map_err(|_| integrity_error(StoreIntegrityCheckV1::IdempotencyReceipt))?;
+        let compatible = receipt.execution_flavor() == crate::DurableExecutionFlavorV1::ProcedureV2
+            || matches!(
+                receipt.lookup_command(),
+                Some(
+                    crate::codec::PersistedDomainCommandV1::WorkspaceInitialize
+                        | crate::codec::PersistedDomainCommandV1::WorkspaceResetAll
+                )
+            );
+        if !compatible {
+            return Err(StoreErrorV1::LegacyProcedureStateUnsupportedV1);
+        }
+    }
+    Ok(())
+}
+
+fn execution_is_v2_only_compatible_v1(execution: &crate::ClaimedExecutionV1) -> bool {
+    execution.execution_flavor() == crate::DurableExecutionFlavorV1::ProcedureV2
+        || matches!(
+            execution.command(),
+            crate::CommandV1::WorkspaceInitialize | crate::CommandV1::WorkspaceResetAll
+        )
+}
+
+fn normalize_schema_v3_terminal_receipts_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
+    for (table, key, query) in [
+        (
+            "jobs",
+            "job_id",
+            "SELECT job_id, terminal_response_json, canonical_request_json FROM jobs \
+             WHERE terminal_response_json IS NOT NULL ORDER BY job_id",
+        ),
+        (
+            "idempotency_records",
+            "idempotency_key",
+            "SELECT idempotency_records.idempotency_key, \
+                    idempotency_records.terminal_response_json, jobs.canonical_request_json \
+             FROM idempotency_records LEFT JOIN jobs USING (job_id) \
+             WHERE idempotency_records.terminal_response_json IS NOT NULL \
+             ORDER BY idempotency_records.idempotency_key",
+        ),
+    ] {
+        let mut statement = connection.prepare(query).map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(storage_error)?;
+        let mut updates = Vec::new();
+        for row in rows {
+            let (identity, encoded, request) = row.map_err(storage_error)?;
+            let execution_flavor = request
+                .as_deref()
+                .map(decode_command_v1)
+                .transpose()
+                .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?
+                .map(|execution| execution.execution_flavor());
+            let (_, normalized) =
+                normalize_terminal_receipt_for_schema_v4_v1(&encoded, execution_flavor)
+                    .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
+            if normalized != encoded {
+                updates.push((identity, normalized));
+            }
+        }
+        drop(statement);
+        let update = format!("UPDATE {table} SET terminal_response_json = ?1 WHERE {key} = ?2");
+        for (identity, normalized) in updates {
+            connection
+                .execute(&update, params![normalized, identity])
+                .map_err(storage_error)?;
+        }
+    }
+    Ok(())
 }
 
 fn verify_migration_predecessor_v1(

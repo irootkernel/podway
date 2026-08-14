@@ -19,7 +19,7 @@ const MAX_OPTION_LABEL_CHARS: usize = 120;
 const MAX_OPTION_CRITERIA_CHARS: usize = 500;
 const MAX_EVIDENCE_GUIDANCE_ENTRY_CHARS: usize = 200;
 const MAX_INSTRUCTIONS_PER_DEFINITION: usize = 16;
-const MAX_ITEMS_PER_DEFINITION: usize = 64;
+pub const MAX_ITEMS_PER_DEFINITION_V2: usize = 64;
 const MIN_OPTIONS_PER_DECISION: usize = 1;
 const MAX_OPTIONS_PER_DECISION: usize = 8;
 const MAX_EVIDENCE_GUIDANCE_ENTRIES: usize = 8;
@@ -43,7 +43,7 @@ fn validate_instructions(instructions: &[String]) -> Result<(), DomainError> {
 }
 
 fn validate_item_specs(items: &[ItemSpecV2]) -> Result<(), DomainError> {
-    if items.len() > MAX_ITEMS_PER_DEFINITION {
+    if items.len() > MAX_ITEMS_PER_DEFINITION_V2 {
         return Err(invalid("too many definition items"));
     }
     let mut seen = BTreeSet::new();

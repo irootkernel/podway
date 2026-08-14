@@ -6,7 +6,6 @@ use std::{
     fs,
     sync::{Arc, Barrier},
     thread,
-    time::{Duration, Instant},
 };
 
 use podway_config::{
@@ -119,7 +118,7 @@ fn raw_request(
         workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new(key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap()
@@ -196,27 +195,6 @@ fn assert_error(response: &ResponseEnvelopeV2, code: &str, admitted: bool) -> Va
     assert_eq!(error.code().as_str(), code);
     assert_eq!(error.details()["admission"]["admitted"], admitted);
     serde_json::to_value(error).unwrap()
-}
-
-fn dispatch_after_cold_reopen(
-    dispatcher: &impl RequestDispatcherV1,
-    request: &(RequestEnvelopeV1, DaemonRequestV1),
-) -> ResponseEnvelopeV2 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let response = runtime::dispatch(dispatcher, request);
-        if !matches!(
-            &response,
-            ResponseEnvelopeV2::Error(error) if error.code().as_str() == "WORKSPACE_MAINTENANCE"
-        ) {
-            return response;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "cold-reopen lifecycle maintenance did not release within 5 seconds: {response:?}"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
 }
 
 fn status(
@@ -301,7 +279,7 @@ fn status_after_cold_reopen(
         )
         .unwrap(),
     );
-    let response = dispatch_after_cold_reopen(dispatcher, &request);
+    let response = runtime::dispatch_after_cold_reopen(dispatcher, &request);
     assert!(encode_response_payload_v2(&response).unwrap().len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
     runtime::v2_result(response, "session.status")
 }
@@ -452,7 +430,7 @@ fn start_ready(
     );
     assert!(matches!(
         runtime::dispatch(dispatcher, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(FAILURE_PROCEDURE.as_bytes(), ProcedureDocumentFormat::Yaml)
@@ -602,7 +580,7 @@ fn v2drw006_failure_receipts_are_atomic_and_cold_replayable() {
         "v2drw006-invalid-option",
         runtime::session_preconditions(&before),
     );
-    let replayed = dispatch_after_cold_reopen(&reopened, &replay);
+    let replayed = runtime::dispatch_after_cold_reopen(&reopened, &replay);
     assert_eq!(
         runtime::without_request_id(&replayed),
         runtime::without_request_id(&first_failure),
@@ -669,7 +647,8 @@ fn v2drw006_failure_receipts_are_atomic_and_cold_replayable() {
         "v2drw006-cancelled-rework",
         cancelled_preconditions,
     );
-    let replayed_cancelled = dispatch_after_cold_reopen(&reopened_again, &cancelled_replay);
+    let replayed_cancelled =
+        runtime::dispatch_after_cold_reopen(&reopened_again, &cancelled_replay);
     assert_eq!(
         runtime::without_request_id(&replayed_cancelled),
         runtime::without_request_id(&cancelled_failure)

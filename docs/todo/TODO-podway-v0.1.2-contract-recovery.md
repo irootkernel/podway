@@ -369,5 +369,5 @@ assets, not only on compilation, local tests, or the locally staged archive.
 - [Release workflow](../implementation-tips/release.md)
 - [Contract manifest](../../contracts/contract-manifest-v1.json)
 - [Version result schema](../../assets/schemas/version-result-v1.schema.json)
-- [Output envelope schema](../../assets/schemas/output-v1.schema.json)
+- Historical `podway.output/v1` envelope schema (removed from the current package by ADR-0019)
 - [GitHub immutable releases](https://docs.github.com/en/enterprise-cloud@latest/code-security/concepts/supply-chain-security/immutable-releases)

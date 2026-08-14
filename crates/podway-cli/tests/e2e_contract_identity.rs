@@ -19,7 +19,7 @@ use podway_cli::client::DaemonClientV1;
 use podway_core::UnixMillis;
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV1, build_identity_v1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2, build_identity_v1,
 };
 use podway_service::{
     FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1, LaunchctlRunnerV1, LocalPlatformPathV1,
@@ -110,8 +110,8 @@ fn live_daemon_status(paths: &ServiceRuntimePathsV1) -> Value {
         .daemon_status(&request)
         .expect("matching daemon status exchange")
     {
-        ResponseEnvelopeV1::Output(output) => output.result().clone().into(),
-        ResponseEnvelopeV1::Error(error) => {
+        ResponseEnvelopeV2::OutputV2(output) => output.result().clone().into(),
+        ResponseEnvelopeV2::Error(error) => {
             panic!("matching daemon rejected status: {:?}", error.code())
         }
     }

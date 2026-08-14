@@ -49,6 +49,7 @@ fn required_path(variable: &str, executable: bool) -> PathBuf {
 fn v2rel003_native_runtime_qualification_emits_complete_compact_evidence() {
     let qualifier = required_path("PODWAY_V2REL003_QUALIFIER", false);
     let podway = required_path("PODWAY_V2REL003_CLI", true);
+    let public_daemon = required_path("PODWAYD_TEST_BINARY", true);
     let debug_daemon = required_path("PODWAY_V2REL003_DAEMON_DEBUG", true);
     let release_daemon = required_path("PODWAY_V2REL003_DAEMON_RELEASE", true);
 
@@ -57,6 +58,8 @@ fn v2rel003_native_runtime_qualification_emits_complete_compact_evidence() {
         .arg("qualify-v2rel003")
         .arg("--podway")
         .arg(podway)
+        .arg("--podwayd-public")
+        .arg(public_daemon)
         .arg("--podwayd-debug")
         .arg(debug_daemon)
         .arg("--podwayd-release")

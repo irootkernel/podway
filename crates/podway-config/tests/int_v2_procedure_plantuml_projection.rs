@@ -102,7 +102,6 @@ fn admit(source: &str, format: ProcedureDocumentFormat) -> ValidatedProcedureV2 
     let parsed =
         match parse_procedure_document(source.as_bytes(), format).expect("fixture must parse") {
             ParsedProcedure::V2(parsed) => parsed,
-            ParsedProcedure::V1(_) => panic!("expected Procedure v2"),
         };
     let validated = validate_procedure_v2(parsed).expect("fixture must validate");
     let context = AuthoringContext::new("plantuml.yaml", source, format);

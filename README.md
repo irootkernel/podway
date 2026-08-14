@@ -11,26 +11,23 @@ Podway ships two matching binaries:
 
 ## When to use Podway
 
-Use Podway when a task has steps that should not be skipped, especially when work may be retried, handed between people or agents, or sent back to an earlier stage. Six built-in procedures cover common work:
+Use Podway when a task has explicit graph nodes that should not be skipped,
+especially when work may be retried, handed between people or agents, or sent
+through a declared rework path. Two built-in procedures cover common work:
 
 | Preset | Best for |
 |---|---|
-| `sw-dev` | Feature and implementation work |
-| `bug-fix` | Reproduction, diagnosis, repair, and regression coverage |
-| `docs-only` | Documentation changes with source and link validation |
-| `analysis` | Investigations that end in supported conclusions |
 | `sw-dev-v2` | Graph-based implementation work with decisions, evidence read-back, rework, and goal assessment |
 | `bug-fix-v2` | Graph-based defect repair with decision rework and goal closeout |
 
-The four unversioned presets retain the v1 lifecycle. The two `-v2` presets ship
-in v0.2.0, which admits Procedure v2 through the normal runtime and excludes the
-development-only admission unlock.
+Podway admits only Procedure v2 through the normal runtime and emits successful
+responses through `podway.output/v3`.
 
 Podway is not a project manager, CI system, command runner, Git automation layer, artifact store, or multi-user access-control service.
 
 ### For AI agents and harnesses
 
-Scripts and AI agents use the same public contract as humans. `podway status --json` and `podway next --json` return the authoritative task state — active stage, missing required items, allowed actions, and ready-to-run command suggestions — so an agent re-derives what happens next from the worktree instead of from its conversation history. Sessions survive context loss and transfer between actors mid-task, and mutations accept explicit preconditions and idempotency keys so retried or concurrent callers cannot corrupt state. See the [agent walkthrough](docs/examples/agent-session.md) and the [handoff walkthrough](docs/examples/handoff-session.md).
+Scripts and AI agents use the same public contract as humans. `podway status --json` and `podway next --json` return the authoritative task state, so an agent re-derives what happens next from the worktree instead of from its conversation history. Sessions survive context loss and transfer between actors mid-task, and mutations accept explicit preconditions and idempotency keys so retried or concurrent callers cannot corrupt state. See the [Procedure v2 workflow](docs/examples/v2-workflow.md).
 
 ## Requirements
 
@@ -100,7 +97,7 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ```markdown
 ## Podway
 
-- This guidance supports Procedure v2 only. Procedure v1 is a compatibility-only legacy surface: do not start, author, convert, replace, or mutate a v1 session. If Podway returns a v1 session, stop and report it without changing state.
+- Podway supports Procedure v2 only. Treat `LEGACY_PROCEDURE_STATE_UNSUPPORTED` as a backup-and-reset boundary; do not edit the database or attempt conversion.
 - When `.podway/config.yaml` exists, read `podway status --json` and `podway next --json` before task work. Require `podway.status-result/v2` and `podway.next-result/v2`, and re-read both after every mutation.
 - Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
@@ -151,19 +148,27 @@ Run Podway from anywhere inside a Git worktree, including the repository's main 
 ```bash
 podway init
 podway preset list
-podway start --preset sw-dev --task "add bounded retry backoff"
+podway start \
+  --preset sw-dev-v2 \
+  --task "add bounded retry backoff" \
+  --goal "Retry transient writes with a bounded exponential delay." \
+  --criterion verified="Fresh verification supports the change." \
+  --actor developer
 podway next
 ```
 
-`podway next` describes the active stage, every missing required item, and the Podway commands that can satisfy it. Do the corresponding work, record the items, and advance one stage:
+`podway next` describes the active graph node, its required items, allowed actions,
+and command suggestions. Perform the work outside Podway, record the requested
+items with the returned item and attempt identities, then use the suggested
+Procedure v2 action with the current revision fences:
 
 ```bash
-podway set goal "Retry transient writes with a bounded exponential delay."
-podway add acceptance-criteria \
-  "Transient write failures retry with bounded exponential backoff."
-podway complete
-podway next
+podway --json status
+podway --json next
 ```
+
+The complete fenced mutation sequence is shown in the
+[Procedure v2 workflow](docs/examples/v2-workflow.md).
 
 Inspect the current session at any time:
 
@@ -179,8 +184,8 @@ Use `podway help <command>` for the exact grammar of a command.
 Inspect a built-in preset before starting it:
 
 ```bash
-podway preset explain bug-fix
-podway preset show bug-fix
+podway preset explain bug-fix-v2
+podway preset show bug-fix-v2
 ```
 
 You can also use a worktree-local YAML procedure:
@@ -192,10 +197,10 @@ podway start --procedure .podway/procedures/custom.yaml --task "review queue beh
 
 Rework is part of the normal lifecycle:
 
-- `podway retry --reason "..."` starts a clean attempt of the current stage.
-- `podway return --to <stage> --reason "..."` returns to an earlier stage and marks reached downstream stages for redo.
+- `podway retry --reason "..."` starts a clean attempt of the current graph node.
+- `podway rework --to <node> --reason "..."` reactivates an allowed graph node and applies declared evidence invalidation.
 - `podway block --reason "..."` prevents completion until `podway unblock --all` resolves the blocker.
-- `podway reopen --to <stage> --reason "..."` reopens a completed session before it is reset.
+- `podway goal revise --reactivate ...` reactivates a completed goal-tracked session when explicitly authorized.
 - `--dry-run` previews destructive transitions that support it.
 
 After a completed or cancelled task no longer needs its local history:

@@ -298,7 +298,7 @@ fn stopped(failure: FormatFailure, context: &AuthoringContext<'_>) -> ProcedureP
         FormatFailure::NotProcedureV2 => vec![config_error_diagnostic(
             &ConfigError::InvalidSchema {
                 expected: podway_core::PROCEDURE_SCHEMA_V2,
-                actual: crate::PROCEDURE_SCHEMA_V1.to_owned(),
+                actual: "unsupported procedure schema".to_owned(),
             },
             context,
         )],

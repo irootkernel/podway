@@ -24,7 +24,7 @@ podway --json start \
   --dry-run
 ```
 
-The dry run returns `podway.output/v2` with
+The dry run returns `podway.output/v3` with
 `result.schema: podway.session-start-result/v2`, `result.dry_run: true`, and the
 shipped `result.procedure_digest`; it creates no session. Remove `--dry-run` to
 start the session.

@@ -27,7 +27,7 @@ fn start(
     );
     assert!(matches!(
         runtime::dispatch(dispatcher, &initialize),
-        ResponseEnvelopeV2::OutputV1(_)
+        ResponseEnvelopeV2::OutputV2(_)
     ));
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(PROCEDURE.as_bytes(), ProcedureDocumentFormat::Yaml).unwrap()

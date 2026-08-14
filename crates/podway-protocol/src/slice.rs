@@ -3,16 +3,15 @@ use std::fmt;
 use podway_core::{
     ActorAttributionV2, AttemptId, BlockerId, CriterionAssessmentReasonV2, CriterionId,
     CriterionStatusV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
-    GoalRevisionReasonV2, GoalStatementV2, GraphNodeId, ItemId, JobId,
-    MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1, MAX_STAGE_ITEMS, OptionId, ReasonV2, Revision, SessionId,
-    Sha256Digest, StageId, WorkspaceId, canonicalize_json_v1,
+    GoalRevisionReasonV2, GoalStatementV2, GraphNodeId, ItemId, JobId, OptionId, ReasonV2,
+    Revision, SessionId, Sha256Digest, WorkspaceId, canonicalize_json_v1,
 };
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
 use crate::{
     ErrorCodeV1, ExitCodeV1, IdempotencyKeyV1, OperationV1, PreconditionsV1, RequestEnvelopeV1,
-    Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
+    SessionOutputV1,
 };
 
 /// The only selector representation accepted by the G006 daemon boundary.
@@ -379,14 +378,6 @@ pub struct SessionIdentityPreconditionsWireV1 {
     pub expected_session_revision: Revision,
 }
 
-/// Optimistic-concurrency facts required when a completed session is reopened.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SessionRevisionPreconditionsWireV1 {
-    pub expected_session_id: SessionId,
-    pub expected_session_revision: Revision,
-}
-
 /// Optional identity guard accepted by session-bearing reads.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -584,15 +575,6 @@ pub struct SessionRetryV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SessionReturnV1 {
-    pub destination_stage_id: StageId,
-    pub reason: String,
-    pub dry_run: bool,
-    pub preconditions: SessionMutationPreconditionsWireV1,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionCompleteV1 {
     pub preconditions: SessionMutationPreconditionsWireV1,
 }
@@ -602,15 +584,6 @@ pub struct SessionCompleteV1 {
 pub struct SessionCancelV1 {
     pub reason: String,
     pub preconditions: SessionMutationPreconditionsWireV1,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SessionReopenV1 {
-    pub destination_stage_id: StageId,
-    pub reason: String,
-    pub dry_run: bool,
-    pub preconditions: SessionRevisionPreconditionsWireV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -848,7 +821,7 @@ pub struct ProcedureV2MutationRequestV1 {
 }
 
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 30] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 28] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
@@ -860,11 +833,9 @@ pub const DAEMON_COMMAND_NAMES_V1: [&str; 30] = [
     "session.complete",
     "session.skip",
     "session.retry",
-    "session.return",
     "session.block",
     "session.unblock",
     "session.cancel",
-    "session.reopen",
     "session.reset",
     "workspace.reset_all",
     "item.check",
@@ -896,11 +867,9 @@ pub enum SliceCommandV1 {
     SessionComplete(SessionCompleteV1),
     SessionSkip(SessionSkipV1),
     SessionRetry(SessionRetryV1),
-    SessionReturn(SessionReturnV1),
     SessionBlock(SessionBlockV1),
     SessionUnblock(SessionUnblockV1),
     SessionCancel(SessionCancelV1),
-    SessionReopen(SessionReopenV1),
     SessionReset(SessionResetV1),
     WorkspaceResetAll(WorkspaceResetAllV1),
     ItemCheck(ItemCheckV1),
@@ -931,11 +900,9 @@ impl SliceCommandV1 {
             Self::SessionComplete(_) => "session.complete",
             Self::SessionSkip(_) => "session.skip",
             Self::SessionRetry(_) => "session.retry",
-            Self::SessionReturn(_) => "session.return",
             Self::SessionBlock(_) => "session.block",
             Self::SessionUnblock(_) => "session.unblock",
             Self::SessionCancel(_) => "session.cancel",
-            Self::SessionReopen(_) => "session.reopen",
             Self::SessionReset(_) => "session.reset",
             Self::WorkspaceResetAll(_) => "workspace.reset_all",
             Self::ItemCheck(_) => "item.check",
@@ -964,20 +931,6 @@ impl SliceCommandV1 {
             }
             Self::SessionStartReplace(command) => {
                 if command.start.dry_run {
-                    OperationV1::Query
-                } else {
-                    OperationV1::Mutate
-                }
-            }
-            Self::SessionReturn(command) => {
-                if command.dry_run {
-                    OperationV1::Query
-                } else {
-                    OperationV1::Mutate
-                }
-            }
-            Self::SessionReopen(command) => {
-                if command.dry_run {
                     OperationV1::Query
                 } else {
                     OperationV1::Mutate
@@ -1021,8 +974,6 @@ impl SliceCommandV1 {
         match self {
             Self::SessionStart(command) => !command.dry_run,
             Self::SessionStartReplace(command) => !command.start.dry_run,
-            Self::SessionReturn(command) => !command.dry_run,
-            Self::SessionReopen(command) => !command.dry_run,
             Self::SessionReset(command) => !command.dry_run,
             _ => matches!(
                 self,
@@ -1220,21 +1171,6 @@ impl SliceRequestV1 {
                     }),
                 )
             }
-            "session.return" => {
-                let payload: SessionStageReasonPayloadV1 = parse_payload(envelope)?;
-                require_dry_run_envelope(envelope, "session.return", payload.dry_run)?;
-                let preconditions = require_session_preconditions(envelope.preconditions())?;
-                validate_reason(&payload.reason)?;
-                (
-                    payload.selector,
-                    SliceCommandV1::SessionReturn(SessionReturnV1 {
-                        destination_stage_id: payload.destination_stage_id,
-                        reason: payload.reason,
-                        dry_run: payload.dry_run,
-                        preconditions,
-                    }),
-                )
-            }
             "session.block" => {
                 require_envelope(envelope, "session.block", OperationV1::Mutate, true)?;
                 let preconditions = require_session_preconditions(envelope.preconditions())?;
@@ -1275,22 +1211,6 @@ impl SliceRequestV1 {
                     payload.selector,
                     SliceCommandV1::SessionCancel(SessionCancelV1 {
                         reason: payload.reason,
-                        preconditions,
-                    }),
-                )
-            }
-            "session.reopen" => {
-                let payload: SessionStageReasonPayloadV1 = parse_payload(envelope)?;
-                require_dry_run_envelope(envelope, "session.reopen", payload.dry_run)?;
-                let preconditions =
-                    require_session_revision_preconditions(envelope.preconditions())?;
-                validate_reason(&payload.reason)?;
-                (
-                    payload.selector,
-                    SliceCommandV1::SessionReopen(SessionReopenV1 {
-                        destination_stage_id: payload.destination_stage_id,
-                        reason: payload.reason,
-                        dry_run: payload.dry_run,
                         preconditions,
                     }),
                 )
@@ -1946,16 +1866,6 @@ struct SessionReasonPayloadV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SessionStageReasonPayloadV1 {
-    selector: WorktreeSelectorWireV1,
-    destination_stage_id: StageId,
-    reason: String,
-    #[serde(default)]
-    dry_run: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SessionUnblockPayloadV1 {
     selector: WorktreeSelectorWireV1,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
@@ -2525,49 +2435,6 @@ fn require_session_identity_preconditions(
     })
 }
 
-fn require_session_revision_preconditions(
-    preconditions: &PreconditionsV1,
-) -> Result<SessionRevisionPreconditionsWireV1, SliceErrorV1> {
-    reject_goal_revision_precondition(preconditions)?;
-    let expected_session_id =
-        preconditions
-            .session_id()
-            .cloned()
-            .ok_or(SliceErrorV1::MissingPrecondition {
-                field: "preconditions.session_id",
-            })?;
-    let expected_session_revision =
-        preconditions
-            .session_revision()
-            .ok_or(SliceErrorV1::MissingPrecondition {
-                field: "preconditions.session_revision",
-            })?;
-    if preconditions.attempt_id().is_some() {
-        return Err(SliceErrorV1::UnexpectedPrecondition {
-            field: "preconditions.attempt_id",
-        });
-    }
-    if preconditions.item_revision().is_some() {
-        return Err(SliceErrorV1::UnexpectedPrecondition {
-            field: "preconditions.item_revision",
-        });
-    }
-    if preconditions.blocker_id().is_some() {
-        return Err(SliceErrorV1::UnexpectedPrecondition {
-            field: "preconditions.blocker_id",
-        });
-    }
-    if preconditions.job_state().is_some() {
-        return Err(SliceErrorV1::UnexpectedPrecondition {
-            field: "preconditions.job_state",
-        });
-    }
-    Ok(SessionRevisionPreconditionsWireV1 {
-        expected_session_id,
-        expected_session_revision,
-    })
-}
-
 fn require_session_read_preconditions(
     preconditions: &PreconditionsV1,
 ) -> Result<SessionReadPreconditionsWireV1, SliceErrorV1> {
@@ -3018,10 +2885,6 @@ pub fn canonical_mutation_identity_v1(
             session_preconditions_json(&session.preconditions),
             json!({"reason": &session.reason}),
         ),
-        SliceCommandV1::SessionReturn(session) => (
-            session_preconditions_json(&session.preconditions),
-            json!({"destination_stage_id": &session.destination_stage_id, "reason": &session.reason}),
-        ),
         SliceCommandV1::SessionBlock(session) => (
             session_preconditions_json(&session.preconditions),
             json!({"reason": &session.reason}),
@@ -3033,10 +2896,6 @@ pub fn canonical_mutation_identity_v1(
         SliceCommandV1::SessionCancel(session) => (
             session_preconditions_json(&session.preconditions),
             json!({"reason": &session.reason}),
-        ),
-        SliceCommandV1::SessionReopen(session) => (
-            session_revision_preconditions_json(&session.preconditions),
-            json!({"destination_stage_id": &session.destination_stage_id, "reason": &session.reason}),
         ),
         SliceCommandV1::SessionReset(session) => (
             session_identity_preconditions_json(&session.preconditions),
@@ -3331,15 +3190,6 @@ fn session_identity_preconditions_json(
     })
 }
 
-fn session_revision_preconditions_json(
-    preconditions: &SessionRevisionPreconditionsWireV1,
-) -> Value {
-    json!({
-        "session_id": &preconditions.expected_session_id,
-        "session_revision": preconditions.expected_session_revision,
-    })
-}
-
 fn workspace_reset_all_preconditions_json(
     preconditions: &WorkspaceResetAllPreconditionsWireV1,
 ) -> Value {
@@ -3408,553 +3258,6 @@ pub struct TerminalJobErrorProjectionV1 {
 pub struct TerminalJobCancellationProjectionV1 {
     pub cancelled: bool,
 }
-/// An item type rendered by the status and next result schemas.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ItemTypeResultV1 {
-    Confirm,
-    Text,
-    Choice,
-    Integer,
-    List,
-    Artifact,
-}
-
-/// A stage status rendered by the authoritative status result.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StageStatusResultV1 {
-    Pending,
-    Current,
-    Blocked,
-    Done,
-    Skipped,
-    Redo,
-    Abandoned,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatusTaskV1 {
-    pub title: String,
-    pub procedure: StatusProcedureV1,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatusProcedureV1 {
-    pub id: String,
-    pub version: String,
-    pub name: String,
-    pub digest: Sha256Digest,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatusSessionV1 {
-    pub id: SessionId,
-    pub lifecycle: SessionLifecycleV1,
-    #[serde(deserialize_with = "deserialize_nonzero_revision")]
-    pub revision: Revision,
-    pub created_at: Rfc3339MillisV1,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub completed_at: Option<Rfc3339MillisV1>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub cancelled_at: Option<Rfc3339MillisV1>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CurrentAttemptResultV1 {
-    pub stage_id: StageId,
-    pub stage_index: u64,
-    pub title: String,
-    pub attempt_id: AttemptId,
-    #[serde(deserialize_with = "deserialize_nonzero_u32")]
-    pub attempt_number: u32,
-    pub blocked: bool,
-    pub ready_to_complete: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatusStageResultV1 {
-    pub id: StageId,
-    pub index: u64,
-    pub title: String,
-    pub status: StageStatusResultV1,
-    pub latest_attempt_number: u32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatusItemResultV1 {
-    pub id: ItemId,
-    #[serde(rename = "type")]
-    pub item_type: ItemTypeResultV1,
-    pub prompt: String,
-    pub required: bool,
-    pub satisfied: bool,
-    pub revision: Revision,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub value: Option<StatusItemValueV1>,
-}
-
-/// The closed value family rendered by one status item.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum StatusItemValueV1 {
-    Confirm(bool),
-    Text(String),
-    Integer(i64),
-    List(Vec<String>),
-    Artifact(StatusArtifactValueV1),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StatusArtifactLocationTypeV1 {
-    Path,
-    Reference,
-}
-
-/// Closed artifact metadata rendered as an item value.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatusArtifactValueV1 {
-    pub location_type: StatusArtifactLocationTypeV1,
-    pub location: String,
-    pub sha256_digest: Sha256Digest,
-    pub size_bytes: u64,
-    pub media_type: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BlockerResultV1 {
-    pub id: BlockerId,
-    pub attempt_id: AttemptId,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QueueResultV1 {
-    pub pending_mutations: bool,
-    pub queued_count: u64,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub running_job_id: Option<JobId>,
-    pub latest_workspace_sequence: u64,
-}
-
-/// Immutable attempt lifecycle rendered by verbose status history.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AttemptLifecycleResultV1 {
-    Active,
-    Completed,
-    Skipped,
-    Abandoned,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreviousAttemptResultV1 {
-    pub stage_id: StageId,
-    pub attempt_id: AttemptId,
-    #[serde(deserialize_with = "deserialize_nonzero_u32")]
-    pub attempt_number: u32,
-    pub lifecycle: AttemptLifecycleResultV1,
-    pub started_at: Rfc3339MillisV1,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub ended_at: Option<Rfc3339MillisV1>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub reason: Option<String>,
-}
-
-/// Typed projection of the closed `status` output `result`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatusResultV1 {
-    pub task: StatusTaskV1,
-    pub session: StatusSessionV1,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub current: Option<CurrentAttemptResultV1>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_optional_non_null"
-    )]
-    pub previous_attempts: Option<Vec<PreviousAttemptResultV1>>,
-    pub stages: Vec<StatusStageResultV1>,
-    pub items: Vec<StatusItemResultV1>,
-    pub blockers: Vec<BlockerResultV1>,
-    pub queue: QueueResultV1,
-}
-
-impl StatusResultV1 {
-    pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
-        let mut result = result.clone();
-        result.remove("schema");
-        let status: Self = serde_json::from_value(Value::Object(result))?;
-        if status.items.iter().all(status_item_value_matches_type)
-            && status
-                .blockers
-                .iter()
-                .all(|blocker| !blocker.reason.is_empty())
-        {
-            Ok(status)
-        } else {
-            Err(<serde_json::Error as serde::de::Error>::custom(
-                "status item value does not match its item type",
-            ))
-        }
-    }
-
-    pub fn to_result_map(&self) -> Map<String, Value> {
-        let mut result = result_map_from_serializable(self);
-        result.insert(
-            "schema".to_owned(),
-            Value::String("podway.status-result/v1".to_owned()),
-        );
-        result
-    }
-}
-
-fn status_item_value_matches_type(item: &StatusItemResultV1) -> bool {
-    match (item.item_type, item.value.as_ref()) {
-        (_, None)
-        | (ItemTypeResultV1::Confirm, Some(StatusItemValueV1::Confirm(true)))
-        | (ItemTypeResultV1::Text | ItemTypeResultV1::Choice, Some(StatusItemValueV1::Text(_)))
-        | (ItemTypeResultV1::Integer, Some(StatusItemValueV1::Integer(_)))
-        | (ItemTypeResultV1::List, Some(StatusItemValueV1::List(_))) => true,
-        (ItemTypeResultV1::Artifact, Some(StatusItemValueV1::Artifact(artifact))) => {
-            !artifact.location.is_empty() && !artifact.media_type.is_empty()
-        }
-        _ => false,
-    }
-}
-
-impl TryFrom<Map<String, Value>> for StatusResultV1 {
-    type Error = serde_json::Error;
-
-    fn try_from(result: Map<String, Value>) -> Result<Self, Self::Error> {
-        Self::from_result_map(&result)
-    }
-}
-
-impl From<StatusResultV1> for Map<String, Value> {
-    fn from(result: StatusResultV1) -> Self {
-        result_map_from_serializable(&result)
-    }
-}
-
-pub const COMPACT_STATUS_RESULT_SCHEMA_V1: &str = "podway.compact-status-result/v1";
-
-/// Closed schema identifier for the bounded quiescent status projection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum CompactStatusResultSchemaV1 {
-    #[serde(rename = "podway.compact-status-result/v1")]
-    V1,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompactStatusProcedureV1 {
-    pub id: String,
-    pub version: String,
-    pub digest: Sha256Digest,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompactStatusSessionV1 {
-    pub id: SessionId,
-    pub lifecycle: SessionLifecycleV1,
-    #[serde(deserialize_with = "deserialize_nonzero_revision")]
-    pub revision: Revision,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompactStatusCurrentV1 {
-    pub stage_id: StageId,
-    pub attempt_id: AttemptId,
-    #[serde(deserialize_with = "deserialize_nonzero_u32")]
-    pub attempt_number: u32,
-    pub ready_to_complete: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompactStatusItemV1 {
-    pub id: ItemId,
-    #[serde(rename = "type")]
-    pub item_type: ItemTypeResultV1,
-    pub required: bool,
-    pub satisfied: bool,
-    pub revision: Revision,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompactBlockerStateV1 {
-    Open,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompactStatusBlockerV1 {
-    pub id: BlockerId,
-    pub attempt_id: AttemptId,
-    pub state: CompactBlockerStateV1,
-}
-
-/// Closed, value-free status result emitted only after an idle queue barrier.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompactStatusResultV1 {
-    pub schema: CompactStatusResultSchemaV1,
-    pub procedure: CompactStatusProcedureV1,
-    pub session: CompactStatusSessionV1,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub current: Option<CompactStatusCurrentV1>,
-    pub items: Vec<CompactStatusItemV1>,
-    pub blockers: Vec<CompactStatusBlockerV1>,
-    pub queue: QueueResultV1,
-}
-
-impl CompactStatusResultV1 {
-    pub fn from_status(status: &StatusResultV1) -> Self {
-        Self {
-            schema: CompactStatusResultSchemaV1::V1,
-            procedure: CompactStatusProcedureV1 {
-                id: status.task.procedure.id.clone(),
-                version: status.task.procedure.version.clone(),
-                digest: status.task.procedure.digest.clone(),
-            },
-            session: CompactStatusSessionV1 {
-                id: status.session.id.clone(),
-                lifecycle: status.session.lifecycle,
-                revision: status.session.revision,
-            },
-            current: status
-                .current
-                .as_ref()
-                .map(|current| CompactStatusCurrentV1 {
-                    stage_id: current.stage_id.clone(),
-                    attempt_id: current.attempt_id.clone(),
-                    attempt_number: current.attempt_number,
-                    ready_to_complete: current.ready_to_complete,
-                }),
-            items: status
-                .items
-                .iter()
-                .map(|item| CompactStatusItemV1 {
-                    id: item.id.clone(),
-                    item_type: item.item_type,
-                    required: item.required,
-                    satisfied: item.satisfied,
-                    revision: item.revision,
-                })
-                .collect(),
-            blockers: status
-                .blockers
-                .iter()
-                .map(|blocker| CompactStatusBlockerV1 {
-                    id: blocker.id.clone(),
-                    attempt_id: blocker.attempt_id.clone(),
-                    state: CompactBlockerStateV1::Open,
-                })
-                .collect(),
-            queue: status.queue.clone(),
-        }
-    }
-
-    pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
-        let compact: Self = serde_json::from_value(Value::Object(result.clone()))?;
-        let lifecycle_is_consistent = match compact.session.lifecycle {
-            SessionLifecycleV1::Running => compact.current.is_some(),
-            SessionLifecycleV1::Completed | SessionLifecycleV1::Cancelled => {
-                compact.current.is_none() && compact.items.is_empty() && compact.blockers.is_empty()
-            }
-        };
-        let blockers_match_current_attempt = compact.current.as_ref().is_none_or(|current| {
-            compact
-                .blockers
-                .iter()
-                .all(|blocker| blocker.attempt_id == current.attempt_id)
-        });
-        if compact.procedure.id.is_empty()
-            || compact.procedure.version.is_empty()
-            || compact.items.len() > MAX_STAGE_ITEMS
-            || compact.blockers.len() > MAX_OPEN_BLOCKERS_PER_ATTEMPT_V1
-            || !lifecycle_is_consistent
-            || !blockers_match_current_attempt
-            || compact.queue.pending_mutations
-            || compact.queue.queued_count != 0
-            || compact.queue.running_job_id.is_some()
-            || compact.queue.latest_workspace_sequence == 0
-        {
-            return Err(<serde_json::Error as serde::de::Error>::custom(
-                "compact status requires an idle queue projection",
-            ));
-        }
-        Ok(compact)
-    }
-
-    pub fn to_result_map(&self) -> Map<String, Value> {
-        result_map_from_serializable(self)
-    }
-}
-
-impl From<&StatusResultV1> for CompactStatusResultV1 {
-    fn from(status: &StatusResultV1) -> Self {
-        Self::from_status(status)
-    }
-}
-
-impl From<StatusResultV1> for CompactStatusResultV1 {
-    fn from(status: StatusResultV1) -> Self {
-        Self::from_status(&status)
-    }
-}
-
-impl TryFrom<Map<String, Value>> for CompactStatusResultV1 {
-    type Error = serde_json::Error;
-
-    fn try_from(result: Map<String, Value>) -> Result<Self, Self::Error> {
-        Self::from_result_map(&result)
-    }
-}
-
-impl From<CompactStatusResultV1> for Map<String, Value> {
-    fn from(result: CompactStatusResultV1) -> Self {
-        result_map_from_serializable(&result)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NextStageResultV1 {
-    pub id: StageId,
-    pub title: String,
-    pub attempt_id: AttemptId,
-    #[serde(deserialize_with = "deserialize_nonzero_u32")]
-    pub attempt_number: u32,
-    pub instructions: Vec<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NextItemResultV1 {
-    pub id: ItemId,
-    #[serde(rename = "type")]
-    pub item_type: ItemTypeResultV1,
-    pub prompt: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AllowedActionsResultV1 {
-    pub complete: bool,
-    pub skip: bool,
-    pub retry: bool,
-    pub return_to: Vec<StageId>,
-    pub cancel: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NextStageAfterCompletionResultV1 {
-    pub id: StageId,
-    pub title: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CommandSuggestionResultV1 {
-    pub command: String,
-    pub argv: Vec<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_optional_non_null"
-    )]
-    pub item_id: Option<ItemId>,
-}
-
-/// Typed projection of the closed `next` output `result`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NextResultV1 {
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub stage: Option<NextStageResultV1>,
-    pub missing_required_items: Vec<NextItemResultV1>,
-    pub blockers: Vec<BlockerResultV1>,
-    pub allowed_actions: AllowedActionsResultV1,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub next_stage_after_completion: Option<NextStageAfterCompletionResultV1>,
-    pub suggestions: Vec<CommandSuggestionResultV1>,
-}
-
-impl NextResultV1 {
-    pub fn from_result_map(result: &Map<String, Value>) -> Result<Self, serde_json::Error> {
-        let mut result = result.clone();
-        result.remove("schema");
-        let next: Self = serde_json::from_value(Value::Object(result))?;
-        let stage_titles_are_valid = next
-            .stage
-            .as_ref()
-            .is_none_or(|stage| !stage.title.is_empty())
-            && next
-                .next_stage_after_completion
-                .as_ref()
-                .is_none_or(|stage| !stage.title.is_empty());
-        if stage_titles_are_valid
-            && next
-                .blockers
-                .iter()
-                .all(|blocker| !blocker.reason.is_empty())
-        {
-            Ok(next)
-        } else {
-            Err(<serde_json::Error as serde::de::Error>::custom(
-                "next result violates non-empty string constraints",
-            ))
-        }
-    }
-
-    pub fn to_result_map(&self) -> Map<String, Value> {
-        let mut result = result_map_from_serializable(self);
-        result.insert(
-            "schema".to_owned(),
-            Value::String("podway.next-result/v1".to_owned()),
-        );
-        result
-    }
-}
-
-impl TryFrom<Map<String, Value>> for NextResultV1 {
-    type Error = serde_json::Error;
-
-    fn try_from(result: Map<String, Value>) -> Result<Self, Self::Error> {
-        Self::from_result_map(&result)
-    }
-}
-
-impl From<NextResultV1> for Map<String, Value> {
-    fn from(result: NextResultV1) -> Self {
-        result_map_from_serializable(&result)
-    }
-}
-
-fn result_map_from_serializable<T: Serialize>(value: &T) -> Map<String, Value> {
-    match serde_json::to_value(value).expect("all serde_json values serialize") {
-        Value::Object(result) => result,
-        _ => unreachable!("result record serializes as a JSON object"),
-    }
-}
 
 fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -3963,6 +3266,7 @@ where
 {
     Option::<T>::deserialize(deserializer)
 }
+
 fn deserialize_optional_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -3971,27 +3275,6 @@ where
     let value = Option::<T>::deserialize(deserializer)?;
     if value.is_none() {
         return Err(serde::de::Error::custom("explicit null is not permitted"));
-    }
-    Ok(value)
-}
-fn deserialize_nonzero_revision<'de, D>(deserializer: D) -> Result<Revision, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let revision = Revision::deserialize(deserializer)?;
-    if revision == Revision::ZERO {
-        return Err(serde::de::Error::custom("revision must be at least one"));
-    }
-    Ok(revision)
-}
-
-fn deserialize_nonzero_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = u32::deserialize(deserializer)?;
-    if value == 0 {
-        return Err(serde::de::Error::custom("value must be at least one"));
     }
     Ok(value)
 }

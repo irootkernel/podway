@@ -7,7 +7,7 @@
   "required": ["schema", "operation", "target_schema", "document", "target_digest"],
   "properties": {
     "schema": { "const": "podway.procedure-source-result/v1" },
-    "operation": { "enum": ["format", "scaffold", "convert"] },
+    "operation": { "enum": ["format", "scaffold"] },
     "target_schema": { "const": "podway.procedure/v2" },
     "document": { "type": "string", "minLength": 1, "maxLength": 131072 },
     "target_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
@@ -15,8 +15,8 @@
     "mode": { "enum": ["stdout", "check", "write"] },
     "changed": { "type": "boolean" },
     "template": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "source_schema": { "const": "podway.procedure/v1" },
-    "source_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }
+    "source_schema": false,
+    "source_digest": false
   },
   "allOf": [
     {
@@ -26,10 +26,6 @@
     {
       "if": { "properties": { "operation": { "const": "scaffold" } }, "required": ["operation"] },
       "then": { "required": ["template"], "not": { "anyOf": [{ "required": ["file"] }, { "required": ["mode"] }, { "required": ["changed"] }, { "required": ["source_schema"] }, { "required": ["source_digest"] }] } }
-    },
-    {
-      "if": { "properties": { "operation": { "const": "convert" } }, "required": ["operation"] },
-      "then": { "required": ["source_schema", "source_digest"], "not": { "anyOf": [{ "required": ["file"] }, { "required": ["mode"] }, { "required": ["changed"] }, { "required": ["template"] }] } }
     }
   ]
 }

@@ -1,3 +1,5 @@
+#![allow(irrefutable_let_patterns)]
+
 #[path = "../src/observability.rs"]
 #[allow(dead_code)]
 mod observability;
@@ -12,20 +14,8 @@ mod support_phase4_workspace;
 mod int_phase4_blocking;
 #[path = "int_phase4_daemon_binary.rs"]
 mod int_phase4_daemon_binary;
-#[path = "int_phase4_daemon_runtime.rs"]
-mod int_phase4_daemon_runtime;
-#[path = "int_phase4_dispatch.rs"]
-mod int_phase4_dispatch;
 #[path = "int_phase4_endpoint.rs"]
 mod int_phase4_endpoint;
-#[path = "int_phase4_execution.rs"]
-mod int_phase4_execution;
-#[path = "int_phase4_native_execution.rs"]
-mod int_phase4_native_execution;
-#[path = "int_phase4_production.rs"]
-mod int_phase4_production;
-#[path = "int_phase4_read_service.rs"]
-mod int_phase4_read_service;
 #[path = "int_phase4_registry.rs"]
 mod int_phase4_registry;
 #[path = "int_phase4_runtime_workspace.rs"]
@@ -38,16 +28,12 @@ mod int_phase4_server;
 mod int_phase4_worker;
 #[path = "int_phase4_workspace.rs"]
 mod int_phase4_workspace;
-#[path = "int_phase5_dispatch.rs"]
-mod int_phase5_dispatch;
-#[path = "int_phase5_execution.rs"]
-mod int_phase5_execution;
 #[path = "int_phase5_reset_marker.rs"]
 mod int_phase5_reset_marker;
-#[path = "int_phase5_reset_runtime.rs"]
-mod int_phase5_reset_runtime;
 #[path = "int_phase8_observability.rs"]
 mod int_phase8_observability;
+#[path = "int_v2_only_reset_recovery.rs"]
+mod int_v2_only_reset_recovery;
 #[path = "int_v2dog003_embedded_presets.rs"]
 mod int_v2dog003_embedded_presets;
 #[path = "int_v2drw001_decide.rs"]

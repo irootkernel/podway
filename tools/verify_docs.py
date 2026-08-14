@@ -12,7 +12,6 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 ROADMAP = DOCS / "roadmap/README.md"
-V2_DOSSIER = DOCS / "todo/TODO-podway-v2-full-feature-ga.md"
 REQUIRED_SECTIONS = (
     "architecture",
     "architecture-decision-records",
@@ -127,47 +126,6 @@ def validate_layout() -> None:
             fail(f"retired documentation or asset path still exists: {retired}")
 
 
-def validate_v2_dossier() -> None:
-    text = V2_DOSSIER.read_text(encoding="utf-8")
-    governance = text.partition("### 2.1 Governance decisions")[2].partition("### 2.2 Integration notices")[0]
-    if "[ADR-0018](../architecture-decision-records/0018-v2-success-envelope.md)" not in governance:
-        fail("v2 dossier governance omits accepted ADR-0018")
-
-    diagnostics = text.partition("### 11.6 Stable diagnostics")[2].partition("## 12. YAML Authority and Graph Projections")[0]
-    for field in ('"source_path": "workflow.yaml"', '"location": {'):
-        if field not in diagnostics:
-            fail(f"v2 authoring diagnostic example omits {field}")
-
-    surface = text.partition("### 16.1 Contract surface delta")[2].partition("### 16.2")[0]
-    existing_routes = (
-        "procedure.validate",
-        "session.start",
-        "session.start_replace",
-        "session.status",
-        "session.next",
-        "session.complete",
-        "session.skip",
-        "session.retry",
-        "session.block",
-        "session.unblock",
-        "session.cancel",
-        "session.reset",
-        "item.check",
-        "item.uncheck",
-        "item.set",
-        "item.add",
-        "item.remove",
-        "item.attach",
-        "item.clear",
-        "job.lookup",
-        "job.status",
-        "job.wait",
-    )
-    missing = [route for route in existing_routes if f"`{route}`" not in surface]
-    if missing:
-        fail(f"v2 contract surface omits existing version-aware routes: {missing}")
-
-
 def validate_roadmap() -> tuple[int, int]:
     lines = ROADMAP.read_text(encoding="utf-8").splitlines()
     epic_positions = [
@@ -232,7 +190,6 @@ def main() -> int:
         if (ROOT / "sot").exists():
             fail("legacy sot directory still exists")
         validate_layout()
-        validate_v2_dossier()
         files = markdown_files()
         validate_english(files)
         links = validate_links(files)

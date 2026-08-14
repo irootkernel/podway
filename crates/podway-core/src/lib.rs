@@ -11,28 +11,24 @@ use serde::{Deserialize, Serialize};
 pub mod aggregate;
 pub mod authoring;
 pub mod canonical;
-pub mod derive;
 pub mod goal_record_v2;
 pub mod procedure;
 pub mod procedure_v2;
 pub mod record_v2;
 pub mod session_v2;
-pub mod transition;
 
 pub use aggregate::*;
 pub use authoring::*;
 pub use canonical::*;
-pub use derive::*;
 pub use goal_record_v2::*;
 pub use procedure::*;
 pub use procedure_v2::*;
 pub use record_v2::*;
 pub use session_v2::*;
-pub use transition::*;
 
 pub const MAX_PROCEDURE_IDENTIFIER_BYTES: usize = 64;
 /// Maximum UTF-8 byte length of an admitted canonical procedure document.
-pub const MAX_PROCEDURE_DOCUMENT_BYTES_V1: usize = 1_048_576;
+pub const MAX_PROCEDURE_DOCUMENT_BYTES: usize = 1_048_576;
 
 /// A typed failure raised while constructing or applying a domain contract.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -284,7 +280,6 @@ uuid_newtype!(AttemptId);
 uuid_newtype!(JobId);
 uuid_newtype!(ProcedureSnapshotId);
 uuid_newtype!(BlockerId);
-procedure_identifier_newtype!(StageId);
 procedure_identifier_newtype!(ItemId);
 procedure_identifier_newtype!(NodeDefinitionId);
 procedure_identifier_newtype!(GraphNodeId);
@@ -403,17 +398,6 @@ pub enum SessionLifecycle {
     Cancelled,
 }
 
-/// Persistent stage progress states. Blocked is derived from open blockers and is never stored.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StageProgressState {
-    Pending,
-    Current,
-    Done,
-    Skipped,
-    Redo,
-    Abandoned,
-}
-
 /// Persistent attempt lifecycle states.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AttemptLifecycle {
@@ -450,11 +434,9 @@ pub enum DomainCommandKind {
     SessionComplete,
     SessionSkip,
     SessionRetry,
-    SessionReturn,
     SessionBlock,
     SessionUnblock,
     SessionCancel,
-    SessionReopen,
     SessionReset,
     SessionDecide,
     SessionRework,
@@ -480,11 +462,9 @@ pub enum DomainCommand {
     SessionComplete,
     SessionSkip,
     SessionRetry,
-    SessionReturn,
     SessionBlock,
     SessionUnblock,
     SessionCancel,
-    SessionReopen,
     SessionReset,
     SessionDecide,
     SessionRework,
@@ -510,11 +490,9 @@ impl DomainCommand {
             Self::SessionComplete => DomainCommandKind::SessionComplete,
             Self::SessionSkip => DomainCommandKind::SessionSkip,
             Self::SessionRetry => DomainCommandKind::SessionRetry,
-            Self::SessionReturn => DomainCommandKind::SessionReturn,
             Self::SessionBlock => DomainCommandKind::SessionBlock,
             Self::SessionUnblock => DomainCommandKind::SessionUnblock,
             Self::SessionCancel => DomainCommandKind::SessionCancel,
-            Self::SessionReopen => DomainCommandKind::SessionReopen,
             Self::SessionReset => DomainCommandKind::SessionReset,
             Self::SessionDecide => DomainCommandKind::SessionDecide,
             Self::SessionRework => DomainCommandKind::SessionRework,
@@ -538,23 +516,14 @@ impl DomainCommand {
 pub struct WorkspaceState {
     workspace_id: WorkspaceId,
     revision: Revision,
-    session: Option<SessionState>,
 }
 
 impl WorkspaceState {
-    pub fn new(
-        workspace_id: WorkspaceId,
-        revision: Revision,
-        session: Option<SessionState>,
-    ) -> Result<Self, DomainError> {
-        if let Some(session) = &session {
-            session.validate()?;
-        }
-        Ok(Self {
+    pub fn new(workspace_id: WorkspaceId, revision: Revision) -> Self {
+        Self {
             workspace_id,
             revision,
-            session,
-        })
+        }
     }
 
     pub fn workspace_id(&self) -> &WorkspaceId {
@@ -563,78 +532,6 @@ impl WorkspaceState {
 
     pub const fn revision(&self) -> Revision {
         self.revision
-    }
-
-    pub fn session(&self) -> Option<&SessionState> {
-        self.session.as_ref()
-    }
-}
-
-/// Session cursor state shared across pure transitions and durable storage.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionState {
-    session_id: SessionId,
-    lifecycle: SessionLifecycle,
-    revision: Revision,
-    active_stage_id: Option<StageId>,
-    active_attempt_id: Option<AttemptId>,
-}
-
-impl SessionState {
-    pub fn new(
-        session_id: SessionId,
-        lifecycle: SessionLifecycle,
-        revision: Revision,
-        active_stage_id: Option<StageId>,
-        active_attempt_id: Option<AttemptId>,
-    ) -> Result<Self, DomainError> {
-        let state = Self {
-            session_id,
-            lifecycle,
-            revision,
-            active_stage_id,
-            active_attempt_id,
-        };
-        state.validate()?;
-        Ok(state)
-    }
-
-    pub fn session_id(&self) -> &SessionId {
-        &self.session_id
-    }
-
-    pub const fn lifecycle(&self) -> SessionLifecycle {
-        self.lifecycle
-    }
-
-    pub const fn revision(&self) -> Revision {
-        self.revision
-    }
-
-    pub fn active_stage_id(&self) -> Option<&StageId> {
-        self.active_stage_id.as_ref()
-    }
-
-    pub fn active_attempt_id(&self) -> Option<&AttemptId> {
-        self.active_attempt_id.as_ref()
-    }
-
-    pub fn validate(&self) -> Result<(), DomainError> {
-        let cursor_is_complete = self.active_stage_id.is_some() && self.active_attempt_id.is_some();
-        let cursor_is_empty = self.active_stage_id.is_none() && self.active_attempt_id.is_none();
-
-        match self.lifecycle {
-            SessionLifecycle::Running if cursor_is_complete => Ok(()),
-            SessionLifecycle::Completed | SessionLifecycle::Cancelled if cursor_is_empty => Ok(()),
-            SessionLifecycle::Running => Err(DomainError::InvalidState {
-                reason: "a running session requires both active cursor fields",
-            }),
-            SessionLifecycle::Completed | SessionLifecycle::Cancelled => {
-                Err(DomainError::InvalidState {
-                    reason: "a terminal session must not have an active cursor",
-                })
-            }
-        }
     }
 }
 
