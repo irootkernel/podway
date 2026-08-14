@@ -220,7 +220,7 @@ podway next --json
 
 Automation must use JSON fields and stable error codes, never parse human output. Mutations support idempotency keys, revision preconditions, detached admission, job lookup, and durable outcome reconciliation.
 
-Podway v0.2.0 implements an evidence-gated, goal-directed workflow memory:
+Podway v0.2.1 implements an evidence-gated, goal-directed workflow memory:
 Procedure v2 documents are declarative graphs with recorded decisions, selected
 evidence read-back, explicit rework, goal revision, and goal assessment, still with
 exactly one active attempt. Static authoring and inspection are available in the
