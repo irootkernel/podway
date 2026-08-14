@@ -20,11 +20,9 @@ fn source() -> String {
 #[test]
 fn bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow() {
     let source = source();
-    let parsed = match parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Yaml)
-        .expect("bug-fix-v2 must parse")
-    {
-        ParsedProcedure::V2(parsed) => parsed,
-    };
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Yaml)
+            .expect("bug-fix-v2 must parse");
     let validated = validate_procedure_v2(parsed).expect("bug-fix-v2 must validate");
     let context = AuthoringContext::new(
         "assets/presets/bug-fix-v2.yaml",

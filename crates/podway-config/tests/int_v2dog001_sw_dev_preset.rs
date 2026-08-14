@@ -20,11 +20,9 @@ fn source() -> String {
 #[test]
 fn sw_dev_v2_is_canonical_clean_and_exercises_the_full_graph_contract() {
     let source = source();
-    let parsed = match parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Yaml)
-        .expect("sw-dev-v2 must parse")
-    {
-        ParsedProcedure::V2(parsed) => parsed,
-    };
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Yaml)
+            .expect("sw-dev-v2 must parse");
     let validated = validate_procedure_v2(parsed).expect("sw-dev-v2 must validate");
     let context = AuthoringContext::new(
         "assets/presets/sw-dev-v2.yaml",

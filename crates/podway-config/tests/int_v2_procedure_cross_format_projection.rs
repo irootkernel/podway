@@ -159,10 +159,8 @@ struct Projections {
 }
 
 fn admit(source: &str, format: ProcedureDocumentFormat) -> ValidatedProcedureV2 {
-    let parsed =
-        match parse_procedure_document(source.as_bytes(), format).expect("fixture must parse") {
-            ParsedProcedure::V2(parsed) => parsed,
-        };
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(source.as_bytes(), format).expect("fixture must parse");
     let validated = validate_procedure_v2(parsed).expect("fixture must validate");
     let context = AuthoringContext::new("cross-format.yaml", source, format);
     let diagnostics = vet_procedure_v2(&validated, &context);

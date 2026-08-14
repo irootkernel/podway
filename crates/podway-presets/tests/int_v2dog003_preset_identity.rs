@@ -40,11 +40,9 @@ fn v2_presets_embed_the_exact_canonical_sources_and_pinned_digests() {
         assert_eq!(admitted.digest(), admitted.pinned_digest());
         assert_eq!(admitted.digest().as_str(), digest);
 
-        let parsed = match parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
-            .expect("canonical source must parse")
-        {
-            ParsedProcedure::V2(parsed) => parsed,
-        };
+        let ParsedProcedure::V2(parsed) =
+            parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
+                .expect("canonical source must parse");
         let validated = validate_procedure_v2(parsed).expect("canonical source must validate");
         assert_eq!(admitted.canonical_json(), validated.canonical_json());
         assert_eq!(admitted.digest(), validated.digest());
