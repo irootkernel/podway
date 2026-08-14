@@ -16,11 +16,11 @@ FUZZ_CARGO_VERSION = "cargo-fuzz 0.13.2"
 FUZZ_RUNS = 100_000
 FUZZ_SEED = 0x50D0A7
 FUZZ_TARGETS = ("frame_decoder", "request_envelope", "response_v2", "config_procedure")
-VALID_REQUEST_PATH = ROOT / "docs/examples/json/ipc-complete-request.json"
 VALID_V2_PROCEDURE_PATHS = (
     ROOT / "assets/presets/sw-dev-v2.yaml",
     ROOT / "tests/fixtures/v2/procedures/equivalent-procedure.json",
 )
+VALID_V2_REQUEST = b"""{"protocol":"podway.ipc/v1","request_id":"00000000-0000-4000-8000-000000000001","client":{"name":"podway","version":"fuzz-seed","pid":1,"product":"podway","contract_manifest_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"operation":"mutate","command":"session.start","workspace":{"root":"/fixture/worktree","expected_uuid":"00000000-0000-4000-8000-000000000002"},"idempotency_key":"fuzz-seed-start","options":{"detach":false,"wait_timeout_ms":30000},"payload":{"selector":{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"00000000-0000-4000-8000-000000000002"},"preset":"sw-dev-v2","task_title":"Fuzz the current request envelope."}}"""
 VALID_V2_RESPONSE = b"""{"schema":"podway.output/v3","request_id":"00000000-0000-4000-8000-000000000001","command":"procedure.validate","generated_at":"2026-08-09T00:00:00.000Z","result":{"schema":"podway.procedure-diagnostics-result/v1","operation":"validate","procedure_schema":"podway.procedure/v2","file":"procedure.yaml","valid":true,"diagnostics":[],"diagnostics_truncated":false,"diagnostics_total":0},"warnings":[]}"""
 
 
@@ -65,12 +65,11 @@ def rustup_executable(name: str) -> str:
 def seed_corpus(directory: Path, target: str) -> None:
     directory.mkdir(mode=0o700)
     (directory / "malformed-json").write_bytes(b"{}")
-    valid_request = VALID_REQUEST_PATH.read_bytes()
     if target == "frame_decoder":
-        framed = len(valid_request).to_bytes(4, byteorder="big") + valid_request
+        framed = len(VALID_V2_REQUEST).to_bytes(4, byteorder="big") + VALID_V2_REQUEST
         (directory / "valid-request-frame").write_bytes(framed)
     elif target == "request_envelope":
-        (directory / "valid-request-envelope").write_bytes(valid_request)
+        (directory / "valid-request-envelope").write_bytes(VALID_V2_REQUEST)
     elif target == "response_v2":
         (directory / "valid-v2-response").write_bytes(VALID_V2_RESPONSE)
     elif target == "config_procedure":
