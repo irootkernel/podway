@@ -203,8 +203,8 @@ Dependencies: `V2CTR`, `V2MOD`, `V2AUT`, `V2GRF`, `V2PLT`, `V2RUN`, `V2DRW`,
 
 Dependencies: completed `PV2GA` release program.
 
-This epic is unreleased v0.2.1 work. It does not itself advance the product
-version or authorize distribution.
+This epic shipped in the immutable [v0.2.1 release](archive/v0.2.1-release-report.md)
+on August 15, 2026.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
