@@ -105,10 +105,10 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
-For fuller operational guidance, copy the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/main/skills/use-podway) directory into the skill directory recognized by the agent:
+For fuller operational guidance, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/main/skills/use-podway) directory under `~/agents/skills/`:
 
 ```bash
-podway_skill_dir=/path/to/agent/skills/use-podway
+podway_skill_dir=~/agents/skills/use-podway
 mkdir -p "$podway_skill_dir/references"
 
 curl -fsSLo "$podway_skill_dir/SKILL.md" \
@@ -120,7 +120,7 @@ for reference in lifecycle authoring recovery; do
 done
 ```
 
-The skill covers the active-session loop and loads separate references only for less frequent lifecycle, Procedure-authoring, or recovery work. Consult the agent's documentation for its skill discovery path and reload requirements. The commands require network access and `curl`, and overwrite existing files with the same names. Replace `main` with a release tag or commit SHA when a reproducible, pinned skill version is required.
+The skill covers the active-session loop and loads separate references only for less frequent lifecycle, Procedure-authoring, or recovery work. Consult the agent's documentation for its skill reload requirements. The commands require network access and `curl`, and overwrite existing files with the same names. Replace `main` with a release tag or commit SHA when a reproducible, pinned skill version is required.
 
 ## Build from source
 
