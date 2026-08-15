@@ -219,8 +219,9 @@ on August 15, 2026.
 
 Dependencies: completed `V2CUT` epic.
 
-This completed epic is post-v0.2.1 unreleased work. It does not advance the
-product version or authorize distribution.
+This completed epic shipped in the immutable
+[v0.2.2 release](archive/v0.2.2-release-report.md). It did not independently
+authorize distribution.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
@@ -256,6 +257,9 @@ installation, or runtime activation, and `make dist` was not run.
 ## V2REC — Workspace Recovery Conformance
 
 Dependencies: completed `V2AGT` epic.
+
+This completed recovery task shipped in the immutable
+[v0.2.2 release](archive/v0.2.2-release-report.md).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
