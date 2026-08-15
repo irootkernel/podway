@@ -1,8 +1,10 @@
 # User Workflows
 
 Initialize one Git worktree with `podway init`, inspect `podway preset list`, and
-start either `sw-dev-v2`, `bug-fix-v2`, or a validated worktree-local Procedure v2
-file. Use `--dry-run` before a destructive replacement or other supported preview.
+start `sw-dev-v2`, `bug-fix-v2`, `small-change-v2`, or a validated worktree-local
+Procedure v2 file. Use `small-change-v2` for a bounded change that still requires
+explicit inspection, verification, review, and closeout but no tracked goal. Use
+`--dry-run` before a destructive replacement or other supported preview.
 
 During a task, read `podway observe`, perform the actual work
 outside Podway, then record only supported evidence on the active attempt. Use typed

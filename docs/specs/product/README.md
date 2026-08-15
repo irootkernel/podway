@@ -11,7 +11,7 @@ rework paths explicit without executing the work itself.
 ```text
 initialize a worktree
   -> start one Procedure v2 session
-  -> define or revise the goal and criteria
+  -> define or revise the goal and criteria when the Procedure enables them
   -> satisfy the active action node
   -> complete, retry, decide, or follow declared rework
   -> reach a terminal node and close the goal
@@ -30,7 +30,8 @@ independent worktrees may progress concurrently. Authoritative task state lives
 under `.podway/runtime/` in the owning worktree.
 
 The public product accepts only `podway.procedure/v2`, emits successful results
-through `podway.output/v3`, and ships exactly `sw-dev-v2` and `bug-fix-v2`.
+through `podway.output/v3`, and ships exactly `bug-fix-v2`, `small-change-v2`,
+and `sw-dev-v2`.
 Procedure-independent contracts such as `podway.ipc/v1`, `podway.error/v1`, the
 workspace configuration, and the contract manifest retain their own versions.
 

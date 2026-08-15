@@ -29,6 +29,23 @@ The dry run returns `podway.output/v3` with
 shipped `result.procedure_digest`; it creates no session. Remove `--dry-run` to
 start the session.
 
+For a smaller change that does not require a tracked goal, inspect and start the
+lightweight preset without `--goal` or `--criterion`:
+
+```bash
+podway --json preset explain small-change-v2
+podway --json start \
+  --preset small-change-v2 \
+  --task "update one validation rule" \
+  --dry-run
+```
+
+Its complete graph is `inspect -> implement -> verify -> review -> closeout`.
+Review option `changes-requested` returns to `implement`; option `ready` advances
+to closeout. Its manual rework targets are `inspect`, `implement`, and `verify`.
+The same observation, fence, item-recording, and outcome-reconciliation rules
+below apply.
+
 ## Read stable state before each mutation
 
 ```bash

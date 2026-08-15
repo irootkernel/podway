@@ -32,6 +32,11 @@ description: Operate a Podway Procedure v2 session safely in a Git worktree by r
 
 For initialization, session creation or replacement, daemon control, reset, cancel, or workspace repair, read [references/lifecycle.md](references/lifecycle.md) before acting.
 
+When the user explicitly asks to start a session, prefer `small-change-v2` for a
+bounded change that needs inspection, implementation, verification, review, and
+closeout but no tracked goal. Use the fuller goal-tracked presets when their
+assessment and evidence requirements match the task.
+
 ## Advance an active session
 
 1. Perform only the work required by the active graph node. Side work may run concurrently, but Podway retains one authoritative active attempt.

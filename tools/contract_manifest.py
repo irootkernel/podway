@@ -25,6 +25,7 @@ SUPPORTED_IPC_IDS = ["podway.ipc/v1"]
 STATIC_ASSETS = {
     "contracts/command-routes.json": "catalog",
     "presets/bug-fix-v2.yaml": "preset",
+    "presets/small-change-v2.yaml": "preset",
     "presets/sw-dev-v2.yaml": "preset",
     "release/dolgorae-adapter-contract-v2.json": "catalog",
     "spec/authoring-diagnostics.json": "catalog",

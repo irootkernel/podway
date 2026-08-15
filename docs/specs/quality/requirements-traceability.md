@@ -8,7 +8,7 @@
 | Required items, blockers, evidence, and goals gate advancement | Lifecycle spec | V2 runtime, goal, decision, and rework tests |
 | Mutations are atomic, ordered, and idempotent | Transaction spec | Store transaction, concurrency, crash, and reconciliation tests |
 | Schema v4 preserves v2 state and rejects legacy task state | SQLite model; sqlite-v4 DDL | Focused migration and reset-recovery tests |
-| Only two v2 presets ship with pinned identity | Built-in preset spec | Preset embedding, digest, CLI, and production tests |
+| Exactly three v2 presets ship with pinned identity | Built-in preset spec | Preset embedding, digest, CLI, and production tests |
 | Public assets and documentation agree | Contract manifest; docs precedence | Contract, quality, documentation, and architecture checks |
 
 The active roadmap owns completion state. Test success proves only the scope of the

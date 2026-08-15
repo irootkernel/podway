@@ -13,10 +13,13 @@ use serde::Serialize;
 pub use podway_core::Sha256Digest;
 
 pub const BUG_FIX_V2_YAML: &str = include_str!("../../../assets/presets/bug-fix-v2.yaml");
+pub const SMALL_CHANGE_V2_YAML: &str = include_str!("../../../assets/presets/small-change-v2.yaml");
 pub const SW_DEV_V2_YAML: &str = include_str!("../../../assets/presets/sw-dev-v2.yaml");
 
 pub const BUG_FIX_V2_SHIPPED_DIGEST: &str =
     "sha256:53e249a158bdbec6e8437595378509a35cb05288b48db9505cad25d04ef8f768";
+pub const SMALL_CHANGE_V2_SHIPPED_DIGEST: &str =
+    "sha256:7b9855f12f85d7fb895dad592e8f0ed6ce46bf2bab34c4fcf7113dd91b111e96";
 pub const SW_DEV_V2_SHIPPED_DIGEST: &str =
     "sha256:810d438bde83d3055d5d8ab49eec59d60f0c3de61610f74e73c5815fd0087854";
 
@@ -258,14 +261,15 @@ pub struct PresetCatalogV2;
 
 impl PresetCatalogV2 {
     /// Returns the built-in v2 presets in stable lexicographic ID order.
-    pub fn list(self) -> &'static [EmbeddedPresetV2; 2] {
+    pub fn list(self) -> &'static [EmbeddedPresetV2; 3] {
         &EMBEDDED_PRESETS_V2
     }
 
     pub fn lookup(self, id: &str) -> Option<EmbeddedPresetV2> {
         match id {
             "bug-fix-v2" => Some(EMBEDDED_PRESETS_V2[0]),
-            "sw-dev-v2" => Some(EMBEDDED_PRESETS_V2[1]),
+            "small-change-v2" => Some(EMBEDDED_PRESETS_V2[1]),
+            "sw-dev-v2" => Some(EMBEDDED_PRESETS_V2[2]),
             _ => None,
         }
     }
@@ -285,6 +289,14 @@ const BUG_FIX_V2_METADATA: PresetMetadata = PresetMetadata {
     description: "A bounded full-feature bug-fix procedure with explicit rework and goal-directed closeout.",
 };
 
+const SMALL_CHANGE_V2_METADATA: PresetMetadata = PresetMetadata {
+    schema: PROCEDURE_SCHEMA_V2,
+    id: "small-change-v2",
+    version: "2",
+    name: "Small Change v2",
+    description: "A short verified change procedure without goal tracking or artifact bookkeeping.",
+};
+
 const SW_DEV_V2_METADATA: PresetMetadata = PresetMetadata {
     schema: PROCEDURE_SCHEMA_V2,
     id: "sw-dev-v2",
@@ -293,11 +305,16 @@ const SW_DEV_V2_METADATA: PresetMetadata = PresetMetadata {
     description: "A bounded full-feature software development procedure with goal-directed closeout.",
 };
 
-const EMBEDDED_PRESETS_V2: [EmbeddedPresetV2; 2] = [
+const EMBEDDED_PRESETS_V2: [EmbeddedPresetV2; 3] = [
     EmbeddedPresetV2 {
         metadata: BUG_FIX_V2_METADATA,
         yaml: BUG_FIX_V2_YAML,
         shipped_digest: BUG_FIX_V2_SHIPPED_DIGEST,
+    },
+    EmbeddedPresetV2 {
+        metadata: SMALL_CHANGE_V2_METADATA,
+        yaml: SMALL_CHANGE_V2_YAML,
+        shipped_digest: SMALL_CHANGE_V2_SHIPPED_DIGEST,
     },
     EmbeddedPresetV2 {
         metadata: SW_DEV_V2_METADATA,
@@ -307,7 +324,7 @@ const EMBEDDED_PRESETS_V2: [EmbeddedPresetV2; 2] = [
 ];
 
 /// Returns the built-in Procedure v2 presets in stable lexicographic ID order.
-pub fn list() -> &'static [EmbeddedPresetV2; 2] {
+pub fn list() -> &'static [EmbeddedPresetV2; 3] {
     catalog_v2().list()
 }
 

@@ -123,7 +123,8 @@ an old marker stale; clean and initialize the disposable runtime again.
 The development gate authorizes only handlers that have landed. Custom Procedure
 v2 starts, including goal-bearing starts, and the decision, rework, goal-definition,
 goal-revision, and criterion-assessment mutations are currently served; shipped
-`bug-fix-v2` and `sw-dev-v2` presets are embedded, digest-pinned, and served
+`bug-fix-v2`, `small-change-v2`, and `sw-dev-v2` presets are embedded,
+digest-pinned, and served
 through the same runtime surface. Use `python3 tools/dev_runtime.py run -- --json preset list`
 to inspect the available identities and the
 [Procedure v2 workflow](../examples/v2-workflow.md) for the complete operator

@@ -1,0 +1,127 @@
+schema: podway.procedure/v2
+id: small-change-v2
+version: "2"
+name: Small Change v2
+purpose: Deliver a small reviewed change with fresh verification evidence.
+description: A short verified change procedure without goal tracking or artifact bookkeeping.
+node_definitions:
+  inspect-change:
+    type: action
+    title: Inspect the change boundary
+    intent: Establish the exact scope and constraints before editing.
+    instructions:
+      - Inspect the relevant implementation, tests, and authoritative contracts.
+      - Record only the bounded scope and constraints for this change.
+    items:
+      - id: scope-summary
+        type: text
+        prompt: Summarize the change scope and constraints.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  implement-change:
+    type: action
+    title: Implement the change
+    intent: Make the smallest complete change within the inspected boundary.
+    instructions:
+      - Implement only the inspected scope and its direct verification.
+    items:
+      - id: implementation-summary
+        type: text
+        prompt: Summarize the implemented change.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  verify-change:
+    type: action
+    title: Verify the change
+    intent: Record fresh verification evidence for the implemented change.
+    instructions:
+      - Run the relevant verification outside Podway.
+      - Record the exact command and its integer exit status.
+    items:
+      - id: verification-command
+        type: text
+        prompt: Record the exact verification command.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+      - id: verification-exit-status
+        type: integer
+        prompt: Record the verification exit status.
+        required: true
+  review-change:
+    type: decision
+    title: Review the change
+    objective: Only an implementation supported by acceptable verification may close.
+    prompt: Is the verified change ready for closeout?
+    evidence_guidance:
+      - Read the recorded scope, implementation summary, verification command, and exit status.
+      - Request changes when correctness, scope, or verification remains unresolved.
+    options:
+      - id: ready
+        label: Ready to close
+        criteria: The implementation is within scope and supported by acceptable verification.
+      - id: changes-requested
+        label: Changes requested
+        criteria: The implementation or verification requires another implementation attempt.
+    reason:
+      required: true
+      prompt: Explain the selection using the referenced evidence.
+  closeout-change:
+    type: action
+    title: Record the closeout
+    intent: Record the final outcome of the verified small change.
+    items:
+      - id: closeout-note
+        type: text
+        prompt: Record the final closeout note.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+graph:
+  entry: inspect
+  nodes:
+    - id: inspect
+      use: inspect-change
+      next: implement
+    - id: implement
+      use: implement-change
+      evidence_from:
+        - node: inspect
+          required: true
+      next: verify
+    - id: verify
+      use: verify-change
+      evidence_from:
+        - node: implement
+          required: true
+      next: review
+    - id: review
+      use: review-change
+      evidence_from:
+        - node: inspect
+          required: true
+        - node: implement
+          required: true
+        - node: verify
+          required: true
+      routes:
+        ready:
+          to: closeout
+          effect: advance
+        changes-requested:
+          to: implement
+          effect: rework
+    - id: closeout
+      use: closeout-change
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - inspect
+    - implement
+    - verify

@@ -4,6 +4,7 @@ This directory contains the canonical built-in Procedure v2 sources:
 
 - `sw-dev-v2.yaml`
 - `bug-fix-v2.yaml`
+- `small-change-v2.yaml`
 
 The implementation embeds these exact files. Each preset is admitted through
 the same v2 parser, schema, canonicalizer, semantic validator, and vetting path

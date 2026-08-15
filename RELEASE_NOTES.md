@@ -7,7 +7,8 @@ Podway 0.2.1 is a release candidate and has not been published. These notes do n
 - Make Procedure v2 the only supported authoring and runtime model, removing Procedure v1 parsing, commands, presets, public success schemas, and runtime paths.
 - Emit all successful commands through the closed `podway.output/v3` envelope while retaining `podway.error/v1` for failures and current procedure-independent `/v1` contracts.
 - Move worktree persistence to schema-v4 and fail closed before migration when legacy Procedure v1 state is present.
-- Ship two built-in Procedure v2 presets: `sw-dev-v2` and `bug-fix-v2`.
+- Ship three built-in Procedure v2 presets: `bug-fix-v2`, `small-change-v2`, and
+  `sw-dev-v2`.
 - Add optional source-distributed `use-podway` guidance for AI coding agents.
 
 ## Compatibility and migration
@@ -29,7 +30,7 @@ The qualified, unpublished distribution contains these exact top-level artifacts
 - `podway-0.2.1-aarch64-apple-darwin.provenance.json`;
 - `podway-0.2.1-aarch64-apple-darwin.dolgorae-handoff.json`.
 
-The archive contains both binaries, shell completions, the two built-in Procedure v2 presets, public schemas and specifications, canonicalization fixtures, the contract manifest, README, release notes, and license. Provenance records the source and build identities, artifact class, target, checksums, contract-manifest identity, qualification results, and signing/notarization status.
+The archive contains both binaries, shell completions, the three built-in Procedure v2 presets, public schemas and specifications, canonicalization fixtures, the contract manifest, README, release notes, and license. Provenance records the source and build identities, artifact class, target, checksums, contract-manifest identity, qualification results, and signing/notarization status.
 
 ## Admission and release boundary
 

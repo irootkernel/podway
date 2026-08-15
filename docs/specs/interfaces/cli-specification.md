@@ -27,7 +27,8 @@ operation that modifies a file; it validates and renders fully before an atomic
 same-directory replacement. Other procedure commands are read-only. Unsupported
 schemas report `PROCEDURE_SCHEMA_UNSUPPORTED` or `PROCEDURE_INVALID` as appropriate.
 
-Built-in catalog commands expose only `sw-dev-v2` and `bug-fix-v2`. `start` accepts
+Built-in catalog commands expose only `bug-fix-v2`, `small-change-v2`, and
+`sw-dev-v2`. `start` accepts
 one preset or one safe worktree-local procedure path, an optional expected procedure
 digest for file sources, a nonempty task title, optional v2 goal inputs, and the
 documented replacement/dry-run controls.

@@ -12,7 +12,7 @@ Read this reference only when the user asks to initialize Podway, start or repla
 ## Initialize and start
 
 - Run `podway init` only when the user explicitly asks to initialize the target worktree. Do not initialize scratch worktrees that merely perform side work for a session owned elsewhere.
-- Before starting, inspect choices with `podway preset list` and `podway preset explain <name>`. This skill supports only the built-in Procedure v2 presets `sw-dev-v2` and `bug-fix-v2`. Select one only when it matches the user's task; otherwise author and review a bounded custom Procedure v2.
+- Before starting, inspect choices with `podway preset list` and `podway preset explain <name>`. This skill supports only the built-in Procedure v2 presets `bug-fix-v2`, `small-change-v2`, and `sw-dev-v2`. Select one only when it matches the user's task; otherwise author and review a bounded custom Procedure v2.
 - For a custom file, validate and preview it using the Procedure-authoring workflow. Start it with the exact `--expect-procedure-digest` reported by the reviewed v2 document; omitting the digest fails with `DIGEST_CONFIRMATION_REQUIRED`. Presets do not use this option.
 - Dry-run a start when its task, goal, criteria, actor label, Procedure, or replacement effect needs review.
 - Use `--dry-run` for `reset` or `start --replace` when the corresponding command help exposes it. A dry run may become stale immediately, so the real command still revalidates.

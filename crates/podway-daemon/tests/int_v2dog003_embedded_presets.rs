@@ -11,7 +11,7 @@ use podway_presets::catalog_v2;
 use podway_store::SqliteStoreOptionsV1;
 
 #[test]
-fn embedded_provider_prepares_both_v2_presets_from_their_shipped_digest() {
+fn embedded_provider_prepares_all_v2_presets_from_their_shipped_digest() {
     let provider = EmbeddedPresetProcedureProviderV1;
     for (index, preset) in catalog_v2().list().iter().enumerate() {
         let suffix = index + 1;

@@ -155,7 +155,8 @@ retry, restart, repair, reset, reinstall, or another mutation.
 
 ### Small-change preset
 
-Add built-in `small-change-v2` with `goal_tracking: false` and the graph:
+Add built-in `small-change-v2` with goal tracking disabled (the Procedure v2
+contract represents this by omitting `goal_tracking`) and the graph:
 
 ```text
 inspect -> implement -> verify -> review -> closeout

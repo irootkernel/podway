@@ -6,7 +6,8 @@ use podway_config::{
 };
 use podway_core::{AuthoringSeverity, PROCEDURE_SCHEMA_V2, Sha256Digest};
 use podway_presets::{
-    BUG_FIX_V2_SHIPPED_DIGEST, EmbeddedPresetV2, PresetError, SW_DEV_V2_SHIPPED_DIGEST, catalog_v2,
+    BUG_FIX_V2_SHIPPED_DIGEST, EmbeddedPresetV2, PresetError, SMALL_CHANGE_V2_SHIPPED_DIGEST,
+    SW_DEV_V2_SHIPPED_DIGEST, catalog_v2,
 };
 
 #[test]
@@ -16,6 +17,11 @@ fn v2_presets_embed_the_exact_canonical_sources_and_pinned_digests() {
             "bug-fix-v2",
             include_bytes!("../../../assets/presets/bug-fix-v2.yaml").as_slice(),
             BUG_FIX_V2_SHIPPED_DIGEST,
+        ),
+        (
+            "small-change-v2",
+            include_bytes!("../../../assets/presets/small-change-v2.yaml").as_slice(),
+            SMALL_CHANGE_V2_SHIPPED_DIGEST,
         ),
         (
             "sw-dev-v2",

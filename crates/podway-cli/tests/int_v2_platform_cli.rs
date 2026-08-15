@@ -1922,6 +1922,15 @@ fn v2drw005_verbose_status_preserves_decision_and_rework_history_in_json_and_tex
 
 #[test]
 fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
+    let fixture = Fixture::new();
+    let overview = fixture.run(&["--json".to_owned(), "help".to_owned()]);
+    assert!(overview.status.success(), "{overview:?}");
+    assert!(
+        one_json(&overview)["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("small-change-v2")
+    );
     for topic in [
         "session.status",
         "session.observe",
@@ -1970,6 +1979,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
             "goal",
             "assess-criterion",
             "if-goal-revision",
+            "small-change-v2",
         ] {
             assert!(script.contains(token), "{shell} completion omits {token}");
         }

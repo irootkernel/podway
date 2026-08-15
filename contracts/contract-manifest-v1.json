@@ -22,6 +22,11 @@
     },
     {
       "kind": "preset",
+      "path": "presets/small-change-v2.yaml",
+      "sha256": "sha256:8294dbb80ab0b2864563b25b2bdcd222861acecbad8f72eba2da524d005fe8a9"
+    },
+    {
+      "kind": "preset",
       "path": "presets/sw-dev-v2.yaml",
       "sha256": "sha256:a2b8bbe0a20d74277bf82c39fc31ddcf6d97d1f5bee88be5feb7e7e67b2eb836"
     },
@@ -391,7 +396,7 @@
       "sha256": "sha256:bb6f715e58da861c89097aa16c9b73816f2cf2c321ec0616ebe2209c574f9049"
     }
   ],
-  "digest": "sha256:5e3e86a8a20d541e53ea057f6073ad1df1c78f9ee78d7222f3120b82ddaf4016",
+  "digest": "sha256:bd2f5d0533db4acb512564dfafa1a5eb29d0cec866db77c5b9b298c96ac6489b",
   "product": "podway",
   "product_version": "0.2.1",
   "schema_version": "podway.contract-manifest/v1",

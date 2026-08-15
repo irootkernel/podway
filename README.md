@@ -13,12 +13,13 @@ Podway ships two matching binaries:
 
 Use Podway when a task has explicit graph nodes that should not be skipped,
 especially when work may be retried, handed between people or agents, or sent
-through a declared rework path. Two built-in procedures cover common work:
+through a declared rework path. Three built-in procedures cover common work:
 
 | Preset | Best for |
 |---|---|
 | `sw-dev-v2` | Graph-based implementation work with decisions, evidence read-back, rework, and goal assessment |
 | `bug-fix-v2` | Graph-based defect repair with decision rework and goal closeout |
+| `small-change-v2` | Short inspect, implement, verify, review, and closeout path without goal tracking |
 
 Podway admits only Procedure v2 through the normal runtime and emits successful
 responses through `podway.output/v3`.
@@ -188,6 +189,12 @@ Inspect a built-in preset before starting it:
 ```bash
 podway preset explain bug-fix-v2
 podway preset show bug-fix-v2
+```
+
+For a bounded verified change that does not need a tracked goal:
+
+```bash
+podway start --preset small-change-v2 --task "update one validation rule"
 ```
 
 You can also use a worktree-local YAML procedure:

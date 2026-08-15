@@ -211,7 +211,11 @@ fn source_and_packaged_roots_share_one_authoritative_verifier() {
 #[test]
 fn source_and_packaged_contract_roots_reject_v2_preset_byte_drift() {
     for layout in [Layout::Source, Layout::Packaged] {
-        for logical in ["presets/bug-fix-v2.yaml", "presets/sw-dev-v2.yaml"] {
+        for logical in [
+            "presets/bug-fix-v2.yaml",
+            "presets/small-change-v2.yaml",
+            "presets/sw-dev-v2.yaml",
+        ] {
             let fixture = ContractFixture::new(layout);
             let path = physical_path(&fixture.root, fixture.layout, logical);
             let mut bytes = fs::read(&path).expect("preset fixture bytes");
