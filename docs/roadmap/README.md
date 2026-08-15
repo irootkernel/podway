@@ -231,3 +231,24 @@ product version or authorize distribution.
 | `V2AGT-005` | Add structured recovery recipes | Completed | Return bounded read-only remediation commands for common automation failures. | [Recovery recipes](archive/podway-agent-workflow-ergonomics.md#recovery-recipes) |
 | `V2AGT-006` | Add the small-change preset | Completed | Ship and dogfood a short verified change path without goal tracking. | [Small-change preset](archive/podway-agent-workflow-ergonomics.md#small-change-preset) |
 | `V2AGT-007` | Harden integrated agent workflows | Completed | Review the complete epic, fix findings, close conformance, and pass the development gate. | [Verification](archive/podway-agent-workflow-ergonomics.md#verification-and-acceptance) |
+
+### V2AGT cold-validation record
+
+An independent cold validation on August 15, 2026 audited committed snapshot
+`c76eb13b279c8b38008e167a5bd30a59f2b26f16` and the complete V2AGT change
+target `d737cc7abe117217b3edb219150739792f69267c...404dd187f6f931624c9a1b6dbf853f5b89e02504`.
+The requirement-to-implementation matrix, canonical contracts, runtime wiring,
+persistence and recovery boundaries, tests, documentation, generated artifacts,
+and roadmap state had no confirmed gap. `gaori --json run full` completed the
+`make test` development gate with exit `0`, artifact status `passed`, and zero
+failures. Mulgae run `r_01a00487-123a-78eb-b278-805fa780b5cd` reviewed target
+`sha256:d4c369dd419273e3a734d5728e14c99940424d38a6d80c929ebf8616489c2f52`
+with complete six-role ZCode coverage, CI decision `pass`, committed publication,
+a successful low-severity findings query, and zero findings. No remediation goal
+or remediation commit was required.
+
+Podway runtime evidence was explicitly waived for this validation because the
+installed v0.2.1 runtime rejected the preserved workspace state with
+`LEGACY_PROCEDURE_STATE_UNSUPPORTED`; the validator did not mutate that state.
+This record does not claim distribution readiness, upstream publication,
+installation, or runtime activation, and `make dist` was not run.
