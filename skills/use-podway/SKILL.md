@@ -1,9 +1,17 @@
 ---
 name: use-podway
-description: Operate a Podway Procedure v2 session safely in a Git worktree by reading authoritative state, recording supported results, advancing graph nodes, handling decisions or rework, and recovering uncertain mutations. Also use when the user explicitly asks to initialize Podway, manage a v2 session or daemon, select or author a v2 Procedure, or diagnose Podway state.
+description: Use only when the user explicitly asks to use Podway for the current workflow or to inspect, advance, initialize, start, replace, cancel, discard, reset, author, diagnose, or recover Podway state. Operate Procedure v2 safely by reading authoritative state, recording supported results, following graph transitions, and reconciling uncertain mutations. Do not use merely because Podway is installed or configured, a repository contains Podway files, another skill mentions optional Podway integration, or a session already exists.
 ---
 
 # Use Podway
+
+## Require explicit activation
+
+- Treat Podway as opt-in for the current user request, not for the repository. Activate it only when the request explicitly asks to use or manage Podway, or when the user approves a workflow envelope that explicitly names the Podway operations in scope.
+- Treat the binary, daemon, `.podway/config.yaml`, Procedure files, repository guidance about optional integration, and existing session state as availability facts only. None activates Podway by itself.
+- Without explicit activation, do not run Podway commands, inspect or attach to an existing session, validate Podway integration, or let Podway state block unrelated work. Continue the non-Podway workflow independently.
+- Do not carry activation from an earlier request, session, or workflow. Require it again for a later workflow.
+- Treat an explicit request to diagnose or discard the current session as activation for that lifecycle operation only.
 
 ## Preserve the boundary
 
@@ -15,6 +23,8 @@ description: Operate a Podway Procedure v2 session safely in a Git worktree by r
 - Support Procedure v2 only. On `LEGACY_PROCEDURE_STATE_UNSUPPORTED`, stop and ask the user to back up the runtime state before authorizing `podway reset --all`.
 
 ## Enter a worktree
+
+Enter a worktree only after explicit activation for the current workflow.
 
 1. Confirm that `podway` is available. If it is absent, report that fact and do not install it without an explicit request.
 2. Check for `.podway/config.yaml` in the owning Git worktree.

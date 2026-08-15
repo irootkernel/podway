@@ -27,4 +27,17 @@ Read this reference only when the user asks to initialize Podway, start or repla
 - Daemon replacement is not a subcommand: replacing the managed daemon means re-running `podway daemon install` with a new binary, and it remains explicit-request-only.
 - Do not edit `.podway/runtime/`, SQLite files, registry metadata, sockets, or LaunchAgent files manually to simulate a supported lifecycle action.
 
-After every lifecycle mutation, re-read `podway status --json` or the relevant daemon/workspace status and report the resulting state. Do not imply that a session mutation installed, committed, pushed, or executed project work.
+## Discard the current session
+
+Use this flow only when the user explicitly asks to remove, discard, clear, or reset the current session. Do not decide that a session is stale merely because it is old, incomplete, or unrelated to the current task.
+
+1. Run `podway observe --json --wait-for-idle` and require `podway.observation-result/v1`. Summarize the Procedure ID and purpose, lifecycle, current node and attempt when present, session ID and revision, recorded progress, and queue state.
+2. If observation returns `SESSION_NOT_FOUND`, report that no current session exists and stop successfully. Do not escalate to `reset --all`.
+3. Explain the requested disposition. `cancel` terminally abandons a running task but preserves the current session and its history. `reset` deletes the current session and all session-scoped history while preserving workspace initialization. When deletion or freeing the worktree's session slot is the stated goal, use `reset` directly; do not cancel first because the following reset would erase that cancellation record.
+4. Read `podway help session.reset`. Preview the exact observed target with `podway reset --dry-run`, passing the latest workspace UUID, session ID, and session revision fences. Do not pass `--yes`, `--detach`, or an idempotency key to the dry run.
+5. Show the dry-run result and the irreversible history loss, then require explicit authorization for the identified session. A dry run is not authorization and may become stale immediately.
+6. After authorization, re-run `podway observe --json --wait-for-idle`. Use only the fresh `session.reset` mutation template, substitute a unique stable idempotency key, preserve every supplied fence, and invoke the confirmed command with `--yes`.
+7. On an uncertain mutation outcome, keep the same canonical request and idempotency key and follow the job-lookup recovery procedure. Do not blindly retry or weaken a fence.
+8. After confirmed reset success, run `podway observe --json --wait-for-idle` again and require `podway.error/v1` with `SESSION_NOT_FOUND`. Report that workspace initialization remains and that only the session-scoped state was deleted.
+
+After every other lifecycle mutation, re-read `podway observe --json --wait-for-idle` or the relevant daemon/workspace status and report the resulting state. Do not imply that a session mutation installed, committed, pushed, or executed project work.
